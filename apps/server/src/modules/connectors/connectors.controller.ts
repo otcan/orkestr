@@ -81,6 +81,7 @@ import {
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
   getLocalWhatsAppBridgeStatus,
+  getLocalWhatsAppGroupPictureAudit,
   getLocalWhatsAppQrSvg,
   handleInboundMessage,
   listLocalWhatsAppChats,
@@ -94,7 +95,7 @@ import {
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../../../../../packages/connectors/src/whatsapp-router-typing.js";
 import { startWhatsAppTyping, stopWhatsAppTyping } from "../../../../../packages/connectors/src/whatsapp-typing.js";
 import { findWhatsAppAccountByAnyId, readyWhatsAppRuntimeAccountId } from "../../../../../packages/connectors/src/whatsapp-account-identity.js";
-import { whatsappWorkerConversation } from "../../../../../packages/connectors/src/whatsapp-worker-client.js";
+import { whatsappWorkerConversation, whatsappWorkerGroupPictureAudit } from "../../../../../packages/connectors/src/whatsapp-worker-client.js";
 import { writeConnectorConfig } from "../../../../../packages/storage/src/config.js";
 import { dataPaths } from "../../../../../packages/storage/src/paths.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
@@ -850,6 +851,20 @@ export class ConnectorsController {
       chatId,
       title,
     });
+  }
+
+  @Post("whatsapp/bridge/accounts/:accountId/chats/picture-audit")
+  @HttpCode(200)
+  async whatsappBridgeGroupPictureAudit(@Req() request: any, @Param("accountId") accountId: string, @Body() body: Record<string, unknown> = {}) {
+    assertBridgeAccountScope("read", { accountId }, request.orkestrMachineAuthContext);
+    const runtimeAccountId = await resolveLocalWhatsAppRuntimeAccountId(accountId);
+    const chatIds = bodyStringArray(body, "chatIds");
+    try {
+      return await whatsappWorkerGroupPictureAudit(runtimeAccountId, chatIds, process.env);
+    } catch (error: any) {
+      if (!["whatsapp_worker_unavailable", "whatsapp_worker_unconfigured"].includes(String(error?.message || ""))) throw error;
+    }
+    return getLocalWhatsAppGroupPictureAudit({ accountId: runtimeAccountId, chatIds });
   }
 
   @Get("whatsapp/bridge/accounts/:accountId/chats/:chatId/participants")

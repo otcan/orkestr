@@ -11,6 +11,7 @@ import {
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
   getLocalWhatsAppGroupInvite,
+  getLocalWhatsAppGroupPictureAudit,
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChatMessages,
@@ -294,6 +295,7 @@ const defaultBridge = {
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
   getLocalWhatsAppGroupInvite,
+  getLocalWhatsAppGroupPictureAudit,
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChatMessages,
@@ -408,6 +410,23 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       participantIds,
       autoSendInviteV4: body.autoSendInviteV4 !== false,
       comment: clean(body.comment),
+      env,
+    }));
+  }
+
+  params = routeMatch(url.pathname, "/accounts/:accountId/chats/picture-audit");
+  if (method === "POST" && params) {
+    requireAuth(req, env);
+    const body = await readJsonBody(req);
+    const chatIds = Array.isArray(body.chatIds) ? body.chatIds.map(clean).filter(Boolean) : [];
+    requireServicePolicy(req, url, env, body, {
+      accounts: [params.accountId],
+      recipients: chatIds.length ? chatIds : ["*"],
+      recipientScope: "history",
+    });
+    return json(res, 200, await bridge.getLocalWhatsAppGroupPictureAudit({
+      accountId: params.accountId,
+      chatIds,
       env,
     }));
   }

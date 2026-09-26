@@ -14,6 +14,7 @@ import { exactSecurityApproveChallengeId } from "../../core/src/raw-terminal-com
 import { publicHttpUrl, tenantPublicSetupUrl } from "../../core/src/tenant-public-urls.js";
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
+import { auditLocalWhatsAppGroupPictures } from "./whatsapp-group-picture-audit.js";
 import { provisionWhatsAppGroupSetup } from "./whatsapp-group-setup.js";
 import { createWhatsAppGroupWithClient, inspectWhatsAppGroupCreateProtocol } from "./whatsapp-group-create-client.js";
 import {
@@ -7733,4 +7734,33 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
 
 export async function sendLocalWhatsAppText(options = {}) {
   return sendLocalWhatsAppMessage(options);
+}
+
+/**
+ * @param {{ accountId?: string, chatIds?: string[], concurrency?: number, env?: NodeJS.ProcessEnv }} options
+ */
+export async function getLocalWhatsAppGroupPictureAudit({ accountId = "", chatIds = [], concurrency = 3, env = process.env } = {}) {
+  const normalized = normalizeAccountId(accountId, env);
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!runtime?.client || !state.ready || state.chatOpsReady === false || state.runtimeUsable === false) {
+    const error = new Error("whatsapp_local_bridge_not_ready");
+    error.statusCode = 503;
+    throw error;
+  }
+  let targetChatIds = chatIds.map((id) => String(id || "").trim()).filter(Boolean);
+  if (!targetChatIds.length) {
+    try {
+      const liveChats = await runtime.client.getChats();
+      targetChatIds = liveChats
+        .filter((chat) => Boolean(chat?.isGroup) && /@g\.us$/i.test(String(chat?.id?._serialized || "")))
+        .map((chat) => String(chat.id._serialized));
+    } catch {
+      const error = new Error("whatsapp_group_picture_audit_list_failed");
+      error.statusCode = 503;
+      throw error;
+    }
+  }
+  const results = await auditLocalWhatsAppGroupPictures({ client: runtime.client, chatIds: targetChatIds, concurrency });
+  return { ok: true, accountId: normalized, results };
 }
