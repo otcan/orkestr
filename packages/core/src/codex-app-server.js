@@ -59,7 +59,13 @@ import { containedUserDeveloperInstructions } from "./tenant-policy.js";
 import { relocateLegacyUserWorkspace } from "./workspace-files.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
 import { performCodexAppServerSafeReset } from "./codex-safe-reset.js";
-import { activeCodexAuthFaultForThread, codexAuthHoldRetryMs, failedAuthRuntimeFields, holdInputWhileCodexAuthFailed } from "./codex-auth-failed-thread.js";
+import {
+  activeCodexAuthFaultForThread,
+  codexAuthHoldRetryMs,
+  failedAuthRuntimeFields,
+  holdInputWhileCodexAuthFailed,
+  reconcileRejectedAuthProbeAfterDelivery,
+} from "./codex-auth-failed-thread.js";
 import { codexTurnAuthFailureReason, recordCodexRuntimeAuthFailureSignal } from "./codex-auth-health.js";
 import { redactCodexSecrets } from "./codex-auth-failure.js";
 import { completeThreadSecurityApproveCommand } from "./security-thread-command.js";
@@ -2130,6 +2136,7 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
     thread = await getThread(thread.id, env).catch(() => null) || thread;
     const result = await sendCodexAppServerInput(thread, next, env);
     if (result.skipped) return delivered;
+    if (!result.deferred && await reconcileRejectedAuthProbeAfterDelivery(thread.id, next.id, env)) return delivered;
     if (!result.deferred) delivered.push(result.message.id);
   } catch (error) {
     const errorText = publicError(error);

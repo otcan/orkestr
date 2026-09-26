@@ -131,3 +131,13 @@ export async function recordCodexRuntimeAuthFailureSignal({ thread = {}, error =
   }, env).catch(() => {});
   return payload;
 }
+
+export async function markCodexAuthHealthRepaired({ threadId = "" } = {}, env = process.env) {
+  const current = await readCodexAuthHealth(env);
+  if (!current || clean(current.state).toLowerCase() !== "broken") return current;
+  const repairedAt = nowIso();
+  const payload = { ...current, state: "repaired", repairedAt, updatedAt: repairedAt, repairedByThreadId: clean(threadId) || null };
+  await writeJson(codexAuthHealthPath(env), payload);
+  await appendEvent({ type: "codex_runtime_auth_repaired", reason: current.reason || null, threadId: clean(threadId) || null }, env).catch(() => {});
+  return payload;
+}

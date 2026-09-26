@@ -16,6 +16,7 @@ import {
 } from "../packages/core/src/codex-auth-health.js";
 import { paneProgressFromText } from "../packages/core/src/pane-progress.js";
 import { appServerStateFromStatus } from "../packages/core/src/codex-app-server-common.js";
+import { codexAuthProbeIntervalMs } from "../packages/core/src/codex-auth-probe.js";
 
 const providerRejection = [
   "unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***…***REDACTED.",
@@ -76,4 +77,10 @@ test("turn auth failure signal records broken health without key fragments", asy
 test("Codex systemError status maps to a failed runtime state", () => {
   assert.equal(appServerStateFromStatus({ type: "systemError" }), "failed");
   assert.equal(appServerStateFromStatus({ type: "idle" }), "ready");
+});
+
+test("auth probe interval defaults to 15 minutes with a 60 second floor", () => {
+  assert.equal(codexAuthProbeIntervalMs({}), 15 * 60_000);
+  assert.equal(codexAuthProbeIntervalMs({ ORKESTR_CODEX_AUTH_PROBE_INTERVAL_MS: "1000" }), 60_000);
+  assert.equal(codexAuthProbeIntervalMs({ ORKESTR_CODEX_AUTH_PROBE_INTERVAL_MS: "120000" }), 120_000);
 });

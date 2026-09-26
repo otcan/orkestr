@@ -53,7 +53,7 @@ import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import { codexTurnAuthFailureReason, recordCodexRuntimeAuthFailureSignal } from "./codex-auth-health.js";
 import { redactCodexSecrets } from "./codex-auth-failure.js";
-import { failedAuthRuntimeFields } from "./codex-auth-failed-thread.js";
+import { failedAuthRuntimeFields, requeueFailedAuthProbeInput, resolveCodexAuthAfterSuccessfulTurn } from "./codex-auth-failed-thread.js";
 import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
 import { runtimeFinalDeliveryPending } from "./runtime-final-delivery.js";
 import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
@@ -773,10 +773,7 @@ export class CodexAppServerClient {
       const status = clean(turn.status || "completed");
       const errorText = redactCodexSecrets(publicError(turn.error));
       const authFailureReason = status === "failed" ? codexTurnAuthFailureReason(errorText) : "";
-      const authFailure = authFailureReason
-        ? failedAuthRuntimeFields({ reason: authFailureReason, turnId, error: errorText })
-        : null;
-      const failedState = authFailure ? authFailure.state : "failed";
+      let authFailure = null;
       const remoteCompactionFailure = status === "failed"
         ? classifyCodexRemoteCompactionFailure(turn.error || errorText, {
             runtimeGeneration: threadId,
@@ -798,6 +795,11 @@ export class CodexAppServerClient {
           if (request?.codexThreadId === threadId && (!turnId || !request.turnId || request.turnId === turnId)) this.pendingRequests.delete(requestKey);
         }
         let thread = await threadForCodexThreadId(threadId, this.env);
+        const previousAuthFailure = thread?.runtime?.authFailure || null;
+        if (authFailureReason) {
+          authFailure = failedAuthRuntimeFields({ reason: authFailureReason, turnId, error: errorText, previous: previousAuthFailure });
+        }
+        const failedState = authFailure ? authFailure.state : "failed";
         if (thread) {
           if (remoteCompactionFailure) {
             recordCodexRemoteCompactionRecovery("detected");
@@ -875,6 +877,7 @@ export class CodexAppServerClient {
             },
           }, this.env).catch(() => {});
           if (authFailure) {
+            await requeueFailedAuthProbeInput(thread, previousAuthFailure, turnId, this.env);
             await appendEvent({
               type: "codex_app_server_turn_failed_auth",
               threadId: thread.id,
@@ -892,6 +895,8 @@ export class CodexAppServerClient {
           }
           if (status === "failed") {
             await recordCodexRuntimeAuthFailureSignal({ thread, error: errorText, turnId }, this.env).catch(() => {});
+          } else if (status === "completed") {
+            await resolveCodexAuthAfterSuccessfulTurn(thread, this.env).catch(() => null);
           }
           await finishTaskAgentTurn(thread, {
             status,
