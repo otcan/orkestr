@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { codexProviderAuthRejectionReason, redactCodexSecrets } from "./codex-auth-failure.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -35,6 +36,13 @@ export function codexRuntimeAuthInvalidReason(value = "") {
   return "";
 }
 
+// Turn-failure channel only: extends the pane-safe classifier with provider
+// auth rejections (401 / invalid API key) that are too generic to trust in
+// arbitrary pane or tool output.
+export function codexTurnAuthFailureReason(value = "") {
+  return codexRuntimeAuthInvalidReason(value) || codexProviderAuthRejectionReason(value);
+}
+
 export function codexAuthHealthPath(env = process.env) {
   return path.join(dataPaths(env).home, "codex-auth-health.json");
 }
@@ -64,7 +72,7 @@ export async function recordCodexRuntimeAuthInvalidSignal({ thread = {}, progres
   const payload = {
     state: "broken",
     reason: clean(progress.codexAuthInvalidReason) || "codex_runtime_auth_invalid",
-    summary: clean(progress.codexAuthInvalidMessage) || clean(progress.summary) || "Codex sign-in needs to be refreshed.",
+    summary: redactCodexSecrets(clean(progress.codexAuthInvalidMessage) || clean(progress.summary)) || "Codex sign-in needs to be refreshed.",
     detectedAt,
     updatedAt: detectedAt,
     threadId: clean(thread.id),
@@ -91,8 +99,8 @@ export async function recordCodexRuntimeAuthInvalidSignal({ thread = {}, progres
 }
 
 export async function recordCodexRuntimeAuthFailureSignal({ thread = {}, error = "", turnId = "" } = {}, env = process.env) {
-  const errorText = clean(error);
-  const reason = codexRuntimeAuthInvalidReason(errorText);
+  const errorText = redactCodexSecrets(clean(error));
+  const reason = codexTurnAuthFailureReason(errorText);
   if (!reason) return null;
   const detectedAt = nowIso();
   const payload = {
