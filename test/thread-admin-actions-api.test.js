@@ -7,6 +7,8 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
+import { createThread } from "../packages/core/src/threads.js";
+import { createThreadWorker } from "../packages/core/src/thread-workers.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -56,13 +58,7 @@ test("thread standing mission API is admin-only, validates, and round-trips", as
   const baseUrl = `http://127.0.0.1:${port}`;
 
   const cookie = await adminCookie(baseUrl);
-  const createResponse = await fetch(`${baseUrl}/api/threads`, {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ id: "mission-api-thread", name: "Mission API Thread" }),
-  });
-  assert.equal(createResponse.status, 201);
-  await read(createResponse);
+  await createThread({ id: "mission-api-thread", name: "Mission API Thread" }, process.env);
 
   const deniedGet = await fetch(`${baseUrl}/api/threads/mission-api-thread/mission`);
   assert.equal(deniedGet.status, 401);
@@ -129,18 +125,8 @@ test("worker push-branch API is admin-only and pushes only the worker's own bran
   const baseUrl = `http://127.0.0.1:${port}`;
   const cookie = await adminCookie(baseUrl);
 
-  const parentResponse = await fetch(`${baseUrl}/api/threads`, {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ id: "push-branch-parent", name: "Push Branch Parent", cwd: repo }),
-  });
-  assert.equal(parentResponse.status, 201);
-  await read(parentResponse);
-  const created = await read(await fetch(`${baseUrl}/api/threads/push-branch-parent/workers`, {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ label: "Push Branch Worker", autoRun: false, wake: false }),
-  }));
+  const parent = await createThread({ id: "push-branch-parent", name: "Push Branch Parent", cwd: repo }, process.env);
+  const created = await createThreadWorker(parent.id, { label: "Push Branch Worker", autoRun: false, wake: false }, process.env);
   const worker = created.worker;
 
   const deniedPush = await fetch(`${baseUrl}/api/threads/${worker.id}/push-branch`, { method: "POST" });
