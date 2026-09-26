@@ -769,8 +769,10 @@ test("whatsapp bridge machine token bypasses browser pairing only for bridge rou
   assert.equal(blocked.ok, false);
   assert.equal(blocked.error, "whatsapp_bridge_token_required");
   assert.equal(blocked.routingFailure.code, "whatsapp_bridge_token_required");
-  assert.equal(repairPage.ok, true);
-  assert.equal(repairSend.ok, true);
+  assert.equal(repairPage.ok, false);
+  assert.equal(repairPage.error, "browser_pairing_required");
+  assert.equal(repairSend.ok, false);
+  assert.equal(repairSend.error, "browser_pairing_required");
   assert.equal(badToken.ok, false);
   assert.equal(badToken.error, "whatsapp_bridge_token_invalid");
   assert.equal(badToken.routingFailure.code, "whatsapp_bridge_token_invalid");
@@ -974,8 +976,17 @@ test("tenant CLI setup status uses instance connector scope", async () => {
     assert.notEqual(gmail.details.overlay, true);
     assert.deepEqual(gmail.details.capabilities, ["gmail_read", "gmail_actions", "gmail_send", "gmail_drafts"]);
 
+    // ORK-512: Gmail OAuth start is now POST; create a one-time intent first.
+    const intent1 = await json(await fetch(`http://127.0.0.1:${port}/api/connectors/gmail/oauth/intent`, {
+      method: "POST",
+      headers: { authorization: "Bearer cli-secret", "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }));
+    assert.ok(intent1.intentId, "intent creation must return intentId");
     const oauth = await json(await fetch(`http://127.0.0.1:${port}/api/connectors/gmail/oauth/start`, {
-      headers: { authorization: "Bearer cli-secret" },
+      method: "POST",
+      headers: { authorization: "Bearer cli-secret", "content-type": "application/json" },
+      body: JSON.stringify({ intentId: intent1.intentId, token: intent1.token }),
     }));
     const globalOauthState = JSON.parse(await fs.readFile(path.join(home, "oauth", "gmail-state.json"), "utf8"));
 
@@ -990,9 +1001,19 @@ test("tenant CLI setup status uses instance connector scope", async () => {
     assert.deepEqual(accounts.availableCapabilities.map((capability) => capability.id), ["gmail_send"]);
     assert.equal(accounts.privacyPolicyVersion, "2026-07-31.1");
 
+    // ORK-512: second oauth/start also requires a fresh intent.
+    const intent2 = await json(await fetch(`http://127.0.0.1:${port}/api/connectors/gmail/oauth/intent`, {
+      method: "POST",
+      headers: { authorization: "Bearer cli-secret", "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }));
     const ignoredScopeOverride = await json(await fetch(
-      `http://127.0.0.1:${port}/api/connectors/gmail/oauth/start?capabilities=gmail_read&privacyConsent=1&privacyPolicyVersion=invalid`,
-      { headers: { authorization: "Bearer cli-secret" } },
+      `http://127.0.0.1:${port}/api/connectors/gmail/oauth/start`,
+      {
+        method: "POST",
+        headers: { authorization: "Bearer cli-secret", "content-type": "application/json" },
+        body: JSON.stringify({ intentId: intent2.intentId, token: intent2.token, capabilities: ["gmail_read"], privacyConsent: "1", privacyPolicyVersion: "invalid" }),
+      },
     ));
     assert.deepEqual(ignoredScopeOverride.capabilities, ["gmail_send"]);
     assert.match(ignoredScopeOverride.authorizeUrl, /^https:\/\/accounts\.google\.com\//);

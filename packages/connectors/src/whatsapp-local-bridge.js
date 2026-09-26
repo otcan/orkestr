@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { publicWhatsAppPartialDelivery, whatsappFailureEvidence, whatsappOperatorFailureDiagnostic } from "./whatsapp-delivery-evidence.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
-import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { appendEvent, readJson, writeJson, writeSecretJson } from "../../storage/src/store.js";
+import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { isRoutableWhatsAppConversationId } from "./whatsapp-identifiers.js";
 import { requestThreadInputDelivery } from "../../core/src/runtime-leases.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
@@ -68,7 +69,24 @@ const inboundForwardHealthCache = new Map();
 const localWhatsAppStartPromises = new Map();
 const localWhatsAppRuntimeUnhandledRejections = new WeakSet();
 const localWhatsAppPairingRequiredNotificationAttempts = new Map();
-const localWhatsAppRepairQrEmailAttempts = new Map();
+// Repair QR email cooldown is now persisted to disk to survive server restarts (ORK-513).
+// Key pattern: "${accountId}:repair_qr_email". Value: lastSentMs (Unix ms timestamp).
+function repairQrCooldownFilePath(env) {
+  return `${dataPaths(env).secrets}/whatsapp-repair-cooldown.json`;
+}
+
+async function readRepairQrLastSentMs(key, env) {
+  const data = await readJson(repairQrCooldownFilePath(env), {});
+  return Number(data[key] || 0);
+}
+
+async function writeRepairQrLastSentMs(key, nowMs, env) {
+  const filePath = repairQrCooldownFilePath(env);
+  await withStorageFileLock(filePath, async () => {
+    const data = await readJson(filePath, {});
+    await writeSecretJson(filePath, { ...data, [key]: nowMs });
+  });
+}
 let runtimeRecoveryHooksForTest = null;
 let typingSessionGeneration = 0;
 let localWhatsAppRuntimeGeneration = 0;
@@ -495,7 +513,7 @@ export async function sendLocalWhatsAppRepairQrEmail(input = {}, env = process.e
   const nowMs = Number(options.nowMs || Date.now());
   const key = `${accountId}:repair_qr_email`;
   const cooldownMs = localWhatsAppRepairQrEmailCooldownMs(env);
-  const lastSentMs = Number(localWhatsAppRepairQrEmailAttempts.get(key) || 0);
+  const lastSentMs = await readRepairQrLastSentMs(key, env);
   if (!recipients.length) {
     await appendEvent({
       type: "whatsapp_local_repair_qr_email_skipped",
@@ -597,7 +615,7 @@ export async function sendLocalWhatsAppRepairQrEmail(input = {}, env = process.e
         }));
       }
     }
-    localWhatsAppRepairQrEmailAttempts.set(key, nowMs);
+    await writeRepairQrLastSentMs(key, nowMs, env);
     await appendEvent({
       type: "whatsapp_local_repair_qr_email_sent",
       accountId,
@@ -3363,7 +3381,7 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   localWhatsAppRecoveryAttempts.clear();
   localWhatsAppStartPromises.clear();
   localWhatsAppPairingRequiredNotificationAttempts.clear();
-  localWhatsAppRepairQrEmailAttempts.clear();
+  // Repair QR email cooldown is file-based; reset is per-test ORKESTR_HOME, no in-memory clear needed.
   runtimeRecoveryHooksForTest = null;
   localWhatsAppRuntimeGeneration = 0;
 }
