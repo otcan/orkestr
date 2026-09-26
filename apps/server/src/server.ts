@@ -140,6 +140,7 @@ export async function createApp(): Promise<INestApplication> {
       if (result.ok) {
         (request as any).orkestrPrincipal = result.principal;
         (request as any).orkestrSecuritySession = result.session || null;
+        (request as any).orkestrAnonymous = (result as any).anonymous === true;
         (request as any).orkestrMachineAuth = (result as any).machineAuth || null;
         (request as any).orkestrMachineAuthContext = (result as any).machineAuthContext || null;
         (request as any).orkestrDesktopShare = (result as any).desktopShare || null;
@@ -360,7 +361,9 @@ function authIntentBrokerAppApiRouteAllowed(method: string, rest: string[], sess
   if (method === "GET" && ["health", "ready", "version"].includes(surface)) return true;
   if (method === "GET" && surface === "setup" && second === "status") return true;
   if (method === "GET" && surface === "users" && second === "me") return true;
-  if (method === "GET" && surface === "connectors" && second === "gmail" && third === "oauth" && fourth === "start") {
+  // ORK-512: the parent answers GET start with 405; POST intent/start run the
+  // one-time intent flow in broker-google-workspace-oauth.ts.
+  if (["GET", "POST"].includes(method) && surface === "connectors" && second === "gmail" && third === "oauth" && ["start", "intent"].includes(fourth || "")) {
     return authIntentAllowsGoogleConnect(session);
   }
   if (surface === "connectors" && second === "gmail" && third === "accounts") {

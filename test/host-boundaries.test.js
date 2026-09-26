@@ -157,6 +157,27 @@ test("handoff routes allow only connect/auth origins, redirect app, and reject u
   assert.equal(redirected.headers.location, "https://connect.example.test/setup/pairing?return=%2Fthread%2Fone");
   assert.deepEqual([attacker.statusCode, attacker.body], [404, "not found"]);
   assert.deepEqual([missing.statusCode, missing.body], [404, "not found"]);
+
+  // ORK-512: OAuth handoffs are exact path+method pairs, not a /oauth/ namespace.
+  for (const [method, url] of [
+    ["GET", "/oauth/gmail/callback?code=sample&state=sample"],
+    ["GET", "/oauth/gmail/start"],
+    ["POST", "/oauth/gmail/start"],
+    ["GET", "/google-marketing/oauth/callback?code=sample"],
+  ]) {
+    assert.equal((await enforce(request(url, "connect.example.test", { method }), runtimeEnv)).handled, false, `${method} ${url}`);
+  }
+  for (const [method, url] of [
+    ["POST", "/oauth/gmail/callback"],
+    ["HEAD", "/oauth/gmail/callback"],
+    ["PUT", "/oauth/gmail/start"],
+    ["GET", "/oauth/other/start"],
+    ["GET", "/oauth/gmail/callback/extra"],
+    ["DELETE", "/google-marketing/oauth/start"],
+  ]) {
+    const denied = await enforce(request(url, "connect.example.test", { method }), runtimeEnv);
+    assert.deepEqual([denied.statusCode, denied.body], [404, "not found"], `${method} ${url}`);
+  }
   await cleanup(home);
 });
 

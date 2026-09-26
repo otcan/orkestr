@@ -7,6 +7,7 @@ import { desktopShareBaseDomain } from "../../../packages/core/src/desktop-share
 import { readInstanceIdentity } from "../../../packages/core/src/instance-identity.js";
 import { assertResourceAccess } from "../../../packages/core/src/policy.js";
 import { listThreads } from "../../../packages/core/src/threads.js";
+import { handoffPath } from "./host-boundary-handoff.js";
 
 function enabled(value = ""): boolean {
   return ["1", "true", "yes", "on", "enabled"].includes(String(value || "").trim().toLowerCase());
@@ -57,7 +58,7 @@ function directHostIsLoopback(request: any): boolean {
   try { return loopback(new URL(`http://${host}`).hostname.replace(/^\[|\]$/g, "")); } catch { return false; }
 }
 
-function trustedProxy(request: any, env = process.env): boolean {
+export function trustedProxy(request: any, env = process.env): boolean {
   if (!enabled(env.ORKESTR_TRUST_PROXY_HEADERS || env.ORKESTR_TRUST_PROXY)) return false;
   const remote = remoteAddress(request);
   const allowed = String(env.ORKESTR_TRUSTED_PROXY_IPS || "")
@@ -129,14 +130,6 @@ export function legacyThreadRoute(rawUrl = "") {
     suffix: parts.slice(offset + 2),
     search: parsed.search,
   };
-}
-
-function handoffPath(rawUrl = ""): boolean {
-  const pathname = new URL(rawUrl || "/", "http://orkestr.local").pathname;
-  return pathname === "/setup" || pathname.startsWith("/setup/") ||
-    pathname.startsWith("/connect/") || pathname.startsWith("/oauth/") ||
-    pathname === "/review/google" || pathname.startsWith("/review/google/") ||
-    pathname.startsWith("/google-marketing/oauth/");
 }
 
 function connectSupportPath(method = "GET", rawUrl = ""): boolean {
@@ -236,7 +229,7 @@ function localProbeRequest(request: any): boolean {
     ["/api/health", "/api/ready", "/api/version", "/metrics", "/api/metrics"].includes(pathname);
 }
 
-function directLoopbackRequest(request: any): boolean {
+export function directLoopbackRequest(request: any): boolean {
   return loopback(remoteAddress(request)) && directHostIsLoopback(request);
 }
 
@@ -346,7 +339,7 @@ export function rejectUnknownHostBoundaryRequest(request: any, response: any, en
   if (origin && launcherOrigin && origin === launcherOrigin && launcherSupportPath(request?.method, rawUrl)) return false;
   if (origin && appOrigin && connectOrigins.size && !connectOrigins.has(appOrigin) && origin === appOrigin) return false;
   if (origin && appOrigin && connectOrigins.size && !connectOrigins.has(appOrigin) && connectOrigins.has(origin)) {
-    if (compatibilityPath(rawUrl) || handoffPath(rawUrl) || connectSupportPath(request?.method, rawUrl) ||
+    if (compatibilityPath(rawUrl) || handoffPath(rawUrl, request?.method) || connectSupportPath(request?.method, rawUrl) ||
         canonicalPath(rawUrl) || legacyThreadRoute(rawUrl)) return false;
   }
   recordDenial(!origin || !appOrigin || !connectOrigins.size || connectOrigins.has(appOrigin)
@@ -403,7 +396,7 @@ export async function enforceHostBoundaryRequest(request: any, response: any, en
     return true;
   }
 
-  if (handoffPath(rawUrl)) {
+  if (handoffPath(rawUrl, request?.method)) {
     if (origin === appOrigin) {
       const base = boundaries.connectBase || boundaries.authBase;
       if (base && origin !== new URL(base).origin) { redirect(response, targetAtBase(base, rawUrl)); return true; }

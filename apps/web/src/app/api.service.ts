@@ -2484,9 +2484,11 @@ export class ApiService {
   }
 
   startUserGmailOAuth(id: string, body: Record<string, unknown> = {}): Observable<UserGmailOAuthStartResponse> {
-    return this.http.post<UserGmailOAuthStartResponse>(
-      this.api(`/users/${encodeURIComponent(id)}/connectors/gmail/oauth/start`),
-      body,
+    const base = `/users/${encodeURIComponent(id)}/connectors/gmail/oauth`;
+    return this.http.post<{ intentId: string; token: string }>(this.api(`${base}/intent`), body).pipe(
+      switchMap(({ intentId, token }) =>
+        this.http.post<UserGmailOAuthStartResponse>(this.api(`${base}/start`), { ...body, intentId, token }),
+      ),
     );
   }
 
@@ -2583,20 +2585,21 @@ export class ApiService {
   }
 
   startGmailOAuth(options: { account?: string; accountId?: string; alias?: string; useMode?: string; oauthApp?: string; setAsMain?: boolean; setAsThreadDefault?: boolean; threadId?: string; capabilities?: string[]; privacyConsent?: boolean; privacyPolicyVersion?: string } = {}): Observable<GmailOAuthStartResponse> {
-    // ORK-512: create a one-time intent first, then POST to start (CSRF-resistant).
-    // Pass binding fields at intent creation so the server can guard against account substitution.
+    // ORK-512: the intent binds every start parameter; start sends only the
+    // one-time credential and the server uses the bound values.
     const intentBody: Record<string, unknown> = {};
-    if (options.account) intentBody["account"] = options.account;
-    if (options.accountId) intentBody["accountId"] = options.accountId;
+    if (options.account?.trim()) intentBody["account"] = options.account.trim();
+    if (options.accountId?.trim()) intentBody["accountId"] = options.accountId.trim();
+    if (options.alias?.trim()) intentBody["alias"] = options.alias.trim();
+    if (options.useMode?.trim()) intentBody["useMode"] = options.useMode.trim();
+    if (options.oauthApp?.trim()) intentBody["oauthApp"] = options.oauthApp.trim();
+    if (options.setAsMain === true) intentBody["setAsMain"] = true;
+    if (options.setAsThreadDefault === true) intentBody["setAsThreadDefault"] = true;
+    if (options.threadId?.trim()) intentBody["threadId"] = options.threadId.trim();
     if (options.capabilities?.length) intentBody["capabilities"] = options.capabilities;
-    if (options.threadId) intentBody["returnTarget"] = `/app/threads/${encodeURIComponent(options.threadId)}`;
     return this.http.post<{ intentId: string; token: string }>(this.api("/connectors/gmail/oauth/intent"), intentBody).pipe(
       switchMap(({ intentId, token }) =>
-        this.http.post<GmailOAuthStartResponse>(this.api("/connectors/gmail/oauth/start"), {
-          ...options,
-          intentId,
-          token,
-        }),
+        this.http.post<GmailOAuthStartResponse>(this.api("/connectors/gmail/oauth/start"), { intentId, token }),
       ),
     );
   }

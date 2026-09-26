@@ -73,6 +73,10 @@ import { getTenantVm } from "../../../../../packages/core/src/tenant-vm-registry
 import { requestPrincipal, userPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { createPairingChallenge, securityStatus } from "../../../../../packages/core/src/security.js";
+import { authenticatedAdminPrincipal, authenticatedPrincipal, callbackRequestHost } from "../../request-security.js";
+import { boundBoolean, boundString, consumeGmailOAuthIntent, createGmailOAuthIntent } from "./gmail-oauth-intents.js";
+import { oauthStartDeniedPage, renderGmailOAuthStartPage, submitGmailOAuthStart } from "./gmail-oauth-start-page.js";
+import { whatsappRepairPageHtml } from "./whatsapp-repair-page.js";
 import { consumeConnectorUseIntent, createConnectorUseIntent } from "../../../../../packages/core/src/connector-use-intent.js";
 import { resolveBrokerConnectInstance } from "../../../../../packages/core/src/broker-instance-registry.js";
 import { normalizeUserId } from "../../../../../packages/core/src/users.js";
@@ -100,7 +104,6 @@ import { writeConnectorConfig } from "../../../../../packages/storage/src/config
 import { dataPaths } from "../../../../../packages/storage/src/paths.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
 import { reportServerError } from "../../watcher-reporting.js";
-import { whatsappRepairPageHtml } from "./whatsapp-repair-page.js";
 
 function bodyStringArray(body: Record<string, unknown>, key: string): string[] {
   const value = body[key];
@@ -203,6 +206,16 @@ function maskEmail(value: unknown): string {
   if (!local || !domain) return "";
   const prefix = local.slice(0, Math.min(2, local.length));
   return `${prefix}${local.length > 2 ? "***" : "*"}@${domain}`;
+}
+
+// Scope selection belongs to Google. Ordinary connections begin narrowly; the
+// disposable review identity receives the submitted scope set. The server
+// decides and binds the capability set into the start intent.
+function gmailOAuthStartCapabilities(principal: any): string[] {
+  const reviewer = googleWorkspaceReviewEnvironmentIdentity(process.env);
+  const reviewerConnection = googleWorkspaceReviewEnvironmentEnabled(process.env) &&
+    clean(principal?.userId || principal?.id) === reviewer.userId;
+  return reviewerConnection ? googleWorkspaceAllowedCapabilities(process.env) : googleWorkspaceDefaultGmailCapabilities();
 }
 
 function googleWorkspaceAuthSessionHasAction(session: any, connectRequest: any): boolean {
@@ -538,63 +551,51 @@ export class ConnectorsController {
     }
   }
 
-  // ORK-512: Create a one-time signed intent before starting Gmail OAuth.
-  // The intent is bound to the authenticated user, host, and optionally the connector account,
-  // requested capabilities, and return target so the start endpoint can validate the caller
-  // hasn't substituted a different account or capability set.
+  // ORK-512: OAuth start is two-step. The intent binds the caller, session,
+  // host and every start parameter; start consumes it and uses only the bound
+  // values, so no request can substitute an account or capability set.
   @Post("gmail/oauth/intent")
   @HttpCode(201)
   async gmailOAuthIntent(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
-    const principal = requestPrincipal(request);
-    const host = String(request?.headers?.host || "").trim();
-    // Bind the optional caller-provided fields into the intent so they can be validated at start.
-    const accountId = String(body.accountId || body.account || "").trim().toLowerCase();
-    const capabilities = Array.isArray(body.capabilities) ? (body.capabilities as string[]) : undefined;
-    const returnTarget = String(body.returnTarget || body.return || "").trim().slice(0, 512);
-    return createConnectorUseIntent(
-      String(principal.userId || principal.id || ""),
-      { connector: "gmail", purpose: "oauth_start", host, accountId, capabilities, returnTarget },
-      process.env,
-    );
+    const principal = authenticatedPrincipal(request);
+    try {
+      return await createGmailOAuthIntent(request, body, process.env, {
+        purpose: "oauth_start",
+        capabilities: gmailOAuthStartCapabilities(principal),
+      });
+    } catch (error) {
+      throw httpError(String((error as Error)?.message || "gmail_oauth_intent_failed"), Number((error as any)?.statusCode || 400) || 400);
+    }
   }
 
-  // ORK-512: Gmail OAuth start is now POST, consumes a one-time intent (CSRF-resistant).
-  // All OAuth parameters are in the request body instead of query string.
   @Post("gmail/oauth/start")
   @HttpCode(200)
   async startGmailOAuth(
     @Req() request: any,
     @Body() body: Record<string, unknown> = {},
   ) {
-    const principal = requestPrincipal(request);
-    const intentId = String(body.intentId || "").trim();
-    const token = String(body.token || "").trim();
-    const host = String(request?.headers?.host || "").trim();
-    const account = String(body.account || "");
-    await consumeConnectorUseIntent(intentId, token, {
-      userId: String(principal.userId || principal.id || ""),
-      connector: "gmail",
-      purpose: "oauth_start",
-      host,
-      // Validate the account matches what was bound in the intent (caller substitution guard).
-      accountId: account.toLowerCase(),
-    }, process.env);
-    const accountId = String(body.accountId || "");
-    const alias = String(body.alias || "");
-    const useMode = String(body.useMode || "");
-    const oauthApp = String(body.oauthApp || "");
-    const setAsMain = String(body.setAsMain || "");
-    const setAsThreadDefault = String(body.setAsThreadDefault || "");
-    const threadId = String(body.threadId || "");
+    let consumed;
+    try {
+      consumed = await consumeGmailOAuthIntent(request, body, process.env, {
+        purpose: "oauth_start",
+        capabilities: gmailOAuthStartCapabilities(authenticatedPrincipal(request)),
+      });
+    } catch (error) {
+      throw httpError(String((error as Error)?.message || "gmail_oauth_intent_invalid"), Number((error as any)?.statusCode || 403) || 403);
+    }
+    const { principal, params } = consumed;
+    const account = boundString(params, "account");
+    const accountId = boundString(params, "accountId");
+    const alias = boundString(params, "alias");
+    const useMode = boundString(params, "useMode");
+    const oauthApp = boundString(params, "oauthApp");
+    const threadId = boundString(params, "threadId");
     const reviewer = googleWorkspaceReviewEnvironmentIdentity(process.env);
     const reviewerConnection = googleWorkspaceReviewEnvironmentEnabled(process.env) &&
       clean(principal.userId || principal.id) === reviewer.userId;
-    // Scope selection belongs to Google. The service owns the request contract:
-    // ordinary connections begin narrowly, while the disposable review identity
-    // receives the submitted scope set without a client-controlled query override.
-    const requestedCapabilities = reviewerConnection
-      ? googleWorkspaceAllowedCapabilities(process.env)
-      : googleWorkspaceDefaultGmailCapabilities();
+    // The consumed intent already proved the bound capability set equals this
+    // server-side selection; keep its canonical order for the OAuth request.
+    const requestedCapabilities = gmailOAuthStartCapabilities(principal);
     // The connector page starts OAuth directly, rather than through a chat
     // connect link. Preserve the reviewed environment binding in its OAuth
     // state so the callback returns to the root-mounted reviewer cockpit.
@@ -611,8 +612,8 @@ export class ConnectorsController {
       alias,
       useMode,
       oauthAppId: oauthApp,
-      setAsMain: ["1", "true", "yes"].includes(clean(setAsMain).toLowerCase()),
-      setAsThreadDefault: ["1", "true", "yes"].includes(clean(setAsThreadDefault).toLowerCase()),
+      setAsMain: boundBoolean(params, "setAsMain"),
+      setAsThreadDefault: boundBoolean(params, "setAsThreadDefault"),
       threadId,
       provider: "google_workspace",
       capabilities: requestedCapabilities,
@@ -1312,76 +1313,30 @@ export class ConnectorsController {
 
 @Controller("oauth")
 export class ConnectorCallbacksController {
-  // ORK-512: /oauth/gmail/start is a legacy GET alias for browser-navigation OAuth start.
-  // Requires an authenticated principal — isAllowedBeforePairing rejects /oauth/* without a
-  // session when auth is enabled, but this explicit check closes the gap in dev-mode installs.
-  // No managed-browser launch is allowed from an anonymous request.
+  // ORK-512: legacy browser entry. GET renders a confirmation form with a
+  // one-time intent and never writes OAuth state; only the POST from that form
+  // (an explicit user gesture) starts OAuth and may open a virtual browser.
   @Get("gmail/start")
   async gmailStart(@Req() request: any, @Query("account") account = "", @Res() response: any) {
-    const principal = requestPrincipal(request);
-    if (!isAdminPrincipal(principal)) {
-      return response.status(403).header("cache-control", "no-store").type("application/json; charset=utf-8").send(JSON.stringify({ ok: false, error: "authentication_required" }));
-    }
-    let payload: any = null;
-    try {
-      // Pass the authenticated principal so the OAuth state is bound to this user.
-      payload = await beginGmailOAuth(process.env, { account, principal });
-    } catch (error) {
-      payload = {
-        ok: false,
-        state: "error",
-        message: String((error as Error)?.message || "Gmail OAuth start failed."),
-      };
-    }
-    const authorizeUrl = String(payload?.authorizeUrl || "").trim();
-    if (payload?.ok !== false && authorizeUrl) {
-      const desktopSlug = await gmailAuthDesktopSlug(payload);
-      if (desktopSlug) {
-        try {
-          const browser = await openUrlInVirtualBrowser(desktopSlug, authorizeUrl);
-          return response
-            .status(200)
-            .header("cache-control", "no-store")
-            .type("text/html; charset=utf-8")
-            .send(googleOAuthHtml({
-              ok: true,
-              state: "opened",
-              title: "Gmail auth opened",
-              message: `Gmail authorization opened in ${browser.label || desktopSlug}. Finish the Google login in that virtual browser.`,
-              deskUrl: browser.desk_url || browser.url || "",
-              desktopSlug,
-              setupHref: "/app/connectors/gmail",
-              setupLabel: "Open Gmail",
-            }));
-        } catch (error) {
-          return response
-            .status(Number((error as any)?.statusCode || 502) || 502)
-            .header("cache-control", "no-store")
-            .type("text/html; charset=utf-8")
-            .send(googleOAuthHtml({
-              ok: false,
-              state: "desktop_error",
-              title: "Gmail auth failed",
-              message: String((error as Error)?.message || "Gmail authorization could not be opened in the virtual browser."),
-              authorizeUrl,
-              desktopSlug,
-              setupHref: "/app/connectors/gmail",
-              setupLabel: "Open Gmail",
-            }));
-        }
-      }
-      return response.redirect(302, authorizeUrl);
-    }
+    const result = await renderGmailOAuthStartPage(request, String(account || ""), process.env);
     return response
-      .status(500)
+      .status(result.status)
       .header("cache-control", "no-store")
+      .header("referrer-policy", "no-referrer")
       .type("text/html; charset=utf-8")
-      .send(googleOAuthHtml({
-        ...payload,
-        title: "Gmail auth failed",
-        setupHref: "/app/connectors/gmail",
-        setupLabel: "Open Gmail",
-      }));
+      .send(result.html || "");
+  }
+
+  @Post("gmail/start")
+  async gmailStartSubmit(@Req() request: any, @Body() body: Record<string, unknown> = {}, @Res() response: any) {
+    const result = await submitGmailOAuthStart(request, body, process.env, gmailAuthDesktopSlug);
+    if (result.redirect) return response.header("cache-control", "no-store").redirect(302, result.redirect);
+    return response
+      .status(result.status)
+      .header("cache-control", "no-store")
+      .header("referrer-policy", "no-referrer")
+      .type("text/html; charset=utf-8")
+      .send(result.html || "");
   }
 
   @Get("gmail/callback")
@@ -1407,7 +1362,7 @@ export class ConnectorCallbacksController {
         .type(tenantForward.contentType)
         .send(tenantForward.body);
     }
-    const result = await finishGmailOAuth(queryParamsFromRequest(request, query));
+    const result = await finishGmailOAuth(queryParamsFromRequest(request, query), process.env, fetch, gmailOAuthCallbackContext(request));
     await notifyGmailOAuthCallback(result).catch(() => null);
     await auditGoogleWorkspaceReviewCallback(result).catch(() => null);
     const payload = googleOAuthCallbackPayload(result);
@@ -1513,7 +1468,11 @@ export class GoogleWorkspaceConnectController {
 @Controller("google-marketing/oauth")
 export class GoogleMarketingCallbacksController {
   @Get("start")
-  async googleMarketingStart(@Res() response: any) {
+  async googleMarketingStart(@Req() request: any, @Res() response: any) {
+    // ORK-512: never start OAuth or open a virtual browser for anonymous callers.
+    if (!authenticatedAdminPrincipal(request)) {
+      return response.status(401).header("cache-control", "no-store").type("text/html; charset=utf-8").send(oauthStartDeniedPage());
+    }
     let payload: any = null;
     try {
       payload = await runOverlayConnectorAction("google-marketing", "start-oauth", {
@@ -1591,7 +1550,7 @@ export class GoogleMarketingCallbacksController {
     }
     const isGmailCallback = callbackState.startsWith("gmail:");
     try {
-      const result = await finishGmailOAuth(queryParamsFromRequest(request, query));
+      const result = await finishGmailOAuth(queryParamsFromRequest(request, query), process.env, fetch, gmailOAuthCallbackContext(request));
       await notifyGmailOAuthCallback(result).catch(() => null);
       return response
         .status(200)
@@ -1747,6 +1706,13 @@ function externalUrlFromRequest(request: any): string {
   const host = String(headers["x-forwarded-host"] || headers.host || "127.0.0.1").split(",")[0].trim();
   const url = String(request?.originalUrl || request?.url || "");
   return `${proto}://${host}${url}`;
+}
+
+// Callback binding context: the callback host must match the state's redirect
+// host, and a signed-in browser must belong to the principal that started it.
+function gmailOAuthCallbackContext(request: any) {
+  const principal = request?.orkestrSecuritySession ? authenticatedPrincipal(request) : null;
+  return { host: callbackRequestHost(request, process.env), principal };
 }
 
 function queryParamsFromRequest(request: any, fallback: Record<string, string> = {}): URLSearchParams {

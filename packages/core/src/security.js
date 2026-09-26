@@ -1529,6 +1529,12 @@ export async function consumeApprovedPairingChallengeForAction(challengeId, { en
   const requiredAction = String(action || "").trim();
   if (!id) throw challengeError("pairing_challenge_id_required", 400);
   if (!requiredAction) throw challengeError("pairing_challenge_action_required", 400);
+  // Validate and consume under the security-config lock so a concurrent
+  // reuse of the same approval cannot also succeed (ORK-512).
+  return withStorageFileLock(secretPath(env), () => consumeApprovedChallengeLocked(id, requiredAction, authIntent, consumedBy, env));
+}
+
+async function consumeApprovedChallengeLocked(id, requiredAction, authIntent, consumedBy, env) {
   const config = await readSecurityConfig(env);
   const now = Date.now();
   let consumed = null;
@@ -2104,11 +2110,9 @@ function isAllowedBeforePairing(request) {
   }
   if (url.startsWith("/desktop/")) return false;
   if (!url.startsWith("/api/") && !url.startsWith("/oauth/")) return true;
-  // Allow the exact OAuth callback redirect targets (Google posts the browser here after auth).
-  // No wildcard: only the specific paths that have registered NestJS handlers and must remain
-  // reachable without a prior session. OAuth initiators (e.g. /oauth/gmail/start) require auth
-  // and must NOT appear here (ORK-512).
-  if (method === "GET" && url === "/oauth/gmail/callback") return true;
+  // Only the exact OAuth callback is public; OAuth start routes require a
+  // paired session and a one-time intent (ORK-512). HEAD is not a callback.
+  if (url.startsWith("/oauth/")) return method === "GET" && url === "/oauth/gmail/callback";
   if (method === "GET" && /^\/(?:api\/)?desktop-shares\/[^/]+\/(?:open|status)$/.test(url)) return true;
   if (method === "GET" && /^\/(?:api\/)?tenant-vms\/[^/]+\/desktop-shares\/[^/]+\/(?:open|status)$/.test(url)) return true;
   if (method === "GET" && ["/api/health", "/api/ready", "/api/version", "/api/setup/status", "/api/setup/security/session-scope"].some((path) => url.startsWith(path))) return true;
@@ -2288,7 +2292,10 @@ export async function authorizeHttpRequest(request, env = process.env) {
     }, env);
     return { ok: true, status, principal, session };
   }
-  if (isAllowedBeforePairing(request)) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
+  // Routes reachable before pairing run with the legacy admin principal for
+  // compatibility, but are marked anonymous so state-changing handlers can
+  // require a real session or a one-time intent (ORK-512/ORK-513).
+  if (isAllowedBeforePairing(request)) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)), anonymous: true };
   return {
     ok: false,
     status,

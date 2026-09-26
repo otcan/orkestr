@@ -722,6 +722,27 @@ test("whatsapp inbound machine token bypasses browser pairing only for inbound",
   assert.equal(otherRoute.error, "browser_pairing_required");
 });
 
+test("pre-pairing allowance names only the exact OAuth callback and marks it anonymous", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-oauth-prepairing-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_AUTH_REQUIRED: "1" };
+  const callback = await authorizeHttpRequest({ method: "GET", url: "/oauth/gmail/callback?state=s&code=c", headers: {} }, env);
+  assert.equal(callback.ok, true);
+  assert.equal(callback.anonymous, true);
+  for (const [method, url] of [
+    ["HEAD", "/oauth/gmail/callback"],
+    ["POST", "/oauth/gmail/callback"],
+    ["GET", "/oauth/gmail/start"],
+    ["POST", "/oauth/gmail/start"],
+    ["GET", "/oauth/anything"],
+    ["GET", "/api/connectors/gmail/oauth/start"],
+    ["POST", "/api/connectors/gmail/oauth/intent"],
+  ]) {
+    const result = await authorizeHttpRequest({ method, url, headers: {} }, env);
+    assert.equal(result.ok, false, `${method} ${url}`);
+    assert.equal(result.error, "browser_pairing_required", `${method} ${url}`);
+  }
+});
+
 test("whatsapp bridge machine token bypasses browser pairing only for bridge routes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-wa-bridge-"));
   const env = {
