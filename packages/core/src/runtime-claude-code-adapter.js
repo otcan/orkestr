@@ -224,6 +224,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
         activeTurnId: null,
         lastTurnId: attemptId,
         lastTurnStatus: "completed",
+        lastTurnError: null,
       },
     }, env);
     await appendTurnLifecycleEvent("completed", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "completed", source: "claude-code" }, env).catch(() => {});
