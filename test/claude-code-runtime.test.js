@@ -318,6 +318,9 @@ test("Claude runtime selects the exact profile, strips inherited API credentials
   assert.equal(thread.claudeSessionId, undefined);
   const otherThread = await claudeThread("owner", primary.id, env, "claude-other-thread");
   assert.equal(await getClaudeCodeSession(otherThread, env), "");
+  thread = await updateThread(thread.id, {
+    runtime: { ...(thread.runtime || {}), lastTurnError: "claude_code_failed" },
+  }, env);
   await enqueueThreadInput(thread.id, { text: "second request", source: "test" }, env);
   assert.equal((await deliverClaudeCodePendingInputs(thread, env)).length, 1);
 
@@ -339,6 +342,8 @@ test("Claude runtime selects the exact profile, strips inherited API credentials
   assert.equal(thread.claudeRateLimits.primary.used_percent, 25);
   assert.equal(thread.claudeRateLimits.secondary.used_percent, 40);
   assert.equal(thread.claudeContextWindow, 200000);
+  assert.equal(thread.runtime.lastTurnStatus, "completed");
+  assert.equal(thread.runtime.lastTurnError, null);
   const publicState = JSON.stringify({ thread, messages, events });
   assert.equal(publicState.includes("must-not-persist"), false);
   assert.equal(publicState.includes("/private/transcript"), false);
