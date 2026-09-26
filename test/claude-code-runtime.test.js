@@ -430,7 +430,7 @@ test("Claude settings share model controls while YOLO remains explicit and fail 
   const changed = await changeClaudeModelControls(thread, { model: "opus", effort: "max", permissionMode: "bypassPermissions" }, principal, yoloEnv);
   assert.equal(changed.thread.executor.metadata.claudeModel, "opus");
   assert.deepEqual(claudeCodeArgs(changed.thread, {}, yoloEnv).slice(0, 9), [
-    "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions", "--allow-dangerously-skip-permissions", "--model", "opus",
+    "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions", "--model", "opus",
   ]);
   assert.throws(() => claudeCodeArgs(changed.thread, {}, env), /claude_code_bypass_permissions_disabled/);
   await assert.rejects(readClaudeModelControls(thread, { userId: "other", roles: [] }, env), /forbidden/i);

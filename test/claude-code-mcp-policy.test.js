@@ -12,6 +12,8 @@ test("Claude YOLO MCP allowlist is server-configured and explicit", () => {
   };
   assert.deepEqual(claudeCodeYoloAllowedMcpTools(env), ["mcp__atlassian", "mcp__docs__search"]);
   const args = claudeCodeArgs(yoloThread, {}, env);
+  assert.equal(args.includes("--dangerously-skip-permissions"), true);
+  assert.equal(args.includes("--allow-dangerously-skip-permissions"), false);
   const allowedAt = args.indexOf("--allowedTools");
   assert.notEqual(allowedAt, -1);
   assert.equal(args[allowedAt + 1], "mcp__atlassian,mcp__docs__search");

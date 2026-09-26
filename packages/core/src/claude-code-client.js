@@ -87,7 +87,7 @@ export function claudeCodeArgs(thread = {}, options = {}, env = process.env) {
   }
   const args = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode];
   if (mode === "bypassPermissions") {
-    args.push("--allow-dangerously-skip-permissions");
+    args.push("--dangerously-skip-permissions");
     const allowedMcpTools = claudeCodeYoloAllowedMcpTools(env);
     if (allowedMcpTools.length) args.push("--allowedTools", allowedMcpTools.join(","));
   }
