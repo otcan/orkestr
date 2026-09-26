@@ -2079,17 +2079,31 @@ async function chooseThread(ctx) {
   return ctx.pickThread(payload?.threads || [], ctx);
 }
 
+// Worker replies go to the worker's bound WhatsApp chat by default; the server
+// still enforces ownership, parent linkage, sanitizer approval and eligibility.
+async function sendRepliesToWhatsApp(argv, target, ctx) {
+  if (argv.includes("--no-reply-whatsapp")) return false;
+  if (argv.includes("--reply-whatsapp")) return true;
+  const payload = await requestJson(`/api/threads/${encodeURIComponent(target)}`, ctx).catch(() => null);
+  const thread = payload?.thread || payload || {};
+  const binding = thread.binding || {};
+  return thread.threadKind === "worker" && Boolean(thread.parentThreadId) &&
+    binding.connector === "whatsapp" && binding.enabled === true && binding.mirrorToWhatsApp !== false &&
+    binding.retired !== true && binding.routeEligible !== false;
+}
+
 async function send(argv, ctx) {
   const json = argv.includes("--json");
   const values = positional(argv);
   const target = values[0];
   const text = values.slice(1).join(" ").trim();
   if (!target || !text) throw new Error('Usage: orkestr send <thread> "<message>"');
+  const replyWhatsApp = await sendRepliesToWhatsApp(argv, target, ctx);
   const payload = await requestJson(`/api/threads/${encodeURIComponent(target)}/input`, {
     ...ctx,
     method: "POST",
     body: { text, source: "cli", parseCommands: true, controlAllowed: true,
-      ...(argv.includes("--reply-whatsapp") ? { workerReplyDelivery: "bound_whatsapp" } : {}),
+      ...(replyWhatsApp ? { workerReplyDelivery: "bound_whatsapp" } : {}),
       ...(flagValue(argv, "--idempotency-key") ? { idempotencyKey: flagValue(argv, "--idempotency-key") } : {}),
     },
   });
@@ -2157,7 +2171,7 @@ Common thread commands:
   orkestr connect google --review --thread <reviewer-thread-id> [--json]
   orkestr connect google --review-environment --thread <reviewer-thread-id> [--json]
   orkestr attach [thread-name-or-id] [--print] [--read-only] [--takeover] [--interrupt] [--yes] [--interval seconds] [--timeout duration] [--json]
-  orkestr send <thread-name-or-id> "<message>" [--reply-whatsapp] [--idempotency-key <key>] [--json]
+  orkestr send <thread-name-or-id> "<message>" [--reply-whatsapp|--no-reply-whatsapp] [--idempotency-key <key>] [--json]
   orkestr wake <thread-name-or-id> [--json]
   orkestr reset <thread-name-or-id> [--json]
   orkestr hard-reset <thread-name-or-id> [--json]
@@ -2431,6 +2445,7 @@ function positional(argv) {
   ]);
   const flagsWithoutValues = new Set([
     "--reply-whatsapp",
+    "--no-reply-whatsapp",
     "--blank",
     "--force-new",
     "--json",
