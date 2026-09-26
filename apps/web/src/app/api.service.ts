@@ -1,6 +1,6 @@
 import { HttpClient } from "@angular/common/http";
 import { Injectable, inject } from "@angular/core";
-import { Observable } from "rxjs";
+import { Observable, switchMap } from "rxjs";
 
 export interface HealthResponse {
   ok: boolean;
@@ -300,6 +300,21 @@ export interface LlmAccountLoginSession {
   startedAt?: string;
   expiresAt?: string;
   failureCode?: string | null;
+}
+
+export interface LlmAccountDiagnostics {
+  profileId: string;
+  profileState: string;
+  authenticated: boolean;
+  available: boolean;
+  authMethod?: string | null;
+  apiProvider?: string | null;
+  providerReportedSubscription?: { tier: string } | null;
+  observedQuota: null;
+  multiplierReported: null;
+  failureCode?: string | null;
+  lastVerifiedAt?: string | null;
+  generatedAt: string;
 }
 
 export interface BrowserSession {
@@ -2581,20 +2596,16 @@ export class ApiService {
   }
 
   startGmailOAuth(options: { account?: string; accountId?: string; alias?: string; useMode?: string; oauthApp?: string; setAsMain?: boolean; setAsThreadDefault?: boolean; threadId?: string; capabilities?: string[]; privacyConsent?: boolean; privacyPolicyVersion?: string } = {}): Observable<GmailOAuthStartResponse> {
-    const params = new URLSearchParams();
-    if (options.account?.trim()) params.set("account", options.account.trim());
-    if (options.accountId?.trim()) params.set("accountId", options.accountId.trim());
-    if (options.alias?.trim()) params.set("alias", options.alias.trim());
-    if (options.useMode?.trim()) params.set("useMode", options.useMode.trim());
-    if (options.oauthApp?.trim()) params.set("oauthApp", options.oauthApp.trim());
-    if (options.setAsMain === true) params.set("setAsMain", "1");
-    if (options.setAsThreadDefault === true) params.set("setAsThreadDefault", "1");
-    if (options.threadId?.trim()) params.set("threadId", options.threadId.trim());
-    if (options.capabilities?.length) params.set("capabilities", options.capabilities.join(","));
-    if (options.privacyConsent === true) params.set("privacyConsent", "1");
-    if (options.privacyPolicyVersion?.trim()) params.set("privacyPolicyVersion", options.privacyPolicyVersion.trim());
-    const suffix = params.size ? `?${params.toString()}` : "";
-    return this.http.get<GmailOAuthStartResponse>(this.api(`/connectors/gmail/oauth/start${suffix}`));
+    // ORK-512: create a one-time intent first, then POST to start (CSRF-resistant).
+    return this.http.post<{ intentId: string; token: string }>(this.api("/connectors/gmail/oauth/intent"), {}).pipe(
+      switchMap(({ intentId, token }) =>
+        this.http.post<GmailOAuthStartResponse>(this.api("/connectors/gmail/oauth/start"), {
+          ...options,
+          intentId,
+          token,
+        }),
+      ),
+    );
   }
 
   googleWorkspaceAccounts(threadId = ""): Observable<GoogleWorkspaceAccountsResponse> {
@@ -2713,6 +2724,10 @@ export class ApiService {
     return this.http.delete<{ ok: boolean; account: LlmAccountProfile; interruptedThreads: number }>(
       this.api(`/llm-accounts/${encodeURIComponent(profileId)}`),
     );
+  }
+
+  llmAccountDiagnostics(profileId: string): Observable<LlmAccountDiagnostics> {
+    return this.http.get<LlmAccountDiagnostics>(this.api(`/llm-accounts/${encodeURIComponent(profileId)}/diagnostics`));
   }
 
   codexThreads(search = ""): Observable<{ threads: CodexStoredThread[]; nextCursor?: string | null }> {

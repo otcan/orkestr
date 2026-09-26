@@ -7,6 +7,7 @@ import {
   startClaudeCodeLogin,
   submitClaudeCodeLoginCode,
 } from "../../../../../packages/core/src/claude-code-client.js";
+import { claudeCodeAccountDiagnostics } from "../../../../../packages/core/src/claude-code-subscription-diagnostics.js";
 import {
   createLlmAccountProfile,
   listLlmAccountProfiles,
@@ -114,6 +115,15 @@ export class LlmAccountsController {
       provider: "claude-code",
     });
     return { login };
+  }
+
+  @Get(":profileId/diagnostics")
+  async diagnostics(@Req() request: any, @Param("profileId") profileId: string, @Query("ownerUserId") requestedOwner = "") {
+    const ownerUserId = ownerForRequest(request, requestedOwner);
+    // resolveLlmAccountProfile enforces owner boundary and revocation guard (allowRevoked: false).
+    const profile = await resolveLlmAccountProfile({ ownerUserId, profileId, provider: "claude-code", requireReady: false });
+    // Read-only probe: never mutates state, never logs events, never calls login/verify.
+    return claudeCodeAccountDiagnostics(profile, process.env);
   }
 
   @Delete(":profileId")

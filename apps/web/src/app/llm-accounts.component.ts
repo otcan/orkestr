@@ -1,7 +1,7 @@
 import { ChangeDetectorRef, Component, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, LlmAccountLoginSession, LlmAccountProfile } from "./api.service";
+import { ApiService, LlmAccountDiagnostics, LlmAccountLoginSession, LlmAccountProfile } from "./api.service";
 
 @Component({
   selector: "app-llm-accounts",
@@ -32,6 +32,11 @@ import { ApiService, LlmAccountLoginSession, LlmAccountProfile } from "./api.ser
                 {{ account.state === 'rate_limited' ? 'Recheck after plan change' : 'Verify login' }}
               </button>
               <button class="secondary danger-soft" type="button" (click)="revoke(account)" [disabled]="busy || account.state === 'revoked'">Revoke</button>
+              @if (account.state !== 'revoked') {
+                <button class="secondary" type="button" (click)="toggleDiagnostics(account)" [disabled]="busy" aria-label="Show account diagnostics">
+                  {{ diagProfileId === account.id ? 'Hide diagnostics' : 'Diagnostics' }}
+                </button>
+              }
             </div>
             @if (account.state === 'rate_limited') {
               <small class="profile-note">Recheck confirms the server login only. It cannot verify the subscription tier or remaining quota, and it never replays failed prompts.</small>
@@ -43,6 +48,25 @@ import { ApiService, LlmAccountLoginSession, LlmAccountProfile } from "./api.ser
                 </label>
                 <button type="submit" [disabled]="busy || !authorizationCode.trim()">Complete login</button>
               </form>
+            }
+            @if (diagProfileId === account.id) {
+              @if (diagError) { <p class="error diag-row" role="alert">{{ diagError }}</p> }
+              @if (diagData) {
+                <aside class="diag-row" aria-label="Account diagnostics">
+                  <dl>
+                    <dt>Authenticated</dt><dd>{{ diagData.authenticated ? 'yes' : 'no' }} (CLI {{ diagData.available ? 'available' : 'unavailable' }})</dd>
+                    <dt>Stored state</dt><dd>{{ diagData.profileState }}</dd>
+                    @if (diagData.authMethod) { <dt>Auth method</dt><dd>{{ diagData.authMethod }}</dd> }
+                    @if (diagData.apiProvider) { <dt>API provider</dt><dd>{{ diagData.apiProvider }}</dd> }
+                    <dt>Subscription tier</dt><dd>{{ diagData.providerReportedSubscription?.tier || 'not reported by CLI' }}</dd>
+                    <dt>Quota</dt><dd>not reported by auth status</dd>
+                    <dt>Multiplier</dt><dd>not reported by any source</dd>
+                    @if (diagData.failureCode) { <dt>Failure code</dt><dd>{{ diagData.failureCode }}</dd> }
+                    <dt>Last verified</dt><dd>{{ diagData.lastVerifiedAt || 'never' }}</dd>
+                  </dl>
+                  <small>Read-only snapshot. Subscription multiplier and quota are not reported by the auth status command. Tier comes directly from the CLI; it is not inferred from the profile label.</small>
+                </aside>
+              }
             }
           </article>
         } @empty { <p>No Claude Code account profiles yet.</p> }
@@ -60,6 +84,10 @@ import { ApiService, LlmAccountLoginSession, LlmAccountProfile } from "./api.ser
     article { border:1px solid var(--line, #d7d7d7); border-radius:10px; padding:12px; flex-wrap:wrap; }
     .code-form { width:100%; justify-content:flex-start; flex-wrap:wrap; }
     .profile-note { flex:1 1 100%; }
+    .diag-row { flex:1 1 100%; width:100%; }
+    aside.diag-row { border-top:1px solid var(--line,#d7d7d7); padding-top:10px; margin-top:4px; }
+    dl { display:grid; grid-template-columns:max-content 1fr; gap:3px 12px; }
+    dt { opacity:.65; }
     article span, small { opacity:.75; }
     .error { color:var(--danger, #a22); }
   `],
@@ -75,6 +103,9 @@ export class LlmAccountsComponent implements OnInit {
   notice = "";
   activeLoginProfileId = "";
   authorizationCode = "";
+  diagProfileId = "";
+  diagData: LlmAccountDiagnostics | null = null;
+  diagError = "";
 
   ngOnInit(): void { void this.load(); }
 
@@ -179,6 +210,22 @@ export class LlmAccountsComponent implements OnInit {
       this.notice = `${account.label} revoked${result.interruptedThreads ? `; ${result.interruptedThreads} attached thread(s) were fenced` : ""}.`;
     } catch (error: any) { this.error = error?.error?.message || error?.error?.error || "Could not revoke the Claude profile."; }
     finally { this.busy = false; this.detector.markForCheck(); }
+  }
+
+  async toggleDiagnostics(account: LlmAccountProfile): Promise<void> {
+    if (this.diagProfileId === account.id) {
+      this.diagProfileId = ""; this.diagData = null; this.diagError = "";
+      this.detector.markForCheck();
+      return;
+    }
+    this.busy = true; this.diagProfileId = account.id; this.diagData = null; this.diagError = "";
+    try {
+      this.diagData = await firstValueFrom(this.api.llmAccountDiagnostics(account.id));
+    } catch (error: any) {
+      this.diagError = error?.error?.error || "Could not load diagnostics.";
+    } finally {
+      this.busy = false; this.detector.markForCheck();
+    }
   }
 
   private replace(account: LlmAccountProfile): void {
