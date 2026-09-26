@@ -234,21 +234,26 @@ test("parallel requests generate at most one QR and the global QR concurrency ca
 });
 
 test("per-account and per-source budgets are durable across a restart", async () => {
-  const first = await startFixtureServer(repairEnv({ ORKESTR_WHATSAPP_REPAIR_ACCOUNT_LIMIT: "1", ORKESTR_WHATSAPP_REPAIR_SOURCE_LIMIT: "4" }));
+  const first = await startFixtureServer(repairEnv({ ORKESTR_WHATSAPP_REPAIR_ACCOUNT_LIMIT: "1", ORKESTR_WHATSAPP_REPAIR_SOURCE_LIMIT: "5" }));
   const home = first.home;
   let token = "";
+  let consumedBeforeRestart = "";
   try {
     stubRuntime();
     const admin = await pairedCookie();
     assert.equal((await send(first.port, { accountId: "wa-one" }, { cookie: admin })).status, 200);
     token = await notificationToken("wa-one");
+    consumedBeforeRestart = await notificationToken("wa-two");
+    assert.equal((await send(first.port, { intent: consumedBeforeRestart })).status, 200);
   } finally {
     setWhatsAppRepairOptionsForTest(null);
     await first.close({ keepHome: true });
   }
-  const second = await startFixtureServer(repairEnv({ ORKESTR_WHATSAPP_REPAIR_ACCOUNT_LIMIT: "1", ORKESTR_WHATSAPP_REPAIR_SOURCE_LIMIT: "4" }), { home });
+  const second = await startFixtureServer(repairEnv({ ORKESTR_WHATSAPP_REPAIR_ACCOUNT_LIMIT: "1", ORKESTR_WHATSAPP_REPAIR_SOURCE_LIMIT: "5" }), { home });
   try {
     const calls = stubRuntime();
+    const replayAfterRestart = await send(second.port, { intent: consumedBeforeRestart });
+    assert.equal(replayAfterRestart.status, 403, "a consumed intent stays consumed across a restart");
     const admin = await pairedCookie();
     const throttled = await send(second.port, { accountId: "wa-one" }, { cookie: admin });
     assert.equal(throttled.status, 429);
@@ -256,17 +261,19 @@ test("per-account and per-source budgets are durable across a restart", async ()
     const holder = await send(second.port, { intent: token });
     assert.equal(holder.status, 503, "throttled intent holders get the generic unavailable response");
     assert.deepEqual(calls, { starts: [], mails: [] });
-    // Unauthenticated source budget (4): the holder above plus three probes.
-    for (let index = 0; index < 3; index += 1) assert.equal((await send(second.port, { intent: "probe" })).status, 403);
+    // Unauthenticated source budget (5), durable across the restart: one intent use before it, then the replay, the holder and two probes.
+    for (let index = 0; index < 2; index += 1) assert.equal((await send(second.port, { intent: "probe" })).status, 403);
     const fresh = await notificationToken("wa-two");
     const blocked = await send(second.port, { intent: fresh });
     assert.equal(blocked.status, 403, "even a valid intent is refused once the source budget is spent");
     assert.equal(blocked.text, genericRejection);
     assert.ok((await eventsOfType("whatsapp_repair_request_rejected")).some((event) => event.reason === "source_rate_limited"));
-    // Administrators are not locked out by anonymous traffic, and the refused
-    // intent was never consumed.
-    assert.equal((await send(second.port, { accountId: "wa-two" }, { cookie: admin })).status, 200);
-    assert.deepEqual(calls.starts, [{ accountId: "wa-two", resetRuntime: true }]);
+    // Administrators are not locked out by the anonymous source budget; they
+    // reach the per-account budget, which wa-two spent before the restart.
+    const adminAfter = await send(second.port, { accountId: "wa-two" }, { cookie: admin });
+    assert.equal(adminAfter.status, 429);
+    assert.equal(adminAfter.json.error, "repair_rate_limited");
+    assert.deepEqual(calls, { starts: [], mails: [] });
     const stored = await findFiles(path.join(home, "secrets", "rate-limits"), "whatsapp-repair-account.json");
     assert.equal(stored.length, 1);
     assert.equal((await fs.readFile(stored[0], "utf8")).includes("wa-one"), false, "account keys are hashed on disk");
