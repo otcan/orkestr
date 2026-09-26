@@ -758,7 +758,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     const source = String(input.source || "manual");
     const output = await existingRuntimeOutput(messageRepository, thread, { ...input, role, source },
       normalizeUserId(input.ownerUserId || resourceOwnerUserId(thread, env)));
-    if (output) return { ...output, duplicate: true, duplicateReason: "canonical_runtime_output" };
+    if (output) return { ...output, duplicate: true, duplicateReason: output.duplicateReason || "canonical_runtime_output" };
     const clientMessageId = clientInputIdempotencyKey(input);
     if (role === "user" && clientMessageId) {
       const duplicate = sqlite
