@@ -263,7 +263,7 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
       ? "broken"
       : clean(pending.pendingId || pending.deviceCode)
         ? "pending"
-        : clean(oauthState.state)
+        : clean(oauthState.state) && !clean(oauthState.consumedAt)
           ? "authorization_url_ready"
           : parentConnector.parentAppConfigured
             ? "not_connected"

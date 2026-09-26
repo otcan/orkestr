@@ -157,6 +157,27 @@ test("handoff routes allow only connect/auth origins, redirect app, and reject u
   assert.equal(redirected.headers.location, "https://connect.example.test/setup/pairing?return=%2Fthread%2Fone");
   assert.deepEqual([attacker.statusCode, attacker.body], [404, "not found"]);
   assert.deepEqual([missing.statusCode, missing.body], [404, "not found"]);
+
+  // ORK-512: OAuth handoffs are exact path+method pairs, not a /oauth/ namespace.
+  for (const [method, url] of [
+    ["GET", "/oauth/gmail/callback?code=sample&state=sample"],
+    ["GET", "/oauth/gmail/start"],
+    ["POST", "/oauth/gmail/start"],
+    ["GET", "/google-marketing/oauth/callback?code=sample"],
+  ]) {
+    assert.equal((await enforce(request(url, "connect.example.test", { method }), runtimeEnv)).handled, false, `${method} ${url}`);
+  }
+  for (const [method, url] of [
+    ["POST", "/oauth/gmail/callback"],
+    ["HEAD", "/oauth/gmail/callback"],
+    ["PUT", "/oauth/gmail/start"],
+    ["GET", "/oauth/other/start"],
+    ["GET", "/oauth/gmail/callback/extra"],
+    ["DELETE", "/google-marketing/oauth/start"],
+  ]) {
+    const denied = await enforce(request(url, "connect.example.test", { method }), runtimeEnv);
+    assert.deepEqual([denied.statusCode, denied.body], [404, "not found"], `${method} ${url}`);
+  }
   await cleanup(home);
 });
 
@@ -412,7 +433,6 @@ test("connect host serves only method-specific pairing primitives and OAuth star
     ["POST", "/api/setup/security/challenges"],
     ["GET", "/api/setup/security/challenges/sample"],
     ["POST", "/api/setup/security/pair"],
-    ["GET", "/api/connectors/gmail/oauth/start?account=sample%40example.test"],
     ["POST", "/api/broker/instances/register"],
     ["POST", "/api/broker/instances/sample/heartbeat"],
     ["POST", "/api/broker/instances/sample/whatsapp/onboarding"],
@@ -437,7 +457,9 @@ test("connect host serves only method-specific pairing primitives and OAuth star
     ["POST", "/api/setup/security/enabled"],
     ["POST", "/api/setup/security/sessions/revoke"],
     ["POST", "/api/setup/security/sessions/sample/revoke"],
+    ["GET", "/api/connectors/gmail/oauth/start"],
     ["POST", "/api/connectors/gmail/oauth/start"],
+    ["POST", "/api/connectors/gmail/oauth/intent"],
     ["GET", "/api/broker/instances"],
     ["GET", "/api/broker/instances/sample/heartbeat"],
     ["POST", "/api/broker/instances/sample/other"],

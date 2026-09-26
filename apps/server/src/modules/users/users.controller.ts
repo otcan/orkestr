@@ -28,6 +28,7 @@ import {
   setUserSkillForPrincipal,
 } from "../../../../../packages/core/src/user-skills.js";
 import { httpError } from "../../common/http.js";
+import { consumeGmailOAuthIntent, createGmailOAuthIntent } from "../connectors/gmail-oauth-intents.js";
 
 function assertAdminRequest(request: any): void {
   if (isAdminPrincipal(requestPrincipal(request))) return;
@@ -118,6 +119,23 @@ function identityProvider(provider: string): "gmail" | "outlook" {
   const normalized = String(provider || "").trim().toLowerCase();
   if (normalized === "gmail" || normalized === "outlook") return normalized;
   throw httpError("unsupported_mail_identity_provider", 400);
+}
+
+function userGmailOAuthParams(body: Record<string, unknown> = {}, options: { onlyPresent?: boolean } = {}) {
+  const params: Record<string, unknown> = {};
+  const account = body.account ?? body.email;
+  const oauthApp = body.oauthAppId ?? body.oauth_app;
+  if (!options.onlyPresent || account !== undefined) params.account = String(account || "").trim().toLowerCase();
+  if (!options.onlyPresent || oauthApp !== undefined) params.oauthApp = String(oauthApp || "").trim();
+  return params;
+}
+
+async function runIntentStep<T>(step: () => Promise<T>): Promise<T> {
+  try {
+    return await step();
+  } catch (error) {
+    throw httpError(String((error as Error)?.message || "gmail_oauth_intent_invalid"), Number((error as any)?.statusCode || 403) || 403);
+  }
 }
 
 function requestedUserId(value: string, request: any) {
@@ -320,13 +338,32 @@ export class UsersController {
     return { ok: true, userId: requested, identities };
   }
 
+  // ORK-512: admin-initiated Gmail OAuth for a user is two-step as well; the
+  // intent binds the admin, session, host, target user, account and OAuth app.
+  @Post(":userId/connectors/gmail/oauth/intent")
+  @HttpCode(201)
+  async createUserGmailOAuthIntent(@Req() request: any, @Param("userId") userId: string, @Body() body: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    const requested = requestedUserId(userId, request);
+    return runIntentStep(() => createGmailOAuthIntent(request, userGmailOAuthParams(body), process.env, {
+      purpose: "user_oauth_start",
+      subjectUserId: requested,
+    }));
+  }
+
   @Post(":userId/connectors/gmail/oauth/start")
   @HttpCode(200)
   async startUserGmailOAuth(@Req() request: any, @Param("userId") userId: string, @Body() body: Record<string, unknown> = {}) {
     assertAdminRequest(request);
-    const principal = requestPrincipal(request);
     const requested = requestedUserId(userId, request);
-    const account = String(body.account || body.email || "").trim().toLowerCase();
+    const supplied = userGmailOAuthParams(body, { onlyPresent: true });
+    const { principal, params } = await runIntentStep(() => consumeGmailOAuthIntent(request, {
+      ...supplied,
+      intentId: body.intentId,
+      token: body.token,
+    }, process.env, { purpose: "user_oauth_start", subjectUserId: requested }));
+    const account = String(params.account || "").trim().toLowerCase();
+    body = { ...body, account, oauthAppId: String(params.oauthApp || "") };
     let identities = await readUserPrivateIdentities(requested);
     if (account) {
       identities = await linkUserPrivateIdentity(requested, mailIdentityBody("gmail", { ...body, account }), {
@@ -336,8 +373,9 @@ export class UsersController {
     }
     const oauth = await beginGmailOAuth(process.env, {
       userId: requested,
+      initiatorUserId: principal.userId,
       account,
-      oauthAppId: String(body.oauthAppId || body.oauth_app || "").trim(),
+      oauthAppId: String(params.oauthApp || "").trim(),
     });
     return { ok: true, userId: requested, identities, ...oauth };
   }

@@ -556,8 +556,10 @@ test("google workspace brokered connect links require instance and owner scoped 
       body: JSON.stringify({ accountId: "sender" }),
     });
     const waRepairPostPayload = await waRepairPostResponse.json();
-    assert.equal(waRepairPostResponse.status, 409);
-    assert.equal(waRepairPostPayload.error, "recipient_missing");
+    // ORK-513: a Google-connect auth-intent session is not an administrator
+    // session and carries no repair intent, so it gets the generic rejection.
+    assert.equal(waRepairPostResponse.status, 403);
+    assert.equal(waRepairPostPayload.error, "repair_request_rejected");
 
     const appResponse = await fetch(`http://127.0.0.1:${port}/app`, { headers: { cookie }, redirect: "manual" });
     const appPayload = await appResponse.json();
@@ -856,9 +858,13 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       redirect: "manual",
     });
     const staleFirstConnectHtml = await staleFirstConnect.text();
-    const staleFirstStartResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/oauth/start`, {
-      headers: { cookie: staleFirstDuplicateCookie },
-    });
+    const brokerOAuthStart = async (cookieHeader, body = {}) => {
+      const oauthBase = `http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/oauth`;
+      const headers = { cookie: cookieHeader, "content-type": "application/json" };
+      const intent = await (await fetch(`${oauthBase}/intent`, { method: "POST", headers, body: JSON.stringify(body) })).json();
+      return fetch(`${oauthBase}/start`, { method: "POST", headers, body: JSON.stringify({ intentId: intent.intentId, token: intent.token }) });
+    };
+    const staleFirstStartResponse = await brokerOAuthStart(staleFirstDuplicateCookie);
     const staleFirstStartPayload = await staleFirstStartResponse.json();
     const challenge = await createPairingChallenge({ env: process.env, instanceId: brokerRegistration.instanceId });
     await approvePairingChallenge(challenge.challengeId, { approvedBy: "node:test", env: process.env });
@@ -910,7 +916,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const intentSetupPayload = await intentSetupResponse.json();
     const intentUserResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/users/me`, { headers: { cookie: authIntentCookie } });
     const intentUserPayload = await intentUserResponse.json();
-    const intentStartResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/oauth/start`, { headers: { cookie: authIntentCookie } });
+    const intentStartResponse = await brokerOAuthStart(authIntentCookie);
     const intentStartPayload = await intentStartResponse.json();
     const intentAccountsResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/accounts?threadId=saim-linkedin`, { headers: { cookie: authIntentCookie } });
     const intentAccountUpdateResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/accounts/google-saim`, {

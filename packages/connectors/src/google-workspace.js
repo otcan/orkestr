@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readJson, writeJson } from "../../storage/src/store.js";
+import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { connectorFile, connectorScopePaths, listConnectorScopePaths } from "./connector-storage.js";
 import {
   encryptBrokerClientPayload,
@@ -475,9 +476,22 @@ export async function getGoogleWorkspaceConnectRequest(connectId = "", env = pro
   };
 }
 
+// Claims a connect link under the ledger lock so two concurrent starts cannot
+// both pass the one-time check (ORK-512). A failed start releases the claim.
+async function updateConnectRequest(scope, connectId, update) {
+  return withStorageFileLock(connectorFile(scope, "oauth", connectFileName), async () => {
+    const ledger = await readConnectLedger(scope);
+    const request = ledger.requests.find((item) => clean(item.connectId) === connectId);
+    if (!request) throw connectorError("google_workspace_connect_link_not_found", 404);
+    update(request);
+    await writeConnectLedger(scope, ledger);
+    return request;
+  });
+}
+
 export async function startGoogleWorkspaceOAuth(env = process.env, options = {}) {
   const connectId = clean(options.connectId || options.connect);
-  const { scope, ledger, request } = await findConnectRequest(connectId, env);
+  const { scope, request } = await findConnectRequest(connectId, env);
   assertConnectRequestUsable(request);
   const capabilities = requireAllowedGoogleWorkspaceCapabilities(request.requestedCapabilities, env);
   if (Object.hasOwn(options, "capabilities")) {
@@ -487,39 +501,52 @@ export async function startGoogleWorkspaceOAuth(env = process.env, options = {})
     }
   }
   const account = clean(options.account || (clean(request.oauthAppId) ? request.account : "")).toLowerCase();
-  const started = await startGmailOAuth(env, {
-    userId: scope.userId || "",
-    account,
-    threadId: request.threadId,
-    chatId: request.chatId,
-    accountId: request.accountId,
-    provider: "google_workspace",
-    connectId,
-    capabilities,
-    scopes: googleWorkspaceScopesForCapabilities(capabilities),
-    ignoreConfiguredAccount: true,
-    brokerInstanceId: request.brokerInstanceId,
-    brokerTenantVmId: request.brokerTenantVmId,
-    brokerTenantUserId: request.brokerTenantUserId,
-    brokerTenantThreadId: request.brokerTenantThreadId,
-    brokerTenantChatId: request.brokerTenantChatId,
-    brokerTenantAccountId: request.brokerTenantAccountId,
-    googleConnectionId: request.googleConnectionId,
-    oauthAppId: request.oauthAppId,
-    connectionAlias: request.connectionAlias,
-    connectionUseMode: request.connectionUseMode,
-    setAsMain: request.setAsMain === true,
-    setAsThreadDefault: request.setAsThreadDefault === true,
-    privacyPolicyVersion: clean(options.privacyPolicyVersion),
-    privacyConsentAt: clean(options.privacyConsentAt),
-    reviewEnvironmentTicket: clean(options.reviewEnvironmentTicket),
+  const claimedAt = nowIso();
+  await updateConnectRequest(scope, connectId, (current) => {
+    assertConnectRequestUsable(current);
+    current.consumedAt = claimedAt;
   });
-  request.consumedAt = nowIso();
-  request.selectedCapabilities = capabilities;
-  request.privacyPolicyVersion = clean(options.privacyPolicyVersion);
-  request.privacyConsentAt = clean(options.privacyConsentAt);
-  request.oauthState = started.state;
-  await writeConnectLedger(scope, ledger);
+  let started;
+  try {
+    started = await startGmailOAuth(env, {
+      userId: scope.userId || "",
+      account,
+      threadId: request.threadId,
+      chatId: request.chatId,
+      accountId: request.accountId,
+      provider: "google_workspace",
+      connectId,
+      capabilities,
+      scopes: googleWorkspaceScopesForCapabilities(capabilities),
+      ignoreConfiguredAccount: true,
+      brokerInstanceId: request.brokerInstanceId,
+      brokerTenantVmId: request.brokerTenantVmId,
+      brokerTenantUserId: request.brokerTenantUserId,
+      brokerTenantThreadId: request.brokerTenantThreadId,
+      brokerTenantChatId: request.brokerTenantChatId,
+      brokerTenantAccountId: request.brokerTenantAccountId,
+      googleConnectionId: request.googleConnectionId,
+      oauthAppId: request.oauthAppId,
+      connectionAlias: request.connectionAlias,
+      connectionUseMode: request.connectionUseMode,
+      setAsMain: request.setAsMain === true,
+      setAsThreadDefault: request.setAsThreadDefault === true,
+      privacyPolicyVersion: clean(options.privacyPolicyVersion),
+      privacyConsentAt: clean(options.privacyConsentAt),
+      reviewEnvironmentTicket: clean(options.reviewEnvironmentTicket),
+    });
+  } catch (error) {
+    await updateConnectRequest(scope, connectId, (current) => {
+      if (current.consumedAt === claimedAt) delete current.consumedAt;
+    }).catch(() => null);
+    throw error;
+  }
+  await updateConnectRequest(scope, connectId, (current) => {
+    current.selectedCapabilities = capabilities;
+    current.privacyPolicyVersion = clean(options.privacyPolicyVersion);
+    current.privacyConsentAt = clean(options.privacyConsentAt);
+    current.oauthState = started.state;
+  });
   return {
     ...started,
     ok: true,
