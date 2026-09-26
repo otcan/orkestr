@@ -304,6 +304,21 @@ export interface LlmAccountLoginSession {
   failureCode?: string | null;
 }
 
+export interface LlmAccountDiagnostics {
+  profileId: string;
+  profileState: string;
+  authenticated: boolean;
+  available: boolean;
+  authMethod?: string | null;
+  apiProvider?: string | null;
+  providerReportedSubscription?: { tier: string } | null;
+  observedQuota: null;
+  multiplierReported: null;
+  failureCode?: string | null;
+  lastVerifiedAt?: string | null;
+  generatedAt: string;
+}
+
 export interface BrowserSession {
   id?: string;
   slug?: string;
@@ -2724,6 +2739,10 @@ export class ApiService {
     return this.http.delete<{ ok: boolean; account: LlmAccountProfile; interruptedThreads: number }>(
       this.api(`/llm-accounts/${encodeURIComponent(profileId)}`),
     );
+  }
+
+  llmAccountDiagnostics(profileId: string): Observable<LlmAccountDiagnostics> {
+    return this.http.get<LlmAccountDiagnostics>(this.api(`/llm-accounts/${encodeURIComponent(profileId)}/diagnostics`));
   }
 
   codexThreads(search = ""): Observable<{ threads: CodexStoredThread[]; nextCursor?: string | null }> {
