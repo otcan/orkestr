@@ -73,6 +73,7 @@ import { getTenantVm } from "../../../../../packages/core/src/tenant-vm-registry
 import { requestPrincipal, userPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { createPairingChallenge, securityStatus } from "../../../../../packages/core/src/security.js";
+import { consumeConnectorUseIntent, createConnectorUseIntent } from "../../../../../packages/core/src/connector-use-intent.js";
 import { resolveBrokerConnectInstance } from "../../../../../packages/core/src/broker-instance-registry.js";
 import { normalizeUserId } from "../../../../../packages/core/src/users.js";
 import { publicRoutingFailurePayload } from "../../../../../packages/core/src/routing-failures.js";
@@ -537,19 +538,46 @@ export class ConnectorsController {
     }
   }
 
-  @Get("gmail/oauth/start")
+  // ORK-512: Create a one-time signed intent before starting Gmail OAuth.
+  // The intent token is single-use and bound to the authenticated user and host.
+  @Post("gmail/oauth/intent")
+  @HttpCode(201)
+  async gmailOAuthIntent(@Req() request: any) {
+    const principal = requestPrincipal(request);
+    const host = String(request?.headers?.host || "").trim();
+    return createConnectorUseIntent(
+      String(principal.userId || principal.id || ""),
+      { connector: "gmail", purpose: "oauth_start", host },
+      process.env,
+    );
+  }
+
+  // ORK-512: Gmail OAuth start is now POST, consumes a one-time intent (CSRF-resistant).
+  // All OAuth parameters are in the request body instead of query string.
+  @Post("gmail/oauth/start")
+  @HttpCode(200)
   async startGmailOAuth(
     @Req() request: any,
-    @Query("account") account = "",
-    @Query("accountId") accountId = "",
-    @Query("alias") alias = "",
-    @Query("useMode") useMode = "",
-    @Query("oauthApp") oauthApp = "",
-    @Query("setAsMain") setAsMain = "",
-    @Query("setAsThreadDefault") setAsThreadDefault = "",
-    @Query("threadId") threadId = "",
+    @Body() body: Record<string, unknown> = {},
   ) {
     const principal = requestPrincipal(request);
+    const intentId = String(body.intentId || "").trim();
+    const token = String(body.token || "").trim();
+    const host = String(request?.headers?.host || "").trim();
+    await consumeConnectorUseIntent(intentId, token, {
+      userId: String(principal.userId || principal.id || ""),
+      connector: "gmail",
+      purpose: "oauth_start",
+      host,
+    }, process.env);
+    const account = String(body.account || "");
+    const accountId = String(body.accountId || "");
+    const alias = String(body.alias || "");
+    const useMode = String(body.useMode || "");
+    const oauthApp = String(body.oauthApp || "");
+    const setAsMain = String(body.setAsMain || "");
+    const setAsThreadDefault = String(body.setAsThreadDefault || "");
+    const threadId = String(body.threadId || "");
     const reviewer = googleWorkspaceReviewEnvironmentIdentity(process.env);
     const reviewerConnection = googleWorkspaceReviewEnvironmentEnabled(process.env) &&
       clean(principal.userId || principal.id) === reviewer.userId;
@@ -956,18 +984,38 @@ export class ConnectorsController {
     });
   }
 
+  // ORK-513: Repair page now requires authentication (removed from pre-pairing allowance).
+  // An intent is generated on page load and embedded in the HTML for the send-email action.
   @Get("whatsapp/bridge/repair")
-  async whatsappBridgeRepairPage(@Query("accountId") accountId = "", @Res() response: any) {
+  async whatsappBridgeRepairPage(@Req() request: any, @Query("accountId") accountId = "", @Res() response: any) {
+    const principal = requestPrincipal(request);
+    const host = String(request?.headers?.host || "").trim();
+    const { intentId, token } = await createConnectorUseIntent(
+      String(principal.userId || principal.id || ""),
+      { connector: "whatsapp", purpose: "repair", host },
+      process.env,
+    );
     return response
       .status(200)
       .header("cache-control", "no-store")
       .type("text/html; charset=utf-8")
-      .send(whatsappRepairPageHtml(accountId));
+      .send(whatsappRepairPageHtml(accountId, intentId, token));
   }
 
+  // ORK-513: send-email consumes the one-time repair intent before sending the QR email.
   @Post("whatsapp/bridge/repair/send-email")
   @HttpCode(200)
-  async whatsappBridgeRepairSendEmail(@Body() body: Record<string, unknown> = {}) {
+  async whatsappBridgeRepairSendEmail(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    const intentId = String(body.intentId || "").trim();
+    const token = String(body.token || "").trim();
+    const host = String(request?.headers?.host || "").trim();
+    await consumeConnectorUseIntent(intentId, token, {
+      userId: String(principal.userId || principal.id || ""),
+      connector: "whatsapp",
+      purpose: "repair",
+      host,
+    }, process.env);
     const result = await sendLocalWhatsAppRepairQrEmail({
       accountId: String(body.accountId || ""),
       reason: "manual_repair_page",

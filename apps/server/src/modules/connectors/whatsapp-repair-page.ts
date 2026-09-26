@@ -6,9 +6,10 @@ function htmlEscape(value: unknown): string {
     .replace(/"/g, "&quot;");
 }
 
-export function whatsappRepairPageHtml(accountId = ""): string {
+export function whatsappRepairPageHtml(accountId = "", intentId = "", token = ""): string {
   const safeAccount = String(accountId || "sender").trim() || "sender";
   const accountJson = JSON.stringify(safeAccount);
+  const intentJson = JSON.stringify({ intentId: String(intentId || ""), token: String(token || "") });
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -53,6 +54,7 @@ export function whatsappRepairPageHtml(accountId = ""): string {
   </main>
   <script>
     const accountId = ${accountJson};
+    const intent = ${intentJson};
     const button = document.getElementById("send");
     const status = document.getElementById("status");
     function setStatus(text, error) {
@@ -66,7 +68,7 @@ export function whatsappRepairPageHtml(accountId = ""): string {
         const response = await fetch("/api/connectors/whatsapp/bridge/repair/send-email", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ accountId })
+          body: JSON.stringify({ accountId, intentId: intent.intentId, token: intent.token })
         });
         const raw = await response.text();
         let payload = {};

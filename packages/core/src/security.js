@@ -2104,7 +2104,11 @@ function isAllowedBeforePairing(request) {
   }
   if (url.startsWith("/desktop/")) return false;
   if (!url.startsWith("/api/") && !url.startsWith("/oauth/")) return true;
-  if (url.startsWith("/oauth/")) return true;
+  // Allow the exact OAuth callback redirect targets (Google posts the browser here after auth).
+  // No wildcard: only the specific paths that have registered NestJS handlers and must remain
+  // reachable without a prior session. OAuth initiators (e.g. /oauth/gmail/start) require auth
+  // and must NOT appear here (ORK-512).
+  if (method === "GET" && url === "/oauth/gmail/callback") return true;
   if (method === "GET" && /^\/(?:api\/)?desktop-shares\/[^/]+\/(?:open|status)$/.test(url)) return true;
   if (method === "GET" && /^\/(?:api\/)?tenant-vms\/[^/]+\/desktop-shares\/[^/]+\/(?:open|status)$/.test(url)) return true;
   if (method === "GET" && ["/api/health", "/api/ready", "/api/version", "/api/setup/status", "/api/setup/security/session-scope"].some((path) => url.startsWith(path))) return true;
@@ -2122,8 +2126,7 @@ function isAllowedBeforePairing(request) {
   if (method === "POST" && /^\/api\/mobile\/pairing\/[^/]+\/complete$/.test(url)) return true;
   if (method === "POST" && url === "/api/mobile/session/refresh") return true;
   if (method === "POST" && /^\/api\/connectors\/twilio\/voice\/[^/]+\/(?:incoming|gather)$/.test(url)) return true;
-  if (method === "GET" && url === "/api/connectors/whatsapp/bridge/repair") return true;
-  if (method === "POST" && url === "/api/connectors/whatsapp/bridge/repair/send-email") return true;
+  // WhatsApp repair routes require authentication (ORK-513). Removed from pre-pairing allowance.
   if (method === "GET" && /^\/api\/setup\/security\/challenges\/[^/]+$/.test(url)) return true;
   if (method === "POST" && url === "/api/setup/security/pair") return true;
   // Logout must remain reachable when the browser presents an expired or
