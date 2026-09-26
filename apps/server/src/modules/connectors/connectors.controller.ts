@@ -539,15 +539,21 @@ export class ConnectorsController {
   }
 
   // ORK-512: Create a one-time signed intent before starting Gmail OAuth.
-  // The intent token is single-use and bound to the authenticated user and host.
+  // The intent is bound to the authenticated user, host, and optionally the connector account,
+  // requested capabilities, and return target so the start endpoint can validate the caller
+  // hasn't substituted a different account or capability set.
   @Post("gmail/oauth/intent")
   @HttpCode(201)
-  async gmailOAuthIntent(@Req() request: any) {
+  async gmailOAuthIntent(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
     const host = String(request?.headers?.host || "").trim();
+    // Bind the optional caller-provided fields into the intent so they can be validated at start.
+    const accountId = String(body.accountId || body.account || "").trim().toLowerCase();
+    const capabilities = Array.isArray(body.capabilities) ? (body.capabilities as string[]) : undefined;
+    const returnTarget = String(body.returnTarget || body.return || "").trim().slice(0, 512);
     return createConnectorUseIntent(
       String(principal.userId || principal.id || ""),
-      { connector: "gmail", purpose: "oauth_start", host },
+      { connector: "gmail", purpose: "oauth_start", host, accountId, capabilities, returnTarget },
       process.env,
     );
   }
@@ -564,13 +570,15 @@ export class ConnectorsController {
     const intentId = String(body.intentId || "").trim();
     const token = String(body.token || "").trim();
     const host = String(request?.headers?.host || "").trim();
+    const account = String(body.account || "");
     await consumeConnectorUseIntent(intentId, token, {
       userId: String(principal.userId || principal.id || ""),
       connector: "gmail",
       purpose: "oauth_start",
       host,
+      // Validate the account matches what was bound in the intent (caller substitution guard).
+      accountId: account.toLowerCase(),
     }, process.env);
-    const account = String(body.account || "");
     const accountId = String(body.accountId || "");
     const alias = String(body.alias || "");
     const useMode = String(body.useMode || "");
@@ -984,15 +992,19 @@ export class ConnectorsController {
     });
   }
 
-  // ORK-513: Repair page now requires authentication (removed from pre-pairing allowance).
-  // An intent is generated on page load and embedded in the HTML for the send-email action.
+  // ORK-513: Repair page requires an authenticated administrator.
+  // The accountId is bound into the one-time intent at page-load time; the send-email endpoint
+  // reads the accountId from the consumed intent, rejecting caller-selected account substitution.
   @Get("whatsapp/bridge/repair")
   async whatsappBridgeRepairPage(@Req() request: any, @Query("accountId") accountId = "", @Res() response: any) {
     const principal = requestPrincipal(request);
+    if (!isAdminPrincipal(principal)) {
+      return response.status(403).header("cache-control", "no-store").type("application/json; charset=utf-8").send(JSON.stringify({ ok: false }));
+    }
     const host = String(request?.headers?.host || "").trim();
     const { intentId, token } = await createConnectorUseIntent(
       String(principal.userId || principal.id || ""),
-      { connector: "whatsapp", purpose: "repair", host },
+      { connector: "whatsapp", purpose: "repair", host, accountId: String(accountId || "").trim() },
       process.env,
     );
     return response
@@ -1002,7 +1014,9 @@ export class ConnectorsController {
       .send(whatsappRepairPageHtml(accountId, intentId, token));
   }
 
-  // ORK-513: send-email consumes the one-time repair intent before sending the QR email.
+  // ORK-513: send-email requires admin OR a valid one-time repair intent.
+  // accountId comes from the consumed intent — caller-selected substitution is rejected.
+  // Generic minimized response prevents disclosure of account/recipient/runtime metadata.
   @Post("whatsapp/bridge/repair/send-email")
   @HttpCode(200)
   async whatsappBridgeRepairSendEmail(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
@@ -1010,25 +1024,38 @@ export class ConnectorsController {
     const intentId = String(body.intentId || "").trim();
     const token = String(body.token || "").trim();
     const host = String(request?.headers?.host || "").trim();
-    await consumeConnectorUseIntent(intentId, token, {
-      userId: String(principal.userId || principal.id || ""),
-      connector: "whatsapp",
-      purpose: "repair",
-      host,
-    }, process.env);
+    // Require admin. Intent validation provides the account binding.
+    if (!isAdminPrincipal(principal)) {
+      throw httpError("admin_required", 403);
+    }
+    let consumed: Record<string, unknown>;
+    try {
+      consumed = await consumeConnectorUseIntent(intentId, token, {
+        userId: String(principal.userId || principal.id || ""),
+        connector: "whatsapp",
+        purpose: "repair",
+        host,
+      }, process.env);
+    } catch {
+      // Generic response: do not reveal whether the intent was not found, expired, or replayed.
+      throw httpError("repair_intent_required", 401);
+    }
+    // accountId is read from the intent — reject caller-selected account substitution.
+    const boundAccountId = String(consumed?.accountId || "").trim();
     const result = await sendLocalWhatsAppRepairQrEmail({
-      accountId: String(body.accountId || ""),
+      accountId: boundAccountId,
       reason: "manual_repair_page",
       force: body.force !== false,
     }, process.env);
     if (!result.ok && !result.skipped) {
-      throw httpError(String(result.error || result.skippedReason || "whatsapp_qr_email_failed"), Number(result.statusCode || 500) || 500);
+      // Generic minimized error — do not expose repair state, account existence, or recipient details.
+      throw httpError("repair_unavailable", 503);
     }
     return {
       ok: result.ok,
       skipped: Boolean(result.skipped),
       skippedReason: result.skippedReason || "",
-      accountId: result.accountId || String(body.accountId || ""),
+      // Mask recipients: no account/email disclosure to the caller.
       recipients: Array.isArray(result.recipients) ? result.recipients.map(maskEmail).filter(Boolean) : [],
     };
   }
@@ -1285,11 +1312,20 @@ export class ConnectorsController {
 
 @Controller("oauth")
 export class ConnectorCallbacksController {
+  // ORK-512: /oauth/gmail/start is a legacy GET alias for browser-navigation OAuth start.
+  // Requires an authenticated principal — isAllowedBeforePairing rejects /oauth/* without a
+  // session when auth is enabled, but this explicit check closes the gap in dev-mode installs.
+  // No managed-browser launch is allowed from an anonymous request.
   @Get("gmail/start")
-  async gmailStart(@Query("account") account = "", @Res() response: any) {
+  async gmailStart(@Req() request: any, @Query("account") account = "", @Res() response: any) {
+    const principal = requestPrincipal(request);
+    if (!isAdminPrincipal(principal)) {
+      return response.status(403).header("cache-control", "no-store").type("application/json; charset=utf-8").send(JSON.stringify({ ok: false, error: "authentication_required" }));
+    }
     let payload: any = null;
     try {
-      payload = await beginGmailOAuth(process.env, { account });
+      // Pass the authenticated principal so the OAuth state is bound to this user.
+      payload = await beginGmailOAuth(process.env, { account, principal });
     } catch (error) {
       payload = {
         ok: false,
