@@ -51,7 +51,9 @@ import {
 import { requestUserInputAnswers } from "./codex-app-server-user-input.js";
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
-import { recordCodexRuntimeAuthFailureSignal } from "./codex-auth-health.js";
+import { codexTurnAuthFailureReason, recordCodexRuntimeAuthFailureSignal } from "./codex-auth-health.js";
+import { redactCodexSecrets } from "./codex-auth-failure.js";
+import { failedAuthRuntimeFields } from "./codex-auth-failed-thread.js";
 import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
 import { runtimeFinalDeliveryPending } from "./runtime-final-delivery.js";
 import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
@@ -769,7 +771,12 @@ export class CodexAppServerClient {
       const threadId = clean(turn.threadId || codexId);
       const turnId = clean(turn.id);
       const status = clean(turn.status || "completed");
-      const errorText = publicError(turn.error);
+      const errorText = redactCodexSecrets(publicError(turn.error));
+      const authFailureReason = status === "failed" ? codexTurnAuthFailureReason(errorText) : "";
+      const authFailure = authFailureReason
+        ? failedAuthRuntimeFields({ reason: authFailureReason, turnId, error: errorText })
+        : null;
+      const failedState = authFailure ? authFailure.state : "failed";
       const remoteCompactionFailure = status === "failed"
         ? classifyCodexRemoteCompactionFailure(turn.error || errorText, {
             runtimeGeneration: threadId,
@@ -850,7 +857,7 @@ export class CodexAppServerClient {
             thread = await threadForCodexThreadId(threadId, this.env) || thread;
           }
           await updateThread(thread.id, {
-            state: status === "failed" ? "failed" : "ready",
+            state: status === "failed" ? failedState : "ready",
             lastError: status === "failed" ? errorText : null,
             runtime: {
               ...(thread.runtime || {}),
@@ -862,10 +869,21 @@ export class CodexAppServerClient {
               lastTurnFailure: remoteCompactionFailure,
               pendingRequest: null,
               codexStatus: { type: status === "failed" ? "systemError" : "idle" },
-              state: status === "failed" ? "failed" : "ready",
+              state: status === "failed" ? failedState : "ready",
+              ...(authFailure ? { authFailure: authFailure.authFailure } : {}),
               updatedAt: nowIso(),
             },
           }, this.env).catch(() => {});
+          if (authFailure) {
+            await appendEvent({
+              type: "codex_app_server_turn_failed_auth",
+              threadId: thread.id,
+              codexThreadId: threadId,
+              turnId,
+              reason: authFailureReason,
+              runtimeReset: false,
+            }, this.env).catch(() => {});
+          }
           const parent = this.turnParent(threadId, turnId);
           if (mailboxTurnRestricted(parent)) {
             const { recordMailboxRouteWorkRuntime } = await import("./mailbox-routes.js");
