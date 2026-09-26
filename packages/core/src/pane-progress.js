@@ -131,9 +131,9 @@ export function paneResumeDirectoryPrompt(text) {
 
 export function paneCodexUpdatePromptChoice(text) {
   const lines = normalizedLines(text).map((line) => line.trim()).slice(-12);
-  const pressIndex = lines.findIndex((line) => /Press enter to continue/i.test(line));
+  const pressIndex = lines.findIndex((line) => /Press enter to continue|\benter\b.*\bcontinue\b/i.test(line));
   if (pressIndex < 0 || pressIndex !== lines.length - 1) return null;
-  const updateIndex = lines.findIndex((line) => /Update available!/i.test(line));
+  const updateIndex = lines.findIndex((line) => /Update available(?:!|\s*[·•])/i.test(line));
   if (updateIndex < 0 || pressIndex - updateIndex > 8) return null;
   const skipUntilLine = lines
     .slice(updateIndex, pressIndex)
