@@ -333,7 +333,7 @@ export function appServerStateFromStatus(status) {
     return "ready";
   }
   if (type === "idle") return "ready";
-  if (type === "systemError") return "failed";
+  if (type === "systemerror") return "failed";
   if (type === "notLoaded") return "unloaded";
   return "";
 }

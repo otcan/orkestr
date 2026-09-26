@@ -15,6 +15,7 @@ import {
   recordCodexRuntimeAuthFailureSignal,
 } from "../packages/core/src/codex-auth-health.js";
 import { paneProgressFromText } from "../packages/core/src/pane-progress.js";
+import { appServerStateFromStatus } from "../packages/core/src/codex-app-server-common.js";
 
 const providerRejection = [
   "unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***…***REDACTED.",
@@ -70,4 +71,9 @@ test("turn auth failure signal records broken health without key fragments", asy
   assert.equal(health.reason, "codex_provider_auth_rejected");
   assert.equal(health.turnId, "turn-auth-401");
   assert.doesNotMatch(JSON.stringify(health), /sk-/);
+});
+
+test("Codex systemError status maps to a failed runtime state", () => {
+  assert.equal(appServerStateFromStatus({ type: "systemError" }), "failed");
+  assert.equal(appServerStateFromStatus({ type: "idle" }), "ready");
 });
