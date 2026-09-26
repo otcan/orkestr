@@ -185,3 +185,98 @@ test("missing intentId or token in consumeConnectorUseIntent throws invalid", as
     { code: "connector_use_intent_invalid" },
   );
 });
+
+// ORK-512/513: binding field validation — account, capabilities, instanceId substitution guards
+
+test("accountId binding: mismatched accountId is rejected with account_mismatch", async (t) => {
+  const dir = await tmpDir(t);
+  const env = { ORKESTR_HOME: dir };
+  const { intentId, token } = await createConnectorUseIntent(
+    "alice",
+    { connector: "gmail", purpose: "oauth_start", accountId: "alice@example.com" },
+    env,
+  );
+  await assert.rejects(
+    consumeConnectorUseIntent(intentId, token, {
+      userId: "alice", connector: "gmail", purpose: "oauth_start",
+      accountId: "bob@example.com",
+    }, env),
+    { code: "connector_use_intent_account_mismatch" },
+    "accountId substitution must be rejected",
+  );
+  // Intent must remain unconsumed after a rejected attempt.
+  const raw = JSON.parse(await fs.readFile(intentsPath(dir, "alice"), "utf8"));
+  assert.equal(raw.length, 1, "intent must remain after account_mismatch");
+});
+
+test("capabilities binding: mismatched capabilities are rejected with capabilities_mismatch", async (t) => {
+  const dir = await tmpDir(t);
+  const env = { ORKESTR_HOME: dir };
+  const { intentId, token } = await createConnectorUseIntent(
+    "alice",
+    { connector: "gmail", purpose: "oauth_start", capabilities: ["gmail_read", "gmail_send"] },
+    env,
+  );
+  await assert.rejects(
+    consumeConnectorUseIntent(intentId, token, {
+      userId: "alice", connector: "gmail", purpose: "oauth_start",
+      capabilities: ["gmail_read"],
+    }, env),
+    { code: "connector_use_intent_capabilities_mismatch" },
+    "capability set reduction must be rejected",
+  );
+});
+
+test("instanceId binding: mismatched instanceId is rejected with instance_mismatch", async (t) => {
+  const dir = await tmpDir(t);
+  const env = { ORKESTR_HOME: dir };
+  const { intentId, token } = await createConnectorUseIntent(
+    "alice",
+    { connector: "gmail", purpose: "oauth_start", instanceId: "instance-A" },
+    env,
+  );
+  await assert.rejects(
+    consumeConnectorUseIntent(intentId, token, {
+      userId: "alice", connector: "gmail", purpose: "oauth_start",
+      instanceId: "instance-B",
+    }, env),
+    { code: "connector_use_intent_instance_mismatch" },
+    "instanceId substitution must be rejected",
+  );
+});
+
+test("consumed entry contains all stored binding fields", async (t) => {
+  const dir = await tmpDir(t);
+  const env = { ORKESTR_HOME: dir };
+  const { intentId, token } = await createConnectorUseIntent(
+    "alice",
+    { connector: "gmail", purpose: "oauth_start", accountId: "alice@example.com", capabilities: ["gmail_read"], instanceId: "instance-X" },
+    env,
+  );
+  const consumed = await consumeConnectorUseIntent(intentId, token, {
+    userId: "alice", connector: "gmail", purpose: "oauth_start",
+    accountId: "alice@example.com", capabilities: ["gmail_read"], instanceId: "instance-X",
+  }, env);
+  assert.equal(consumed.accountId, "alice@example.com");
+  assert.deepEqual(consumed.capabilities, ["gmail_read"]);
+  assert.equal(consumed.instanceId, "instance-X");
+});
+
+test("not_found rejection emits audit event without intentId (prevents enumeration)", async (t) => {
+  const dir = await tmpDir(t);
+  const env = { ORKESTR_HOME: dir };
+  await assert.rejects(
+    consumeConnectorUseIntent("cintent_doesnotexist99", "a".repeat(64), {
+      userId: "alice", connector: "gmail", purpose: "oauth_start",
+    }, env),
+    { code: "connector_use_intent_not_found" },
+  );
+  const eventsFile = path.join(dir, "events.jsonl");
+  const lines = (await fs.readFile(eventsFile, "utf8").catch(() => "")).split("\n").filter(Boolean);
+  const events = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const notFoundEvent = events.find((e) => e.type === "connector_use_intent_rejected" && e.reason === "not_found");
+  assert.ok(notFoundEvent, "not_found rejection must emit a connector_use_intent_rejected event");
+  assert.equal(notFoundEvent.userId, "alice");
+  assert.equal(notFoundEvent.connector, "gmail");
+  assert.equal("intentId" in notFoundEvent, false, "not_found audit event must not include intentId to prevent enumeration");
+});
