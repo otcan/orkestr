@@ -1,6 +1,6 @@
 import { HttpClient } from "@angular/common/http";
 import { Injectable, inject } from "@angular/core";
-import { Observable } from "rxjs";
+import { Observable, switchMap } from "rxjs";
 
 export interface HealthResponse {
   ok: boolean;
@@ -2583,20 +2583,22 @@ export class ApiService {
   }
 
   startGmailOAuth(options: { account?: string; accountId?: string; alias?: string; useMode?: string; oauthApp?: string; setAsMain?: boolean; setAsThreadDefault?: boolean; threadId?: string; capabilities?: string[]; privacyConsent?: boolean; privacyPolicyVersion?: string } = {}): Observable<GmailOAuthStartResponse> {
-    const params = new URLSearchParams();
-    if (options.account?.trim()) params.set("account", options.account.trim());
-    if (options.accountId?.trim()) params.set("accountId", options.accountId.trim());
-    if (options.alias?.trim()) params.set("alias", options.alias.trim());
-    if (options.useMode?.trim()) params.set("useMode", options.useMode.trim());
-    if (options.oauthApp?.trim()) params.set("oauthApp", options.oauthApp.trim());
-    if (options.setAsMain === true) params.set("setAsMain", "1");
-    if (options.setAsThreadDefault === true) params.set("setAsThreadDefault", "1");
-    if (options.threadId?.trim()) params.set("threadId", options.threadId.trim());
-    if (options.capabilities?.length) params.set("capabilities", options.capabilities.join(","));
-    if (options.privacyConsent === true) params.set("privacyConsent", "1");
-    if (options.privacyPolicyVersion?.trim()) params.set("privacyPolicyVersion", options.privacyPolicyVersion.trim());
-    const suffix = params.size ? `?${params.toString()}` : "";
-    return this.http.get<GmailOAuthStartResponse>(this.api(`/connectors/gmail/oauth/start${suffix}`));
+    // ORK-512: create a one-time intent first, then POST to start (CSRF-resistant).
+    // Pass binding fields at intent creation so the server can guard against account substitution.
+    const intentBody: Record<string, unknown> = {};
+    if (options.account) intentBody["account"] = options.account;
+    if (options.accountId) intentBody["accountId"] = options.accountId;
+    if (options.capabilities?.length) intentBody["capabilities"] = options.capabilities;
+    if (options.threadId) intentBody["returnTarget"] = `/app/threads/${encodeURIComponent(options.threadId)}`;
+    return this.http.post<{ intentId: string; token: string }>(this.api("/connectors/gmail/oauth/intent"), intentBody).pipe(
+      switchMap(({ intentId, token }) =>
+        this.http.post<GmailOAuthStartResponse>(this.api("/connectors/gmail/oauth/start"), {
+          ...options,
+          intentId,
+          token,
+        }),
+      ),
+    );
   }
 
   googleWorkspaceAccounts(threadId = ""): Observable<GoogleWorkspaceAccountsResponse> {
