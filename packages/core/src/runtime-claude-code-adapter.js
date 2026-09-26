@@ -49,6 +49,15 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function claudeCodeTelemetryPatch(telemetry = {}) {
+  return {
+    ...(telemetry?.model ? { claudeModelResolved: telemetry.model } : {}),
+    ...(telemetry?.tokenUsage ? { claudeTokenUsage: telemetry.tokenUsage } : {}),
+    ...(telemetry?.rateLimits ? { claudeRateLimits: telemetry.rateLimits } : {}),
+    ...(telemetry?.contextWindow ? { claudeContextWindow: telemetry.contextWindow } : {}),
+  };
+}
+
 function accountProfileId(thread = {}) {
   return clean(thread?.executor?.accountProfileId || thread?.executor?.metadata?.accountProfileId);
 }
@@ -190,6 +199,11 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
     const eventId = claudeCodeOutputEventId(thread.id, attemptId);
     let assistant = await existingClaudeCodeOutput(thread.id, eventId, env);
     if (!assistant) {
+      // Appending the final raises the connector-delivery signal immediately.
+      // Persist its telemetry first so WhatsApp formats the final from the same
+      // completed Claude turn instead of the previous quota snapshot.
+      const telemetryPatch = claudeCodeTelemetryPatch(result.telemetry);
+      if (Object.keys(telemetryPatch).length) await updateThread(thread.id, telemetryPatch, env);
       assistant = await appendClaudeCodeFinal(thread, freshMessage, attemptId, result.text, env);
     }
     const completedMessage = await updateThreadMessage(thread.id, freshMessage.id, {
@@ -202,10 +216,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
     }, env);
     const updated = await updateThread(thread.id, {
       state: "ready",
-      ...(result.telemetry?.model ? { claudeModelResolved: result.telemetry.model } : {}),
-      ...(result.telemetry?.tokenUsage ? { claudeTokenUsage: result.telemetry.tokenUsage } : {}),
-      ...(result.telemetry?.rateLimits ? { claudeRateLimits: result.telemetry.rateLimits } : {}),
-      ...(result.telemetry?.contextWindow ? { claudeContextWindow: result.telemetry.contextWindow } : {}),
+      ...claudeCodeTelemetryPatch(result.telemetry),
       runtime: {
         ...(thread.runtime || {}),
         runtimeKind: "claude-code",

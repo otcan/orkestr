@@ -19,6 +19,7 @@ import {
 import { changeClaudeModelControls, readClaudeModelControls } from "../packages/core/src/claude-model-controls.js";
 import { claudeCodeProgressText } from "../packages/core/src/claude-code-progress.js";
 import { createWorkerReplyDeliveryIntent } from "../packages/core/src/reply-delivery-intent.js";
+import { setThreadConnectorDeliverySignalHandler } from "../packages/core/src/connector-delivery-signals.js";
 import { getClaudeCodeSession } from "../packages/core/src/claude-code-sessions.js";
 import { getRouterTrace } from "../packages/core/src/router-traces.js";
 import {
@@ -331,6 +332,38 @@ test("Claude runtime selects the exact profile, strips inherited API credentials
   const publicState = JSON.stringify({ thread, messages, events });
   assert.equal(publicState.includes("must-not-persist"), false);
   assert.equal(publicState.includes("/private/transcript"), false);
+});
+
+test("Claude runtime persists quota telemetry before signaling its WhatsApp final", async (t) => {
+  const { env } = await fixture(t, "quota-before-whatsapp-final");
+  const profile = await readyProfile("owner", "Quota ordering", env);
+  const thread = await claudeThread("owner", profile.id, env, "claude-quota-ordering");
+  await enqueueThreadInput(thread.id, {
+    text: "quota ordering request",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    accountId: "sender",
+    chatId: "quota-ordering@g.us",
+  }, env);
+
+  let resolveSignal;
+  const signaled = new Promise((resolve) => { resolveSignal = resolve; });
+  const clearSignal = setThreadConnectorDeliverySignalHandler(async ({ messageId }) => {
+    const message = (await listThreadMessages(thread.id, env)).find((item) => item.id === messageId);
+    if (message?.phase !== "final_answer") return;
+    const observed = await getThread(thread.id, env);
+    resolveSignal({ messageId, rateLimits: observed.claudeRateLimits });
+  });
+  t.after(clearSignal);
+
+  assert.equal((await deliverClaudeCodePendingInputs(thread, env)).length, 1);
+  const observed = await Promise.race([
+    signaled,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("connector_delivery_signal_timeout")), 1000)),
+  ]);
+  assert.ok(observed.messageId);
+  assert.equal(observed.rateLimits.primary.used_percent, 25);
+  assert.equal(observed.rateLimits.secondary.used_percent, 40);
 });
 
 test("Claude runtime voids a failed turn through the system prompt when the next turn resumes", async (t) => {
