@@ -111,6 +111,35 @@ test("pane progress recognizes a footer-anchored composer beyond the old eight-l
   assert.equal(progress.composer?.reason, "footer_anchored_composer");
 });
 
+test("pane progress accepts the Codex key-hint row below the model footer", () => {
+  const text = [
+    "• Earlier turn output.",
+    "",
+    "› Ask Codex to do anything",
+    "",
+    "  gpt-5.6-sol medium · /workspace/demo",
+    "  ← for agents · ? for shortcuts",
+  ].join("\n");
+  const progress = paneProgressFromText(text, { tailLines: 8 });
+
+  assert.equal(panePromptReady(text), true);
+  assert.equal(progress.promptReady, true);
+  assert.equal(progress.composer?.reason, "footer_anchored_composer");
+  assert.equal(panePromptReady(text.replace("← for agents · ", "")), true);
+});
+
+test("pane progress still rejects transcript output after a Codex key-hint row", () => {
+  const text = [
+    "› historical question",
+    "",
+    "  gpt-5.6-sol medium · /workspace/demo",
+    "  ← for agents · ? for shortcuts",
+    "ordinary transcript output",
+  ].join("\n");
+
+  assert.equal(panePromptReady(text), false);
+});
+
 test("pane progress does not treat a historical prompt as a current composer", () => {
   const text = [
     "› historical question",
