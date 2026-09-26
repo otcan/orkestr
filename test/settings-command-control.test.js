@@ -293,3 +293,30 @@ test("history leak backstop emits a bounded metric and alert", async t => {
   await appendThreadMessage(f.thread.id, { role: "user", source: "ui", text: "/fast" }, f.env);
   assert.match(renderOpenMetrics(f.env), /orkestr_settings_history_leak_total\{surface="webui"\} 1/);
 });
+
+test("effort setter issues exactly one correlated update; invalid effort issues none", async t => {
+  const f = await fixture(t);
+  const invalid = await handleWhatsAppSettingsCommand({ ...f.input, text: "/effort extreme", canonicalEventId: "invalid-effort" }, f.env);
+  assert.equal(invalid.outcome, "invalid");
+  assert.equal(f.calls.filter(c => c.method === "thread/settings/update").length, 0);
+  const applied = await handleWhatsAppSettingsCommand({ ...f.input, text: "/EFFORT HIGH", canonicalEventId: "effort-event" }, f.env);
+  assert.equal(applied.ok, true);
+  const updates = f.calls.filter(c => c.method === "thread/settings/update");
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].params.threadId, "fake-generation");
+  assert.equal(updates[0].params.effort, "high");
+  assert.equal((await getThread(f.thread.id, f.env)).codexReasoningEffort, "high");
+  assert.ok(f.calls.every(c => !["turn/start", "turn/steer"].includes(c.method)));
+  assert.deepEqual(await listThreadMessages(f.thread.id, f.env), []);
+  assert.equal((await listConnectorOutboxJobs({}, f.env)).jobs.filter(job => job.deliveryType === "control_reply").length, 2);
+});
+
+test("WhatsApp admin role may use model controls; bare /fast stays status-only", async t => {
+  const f = await fixture(t);
+  const result = await handleWhatsAppSettingsCommand({ ...f.input, text: "/fast", senderEffectiveRole: "admin", canonicalEventId: "admin-event" }, f.env);
+  assert.equal(result.ok, true);
+  assert.equal(result.action, "status");
+  assert.match(result.replyText, /Fast mode is off/);
+  assert.deepEqual(f.calls.map(c => c.method), ["model/list"]);
+  assert.deepEqual(await listThreadMessages(f.thread.id, f.env), []);
+});
