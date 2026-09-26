@@ -56,11 +56,13 @@ test("thread standing mission API is admin-only, validates, and round-trips", as
   const baseUrl = `http://127.0.0.1:${port}`;
 
   const cookie = await adminCookie(baseUrl);
-  await read(await fetch(`${baseUrl}/api/threads`, {
+  const createResponse = await fetch(`${baseUrl}/api/threads`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie },
     body: JSON.stringify({ id: "mission-api-thread", name: "Mission API Thread" }),
-  }));
+  });
+  assert.equal(createResponse.status, 201);
+  await read(createResponse);
 
   const deniedGet = await fetch(`${baseUrl}/api/threads/mission-api-thread/mission`);
   assert.equal(deniedGet.status, 401);
@@ -71,7 +73,9 @@ test("thread standing mission API is admin-only, validates, and round-trips", as
   });
   assert.equal(deniedPut.status, 401);
 
-  const emptyGet = await read(await fetch(`${baseUrl}/api/threads/mission-api-thread/mission`, { headers: { cookie } }));
+  const emptyGetResponse = await fetch(`${baseUrl}/api/threads/mission-api-thread/mission`, { headers: { cookie } });
+  const emptyGet = await read(emptyGetResponse);
+  assert.equal(emptyGetResponse.status, 200, JSON.stringify(emptyGet));
   assert.equal(emptyGet.standingMission, null);
 
   const invalidSet = await fetch(`${baseUrl}/api/threads/mission-api-thread/mission`, {
@@ -125,11 +129,13 @@ test("worker push-branch API is admin-only and pushes only the worker's own bran
   const baseUrl = `http://127.0.0.1:${port}`;
   const cookie = await adminCookie(baseUrl);
 
-  await read(await fetch(`${baseUrl}/api/threads`, {
+  const parentResponse = await fetch(`${baseUrl}/api/threads`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie },
     body: JSON.stringify({ id: "push-branch-parent", name: "Push Branch Parent", cwd: repo }),
-  }));
+  });
+  assert.equal(parentResponse.status, 201);
+  await read(parentResponse);
   const created = await read(await fetch(`${baseUrl}/api/threads/push-branch-parent/workers`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie },
@@ -144,11 +150,20 @@ test("worker push-branch API is admin-only and pushes only the worker's own bran
   await execFileAsync("git", ["add", "api-change.txt"], { cwd: worker.worktreePath });
   await execFileAsync("git", ["commit", "-m", "api change"], { cwd: worker.worktreePath });
 
-  const pushed = await read(await fetch(`${baseUrl}/api/threads/${worker.id}/push-branch`, {
+  const arbitraryRefspec = await fetch(`${baseUrl}/api/threads/${worker.id}/push-branch`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ branch: "main" }),
+  });
+  assert.equal(arbitraryRefspec.status, 400);
+
+  const pushedResponse = await fetch(`${baseUrl}/api/threads/${worker.id}/push-branch`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie },
     body: "{}",
-  }));
+  });
+  const pushed = await read(pushedResponse);
+  assert.equal(pushedResponse.status, 200, JSON.stringify(pushed));
   assert.equal(pushed.pushed, true);
   assert.equal(pushed.remoteBranch, `origin/${worker.branchName}`);
   assert.equal(pushed.thread.remoteBranch, `origin/${worker.branchName}`);

@@ -88,9 +88,14 @@ worker), the stored `branchName` is neither `main`/`master` nor the thread's
 passes (`assertWorkerGitOwnership`), the checked-out `HEAD` branch matches the
 stored branch exactly, `origin`'s URL matches the thread's stored
 `repoRemoteUrl`, and the remote has no commits the worker doesn't already have.
-The push itself is always `git push -u origin HEAD:refs/heads/<branch>` --
-never `--force`, never an arbitrary refspec. On success it persists
-`remoteBranch` on the thread and sets the local git upstream tracking branch.
+The push refspec is always `HEAD:refs/heads/<branch>` -- never `--force`, never
+an arbitrary refspec. On success it persists `remoteBranch` on the thread and,
+when service and checkout share an identity, sets the local tracking branch.
+When the Orkestr service is privileged but the checkout belongs to a runtime
+user, it validates that checkout as its owner, copies the exact branch into an
+isolated temporary bare repository, and pushes from there. This avoids leaving
+root-owned refs, locks, or config in the worker checkout; in that case the
+persisted `remoteBranch` is the canonical upstream state.
 
 ## Recurring autonomy tick (opt-in)
 

@@ -87,6 +87,14 @@ test("pushWorkerOwnBranch rejects when checkout HEAD does not match the stored b
   );
 });
 
+test("pushWorkerOwnBranch requires the stored remote and rejects a remote mismatch", async (t) => {
+  const { env, worker } = await setUpWorkerWithRemote(t, "remote-identity");
+  await updateThread(worker.id, { repoRemoteUrl: null }, env);
+  await assert.rejects(pushWorkerOwnBranch(worker.id, {}, env), /worker_stored_remote_unknown/);
+  await updateThread(worker.id, { repoRemoteUrl: "/different/origin.git" }, env);
+  await assert.rejects(pushWorkerOwnBranch(worker.id, {}, env), /worker_remote_mismatch/);
+});
+
 test("pushWorkerOwnBranch rejects when the remote has commits the worker does not", async (t) => {
   const { env, worker, remote } = await setUpWorkerWithRemote(t, "divergence");
   // Someone else advances the worker's remote branch out of band, from a
@@ -121,4 +129,55 @@ test("pushWorkerOwnBranch rejects a non-worker thread and never force-pushes", a
   });
   const thread = await createThread({ id: "not-a-worker", name: "Root Thread", cwd: repo, branchName: "main" }, env);
   await assert.rejects(pushWorkerOwnBranch(thread.id, {}, env), /thread_is_not_worker/);
+});
+
+test("a root service stages a push without writing into a runtime-user-owned checkout", async (t) => {
+  if (process.geteuid?.() !== 0) return t.skip("requires root to exercise privileged staging");
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-branch-push-priv-home-"));
+  const repo = await createTempGitRepo("orkestr-branch-push-priv-repo-");
+  const remoteDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-branch-push-priv-remote-"));
+  const remote = path.join(remoteDir, "origin.git");
+  const branchName = "orkestr/worker/privileged-staging";
+  const env = { ORKESTR_HOME: home };
+  t.after(async () => {
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    await fs.rm(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    await fs.rm(remoteDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+
+  await execFileAsync("git", ["init", "--bare", remote]);
+  await execFileAsync("git", ["remote", "add", "origin", remote], { cwd: repo });
+  await execFileAsync("git", ["push", "origin", "main"], { cwd: repo });
+  await execFileAsync("git", ["checkout", "-b", branchName], { cwd: repo });
+  await fs.writeFile(path.join(repo, "runtime-user-change.txt"), "runtime owned\n", "utf8");
+  await execFileAsync("git", ["add", "runtime-user-change.txt"], { cwd: repo });
+  await execFileAsync("git", ["commit", "-m", "runtime user change"], { cwd: repo });
+
+  const parent = await createThread({
+    id: "privileged-staging-parent",
+    name: "Privileged staging parent",
+    cwd: repo,
+    repoPath: repo,
+  }, env);
+  const worker = await createThread({
+    id: "privileged-staging-worker",
+    name: "Privileged staging worker",
+    parentThreadId: parent.id,
+    cwd: repo,
+    repoPath: repo,
+    worktreePath: repo,
+    repoRemoteUrl: remote,
+    branchName,
+    baseBranch: "main",
+  }, env);
+  await execFileAsync("chown", ["-R", "65534:65534", repo]);
+
+  const result = await pushWorkerOwnBranch(worker.id, { operatorUserId: "admin" }, env);
+  assert.equal(result.pushed, true);
+  const remoteHead = await execFileAsync("git", ["--git-dir", remote, "rev-parse", `refs/heads/${branchName}`])
+    .then((output) => String(output.stdout).trim());
+  const localHead = await execFileAsync("git", ["-c", `safe.directory=${repo}`, "-C", repo, "rev-parse", "HEAD"])
+    .then((output) => String(output.stdout).trim());
+  assert.equal(remoteHead, localHead);
+  assert.equal((await fs.stat(path.join(repo, ".git", "config"))).uid, 65534);
 });

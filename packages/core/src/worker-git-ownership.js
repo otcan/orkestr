@@ -14,16 +14,24 @@ function blocked(reason, details) {
 
 // A privileged deploy process must not replace a runtime user's index or refs.
 // Do not infer Unix accounts from thread principals, or attempt permission repair.
-export async function assertWorkerGitOwnership(checkout) {
+async function inspectOwnership(checkout, expectedIdentity) {
   const effectiveUid = process.geteuid?.();
-  const context = { checkout: String(checkout || ""), effectiveUid: effectiveUid ?? null };
-  if (!Number.isInteger(effectiveUid) || !checkout) throw blocked("worker_git_ownership_unavailable", context);
+  const expectedUid = expectedIdentity?.uid;
+  const expectedGid = expectedIdentity?.gid;
+  const context = {
+    checkout: String(checkout || ""),
+    effectiveUid: effectiveUid ?? null,
+    ...(Number.isInteger(expectedUid) && expectedUid !== effectiveUid ? { expectedUid } : {}),
+  };
+  if (!Number.isInteger(effectiveUid) || !Number.isInteger(expectedUid) || !checkout) {
+    throw blocked("worker_git_ownership_unavailable", context);
+  }
   const inspect = async (target, role, optional = false) => {
     let stat;
     try { stat = await fs.lstat(target); }
     catch (error) { if (optional && error.code === "ENOENT") return; throw error; }
     if (stat.isSymbolicLink()) throw blocked("worker_git_ownership_unavailable", { ...context, path: target, role, detail: "symlink" });
-    if (stat.uid !== effectiveUid) throw blocked("worker_git_owner_mismatch", {
+    if (stat.uid !== expectedUid) throw blocked("worker_git_owner_mismatch", {
       ...context, path: target, role, ownerUid: stat.uid,
     });
   };
@@ -31,8 +39,12 @@ export async function assertWorkerGitOwnership(checkout) {
     const root = await fs.realpath(checkout);
     await inspect(root, "checkout");
     await inspect(path.join(root, ".git"), "git_entry", true);
+    const runAsOwner = effectiveUid === 0 && expectedUid !== 0;
     const git = async args => (await exec("git", ["--no-optional-locks", "-C", root, ...args], {
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, timeout: 10000, maxBuffer: 1024 * 1024,
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+      timeout: 10000,
+      maxBuffer: 1024 * 1024,
+      ...(runAsOwner ? { uid: expectedUid, gid: expectedGid } : {}),
     })).stdout.trim();
     const top = await git(["rev-parse", "--show-toplevel"]);
     const gitDir = await git(["rev-parse", "--absolute-git-dir"]);
@@ -61,9 +73,38 @@ export async function assertWorkerGitOwnership(checkout) {
         }
       }
     }
-    return { effectiveUid, checkout: top, gitDir, commonDir };
+    return { effectiveUid, ownerUid: expectedUid, ownerGid: expectedGid, checkout: top, gitDir, commonDir };
   } catch (error) {
     if (error.blocker) throw error;
     throw blocked("worker_git_ownership_unavailable", { ...context, detail: error.code || "inspection_failed" });
   }
+}
+
+export async function assertWorkerGitOwnership(checkout) {
+  const effectiveUid = process.geteuid?.();
+  const effectiveGid = process.getegid?.();
+  return inspectOwnership(checkout, { uid: effectiveUid, gid: effectiveGid });
+}
+
+// Privileged orchestration may need to perform a read-only inspection of a
+// runtime-owned checkout before staging a push elsewhere. Validate that the
+// checkout and every Git path share the checkout owner's uid, and run Git's
+// read probes as that owner so root never creates files in the runtime tree.
+export async function inspectWorkerGitOwnership(checkout) {
+  if (!checkout) throw blocked("worker_git_ownership_unavailable", { checkout: String(checkout || "") });
+  let root;
+  let stat;
+  try {
+    root = await fs.realpath(checkout);
+    stat = await fs.lstat(root);
+  } catch (error) {
+    throw blocked("worker_git_ownership_unavailable", {
+      checkout: String(checkout || ""),
+      detail: error?.code || "inspection_failed",
+    });
+  }
+  if (stat.isSymbolicLink()) {
+    throw blocked("worker_git_ownership_unavailable", { checkout: String(checkout || ""), detail: "symlink" });
+  }
+  return inspectOwnership(root, { uid: stat.uid, gid: stat.gid });
 }

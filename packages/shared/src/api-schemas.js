@@ -372,7 +372,11 @@ export const threadStandingMissionUpdateSchema = {
 
 export const threadWorkerPushBranchSchema = {
   ...idParams("threadId"),
-  body: objectValue,
+  body: {
+    type: "object",
+    properties: {},
+    additionalProperties: false,
+  },
 };
 
 export const taskAgentCreateSchema = {

@@ -376,7 +376,7 @@ async function createThreadLocked(input = {}, env = process.env) {
     forkedFromMessageCursor: Number(input.forkedFromMessageCursor || 0) || null,
     handoffPrompt: String(input.handoffPrompt || "").trim() || null,
     handoffMessageId: String(input.handoffMessageId || "").trim() || null,
-    standingMission: sanitizeStandingMissionText(input.standingMission) || null,
+    standingMission: sanitizeStandingMissionText(input.standingMission, env) || null,
     standingMissionUpdatedAt: String(input.standingMissionUpdatedAt || "").trim() || null,
     standingMissionUpdatedBy: String(input.standingMissionUpdatedBy || "").trim() || null,
     createdAt: nowIso(),

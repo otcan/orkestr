@@ -38,7 +38,15 @@ async function correlatedRunningMessage(thread, activeTurnId, env) {
   // and can be newer than the user message, so the role must be part of the
   // lookup itself rather than filtered afterward -- otherwise a reverse scan
   // would match the assistant final instead of the still-"running" user turn.
-  const candidate = await findThreadMessage(thread.id, { executorTurnId: activeTurnId, role: "user" }, env).catch(() => null);
+  // findThreadMessage's canonical lookup key is codexTurnId; both the JSON and
+  // SQLite repositories map that key to executorTurnId for non-Codex runtimes.
+  // Passing executorTurnId directly only worked in the legacy JSON fallback
+  // and silently dropped the correlation predicate in SQLite.
+  const candidate = await findThreadMessage(thread.id, {
+    codexTurnId: activeTurnId,
+    role: "user",
+    state: "running",
+  }, env).catch(() => null);
   if (!candidate) return null;
   if (clean(candidate.state) !== "running") return null;
   return candidate;

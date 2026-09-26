@@ -93,11 +93,13 @@ test("root skips a foreign-owned standalone checkout without replacing owner ind
   await f.git(checkout, ["init", "--template=", "-b", "worker"], identity);
   const bundle = path.join(f.root, "fixture.bundle");
   await f.git(f.repo, ["bundle", "create", bundle, "--all"]);
+  await fs.chmod(bundle, 0o644);
   await f.git(checkout, ["fetch", bundle, "main"], identity);
   await f.git(checkout, ["reset", "--hard", "FETCH_HEAD"], identity);
   const { env, worker } = await threads(f, checkout);
   await advance(f);
   await f.git(f.repo, ["bundle", "create", bundle, "--all"]);
+  await fs.chmod(bundle, 0o644);
   await f.git(checkout, ["fetch", bundle, "main"], identity);
   const targets = ["index", "refs/heads/worker"].map(name => path.join(checkout, ".git", name));
   const before = await Promise.all(targets.map(snapshot));

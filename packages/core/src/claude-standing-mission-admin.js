@@ -21,19 +21,19 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-export function threadStandingMissionSummary(thread = {}) {
+export function threadStandingMissionSummary(thread = {}, env = process.env) {
   return {
     standingMission: thread.standingMission || null,
     standingMissionUpdatedAt: thread.standingMissionUpdatedAt || null,
     standingMissionUpdatedBy: thread.standingMissionUpdatedBy || null,
-    maxChars: standingMissionMaxChars(process.env),
+    maxChars: standingMissionMaxChars(env),
   };
 }
 
 export async function getThreadStandingMission(threadId, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) throw httpError("thread_not_found", 404);
-  return threadStandingMissionSummary(thread);
+  return threadStandingMissionSummary(thread, env);
 }
 
 export async function setThreadStandingMission(threadId, rawMission, actorUserId, env = process.env) {
@@ -55,7 +55,7 @@ export async function setThreadStandingMission(threadId, rawMission, actorUserId
     operatorUserId: nonEmptyString(actorUserId) || null,
     missionLength: mission.length,
   }, env).catch(() => {});
-  return threadStandingMissionSummary(updated);
+  return threadStandingMissionSummary(updated, env);
 }
 
 export async function clearThreadStandingMission(threadId, actorUserId, env = process.env) {
@@ -74,5 +74,5 @@ export async function clearThreadStandingMission(threadId, actorUserId, env = pr
     resourceType: "thread",
     operatorUserId: nonEmptyString(actorUserId) || null,
   }, env).catch(() => {});
-  return threadStandingMissionSummary(updated);
+  return threadStandingMissionSummary(updated, env);
 }

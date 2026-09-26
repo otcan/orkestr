@@ -110,6 +110,25 @@ test("recovery leaves a mismatched executorTurnId untouched", async (t) => {
   assert.equal(untouchedThread.runtime.activeTurnId, "claude_turn_stuck");
 });
 
+test("SQLite recovery correlates the active turn instead of selecting a newer unrelated user message", async (t) => {
+  const { env: baseEnv } = await fixture(t, "sqlite-correlation");
+  const env = { ...baseEnv, ORKESTR_THREAD_MESSAGE_STORE: "sqlite" };
+  const { thread, messageId } = await claudeThreadWithStuckTurn(env, "orphan-sqlite-correlation", { withFinal: false });
+  const unrelated = await enqueueThreadInput(thread.id, { text: "newer unrelated request", source: "test" }, env);
+  const { updateThreadMessage } = await import("../packages/core/src/threads.js");
+  await updateThreadMessage(thread.id, unrelated.id, {
+    state: "running",
+    executorKind: "claude-code",
+    executorTurnId: "claude_turn_other",
+  }, env);
+
+  const result = await recoverOrphanedClaudeCodeTurn(await getThread(thread.id, env), env);
+  assert.equal(result.recovered, true);
+  assert.equal(result.messageId, messageId);
+  assert.equal((await getThreadMessage(thread.id, messageId, env)).state, "failed");
+  assert.equal((await getThreadMessage(thread.id, unrelated.id, env)).state, "running");
+});
+
 test("recovery leaves a live turn untouched", async (t) => {
   const { env } = await fixture(t, "live");
   const { thread, messageId } = await claudeThreadWithStuckTurn(env, "orphan-live", { withFinal: false });
