@@ -158,6 +158,16 @@ test("Claude runtime uses an account-scoped writable temp directory", () => {
   assert.equal(runtime.TMP, runtime.TMPDIR);
   assert.equal(runtime.TEMP, runtime.TMPDIR);
   assert.equal(runtime.TMPDIR.includes("/shared/tmp"), false);
+  assert.equal(runtime.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, "1");
+});
+
+test("Claude runtime preserves explicitly authorized bypass permissions", () => {
+  const runtime = claudeCodeRuntimeEnv(
+    { credentialRoot: "/srv/orkestr/profiles/opaque" },
+    { executor: { metadata: { claudePermissionMode: "bypassPermissions" } } },
+    { TMPDIR: "/shared/tmp" },
+  );
+  assert.equal(runtime.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, "0");
 });
 
 async function claudeThread(ownerUserId, profileId, env, id = "claude-thread") {

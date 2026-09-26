@@ -4,6 +4,9 @@ import { claudeSubscriptionTokenForRuntime } from "./llm-account-profiles.js";
 export function claudeCodeRuntimeEnv(profile = {}, thread = {}, env = process.env) {
   const runtimeHome = path.join(profile.credentialRoot, "runtime-home");
   const runtimeTmp = path.join(profile.credentialRoot, "tmp");
+  const permissionMode = String(
+    thread?.executor?.metadata?.claudePermissionMode || thread?.claudePermissionMode || "acceptEdits",
+  ).trim();
   const source = { ...process.env, ...env };
   const inherited = {};
   for (const key of [
@@ -21,7 +24,11 @@ export function claudeCodeRuntimeEnv(profile = {}, thread = {}, env = process.en
     TMP: runtimeTmp,
     TEMP: runtimeTmp,
     CLAUDE_CONFIG_DIR: profile.credentialRoot,
-    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+    // Claude's non-write-user hardening forces permission mode back to
+    // `default` while this scrub is enabled. An operator who explicitly chose
+    // bypassPermissions has already opted into unrestricted tool execution, so
+    // preserve that mode instead of silently weakening it at process startup.
+    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: permissionMode === "bypassPermissions" ? "0" : "1",
     DISABLE_AUTOUPDATER: "1",
   };
 }
