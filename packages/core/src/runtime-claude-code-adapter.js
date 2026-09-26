@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
-import { spawn } from "node:child_process";
 import {
   claudeCodeArgs,
   claudeCodeCommand,
@@ -19,6 +18,7 @@ import {
   readClaudeCodeStatusTelemetry,
 } from "./claude-code-client.js";
 import { appendEvent } from "../../storage/src/store.js";
+import { appHome } from "../../storage/src/paths.js";
 import { updateLlmAccountProfileState } from "./llm-account-profiles.js";
 import { deferClaudeCodeRateLimitedInput, recoverClaudeCodeThreadState, resolveClaudeCodeRuntimeProfile } from "./claude-code-rate-limit.js";
 import {
@@ -45,6 +45,11 @@ import {
 } from "./claude-code-runtime-policy.js";
 import { createClaudeCodeProgressReporter } from "./claude-code-progress.js";
 import { completeInterruptedClaudeCodeTurn } from "./claude-code-turn-state.js";
+import {
+  recoverOrphanedAttempt,
+  spawnSupervised,
+  supervisedProcessDefaults,
+} from "./claude-code-supervised-process.js";
 
 export { assertClaudeCodeHostOwner, threadUsesClaudeCode } from "./claude-code-runtime-policy.js";
 
@@ -69,6 +74,11 @@ function workspaceForThread(thread = {}) {
   return clean(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath) || process.cwd();
 }
 
+// Path for the supervised-process identity file, scoped to the thread.
+function supervisionIdentityPath(threadId, env = process.env) {
+  return path.join(appHome(env), "runtimes", "claude-code", "supervision", `${clean(threadId)}.json`);
+}
+
 async function profileForThread(thread, env, requireReady = true) {
   assertClaudeCodeHostOwner(thread, env);
   if (requireReady && !claudeCodeEnabled(env)) {
@@ -80,7 +90,10 @@ async function profileForThread(thread, env, requireReady = true) {
   return resolveClaudeCodeRuntimeProfile(thread, env, requireReady);
 }
 
-async function runProcess({ thread, profile, prompt, sessionId, priorTurnFailed = false, attemptId, onPromptSubmitted = null, onEvent = null, env }) {
+// runProcess accepts an optional onHeartbeat callback so the caller can forward
+// long-running-tool heartbeats to the progress reporter without creating a
+// circular reference inside spawnSupervised.
+async function runProcess({ thread, profile, prompt, sessionId, priorTurnFailed = false, attemptId, onPromptSubmitted = null, onEvent = null, onHeartbeat = null, env }) {
   const command = claudeCodeCommand(env);
   const childEnv = await claudeCodeExecutionEnv(profile, thread, env);
   const statusCapture = claudeCodeStatusCapture(profile, thread);
@@ -91,14 +104,41 @@ async function runProcess({ thread, profile, prompt, sessionId, priorTurnFailed 
   await fs.mkdir(path.dirname(statusCapture.capturePath), { recursive: true, mode: 0o700 });
   await fs.rm(statusCapture.capturePath, { force: true });
   childEnv.ORKESTR_CLAUDE_STATUS_CAPTURE_PATH = statusCapture.capturePath;
+
+  const identityFilePath = supervisionIdentityPath(thread.id, env);
+  const defaults = supervisedProcessDefaults(env);
+
   return new Promise((resolve, reject) => {
-    const proc = spawn(command, claudeCodeArgs(thread, { sessionId, priorTurnFailed, statusCaptureCommand: statusCapture.command }, env), {
+    const supervisor = spawnSupervised({
+      command,
+      args: claudeCodeArgs(thread, { sessionId, priorTurnFailed, statusCaptureCommand: statusCapture.command }, env),
       cwd: workspaceForThread(thread),
       env: childEnv,
-      stdio: ["pipe", "pipe", "pipe"],
+      attemptId,
+      identityFilePath,
+      gracePeriodMs: defaults.gracePeriodMs,
+      semanticInactivityMs: defaults.semanticInactivityMs,
+      staleWorkingMs: defaults.staleWorkingMs,
+      toolDeadlineMs: defaults.toolDeadlineMs,
+      heartbeatIntervalMs: defaults.heartbeatIntervalMs,
+      heartbeatThresholdMs: defaults.heartbeatThresholdMs,
+      onSemanticStall() {
+        // failureCode path in close handler records this; no additional work needed here.
+      },
+      onToolTimeout({ toolName, elapsedMs }) {
+        appendEvent({
+          type: "claude_code_tool_timeout",
+          threadId: thread.id,
+          attemptId,
+          toolName,
+          elapsedMs,
+        }, env).catch(() => {});
+      },
+      onHeartbeat,
     });
-    const active = { proc, attemptId, interrupted: false, settled: false };
-    activeTurns.set(thread.id, active);
+
+    activeTurns.set(thread.id, supervisor);
+
     let outputBytes = 0;
     let stderr = "";
     let resultText = "";
@@ -106,48 +146,39 @@ async function runProcess({ thread, profile, prompt, sessionId, priorTurnFailed 
     let observedSessionId = sessionId;
     let resultError = "";
     let telemetry = {};
-    let forceKillTimer = null;
     let submissionPromise = Promise.resolve();
-    function terminate(failureCode) {
-      if (failureCode) active.failureCode = failureCode;
-      proc.kill("SIGTERM");
-      if (!forceKillTimer) {
-        forceKillTimer = setTimeout(() => {
-          if (!active.settled) proc.kill("SIGKILL");
-        }, 5_000);
-        forceKillTimer.unref?.();
-      }
-    }
+
     const timeout = setTimeout(() => {
-      if (active.settled) return;
-      terminate("claude_code_timeout");
+      if (supervisor.settled) return;
+      supervisor.terminate("claude_code_timeout");
     }, claudeCodeTimeoutMs(env));
     timeout.unref?.();
 
     function finish(error = null) {
-      if (active.settled) return;
-      active.settled = true;
+      if (supervisor.settled) return;
+      supervisor.markSettled(error?.code || null);
       clearTimeout(timeout);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      if (activeTurns.get(thread.id) === active) activeTurns.delete(thread.id);
+      if (activeTurns.get(thread.id) === supervisor) activeTurns.delete(thread.id);
+      supervisor.removeIdentityFile().catch(() => {});
       if (error) reject(error);
       else resolve({
         text: resultText || assistantText,
         sessionId: observedSessionId,
-        interrupted: active.interrupted,
+        interrupted: supervisor.interrupted,
         telemetry,
       });
     }
 
-    const lines = readline.createInterface({ input: proc.stdout });
+    const lines = readline.createInterface({ input: supervisor.proc.stdout });
     lines.on("line", (line) => {
       outputBytes += Buffer.byteLength(line) + 1;
       if (outputBytes > claudeCodeMaxOutputBytes(env)) {
-        terminate("claude_code_output_limit");
+        supervisor.terminate("claude_code_output_limit");
         return;
       }
       let event;
       try { event = JSON.parse(line); } catch { return; }
+      supervisor.observeEvent(event);
       onEvent?.(event);
       observedSessionId = claudeCodeEventSessionId(event) || observedSessionId;
       telemetry = mergeClaudeCodeTelemetry(telemetry, claudeCodeEventTelemetry(event));
@@ -159,20 +190,22 @@ async function runProcess({ thread, profile, prompt, sessionId, priorTurnFailed 
         assistantText = text;
       }
     });
-    proc.stderr.on("data", (chunk) => {
+    supervisor.proc.stderr.on("data", (chunk) => {
       stderr = `${stderr}${String(chunk || "")}`.slice(-8192);
     });
-    proc.on("error", (error) => finish(error));
-    proc.on("close", async (code, signal) => {
+    supervisor.proc.on("error", (error) => finish(error));
+    supervisor.proc.on("close", async (code, signal) => {
       lines.close();
       await submissionPromise;
       const statusTelemetry = await readClaudeCodeStatusTelemetry(statusCapture.capturePath);
       if (statusTelemetry) telemetry = mergeClaudeCodeTelemetry(telemetry, statusTelemetry);
-      if (active.interrupted) return finish();
-      const failure = active.failureCode || (resultError ? classifyClaudeCodeFailure(resultError) : "") || (code === 0 ? "" : classifyClaudeCodeFailure(stderr || `exit_${code}_${signal || ""}`));
-      if (failure) {
-        const error = new Error(failure);
-        error.code = failure;
+      if (supervisor.interrupted) return finish();
+      const failureCode = supervisor.failureCode ||
+        (resultError ? classifyClaudeCodeFailure(resultError) : "") ||
+        (code === 0 ? "" : classifyClaudeCodeFailure(stderr || `exit_${code}_${signal || ""}`));
+      if (failureCode) {
+        const error = new Error(failureCode);
+        error.code = failureCode;
         error.telemetry = telemetry;
         return finish(error);
       }
@@ -183,13 +216,13 @@ async function runProcess({ thread, profile, prompt, sessionId, priorTurnFailed 
       }
       return finish();
     });
-    proc.stdin.on("error", () => {});
+    supervisor.proc.stdin.on("error", () => {});
     submissionPromise = profileForThread(thread, env, true)
       .then(async () => {
-        proc.stdin.end(`${String(prompt || "").replace(/\n*$/g, "")}\n`);
+        supervisor.proc.stdin.end(`${String(prompt || "").replace(/\n*$/g, "")}\n`);
         await onPromptSubmitted?.();
       })
-      .catch((error) => terminate(publicClaudeCodeFailure(error)));
+      .catch((error) => supervisor.terminate(publicClaudeCodeFailure(error)));
   });
 }
 
@@ -233,6 +266,25 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
   const freshMessage = await getThreadMessage(thread.id, message.id, env);
   if (!freshMessage || !pendingStates.has(clean(freshMessage.state))) return { skipped: true, message: freshMessage || message };
   const attemptId = `claude_turn_${crypto.randomBytes(12).toString("base64url")}`;
+
+  // Terminate any orphaned process group left by a previous crashed attempt
+  // before writing the new attempt identity file.
+  const identityFilePath = supervisionIdentityPath(thread.id, env);
+  const orphan = await recoverOrphanedAttempt(identityFilePath).catch(() => ({ recovered: false }));
+  if (orphan.blocked) {
+    const error = new Error("claude_code_orphan_identity_unverified");
+    error.code = "claude_code_orphan_identity_unverified";
+    throw error;
+  }
+  if (orphan.recovered) {
+    await appendEvent({
+      type: "claude_code_orphan_recovered",
+      threadId: thread.id,
+      orphanPgid: orphan.pgid,
+      orphanAttemptId: orphan.attemptId,
+    }, env).catch(() => {});
+  }
+
   const deliveryAttempt = Math.max(0, Number(freshMessage.deliveryAttempt || 0) || 0) + 1;
   const sessionId = await getClaudeCodeSession(thread, env);
   const priorTurnFailed = clean(thread.runtime?.lastTurnStatus) === "failed";
@@ -280,6 +332,9 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
           ownerProcess: attemptId,
         }, env),
         onEvent: (event) => progress.observe(event),
+        // Forward supervisor heartbeats to the progress reporter.
+        // heartbeat() is rate-limited inside the reporter; redaction is handled there.
+        onHeartbeat: ({ toolElapsedMs }) => progress.heartbeat(toolElapsedMs),
         env,
       });
     } finally {
@@ -408,29 +463,33 @@ export async function deliverClaudeCodePendingInputs(thread, env = process.env) 
 }
 
 export async function interruptClaudeCodeThread(thread, env = process.env) {
-  const active = activeTurns.get(thread.id);
-  if (!active) return { interrupted: false, reason: "no_active_turn" };
-  active.interrupted = true;
-  active.proc.kill("SIGTERM");
-  const killTimer = setTimeout(() => {
-    if (!active.settled) active.proc.kill("SIGKILL");
-  }, 5_000);
-  killTimer.unref?.();
-  await appendEvent({ type: "claude_code_turn_interrupt_requested", threadId: thread.id, turnId: active.attemptId }, env);
-  return { interrupted: true, turnId: active.attemptId };
+  const supervisor = activeTurns.get(thread.id);
+  if (!supervisor) return { interrupted: false, reason: "no_active_turn" };
+  // interrupt() marks the flag and sends SIGTERM/-PGID, killing the whole
+  // process group including any grandchild app-server or readline handles.
+  supervisor.interrupt();
+  await appendEvent({ type: "claude_code_turn_interrupt_requested", threadId: thread.id, turnId: supervisor.attemptId }, env);
+  return { interrupted: true, turnId: supervisor.attemptId };
 }
 
 export async function claudeCodeThreadStatus(thread, env = process.env, counts = {}) {
-  const active = activeTurns.get(thread.id);
+  const supervisor = activeTurns.get(thread.id);
   let profileState = "unknown";
   try { profileState = (await profileForThread(thread, env, false)).state; } catch {}
-  if (!active) {
+  if (!supervisor) {
     const recovery = await recoverClaudeCodeThreadState(thread, profileState, env);
     thread = recovery.thread;
     if (recovery.recovered) deliveryScheduler?.(thread.id, env, 0);
   }
   const persistedState = clean(thread.runtime?.state || thread.state || "ready").toLowerCase();
-  const state = active ? "working" : persistedState === "working" ? "interrupted" : persistedState;
+  const state = supervisor ? "working" : persistedState === "working" ? "interrupted" : persistedState;
+
+  // Semantic liveness: staleWorking is true when the process is alive but has not
+  // produced meaningful output for longer than ORKESTR_CLAUDE_STALE_WORKING_MS.
+  const staleWorking = supervisor ? supervisor.tickStaleWorking() : false;
+  const staleWorkingSince = supervisor ? (supervisor.staleWorkingSince || null) : null;
+  const staleWorkingReason = staleWorking ? "semantic_inactivity" : null;
+
   return {
     state,
     status: state,
@@ -439,15 +498,19 @@ export async function claudeCodeThreadStatus(thread, env = process.env, counts =
     provider: "anthropic",
     promptReady: state === "ready" && profileState === "ready",
     promptReadyStable: state === "ready" && profileState === "ready",
-    working: Boolean(active),
-    foregroundWorking: Boolean(active),
-    typingActive: Boolean(active),
+    working: Boolean(supervisor),
+    foregroundWorking: Boolean(supervisor),
+    // typingActive is false when the process is stale (transport alive, semantics silent).
+    typingActive: Boolean(supervisor) && !staleWorking,
     backgroundWork: false,
+    staleWorking,
+    staleWorkingSince,
+    staleWorkingReason,
     pendingCount: Number(counts.pendingCount || 0),
     runningCount: Number(counts.runningCount || 0),
     accountProfileId: accountProfileId(thread) || null,
     accountState: profileState,
-    activeTurnId: active?.attemptId || null,
+    activeTurnId: supervisor?.attemptId || null,
     error: state === "interrupted" ? "claude_code_runtime_interrupted" : thread.lastError || null,
     model: thread.claudeModel || thread.executor?.metadata?.claudeModel || thread.claudeModelResolved || null,
     effort: thread.claudeEffort || thread.executor?.metadata?.claudeEffort || null,
@@ -470,7 +533,7 @@ export async function resumeClaudeCodeThread(thread, env = process.env) {
 }
 
 export function resetClaudeCodeRuntimeForTest() {
-  for (const active of activeTurns.values()) active.proc.kill("SIGKILL");
+  for (const supervisor of activeTurns.values()) supervisor.terminate("test_reset");
   activeTurns.clear();
   turnReservations.clear();
 }

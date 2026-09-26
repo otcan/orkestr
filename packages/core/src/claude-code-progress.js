@@ -57,6 +57,14 @@ function progressLimit(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(1, Math.min(50, Math.floor(parsed))) : 12;
 }
 
+// Format elapsed milliseconds as "Xm Ys" or "Zs".
+function formatElapsed(ms) {
+  const totalSecs = Math.max(0, Math.floor(Number(ms) || 0) / 1000);
+  const minutes = Math.floor(totalSecs / 60);
+  const secs = Math.floor(totalSecs % 60);
+  return minutes > 0 ? `${minutes}m ${secs}s` : `${secs}s`;
+}
+
 export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = {}, attemptId = "", onPersisted = null } = {}, env = process.env) {
   const deliveryParent = replyDeliveryProjectionParent(parentMessage) || parentMessage;
   const enabled = whatsappOrigin(deliveryParent) && !trustedHushReplyDeliveryIntent(parentMessage);
@@ -64,6 +72,7 @@ export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = 
   let sequence = 0;
   let persisted = 0;
   let lastPersistedAt = 0;
+  let lastHeartbeatAt = 0;
   let pending = Promise.resolve();
 
   function queue(text, key, { force = false, affectsThrottle = true } = {}) {
@@ -110,6 +119,44 @@ export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = 
     observe(event = {}) {
       const text = claudeCodeProgressText(event);
       if (text) void queue(text, sequence + 1);
+    },
+    // Rate-limited heartbeat for long-running tool calls.
+    // Emits a safe "still working" message with elapsed duration — no tool
+    // input, paths, or secrets are included.
+    heartbeat(toolElapsedMs) {
+      if (!enabled) return pending;
+      const now = Date.now();
+      if (now - lastHeartbeatAt < progressIntervalMs(env)) return pending;
+      lastHeartbeatAt = now;
+      const elapsed = formatElapsed(toolElapsedMs);
+      const text = `Claude Code is still working (${elapsed} elapsed).`;
+      sequence += 1;
+      const eventId = `claude-code:${clean(thread.id)}:${clean(attemptId)}:heartbeat:${sequence}`;
+      pending = pending.then(async () => {
+        const existing = (await listThreadMessages(thread.id, env)).find((m) => m.eventId === eventId);
+        if (existing) return existing;
+        const message = await appendThreadMessage(thread.id, {
+          role: "assistant",
+          source: "claude-code",
+          phase: "commentary",
+          state: "completed",
+          text,
+          parentMessageId: parentMessage.id,
+          eventId,
+          executorKind: "claude-code",
+          executorTurnId: attemptId,
+          connector: deliveryParent.connector || "",
+          chatId: deliveryParent.chatId || "",
+          accountId: deliveryParent.accountId || "",
+          sourceEventId: parentMessage.sourceEventId || "",
+          routerTraceId: parentMessage.routerTraceId || "",
+          turnId: parentMessage.turnId || "",
+        }, env);
+        markConnectorDeliverySignal(message);
+        await onPersisted?.(message);
+        return message;
+      }).catch(() => null);
+      return pending;
     },
     flush() {
       return pending;
