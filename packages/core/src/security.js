@@ -2130,7 +2130,11 @@ function isAllowedBeforePairing(request) {
   if (method === "POST" && /^\/api\/mobile\/pairing\/[^/]+\/complete$/.test(url)) return true;
   if (method === "POST" && url === "/api/mobile/session/refresh") return true;
   if (method === "POST" && /^\/api\/connectors\/twilio\/voice\/[^/]+\/(?:incoming|gather)$/.test(url)) return true;
-  // WhatsApp repair routes require authentication (ORK-513). Removed from pre-pairing allowance.
+  // The repair page and action stay reachable from the pairing-required email
+  // link; the controller requires an administrator session or a signed
+  // one-time repair intent before any runtime or mail side effect (ORK-513).
+  if (method === "GET" && url === "/api/connectors/whatsapp/bridge/repair") return true;
+  if (method === "POST" && url === "/api/connectors/whatsapp/bridge/repair/send-email") return true;
   if (method === "GET" && /^\/api\/setup\/security\/challenges\/[^/]+$/.test(url)) return true;
   if (method === "POST" && url === "/api/setup/security/pair") return true;
   // Logout must remain reachable when the browser presents an expired or

@@ -76,8 +76,7 @@ import { createPairingChallenge, securityStatus } from "../../../../../packages/
 import { authenticatedAdminPrincipal, authenticatedPrincipal, callbackRequestHost } from "../../request-security.js";
 import { boundBoolean, boundString, consumeGmailOAuthIntent, createGmailOAuthIntent } from "./gmail-oauth-intents.js";
 import { oauthStartDeniedPage, renderGmailOAuthStartPage, submitGmailOAuthStart } from "./gmail-oauth-start-page.js";
-import { whatsappRepairPageHtml } from "./whatsapp-repair-page.js";
-import { consumeConnectorUseIntent, createConnectorUseIntent } from "../../../../../packages/core/src/connector-use-intent.js";
+import { handleWhatsAppRepairSend, renderWhatsAppRepairPage } from "./whatsapp-repair-handlers.js";
 import { resolveBrokerConnectInstance } from "../../../../../packages/core/src/broker-instance-registry.js";
 import { normalizeUserId } from "../../../../../packages/core/src/users.js";
 import { publicRoutingFailurePayload } from "../../../../../packages/core/src/routing-failures.js";
@@ -92,7 +91,6 @@ import {
   logoutLocalWhatsAppAccount,
   promoteLocalWhatsAppGroupParticipants,
   recoverLocalWhatsAppChatMessages,
-  sendLocalWhatsAppRepairQrEmail,
   startLocalWhatsAppAccount,
   stopLocalWhatsAppTyping,
 } from "../../../../../packages/connectors/src/whatsapp-local-bridge.js";
@@ -198,14 +196,6 @@ function googleWorkspaceAuthIntent(connectRequest: any): Record<string, string> 
     restartSurface: "whatsapp",
     source: String(connectRequest?.source || "connect_link").trim(),
   };
-}
-
-function maskEmail(value: unknown): string {
-  const text = String(value || "").trim();
-  const [local, domain] = text.split("@");
-  if (!local || !domain) return "";
-  const prefix = local.slice(0, Math.min(2, local.length));
-  return `${prefix}${local.length > 2 ? "***" : "*"}@${domain}`;
 }
 
 // Scope selection belongs to Google. Ordinary connections begin narrowly; the
@@ -993,72 +983,28 @@ export class ConnectorsController {
     });
   }
 
-  // ORK-513: Repair page requires an authenticated administrator.
-  // The accountId is bound into the one-time intent at page-load time; the send-email endpoint
-  // reads the accountId from the consumed intent, rejecting caller-selected account substitution.
+  // ORK-513: reachable before pairing so the notification link works, but the
+  // page is generic for anonymous callers and the action requires an
+  // administrator session or a signed one-time repair intent.
   @Get("whatsapp/bridge/repair")
   async whatsappBridgeRepairPage(@Req() request: any, @Query("accountId") accountId = "", @Res() response: any) {
-    const principal = requestPrincipal(request);
-    if (!isAdminPrincipal(principal)) {
-      return response.status(403).header("cache-control", "no-store").type("application/json; charset=utf-8").send(JSON.stringify({ ok: false }));
-    }
-    const host = String(request?.headers?.host || "").trim();
-    const { intentId, token } = await createConnectorUseIntent(
-      String(principal.userId || principal.id || ""),
-      { connector: "whatsapp", purpose: "repair", host, accountId: String(accountId || "").trim() },
-      process.env,
-    );
+    const page = renderWhatsAppRepairPage(request, accountId);
     return response
-      .status(200)
+      .status(page.status)
       .header("cache-control", "no-store")
+      .header("referrer-policy", "no-referrer")
       .type("text/html; charset=utf-8")
-      .send(whatsappRepairPageHtml(accountId, intentId, token));
+      .send(page.html);
   }
 
-  // ORK-513: send-email requires admin OR a valid one-time repair intent.
-  // accountId comes from the consumed intent — caller-selected substitution is rejected.
-  // Generic minimized response prevents disclosure of account/recipient/runtime metadata.
   @Post("whatsapp/bridge/repair/send-email")
-  @HttpCode(200)
-  async whatsappBridgeRepairSendEmail(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
-    const principal = requestPrincipal(request);
-    const intentId = String(body.intentId || "").trim();
-    const token = String(body.token || "").trim();
-    const host = String(request?.headers?.host || "").trim();
-    // Require admin. Intent validation provides the account binding.
-    if (!isAdminPrincipal(principal)) {
-      throw httpError("admin_required", 403);
-    }
-    let consumed: Record<string, unknown>;
-    try {
-      consumed = await consumeConnectorUseIntent(intentId, token, {
-        userId: String(principal.userId || principal.id || ""),
-        connector: "whatsapp",
-        purpose: "repair",
-        host,
-      }, process.env);
-    } catch {
-      // Generic response: do not reveal whether the intent was not found, expired, or replayed.
-      throw httpError("repair_intent_required", 401);
-    }
-    // accountId is read from the intent — reject caller-selected account substitution.
-    const boundAccountId = String(consumed?.accountId || "").trim();
-    const result = await sendLocalWhatsAppRepairQrEmail({
-      accountId: boundAccountId,
-      reason: "manual_repair_page",
-      force: body.force !== false,
-    }, process.env);
-    if (!result.ok && !result.skipped) {
-      // Generic minimized error — do not expose repair state, account existence, or recipient details.
-      throw httpError("repair_unavailable", 503);
-    }
-    return {
-      ok: result.ok,
-      skipped: Boolean(result.skipped),
-      skippedReason: result.skippedReason || "",
-      // Mask recipients: no account/email disclosure to the caller.
-      recipients: Array.isArray(result.recipients) ? result.recipients.map(maskEmail).filter(Boolean) : [],
-    };
+  async whatsappBridgeRepairSendEmail(@Req() request: any, @Body() body: Record<string, unknown> = {}, @Res() response: any) {
+    const result = await handleWhatsAppRepairSend(request, body, process.env);
+    return response
+      .status(result.status)
+      .header("cache-control", "no-store")
+      .type("application/json; charset=utf-8")
+      .send(JSON.stringify(result.payload));
   }
 
   @Get("whatsapp/bridge/qr.svg")

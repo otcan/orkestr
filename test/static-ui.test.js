@@ -556,8 +556,10 @@ test("google workspace brokered connect links require instance and owner scoped 
       body: JSON.stringify({ accountId: "sender" }),
     });
     const waRepairPostPayload = await waRepairPostResponse.json();
-    assert.equal(waRepairPostResponse.status, 409);
-    assert.equal(waRepairPostPayload.error, "recipient_missing");
+    // ORK-513: a Google-connect auth-intent session is not an administrator
+    // session and carries no repair intent, so it gets the generic rejection.
+    assert.equal(waRepairPostResponse.status, 403);
+    assert.equal(waRepairPostPayload.error, "repair_request_rejected");
 
     const appResponse = await fetch(`http://127.0.0.1:${port}/app`, { headers: { cookie }, redirect: "manual" });
     const appPayload = await appResponse.json();

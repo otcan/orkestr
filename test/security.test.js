@@ -790,10 +790,12 @@ test("whatsapp bridge machine token bypasses browser pairing only for bridge rou
   assert.equal(blocked.ok, false);
   assert.equal(blocked.error, "whatsapp_bridge_token_required");
   assert.equal(blocked.routingFailure.code, "whatsapp_bridge_token_required");
-  assert.equal(repairPage.ok, false);
-  assert.equal(repairPage.error, "browser_pairing_required");
-  assert.equal(repairSend.ok, false);
-  assert.equal(repairSend.error, "browser_pairing_required");
+  // ORK-513: the repair link stays reachable before pairing, but the request is
+  // marked anonymous so the handler demands an admin session or signed intent.
+  assert.equal(repairPage.ok, true);
+  assert.equal(repairPage.anonymous, true);
+  assert.equal(repairSend.ok, true);
+  assert.equal(repairSend.anonymous, true);
   assert.equal(badToken.ok, false);
   assert.equal(badToken.error, "whatsapp_bridge_token_invalid");
   assert.equal(badToken.routingFailure.code, "whatsapp_bridge_token_invalid");

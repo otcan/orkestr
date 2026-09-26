@@ -5,6 +5,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson, writeSecretJson } from "../../storage/src/store.js";
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { isRoutableWhatsAppConversationId } from "./whatsapp-identifiers.js";
+import { issueWhatsAppRepairIntent } from "./whatsapp-repair-intent.js";
 import { requestThreadInputDelivery } from "../../core/src/runtime-leases.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { listTenantWhatsAppRoutes, tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
@@ -236,6 +237,11 @@ function normalizeAccountId(accountId = "", env = process.env) {
   return normalized;
 }
 
+/** Canonical managed account id (resolves legacy aliases); throws for unknown accounts. */
+export async function resolveManagedLocalWhatsAppAccountId(accountId = "", env = process.env) {
+  return normalizeManagedAccountId(accountId, env);
+}
+
 async function normalizeManagedAccountId(accountId = "", env = process.env) {
   const ids = await managedLocalWhatsAppAccountIds(env);
   const normalized = resolveLocalAccountAlias(accountId || ids[0] || "account-1", env, ids);
@@ -433,7 +439,11 @@ export async function notifyLocalWhatsAppPairingRequired(input = {}, env = proce
   }
   const reason = String(input.reason || "pairing_required").trim();
   const label = accountLabel(accountId);
-  const link = String(input.repairUrl || localWhatsAppRepairLink(accountId, env));
+  const baseLink = String(input.repairUrl || localWhatsAppRepairLink(accountId, env));
+  // The notification is the trusted issuer of the one-time repair intent. It
+  // travels in the URL fragment so it never reaches access logs or previews.
+  const repairIntent = await issueWhatsAppRepairIntent({ accountId, link: baseLink }, env).catch(() => null);
+  const link = repairIntent ? `${baseLink.replace(/#.*$/, "")}#repair=${encodeURIComponent(repairIntent.token)}` : baseLink;
   const lines = [
     "Orkestr WhatsApp is disconnected and needs to be paired again.",
     "",
@@ -533,9 +543,17 @@ export async function sendLocalWhatsAppRepairQrEmail(input = {}, env = process.e
   }
   const statusReader = options.getLocalWhatsAppBridgeStatus || getLocalWhatsAppBridgeStatus;
   const currentStatus = await statusReader(env).catch(() => null);
-  const currentAccount = Array.isArray(currentStatus?.accounts)
-    ? currentStatus.accounts.find((account) => account.accountId === accountId || account.id === accountId)
-    : null;
+  if (!Array.isArray(currentStatus?.accounts)) {
+    // Readiness is unknown: fail closed rather than resetting a runtime that
+    // may be healthy (ORK-513).
+    await appendEvent({
+      type: "whatsapp_local_repair_qr_email_skipped",
+      accountId,
+      reason: "status_unavailable",
+    }, env).catch(() => {});
+    return { ok: false, configured: true, error: "whatsapp_status_unavailable", statusCode: 503, recipients };
+  }
+  const currentAccount = currentStatus.accounts.find((account) => account.accountId === accountId || account.id === accountId) || null;
   if (currentAccount?.ready) {
     await appendEvent({
       type: "whatsapp_local_repair_qr_email_skipped",
@@ -549,9 +567,15 @@ export async function sendLocalWhatsAppRepairQrEmail(input = {}, env = process.e
   let attachmentPath = await getAttachmentPath(accountId, env);
   if (!attachmentPath) {
     const starter = options.startLocalWhatsAppAccount || startLocalWhatsAppAccount;
+    const resetRuntime = input.force !== false;
+    await appendEvent({
+      type: resetRuntime ? "whatsapp_local_repair_runtime_reset" : "whatsapp_local_repair_runtime_start",
+      accountId,
+      reason: String(input.reason || "manual_repair_page").trim(),
+    }, env).catch(() => {});
     await starter(accountId, env, {
       ...(options.startOptions || {}),
-      resetRuntime: input.force !== false,
+      resetRuntime,
       repairNotification: false,
     });
     attachmentPath = options.getQrAttachmentPath
