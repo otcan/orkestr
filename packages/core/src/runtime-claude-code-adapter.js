@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import {
   claudeCodeEnabled,
+  claudeCodeEventBackgroundToolUse,
+  claudeCodeMaxBackgroundTaskRetries,
 } from "./claude-code-client.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { updateLlmAccountProfileState } from "./llm-account-profiles.js";
@@ -113,7 +115,10 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
   const profile = await profileForThread(thread, env, true);
   const freshMessage = await getThreadMessage(thread.id, message.id, env);
   if (!freshMessage || !pendingStates.has(clean(freshMessage.state))) return { skipped: true, message: freshMessage || message };
-  const attemptId = `claude_turn_${crypto.randomBytes(12).toString("base64url")}`;
+  // Reassigned across an automatic background-task retry (below) so every
+  // downstream success/failure code path reports the attempt that actually
+  // produced the outcome.
+  let attemptId = `claude_turn_${crypto.randomBytes(12).toString("base64url")}`;
 
   // Terminate any orphaned process group left by a previous crashed attempt
   // before writing the new attempt identity file.
@@ -134,8 +139,8 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
   }
 
   const deliveryAttempt = Math.max(0, Number(freshMessage.deliveryAttempt || 0) || 0) + 1;
-  const sessionId = await getClaudeCodeSession(thread, env);
-  const priorTurnFailed = clean(thread.runtime?.lastTurnStatus) === "failed";
+  let sessionId = await getClaudeCodeSession(thread, env);
+  let priorTurnFailed = clean(thread.runtime?.lastTurnStatus) === "failed";
   const runningMessage = await updateThreadMessage(thread.id, message.id, {
     state: "running",
     deliveryState: "delivering",
@@ -164,30 +169,81 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
   }, env);
   await progress.start();
 
+  const maxBackgroundTaskRetries = claudeCodeMaxBackgroundTaskRetries(env);
+  let backgroundTaskRetries = 0;
+  let backgroundTaskRetryNotice = false;
+
   try {
     let result;
     try {
-      result = await runClaudeCodeProcess({
-        thread,
-        profile,
-        prompt: codexInputText(freshMessage),
-        sessionId,
-        priorTurnFailed,
-        standingMission: resolveStandingMissionAppendText(thread, env),
-        attemptId,
-        onPromptSubmitted: () => recordClaudeCodeRouterTrace(runningMessage || freshMessage, "delivered_to_runtime", {
-          threadId: thread.id,
-          attempt: deliveryAttempt,
-          ownerProcess: attemptId,
-        }, env),
-        onEvent: (event) => progress.observe(event),
-        // Forward supervisor heartbeats to the progress reporter.
-        // heartbeat() is rate-limited inside the reporter; redaction is handled there.
-        onHeartbeat: ({ toolElapsedMs }) => progress.heartbeat(toolElapsedMs),
-        assertProfileReady: () => profileForThread(thread, env, true),
-        activeTurns,
-        env,
-      });
+      // A detected run_in_background attempt gets a small, hard-bounded
+      // number of *immediate* foreground retries of this same input/session
+      // (not a deferred requeue -- the caller is still awaiting this call).
+      // Each retry runs under a fresh attemptId and a stronger notice naming
+      // the exact violation. Exceeding the bound re-throws so the surrounding
+      // catch below reports one durable, low-cardinality failure instead of
+      // looping forever; no assistant final or progress "started" commentary
+      // is ever emitted for a discarded intermediate attempt, so a retry
+      // that eventually succeeds or fails still produces exactly one visible
+      // outcome for the user.
+      for (;;) {
+        try {
+          result = await runClaudeCodeProcess({
+            thread,
+            profile,
+            prompt: codexInputText(freshMessage),
+            sessionId,
+            priorTurnFailed,
+            backgroundTaskRetry: backgroundTaskRetryNotice,
+            standingMission: resolveStandingMissionAppendText(thread, env),
+            attemptId,
+            onPromptSubmitted: () => recordClaudeCodeRouterTrace(runningMessage || freshMessage, "delivered_to_runtime", {
+              threadId: thread.id,
+              attempt: deliveryAttempt,
+              ownerProcess: attemptId,
+            }, env),
+            // An event carrying the violating tool_use is never forwarded to
+            // progress commentary: the assistant's own text in that same
+            // event is exactly the false "I'll keep working/report back"
+            // narration CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE warns against,
+            // and detection only concludes at process close -- forwarding it
+            // first would leak that false claim to WhatsApp before the
+            // rejection below ever happens.
+            onEvent: (event) => {
+              if (!claudeCodeEventBackgroundToolUse(event)) progress.observe(event);
+            },
+            // Forward supervisor heartbeats to the progress reporter.
+            // heartbeat() is rate-limited inside the reporter; redaction is handled there.
+            onHeartbeat: ({ toolElapsedMs }) => progress.heartbeat(toolElapsedMs),
+            assertProfileReady: () => profileForThread(thread, env, true),
+            activeTurns,
+            env,
+          });
+          break;
+        } catch (error) {
+          const retryFailureCode = publicClaudeCodeFailure(error);
+          if (retryFailureCode !== "claude_code_background_task_attempted" || backgroundTaskRetries >= maxBackgroundTaskRetries) {
+            throw error;
+          }
+          backgroundTaskRetries += 1;
+          backgroundTaskRetryNotice = true;
+          priorTurnFailed = true;
+          // Resume the exact session the offending turn was running under
+          // (captured from its own init event) rather than starting fresh.
+          sessionId = clean(error.sessionId) || sessionId;
+          const nextAttemptId = `claude_turn_${crypto.randomBytes(12).toString("base64url")}`;
+          await appendEvent({
+            type: "claude_code_background_task_retry",
+            threadId: thread.id,
+            profileId: profile.id,
+            previousTurnId: attemptId,
+            turnId: nextAttemptId,
+            retryCount: backgroundTaskRetries,
+            maxRetries: maxBackgroundTaskRetries,
+          }, env).catch(() => {});
+          attemptId = nextAttemptId;
+        }
+      }
     } finally {
       await progress.flush();
     }

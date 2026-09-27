@@ -39,6 +39,7 @@ export async function runClaudeCodeProcess({
   prompt,
   sessionId,
   priorTurnFailed = false,
+  backgroundTaskRetry = false,
   standingMission = "",
   attemptId,
   onPromptSubmitted = null,
@@ -64,7 +65,7 @@ export async function runClaudeCodeProcess({
   return new Promise((resolve, reject) => {
     const supervisor = spawnSupervised({
       command,
-      args: claudeCodeArgs(thread, { sessionId, priorTurnFailed, standingMission, statusCaptureCommand: statusCapture.command }, env),
+      args: claudeCodeArgs(thread, { sessionId, priorTurnFailed, backgroundTaskRetry, standingMission, statusCaptureCommand: statusCapture.command }, env),
       cwd: workspaceForThread(thread),
       env: childEnv,
       attemptId,
@@ -157,6 +158,10 @@ export async function runClaudeCodeProcess({
         const error = new Error(failureCode);
         error.code = failureCode;
         error.telemetry = telemetry;
+        // An automatic retry needs the session the offending turn was
+        // actually running under (captured from its own init event) so it
+        // resumes the same transcript instead of starting a fresh one.
+        if (failureCode === "claude_code_background_task_attempted") error.sessionId = observedSessionId;
         return finish(error);
       }
       if (!observedSessionId) {
