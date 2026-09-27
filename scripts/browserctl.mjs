@@ -13,6 +13,7 @@ import {
   normalizeDesktopAddressFields,
 } from "../packages/core/src/desktop-runtime-addresses.js";
 import { probeRfbFramebuffer } from "./browserctl-visual-readiness.mjs";
+import { verifyPortOwnedByPid } from "./browserctl-port-identity.mjs";
 
 const defaultCatalog = [
   {
@@ -299,8 +300,38 @@ async function desktopReadiness({ state = {}, prepared = false, dryRunning = fal
   const completePidState = required.every((name) => Boolean(pids[name].pid));
   const missingPids = required.filter((name) => pids[name].pid && !pids[name].ok);
   const pidOk = dryRunning || (hasRuntimeState && completePidState && missingPids.length === 0);
-  const bridgeOk = dryRunning || (pids.x11vnc.ok && pids.websockify.ok && webOpen);
-  const browserOk = dryRunning || (pids.chrome.ok && cdpOpen);
+  // A live PID number and an open port are each necessary but neither is
+  // sufficient: a stale/reused PID can still pass the liveness check above,
+  // and an open port can belong to an unrelated process. Only an actual
+  // /proc fd-to-socket-inode match proves the recorded process is the one
+  // holding that exact listener. Skipped (treated as satisfied) when the
+  // port isn't even open -- webOpen/cdpOpen already cover that failure --
+  // or during a dry run, which has no real processes to verify.
+  const websockifyPortOwnership = !dryRunning && webOpen
+    ? await verifyPortOwnedByPid({ port: state.webPort || portsForSlug(state.slug || "desktop").webPort, pid: state.websockifyPid })
+    : { ok: true, status: dryRunning ? "dry_run" : "port_not_open" };
+  const chromePortOwnership = !dryRunning && cdpOpen
+    ? await verifyPortOwnedByPid({ port: state.debugPort || portsForSlug(state.slug || "desktop").debugPort, pid: state.chromePid })
+    : { ok: true, status: dryRunning ? "dry_run" : "port_not_open" };
+  // A DISPLAY-identity check (does the recorded Chrome PID's own
+  // /proc/<pid>/environ still target the expected DISPLAY) was assessed and
+  // implemented in ./browserctl-port-identity.mjs as
+  // verifyChromeDisplayIdentity, with its own injectable-seam unit tests.
+  // It is deliberately NOT wired into this live readiness gate: this
+  // repo's existing desktop test fixtures (e.g. browserctlSession() in
+  // test/desktop-visual-readiness.test.js) record one real PID -- the test
+  // runner's own -- for every role (xvfb/x11vnc/websockify/chrome) as a
+  // simulation shortcut. That PID's real environment DISPLAY has no
+  // relationship to the fixture's recorded expected display, so checking it
+  // live would fail deterministically-but-falsely across the existing
+  // fixture convention (confirmed empirically), not because desktop
+  // readiness is actually degraded. Fixing that would mean rewriting the
+  // shared multi-role-PID convention across every desktop test file, which
+  // is out of scope for this bounded change. The function remains available
+  // for a future, narrower caller that has a real, dedicated Chrome PID to
+  // check.
+  const bridgeOk = dryRunning || (pids.x11vnc.ok && pids.websockify.ok && webOpen && websockifyPortOwnership.ok);
+  const browserOk = dryRunning || (pids.chrome.ok && cdpOpen && chromePortOwnership.ok);
   const framebuffer = dryRunning
     ? { ok: true, status: "dry_run" }
     : bridgeOk
@@ -314,7 +345,9 @@ async function desktopReadiness({ state = {}, prepared = false, dryRunning = fal
   if (!prepared) issues.push("not_prepared");
   if (hasRuntimeState && !pidOk) issues.push("stale_state");
   if (hasRuntimeState && !bridgeOk) issues.push("desktop_bridge_unreachable");
+  if (hasRuntimeState && webOpen && !websockifyPortOwnership.ok) issues.push(websockifyPortOwnership.status);
   if (hasRuntimeState && !browserOk) issues.push("desktop_browser_unreachable");
+  if (hasRuntimeState && cdpOpen && !chromePortOwnership.ok) issues.push(chromePortOwnership.status);
   if (hasRuntimeState && !visualOk) issues.push(framebuffer.status || "framebuffer_unreachable");
   const ok = dryRunning || (pidOk && bridgeOk && browserOk && visualOk);
   return {
@@ -326,6 +359,8 @@ async function desktopReadiness({ state = {}, prepared = false, dryRunning = fal
     browserOk,
     visualOk,
     framebuffer,
+    websockifyPortOwnership,
+    chromePortOwnership,
     checks: {
       prepared,
       webOpen,
