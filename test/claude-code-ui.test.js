@@ -29,6 +29,13 @@ test("Claude account UI uses opaque profiles and attended login APIs", async () 
   assert.match(api, /\/login\/code/);
   assert.match(api, /\/llm-accounts/);
   assert.doesNotMatch(accounts, /credentialRoot|CLAUDE_CONFIG_DIR|ANTHROPIC_API_KEY/);
+  assert.match(accounts, /Set up long-lived login/);
+  assert.match(accounts, /claude setup-token/);
+  assert.match(accounts, /name="claude-worker-token".*autocomplete="off"/);
+  assert.match(accounts, /this\.subscriptionToken = ""/);
+  assert.match(accounts, /setLlmAccountSubscriptionToken\(account\.id, token\)/);
+  assert.match(api, /\/subscription-token/);
+  assert.doesNotMatch(accounts, /localStorage|sessionStorage|console\.log/);
 });
 
 test("new-thread UI binds Claude to a selected server account profile", async () => {

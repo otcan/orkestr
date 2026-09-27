@@ -1670,9 +1670,11 @@ test("CLI sends input with Orkestr command parsing enabled", async () => {
   });
 
   assert.equal(code, 0);
-  assert.equal(seen[0].body.text, "/now ship it");
-  assert.equal(seen[0].body.parseCommands, true);
-  assert.equal(seen[0].body.controlAllowed, true);
+  const input = seen.find((entry) => entry.body);
+  assert.equal(input.body.text, "/now ship it");
+  assert.equal(input.body.parseCommands, true);
+  assert.equal(input.body.controlAllowed, true);
+  assert.equal(input.body.workerReplyDelivery, undefined);
   assert.match(stdout.text(), /Queued thread-1/);
 });
 

@@ -14,12 +14,19 @@ function footerLine(line) {
     /^dbg:\s*m:gpt-[a-z0-9_.-]+\/[a-z0-9_.-]+\s*\u00b7/i.test(text);
 }
 
+// Newer Codex TUIs render a key-hint row below the model footer, for example
+// "← for agents · ? for shortcuts".
+function footerHintLine(line) {
+  const text = String(line || "").trim();
+  return /^(?:[←→]\s+for\s+[a-z ]+\s+·\s+)*\?\s+for\s+shortcuts$/i.test(text);
+}
+
 function footerIndex(lines) {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     if (!footerLine(lines[index])) continue;
     // A current Codex footer remains at the bottom of the viewport. Transcript
     // output after it means this is not evidence of the current composer.
-    if (nonemptyAfter(lines, index).length === 0) return index;
+    if (nonemptyAfter(lines, index).every(footerHintLine)) return index;
   }
   return -1;
 }

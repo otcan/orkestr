@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { createHmac, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { resolveScope, validateScopeRequest, scanEnvironment, immutableCommit } from "./secret-scan-scope.mjs";
 import { createEvidence, aggregateFindings } from "./secret-scan-evidence.mjs";
+import { scannerLifecycle } from "./scanner-process.mjs";
 export { scannerLogOptions } from "./secret-scan-scope.mjs";
 
 export const scannerRelease = Object.freeze({ version: "8.30.1", archiveSha256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" });
@@ -37,7 +37,7 @@ export function applyReviewedFindings(findings, policy, now = Date.now()) {
     classification: reviews.get(key(row)).classification } : row);
 }
 
-export async function scanRepository({ binary, repository, repositoryLabel, reportPath, baseCommit = "", targetRef, expectedCommit, approvedRefs = [] }, runner = spawnSync) {
+export async function scanRepository({ binary, repository, repositoryLabel, reportPath, baseCommit = "", targetRef, expectedCommit, approvedRefs = [] }, runner) {
   if (!path.isAbsolute(binary || "") || !path.isAbsolute(repository || "") || !path.isAbsolute(reportPath || "") ||
       !/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repositoryLabel || "") || (baseCommit && !/^[a-f0-9]{40,64}$/.test(baseCommit))) throw new Error("explicit_scan_scope_required");
   const reportTarget = path.resolve(reportPath), repoRoot = await fs.realpath(repository);
@@ -45,6 +45,7 @@ export async function scanRepository({ binary, repository, repositoryLabel, repo
   const reportParent = await fs.realpath(path.dirname(reportTarget));
   if (reportParent === repoRoot || reportParent.startsWith(repoRoot + path.sep)) throw new Error("private_report_path_required");
   const evidence = await createEvidence(reportTarget, { repository: repositoryLabel, scanner: scannerRelease.version });
+  const lifecycle = scannerLifecycle(runner);
   const env = scanEnvironment;
   let temporary;
   try {
@@ -53,9 +54,9 @@ export async function scanRepository({ binary, repository, repositoryLabel, repo
     const scope = resolveScope(scopeOptions);
     const { logOptions: _logOptions, ...scopeEvidence } = scope;
     await evidence.checkpoint({ ...scopeEvidence, scopeVerified: true });
-    const version = runner(binary, ["version"], { env, encoding: "utf8", timeout: 10000, maxBuffer: 4096 });
-    if (version.status !== 0 || !new RegExp(`^v?${scannerRelease.version.replaceAll(".", "\\.")}(?:\\s|$)`).test(String(version.stdout || "").trim())) throw new Error("pinned_scanner_required");
-    temporary = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-redacted-scan-"));
+    const version = await lifecycle.run(binary, ["version"], { env, encoding: "utf8", timeout: 10000, maxBuffer: 4096 });
+    if (version.status !== 0 || version.error || !new RegExp(`^v?${scannerRelease.version.replaceAll(".", "\\.")}(?:\\s|$)`).test(String(version.stdout || "").trim())) throw new Error("pinned_scanner_required");
+    temporary = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-redacted-scan-${evidence.report.runId}-`));
     const rawReport = path.join(temporary, "redacted.json"), ignore = path.join(temporary, "empty-ignore");
     await fs.writeFile(ignore, "", { mode: 0o600 });
     const config = fileURLToPath(new URL("./gitleaks.toml", import.meta.url));
@@ -63,7 +64,7 @@ export async function scanRepository({ binary, repository, repositoryLabel, repo
       "--log-opts", scope.logOptions, "--redact=100", "--no-banner", "--no-color",
       "--report-format", "json", "--report-path", rawReport, "--exit-code", "23", "--timeout", "300"];
     // Raw tool output can include commit text and detection context: discard it.
-    const scan = runner(binary, args, { env, cwd: repoRoot, timeout: 310000, stdio: "ignore" });
+    const scan = await lifecycle.run(binary, args, { env, cwd: repoRoot, timeout: 310000, stdio: "ignore" });
     evidence.report.scannerExitStatus = Number.isInteger(scan.status) ? scan.status : null;
     if (![0, 23].includes(scan.status) || scan.error) throw new Error("scanner_failed_no_coverage_claim");
     const stat = await fs.lstat(rawReport);
@@ -77,18 +78,29 @@ export async function scanRepository({ binary, repository, repositoryLabel, repo
     // Delete even redacted transient payload before marking evidence complete.
     await fs.rm(temporary, { recursive: true, force: true });
     temporary = null;
+    lifecycle.check();
     await evidence.finish({ ...aggregate, complete: true, ok: aggregate.unresolved === 0,
       category: aggregate.unresolved ? "needs_private_triage" : "clean" });
+    lifecycle.check();
     return { ok: evidence.report.ok, ...aggregate, scope: scope.scope, scanner: scannerRelease.version, runId: evidence.report.runId };
   } catch (error) {
     const safeCodes = new Set(["explicit_scan_scope_required", "scan_revision_unavailable", "scan_history_incomplete", "scan_target_mismatch",
       "scan_stale_checkout", "scan_base_mismatch", "scan_revision_count_invalid", "pinned_scanner_required", "scanner_failed_no_coverage_claim",
-      "invalid_scanner_report", "inconsistent_scanner_exit", "invalid_finding_review_policy", "scan_refs_changed"]);
+      "invalid_scanner_report", "inconsistent_scanner_exit", "invalid_finding_review_policy", "scan_refs_changed", "scan_interrupted"]);
     await evidence.finish({ complete: false, ok: false, category: safeCodes.has(error.message) ? error.message : "scan_collection_failed" });
     throw new Error(safeCodes.has(error.message) ? error.message : "scan_collection_failed");
   } finally {
     try { if (temporary) await fs.rm(temporary, { recursive: true, force: true }); }
-    finally { await evidence.close(); }
+    finally {
+      try {
+        if (lifecycle.interrupted) {
+          await evidence.finish({ complete: false, ok: false, category: "scan_interrupted" });
+          throw new Error("scan_interrupted");
+        }
+      } finally {
+        try { await evidence.close(); } finally { lifecycle.dispose(); }
+      }
+    }
   }
 }
 

@@ -194,3 +194,24 @@ test("nonsecret reviews bind exact immutable locations, scanner and expiry", () 
   assert.throws(() => applyReviewedFindings([finding], { ...policy, scanner: "0.0.0" }, now), /invalid_finding/);
   assert.throws(() => applyReviewedFindings([finding], { ...policy, findings: [{ ...review, path: "test/*" }] }, now), /invalid_finding/);
 });
+
+test("injected asynchronous runner interruption cleans residue and restores signal listeners", async t => {
+  const options = await fixture(t);
+  const before = [process.listenerCount("SIGTERM"), process.listenerCount("SIGINT")];
+  let transient;
+  await assert.rejects(scanRepository(options, async (binary, args, config) => {
+    const result = runnerFor(0)(binary, args, config);
+    if (args[0] !== "version") {
+      transient = args[args.indexOf("--report-path") + 1];
+      process.emit("SIGINT");
+      process.emit("SIGTERM");
+    }
+    return result;
+  }), /scan_interrupted/);
+  assert.deepEqual([process.listenerCount("SIGTERM"), process.listenerCount("SIGINT")], before);
+  await assert.rejects(fs.stat(path.dirname(transient)), { code: "ENOENT" });
+  const report = JSON.parse(await fs.readFile(options.reportPath, "utf8"));
+  assert.equal(report.complete, false);
+  assert.equal(report.ok, false);
+  assert.equal(report.category, "scan_interrupted");
+});

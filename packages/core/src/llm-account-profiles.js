@@ -83,6 +83,9 @@ export function publicLlmAccountProfile(profile = {}) {
     lastVerifiedAt: clean(profile.lastVerifiedAt) || null,
     revokedAt: clean(profile.revokedAt) || null,
     failureCode: clean(profile.failureCode) || null,
+    authenticationMethod: profile.subscriptionToken || profile.authenticationMethod === "subscription_token" ? "subscription_token" : "browser_login",
+    tokenConfiguredAt: clean(profile.tokenConfiguredAt) || null,
+    credentialRevision: Number(profile.credentialRevision || 0),
   };
 }
 
@@ -142,10 +145,14 @@ export async function updateLlmAccountProfileState(ownerUserId, profileId, state
       if (normalizedState !== "revoked") throw profileError("llm_account_profile_revoked", 410);
       return publicLlmAccountProfile(profile);
     }
+    if (options.credentialRevision !== undefined && Number(options.credentialRevision) !== Number(profile.credentialRevision || 0)) {
+      throw profileError("llm_account_credentials_changed", 409);
+    }
     profile.state = normalizedState;
     profile.updatedAt = nowIso();
     profile.lastVerifiedAt = options.verified === true ? profile.updatedAt : profile.lastVerifiedAt || "";
     profile.revokedAt = normalizedState === "revoked" ? profile.updatedAt : "";
+    if (normalizedState === "revoked") delete profile.subscriptionToken;
     profile.failureCode = clean(options.failureCode).slice(0, 120);
     return publicLlmAccountProfile(profile);
   });
@@ -167,7 +174,42 @@ export async function resolveLlmAccountProfile({ ownerUserId, profileId, provide
   if (requireReady && profile.state !== "ready") throw profileError("llm_account_profile_not_ready", 428);
   const root = credentialRoot(owner, normalizedProvider, id, env);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
-  return { ...profile, credentialRoot: root };
+  // Secret material must not escape through general profile resolution.
+  const { subscriptionToken, ...safeProfile } = profile;
+  return { ...safeProfile, authenticationMethod: subscriptionToken ? "subscription_token" : "browser_login", credentialRoot: root };
+}
+
+// Tokens enter only through the owner-scoped authenticated account API. Never
+// accept a credential path or inherit a host-global token for a tenant profile.
+export async function setClaudeSubscriptionToken(ownerUserId, profileId, token, env = process.env) {
+  const value = typeof token === "string" ? token.trim() : "";
+  if (!/^sk-ant-oat01-[A-Za-z0-9_-]{20,4096}$/.test(value)) throw profileError("claude_subscription_token_invalid");
+  const owner = normalizedOwner(ownerUserId);
+  if (!owner) throw profileError("llm_account_owner_required", 403);
+  return mutateProfiles(owner, env, async (profiles) => {
+    const profile = profiles.find(entry => entry.id === clean(profileId) && entry.ownerUserId === owner);
+    if (!profile) throw profileError("llm_account_profile_not_found", 404);
+    if (profile.state === "revoked") throw profileError("llm_account_profile_revoked", 410);
+    if (profile.provider !== "claude-code" || profile.authMode !== "subscription") throw profileError("llm_account_auth_mode_unsupported", 409);
+    profile.subscriptionToken = value;
+    profile.tokenConfiguredAt = nowIso();
+    profile.credentialRevision = Number(profile.credentialRevision || 0) + 1;
+    profile.updatedAt = profile.tokenConfiguredAt;
+    profile.state = "login_required";
+    profile.failureCode = "claude_code_verification_required";
+    profile.lastVerifiedAt = "";
+    return publicLlmAccountProfile(profile);
+  });
+}
+
+export async function claudeSubscriptionTokenForRuntime(profile, env = process.env) {
+  if (!profile?.id || !profile?.ownerUserId) return "";
+  const current = (await readProfiles(profile.ownerUserId, env)).find(entry => entry.id === profile.id && entry.ownerUserId === profile.ownerUserId);
+  if (!current) throw profileError("llm_account_profile_not_found", 404);
+  if (current.state === "revoked") throw profileError("llm_account_profile_revoked", 410);
+  if (current.provider !== "claude-code") throw profileError("llm_account_provider_mismatch", 409);
+  if (Number(current.credentialRevision || 0) !== Number(profile.credentialRevision || 0)) throw profileError("llm_account_credentials_changed", 409);
+  return current.subscriptionToken || "";
 }
 
 export async function revokeLlmAccountProfile(ownerUserId, profileId, env = process.env) {

@@ -42,6 +42,7 @@ import {
   trustedHushReplyDeliveryIntent,
 } from "../../core/src/reply-delivery-intent.js";
 import { recordRuntimeControlMetric } from "../../core/src/observability.js";
+import { assertLiveReplyDeliveryBinding } from "../../core/src/reply-delivery-live-fence.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
@@ -3679,6 +3680,7 @@ async function sendClaimedWhatsAppText({
       deliveryType,
       outboxJobId: outboxClaim.job.id,
     }, env);
+    await assertLiveReplyDeliveryBinding({ parent, threadId, chatId, accountId }, env);
     const payload = await sendWhatsAppText({
       chatId,
       text,
@@ -6842,6 +6844,18 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           message.connector === "whatsapp" ||
           boundThreadWhatsAppAssistantOrigin({ message, thread, kind });
         if (!whatsappOrigin) continue;
+        const progressFence = replyDeliveryBindingFence(parent || {}, thread || {});
+        if (progressFence.applies && !progressFence.allowed) {
+          await skipWhatsAppOutboundCandidate({
+            state, outboundIntents, kind, deliveryType: "progress", agentId, threadId,
+            messageId: message.id, parentMessageId: message.parentMessageId,
+            chatId: pickString(progressFence.intent?.target?.chatId),
+            accountId: pickString(progressFence.intent?.target?.accountId),
+            message, parent, reason: progressFence.reason, env,
+          });
+          skipped.push({ agentId, threadId, messageId: message.id, reason: progressFence.reason });
+          continue;
+        }
         if (trustedHushReplyDeliveryIntent(parent)) {
           await skipWhatsAppOutboundCandidate({
             state,

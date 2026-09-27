@@ -1495,6 +1495,7 @@ try {
       item.gitParentAhead === null || item.gitParentAhead === undefined ? "" : `parentAhead=${item.gitParentAhead}`,
       item.gitDirtyFiles === null || item.gitDirtyFiles === undefined ? "" : `dirty=${item.gitDirtyFiles}`,
       item.error ? `error=${item.error}` : "",
+      item.blocker ? `blocker=${JSON.stringify(item.blocker)}` : "",
     ].filter(Boolean).join(" ");
     console.log(`Post-deploy worker ${item.synced ? "synced" : "skipped"}: ${name}${detail ? ` (${detail})` : ""}`);
   }

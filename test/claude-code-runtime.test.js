@@ -7,6 +7,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { listEvents } from "../packages/storage/src/store.js";
 import {
   cancelClaudeCodeLogin,
+  CLAUDE_CODE_FAILED_TURN_NOTICE,
   claudeCodeArgs,
   claudeCodeEventTelemetry,
   mergeClaudeCodeTelemetry,
@@ -17,6 +18,8 @@ import {
 } from "../packages/core/src/claude-code-client.js";
 import { changeClaudeModelControls, readClaudeModelControls } from "../packages/core/src/claude-model-controls.js";
 import { claudeCodeProgressText } from "../packages/core/src/claude-code-progress.js";
+import { createWorkerReplyDeliveryIntent } from "../packages/core/src/reply-delivery-intent.js";
+import { setThreadConnectorDeliverySignalHandler } from "../packages/core/src/connector-delivery-signals.js";
 import { getClaudeCodeSession } from "../packages/core/src/claude-code-sessions.js";
 import { getRouterTrace } from "../packages/core/src/router-traces.js";
 import {
@@ -50,6 +53,10 @@ async function fixture(t, name = "runtime") {
 import fs from "node:fs";
 import { execSync } from "node:child_process";
 const args = process.argv.slice(2);
+if (args[args.indexOf("--output-format") + 1] === "json") {
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "OK" }));
+  process.exit(0);
+}
 if (args[0] === "auth" && args[1] === "status") {
   process.stdout.write(JSON.stringify({ authenticated: true, status: "logged_in" }) + "\\n");
   process.exit(0);
@@ -84,6 +91,10 @@ process.stdin.on("end", () => {
     process.stdout.write(JSON.stringify({ type: "rate_limit_event", session_id: session, rate_limit_info: { status: "rejected", rateLimitType: "five_hour", resetsAt: 1900000000, isUsingOverage: false, overageDisabledReason: "must-not-persist" } }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "assistant", session_id: session, error: "rate_limit" }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "result", subtype: "success", session_id: session, is_error: true, result: "You've hit your limit · resets later" }) + "\\n");
+    process.exit(1);
+  }
+  if (prompt.includes("expired auth")) {
+    process.stdout.write(JSON.stringify({ type: "result", subtype: "success", session_id: resumed, is_error: true, result: "Failed to authenticate. API Error: 401" }) + "\\n");
     process.exit(1);
   }
   if (prompt.includes("rate limit")) {
@@ -147,6 +158,16 @@ test("Claude runtime uses an account-scoped writable temp directory", () => {
   assert.equal(runtime.TMP, runtime.TMPDIR);
   assert.equal(runtime.TEMP, runtime.TMPDIR);
   assert.equal(runtime.TMPDIR.includes("/shared/tmp"), false);
+  assert.equal(runtime.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, "1");
+});
+
+test("Claude runtime preserves explicitly authorized bypass permissions", () => {
+  const runtime = claudeCodeRuntimeEnv(
+    { credentialRoot: "/srv/orkestr/profiles/opaque" },
+    { executor: { metadata: { claudePermissionMode: "bypassPermissions" } } },
+    { TMPDIR: "/shared/tmp" },
+  );
+  assert.equal(runtime.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, "0");
 });
 
 async function claudeThread(ownerUserId, profileId, env, id = "claude-thread") {
@@ -297,6 +318,9 @@ test("Claude runtime selects the exact profile, strips inherited API credentials
   assert.equal(thread.claudeSessionId, undefined);
   const otherThread = await claudeThread("owner", primary.id, env, "claude-other-thread");
   assert.equal(await getClaudeCodeSession(otherThread, env), "");
+  thread = await updateThread(thread.id, {
+    runtime: { ...(thread.runtime || {}), lastTurnError: "claude_code_failed" },
+  }, env);
   await enqueueThreadInput(thread.id, { text: "second request", source: "test" }, env);
   assert.equal((await deliverClaudeCodePendingInputs(thread, env)).length, 1);
 
@@ -318,9 +342,65 @@ test("Claude runtime selects the exact profile, strips inherited API credentials
   assert.equal(thread.claudeRateLimits.primary.used_percent, 25);
   assert.equal(thread.claudeRateLimits.secondary.used_percent, 40);
   assert.equal(thread.claudeContextWindow, 200000);
+  assert.equal(thread.runtime.lastTurnStatus, "completed");
+  assert.equal(thread.runtime.lastTurnError, null);
   const publicState = JSON.stringify({ thread, messages, events });
   assert.equal(publicState.includes("must-not-persist"), false);
   assert.equal(publicState.includes("/private/transcript"), false);
+});
+
+test("Claude runtime persists quota telemetry before signaling its WhatsApp final", async (t) => {
+  const { env } = await fixture(t, "quota-before-whatsapp-final");
+  const profile = await readyProfile("owner", "Quota ordering", env);
+  const thread = await claudeThread("owner", profile.id, env, "claude-quota-ordering");
+  await enqueueThreadInput(thread.id, {
+    text: "quota ordering request",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    accountId: "sender",
+    chatId: "quota-ordering@g.us",
+  }, env);
+
+  let resolveSignal;
+  const signaled = new Promise((resolve) => { resolveSignal = resolve; });
+  const clearSignal = setThreadConnectorDeliverySignalHandler(async ({ messageId }) => {
+    const message = (await listThreadMessages(thread.id, env)).find((item) => item.id === messageId);
+    if (message?.phase !== "final_answer") return;
+    const observed = await getThread(thread.id, env);
+    resolveSignal({ messageId, rateLimits: observed.claudeRateLimits });
+  });
+  t.after(clearSignal);
+
+  assert.equal((await deliverClaudeCodePendingInputs(thread, env)).length, 1);
+  const observed = await Promise.race([
+    signaled,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("connector_delivery_signal_timeout")), 1000)),
+  ]);
+  assert.ok(observed.messageId);
+  assert.equal(observed.rateLimits.primary.used_percent, 25);
+  assert.equal(observed.rateLimits.secondary.used_percent, 40);
+});
+
+test("Claude runtime voids a failed turn through the system prompt when the next turn resumes", async (t) => {
+  const { calls, env } = await fixture(t, "failed-turn");
+  const primary = await readyProfile("owner", "Primary", env);
+  let thread = await claudeThread("owner", primary.id, env);
+  for (const text of ["first request", "expired auth probe", "replacement request", "follow-up request"]) {
+    await enqueueThreadInput(thread.id, { text, source: "test" }, env);
+    await deliverClaudeCodePendingInputs(thread, env).catch(() => {});
+    // The owner re-authenticates after the provider rejected the expired token.
+    if (text === "expired auth probe") await updateLlmAccountProfileState("owner", primary.id, "ready", { verified: true }, env);
+    thread = await getThread(thread.id, env);
+  }
+
+  const recorded = (await fs.readFile(calls, "utf8")).trim().split("\n").map(JSON.parse);
+  assert.deepEqual(recorded.map((call) => call.prompt), ["first request", "expired auth probe", "replacement request", "follow-up request"]);
+  const notices = recorded.map((call) => {
+    const at = call.args.indexOf("--append-system-prompt");
+    return at >= 0 ? call.args[at + 1] : null;
+  });
+  assert.deepEqual(notices, [null, null, CLAUDE_CODE_FAILED_TURN_NOTICE, null]);
+  assert.deepEqual(recorded[2].args.slice(-2), ["--resume", "claude_session_fixture"]);
 });
 
 test("Claude runtime records exact router delivery phases for WhatsApp input", async (t) => {
@@ -365,7 +445,7 @@ test("Claude settings share model controls while YOLO remains explicit and fail 
   const changed = await changeClaudeModelControls(thread, { model: "opus", effort: "max", permissionMode: "bypassPermissions" }, principal, yoloEnv);
   assert.equal(changed.thread.executor.metadata.claudeModel, "opus");
   assert.deepEqual(claudeCodeArgs(changed.thread, {}, yoloEnv).slice(0, 9), [
-    "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions", "--allow-dangerously-skip-permissions", "--model", "opus",
+    "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions", "--model", "opus",
   ]);
   assert.throws(() => claudeCodeArgs(changed.thread, {}, env), /claude_code_bypass_permissions_disabled/);
   await assert.rejects(readClaudeModelControls(thread, { userId: "other", roles: [] }, env), /forbidden/i);
@@ -412,6 +492,45 @@ test("Claude telemetry replaces a rejected window when the provider allows reque
   assert.equal(JSON.stringify(merged).includes("must-not-persist"), false);
 });
 
+test("Claude telemetry reads unified subscription windows from current rate-limit events", () => {
+  const telemetry = claudeCodeEventTelemetry({
+    type: "rate_limit_event",
+    rate_limit_info: {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      resetsAt: 1900000000,
+      unifiedWindows: {
+        five_hour: { utilization: 0.17, resetsAt: 1900000000 },
+        seven_day: { utilization: 0.07, resetsAt: 1900100000 },
+      },
+    },
+  });
+
+  assert.deepEqual(telemetry.rateLimits.primary, {
+    used_percent: 17,
+    window_minutes: 300,
+    resets_at: 1900000000,
+    status: "allowed",
+  });
+  assert.deepEqual(telemetry.rateLimits.secondary, {
+    used_percent: 7,
+    window_minutes: 10080,
+    resets_at: 1900100000,
+  });
+
+  const merged = mergeClaudeCodeTelemetry(telemetry, claudeCodeEventTelemetry({
+    type: "rate_limit_event",
+    rate_limit_info: {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      resetsAt: 1900000000,
+    },
+  }));
+  assert.equal(merged.rateLimits.primary.used_percent, 17);
+  assert.equal(merged.rateLimits.primary.status, "allowed");
+  assert.equal(merged.rateLimits.secondary.used_percent, 7);
+});
+
 test("Claude telemetry does not normalize missing usage percentages to zero", () => {
   const telemetry = claudeCodeEventTelemetry({
     rate_limits: {
@@ -420,6 +539,31 @@ test("Claude telemetry does not normalize missing usage percentages to zero", ()
     },
   });
   assert.equal(telemetry.rateLimits, null);
+});
+
+test("Claude delegated worker projects progress and final from explicit intent, but plain CLI stays private", async t => {
+  const { env } = await fixture(t, "worker-reply");
+  const profile = await readyProfile("owner", "Worker reply", env);
+  let thread = await claudeThread("owner", profile.id, env, "claude-worker-reply");
+  thread = await updateThread(thread.id, { binding: { connector: "whatsapp", chatId: "worker-chat", responderAccountId: "account-a" } }, env);
+  const first = await enqueueThreadInput(thread.id, {
+    source: "worker_assignment", originSurface: "orkestr-worker", originTransport: "authenticated-http",
+    text: "stream progress", replyDeliveryIntent: createWorkerReplyDeliveryIntent(thread, { mode: "bound_whatsapp" }),
+  }, env);
+  await sendClaudeCodeInput(thread, first, env);
+  const outputs = (await listThreadMessages(thread.id, env)).filter(m => m.parentMessageId === first.id);
+  assert.deepEqual(outputs.map(m => m.phase), ["commentary", "commentary", "final_answer"]);
+  for (const output of outputs) {
+    assert.equal(output.connector, "whatsapp");
+    assert.equal(output.chatId, "worker-chat");
+    assert.equal(output.accountId, "account-a");
+    assert.equal(output.parentMessageId, first.id);
+  }
+  const second = await enqueueThreadInput(thread.id, { source: "cli", text: "stream progress private task" }, env);
+  await sendClaudeCodeInput(await getThread(thread.id, env), second, env);
+  const privateOutputs = (await listThreadMessages(thread.id, env)).filter(m => m.parentMessageId === second.id);
+  assert.deepEqual(privateOutputs.map(m => m.phase), ["final_answer"]);
+  assert.equal(Boolean(privateOutputs[0].chatId), false);
 });
 
 test("Claude progress projection requires tool-backed assistant events and never exposes tool input", () => {
@@ -615,8 +759,8 @@ test("Claude API creates a thread with only an opaque exact profile binding", as
         wake: false,
       }),
     });
-    assert.equal(response.status, 201);
     const payload = await response.json();
+    assert.equal(response.status, 201, JSON.stringify(payload));
     assert.equal(payload.thread.runtimeKind, "claude-code");
     assert.equal(payload.thread.executor.accountProfileId, profile.id);
     assert.equal(JSON.stringify(payload).includes("runtimes/claude-code"), false);
@@ -638,6 +782,33 @@ test("Claude API creates a thread with only an opaque exact profile binding", as
     assert.equal(accountsResponse.status, 200, JSON.stringify(accounts));
     assert.equal(accounts.enabled, true, JSON.stringify(accounts));
     assert.deepEqual(accounts.accounts.map((account) => account.id), [profile.id]);
+    const token = "sk-ant-oat01-" + "x".repeat(40);
+    const tokenResponse = await fetch(`http://127.0.0.1:${port}/api/llm-accounts/${profile.id}/subscription-token`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }),
+    });
+    const savedToken = await tokenResponse.json();
+    assert.equal(tokenResponse.status, 200, JSON.stringify(savedToken));
+    assert.equal(savedToken.account.authenticationMethod, "subscription_token");
+    assert.equal(savedToken.account.state, "login_required");
+    assert.ok(!JSON.stringify(savedToken).includes(token));
+    const verificationResponse = await fetch(`http://127.0.0.1:${port}/api/llm-accounts/${profile.id}/verify`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    });
+    const verification = await verificationResponse.json();
+    assert.equal(verificationResponse.status, 200, JSON.stringify(verification));
+    assert.equal(verification.account.authenticationMethod, "subscription_token");
+    assert.equal(verification.account.state, "ready");
+    assert.equal(verification.status.verificationKind, "model_request");
+    const invalidToken = await fetch(`http://127.0.0.1:${port}/api/llm-accounts/${profile.id}/subscription-token`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: "bad-token" }),
+    });
+    assert.equal(invalidToken.status, 400);
+    const foreignProfile = await readyProfile("different-owner", "Foreign profile", env);
+    const foreignToken = await fetch(`http://127.0.0.1:${port}/api/llm-accounts/${foreignProfile.id}/subscription-token`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }),
+    });
+    assert.equal(foreignToken.status, 404);
+    assert.ok(!JSON.stringify(await listEvents(env)).includes(token));
     const foreignOwner = await fetch(`http://127.0.0.1:${port}/api/threads`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "Denied tenant Claude", ownerUserId: "tenant", executorId: "claude-code", executor: { type: "claude-code", accountProfileId: profile.id } }),

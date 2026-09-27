@@ -8,6 +8,7 @@ import { appendEvent } from "../../storage/src/store.js";
 import { createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThread } from "./threads.js";
 import { runtimeStatus } from "./runtime-leases.js";
 import { agentReleaseRolePolicy } from "./agent-release-role.js";
+import { assertWorkerGitOwnership } from "./worker-git-ownership.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -50,6 +51,7 @@ async function git(repoPath, args, options = {}) {
   const { stdout, stderr } = await execFileAsync("git", ["-C", repoPath, ...args], {
     maxBuffer: 8 * 1024 * 1024,
     ...options,
+    env: { ...process.env, ...options.env, GIT_OPTIONAL_LOCKS: "0" },
   });
   return { stdout: String(stdout || "").trim(), stderr: String(stderr || "").trim() };
 }
@@ -507,6 +509,7 @@ export async function syncThreadWorkerWithParent(threadId, env = process.env) {
   if (!thread) throw httpError("thread_not_found", 404);
   if (!nonEmptyString(thread.parentThreadId)) throw httpError("thread_is_not_worker", 400);
 
+  await assertWorkerGitOwnership(threadCheckoutPath(thread));
   const state = await detectThreadGitState(thread, env);
   const repoPath = await resolveGitRoot(threadCheckoutPath(thread)).catch(() => null);
   if (!repoPath) throw httpError("thread_repo_not_found", 404);
@@ -523,6 +526,7 @@ export async function syncThreadWorkerWithParent(threadId, env = process.env) {
     return { synced: false, reason: "already_synced", thread: updated, gitState: state };
   }
 
+  await assertWorkerGitOwnership(repoPath);
   await git(repoPath, ["merge", "--ff-only", parentHead]);
   const nextState = await detectThreadGitState(thread, env);
   const updated = await updateThread(thread.id, gitStatePatch(nextState), env);
@@ -588,6 +592,7 @@ function workerSyncStateFields(state = {}) {
 }
 
 async function pushWorkerBranch(thread, state = {}, env = process.env) {
+  await assertWorkerGitOwnership(threadCheckoutPath(thread));
   const repoPath = await resolveGitRoot(threadCheckoutPath(thread)).catch(() => null);
   if (!repoPath) return { pushed: false, reason: "thread_repo_not_found" };
   const branchName = nonEmptyString(state.branchName || thread.branchName || await currentBranch(repoPath));
@@ -617,13 +622,15 @@ export async function syncSafeThreadWorkersWithParents(input = {}, env = process
     let current = worker;
     let state = {};
     try {
+      await assertWorkerGitOwnership(threadCheckoutPath(worker));
       const refreshed = await refreshThreadGitState(worker.id, env);
       current = refreshed.thread || worker;
       state = refreshed.gitState || {};
     } catch (error) {
       results.push(workerSyncResult(worker, {
         skipped: true,
-        reason: "refresh_failed",
+        reason: error.blocker?.reason || "refresh_failed",
+        ...(error.blocker ? { blocker: error.blocker } : {}),
         error: error?.message || String(error),
       }));
       continue;
@@ -682,7 +689,8 @@ export async function syncSafeThreadWorkersWithParents(input = {}, env = process
         } catch (error) {
           pushResult = {
             pushed: false,
-            reason: "push_failed",
+            reason: error.blocker?.reason || "push_failed",
+            ...(error.blocker ? { blocker: error.blocker } : {}),
             error: error?.message || String(error),
           };
         }
@@ -693,19 +701,22 @@ export async function syncSafeThreadWorkersWithParents(input = {}, env = process
         pushed: Boolean(pushResult.pushed),
         reason: pushResult.pushed ? "synced_and_pushed" : (synced.synced ? pushResult.reason || "synced" : synced.reason || "already_synced"),
         error: pushResult.error || null,
+        ...(pushResult.blocker ? { blocker: pushResult.blocker } : {}),
       }));
     } catch (error) {
       results.push(workerSyncResult(current, {
         ...stateFields,
         skipped: true,
         reason: error?.message || "sync_failed",
+        ...(error.blocker ? { blocker: error.blocker } : {}),
         error: error?.message || String(error),
       }));
     }
   }
 
   return {
-    ok: true,
+    ok: !results.some((result) => result.blocker),
+    blocked: results.filter((result) => result.blocker).length,
     scanned: workers.length,
     synced: results.filter((result) => result.synced).length,
     pushed: results.filter((result) => result.pushed).length,

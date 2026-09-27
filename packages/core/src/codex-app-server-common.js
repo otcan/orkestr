@@ -333,7 +333,7 @@ export function appServerStateFromStatus(status) {
     return "ready";
   }
   if (type === "idle") return "ready";
-  if (type === "systemError") return "failed";
+  if (type === "systemerror") return "failed";
   if (type === "notLoaded") return "unloaded";
   return "";
 }
@@ -572,6 +572,9 @@ async function appendOrUpdateEventMessageLocked(thread, input, env) {
 export async function markThreadFromCodexStatus(thread, status, env = process.env) {
   const state = appServerStateFromStatus(status);
   if (!state) return;
+  // A Codex auth fault parks the thread in failed_auth; an idle/failed status
+  // echo from the same runtime must not silently mark it ready again.
+  if (clean(thread.state) === "failed_auth" && !["working", "awaiting_approval"].includes(state)) return;
   const activeTurnId = state === "working" ? thread.runtime?.activeTurnId || null : null;
   await updateThread(thread.id, {
     state,

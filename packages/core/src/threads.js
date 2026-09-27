@@ -1,4 +1,5 @@
 import path from "node:path";
+import { nextThreadReplyDeliveryEpoch } from "./reply-delivery-intent.js";
 import { observeSettingsHistoryWrite } from "./codex-settings-command-observability.js";
 import fs from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
@@ -34,6 +35,7 @@ import {
 import { withCanonicalPublicReferenceLock } from "./canonical-public-reference-lock.js";
 import { injectRuntimeFault } from "./runtime-fault-injection.js";
 import { recordRegistryWriteRejectionMetric, recordWatcherAlertMetric } from "./observability.js";
+import { sanitizeStandingMissionText } from "./claude-standing-mission.js";
 
 const runningThreadIds = new Set();
 const activeInputStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
@@ -374,6 +376,9 @@ async function createThreadLocked(input = {}, env = process.env) {
     forkedFromMessageCursor: Number(input.forkedFromMessageCursor || 0) || null,
     handoffPrompt: String(input.handoffPrompt || "").trim() || null,
     handoffMessageId: String(input.handoffMessageId || "").trim() || null,
+    standingMission: sanitizeStandingMissionText(input.standingMission, env) || null,
+    standingMissionUpdatedAt: String(input.standingMissionUpdatedAt || "").trim() || null,
+    standingMissionUpdatedBy: String(input.standingMissionUpdatedBy || "").trim() || null,
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -461,6 +466,9 @@ async function updateThreadLocked(threadId, patch = {}, env = process.env) {
       binding: patch.binding ? { ...(thread.binding || {}), ...patch.binding } : thread.binding,
       updatedAt: nowIso(),
     };
+    const replyDeliveryEpoch = nextThreadReplyDeliveryEpoch(thread, candidate);
+    if (replyDeliveryEpoch) candidate.replyDeliveryEpoch = replyDeliveryEpoch;
+    else delete candidate.replyDeliveryEpoch;
     if (comparableThreadState(thread) === comparableThreadState(candidate)) {
       updated = thread;
       return thread;
@@ -754,7 +762,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     const source = String(input.source || "manual");
     const output = await existingRuntimeOutput(messageRepository, thread, { ...input, role, source },
       normalizeUserId(input.ownerUserId || resourceOwnerUserId(thread, env)));
-    if (output) return { ...output, duplicate: true, duplicateReason: "canonical_runtime_output" };
+    if (output) return { ...output, duplicate: true, duplicateReason: output.duplicateReason || "canonical_runtime_output" };
     const clientMessageId = clientInputIdempotencyKey(input);
     if (role === "user" && clientMessageId) {
       const duplicate = sqlite

@@ -59,6 +59,15 @@ import { containedUserDeveloperInstructions } from "./tenant-policy.js";
 import { relocateLegacyUserWorkspace } from "./workspace-files.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
 import { performCodexAppServerSafeReset } from "./codex-safe-reset.js";
+import {
+  activeCodexAuthFaultForThread,
+  codexAuthHoldRetryMs,
+  failedAuthRuntimeFields,
+  holdInputWhileCodexAuthFailed,
+  reconcileRejectedAuthProbeAfterDelivery,
+} from "./codex-auth-failed-thread.js";
+import { codexTurnAuthFailureReason, recordCodexRuntimeAuthFailureSignal } from "./codex-auth-health.js";
+import { redactCodexSecrets } from "./codex-auth-failure.js";
 import { completeThreadSecurityApproveCommand } from "./security-thread-command.js";
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
@@ -439,7 +448,7 @@ async function updateDeliveryRecoveryState(thread, message, state, context = {},
     method: context.method || null,
     attempt: context.attempt ?? deliveryRecoveryAttempt(currentMessage),
     codexThreadId: context.codexThreadId || codexThreadId(currentThread) || null,
-    error: context.error || null,
+    error: context.error ? redactCodexSecrets(context.error) : null,
   };
   const runtimeState = state === "operator_required"
     ? "operator_required"
@@ -453,7 +462,7 @@ async function updateDeliveryRecoveryState(thread, message, state, context = {},
       : context.runtimeState || currentThread.state;
   const updatedThread = await updateThread(thread.id, {
     state: threadState,
-    lastError: state === "operator_required" ? context.error || context.reason || "runtime_recovery_required" : null,
+    lastError: state === "operator_required" ? recovery.error || context.reason || "runtime_recovery_required" : null,
     runtime: {
       ...(currentThread.runtime || {}),
       runtimeKind: "codex-app-server",
@@ -503,6 +512,28 @@ async function operatorRequiredForDeliveryRecovery(thread, message, context = {}
     ...context,
     error: context.error || context.reason || "codex_runtime_recovery_failed",
   }, env);
+}
+
+async function failedAuthForDeliveryRecovery(thread, message, error, reason, codexId, env = process.env) {
+  const errorText = publicError(error);
+  if (error instanceof Error) await recordCodexRuntimeAuthFailureSignal({ thread, error: errorText }, env).catch(() => {});
+  const fields = failedAuthRuntimeFields({ reason, error: errorText });
+  const current = await getThread(thread.id, env).catch(() => null) || thread;
+  const updatedThread = await updateThread(thread.id, {
+    state: fields.state,
+    lastError: fields.authFailure.summary,
+    runtime: {
+      ...(current.runtime || {}),
+      runtimeKind: "codex-app-server",
+      state: fields.state,
+      authFailure: fields.authFailure,
+      deliveryRecovery: { state: fields.state, checkedAt: nowIso(), messageId: message?.id || null, reason, method: "none", codexThreadId: codexId || null },
+      updatedAt: nowIso(),
+    },
+  }, env).catch(() => current);
+  const held = await holdInputWhileCodexAuthFailed(updatedThread || current, message, env);
+  if (held.held) scheduleCodexAppServerInputDelivery(thread.id, env, codexAuthHoldRetryMs(env));
+  return { thread: updatedThread || current, message: held.message || message };
 }
 
 async function verifiedExternalDeliveryRuntime(thread, message, client, env = process.env) {
@@ -599,6 +630,15 @@ async function verifiedExternalDeliveryRuntime(thread, message, client, env = pr
     resumeError = error;
   }
 
+  const resumeAuthReason = resumeError ? codexTurnAuthFailureReason(publicError(resumeError)) : "";
+  const activeAuthFault = resumeAuthReason ? null : await activeCodexAuthFaultForThread(currentThread, env);
+  if (resumeAuthReason || activeAuthFault) {
+    // Auth faults are not runtime faults: never start a fresh Codex session for them.
+    const authReason = resumeAuthReason || clean(activeAuthFault.reason) || "codex_runtime_auth_invalid";
+    const authError = resumeError || activeAuthFault.summary || authReason;
+    const stopped = await failedAuthForDeliveryRecovery(currentThread, currentMessage, authError, authReason, id, env);
+    return { ok: false, ...stopped, client: currentClient, reason: "failed_auth" };
+  }
   const attempt = deliveryRecoveryAttempt(currentMessage);
   const maxAttempts = codexAppServerDeliveryRecoveryMax(env);
   const resumeInterruptedReset = interruptedRecoveryState === "resetting" && attempt > 0 && attempt <= maxAttempts;
@@ -1775,6 +1815,12 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
     delivered.push(next.id);
     return delivered;
   }
+  const authHold = await holdInputWhileCodexAuthFailed(thread, next, env);
+  if (authHold.held) {
+    scheduleCodexAppServerInputDelivery(thread.id, env, codexAuthHoldRetryMs(env));
+    return delivered;
+  }
+  thread = authHold.thread || thread;
   if (next.deliveryClaimId && recentDeliveryClaim(next, env)) {
     scheduleCodexAppServerInputDelivery(thread.id, env, 15000);
     return delivered;
@@ -2090,6 +2136,7 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
     thread = await getThread(thread.id, env).catch(() => null) || thread;
     const result = await sendCodexAppServerInput(thread, next, env);
     if (result.skipped) return delivered;
+    if (!result.deferred && await reconcileRejectedAuthProbeAfterDelivery(thread.id, next.id, env)) return delivered;
     if (!result.deferred) delivered.push(result.message.id);
   } catch (error) {
     const errorText = publicError(error);

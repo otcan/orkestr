@@ -45,6 +45,7 @@ import {
   remoteCompactionRecoveryAttempt,
   remoteCompactionRecoveryAttempted,
 } from "./codex-remote-compaction-recovery.js";
+import { threadInFailedAuth } from "./codex-auth-failed-thread.js";
 
 const recoveryScanCache = new Map();
 
@@ -194,6 +195,7 @@ function autoSafeResetCooldownActive(thread = {}, env = process.env) {
 
 function shouldAutoSafeResetRepeatedStaleTurn(thread = {}, messages = [], turn = null, options = {}, env = process.env) {
   if (!turn) return false;
+  if (threadInFailedAuth(thread)) return false;
   const remoteCompactionFailure = remoteCompactionFailureForTurn(turn?.terminalFailure, {
     runtimeGeneration: turn?.terminalFailure?.runtimeGeneration,
     turnId: messageTurnId(turn?.latestUser),

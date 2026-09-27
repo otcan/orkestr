@@ -208,7 +208,7 @@ export function threadMessagePage(thread: any, rawMessages: any[] = [], query: R
     hasMoreBefore: oldestCursor !== null && rawMessages.some((message, index) => messageCursor(message, index) < oldestCursor),
     state: status?.state || thread.state || "sleeping",
     source: "orkestr-oss",
-    staleWorking: false,
+    staleWorking: (status as any)?.staleWorking ?? false,
     awaitingInput: !!pendingQuestion,
     awaitingInputEventId: pendingQuestion?.eventId || null,
     pendingQuestion,

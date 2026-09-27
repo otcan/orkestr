@@ -30,6 +30,7 @@ import {
   consumeThreadConnectorDeliverySignalCount,
   resetThreadRuntime,
   safeResetThreadRuntime,
+  wakeThread,
   setThreadConnectorDeliverySignalHandler,
   sleepThread,
 } from "../packages/core/src/runtime-leases.js";
@@ -190,22 +191,22 @@ rl.on("line", (line) => {
   if (message.method === "turn/start") {
     const thread = state.threads.find((item) => item.id === params.threadId);
     if (!thread || !thread.loaded) return send({ id, error: { code: -32000, message: "thread not found: " + params.threadId } });
-    const requestedStatus = process.env.FAKE_CODEX_TURN_STATUS || "completed";
+    const requestedStatus = state.nextTurnStatus || process.env.FAKE_CODEX_TURN_STATUS || "completed";
     state.nextTurnNumber = (state.nextTurnNumber || 0) + 1;
     const turn = { id: "turn_" + String(state.nextTurnNumber).padStart(6, "0"), threadId: params.threadId, status: "inProgress", items: [] };
     const text = params.input?.find((item) => item.type === "text")?.text || "";
     const user = { type: "userMessage", id: "user_" + turn.id, content: [{ type: "text", text }] };
     const agent = { type: "agentMessage", id: "agent_" + turn.id, text: "Reply to: " + text, phase: "final_answer" };
-    turn.items = requestedStatus === "interrupted" ? [user] : [user, agent];
+    turn.items = requestedStatus === "interrupted" || state.nextTurnError ? [user] : [user, agent];
     thread.turns.push(turn);
     writeState(state);
     send({ id, result: { turn } });
     send({ method: "turn/started", params: { turn } });
-    if (requestedStatus !== "interrupted") send({ method: "item/completed", params: { threadId: params.threadId, turnId: turn.id, item: agent } });
+    if (requestedStatus !== "interrupted" && !state.nextTurnError) send({ method: "item/completed", params: { threadId: params.threadId, turnId: turn.id, item: agent } });
     turn.status = requestedStatus;
     thread.status = { type: "idle" };
     writeState(state);
-    send({ method: "turn/completed", params: { turn: { ...turn, status: requestedStatus, error: requestedStatus === "interrupted" ? { message: "Conversation interrupted - tell the model what to do differently." } : null } } });
+    send({ method: "turn/completed", params: { turn: { ...turn, status: requestedStatus, error: requestedStatus === "interrupted" ? { message: "Conversation interrupted - tell the model what to do differently." } : requestedStatus === "failed" && state.nextTurnError ? { message: state.nextTurnError } : null } } });
     return;
   }
   send({ id, result: {} });
@@ -1772,12 +1773,394 @@ test("Codex app-server failed turns record reused refresh tokens as broken auth"
 
     const updated = await getThread(started.thread.id, env);
     const health = await readCodexAuthHealth(env);
-    assert.equal(updated.state, "failed");
+    assert.equal(updated.state, "failed_auth");
+    assert.equal(updated.runtime.authFailure.reason, "codex_refresh_token_reused");
     assert.match(updated.runtime.lastTurnError, /refresh token was already used/);
     assert.equal(health.state, "broken");
     assert.equal(health.reason, "codex_refresh_token_reused");
     assert.equal(health.threadId, started.thread.id);
     assert.equal(health.turnId, "turn-auth-failed");
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+const fakeProviderAuthRejection = [
+  "unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***\u2026***REDACTED.",
+  "You can find your API key at https://platform.example.test/account/api-keys.,",
+  "url: https://chatgpt.com/backend-api/codex/responses, cf-ray: test-ray, request id: req-test",
+].join(" ");
+
+async function filesContaining(root, needle) {
+  const hits = [];
+  for (const entry of await fs.readdir(root, { withFileTypes: true, recursive: true }).catch(() => [])) {
+    if (!entry.isFile()) continue;
+    const file = path.join(entry.parentPath || entry.path, entry.name);
+    const text = await fs.readFile(file, "utf8").catch(() => "");
+    if (text.includes(needle)) hits.push(file);
+  }
+  return hits;
+}
+
+async function failTurnWithProviderAuthRejection(env, thread, turnId) {
+  const client = await getCodexAppServerClient({ env, home: env.HOME });
+  await client.handleNotification({
+    method: "turn/completed",
+    params: {
+      turn: {
+        id: turnId,
+        threadId: thread.executor.codexThreadId,
+        status: "failed",
+        error: { message: fakeProviderAuthRejection },
+      },
+    },
+  });
+  return client;
+}
+
+test("Codex app-server parks provider 401 auth rejections in failed_auth without resetting", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-provider-auth-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_AUTH_HOLD_RETRY_MS: "600000",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-provider-auth-thread", name: "Provider Auth Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexId = started.thread.codexThreadId;
+    const client = await failTurnWithProviderAuthRejection(env, started.thread, "turn-provider-auth");
+    await client.handleNotification({ method: "thread/status/changed", params: { threadId: codexId, status: { type: "idle" } } });
+
+    const failed = await getThread(started.thread.id, env);
+    const health = await readCodexAuthHealth(env);
+    assert.equal(failed.state, "failed_auth");
+    assert.equal(failed.runtime.state, "failed_auth");
+    assert.equal(failed.runtime.lastTurnStatus, "failed");
+    assert.equal(failed.runtime.authFailure.reason, "codex_provider_auth_rejected");
+    assert.match(failed.runtime.lastTurnError, /Incorrect API key provided: \[redacted-api-key\]/);
+    assert.equal(health.state, "broken");
+    assert.equal(health.reason, "codex_provider_auth_rejected");
+    assert.equal(health.threadId, started.thread.id);
+
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "hold this until auth is repaired",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-provider-auth",
+    }, env);
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const heldThread = await getThread(started.thread.id, env);
+    const heldInput = (await listThreadMessages(started.thread.id, env)).find((message) => message.id === input.id);
+    const heldState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, []);
+    assert.equal(heldInput.state, "queued");
+    assert.equal(heldInput.deliveryState, "awaiting_codex_auth");
+    assert.equal(heldThread.state, "failed_auth");
+    assert.equal(heldThread.codexThreadId, codexId);
+    assert.equal(heldThread.executor.metadata?.lastSafeReset, undefined);
+    assert.equal(heldState.calls.filter((call) => call.method === "thread/start").length, 1);
+    assert.ok(!heldState.calls.some((call) => call.method === "thread/resume"));
+    assert.ok(!heldState.calls.some((call) => call.method === "turn/start"));
+    assert.deepEqual(await filesContaining(env.ORKESTR_HOME, "sk-test"), []);
+
+    const authPath = path.join(env.HOME, ".codex", "auth.json");
+    await fs.mkdir(path.dirname(authPath), { recursive: true });
+    await fs.writeFile(authPath, "{}\n");
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(authPath, future, future);
+
+    const redelivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const repairedThread = await getThread(started.thread.id, env);
+    const deliveredInput = (await listThreadMessages(started.thread.id, env)).find((message) => message.id === input.id);
+    const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(redelivered, [input.id]);
+    assert.equal(deliveredInput.state, "completed");
+    assert.equal(repairedThread.codexThreadId, codexId);
+    assert.equal(repairedThread.runtime.authFailure.state, "repaired");
+    assert.equal(repairedThread.executor.metadata?.lastSafeReset, undefined);
+    assert.equal(finalState.calls.filter((call) => call.method === "thread/start").length, 1);
+    assert.ok(finalState.calls.some((call) => call.method === "turn/start" && call.params.threadId === codexId));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+async function waitFor(predicate, { timeoutMs = 5000, intervalMs = 25 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await predicate();
+    if (value) return value;
+    if (Date.now() > deadline) throw new Error("waitFor timed out");
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+function authProbeEnv(home, fake) {
+  return {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_AUTH_HOLD_RETRY_MS: "600000",
+    ORKESTR_CODEX_AUTH_PROBE_INTERVAL_MS: "60000",
+  };
+}
+
+async function parkThreadForAuth(env, id, { backdateMs = 0 } = {}) {
+  const thread = await createThread({ id, name: id, cwd: env.HOME, executorId: "codex", executor: { type: "codex" } }, env);
+  const started = await startCodexAppServerThread(thread, env);
+  await failTurnWithProviderAuthRejection(env, started.thread, `turn-${id}`);
+  let parked = await getThread(started.thread.id, env);
+  assert.equal(parked.state, "failed_auth");
+  if (backdateMs) {
+    const detectedAt = new Date(Date.now() - backdateMs).toISOString();
+    parked = await updateThread(parked.id, { runtime: { ...parked.runtime, authFailure: { ...parked.runtime.authFailure, detectedAt } } }, env);
+  }
+  return parked;
+}
+
+async function setFakeTurnOutcome(fake, status = "", error = "") {
+  const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+  rawState.nextTurnStatus = status || undefined;
+  rawState.nextTurnError = error || undefined;
+  await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+}
+
+async function fakeCalls(fake, method) {
+  const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+  return rawState.calls.filter((call) => call.method === method);
+}
+
+function queueExternalInput(env, threadId, text) {
+  return enqueueThreadInput(threadId, { text, source: "whatsapp_inbound", connector: "whatsapp", chatId: `chat-${threadId}` }, env);
+}
+
+test("Codex app-server auth probe delivers one held input and releases peer threads when auth works", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-auth-probe-ok-"));
+  const fake = await createFakeCodex(home);
+  const env = authProbeEnv(home, fake);
+  try {
+    const first = await parkThreadForAuth(env, "auth-probe-ok-a", { backdateMs: 120_000 });
+    const peer = await parkThreadForAuth(env, "auth-probe-ok-b", { backdateMs: 120_000 });
+    const probeInput = await queueExternalInput(env, first.id, "probe input");
+    const peerInput = await queueExternalInput(env, peer.id, "peer input");
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(first.id, env), env);
+    assert.deepEqual(delivered, [probeInput.id]);
+    const released = await waitFor(async () => {
+      const current = await getThread(peer.id, env);
+      return current.runtime?.authFailure?.state === "repaired" ? current : null;
+    });
+    const probed = await getThread(first.id, env);
+    const health = await readCodexAuthHealth(env);
+    assert.equal(probed.state, "ready");
+    assert.equal(probed.runtime.authFailure.state, "repaired");
+    assert.equal(released.state, "ready");
+    assert.equal(released.codexThreadId, peer.codexThreadId);
+    assert.equal(health.state, "repaired");
+
+    const peerDelivered = await deliverCodexAppServerPendingInputs(await getThread(peer.id, env), env);
+    assert.deepEqual(peerDelivered, [peerInput.id]);
+    assert.equal((await fakeCalls(fake, "thread/start")).length, 2);
+    assert.equal((await getThread(peer.id, env)).executor.metadata?.lastSafeReset, undefined);
+    assert.ok((await fakeCalls(fake, "turn/start")).some((call) => call.params.threadId === peer.codexThreadId));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server auth probe rejected with 401 re-parks without reset and keeps the input queued", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-auth-probe-401-"));
+  const fake = await createFakeCodex(home);
+  const env = authProbeEnv(home, fake);
+  try {
+    const parked = await parkThreadForAuth(env, "auth-probe-401", { backdateMs: 120_000 });
+    const previousDetectedAt = parked.runtime.authFailure.detectedAt;
+    const input = await queueExternalInput(env, parked.id, "probe that fails");
+    await setFakeTurnOutcome(fake, "failed", fakeProviderAuthRejection);
+
+    await deliverCodexAppServerPendingInputs(await getThread(parked.id, env), env);
+    const requeued = await waitFor(async () => {
+      const message = (await listThreadMessages(parked.id, env)).find((item) => item.id === input.id);
+      return message?.deliveryAuthProbeFailedTurnId ? message : null;
+    });
+    const reparked = await getThread(parked.id, env);
+    assert.equal(requeued.state, "queued");
+    assert.equal(requeued.deliveryState, "awaiting_codex_auth");
+    assert.equal(reparked.state, "failed_auth");
+    assert.equal(reparked.codexThreadId, parked.codexThreadId);
+    assert.equal(reparked.executor.metadata?.lastSafeReset, undefined);
+    assert.ok(Date.parse(reparked.runtime.authFailure.detectedAt) > Date.parse(previousDetectedAt));
+    assert.ok(reparked.runtime.authFailure.lastProbeAt);
+    assert.equal((await readCodexAuthHealth(env)).state, "broken");
+
+    const again = await deliverCodexAppServerPendingInputs(await getThread(parked.id, env), env);
+    assert.deepEqual(again, []);
+    assert.equal((await fakeCalls(fake, "turn/start")).length, 1);
+    assert.equal((await fakeCalls(fake, "thread/start")).length, 1);
+    assert.deepEqual(await filesContaining(env.ORKESTR_HOME, "sk-test"), []);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server allows at most one auth probe per interval across parked threads", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-auth-probe-single-"));
+  const fake = await createFakeCodex(home);
+  const env = authProbeEnv(home, fake);
+  try {
+    const threads = [];
+    for (const id of ["auth-probe-single-a", "auth-probe-single-b", "auth-probe-single-c"]) {
+      threads.push(await parkThreadForAuth(env, id, { backdateMs: 120_000 }));
+    }
+    const inputs = [];
+    for (const thread of threads) inputs.push(await queueExternalInput(env, thread.id, `held ${thread.id}`));
+    await setFakeTurnOutcome(fake, "failed", fakeProviderAuthRejection);
+
+    await Promise.all(threads.map(async (thread) => deliverCodexAppServerPendingInputs(await getThread(thread.id, env), env)));
+    await waitFor(async () => {
+      const messages = (await Promise.all(threads.map((thread) => listThreadMessages(thread.id, env)))).flat();
+      return inputs.every((input) => {
+        const message = messages.find((item) => item.id === input.id);
+        return message?.state === "queued" && message.deliveryState === "awaiting_codex_auth";
+      });
+    });
+    for (const thread of threads) {
+      await deliverCodexAppServerPendingInputs(await getThread(thread.id, env), env);
+    }
+    assert.equal((await fakeCalls(fake, "turn/start")).length, 1);
+    for (const thread of threads) assert.equal((await getThread(thread.id, env)).state, "failed_auth");
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server operator wake clears failed_auth and allows one immediate attempt", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-auth-wake-"));
+  const fake = await createFakeCodex(home);
+  const env = authProbeEnv(home, fake);
+  try {
+    const parked = await parkThreadForAuth(env, "auth-wake-thread");
+    const input = await queueExternalInput(env, parked.id, "deliver after wake");
+    assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(parked.id, env), env), []);
+
+    await wakeThread(parked.id, { reason: "manual_wake" }, env);
+    const woken = await getThread(parked.id, env);
+    assert.notEqual(woken.state, "failed_auth");
+    assert.equal(woken.runtime.authFailure.state, "operator_cleared");
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(parked.id, env), env);
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal((await getThread(parked.id, env)).codexThreadId, parked.codexThreadId);
+    assert.equal((await fakeCalls(fake, "thread/start")).length, 1);
+    assert.ok((await fakeCalls(fake, "turn/start")).some((call) => call.params.threadId === parked.codexThreadId));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server skips delivery safe reset while Codex auth health is broken", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-auth-no-reset-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_AUTH_HOLD_RETRY_MS: "600000",
+  };
+  try {
+    const other = await createThread({ id: "app-server-auth-other-thread", name: "Other Auth Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const otherStarted = await startCodexAppServerThread(other, env);
+    await failTurnWithProviderAuthRejection(env, otherStarted.thread, "turn-other-auth");
+
+    const thread = await createThread({ id: "app-server-auth-no-reset-thread", name: "Auth No Reset Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexId = started.thread.codexThreadId;
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "do not reset for auth",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-auth-no-reset",
+    }, env);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    rawState.threads = rawState.threads.filter((item) => item.id !== codexId);
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+    const startsBefore = rawState.calls.filter((call) => call.method === "thread/start").length;
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const current = await getThread(started.thread.id, env);
+    const heldInput = (await listThreadMessages(started.thread.id, env)).find((message) => message.id === input.id);
+    const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, []);
+    assert.equal(current.state, "failed_auth");
+    assert.equal(current.runtime.authFailure.reason, "codex_provider_auth_rejected");
+    assert.equal(current.codexThreadId, codexId);
+    assert.equal(current.executor.metadata?.lastSafeReset, undefined);
+    assert.equal(heldInput.state, "queued");
+    assert.equal(heldInput.deliveryState, "awaiting_codex_auth");
+    assert.equal(finalState.calls.filter((call) => call.method === "thread/start").length, startsBefore);
+    assert.ok(!finalState.calls.some((call) => call.method === "turn/start"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server keeps runtime recovery for non-auth turn failures", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-non-auth-failure-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-non-auth-failure-thread", name: "Non Auth Failure Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const oldCodexThreadId = started.thread.codexThreadId;
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    await client.handleNotification({
+      method: "turn/completed",
+      params: {
+        turn: {
+          id: "turn-non-auth",
+          threadId: oldCodexThreadId,
+          status: "failed",
+          error: { message: "stream disconnected before completion: 503 Service Unavailable" },
+        },
+      },
+    });
+    const failed = await getThread(started.thread.id, env);
+    assert.equal(failed.state, "failed");
+    assert.equal(failed.runtime.authFailure, undefined);
+    assert.equal(await readCodexAuthHealth(env), null);
+
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "recover after runtime failure",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-non-auth-failure",
+    }, env);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    rawState.threads = [{ id: "unrelated-live-thread", sessionId: "sess_unrelated", name: "", preview: "", cwd: home, status: { type: "idle" }, loaded: true, turns: [] }];
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const resetThread = await getThread(started.thread.id, env);
+    const deliveredInput = (await listThreadMessages(started.thread.id, env)).find((message) => message.id === input.id);
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(deliveredInput.deliveryRecoveryMethod, "safe_reset");
+    assert.notEqual(resetThread.codexThreadId, oldCodexThreadId);
+    assert.ok(resetThread.executor.metadata.lastSafeReset);
   } finally {
     stopCodexAppServerClients();
   }

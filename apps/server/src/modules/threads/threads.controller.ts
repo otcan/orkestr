@@ -42,6 +42,7 @@ import { executeSettingsCommand, parseSettingsCommand } from "../../../../../pac
 import { settingsOperationKey } from "../../../../../packages/core/src/codex-settings-operations.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { createUiReplyDeliveryIntent, publicReplyDeliveryIntentMessage } from "../../../../../packages/core/src/reply-delivery-intent.js";
+import { prepareWorkerReplyInput } from "../../../../../packages/core/src/worker-reply-input.js";
 import { launchNativeTerminal } from "../../../../../packages/core/src/native-terminal.js";
 import {
   rawAttachPollIntervalMs,
@@ -940,6 +941,11 @@ export class ThreadsController {
         thread: await threadRuntimeSummary(updatedThread || thread, updatedMessages),
       };
     }
+    if (body.workerReplyDelivery !== undefined) {
+      await getThreadForPrincipal(thread.id, principal);
+      await this.assertThreadSanitized("thread.worker-reply", principal, thread, { workerReplyDelivery: body.workerReplyDelivery });
+    }
+    body = await prepareWorkerReplyInput(thread, body, principal);
     const message = await enqueueThreadInputForPrincipal(thread.id, body, principal);
     if (threadUsesApiAgent(thread)) {
       if (body.autoRun === false) {

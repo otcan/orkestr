@@ -6,6 +6,12 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { claudeCodeYoloAllowedMcpTools } from "./claude-code-mcp-policy.js";
 import { claudeCodeStatusAuthenticated } from "./claude-code-auth-status.js";
+import { claudeCodeRuntimeEnv, claudeCodeExecutionEnv } from "./claude-code-environment.js";
+import { claudeCodeEventTelemetry, mergeClaudeCodeTelemetry } from "./claude-code-telemetry.js";
+import { composeClaudeAppendSystemPrompt, resolveStandingMissionAppendText } from "./claude-standing-mission.js";
+export { claudeCodeRuntimeEnv, claudeCodeExecutionEnv } from "./claude-code-environment.js";
+export { claudeCodeEventTelemetry, mergeClaudeCodeTelemetry } from "./claude-code-telemetry.js";
+export { resolveStandingMissionAppendText } from "./claude-standing-mission.js";
 
 const execFileAsync = promisify(execFile);
 const loginSessions = new Map();
@@ -83,7 +89,7 @@ export function claudeCodeArgs(thread = {}, options = {}, env = process.env) {
   }
   const args = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode];
   if (mode === "bypassPermissions") {
-    args.push("--allow-dangerously-skip-permissions");
+    args.push("--dangerously-skip-permissions");
     const allowedMcpTools = claudeCodeYoloAllowedMcpTools(env);
     if (allowedMcpTools.length) args.push("--allowedTools", allowedMcpTools.join(","));
   }
@@ -94,9 +100,30 @@ export function claudeCodeArgs(thread = {}, options = {}, env = process.env) {
   if (clean(options.statusCaptureCommand)) {
     args.push("--settings", JSON.stringify({ statusLine: { type: "command", command: clean(options.statusCaptureCommand) } }));
   }
-  if (clean(options.sessionId)) args.push("--resume", clean(options.sessionId));
+  // The standing mission is delivered on every turn (first and resumed) so a
+  // long-running worker never loses track of it once the initial handoff
+  // message scrolls out of the effective context. It coexists with the
+  // failed-turn notice below rather than replacing it.
+  const appendPieces = [clean(options.standingMission)];
+  if (clean(options.sessionId)) {
+    // A resumed transcript keeps the user message of a turn that failed before
+    // Claude answered (API errors are not replayed to the model). Without this
+    // notice the stale request merges with the new one and reads as an override.
+    if (options.priorTurnFailed) appendPieces.push(CLAUDE_CODE_FAILED_TURN_NOTICE);
+  }
+  const appendSystemPrompt = composeClaudeAppendSystemPrompt(appendPieces);
+  if (appendSystemPrompt) args.push("--append-system-prompt", appendSystemPrompt);
+  if (clean(options.sessionId)) {
+    args.push("--resume", clean(options.sessionId));
+  }
   return args;
 }
+
+export const CLAUDE_CODE_FAILED_TURN_NOTICE = [
+  "Orkestr runtime notice: the previous user turn in this conversation failed with a runtime or provider error before you answered it.",
+  "That turn is void; do not complete or enforce its instructions.",
+  "Treat only the latest user message as the current request.",
+].join(" ");
 
 export function claudeCodeStatusCapture(profile = {}, thread = {}) {
   const key = crypto.createHash("sha256").update(clean(thread.id)).digest("hex");
@@ -114,113 +141,6 @@ export async function readClaudeCodeStatusTelemetry(capturePath = "") {
   } catch {
     return null;
   }
-}
-
-function finite(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const number = Number(value);
-  return Number.isFinite(number) && number >= 0 ? number : null;
-}
-
-function mergeClaudeCodeRateLimits(current = null, observed = null) {
-  if (!observed) return current || null;
-  return {
-    primary: observed.primary || current?.primary || null,
-    secondary: observed.secondary || current?.secondary || null,
-    plan_type: observed.plan_type || current?.plan_type || "claude_subscription",
-  };
-}
-
-export function claudeCodeEventTelemetry(event = {}) {
-  const usage = event.usage || event.message?.usage || event.context_window?.current_usage || null;
-  const input = finite(usage?.input_tokens);
-  const output = finite(usage?.output_tokens);
-  const cacheWrite = finite(usage?.cache_creation_input_tokens);
-  const cacheRead = finite(usage?.cache_read_input_tokens);
-  const tokenUsage = usage ? {
-    ...(input !== null ? { input_tokens: input } : {}),
-    ...(output !== null ? { output_tokens: output } : {}),
-    ...(cacheWrite !== null ? { cache_creation_input_tokens: cacheWrite } : {}),
-    ...(cacheRead !== null ? { cache_read_input_tokens: cacheRead } : {}),
-    ...([input, cacheWrite, cacheRead].some((value) => value !== null)
-      ? { total_tokens: (input || 0) + (cacheWrite || 0) + (cacheRead || 0) }
-      : {}),
-  } : null;
-  const limits = event.rate_limits || event.rateLimits || null;
-  const window = (value, minutes) => {
-    const used = finite(value?.used_percentage ?? value?.used_percent);
-    const reset = finite(value?.resets_at);
-    return used === null ? null : { used_percent: Math.min(100, used), window_minutes: minutes, ...(reset !== null ? { resets_at: reset } : {}) };
-  };
-  let rateLimits = limits ? {
-    primary: window(limits.five_hour || limits.primary, 300),
-    secondary: window(limits.seven_day || limits.weekly || limits.secondary, 10080),
-    plan_type: "claude_subscription",
-  } : null;
-  const providerLimit = event.rate_limit_info || event.rateLimitInfo || null;
-  const providerLimitType = clean(providerLimit?.rateLimitType || providerLimit?.rate_limit_type).toLowerCase();
-  const providerLimitStatus = clean(providerLimit?.status).toLowerCase();
-  if (["allowed", "rejected"].includes(providerLimitStatus) && ["five_hour", "seven_day"].includes(providerLimitType)) {
-    const reset = finite(providerLimit?.resetsAt ?? providerLimit?.resets_at);
-    const providerWindow = {
-      status: providerLimitStatus,
-      window_minutes: providerLimitType === "five_hour" ? 300 : 10080,
-      ...(providerLimitStatus === "rejected" ? { used_percent: 100 } : {}),
-      ...(reset !== null ? { resets_at: reset } : {}),
-    };
-    rateLimits = {
-      primary: providerLimitType === "five_hour" ? providerWindow : rateLimits?.primary || null,
-      secondary: providerLimitType === "seven_day" ? providerWindow : rateLimits?.secondary || null,
-      plan_type: "claude_subscription",
-    };
-  }
-  const contextSize = finite(event.context_window?.context_window_size);
-  return {
-    tokenUsage: tokenUsage && Object.keys(tokenUsage).length ? tokenUsage : null,
-    rateLimits: rateLimits?.primary || rateLimits?.secondary ? rateLimits : null,
-    contextWindow: contextSize && contextSize > 0 ? contextSize : null,
-    model: validModelTelemetry(event.model?.id || event.model || event.message?.model),
-  };
-}
-
-export function mergeClaudeCodeTelemetry(current = {}, observed = {}) {
-  return {
-    tokenUsage: observed.tokenUsage || current.tokenUsage || null,
-    rateLimits: mergeClaudeCodeRateLimits(current.rateLimits, observed.rateLimits),
-    contextWindow: observed.contextWindow || current.contextWindow || null,
-    model: observed.model || current.model || null,
-  };
-}
-
-function validModelTelemetry(value = "") {
-  value = clean(value);
-  return /^[a-zA-Z0-9._:-]{1,120}$/.test(value) ? value : null;
-}
-
-export function claudeCodeRuntimeEnv(profile = {}, thread = {}, env = process.env) {
-  const runtimeHome = path.join(profile.credentialRoot, "runtime-home");
-  const runtimeTmp = path.join(profile.credentialRoot, "tmp");
-  const source = { ...process.env, ...env };
-  const inherited = {};
-  for (const key of [
-    "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "NO_COLOR",
-    "TMPDIR", "TMP", "TEMP", "USER", "LOGNAME", "SHELL", "SSH_AUTH_SOCK",
-    "XDG_RUNTIME_DIR", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
-    "SYSTEMROOT", "WINDIR", "PATHEXT",
-  ]) {
-    if (source[key] !== undefined) inherited[key] = source[key];
-  }
-  const next = {
-    ...inherited,
-    HOME: runtimeHome,
-    TMPDIR: runtimeTmp,
-    TMP: runtimeTmp,
-    TEMP: runtimeTmp,
-    CLAUDE_CONFIG_DIR: profile.credentialRoot,
-    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
-    DISABLE_AUTOUPDATER: "1",
-  };
-  return next;
 }
 
 export function classifyClaudeCodeFailure(value = "") {
@@ -255,7 +175,7 @@ export function claudeCodeEventText(event = {}) {
 
 export async function claudeCodeLoginStatus(profile = {}, thread = {}, env = process.env) {
   const command = claudeCodeCommand(env);
-  const runtimeEnv = claudeCodeRuntimeEnv(profile, thread, env);
+  const runtimeEnv = await claudeCodeExecutionEnv(profile, thread, env);
   await Promise.all([
     fs.mkdir(runtimeEnv.HOME, { recursive: true, mode: 0o700 }),
     fs.mkdir(runtimeEnv.TMPDIR, { recursive: true, mode: 0o700 }),
@@ -387,12 +307,24 @@ function monitorAuthenticatedLogin(session) {
       session.output = "";
       if (!session.closed) session.proc?.kill("SIGTERM");
     }
-  })().finally(() => {
+  })().catch(() => {
+    // A profile may be rotated/revoked while verification is awaiting the CLI.
+    // Keep the attended flow fail-closed without an unhandled rejection.
+    session.state = "failed";
+    session.failureCode = "claude_code_login_failed";
+    session.output = "";
+    if (!session.closed) session.proc?.kill("SIGTERM");
+  }).finally(() => {
     session.verifying = false;
   });
 }
 
 export async function startClaudeCodeLogin(profile = {}, thread = {}, env = process.env) {
+  if (profile.authenticationMethod === "subscription_token") {
+    const error = new Error("claude_subscription_token_rotation_required");
+    error.statusCode = 409;
+    throw error;
+  }
   if (profile.authMode !== "subscription") {
     const error = new Error("llm_account_auth_mode_unsupported");
     error.statusCode = 409;

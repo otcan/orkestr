@@ -1,5 +1,21 @@
 import { recordRouterTraceEvent } from "./router-traces.js";
-import { listThreadMessages } from "./threads.js";
+import { appendThreadMessage, listThreadMessages } from "./threads.js";
+import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
+import { replyDeliveryProjectionParent } from "./reply-delivery-intent.js";
+
+export async function appendClaudeCodeFinal(thread, parent, attemptId, text, env) {
+  const route = replyDeliveryProjectionParent(parent) || parent;
+  const assistant = await appendThreadMessage(thread.id, {
+    role: "assistant", source: "claude-code", phase: "final_answer", state: "completed",
+    text: String(text || "").trim() || "Claude Code completed without text output.",
+    parentMessageId: parent.id, eventId: claudeCodeOutputEventId(thread.id, attemptId),
+    executorKind: "claude-code", executorTurnId: attemptId,
+    connector: route.connector || "", chatId: route.chatId || "", accountId: route.accountId || "",
+    sourceEventId: parent.sourceEventId || "", routerTraceId: parent.routerTraceId || "", turnId: parent.turnId || "",
+  }, env);
+  markConnectorDeliverySignal(assistant);
+  return assistant;
+}
 
 export function claudeCodeOutputEventId(threadId, attemptId) {
   return `claude-code:${threadId}:${attemptId}:final`;

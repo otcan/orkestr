@@ -153,6 +153,7 @@ export const threadInputSchema = {
       externalId: stringValue,
       clientMessageId: stringValue,
       idempotencyKey: stringValue,
+      workerReplyDelivery: { type: "string", enum: ["bound_whatsapp"] },
       chatId: stringValue,
       from: stringValue,
       accountId: stringValue,
@@ -354,6 +355,27 @@ export const threadWorkerCreateSchema = {
       autoRun: { type: "boolean" },
     },
     additionalProperties: true,
+  },
+};
+
+export const threadStandingMissionUpdateSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    required: ["mission"],
+    properties: {
+      mission: stringValue,
+    },
+    additionalProperties: false,
+  },
+};
+
+export const threadWorkerPushBranchSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    properties: {},
+    additionalProperties: false,
   },
 };
 

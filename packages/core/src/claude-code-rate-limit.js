@@ -67,7 +67,7 @@ async function recoverProfile(thread, profile, env) {
       thread.ownerUserId || thread.userId,
       profile.id,
       "ready",
-      { verified: true, failureCode: "" },
+      { verified: true, failureCode: "", credentialRevision: profile.credentialRevision || 0 },
       env,
     );
     await appendEvent({

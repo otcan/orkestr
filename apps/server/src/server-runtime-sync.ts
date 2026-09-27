@@ -11,6 +11,7 @@ import { runDueGmailNotifications } from "../../../packages/core/src/gmail-notif
 import { runDueGmailJobsAutomation } from "../../../packages/connectors/src/gmail-jobs-queue.js";
 import { connectorAuthStatus } from "../../../packages/connectors/src/connector-auth.js";
 import { recoverStaleCodexAppServerTurns } from "../../../packages/core/src/codex-app-server.js";
+import { recoverOrphanedClaudeCodeTurns } from "../../../packages/core/src/claude-code-orphan-turn-recovery.js";
 import { deployDrainActiveSync } from "../../../packages/core/src/deploy-drain.js";
 import { deliverWhatsAppReplies, syncWhatsAppTypingIndicators } from "../../../packages/connectors/src/whatsapp.js";
 import { recoverTwilioVoiceCalleCallbacks } from "../../../packages/connectors/src/twilio-voice-assistant.js";
@@ -230,6 +231,18 @@ async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { force
       });
       return { recovered: 0, appended: 0 };
     });
+    const recoveredClaudeCode = await recoverOrphanedClaudeCodeTurns(env).catch((error) => {
+      reportServerError(env, {
+        source: "server.recoverClaudeCodeOrphanTurns",
+        code: "claude_code_orphan_turn_recovery_failed",
+        message: error?.message || String(error),
+        error,
+      });
+      return { recovered: 0, results: [] };
+    });
+    for (const result of recoveredClaudeCode.results || []) {
+      if (result.recovered) await deliverPendingThreadInputs(result.threadId, env, { processApiAgent: true }).catch(() => {});
+    }
     const whatsappRecovery = await recoverWhatsAppAccountsAndOutbox(env, "runtime_sync_whatsapp_recovery").catch((error) => {
       reportServerError(env, {
         source: "server.recoverWhatsAppAccounts",
@@ -264,6 +277,7 @@ async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { force
       runtime_appended: Number(synced.appended || 0),
       total_appended: appended,
       recovered_app_server_turns: Number(recovered.recovered || 0),
+      recovered_claude_code_turns: Number(recoveredClaudeCode.recovered || 0),
       recovered_pending_inputs: recoveredPendingInputs.length,
       recovered_whatsapp_accounts: recoveredWhatsAppAccounts,
       retried_whatsapp_outbox: retriedWhatsAppOutbox,
@@ -292,6 +306,7 @@ async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { force
       ...synced,
       appended,
       recoveredAppServerTurns: recovered.recovered || 0,
+      recoveredClaudeCodeTurns: recoveredClaudeCode.recovered || 0,
       recoveredPendingInputs,
       recoveredWhatsAppAccounts,
       retriedWhatsAppOutbox,

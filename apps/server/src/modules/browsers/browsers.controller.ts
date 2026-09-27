@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
+import { readyDesktopForShare } from "./desktop-share-readiness.js";
 import {
   cleanupVirtualBrowser,
   listBrowserSessions,
@@ -48,8 +49,7 @@ import {
 } from "../../../../../packages/browsers/src/desktop-capability-broker.js";
 import { assertOidcDesktopSession } from "../../../../../packages/core/src/oidc-desktop-session.js";
 import { httpError } from "../../common/http.js";
-import { desktopAttemptId, desktopOperationWarnings, desktopShareNotReadyReason,
-  desktopShareReady, desktopStoppedLeaseRecoveryOptions } from "./desktop-warning-response.js";
+import { desktopAttemptId, desktopOperationWarnings, desktopStoppedLeaseRecoveryOptions } from "./desktop-warning-response.js";
 import { oidcDesktopOpenResponse } from "./oidc-desktop-open.js";
 
 @Controller("api")
@@ -198,24 +198,13 @@ export class BrowsersController {
       ...breakGlassOptions,
     }, process.env);
     const warnings = await desktopOperationWarnings({ slug, threadId, ownerUserId, operation: "share", attemptId, principal, breakGlassOptions, decision: accessDecision });
-    let browser: any = null;
-    let startError = "";
+    const startError = "";
     const startRequested = body.start !== false;
-    if (startRequested) {
-      try {
-        browser = await openVirtualBrowser(slug, process.env, "", {
-          principal,
-          threadId,
-          ownerUserId,
-          fencingToken: String(body.fencingToken || "").trim(),
-          ...breakGlassOptions,
-        });
-      } catch (error) {
-        startError = String((error as Error)?.message || error || "desktop_start_failed");
-      }
-      if (startError) throw httpError(startError, 503, { attemptId, warnings });
-      if (!desktopShareReady(browser)) throw httpError(desktopShareNotReadyReason(browser), 503, { attemptId, warnings });
-    }
+    const browser = await readyDesktopForShare(normalizeDesktopSlug(slug), {
+      principal, threadId, ownerUserId,
+      fencingToken: String(body.fencingToken || "").trim(),
+      ...breakGlassOptions,
+    }, { startRequested, attemptId, warnings });
     const share = await createDesktopShare({
       desktopSlug: slug,
       principal,

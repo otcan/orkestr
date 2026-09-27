@@ -31,6 +31,8 @@ import { jiraCommand } from "./jira-command.js";
 import { mailboxesCommand } from "./mailbox-command.js";
 import { tenantSliceCommand } from "./tenant-slice-command.js";
 import { pickThread as defaultPickThread } from "./thread-picker.js";
+import { threadMissionCommand } from "./thread-mission-command.js";
+import { workerPushBranchCommand } from "./worker-branch-push-command.js";
 
 export async function runCli(argv = process.argv.slice(2), context = {}) {
   const global = parseGlobalFlags(argv);
@@ -1798,7 +1800,8 @@ async function revokeSecuritySessionCommand(argv, ctx) {
 async function threadCommand(argv, ctx) {
   const subcommand = argv[0] || "";
   if (subcommand === "create") return createThreadCommand(argv.slice(1), ctx);
-  throw new Error("Usage: orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]");
+  if (subcommand === "mission") return threadMissionCommand(argv.slice(1), ctx);
+  throw new Error("Usage: orkestr thread <create|mission> ... (see --help)");
 }
 
 async function createThreadCommand(argv, ctx) {
@@ -1824,7 +1827,8 @@ async function workerCommand(argv, ctx) {
   const subcommand = argv[0] || "";
   if (subcommand === "create") return createWorkerCommand(argv.slice(1), ctx);
   if (subcommand === "release-role") return workerReleaseRoleCommand(argv.slice(1), ctx);
-  throw new Error("Usage: orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]\n       orkestr worker release-role get <thread> [--json]\n       orkestr worker release-role set <thread> <worker|release_train> [--json]");
+  if (subcommand === "push-branch") return workerPushBranchCommand(argv.slice(1), ctx);
+  throw new Error("Usage: orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]\n       orkestr worker release-role get <thread> [--json]\n       orkestr worker release-role set <thread> <worker|release_train> [--json]\n       orkestr worker push-branch ... (see --help)");
 }
 
 // Admin-only: reads/writes the thread's persisted agentReleaseRole field, the
@@ -2110,16 +2114,33 @@ async function chooseThread(ctx) {
   return ctx.pickThread(payload?.threads || [], ctx);
 }
 
+// Worker replies go to the worker's bound WhatsApp chat by default; the server
+// still enforces ownership, parent linkage, sanitizer approval and eligibility.
+async function sendRepliesToWhatsApp(argv, target, ctx) {
+  if (argv.includes("--no-reply-whatsapp")) return false;
+  if (argv.includes("--reply-whatsapp")) return true;
+  const payload = await requestJson(`/api/threads/${encodeURIComponent(target)}`, ctx).catch(() => null);
+  const thread = payload?.thread || payload || {};
+  const binding = thread.binding || {};
+  return thread.threadKind === "worker" && Boolean(thread.parentThreadId) &&
+    binding.connector === "whatsapp" && binding.enabled === true && binding.mirrorToWhatsApp !== false &&
+    binding.retired !== true && binding.routeEligible !== false;
+}
+
 async function send(argv, ctx) {
   const json = argv.includes("--json");
   const values = positional(argv);
   const target = values[0];
   const text = values.slice(1).join(" ").trim();
   if (!target || !text) throw new Error('Usage: orkestr send <thread> "<message>"');
+  const replyWhatsApp = await sendRepliesToWhatsApp(argv, target, ctx);
   const payload = await requestJson(`/api/threads/${encodeURIComponent(target)}/input`, {
     ...ctx,
     method: "POST",
-    body: { text, source: "cli", parseCommands: true, controlAllowed: true },
+    body: { text, source: "cli", parseCommands: true, controlAllowed: true,
+      ...(replyWhatsApp ? { workerReplyDelivery: "bound_whatsapp" } : {}),
+      ...(flagValue(argv, "--idempotency-key") ? { idempotencyKey: flagValue(argv, "--idempotency-key") } : {}),
+    },
   });
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else {
@@ -2185,7 +2206,7 @@ Common thread commands:
   orkestr connect google --review --thread <reviewer-thread-id> [--json]
   orkestr connect google --review-environment --thread <reviewer-thread-id> [--json]
   orkestr attach [thread-name-or-id] [--print] [--read-only] [--takeover] [--interrupt] [--yes] [--interval seconds] [--timeout duration] [--json]
-  orkestr send <thread-name-or-id> "<message>" [--json]
+  orkestr send <thread-name-or-id> "<message>" [--reply-whatsapp|--no-reply-whatsapp] [--idempotency-key <key>] [--json]
   orkestr wake <thread-name-or-id> [--json]
   orkestr reset <thread-name-or-id> [--json]
   orkestr hard-reset <thread-name-or-id> [--json]
@@ -2213,9 +2234,11 @@ Advanced:
   orkestr vm-slice create <owner-user-id> [--id slice-id] [--namespace ns] [--vm-name name] [--no-control-plane] [--execute] [--json]
   orkestr vm-slice [list|status <slice-id>|provision <slice-id>|destroy <slice-id> [--execute]] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
+  orkestr thread mission <get|set|clear> <thread> [mission text] [--text text] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
   orkestr worker release-role get <thread> [--json]
   orkestr worker release-role set <thread> <worker|release_train> [--json]
+  orkestr worker push-branch <worker-thread> [--json]
   orkestr task-agent profiles [--json]
   orkestr task-agent spawn <parent-thread> <task text> [--profile sre_engineer] [--context ref]... [--no-run] [--json]
   orkestr task-agent [list <parent-thread>|status <task-agent-thread>|cancel <task-agent-thread>] [--json]
@@ -2352,6 +2375,7 @@ function formatWhereAmI(payload = {}) {
 function positional(argv) {
   const values = [];
   const flagsWithValues = new Set([
+    "--idempotency-key",
     "--branch",
     "--branch-name",
     "--account",
@@ -2459,6 +2483,8 @@ function positional(argv) {
     "--owner-user-id",
   ]);
   const flagsWithoutValues = new Set([
+    "--reply-whatsapp",
+    "--no-reply-whatsapp",
     "--blank",
     "--force-new",
     "--json",
