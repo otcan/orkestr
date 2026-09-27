@@ -44,7 +44,8 @@ for (const phase of ["final_answer", "commentary"]) for (const failure of ["part
   const parent = await appendThreadMessage(thread.id, { role: "user", connector: "whatsapp", source: "whatsapp_inbound",
     chatId: "synthetic-chat", text: "Document please", state: "completed" }, env);
   const reply = await appendThreadMessage(thread.id, { role: "assistant", connector: "whatsapp", source: "codex-app-server",
-    chatId: "synthetic-chat", parentMessageId: parent.id, phase, state: "completed", text: `[report](${source})` }, env);
+    chatId: "synthetic-chat", parentMessageId: parent.id, phase, state: "completed", text: "Document ready.",
+    attachments: [{ path: source, filename: "report.xlsx" }] }, env);
   await fs.unlink(source);
   let sends = 0;
   await deliverWhatsAppReplies(env, async (_url, options = {}) => {
@@ -76,7 +77,8 @@ test("claimed retry enforces snapshot obligations retained only in the durable o
   const parent = await appendThreadMessage(thread.id, { role: "user", connector: "whatsapp", source: "whatsapp_inbound",
     chatId: "synthetic-chat", text: "Document please", state: "completed" }, env);
   const reply = await appendThreadMessage(thread.id, { role: "assistant", connector: "whatsapp", source: "codex-app-server",
-    chatId: "synthetic-chat", parentMessageId: parent.id, phase: "final_answer", state: "completed", text: `[report](${source})` }, env);
+    chatId: "synthetic-chat", parentMessageId: parent.id, phase: "final_answer", state: "completed", text: "Document ready.",
+    attachments: [{ path: source, filename: "report.xlsx" }] }, env);
   let sends = 0;
   const forbidden = async () => { sends++; throw new Error("must not send an incomplete batch"); };
   await deliverWhatsAppReplies(env, forbidden);
@@ -100,9 +102,10 @@ for (const phase of ["final_answer", "commentary"]) for (const encrypted of [fal
   if (encrypted) await enableEncryption(env);
   const parent = await appendThreadMessage(thread.id, { role: "user", source: "whatsapp_inbound", connector: "whatsapp",
     chatId: "synthetic-chat", text: "Send document", state: "completed" }, env);
-  const text = `Document: [report.xlsx](${source})`;
+  const text = "Document: report.xlsx";
   const reply = await appendThreadMessage(thread.id, { role: "assistant", source: "codex-app-server", connector: "whatsapp",
-    chatId: "synthetic-chat", phase, state: "completed", parentMessageId: parent.id, text }, env);
+    chatId: "synthetic-chat", phase, state: "completed", parentMessageId: parent.id, text,
+    attachments: [{ path: source, filename: "report.xlsx" }] }, env);
   const stored = (await listThreadMessages(thread.id, env)).find(x => x.id === reply.id);
   const snapshot = encrypted ? stored.attachments[0].deliverySource : stored.attachments[0];
   assert.notEqual(snapshot.path, source);
@@ -150,7 +153,7 @@ for (const phase of ["final_answer", "commentary"]) for (const encrypted of [fal
     chatId: "synthetic-chat", text: "Document please", state: "completed" }, env);
   const reply = await appendThreadMessage(thread.id, { role: "assistant", connector: "whatsapp", source: "codex-app-server",
     chatId: "synthetic-chat", parentMessageId: parent.id, phase, state: "completed",
-    text: `[report](${source})` }, env);
+    text: "Document ready.", attachments: [{ path: source, filename: "report.xlsx" }] }, env);
   const snapshot = encrypted ? reply.attachments[0].deliverySource : reply.attachments[0];
   await fs.rm(snapshot.path);
   await assert.rejects(updateThreadMessage(thread.id, reply.id, { text: reply.text + "\nEdited" }, env), /snapshot_integrity_failed/);
@@ -190,9 +193,10 @@ test("snapshot and live source do not become duplicate attachments", async t => 
   const { env, thread, source } = await fixture(t);
   const snapshot = await snapshotRoutedAttachments({ thread, message: { role: "assistant", connector: "whatsapp" },
     attachments: [{ path: source, filename: "report.xlsx" }], env });
-  const resolved = await resolveThreadAttachments({ thread, attachments: snapshot, text: `[report](${source})`, env });
+  const resolved = await resolveThreadAttachments({ thread, attachments: snapshot, text: `Also see ${source}`, env });
   assert.equal(resolved.attachments.length, 1);
-  assert.equal(resolved.skipped.length, 0);
+  assert.equal(resolved.attachments[0].path, snapshot[0].path);
+  assert.equal(resolved.skipped.every((item) => item.reason === "attachment_requires_explicit_selection"), true);
   assert.deepEqual(await snapshotRoutedAttachments({ thread, message: { role: "assistant" }, attachments: snapshot, env }), snapshot);
 });
 

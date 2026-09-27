@@ -25,7 +25,8 @@ async function fixture(t, phase = "final_answer") {
   const parent = await appendThreadMessage(thread.id, { role: "user", source: "whatsapp_inbound", connector: "whatsapp", chatId: "synthetic-chat", state: "completed", text: "Document please" }, env);
   const source = path.join(home, "synthetic.xlsx");
   const reply = () => appendThreadMessage(thread.id, { role: "assistant", source: "codex-app-server", connector: "whatsapp", chatId: "synthetic-chat",
-    parentMessageId: parent.id, state: "completed", phase, text: `Document: [workbook](${source})` }, env);
+    parentMessageId: parent.id, state: "completed", phase, text: "Document ready.",
+    attachments: [{ path: source, filename: "synthetic.xlsx" }] }, env);
   return { home, env, thread, source, reply };
 }
 
@@ -78,6 +79,31 @@ for (const phase of ["final_answer", "commentary"]) for (const fault of ["missin
   assert.deepEqual(cleanup.deleted, []);
   const duplicate = await deliverWhatsAppReplies(f.env, async () => { throw new Error("duplicate delivery"); });
   assert.equal(duplicate.delivered.length, 0);
+});
+
+test("a prose-only mention of a producer file delivers as text and never stages an attachment", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(f.source, syntheticWorkbook);
+  const reply = await appendThreadMessage(f.thread.id, { role: "assistant", source: "codex-app-server", connector: "whatsapp",
+    chatId: "synthetic-chat", state: "completed", phase: "final_answer",
+    text: `Document: [workbook](${f.source})` }, f.env);
+  assert.equal(reply.outboundAttachmentStaging, undefined);
+  assert.equal(reply.attachments, undefined);
+  assert.equal(reply.deliveryError, undefined);
+  assert.equal(reply.text, `Document: [workbook](${f.source})`);
+  const journalDir = path.join(f.home, "outbound-attachment-staging", createHash("sha256").update(`admin\n${f.thread.id}`).digest("hex"));
+  await assert.rejects(fs.stat(journalDir), { code: "ENOENT" });
+  let sends = 0;
+  const result = await deliverWhatsAppReplies(f.env, async (url, options) => {
+    if (options?.method === "POST") {
+      sends++;
+      assert.equal(new URL(url).pathname, "/send-text");
+      assert.equal(JSON.parse(options.body).paths, undefined);
+    }
+    return new Response(JSON.stringify({ ok: true, ids: ["synthetic-text-ack"] }), { headers: { "content-type": "application/json" } });
+  });
+  assert.equal(result.delivered.length >= 1, true);
+  assert.equal(sends >= 1, true);
 });
 
 test("staging journal cannot be reused for a different owner, message or edited text", async t => {
