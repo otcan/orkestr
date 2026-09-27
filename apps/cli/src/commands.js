@@ -1827,7 +1827,38 @@ async function workerCommand(argv, ctx) {
   const subcommand = argv[0] || "";
   if (subcommand === "create") return createWorkerCommand(argv.slice(1), ctx);
   if (subcommand === "push-branch") return workerPushBranchCommand(argv.slice(1), ctx);
-  throw new Error("Usage: orkestr worker <create|push-branch> ... (see --help)");
+  if (subcommand === "release-role") return workerReleaseRoleCommand(argv.slice(1), ctx);
+  throw new Error("Usage: orkestr worker <create|push-branch|release-role> ... (see --help)");
+}
+
+// Admin-only: reads/writes the thread's persisted agentReleaseRole field, the
+// sole source used to select worker vs. release-train policy text. There is
+// no free-text form of this command; the role must be one of the fixed values.
+async function workerReleaseRoleCommand(argv, ctx) {
+  const action = argv[0] || "";
+  const json = argv.includes("--json");
+  if (action === "get") {
+    const threadId = argv[1];
+    if (!threadId) throw new Error("Usage: orkestr worker release-role get <thread> [--json]");
+    const payload = await requestJson(`/api/threads/${encodeURIComponent(threadId)}/release-role`, ctx);
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(`${payload.role}\n`);
+    return 0;
+  }
+  if (action === "set") {
+    const threadId = argv[1];
+    const role = argv[2];
+    if (!threadId || !role) throw new Error("Usage: orkestr worker release-role set <thread> <worker|release_train> [--json]");
+    const payload = await requestJson(`/api/threads/${encodeURIComponent(threadId)}/release-role`, {
+      ...ctx,
+      method: "PUT",
+      body: { role },
+    });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(`Release role for ${threadId}: ${payload.role}\n`);
+    return 0;
+  }
+  throw new Error("Usage: orkestr worker release-role get <thread> [--json]\n       orkestr worker release-role set <thread> <worker|release_train> [--json]");
 }
 
 async function createWorkerCommand(argv, ctx) {
@@ -2206,6 +2237,8 @@ Advanced:
   orkestr thread mission <get|set|clear> <thread> [mission text] [--text text] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
   orkestr worker push-branch <worker-thread> [--json]
+  orkestr worker release-role get <thread> [--json]
+  orkestr worker release-role set <thread> <worker|release_train> [--json]
   orkestr task-agent profiles [--json]
   orkestr task-agent spawn <parent-thread> <task text> [--profile sre_engineer] [--context ref]... [--no-run] [--json]
   orkestr task-agent [list <parent-thread>|status <task-agent-thread>|cancel <task-agent-thread>] [--json]

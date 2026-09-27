@@ -18,6 +18,7 @@ import {
   getThreadStandingMission,
   setThreadStandingMission,
 } from "../../../../../packages/core/src/claude-standing-mission-admin.js";
+import { getThreadAgentReleaseRole, setThreadAgentReleaseRole } from "../../../../../packages/core/src/agent-release-role.js";
 import { cancelTaskAgent, createTaskAgent, listTaskAgents, taskAgentSummary } from "../../../../../packages/core/src/task-agents.js";
 import { userScopedCapabilityHints } from "../../../../../packages/core/src/user-skills.js";
 import { sanitizedThreadActionInput } from "./thread-route-helpers.js";
@@ -84,6 +85,14 @@ export class ThreadWorkerService {
 
   pushOwnBranch(threadId: string, operatorUserId: string) {
     return pushWorkerOwnBranch(threadId, { operatorUserId });
+  }
+
+  getReleaseRole(threadId: string) {
+    return getThreadAgentReleaseRole(threadId);
+  }
+
+  setReleaseRole(threadId: string, role: string, actorUserId: string) {
+    return setThreadAgentReleaseRole(threadId, role, { actorUserId });
   }
 }
 
