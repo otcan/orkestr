@@ -2131,6 +2131,7 @@ write_cli_wrapper() {
 #!/usr/bin/env bash
 set -euo pipefail
 caller_cwd="${ORKESTR_CALLER_CWD:-$PWD}"
+app_dir_override="${ORKESTR_APP_DIR:-}"
 env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
 if [ -r "$env_file" ]; then
   set -a
@@ -2138,10 +2139,14 @@ if [ -r "$env_file" ]; then
   . "$env_file"
   set +a
 fi
-app_dir="${ORKESTR_APP_DIR:-/opt/orkestr/app}"
 current_link="${ORKESTR_CURRENT_LINK:-/opt/orkestr/current}"
-if [ "${ORKESTR_RELEASE_DEPLOY:-0}" = "1" ] && [ -e "$current_link" ]; then
+legacy_app_dir="${ORKESTR_APP_DIR:-/opt/orkestr/app}"
+if [ -n "$app_dir_override" ]; then
+  app_dir="$app_dir_override"
+elif [ -e "$current_link/apps/cli/bin/orkestr-oss.js" ]; then
   app_dir="$current_link"
+else
+  app_dir="$legacy_app_dir"
 fi
 export ORKESTR_CALLER_CWD="$caller_cwd"
 cd "$app_dir"
