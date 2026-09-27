@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isReleaseTrainThread } from "./agent-release-role-policy.js";
 import { claudeSubscriptionTokenForRuntime } from "./llm-account-profiles.js";
 
 function clean(value = "") {
@@ -31,6 +32,18 @@ function claudeCodeGitConfig(env = process.env) {
       [`GIT_CONFIG_VALUE_${index}`, value],
     ]),
   ]);
+}
+
+function releaseTrainCliEnv(thread = {}, env = process.env) {
+  if (!isReleaseTrainThread(thread)) return {};
+  const orkestrHome = clean(env.ORKESTR_HOME);
+  const explicitBase = clean(env.ORKESTR_API_BASE);
+  const port = clean(env.ORKESTR_PORT || env.PORT);
+  const apiBase = explicitBase || (port ? `http://127.0.0.1:${port}` : "");
+  return {
+    ...(orkestrHome ? { ORKESTR_HOME: orkestrHome } : {}),
+    ...(apiBase ? { ORKESTR_API_BASE: apiBase } : {}),
+  };
 }
 
 export function claudeCodeRuntimeEnv(profile = {}, thread = {}, env = process.env) {
@@ -68,6 +81,11 @@ export function claudeCodeRuntimeEnv(profile = {}, thread = {}, env = process.en
     // result falsely reports completion. Disable the feature at the source
     // rather than relying on the model to never request it.
     CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+    // Only an admin-promoted release train receives the non-secret routing
+    // needed by the local Orkestr CLI. The CLI still reads its bearer token
+    // from the protected ORKESTR_HOME store; no credential value is copied
+    // into the Claude process environment. Ordinary workers fail closed.
+    ...releaseTrainCliEnv(thread, env),
     ...claudeCodeGitConfig(env),
   };
 }
