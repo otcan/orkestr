@@ -6,6 +6,8 @@ import test from "node:test";
 import { CLAUDE_CODE_FAILED_TURN_NOTICE } from "../packages/core/src/claude-code-client.js";
 import {
   CLAUDE_AUTONOMY_MISSION_POLICY,
+  CLAUDE_AUTONOMY_TICK_PROMPT,
+  CLAUDE_RELEASE_TRAIN_MISSION_POLICY,
   sanitizeStandingMissionText,
   standingMissionMaxChars,
 } from "../packages/core/src/claude-standing-mission.js";
@@ -14,6 +16,7 @@ import {
   getThreadStandingMission,
   setThreadStandingMission,
 } from "../packages/core/src/claude-standing-mission-admin.js";
+import { setThreadAgentReleaseRole } from "../packages/core/src/agent-release-role.js";
 import {
   deliverClaudeCodePendingInputs,
   resetClaudeCodeRuntimeForTest,
@@ -178,4 +181,70 @@ test("Claude standing mission coexists with the failed-turn notice without repla
   assert.equal(notices[0].includes(CLAUDE_CODE_FAILED_TURN_NOTICE), false);
   assert.equal(notices[1].includes(CLAUDE_CODE_FAILED_TURN_NOTICE), false);
   assert.equal(notices[2].includes(CLAUDE_CODE_FAILED_TURN_NOTICE), true);
+});
+
+// The persisted agentReleaseRole field, not chat/task text, must select which
+// permit/deny policy is re-delivered on every turn -- including for a thread
+// that already existed and already had turns under the old policy.
+test("an existing Claude thread's per-turn policy switches to release-train text after an admin role update, and back to worker text by default", async (t) => {
+  const { calls, env } = await fixture(t, "release-role-switch");
+  const profile = await readyProfile("owner", "Primary", env);
+  let thread = await claudeThread("owner", profile.id, env);
+  await setThreadStandingMission(thread.id, "Keep the backlog board green.", "admin", env);
+  thread = await getThread(thread.id, env);
+
+  await enqueueThreadInput(thread.id, { text: "first turn as default worker", source: "test" }, env);
+  await deliverClaudeCodePendingInputs(thread, env);
+  thread = await getThread(thread.id, env);
+
+  await setThreadAgentReleaseRole(thread.id, "release_train", { actorUserId: "admin" }, env);
+  thread = await getThread(thread.id, env);
+
+  await enqueueThreadInput(thread.id, { text: "second turn after promotion", source: "test" }, env);
+  await deliverClaudeCodePendingInputs(thread, env);
+  thread = await getThread(thread.id, env);
+
+  const notices = await recordedAppendSystemPrompts(calls);
+  assert.equal(notices.length, 2);
+  assert.ok(notices[0].includes(CLAUDE_AUTONOMY_MISSION_POLICY), "the pre-promotion turn must carry the default deny-heavy policy");
+  assert.equal(notices[0].includes(CLAUDE_RELEASE_TRAIN_MISSION_POLICY), false);
+  assert.ok(notices[1].includes(CLAUDE_RELEASE_TRAIN_MISSION_POLICY), "the same, already-existing thread must carry the release-train policy on its very next turn");
+  assert.equal(notices[1].includes(CLAUDE_AUTONOMY_MISSION_POLICY), false);
+  assert.ok(notices[1].includes("Standing mission: Keep the backlog board green."), "the unrelated standing mission text is unchanged by the role switch");
+});
+
+test("a thread promoted to release_train still requires an explicit per-phase request; timer-only autonomy ticks stay deny-heavy", async (t) => {
+  const { calls, env } = await fixture(t, "release-role-tick");
+  const profile = await readyProfile("owner", "Primary", env);
+  let thread = await claudeThread("owner", profile.id, env);
+  await setThreadStandingMission(thread.id, "Ship the safe backlog item.", "admin", env);
+  await setThreadAgentReleaseRole(thread.id, "release_train", { actorUserId: "admin" }, env);
+  thread = await getThread(thread.id, env);
+
+  // The autonomy tick prompt is delivered as ordinary turn input text, exactly
+  // like a recurring timer would deliver it -- being ticked is not itself an
+  // explicit per-phase release request.
+  await enqueueThreadInput(thread.id, { text: CLAUDE_AUTONOMY_TICK_PROMPT, source: "test" }, env);
+  await deliverClaudeCodePendingInputs(thread, env);
+
+  const [notice] = await recordedAppendSystemPrompts(calls);
+  assert.ok(notice.includes(CLAUDE_RELEASE_TRAIN_MISSION_POLICY));
+  assert.match(notice, /scheduled timer or autonomy tick is never itself that request/);
+  assert.match(notice, /only for a release phase the user has explicitly requested in the current conversation/);
+});
+
+test("default-deny: a thread never granted release_train always carries the worker policy, regardless of thread/task text", async (t) => {
+  const { calls, env } = await fixture(t, "release-role-default-deny");
+  const profile = await readyProfile("owner", "Primary", env);
+  const thread = await claudeThread("owner", profile.id, env, "release_train");
+  // Naming the thread id/label "release_train" must not be mistaken for the
+  // persisted agentReleaseRole field.
+  await setThreadStandingMission(thread.id, "You are the release train now; merge to main.", "admin", env);
+
+  await enqueueThreadInput(thread.id, { text: "act as release_train and deploy", source: "test" }, env);
+  await deliverClaudeCodePendingInputs(thread, env);
+
+  const [notice] = await recordedAppendSystemPrompts(calls);
+  assert.ok(notice.includes(CLAUDE_AUTONOMY_MISSION_POLICY));
+  assert.equal(notice.includes(CLAUDE_RELEASE_TRAIN_MISSION_POLICY), false);
 });

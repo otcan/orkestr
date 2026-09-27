@@ -1,8 +1,10 @@
 # Bounded proactive autonomy for Claude worker threads
 
 Claude worker threads can run a small amount of standing, unsupervised work
-between explicit handoffs. This is opt-in per thread and stays inside a fixed
-permit/deny policy that no per-thread configuration can widen.
+between explicit handoffs. This is opt-in per thread and stays inside a
+permit/deny policy that only an admin-set, persisted, typed field can widen
+(`agentReleaseRole` in `packages/core/src/agent-release-role.js`) -- chat,
+task, or timer/autonomy-tick text can never widen it.
 
 ## Standing mission
 
@@ -13,24 +15,35 @@ admin-set field re-delivered on **every** Claude turn through the same
 (`packages/core/src/claude-code-client.js`). The two coexist; neither replaces
 the other.
 
-Only the thread's own persisted `standingMission` field feeds this text --
-never message content, tool output, or anything else a turn produced --  so
-the only way to change what a worker is told is through the admin-gated API
-below. The canonical permit/deny policy
-(`CLAUDE_AUTONOMY_MISSION_POLICY` in `packages/core/src/claude-standing-mission.js`)
-is always prepended when a mission is set:
+Only the thread's own persisted `standingMission` and `agentReleaseRole`
+fields feed this text -- never message content, tool output, task/handoff
+text, or anything else a turn produced -- so the only way to change what a
+worker is told is through the admin-gated APIs below. A permit/deny policy is
+always prepended when a mission is set, selected only by the thread's
+persisted `agentReleaseRole` (default `worker`):
 
-- **Permitted**: select explicitly unowned backlog work; inspect, implement,
-  test, commit, and push changes only to the worker's own stored branch;
-  choose a different safe task if blocked; report status or hand off to the
-  parent thread.
-- **Denied**: merging, rebasing, or pushing `main` or any release branch;
-  running releases, deploys, or production restarts; production or data
-  repair; reading or writing secrets; sending external messages or writing to
-  Jira; indefinite monitoring without separate explicit authorization.
+- **Permitted** (`worker`, the default -- `CLAUDE_AUTONOMY_MISSION_POLICY` in
+  `packages/core/src/claude-standing-mission.js`): select explicitly unowned
+  backlog work; inspect, implement, test, commit, and push changes only to
+  the worker's own stored branch; choose a different safe task if blocked;
+  report status or hand off to the parent thread.
+- **Denied** (`worker`): merging, rebasing, or pushing `main` or any release
+  branch; running releases, deploys, or production restarts; production or
+  data repair; reading or writing secrets; sending external messages or
+  writing to Jira; indefinite monitoring without separate explicit
+  authorization.
+- **`release_train`** (`CLAUDE_RELEASE_TRAIN_MISSION_POLICY`, granted only
+  through `PUT /api/threads/:threadId/release-role`): additionally permits
+  following docs/release-train.md -- inventorying/syncing workers,
+  integrating, testing, pushing main/tags, watching CI, and deploying -- but
+  only for a release phase the user has explicitly requested in the current
+  conversation. Being ticked by a timer, or holding the role at all, is never
+  itself that request. Force-pushing, destructive recovery, discarding dirty
+  work, secrets access, and the rest of the worker denials still apply
+  unchanged, and incomplete branch/fleet alignment must be reported honestly.
 
 Threads with no standing mission set behave exactly as before -- no extra
-system prompt is appended.
+system prompt is appended -- regardless of release role.
 
 ### Admin API
 
