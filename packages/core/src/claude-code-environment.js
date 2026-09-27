@@ -62,6 +62,12 @@ export function claudeCodeRuntimeEnv(profile = {}, thread = {}, env = process.en
     // preserve that mode instead of silently weakening it at process startup.
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: permissionMode === "bypassPermissions" ? "0" : "1",
     DISABLE_AUTOUPDATER: "1",
+    // This process runs headlessly under -p/stream-json: nothing observes or
+    // reaps a backgrounded Bash/Agent task after the CLI exits, so a task
+    // left running in the background is silently killed while the turn's
+    // result falsely reports completion. Disable the feature at the source
+    // rather than relying on the model to never request it.
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
     ...claudeCodeGitConfig(env),
   };
 }
