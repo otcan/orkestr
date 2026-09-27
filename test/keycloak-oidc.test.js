@@ -12,6 +12,7 @@ import {
   keycloakOidcSettings,
 } from "../packages/core/src/keycloak-oidc.js";
 import { authorizeHttpRequest, createOidcSecuritySession, oidcSecurityCookieName, sessionCookieHeader, verifySecurityToken } from "../packages/core/src/security.js";
+import { listEvents } from "../packages/storage/src/store.js";
 
 function saveEnv(keys) {
   return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -163,6 +164,143 @@ test("Keycloak OIDC binds launcher login and callback to the configured launcher
     fetchImpl: oidcFixture({ issuer, privateKey, jwk, idToken }),
   });
   assert.equal(completed.redirectPath, "/apps");
+});
+
+function burstEnvKeys() {
+  return [
+    "ORKESTR_HOME", "ORKESTR_AUTH_PROVIDER", "ORKESTR_KEYCLOAK_OIDC_ENABLED",
+    "ORKESTR_KEYCLOAK_ISSUER", "ORKESTR_KEYCLOAK_CLIENT_ID", "ORKESTR_PUBLIC_APP_URL",
+    "ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_LIMIT", "ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_WINDOW_MS",
+    "ORKESTR_KEYCLOAK_OIDC_GLOBAL_BURST_LIMIT", "ORKESTR_KEYCLOAK_OIDC_GLOBAL_BURST_WINDOW_MS",
+    "ORKESTR_KEYCLOAK_OIDC_PENDING_STATE_LIMIT",
+  ];
+}
+
+async function burstFixture(t, name, overrides = {}) {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-keycloak-oidc-${name}-`));
+  const prior = saveEnv(burstEnvKeys());
+  const issuer = `https://keycloak-${name}.example.test/realms/orkestr`;
+  Object.assign(process.env, configuredEnv(home, issuer), overrides);
+  t.after(async () => {
+    restoreEnv(prior);
+    await fs.rm(home, { recursive: true, force: true });
+  });
+  const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const jwk = { ...publicKey.export({ format: "jwk" }), kid: "signing-key", use: "sig", alg: "RS256" };
+  return { fetchImpl: oidcFixture({ issuer, privateKey, jwk, idToken: "" }) };
+}
+
+function assertRateLimited(scope) {
+  return (error) => {
+    assert.match(String(error.message), /oidc_login_rate_limited/);
+    assert.equal(error.statusCode, 429);
+    assert.equal(error.rateLimitScope, scope);
+    assert.equal(Number.isFinite(error.retryAfterSeconds) && error.retryAfterSeconds > 0, true);
+    return true;
+  };
+}
+
+test("Keycloak OIDC login start bounds one client's burst without blocking an unrelated client", async (t) => {
+  const { fetchImpl } = await burstFixture(t, "client-burst", {
+    ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_LIMIT: "2",
+    ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_WINDOW_MS: "60000",
+  });
+  await beginKeycloakLogin({ clientKey: "client-a", fetchImpl });
+  await beginKeycloakLogin({ clientKey: "client-a", fetchImpl });
+  await assert.rejects(beginKeycloakLogin({ clientKey: "client-a", fetchImpl }), assertRateLimited("client_burst"));
+  // A second, independent client can still begin login while the first is limited.
+  const other = await beginKeycloakLogin({ clientKey: "client-b", fetchImpl });
+  assert.ok(new URL(other.authorizationUrl).searchParams.get("state"));
+});
+
+test("Keycloak OIDC login start bounds aggregate creation across many distinct clients", async (t) => {
+  const { fetchImpl } = await burstFixture(t, "global-burst", {
+    ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_LIMIT: "1",
+    ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_WINDOW_MS: "60000",
+    ORKESTR_KEYCLOAK_OIDC_GLOBAL_BURST_LIMIT: "3",
+    ORKESTR_KEYCLOAK_OIDC_GLOBAL_BURST_WINDOW_MS: "60000",
+  });
+  await beginKeycloakLogin({ clientKey: "c1", fetchImpl });
+  await beginKeycloakLogin({ clientKey: "c2", fetchImpl });
+  await beginKeycloakLogin({ clientKey: "c3", fetchImpl });
+  // Each of c1..c3 stayed within its own per-client budget; the rejection
+  // below can only be the separate, aggregate global burst budget.
+  await assert.rejects(beginKeycloakLogin({ clientKey: "c4", fetchImpl }), assertRateLimited("global_burst"));
+});
+
+test("Keycloak OIDC login start recovers per-client capacity once the burst window elapses", async (t) => {
+  const { fetchImpl } = await burstFixture(t, "client-burst-recovery", {
+    ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_LIMIT: "1",
+    ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_WINDOW_MS: "80",
+  });
+  await beginKeycloakLogin({ clientKey: "recovering-client", fetchImpl });
+  await assert.rejects(beginKeycloakLogin({ clientKey: "recovering-client", fetchImpl }), assertRateLimited("client_burst"));
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const recovered = await beginKeycloakLogin({ clientKey: "recovering-client", fetchImpl });
+  assert.ok(new URL(recovered.authorizationUrl).searchParams.get("state"));
+});
+
+test("Keycloak OIDC login start cannot be oversubscribed by concurrent requests from one client", async (t) => {
+  const { fetchImpl } = await burstFixture(t, "client-burst-concurrent", {
+    ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_LIMIT: "3",
+    ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_WINDOW_MS: "60000",
+  });
+  const results = await Promise.allSettled(
+    Array.from({ length: 8 }, () => beginKeycloakLogin({ clientKey: "concurrent-client", fetchImpl })),
+  );
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 3);
+  const rejected = results.filter((result) => result.status === "rejected");
+  assert.equal(rejected.length, 5);
+  assert.equal(rejected.every((result) => /oidc_login_rate_limited/.test(String(result.reason))), true);
+});
+
+test("Keycloak OIDC login start treats a missing client key as one bounded shared bucket instead of bypassing the limiter", async (t) => {
+  const { fetchImpl } = await burstFixture(t, "anonymous-client", {
+    ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_LIMIT: "2",
+    ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_WINDOW_MS: "60000",
+  });
+  await beginKeycloakLogin({ fetchImpl });
+  await beginKeycloakLogin({ fetchImpl });
+  await assert.rejects(beginKeycloakLogin({ fetchImpl }), assertRateLimited("client_burst"));
+});
+
+test("Keycloak OIDC login rate limiting rejects without consuming pending-state capacity and audits only a minimized event", async (t) => {
+  const { fetchImpl } = await burstFixture(t, "rate-limit-audit", {
+    ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_LIMIT: "1",
+    ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_WINDOW_MS: "60000",
+  });
+  await beginKeycloakLogin({ clientKey: "audited-client", returnTo: "/apps/private-return-path", fetchImpl });
+  await assert.rejects(
+    beginKeycloakLogin({ clientKey: "audited-client", returnTo: "/apps/private-return-path", fetchImpl }),
+    assertRateLimited("client_burst"),
+  );
+  // The rejected attempt must not have grown the persisted pending-state pool.
+  await assert.rejects(
+    beginKeycloakLogin({ clientKey: "audited-client", returnTo: "/apps/private-return-path", fetchImpl }),
+    assertRateLimited("client_burst"),
+  );
+  const events = await listEvents(process.env, 200);
+  const rateLimitEvents = events.filter((event) => event.type === "security_oidc_login_rate_limited");
+  assert.equal(rateLimitEvents.length, 2);
+  for (const event of rateLimitEvents) {
+    assert.equal(event.scope, "client_burst");
+    assert.equal(typeof event.clientKeyHash, "string");
+    assert.notEqual(event.clientKeyHash, "audited-client");
+    const serialized = JSON.stringify(event);
+    assert.equal(serialized.includes("audited-client"), false);
+    assert.equal(serialized.includes("private-return-path"), false);
+  }
+});
+
+test("Keycloak OIDC login start still enforces the long-lived pending-state pool once the burst budgets allow enough creates", async (t) => {
+  const { fetchImpl } = await burstFixture(t, "pending-pool", {
+    ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_LIMIT: "5",
+    ORKESTR_KEYCLOAK_OIDC_GLOBAL_BURST_LIMIT: "5",
+    ORKESTR_KEYCLOAK_OIDC_PENDING_STATE_LIMIT: "2",
+  });
+  await beginKeycloakLogin({ clientKey: "pool-client-1", fetchImpl });
+  await beginKeycloakLogin({ clientKey: "pool-client-2", fetchImpl });
+  await assert.rejects(beginKeycloakLogin({ clientKey: "pool-client-3", fetchImpl }), assertRateLimited("pending_state_pool"));
 });
 
 test("Keycloak control-plane access requires an explicit realm role and maps to the existing admin", async (t) => {
