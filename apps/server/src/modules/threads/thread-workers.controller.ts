@@ -11,6 +11,7 @@ import { requestPrincipal } from "../../../../../packages/core/src/principal.js"
 import { threadRuntimeSummary } from "../../thread-summary.js";
 import { httpError, validateRequestSchema } from "../../common/http.js";
 import {
+  threadReleaseRoleUpdateSchema,
   threadRepoUpdateSchema,
   threadWorkerCreateSchema,
 } from "../../../../../packages/shared/src/api-schemas.js";
@@ -105,5 +106,22 @@ export class ThreadWorkersController {
       ...result,
       thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),
     };
+  }
+
+  // Read/write the persisted, admin-only release role. This is the sole
+  // trusted source for release-train policy selection (agent-release-role.js);
+  // it is never inferred from chat, task, or timer/autonomy-tick text.
+  @Get(":threadId/release-role")
+  async getReleaseRole(@Req() request: any, @Param("threadId") threadId: string) {
+    assertThreadAdminOnly("thread.release_role.get", requestPrincipal(request));
+    return this.threadWorkerService.getReleaseRole(threadId);
+  }
+
+  @Put(":threadId/release-role")
+  async setReleaseRole(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    validateRequestSchema(threadReleaseRoleUpdateSchema, { params: { threadId }, body });
+    const principal = requestPrincipal(request);
+    assertThreadAdminOnly("thread.release_role.set", principal);
+    return this.threadWorkerService.setReleaseRole(threadId, String(body.role || ""), String(principal?.userId || ""));
   }
 }

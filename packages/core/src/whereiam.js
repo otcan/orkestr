@@ -17,6 +17,7 @@ import {
   userSkillCapabilitySnapshot,
 } from "./user-skills.js";
 import { desktopAccessPolicySummary, filterDesktopSessionsForThread } from "./desktop-access.js";
+import { agentReleaseRolePolicy, threadAgentReleaseRole } from "./agent-release-role.js";
 
 const desktopInventoryLiveCache = new Map();
 
@@ -192,6 +193,10 @@ function publicThread(thread = null, status = null) {
     bindingName: thread.bindingName || null,
     state: thread.state || null,
     wakePolicy: thread.wakePolicy || null,
+    // Read only from the thread's persisted, admin-set field — never derived
+    // from chat/task text — so a session cannot talk itself into release
+    // authority; see packages/core/src/agent-release-role.js.
+    agentReleaseRole: threadAgentReleaseRole(thread),
     parentThreadId: thread.parentThreadId || null,
     rootThreadId: thread.rootThreadId || null,
     threadKind: thread.threadKind || null,
@@ -581,6 +586,9 @@ export async function whereAmI(input = {}, env = process.env) {
     desktops,
     settings,
     capabilities: await capabilityHints(thread || { ownerUserId: owner }, { ownerUserId: owner }, env),
+    // Derived only from the matched thread's persisted agentReleaseRole field
+    // (defaults to the safe "worker" policy when no thread is matched at all).
+    releaseRolePolicy: agentReleaseRolePolicy(thread || {}),
     apiSession: requestedApiSessionId
       ? {
           id: requestedApiSessionId,

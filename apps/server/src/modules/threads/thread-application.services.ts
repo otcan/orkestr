@@ -12,6 +12,7 @@ import {
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
 import { createThreadWorker, detectThreadRepo, listThreadWorkers, refreshThreadGitState, syncThreadWorkerWithParent, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
+import { getThreadAgentReleaseRole, setThreadAgentReleaseRole } from "../../../../../packages/core/src/agent-release-role.js";
 import { cancelTaskAgent, createTaskAgent, listTaskAgents, taskAgentSummary } from "../../../../../packages/core/src/task-agents.js";
 import { userScopedCapabilityHints } from "../../../../../packages/core/src/user-skills.js";
 import { sanitizedThreadActionInput } from "./thread-route-helpers.js";
@@ -74,6 +75,14 @@ export class ThreadWorkerService {
 
   refreshGitState(threadId: string) {
     return refreshThreadGitState(threadId);
+  }
+
+  getReleaseRole(threadId: string) {
+    return getThreadAgentReleaseRole(threadId);
+  }
+
+  setReleaseRole(threadId: string, role: string, actorUserId: string) {
+    return setThreadAgentReleaseRole(threadId, role, { actorUserId });
   }
 }
 

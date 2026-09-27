@@ -432,6 +432,18 @@ export const threadRepoUpdateSchema = {
   },
 };
 
+export const threadReleaseRoleUpdateSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    required: ["role"],
+    properties: {
+      role: stringValue,
+    },
+    additionalProperties: false,
+  },
+};
+
 export const threadRunSchema = {
   ...idParams("threadId"),
   body: objectValue,

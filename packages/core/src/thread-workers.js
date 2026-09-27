@@ -7,6 +7,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThread } from "./threads.js";
 import { runtimeStatus } from "./runtime-leases.js";
+import { agentReleaseRolePolicy } from "./agent-release-role.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -825,11 +826,15 @@ function handoffPrompt(parent, worker, input = {}) {
   const dirtyNote = worker.sourceDirty
     ? "\n- The parent checkout had uncommitted changes when this worker was created; only committed git state is present in this worktree."
     : "";
+  // The role line and permission rules come only from the worker's persisted
+  // agentReleaseRole field (agent-release-role.js) — never from `task`/`input`
+  // free text, so a handoff message cannot itself grant release authority.
+  const policy = agentReleaseRolePolicy(worker);
   return [
     `You are an Orkestr worker thread forked from "${parentName}".`,
     "",
     "Worker context:",
-    "- Role: worker thread. You are not the parent/root Orkestr thread.",
+    `- Role: ${policy.roleLabel}`,
     `- Parent Orkestr thread: ${parent.id}`,
     `- Parent Codex thread: ${parentCodex}`,
     `- Root Orkestr thread: ${worker.rootThreadId}`,
@@ -842,14 +847,7 @@ function handoffPrompt(parent, worker, input = {}) {
     "Task:",
     task || "No task was supplied. Wait for parent/root instructions before making changes.",
     "",
-    "Rules:",
-    "- Work only inside this worker worktree and branch.",
-    "- Do not modify the parent checkout.",
-    "- Do not merge into, push to, or otherwise mutate main from this worker thread.",
-    "- The parent/root Orkestr thread owns integration, merge-to-main, push-to-main, tags, and release actions.",
-    "- If asked to merge or push main, report your branch status and tell the parent/root thread to perform the integration.",
-    "- Keep commits scoped to this branch.",
-    "- Report changed files, verification commands, and any merge notes when done.",
+    policy.promptText,
   ].join("\n");
 }
 
