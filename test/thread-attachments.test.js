@@ -25,6 +25,46 @@ test("prose and symlink mentions do not implicitly export credential-like files"
   assert.equal(result.skipped.every(x=>x.reason==="attachment_requires_explicit_selection"),true);
 });
 
+test("an ordinary markdown document location mentioned in prose does not become an attachment", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-prose-markdown-"));
+  const workspace = path.join(home, "workspace");
+  await fs.mkdir(workspace);
+  const docPath = path.join(workspace, "design-notes.md");
+  await fs.writeFile(docPath, "# Design notes\nordinary content", "utf8");
+  const thread = { id: "prose-markdown-thread", ownerUserId: "alice", cwd: workspace, workspace };
+
+  const result = await resolveThreadAttachments({
+    thread,
+    text: `See the writeup here: [design notes](${docPath})`,
+    env: { ORKESTR_HOME: home },
+  });
+
+  assert.equal(result.attachments.length, 0);
+  assert.ok(result.skipped.some((item) => item.reason === "attachment_requires_explicit_selection"));
+});
+
+test("a structured attachment is preserved even when the message text has no path mention", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-structured-attachment-"));
+  const env = { ORKESTR_HOME: home };
+  const paths = dataPaths(env);
+  const uploadDir = path.join(paths.home, "uploads", "structured-thread");
+  await fs.mkdir(uploadDir, { recursive: true });
+  const filePath = path.join(uploadDir, "summary.txt");
+  await fs.writeFile(filePath, "summary body", "utf8");
+  const thread = { id: "structured-thread", cwd: uploadDir };
+
+  const result = await resolveThreadAttachments({
+    thread,
+    text: "Here is the summary you asked for.",
+    attachments: [{ path: filePath, filename: "summary.txt", mimetype: "text/plain" }],
+    env,
+  });
+
+  assert.equal(result.attachments.length, 1);
+  assert.equal(result.attachments[0].filename, "summary.txt");
+  assert.equal(result.attachments[0].path, filePath);
+});
+
 test("thread attachment extraction normalizes allowed paths and dedupes text and explicit attachments", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attachments-"));
   const env = { ORKESTR_HOME: home };
@@ -185,8 +225,8 @@ test("thread attachment policy denies secrets and arbitrary paths by default", a
     text: `${path.join(workspace, "public.txt")}\n${path.join(paths.secrets, "token.txt")}`,
     env,
   });
-  assert.equal(resolved.attachments.length, 1);
-  assert.equal(resolved.skipped.some((item) => item.reason === "attachment_path_forbidden"), true);
+  assert.equal(resolved.attachments.length, 0);
+  assert.equal(resolved.skipped.every((item) => item.reason === "attachment_requires_explicit_selection"), true);
 });
 
 test("thread attachment policy allows temp artifacts for admin-owned threads only", async () => {
@@ -211,9 +251,17 @@ test("thread attachment policy allows temp artifacts for admin-owned threads onl
     text: `Screenshot: [mobile](${screenshotPath})`,
     env,
   });
-  assert.equal(resolved.attachments.length, 1);
-  assert.equal(resolved.attachments[0].filename, "portal-mobile.png");
-  assert.equal(resolved.attachments[0].mimetype, "image/png");
+  assert.equal(resolved.attachments.length, 0);
+  assert.equal(resolved.skipped.some((item) => item.reason === "attachment_requires_explicit_selection"), true);
+
+  const structured = await resolveThreadAttachments({
+    thread: adminThread,
+    attachments: [{ path: screenshotPath, filename: "portal-mobile.png" }],
+    env,
+  });
+  assert.equal(structured.attachments.length, 1);
+  assert.equal(structured.attachments[0].filename, "portal-mobile.png");
+  assert.equal(structured.attachments[0].mimetype, "image/png");
 });
 
 test("thread attachment policy allows any ordinary path for admin threads by default", async () => {
@@ -249,9 +297,8 @@ test("thread attachment policy allows any ordinary path for admin threads by def
     text: `Labels: ${arbitraryPath}\nSecret: ${secretPath}`,
     env,
   });
-  assert.equal(resolved.attachments.length, 1);
-  assert.equal(resolved.attachments[0].filename, "fba-labels.pdf");
-  assert.equal(resolved.skipped.some((item) => item.reason === "attachment_path_forbidden"), true);
+  assert.equal(resolved.attachments.length, 0);
+  assert.equal(resolved.skipped.every((item) => item.reason === "attachment_requires_explicit_selection"), true);
 });
 
 test("thread attachment path extraction ignores registered slash commands", async () => {
@@ -294,11 +341,8 @@ test("thread attachment resolution ignores code references, app routes, and dire
 
   const resolved = await resolveThreadAttachments({ thread, text, env });
   assert.deepEqual(resolved.attachments, []);
-  assert.deepEqual(resolved.skipped, [{
-    path: missingImagePath,
-    raw: missingImagePath,
-    reason: "attachment_path_missing",
-  }]);
+  assert.equal(resolved.skipped.length, 2);
+  assert.equal(resolved.skipped.every((item) => item.reason === "attachment_requires_explicit_selection"), true);
 });
 
 test("thread attachment path redaction is opt-in and role-aware", async () => {
