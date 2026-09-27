@@ -184,13 +184,19 @@ test("the admin API reads the default role and persists an explicit set, rejecti
   t.after(() => fs.rm(home, { recursive: true, force: true, maxRetries: 5 }));
   const priorHome = process.env.ORKESTR_HOME;
   const priorAdmin = process.env.ORKESTR_ADMIN_USER_ID;
+  const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
+  const priorBoundaries = process.env.ORKESTR_HOST_BOUNDARIES;
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_ADMIN_USER_ID = "admin";
+  process.env.ORKESTR_AUTH_REQUIRED = "0";
+  process.env.ORKESTR_HOST_BOUNDARIES = "0";
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   t.after(async () => {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME; else process.env.ORKESTR_HOME = priorHome;
     if (priorAdmin === undefined) delete process.env.ORKESTR_ADMIN_USER_ID; else process.env.ORKESTR_ADMIN_USER_ID = priorAdmin;
+    if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED; else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
+    if (priorBoundaries === undefined) delete process.env.ORKESTR_HOST_BOUNDARIES; else process.env.ORKESTR_HOST_BOUNDARIES = priorBoundaries;
   });
   const baseUrl = `http://127.0.0.1:${server.address().port}/api`;
   await createThread({ id: "release-role-api-thread", ownerUserId: "admin" }, process.env);

@@ -6,9 +6,11 @@ import test from "node:test";
 import { CLAUDE_CODE_FAILED_TURN_NOTICE } from "../packages/core/src/claude-code-client.js";
 import {
   CLAUDE_AUTONOMY_MISSION_POLICY,
+  resolveStandingMissionAppendText,
   sanitizeStandingMissionText,
   standingMissionMaxChars,
 } from "../packages/core/src/claude-standing-mission.js";
+import { setThreadAgentReleaseRole } from "../packages/core/src/agent-release-role.js";
 import {
   clearThreadStandingMission,
   getThreadStandingMission,
@@ -154,6 +156,34 @@ test("Claude standing mission is delivered on the first turn and again on a resu
     assert.ok(notice.includes("Standing mission: Keep the backlog board green."));
     assert.equal(notice.includes(CLAUDE_CODE_FAILED_TURN_NOTICE), false);
   }
+});
+
+test("an existing Claude worker switches its per-turn system policy after an audited release-role update", async (t) => {
+  const { calls, env } = await fixture(t, "release-role-switch");
+  const profile = await readyProfile("owner", "Primary", env);
+  let thread = await claudeThread("owner", profile.id, env, "existing-release-worker");
+  await setThreadStandingMission(thread.id, "Maintain the Features release train.", "admin", env);
+
+  thread = await getThread(thread.id, env);
+  assert.match(resolveStandingMissionAppendText(thread, env), /Denied: merging, rebasing, or pushing main/);
+  await enqueueThreadInput(thread.id, { text: "prepare only", source: "test" }, env);
+  await deliverClaudeCodePendingInputs(thread, env);
+
+  await setThreadAgentReleaseRole(thread.id, "release_train", { actorUserId: "admin" }, env);
+  thread = await getThread(thread.id, env);
+  const switched = resolveStandingMissionAppendText(thread, env);
+  assert.match(switched, /Rules \(release train role/);
+  assert.match(switched, /only when the user has explicitly requested that specific release phase/);
+  assert.match(switched, /scheduled timer or autonomy tick.*must never by itself authorize/);
+  assert.doesNotMatch(switched, /Denied: merging, rebasing, or pushing main/);
+
+  await enqueueThreadInput(thread.id, { text: "report readiness", source: "test" }, env);
+  await deliverClaudeCodePendingInputs(thread, env);
+  const notices = await recordedAppendSystemPrompts(calls);
+  assert.equal(notices.length, 2);
+  assert.match(notices[0], /Denied: merging, rebasing, or pushing main/);
+  assert.match(notices[1], /Rules \(release train role/);
+  assert.doesNotMatch(notices[1], /Denied: merging, rebasing, or pushing main/);
 });
 
 test("Claude standing mission coexists with the failed-turn notice without replacing it", async (t) => {
