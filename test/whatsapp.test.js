@@ -30,6 +30,7 @@ import { readyWhatsAppRuntimeAccountId } from "../packages/connectors/src/whatsa
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { provisionWhatsAppGroupSetup } from "../packages/connectors/src/whatsapp-group-setup.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
+import { prepareWhatsAppOutboundAttachments } from "../packages/connectors/src/whatsapp-outbound-attachments.js";
 import { canRecoverLiveWhatsAppOutboundIntent, mergeWhatsAppOutboundIntents, mergeWhatsAppOutboundMirrorCursors } from "../packages/connectors/src/whatsapp-outbound-intents.js";
 import { formatWhatsAppQueueNotice } from "../packages/connectors/src/whatsapp-outbound-mirror.js";
 import { routerUpdateWhatsAppDeliveryTarget } from "../packages/connectors/src/whatsapp-router-updates.js";
@@ -11249,7 +11250,8 @@ test("whatsapp inbound ignores fromMe attachment echoes already sent by the resp
     parentMessageId: parent.id,
     chatId: "chat-thread-echo",
     accountId: "responder",
-    text: `Report attached: ${reportPath}`,
+    text: "Report attached.",
+    attachments: [{ path: reportPath, filename: "report.csv" }],
   }, env);
 
   const sentAttachmentId = "true_chat-thread-echo_sent-report";
@@ -14535,6 +14537,7 @@ test("whatsapp delivery sends allowed local paths as media attachments and does 
     phase: "final_answer",
     state: "completed",
     text: `Generated report: ${reportPath}`,
+    attachments: [{ path: reportPath, filename: "report.txt" }],
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-path-attachment",
@@ -14648,6 +14651,7 @@ test("whatsapp tenant relay sends local report links as inline bridge media inst
     phase: "final_answer",
     state: "completed",
     text: `Generated report: [job-search-report.md](${reportPath})`,
+    attachments: [{ path: reportPath, filename: "job-search-report.md" }],
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-tenant-relay-attachment",
@@ -14692,6 +14696,7 @@ test("whatsapp delivery sends admin temp screenshots as media attachments", asyn
     phase: "final_answer",
     state: "completed",
     text: `Screenshot: [mobile](${screenshotPath})`,
+    attachments: [{ path: screenshotPath, filename: "portal-mobile.png" }],
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-tmp-screenshot",
@@ -14715,34 +14720,25 @@ test("whatsapp delivery sends admin temp screenshots as media attachments", asyn
 test("whatsapp delivery reports skipped local attachments in the outgoing text", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-skipped-attachment-"));
   const env = await externalBridgeEnvWithAllowingSanitizer(home);
-  await createThread({ id: "thread-wa-skipped-attachment", ownerUserId: "alice", name: "WA Skipped Attachment" }, env);
-  await writeConnectorConfig("whatsapp", {
-    bridgeMode: "external",
-    bridgeUrl: "http://wa.local",
-    threadRoutes: { "chat-skipped-attachment": "thread-wa-skipped-attachment" },
-  }, env);
+  const thread = await createThread({ id: "thread-wa-skipped-attachment", ownerUserId: "alice", name: "WA Skipped Attachment" }, env);
 
-  const routed = await routeWhatsAppInbound({ eventId: "wa-skipped-attachment-1", chatId: "chat-skipped-attachment", text: "send report" }, env);
-  await appendThreadMessage("thread-wa-skipped-attachment", {
-    role: "assistant",
-    source: "codex-rollout",
-    phase: "final_answer",
-    state: "completed",
-    text: "Generated report: /etc/passwd",
-    parentMessageId: routed.message.id,
-    connector: "whatsapp",
-    chatId: "chat-skipped-attachment",
-  }, env);
-
-  const calls = [];
-  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
-    calls.push({ url, body: JSON.parse(options.body) });
-    return response({ ok: true, ids: ["sent-skipped-note"] });
+  // An explicitly selected forbidden attachment (structured, not a prose path
+  // mention) must still be reported as an unsent attachment rather than
+  // silently dropped.
+  const { text } = await prepareWhatsAppOutboundAttachments({
+    thread,
+    message: {
+      id: "message-wa-skipped-attachment",
+      role: "assistant",
+      connector: "whatsapp",
+      text: "Generated report.",
+      attachments: [{ path: "/etc/passwd" }],
+    },
+    principal: null,
+    env,
   });
 
-  assert.equal(delivery.delivered.length, 1);
-  assert.equal(calls[0].url.pathname, "/send-text");
-  assert.match(stripDebugFooter(calls[0].body.text), /Attachment not sent:\n- \/etc\/passwd: attachment path not allowed/);
+  assert.match(stripDebugFooter(text), /Attachment not sent:\n- \/etc\/passwd: attachment path not allowed/);
 });
 
 test("whatsapp delivery does not report code links, routes, or directories as skipped attachments", async () => {
@@ -14816,6 +14812,7 @@ test("whatsapp delivery exposes allowed local paths for user-owned chats while s
     phase: "final_answer",
     state: "completed",
     text: `Generated report: ${reportPath}`,
+    attachments: [{ path: reportPath, filename: "report.txt" }],
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-user-path-redaction",
@@ -14862,6 +14859,7 @@ test("whatsapp delivery exposes allowed local paths for admin-role thread owners
     phase: "final_answer",
     state: "completed",
     text: `Generated report: ${reportPath}`,
+    attachments: [{ path: reportPath, filename: "report.txt" }],
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-admin-role-path",
