@@ -195,6 +195,41 @@ test("Claude runtime preserves explicitly authorized bypass permissions", () => 
   assert.equal(runtime.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, "0");
 });
 
+test("Claude runtime exposes local CLI routing only to an admin-promoted release train", () => {
+  const source = {
+    ORKESTR_HOME: "/srv/orkestr/private-state",
+    ORKESTR_PORT: "18912",
+    ORKESTR_API_TOKEN: "must-not-reach-claude",
+    ORKESTR_CLI_AUTH_TOKEN: "must-not-reach-claude",
+  };
+  const worker = claudeCodeRuntimeEnv({ credentialRoot: "/srv/orkestr/profiles/worker" }, {}, source);
+  assert.equal(worker.ORKESTR_HOME, undefined);
+  assert.equal(worker.ORKESTR_API_BASE, undefined);
+
+  const releaseTrain = claudeCodeRuntimeEnv(
+    { credentialRoot: "/srv/orkestr/profiles/release" },
+    { agentReleaseRole: "release_train" },
+    source,
+  );
+  assert.equal(releaseTrain.ORKESTR_HOME, "/srv/orkestr/private-state");
+  assert.equal(releaseTrain.ORKESTR_API_BASE, "http://127.0.0.1:18912");
+  assert.equal(releaseTrain.ORKESTR_API_TOKEN, undefined);
+  assert.equal(releaseTrain.ORKESTR_CLI_AUTH_TOKEN, undefined);
+});
+
+test("Claude release train prefers an explicit local API base", () => {
+  const runtime = claudeCodeRuntimeEnv(
+    { credentialRoot: "/srv/orkestr/profiles/release" },
+    { agentReleaseRole: "release_train" },
+    {
+      ORKESTR_HOME: "/srv/orkestr/private-state",
+      ORKESTR_API_BASE: "http://127.0.0.1:19999",
+      ORKESTR_PORT: "18912",
+    },
+  );
+  assert.equal(runtime.ORKESTR_API_BASE, "http://127.0.0.1:19999");
+});
+
 test("Claude runtime can use a dedicated credential-blind GitHub SSH transport", () => {
   const runtime = claudeCodeRuntimeEnv({ credentialRoot: "/srv/orkestr/profiles/opaque" }, {}, {
     ORKESTR_CLAUDE_CODE_GITHUB_HTTPS_TO_SSH: "1",
