@@ -3,6 +3,13 @@ import path from "node:path";
 import { dataPaths, ensureDataDirs, userDataPaths } from "../../storage/src/paths.js";
 import { isAdminPrincipal, policyError } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
+import {
+  containmentError,
+  openContainedFileForOverwrite,
+  resolveContainedPath,
+  resolveContainmentRoot,
+  specialFile,
+} from "./fs-containment.js";
 
 function uniqueResolvedPaths(values = []) {
   const seen = new Set();
@@ -33,6 +40,27 @@ function pathInside(parent, candidate) {
 
 function insideAnyRoot(candidate, roots = []) {
   return roots.some((root) => pathInside(root.path || root, candidate));
+}
+
+/**
+ * Descriptor-safe containment for the legacy scoped file APIs: finds which
+ * configured root lexically contains the candidate, then re-verifies every
+ * traversed real path segment with lstat (rejecting symlinks, hard links,
+ * and other special files) instead of trusting a lexical path.relative
+ * check alone. Equivalent to the containment primitive instance-virtual-files.js
+ * uses for /api/instance/files.
+ */
+async function containedRootsPath(candidateAbsolutePath, roots, { allowMissingLeaf = false, errorPrefix = "file" } = {}) {
+  for (const root of roots) {
+    const rootPath = path.resolve(root.path || root);
+    const relative = path.relative(rootPath, candidateAbsolutePath);
+    if (relative !== "" && (relative.startsWith("..") || path.isAbsolute(relative))) continue;
+    const realRoot = await resolveContainmentRoot(rootPath, { errorPrefix }).catch(() => null);
+    if (!realRoot) continue;
+    const contained = await resolveContainedPath(realRoot, relative, { allowMissingLeaf, errorPrefix });
+    return { root, rootPath, realRoot, ...contained };
+  }
+  throw containmentError(`${errorPrefix}_path_forbidden`, 403);
 }
 
 function ownerUserIdForPrincipal(principal = {}, env = process.env) {
@@ -241,17 +269,18 @@ async function directoryEntries(currentPath, { directoriesOnly = false } = {}) {
   const rows = await fs.readdir(currentPath, { withFileTypes: true });
   const entries = [];
   for (const entry of rows) {
-    if (directoriesOnly && !entry.isDirectory()) continue;
     const entryPath = path.join(currentPath, entry.name);
-    const stats = await fs.stat(entryPath).catch(() => null);
+    const stats = await fs.lstat(entryPath).catch(() => null);
+    if (!stats || specialFile(stats) || (stats.isFile() && stats.nlink > 1)) continue;
+    if (directoriesOnly && !stats.isDirectory()) continue;
     entries.push({
       name: entry.name,
       path: entryPath,
-      type: entry.isDirectory() ? "directory" : "file",
-      directory: entry.isDirectory(),
+      type: stats.isDirectory() ? "directory" : "file",
+      directory: stats.isDirectory(),
       hidden: entry.name.startsWith("."),
-      size: stats?.isFile() ? stats.size : null,
-      modifiedAt: stats?.mtime ? stats.mtime.toISOString() : null,
+      size: stats.isFile() ? stats.size : null,
+      modifiedAt: stats.mtime ? stats.mtime.toISOString() : null,
     });
   }
   return entries
@@ -266,11 +295,15 @@ async function directoryEntries(currentPath, { directoriesOnly = false } = {}) {
 export async function listWorkspaceFoldersForPrincipal(rawPath = "", principal = {}, env = process.env) {
   const roots = await workspaceFolderRootsForPrincipal(principal, env);
   const requestedPath = String(rawPath || "").trim();
-  const currentPath = path.resolve(requestedPath || roots[0]?.path || await workspaceRootForPrincipal(principal, env));
-  if (!insideAnyRoot(currentPath, roots)) {
-    return { ok: false, error: "workspace_path_forbidden", path: currentPath, parent: null, roots, entries: [] };
+  const candidatePath = path.resolve(requestedPath || roots[0]?.path || await workspaceRootForPrincipal(principal, env));
+  let contained;
+  try {
+    contained = await containedRootsPath(candidatePath, roots, { allowMissingLeaf: true, errorPrefix: "workspace" });
+  } catch {
+    return { ok: false, error: "workspace_path_forbidden", path: candidatePath, parent: null, roots, entries: [] };
   }
-  if (!(await directoryExists(currentPath))) {
+  const currentPath = contained.absolutePath;
+  if (!contained.stats?.isDirectory()) {
     return { ok: false, error: "directory_not_found", path: currentPath, parent: safeParent(currentPath, roots), roots, entries: [] };
   }
 
@@ -290,37 +323,38 @@ export async function listWorkspaceFoldersForPrincipal(rawPath = "", principal =
 }
 
 export async function listFilesForPrincipal(rawPath = "", principal = {}, env = process.env) {
-  const roots = await fileBrowserRootsForPrincipal(principal, env);
-  const requestedPath = String(rawPath || "").trim();
-  const currentPath = path.resolve(requestedPath || roots[0]?.path || dataPaths(env).files);
-  if (!insideAnyRoot(currentPath, roots)) {
-    return { ok: false, error: "file_path_forbidden", path: currentPath, parent: null, roots, entries: [] };
-  }
-  if (!(await directoryExists(currentPath))) {
-    return { ok: false, error: "directory_not_found", path: currentPath, parent: safeParent(currentPath, roots), roots, entries: [] };
+  const resolved = await resolveFilePathForPrincipal(rawPath, principal, env);
+  if (!resolved.ok) return { ok: false, error: resolved.error, path: resolved.path, parent: null, roots: resolved.roots, entries: [] };
+  const currentPath = resolved.path;
+  if (!resolved.stats?.isDirectory()) {
+    return { ok: false, error: "directory_not_found", path: currentPath, parent: safeParent(currentPath, resolved.roots), roots: resolved.roots, entries: [] };
   }
 
   try {
     const entries = await directoryEntries(currentPath);
-    return { ok: true, error: "", path: currentPath, parent: safeParent(currentPath, roots), roots, entries };
+    return { ok: true, error: "", path: currentPath, parent: safeParent(currentPath, resolved.roots), roots: resolved.roots, entries };
   } catch (error) {
     return {
       ok: false,
       error: String(error?.message || error || "directory_unreadable"),
       path: currentPath,
-      parent: safeParent(currentPath, roots),
-      roots,
+      parent: safeParent(currentPath, resolved.roots),
+      roots: resolved.roots,
       entries: [],
     };
   }
 }
 
-async function resolveFilePathForPrincipal(rawPath = "", principal = {}, env = process.env) {
+async function resolveFilePathForPrincipal(rawPath = "", principal = {}, env = process.env, { allowMissingLeaf = true } = {}) {
   const roots = await fileBrowserRootsForPrincipal(principal, env);
   const requestedPath = String(rawPath || "").trim();
-  const resolved = path.resolve(requestedPath || roots[0]?.path || dataPaths(env).files);
-  if (!insideAnyRoot(resolved, roots)) return { ok: false, error: "file_path_forbidden", path: resolved, roots };
-  return { ok: true, error: "", path: resolved, roots };
+  const candidatePath = path.resolve(requestedPath || roots[0]?.path || dataPaths(env).files);
+  try {
+    const contained = await containedRootsPath(candidatePath, roots, { allowMissingLeaf, errorPrefix: "file" });
+    return { ok: true, error: "", path: contained.absolutePath, stats: contained.stats, roots };
+  } catch (error) {
+    return { ok: false, error: error?.code || "file_path_forbidden", path: candidatePath, stats: null, roots };
+  }
 }
 
 function safeFileName(value = "", fallback = "upload") {
@@ -331,14 +365,15 @@ export async function createFolderForPrincipal(rawPath = "", folderName = "", pr
   const resolved = await resolveFilePathForPrincipal(rawPath, principal, env);
   if (!resolved.ok) return { ok: false, error: resolved.error, path: resolved.path, parent: null, roots: resolved.roots, entries: [] };
   const currentPath = resolved.path;
-  if (!(await directoryExists(currentPath))) {
+  if (!resolved.stats?.isDirectory()) {
     return { ok: false, error: "directory_not_found", path: currentPath, parent: safeParent(currentPath, resolved.roots), roots: resolved.roots, entries: [] };
   }
   const name = safeFileName(folderName, "");
   if (!name) return { ok: false, error: "folder_name_required", path: currentPath, parent: safeParent(currentPath, resolved.roots), roots: resolved.roots, entries: [] };
   const target = path.join(currentPath, name);
-  if (!insideAnyRoot(target, resolved.roots)) {
-    return { ok: false, error: "file_path_forbidden", path: currentPath, parent: safeParent(currentPath, resolved.roots), roots: resolved.roots, entries: [] };
+  const existing = await fs.lstat(target).catch(() => null);
+  if (existing && specialFile(existing)) {
+    return { ok: false, error: "file_special_type_forbidden", path: currentPath, parent: safeParent(currentPath, resolved.roots), roots: resolved.roots, entries: [] };
   }
   await fs.mkdir(target, { recursive: false });
   return listFilesForPrincipal(currentPath, principal, env);
@@ -348,16 +383,27 @@ export async function saveFilesForPrincipal(rawPath = "", files = [], principal 
   const resolved = await resolveFilePathForPrincipal(rawPath, principal, env);
   if (!resolved.ok) return { ok: false, error: resolved.error, path: resolved.path, parent: null, roots: resolved.roots, entries: [], files: [] };
   const currentPath = resolved.path;
-  if (!(await directoryExists(currentPath))) {
+  if (!resolved.stats?.isDirectory()) {
     return { ok: false, error: "directory_not_found", path: currentPath, parent: safeParent(currentPath, resolved.roots), roots: resolved.roots, entries: [], files: [] };
   }
   const saved = [];
   for (const [index, file] of Array.from(files || []).entries()) {
     const name = safeFileName(file.originalname || file.name || "", `upload-${index + 1}`);
     const target = path.join(currentPath, name);
-    if (!insideAnyRoot(target, resolved.roots)) continue;
     const buffer = file.buffer || file.data || Buffer.from(String(file.content || ""), "utf8");
-    await fs.writeFile(target, buffer);
+    let handle;
+    try {
+      handle = await openContainedFileForOverwrite(target, 0o600, { errorPrefix: "file" });
+      const stats = await handle.stat();
+      if (!stats.isFile() || stats.nlink > 1) throw containmentError("file_hard_link_forbidden", 403);
+      await handle.truncate(0);
+      await handle.writeFile(buffer);
+    } catch (error) {
+      if (error?.code?.startsWith?.("file_")) continue;
+      throw error;
+    } finally {
+      await handle?.close();
+    }
     saved.push({ name, path: target, size: Buffer.byteLength(buffer) });
   }
   const listing = await listFilesForPrincipal(currentPath, principal, env);
@@ -365,7 +411,7 @@ export async function saveFilesForPrincipal(rawPath = "", files = [], principal 
 }
 
 export async function deleteFileForPrincipal(rawPath = "", principal = {}, env = process.env) {
-  const resolved = await resolveFilePathForPrincipal(rawPath, principal, env);
+  const resolved = await resolveFilePathForPrincipal(rawPath, principal, env, { allowMissingLeaf: false });
   if (!resolved.ok) return { ok: false, error: resolved.error, path: resolved.path, parent: null, roots: resolved.roots, entries: [] };
   const target = resolved.path;
   if (resolved.roots.some((root) => path.resolve(root.path) === target)) {
