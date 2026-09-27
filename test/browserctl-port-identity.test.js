@@ -237,6 +237,34 @@ test("verifyPortOwnedByPid against real /proc: a real process is recognized as t
   }
 });
 
+test("verifyPortOwnedByPid against real /proc: a real IPv6-only listening socket is recognized via the actual kernel /proc/net/tcp6 format", async (t) => {
+  const server = net.createServer((socket) => socket.end());
+  try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "::1", resolve);
+    });
+  } catch (error) {
+    // Some sandboxes disable IPv6 entirely; skip rather than fail rather
+    // than assert on an environment property this test doesn't control.
+    t.skip(`IPv6 loopback unavailable in this environment: ${error?.message || error}`);
+    return;
+  }
+  try {
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    // No injected deps: this exercises the real /proc/net/tcp6 parsing
+    // path against this machine's actual kernel output, not the
+    // hand-authored tcp6Row() fixture used by the injected-deps tests
+    // above (which encodes this same test's assumption about the format,
+    // not an independent check of it).
+    const result = await verifyPortOwnedByPid({ port, pid: process.pid });
+    assert.deepEqual(result, { ok: true, status: "owned" });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("verifyPortOwnedByPid against real /proc: a real, live, unrelated process is correctly rejected as the wrong owner", async () => {
   const server = net.createServer((socket) => socket.end());
   await new Promise((resolve, reject) => {

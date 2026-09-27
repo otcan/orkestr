@@ -27,16 +27,40 @@ function defaultReadFile(path) {
   return fs.readFile(path, "utf8");
 }
 
+// Every default /proc/<pid>/... reader below builds its path from `pid`.
+// This is validated here independently of the `pidExists` gate in the
+// exported functions: `pidExists` is itself an injectable dependency, so a
+// future caller could supply an override that does not perform the same
+// strict integer check. Without this, an attacker-influenced non-numeric
+// `pid` (e.g. containing "../" or other path segments) could turn these
+// reads into an arbitrary-path read primitive. A malformed value throws
+// synchronously, which the callers below already treat as "evidence
+// unavailable" -- fail closed, never a silent pass.
+function safeProcPid(pid) {
+  const parsed = Number(pid);
+  if (!Number.isInteger(parsed) || parsed <= 0 || String(pid).trim() !== String(parsed)) {
+    throw Object.assign(new Error("invalid_pid_for_proc_path"), { code: "EINVAL" });
+  }
+  return parsed;
+}
+
 function defaultListFds(pid) {
-  return fs.readdir(`/proc/${pid}/fd`);
+  return fs.readdir(`/proc/${safeProcPid(pid)}/fd`);
 }
 
 function defaultReadFdLink(pid, fd) {
-  return fs.readlink(`/proc/${pid}/fd/${fd}`);
+  // Real /proc/<pid>/fd entries (from the default listFds/fs.readdir above)
+  // are always plain decimal integers; reject anything else before it
+  // reaches path construction, same defense-in-depth reasoning as
+  // safeProcPid.
+  if (!/^\d+$/.test(String(fd))) {
+    throw Object.assign(new Error("invalid_fd_for_proc_path"), { code: "EINVAL" });
+  }
+  return fs.readlink(`/proc/${safeProcPid(pid)}/fd/${fd}`);
 }
 
 function defaultReadEnviron(pid) {
-  return fs.readFile(`/proc/${pid}/environ`);
+  return fs.readFile(`/proc/${safeProcPid(pid)}/environ`);
 }
 
 function defaultPidExists(pid) {
@@ -170,8 +194,23 @@ export async function verifyPortOwnedByPid({ port, pid, deps: overrides = {} } =
   if (heldInodes === null) {
     return { ok: false, status: "owner_evidence_unavailable" };
   }
-  for (const inode of heldInodes) {
-    if (listenInodes.has(inode)) return { ok: true, status: "owned" };
+  const matchedInode = [...heldInodes].find((inode) => listenInodes.has(inode));
+  if (matchedInode) {
+    // The two reads above (listen table, then fd table) are not atomic --
+    // between them the matched socket could in principle have closed and
+    // the port been reassigned. Re-read the listen table now and require
+    // the same inode to still be the one LISTENing on this port before
+    // declaring ownership: this narrows the race to the much shorter
+    // window between this second read and the caller observing the
+    // result, rather than the full gap between the original two reads.
+    // (In practice Linux allocates anonymous socket inode numbers from a
+    // monotonically increasing per-boot counter rather than recycling
+    // freed numbers, so an exact-inode collision within either window is
+    // not realistically reachable -- this is defense in depth, not a
+    // response to a demonstrated exploit.)
+    const recheckInodes = await currentListenInodesForPort(numericPort, deps);
+    if (recheckInodes === null) return { ok: false, status: "owner_evidence_unavailable" };
+    if (recheckInodes.has(matchedInode)) return { ok: true, status: "owned" };
   }
   return { ok: false, status: "wrong_process_on_port" };
 }
