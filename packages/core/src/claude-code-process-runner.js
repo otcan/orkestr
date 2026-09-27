@@ -4,6 +4,7 @@ import readline from "node:readline";
 import {
   claudeCodeArgs,
   claudeCodeCommand,
+  claudeCodeEventBackgroundToolUse,
   claudeCodeEventSessionId,
   claudeCodeEventTelemetry,
   claudeCodeEventText,
@@ -38,6 +39,7 @@ export async function runClaudeCodeProcess({
   prompt,
   sessionId,
   priorTurnFailed = false,
+  backgroundTaskRetry = false,
   standingMission = "",
   attemptId,
   onPromptSubmitted = null,
@@ -63,7 +65,7 @@ export async function runClaudeCodeProcess({
   return new Promise((resolve, reject) => {
     const supervisor = spawnSupervised({
       command,
-      args: claudeCodeArgs(thread, { sessionId, priorTurnFailed, standingMission, statusCaptureCommand: statusCapture.command }, env),
+      args: claudeCodeArgs(thread, { sessionId, priorTurnFailed, backgroundTaskRetry, standingMission, statusCaptureCommand: statusCapture.command }, env),
       cwd: workspaceForThread(thread),
       env: childEnv,
       attemptId,
@@ -82,6 +84,7 @@ export async function runClaudeCodeProcess({
     let assistantText = "";
     let observedSessionId = sessionId;
     let resultError = "";
+    let backgroundToolAttempt = "";
     let telemetry = {};
     let submissionPromise = Promise.resolve();
     const timeout = setTimeout(() => {
@@ -115,6 +118,7 @@ export async function runClaudeCodeProcess({
       try { event = JSON.parse(line); } catch { return; }
       supervisor.observeEvent(event);
       onEvent?.(event);
+      if (!backgroundToolAttempt) backgroundToolAttempt = claudeCodeEventBackgroundToolUse(event);
       observedSessionId = claudeCodeEventSessionId(event) || observedSessionId;
       telemetry = mergeClaudeCodeTelemetry(telemetry, claudeCodeEventTelemetry(event));
       const text = claudeCodeEventText(event);
@@ -133,13 +137,31 @@ export async function runClaudeCodeProcess({
       const statusTelemetry = await readClaudeCodeStatusTelemetry(statusCapture.capturePath);
       if (statusTelemetry) telemetry = mergeClaudeCodeTelemetry(telemetry, statusTelemetry);
       if (supervisor.interrupted) return finish();
+      // A detected background-task attempt overrides an otherwise-clean exit:
+      // the turn's own result text may claim it will keep working or notify
+      // later, which this headless process can never honor once it exits.
+      // Reject the turn instead of finalizing that false completion; the
+      // standard failed-turn path (below) already retries on the next input.
       const failureCode = supervisor.failureCode ||
         (resultError ? classifyClaudeCodeFailure(resultError) : "") ||
-        (code === 0 ? "" : classifyClaudeCodeFailure(stderr || `exit_${code}_${signal || ""}`));
+        (code === 0 ? "" : classifyClaudeCodeFailure(stderr || `exit_${code}_${signal || ""}`)) ||
+        (backgroundToolAttempt ? "claude_code_background_task_attempted" : "");
       if (failureCode) {
+        if (failureCode === "claude_code_background_task_attempted") {
+          appendEvent({
+            type: "claude_code_background_task_blocked",
+            threadId: thread.id,
+            attemptId,
+            toolName: backgroundToolAttempt,
+          }, env).catch(() => {});
+        }
         const error = new Error(failureCode);
         error.code = failureCode;
         error.telemetry = telemetry;
+        // An automatic retry needs the session the offending turn was
+        // actually running under (captured from its own init event) so it
+        // resumes the same transcript instead of starting a fresh one.
+        if (failureCode === "claude_code_background_task_attempted") error.sessionId = observedSessionId;
         return finish(error);
       }
       if (!observedSessionId) {

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { CLAUDE_CODE_FAILED_TURN_NOTICE } from "../packages/core/src/claude-code-client.js";
+import { CLAUDE_CODE_FAILED_TURN_NOTICE, CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE } from "../packages/core/src/claude-code-client.js";
 import {
   CLAUDE_AUTONOMY_MISSION_POLICY,
   resolveStandingMissionAppendText,
@@ -126,13 +126,13 @@ test("standing mission admin set/get/clear validates, caps, and persists", async
   assert.equal(cleared.standingMission, null);
 });
 
-test("Claude turns without a standing mission behave exactly as before (no append-system-prompt)", async (t) => {
+test("Claude turns without a standing mission still get only the headless runtime notice (no leftover mission text)", async (t) => {
   const { calls, env } = await fixture(t, "no-mission");
   const profile = await readyProfile("owner", "Primary", env);
   const thread = await claudeThread("owner", profile.id, env);
   await enqueueThreadInput(thread.id, { text: "plain request", source: "test" }, env);
   await deliverClaudeCodePendingInputs(thread, env);
-  assert.deepEqual(await recordedAppendSystemPrompts(calls), [null]);
+  assert.deepEqual(await recordedAppendSystemPrompts(calls), [CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE]);
 });
 
 test("Claude standing mission is delivered on the first turn and again on a resumed turn", async (t) => {
