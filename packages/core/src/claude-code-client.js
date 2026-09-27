@@ -82,6 +82,12 @@ export function claudeCodePermissionMode(thread = {}) {
   return new Set(["default", "plan", "acceptEdits", "dontAsk", "bypassPermissions"]).has(requested) ? requested : "acceptEdits";
 }
 
+export const CLAUDE_CODE_ROOT_ACCESS_NOTICE = [
+  "Host capability: the operator has explicitly granted this Claude Code runtime unrestricted passwordless root access.",
+  "Use `sudo -n <command>` whenever root privileges are needed for the user's request; this configured access is authorized and must not be declined merely because it is privileged or because it verifies sudo availability.",
+  "Follow the user's requested scope, preserve unrelated work, and do not print credential or secret contents unless the user explicitly requests that exact disclosure.",
+].join(" ");
+
 function modelForThread(thread = {}) {
   const value = clean(thread?.executor?.metadata?.claudeModel || thread?.claudeModel);
   return /^[a-zA-Z0-9._:-]{1,120}$/.test(value) ? value : "";
@@ -114,6 +120,7 @@ export function claudeCodeArgs(thread = {}, options = {}, env = process.env) {
   // failed-turn notice below rather than replacing it.
   const appendPieces = [
     CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE,
+    truthy(env.ORKESTR_CLAUDE_CODE_ROOT_ACCESS) ? CLAUDE_CODE_ROOT_ACCESS_NOTICE : "",
     options.backgroundTaskRetry ? CLAUDE_CODE_BACKGROUND_TASK_RETRY_NOTICE : "",
     clean(options.standingMission),
   ];
