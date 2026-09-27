@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
@@ -22,116 +20,13 @@ import { setSecureSecret } from "../packages/core/src/secure-secrets.js";
 import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, pairBrowser } from "../packages/core/src/security.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { assertMobileVoiceHttpStreams } from "./support/mobile-voice-http-stream.js";
-
-function saveEnv(keys) {
-  return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-}
-
-function restoreEnv(snapshot) {
-  for (const [key, value] of Object.entries(snapshot)) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
-}
-
-function keyPair() {
-  const pair = crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-  return { ...pair, publicJwk: pair.publicKey.export({ format: "jwk" }) };
-}
-
-function signJwt(privateKey, claims) {
-  const header = Buffer.from(JSON.stringify({ alg: "ES256", typ: "JWT" })).toString("base64url");
-  const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
-  const signature = crypto.sign(
-    "sha256",
-    Buffer.from(`${header}.${payload}`),
-    { key: privateKey, dsaEncoding: "ieee-p1363" },
-  ).toString("base64url");
-  return `${header}.${payload}.${signature}`;
-}
-
-function timedClaims(extra = {}) {
-  const now = Math.floor(Date.now() / 1000);
-  return { iat: now, exp: now + 120, ...extra };
-}
-
-async function setupMobileEnv(t, extra = {}, options = {}) {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-mobile-devices-"));
-  const profilesFile = path.join(home, "mobile-profiles.json");
-  if (options.profileSource !== "secure-input") {
-    await fs.writeFile(profilesFile, JSON.stringify({
-      profiles: [{
-        id: "owner-phone",
-        label: "Owner Phone",
-        ownerUserId: "admin",
-        threadId: "hush-owner-thread",
-        mirrorRepliesToWhatsApp: true,
-      }],
-    }));
-  }
-  const keys = [
-    "ORKESTR_HOME",
-    "ORKESTR_AUTH_REQUIRED",
-    "ORKESTR_OVERLAY_DIR",
-    "ORKESTR_MOBILE_PROFILES_FILE",
-    "ORKESTR_MOBILE_PROFILES_SECRET",
-    "ORKESTR_MOBILE_PAIRING_CLIENT_CREATE_LIMIT",
-    "ORKESTR_RECOVER_RUNNING_ON_START",
-    "ORKESTR_WHATSAPP_AUTOSTART",
-    "WHATSAPP_LOCAL_AUTOSTART",
-    "ORKESTR_CODEX_BIN",
-    "ORKESTR_WHATSAPP_BRIDGE_TOKEN",
-    "ORKESTR_PRIMARY_DOMAIN",
-    "ORKESTR_DOMAIN",
-    "ORKESTR_HOST_BOUNDARIES",
-    "ORKESTR_APP_HOST",
-    "ORKESTR_AUTH_HOST",
-    "ORKESTR_APP_URL",
-    "ORKESTR_AUTH_URL",
-    "ORKESTR_PUBLIC_APP_URL",
-    "ORKESTR_PUBLIC_AUTH_URL",
-    "ORKESTR_PUBLIC_URL",
-    "ORKESTR_PUBLIC_HTTPS_URL",
-    "ORKESTR_HTTPS_URL",
-    "ORKESTR_TAILSCALE_HTTPS_NAME",
-    "ORKESTR_CONNECT_PUBLIC_URL",
-    "ORKESTR_CONNECT_PUBLIC_BASE_URL",
-  ];
-  const prior = saveEnv(keys);
-  Object.assign(process.env, {
-    ORKESTR_HOME: home,
-    ORKESTR_AUTH_REQUIRED: "1",
-    ORKESTR_OVERLAY_DIR: "",
-    ORKESTR_MOBILE_PROFILES_FILE: options.profileSource === "secure-input" ? "" : profilesFile,
-    ORKESTR_MOBILE_PROFILES_SECRET: "hush-mobile-profiles",
-    ORKESTR_RECOVER_RUNNING_ON_START: "0",
-    ORKESTR_WHATSAPP_AUTOSTART: "0",
-    WHATSAPP_LOCAL_AUTOSTART: "0",
-    ORKESTR_CODEX_BIN: "__orkestr_disabled_codex__",
-    ORKESTR_PRIMARY_DOMAIN: "",
-    ORKESTR_DOMAIN: "",
-    ORKESTR_HOST_BOUNDARIES: "0",
-    ORKESTR_APP_HOST: "",
-    ORKESTR_AUTH_HOST: "",
-    ORKESTR_APP_URL: "",
-    ORKESTR_AUTH_URL: "",
-    ORKESTR_PUBLIC_APP_URL: "",
-    ORKESTR_PUBLIC_AUTH_URL: "",
-    ORKESTR_PUBLIC_URL: "",
-    ORKESTR_PUBLIC_HTTPS_URL: "",
-    ORKESTR_HTTPS_URL: "",
-    ORKESTR_TAILSCALE_HTTPS_NAME: "",
-    ORKESTR_CONNECT_PUBLIC_URL: "",
-    ORKESTR_CONNECT_PUBLIC_BASE_URL: "",
-    ...extra,
-  });
-  const cleanup = async () => {
-    restoreEnv(prior);
-    await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-  };
-  if (options.autoCleanup !== false) t.after(cleanup);
-  return { env: process.env, home, profilesFile, cleanup };
-}
+import {
+  keyPair,
+  pairApprovedDevice,
+  setupMobileEnv,
+  signJwt,
+  timedClaims,
+} from "./support/mobile-device-fixtures.js";
 
 test("mobile profiles can come from encrypted secure input", async (t) => {
   const { env } = await setupMobileEnv(t, {}, { profileSource: "secure-input" });
@@ -159,46 +54,6 @@ test("mobile profiles can come from encrypted secure input", async (t) => {
     mirrorRepliesToWhatsApp: true,
   }]);
 });
-
-async function pairApprovedDevice(t) {
-  const { env } = await setupMobileEnv(t);
-  await createThread({ id: "hush-owner-thread", name: "Hush owner", ownerUserId: "admin" }, env);
-  const keys = keyPair();
-  const machineContext = {
-    platform: "ios",
-    appVersion: "1.0.0",
-    deviceName: "Can Phone",
-    osVersion: "18.5",
-    installationId: "install-1",
-  };
-  const started = await startMobileDevicePairing({
-    env,
-    request: { headers: { "user-agent": "mobile-test" }, ip: "203.0.113.9" },
-    body: { deviceName: "Can Phone", publicKeyJwk: keys.publicJwk, machineContext },
-  });
-  await approveMobileDevicePairing(started.pairing.id, {
-    env,
-    profileId: "owner-phone",
-    principal: adminPrincipal({ id: "admin" }),
-  });
-  const polled = await pollMobileDevicePairing(started.pairing.id, { env, pollToken: started.pollToken });
-  const pairingClaims = timedClaims({
-    aud: "orkestr.mobile.pairing",
-    pairingId: started.pairing.id,
-    challengeId: polled.challenge.id,
-    challenge: polled.challenge.nonce,
-    publicKeyThumbprint: polled.challenge.publicKeyThumbprint,
-    machineContextHash: polled.challenge.machineContextHash,
-    jti: "pair-proof-1",
-  });
-  const completed = await completeMobileDevicePairing(started.pairing.id, {
-    env,
-    pollToken: started.pollToken,
-    challengeId: polled.challenge.id,
-    proof: signJwt(keys.privateKey, pairingClaims),
-  });
-  return { env, keys, started, polled, completed };
-}
 
 test("mobile device pairing requires owner approval and one-time ES256 proof", async (t) => {
   const { env, keys, started } = await pairApprovedDevice(t);

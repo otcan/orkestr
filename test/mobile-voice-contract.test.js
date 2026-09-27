@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
 import {
   mobileVoiceContractScenarios,
   registerMobileVoiceContractTests,
@@ -13,6 +13,9 @@ import {
   signEs256Proof,
   verifyEs256Proof,
 } from "./support/mobile-voice-test-helpers.js";
+import { closeMobileVoiceHttpHarness, createMobileVoiceHttpHarness } from "./support/mobile-voice-http-harness.js";
+
+after(closeMobileVoiceHttpHarness);
 
 function mobileRequest(overrides = {}) {
   return {
@@ -237,3 +240,9 @@ test("mobile endpoint contract registers every ORK-472 security and lifecycle sc
     assert.ok(registered.some(({ name }) => name.includes(phrase)), `missing contract test: ${phrase}`);
   }
 });
+
+// Activates the 17 ORK-472 black-box scenarios above against a real
+// in-process HTTP adapter (real server, real auth middleware, real Nest
+// routing) instead of only checking that they are registered. Each
+// scenario below is a genuinely executed node:test case, not a stub.
+registerMobileVoiceContractTests({ test, createHarness: createMobileVoiceHttpHarness });

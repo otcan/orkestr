@@ -5,11 +5,24 @@ native Hush client. Hush is a separate mobile ingress. It must not reuse the
 legacy Vagent static-token webhook or allow the client to select an Orkestr
 thread.
 
-The reusable black-box suite lives in
-`test/support/mobile-voice-contract.js`. A MobileModule test supplies an HTTP
-adapter and calls `registerMobileVoiceContractTests`. Test-only worker and clock
-hooks are allowed; authentication and controller dispatch must go through the
-real HTTP middleware.
+The reusable black-box suite lives in `test/support/mobile-voice-contract.js`
+and defines the 17 scenarios in `mobileVoiceContractScenarios` (the Required
+cases table below). It is activated with a real in-process HTTP adapter --
+`createMobileVoiceHttpHarness` in `test/support/mobile-voice-http-harness.js`
+-- registered at the top level of `test/mobile-voice-contract.test.js`:
+`registerMobileVoiceContractTests({ test, createHarness:
+createMobileVoiceHttpHarness })`. That call turns every one of the 17
+scenarios into a genuine `node:test` case; none of them are stubs or a
+registration-only check (a separate, narrower test in the same file still
+checks that all 17 are registered by name, but the line above is what
+actually runs them). The harness boots one real Orkestr HTTP server
+(`startServer`) and reuses it across all 17 scenarios rather than starting
+one per scenario. Its lifecycle is closed exactly once, via
+`after(closeMobileVoiceHttpHarness)` at the test file's module top level --
+not from inside a running scenario, which would scope the hook to that one
+scenario and close the shared server right after it finishes, starving every
+later scenario. Test-only worker and clock hooks are allowed; authentication
+and controller dispatch always go through the real HTTP middleware.
 
 ## Authoritative controller contract
 
@@ -82,6 +95,26 @@ without binding the suite to a response envelope:
 id, state, clientTurnId, profileId, threadId,
 inputMessageId, finalParentMessageId, text, speech, error
 ```
+
+## Additional live-HTTP hardening tests
+
+`test/mobile-voice-live-hardening.test.js` covers five cases the 17-scenario
+contract above states abstractly but does not itself exercise at the exact
+boundary named, each against the same real HTTP server/auth path as the
+contract suite:
+
+| Test | What it proves that the contract scenarios above do not |
+| --- | --- |
+| Two simultaneous POST voice-turn requests over real HTTP complete without cross-delivering answers | Uses a real `Promise.all` of two concurrent `POST /api/mobile/voice-turns` requests, not sequential awaits, and reads both turns back concurrently after completing them out of order. |
+| A valid device bearer token and proof are rejected on owner-only mobile routes | A fully valid, correctly-signed device credential gets `403` from `GET /api/mobile/profiles`, `GET /api/mobile/devices`, `POST /api/mobile/profiles/:id/pairings/approve`, and `POST /api/mobile/devices/:id/revoke` -- proving a device credential can never reach an owner-only route, not just that an *unauthenticated* request is denied there. |
+| A syntactically valid but never-issued bearer token is denied, distinctly from an expired or revoked one | A random, well-formed bearer token with a correctly self-signed proof that was never paired at all is denied and dispatches zero thread messages, as opposed to a token whose session existed and later expired or was revoked. |
+| A consumed pairing challenge cannot be replayed even while the pairing is still approved | Isolates the pairing challenge's own single-use (`challengeConsumedAt`) guard from the separate pairing-status guard, which alone already blocks any second `complete` call once a pairing reaches `completed`. The test replays an already-consumed challenge against a pairing whose status is deliberately rolled back to `approved`, so only the nonce-consumption check is under test. |
+| A real authenticated SSE disconnect while dispatch is still genuinely in flight does not cancel the turn | Gates the injected `requestThreadInputDelivery` dependency on a manually-resolved promise so "dispatch has started but not finished" is a controlled fact, not a timing guess, then opens a real authenticated SSE stream, reads the `queued` event, and disconnects while that gate is still unresolved -- proving disconnect during genuinely in-flight work does not cancel it, rather than only proving that a turn can be completed after a client happened to disconnect. |
+
+The shared ES256 pairing/env fixtures both this file and
+`test/mobile-devices.test.js` use live in
+`test/support/mobile-device-fixtures.js` (`keyPair`, `signJwt`,
+`timedClaims`, `setupMobileEnv`, `pairApprovedDevice`).
 
 ## Storage and lifecycle invariants
 
