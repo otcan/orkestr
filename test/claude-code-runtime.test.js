@@ -8,6 +8,7 @@ import { listEvents } from "../packages/storage/src/store.js";
 import {
   cancelClaudeCodeLogin,
   CLAUDE_CODE_FAILED_TURN_NOTICE,
+  CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE,
   claudeCodeArgs,
   claudeCodeEventTelemetry,
   mergeClaudeCodeTelemetry,
@@ -399,7 +400,12 @@ test("Claude runtime voids a failed turn through the system prompt when the next
     const at = call.args.indexOf("--append-system-prompt");
     return at >= 0 ? call.args[at + 1] : null;
   });
-  assert.deepEqual(notices, [null, null, CLAUDE_CODE_FAILED_TURN_NOTICE, null]);
+  assert.deepEqual(notices, [
+    CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE,
+    CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE,
+    `${CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE}\n\n${CLAUDE_CODE_FAILED_TURN_NOTICE}`,
+    CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE,
+  ]);
   assert.deepEqual(recorded[2].args.slice(-2), ["--resume", "claude_session_fixture"]);
 });
 

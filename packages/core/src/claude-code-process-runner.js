@@ -4,6 +4,7 @@ import readline from "node:readline";
 import {
   claudeCodeArgs,
   claudeCodeCommand,
+  claudeCodeEventBackgroundToolUse,
   claudeCodeEventSessionId,
   claudeCodeEventTelemetry,
   claudeCodeEventText,
@@ -82,6 +83,7 @@ export async function runClaudeCodeProcess({
     let assistantText = "";
     let observedSessionId = sessionId;
     let resultError = "";
+    let backgroundToolAttempt = "";
     let telemetry = {};
     let submissionPromise = Promise.resolve();
     const timeout = setTimeout(() => {
@@ -115,6 +117,7 @@ export async function runClaudeCodeProcess({
       try { event = JSON.parse(line); } catch { return; }
       supervisor.observeEvent(event);
       onEvent?.(event);
+      if (!backgroundToolAttempt) backgroundToolAttempt = claudeCodeEventBackgroundToolUse(event);
       observedSessionId = claudeCodeEventSessionId(event) || observedSessionId;
       telemetry = mergeClaudeCodeTelemetry(telemetry, claudeCodeEventTelemetry(event));
       const text = claudeCodeEventText(event);
@@ -133,10 +136,24 @@ export async function runClaudeCodeProcess({
       const statusTelemetry = await readClaudeCodeStatusTelemetry(statusCapture.capturePath);
       if (statusTelemetry) telemetry = mergeClaudeCodeTelemetry(telemetry, statusTelemetry);
       if (supervisor.interrupted) return finish();
+      // A detected background-task attempt overrides an otherwise-clean exit:
+      // the turn's own result text may claim it will keep working or notify
+      // later, which this headless process can never honor once it exits.
+      // Reject the turn instead of finalizing that false completion; the
+      // standard failed-turn path (below) already retries on the next input.
       const failureCode = supervisor.failureCode ||
         (resultError ? classifyClaudeCodeFailure(resultError) : "") ||
-        (code === 0 ? "" : classifyClaudeCodeFailure(stderr || `exit_${code}_${signal || ""}`));
+        (code === 0 ? "" : classifyClaudeCodeFailure(stderr || `exit_${code}_${signal || ""}`)) ||
+        (backgroundToolAttempt ? "claude_code_background_task_attempted" : "");
       if (failureCode) {
+        if (failureCode === "claude_code_background_task_attempted") {
+          appendEvent({
+            type: "claude_code_background_task_blocked",
+            threadId: thread.id,
+            attemptId,
+            toolName: backgroundToolAttempt,
+          }, env).catch(() => {});
+        }
         const error = new Error(failureCode);
         error.code = failureCode;
         error.telemetry = telemetry;

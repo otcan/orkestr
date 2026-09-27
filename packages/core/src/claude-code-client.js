@@ -104,7 +104,7 @@ export function claudeCodeArgs(thread = {}, options = {}, env = process.env) {
   // long-running worker never loses track of it once the initial handoff
   // message scrolls out of the effective context. It coexists with the
   // failed-turn notice below rather than replacing it.
-  const appendPieces = [clean(options.standingMission)];
+  const appendPieces = [CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE, clean(options.standingMission)];
   if (clean(options.sessionId)) {
     // A resumed transcript keeps the user message of a turn that failed before
     // Claude answered (API errors are not replayed to the model). Without this
@@ -124,6 +124,39 @@ export const CLAUDE_CODE_FAILED_TURN_NOTICE = [
   "That turn is void; do not complete or enforce its instructions.",
   "Treat only the latest user message as the current request.",
 ].join(" ");
+
+// Delivered on every headless turn, unconditionally. This CLI runs under
+// -p/stream-json with no supervising terminal: once this process exits,
+// nothing is left to run, observe, or finish anything the model started in
+// the background, and no future turn is guaranteed to happen. A Bash or
+// Agent call made with run_in_background can be killed the instant this
+// turn ends while the turn's own result text still claims it will finish
+// and report back later -- a false completion. Background tasks are also
+// disabled at the runtime level (CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1) as
+// a fail-safe, but the model must not rely on that and must not narrate a
+// commitment this process cannot keep.
+export const CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE = [
+  "Orkestr runtime notice: this is a headless, non-interactive turn with no supervising terminal.",
+  "Use only foreground commands and foreground agent calls -- never request run_in_background for a Bash or Agent tool call, since a backgrounded task can be silently killed the instant this turn's result is returned and this process will not run again to finish or report it.",
+  "Never tell the user you will keep working, wait, monitor something, or notify them later; finish all necessary work and give the complete result before this turn ends.",
+].join(" ");
+
+function toolUseBlocks(event = {}) {
+  if (clean(event.type).toLowerCase() !== "assistant") return [];
+  const content = Array.isArray(event.message?.content) ? event.message.content : Array.isArray(event.content) ? event.content : [];
+  return content.filter((block) => block && typeof block === "object" && clean(block.type).toLowerCase() === "tool_use");
+}
+
+// Bash and Agent tool calls carry their run_in_background request as a plain
+// boolean in the tool_use block's input, visible on the assistant event
+// before any tool_result -- this is the documented tool-call schema, not an
+// undocumented file or side channel, so detection here is reliable.
+export function claudeCodeEventBackgroundToolUse(event = {}) {
+  for (const block of toolUseBlocks(event)) {
+    if (block.input?.run_in_background === true) return clean(block.name) || "unknown_tool";
+  }
+  return "";
+}
 
 export function claudeCodeStatusCapture(profile = {}, thread = {}) {
   const key = crypto.createHash("sha256").update(clean(thread.id)).digest("hex");

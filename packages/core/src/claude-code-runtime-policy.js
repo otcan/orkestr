@@ -14,6 +14,7 @@ export function publicClaudeCodeFailure(error) {
     "llm_account_provider_mismatch",
     "llm_account_profile_revoked",
     "llm_account_profile_not_ready",
+    "claude_code_background_task_attempted",
   ]).has(exact)) return exact;
   return classifyClaudeCodeFailure(`${error?.code || ""} ${error?.message || error || ""}`);
 }
