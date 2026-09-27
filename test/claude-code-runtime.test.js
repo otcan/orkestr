@@ -170,6 +170,29 @@ test("Claude runtime preserves explicitly authorized bypass permissions", () => 
   assert.equal(runtime.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, "0");
 });
 
+test("Claude runtime can use a dedicated credential-blind GitHub SSH transport", () => {
+  const runtime = claudeCodeRuntimeEnv({ credentialRoot: "/srv/orkestr/profiles/opaque" }, {}, {
+    ORKESTR_CLAUDE_CODE_GITHUB_HTTPS_TO_SSH: "1",
+    ORKESTR_CLAUDE_CODE_GIT_SSH_COMMAND: "/usr/bin/ssh -F /home/openclaw/.ssh/config -o BatchMode=yes",
+  });
+  assert.equal(runtime.GIT_CONFIG_COUNT, "2");
+  assert.equal(runtime.GIT_CONFIG_KEY_0, "url.git@github.com:.insteadOf");
+  assert.equal(runtime.GIT_CONFIG_VALUE_0, "https://github.com/");
+  assert.equal(runtime.GIT_CONFIG_KEY_1, "core.sshCommand");
+  assert.equal(runtime.GIT_CONFIG_VALUE_1, "/usr/bin/ssh -F /home/openclaw/.ssh/config -o BatchMode=yes");
+  assert.equal(runtime.GITHUB_TOKEN, undefined);
+  assert.equal(runtime.GH_TOKEN, undefined);
+});
+
+test("Claude runtime rejects multiline Git SSH commands", () => {
+  assert.throws(
+    () => claudeCodeRuntimeEnv({ credentialRoot: "/srv/orkestr/profiles/opaque" }, {}, {
+      ORKESTR_CLAUDE_CODE_GIT_SSH_COMMAND: "/usr/bin/ssh\nmalicious",
+    }),
+    /claude_code_git_ssh_command_invalid/,
+  );
+});
+
 async function claudeThread(ownerUserId, profileId, env, id = "claude-thread") {
   env.ORKESTR_ADMIN_USER_ID = ownerUserId;
   const thread = await createThread({
