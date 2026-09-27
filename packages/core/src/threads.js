@@ -89,6 +89,7 @@ const messageStringFields = [
   "executorRequestId",
   "codexThreadId",
   "codexTurnId",
+  "codexCallId",
   "codexItemId",
   "codexRequestId",
   "codexModel",

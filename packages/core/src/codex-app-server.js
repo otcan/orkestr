@@ -157,7 +157,7 @@ async function legacyRolloutQuestionImmediatelyBefore(thread, input, env = proce
   return legacyRolloutQuestion(priorConversationMessage) ? priorConversationMessage : null;
 }
 
-async function rejectExpiredLegacyQuestionReply(thread, input, env = process.env) {
+export async function rejectExpiredLegacyQuestionReply(thread, input, env = process.env) {
   const question = await legacyRolloutQuestionImmediatelyBefore(thread, input, env);
   if (!question) return null;
   const errorText = "That Codex question is no longer active. Please resend the intended instruction in full instead of replying with an option label.";
@@ -189,6 +189,33 @@ async function rejectExpiredLegacyQuestionReply(thread, input, env = process.env
     ...whatsappProjectionFields(externalChatInput(input) ? input : null, thread),
   }, env).catch(() => null);
   if (reply) markConnectorDeliverySignal(reply);
+  // The rejection above only stops the reply from being misdelivered as an
+  // answer to a phantom question; it must not silently discard the user's
+  // words. Requeue them as exactly one fresh, ordinary, passive turn -- not
+  // steered, not answering anything -- reusing the same connector/sender
+  // context the rejected input already carried (never a different or wider
+  // destination) and a clientMessageId derived only from this specific
+  // rejected input's own id, so a restart/retry of this same rejection can
+  // never produce a second requeued turn.
+  const requeued = await appendThreadMessage(thread.id, {
+    role: "user",
+    source: input.source || "orkestr_runtime",
+    text: input.text,
+    state: "queued",
+    deliveryState: "expired_question_requeue",
+    codexDeliveryMode: "passive",
+    steerActiveTurn: false,
+    clientMessageId: `expired-question-requeue:${input.id}`,
+    connector: input.connector || "",
+    chatId: input.chatId || "",
+    accountId: input.accountId || "",
+    originSurface: input.originSurface || "",
+    originTransport: input.originTransport || "",
+    senderParticipantId: input.senderParticipantId || "",
+    senderTrustLevel: input.senderTrustLevel || "",
+    senderEffectiveRole: input.senderEffectiveRole || "",
+    senderPolicyMode: input.senderPolicyMode || "",
+  }, env).catch(() => null);
   recordCodexUserInputRequest({ path: "rollout", outcome: "expired" });
   recordCodexInputDelivery({
     mode: "deferred",
@@ -200,8 +227,9 @@ async function rejectExpiredLegacyQuestionReply(thread, input, env = process.env
     threadId: thread.id,
     messageId: input.id,
     questionMessageId: question.id,
+    requeuedMessageId: requeued?.id || null,
   }, env).catch(() => {});
-  return { input: failed, reply };
+  return { input: failed, reply, requeued };
 }
 
 async function recordMessageRouterTrace(message = {}, phase, context = {}, env = process.env) {
