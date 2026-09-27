@@ -24,6 +24,7 @@ import { claudeCodeProgressText } from "../packages/core/src/claude-code-progres
 import { createWorkerReplyDeliveryIntent } from "../packages/core/src/reply-delivery-intent.js";
 import { setThreadConnectorDeliverySignalHandler } from "../packages/core/src/connector-delivery-signals.js";
 import { getClaudeCodeSession } from "../packages/core/src/claude-code-sessions.js";
+import { claudeSystemPolicyRevision } from "../packages/core/src/claude-system-policy-revision.js";
 import { getRouterTrace } from "../packages/core/src/router-traces.js";
 import {
   createLlmAccountProfile,
@@ -534,6 +535,19 @@ test("Claude runtime advertises configured root access on every turn", () => {
   const disabled = claudeCodeArgs({}, {}, {});
   const disabledAt = disabled.indexOf("--append-system-prompt");
   assert.equal(disabled[disabledAt + 1], CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE);
+});
+
+test("enabling Claude root access rotates existing sessions into the new system policy", () => {
+  const thread = { claudeSystemPolicyRevision: "thread-policy" };
+  assert.equal(claudeSystemPolicyRevision(thread, {}), "thread-policy");
+  assert.equal(
+    claudeSystemPolicyRevision(thread, { ORKESTR_CLAUDE_CODE_ROOT_ACCESS: "1" }),
+    "thread-policy:root-access-v1",
+  );
+  assert.equal(
+    claudeSystemPolicyRevision({}, { ORKESTR_CLAUDE_CODE_ROOT_ACCESS: "true" }),
+    "root-access-v1",
+  );
 });
 
 test("Claude runtime auto-retries a single background-task attempt in the foreground and projects no false completion", async (t) => {

@@ -23,12 +23,12 @@ async function readSessions(ownerUserId, env = process.env) {
   return Array.isArray(state?.sessions) ? state.sessions : [];
 }
 
-function exactBinding(thread = {}) {
+function exactBinding(thread = {}, env = process.env) {
   return {
     ownerUserId: normalizedOwner(thread.ownerUserId || thread.userId),
     threadId: clean(thread.id),
     profileId: clean(thread?.executor?.accountProfileId || thread?.executor?.metadata?.accountProfileId),
-    policyRevision: claudeSystemPolicyRevision(thread),
+    policyRevision: claudeSystemPolicyRevision(thread, env),
   };
 }
 
@@ -37,7 +37,7 @@ function validBinding(binding = {}) {
 }
 
 export async function getClaudeCodeSession(thread = {}, env = process.env) {
-  const binding = exactBinding(thread);
+  const binding = exactBinding(thread, env);
   if (!validBinding(binding)) return "";
   const found = (await readSessions(binding.ownerUserId, env)).find((entry) =>
     entry.threadId === binding.threadId &&
@@ -49,7 +49,7 @@ export async function getClaudeCodeSession(thread = {}, env = process.env) {
 }
 
 export async function setClaudeCodeSession(thread = {}, sessionId = "", env = process.env) {
-  const binding = exactBinding(thread);
+  const binding = exactBinding(thread, env);
   const nextSessionId = clean(sessionId);
   if (!validBinding(binding) || !nextSessionId || nextSessionId.length > 512) {
     const error = new Error("claude_code_session_invalid");
@@ -69,7 +69,7 @@ export async function setClaudeCodeSession(thread = {}, sessionId = "", env = pr
 }
 
 export async function clearClaudeCodeSession(thread = {}, env = process.env) {
-  const binding = exactBinding(thread);
+  const binding = exactBinding(thread, env);
   if (!validBinding(binding)) return false;
   const file = storePath(binding.ownerUserId, env);
   return withStorageFileLock(file, async () => {
