@@ -5,6 +5,16 @@ const requestOutcomes = new Set(["pending", "answered", "suppressed", "expired"]
 const deliveryModes = new Set(["turn_start", "turn_steer", "deferred"]);
 const deliveryOutcomes = new Set(["accepted", "queued", "rejected"]);
 const deliveryLatencyBuckets = [0, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 180, 300];
+// A separate, additive metric (not a new label on the existing counters
+// above) so the already-published label sets never change shape. Only the
+// reason a phantom request_user_input projection was suppressed/retracted
+// is exposed here, through a strict enum -- never a call_id, message id, or
+// thread id.
+const phantomQuestionSuppressionReasons = new Set([
+  "failed_call",
+  "native_request_authoritative",
+  "retracted_after_read",
+]);
 
 function enumValue(value, allowed, fallback = "unknown") {
   const normalized = String(value || "").trim().toLowerCase();
@@ -16,6 +26,12 @@ export function recordCodexUserInputRequest({ path = "unknown", outcome = "unkno
     path: enumValue(path, requestPaths),
     outcome: enumValue(outcome, requestOutcomes),
   }, amount);
+}
+
+export function recordCodexPhantomQuestionSuppression({ reason = "unknown" } = {}) {
+  incrementCounter("orkestr_codex_phantom_question_suppressions_total", {
+    reason: enumValue(reason, phantomQuestionSuppressionReasons),
+  });
 }
 
 export function recordCodexInputDelivery({ mode = "unknown", outcome = "unknown", latencyMs = null } = {}) {

@@ -102,7 +102,7 @@ import {
 import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
 import { readCodexRolloutSessionMeta, validateCodexRolloutGeneration } from "./codex-rollout-generation.js";
 import { replyDeliveryProjectionParent } from "./reply-delivery-intent.js";
-import { recordCodexUserInputRequest } from "./codex-input-observability.js";
+import { recordCodexPhantomQuestionSuppression, recordCodexUserInputRequest } from "./codex-input-observability.js";
 import { clearFailedAuthForOperatorWake } from "./codex-auth-failed-thread.js";
 
 setConnectorOutboxJobAdapter(ensureConnectorOutboxJob);
@@ -4368,9 +4368,17 @@ export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, ge
     .filter((payload) => requestUserInputFailureOutput(payload))
     .map((payload) => String(payload.call_id || payload.callId || "").trim())
     .filter(Boolean));
+  // Tracks every request_user_input call_id whose function_call appears in
+  // THIS parsed batch, regardless of whether it ended up suppressed. A
+  // call_id present in failedRequestCallIds but absent here means the
+  // matching function_call was already parsed (and possibly already
+  // persisted as a need_input message) in an earlier, separate read -- the
+  // caller uses the difference to retract that stale persisted projection.
+  const callIdsWithFunctionCallInBatch = new Set();
   for (const { parsed, cursor } of entries) {
     let text = "";
     let phase = null;
+    let callId = "";
     if (parsed?.type === "response_item" && parsed.payload?.type === "message" && parsed.payload?.role === "assistant") {
       text = collectMessageText(parsed.payload.content);
       phase = parsed.payload.phase || "final_answer";
@@ -4384,7 +4392,8 @@ export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, ge
       text = String(parsed.payload.item.text || "").trim();
       phase = "plan";
     } else if (parsed?.type === "response_item" && parsed.payload?.type === "function_call" && parsed.payload?.name === "request_user_input") {
-      const callId = String(parsed.payload.call_id || parsed.payload.callId || "").trim();
+      callId = String(parsed.payload.call_id || parsed.payload.callId || "").trim();
+      if (callId) callIdsWithFunctionCallInBatch.add(callId);
       const suppressReason = options.includeRequestUserInput === false
         ? "native_request_authoritative"
         : callId && failedRequestCallIds.has(callId)
@@ -4419,6 +4428,7 @@ export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, ge
       codexThreadId: generation || null,
       codexTurnId: codexTurnId || null,
       codexItemId: codexItemId || null,
+      codexCallId: phase === "need_input" && callId ? callId : null,
       sourceFormat: parsed?.type === "response_item" ? "response_item" : "event_msg",
     };
     const key = ["assistant", String(phase || ""), normalizedTextKey(text)].join("\n");
@@ -4434,6 +4444,11 @@ export function parseAssistantRolloutMessages(body, threadId, baseOffset = 0, ge
         codexTurnId: message.codexTurnId || existing.codexTurnId || null,
         codexItemId: message.codexItemId || existing.codexItemId || null,
       };
+    }
+  }
+  if (options.onOrphanFailedRequestUserInputCallId) {
+    for (const callId of failedRequestCallIds) {
+      if (!callIdsWithFunctionCallInBatch.has(callId)) options.onOrphanFailedRequestUserInputCallId(callId);
     }
   }
   return messages.map(({ sourceFormat, ...message }) => message);
@@ -4518,6 +4533,46 @@ async function rolloutExistingMessages(threadId, parsed = [], env = process.env)
   }, env);
 }
 
+// Retracts an already-persisted rollout-fallback need_input projection whose
+// request_user_input call_id turned out, on a LATER separate rollout read,
+// to have a failed/unavailable function_call_output. The function_call and
+// its output can land in different reads under normal incremental polling
+// (parseAssistantRolloutMessages only correlates within one parsed batch),
+// so this closes that window: the caller passes every "orphan" failed
+// call_id this read discovered (a failure whose matching function_call was
+// not in this same batch) and this looks each one up against the
+// already-fetched recent-message window, hiding any match.
+//
+// Idempotent and safe to call from a re-processed/overlapping read: a
+// message already retracted (visibility "internal") is left untouched, and
+// a call_id with no matching persisted message (already suppressed within
+// its own batch, or outside the recent-message window) is a no-op.
+export async function retractStalePhantomNeedInputMessages(threadId, existing = [], orphanFailedCallIds = [], env = process.env) {
+  if (!orphanFailedCallIds.length) return;
+  const targets = new Set(orphanFailedCallIds.filter(Boolean));
+  if (!targets.size) return;
+  for (const message of existing) {
+    if (message.role !== "assistant") continue;
+    if (String(message.source || "").trim() !== "codex-rollout") continue;
+    if (String(message.phase || "").trim().toLowerCase() !== "need_input") continue;
+    if (String(message.visibility || "").trim().toLowerCase() === "internal") continue;
+    const callId = String(message.codexCallId || "").trim();
+    if (!callId || !targets.has(callId)) continue;
+    await updateThreadMessage(threadId, message.id, {
+      visibility: "internal",
+      deliveryState: "phantom_question_retracted",
+      observedVia: "codex_rollout_phantom_retraction",
+    }, env).catch(() => {});
+    recordCodexUserInputRequest({ path: "rollout", outcome: "suppressed" });
+    recordCodexPhantomQuestionSuppression({ reason: "retracted_after_read" });
+    await appendEvent({
+      type: "codex_rollout_phantom_question_retracted",
+      threadId,
+      messageId: message.id,
+    }, env).catch(() => {});
+  }
+}
+
 function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set(), env = process.env) {
   if (!thread?.id || activeLeaseThreadIds.has(thread.id)) return false;
   if (!threadUsesNativeCodexRuntime(thread)) return false;
@@ -4529,7 +4584,10 @@ function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set()
 async function appendRolloutMessages({ thread, rolloutPath, generation = "", body, start, initialScan, projectionSource = "detached_rollout", env }) {
   const parsed = parseAssistantRolloutMessages(body, thread.id, start, generation, {
     includeRequestUserInput: false,
-    onRequestUserInputSuppressed: () => recordCodexUserInputRequest({ path: "rollout", outcome: "suppressed" }),
+    onRequestUserInputSuppressed: ({ reason }) => {
+      recordCodexUserInputRequest({ path: "rollout", outcome: "suppressed" });
+      recordCodexPhantomQuestionSuppression({ reason });
+    },
   });
   if (!parsed.length) return { appended: 0, completedTurnId: null };
   const existing = await rolloutExistingMessages(thread.id, parsed, env);
@@ -4584,6 +4642,7 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
       executorTurnId: parentTurnId || null,
       codexItemId: message.codexItemId || null,
       executorItemId: message.codexItemId || null,
+      codexCallId: message.codexCallId || null,
     };
     if (await rolloutFinalDuplicateExists(thread.id, candidateMessage, existingFinalDuplicateKeys, env)) continue;
     const appendedMessage = await appendThreadMessage(thread.id, candidateMessage, env);
@@ -4797,11 +4856,17 @@ async function syncLeaseRollout(lease, env = process.env) {
   }
   thread = readFence.thread;
   const nativeCodexRuntime = threadUsesNativeCodexRuntime(thread);
+  const orphanFailedCallIds = [];
   const parsed = parseAssistantRolloutMessages(body, currentLease.threadId, start, generation, {
     includeRequestUserInput: !nativeCodexRuntime,
-    onRequestUserInputSuppressed: () => recordCodexUserInputRequest({ path: "rollout", outcome: "suppressed" }),
+    onRequestUserInputSuppressed: ({ reason }) => {
+      recordCodexUserInputRequest({ path: "rollout", outcome: "suppressed" });
+      recordCodexPhantomQuestionSuppression({ reason });
+    },
+    onOrphanFailedRequestUserInputCallId: (callId) => orphanFailedCallIds.push(callId),
   });
   const existing = await rolloutExistingMessages(currentLease.threadId, parsed, env);
+  await retractStalePhantomNeedInputMessages(currentLease.threadId, existing, orphanFailedCallIds, env);
   const existingEventKeys = new Set(existing.map(rolloutMessageEventKey));
   const existingTextKeys = new Set(
     existing
@@ -4854,6 +4919,7 @@ async function syncLeaseRollout(lease, env = process.env) {
       executorTurnId: parentTurnId || null,
       codexItemId: message.codexItemId || null,
       executorItemId: message.codexItemId || null,
+      codexCallId: message.codexCallId || null,
     };
     if (await rolloutFinalDuplicateExists(currentLease.threadId, candidateMessage, existingFinalDuplicateKeys, env)) continue;
     const appendedMessage = await appendThreadMessage(currentLease.threadId, candidateMessage, env);
