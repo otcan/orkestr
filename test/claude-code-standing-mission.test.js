@@ -6,11 +6,13 @@ import test from "node:test";
 import { CLAUDE_CODE_FAILED_TURN_NOTICE } from "../packages/core/src/claude-code-client.js";
 import {
   CLAUDE_AUTONOMY_MISSION_POLICY,
+  CLAUDE_AUTONOMY_TICK_PROMPT,
   resolveStandingMissionAppendText,
   sanitizeStandingMissionText,
   standingMissionMaxChars,
 } from "../packages/core/src/claude-standing-mission.js";
 import { setThreadAgentReleaseRole } from "../packages/core/src/agent-release-role.js";
+import { agentReleaseRolePolicy } from "../packages/core/src/agent-release-role-policy.js";
 import {
   clearThreadStandingMission,
   getThreadStandingMission,
@@ -133,6 +135,62 @@ test("Claude turns without a standing mission behave exactly as before (no appen
   await enqueueThreadInput(thread.id, { text: "plain request", source: "test" }, env);
   await deliverClaudeCodePendingInputs(thread, env);
   assert.deepEqual(await recordedAppendSystemPrompts(calls), [null]);
+});
+
+test("CLAUDE_AUTONOMY_MISSION_POLICY requires explicit current-conversation authorization before a worker may push any branch", () => {
+  const [permitted, denied] = CLAUDE_AUTONOMY_MISSION_POLICY.split(/(?=Denied:)/);
+  // Local work is still permitted, but never framed as an implicit push grant.
+  assert.match(permitted, /commit changes, locally only, to this worker's own stored branch/);
+  assert.doesNotMatch(permitted, /\bpush\b/i);
+  // Normal Orkestr-routed replies are explicitly not an external message --
+  // the Moteks incident's false "I cannot send WhatsApp" claim was wrong.
+  assert.match(permitted, /Orkestr automatically routes these to the bound connector, which is not sending an external message and is always allowed/);
+  // The pre-existing "Denied: merging, rebasing, or pushing main" substring
+  // must still lead the Denied clause unchanged -- the release-role-switch
+  // regression test below asserts on this exact text.
+  assert.match(denied, /^Denied: merging, rebasing, or pushing main or any release branch;/);
+  // Pushing -- including the worker's own branch -- is denied by default and
+  // requires the user's explicit, in-conversation authorization for that
+  // exact push.
+  assert.match(denied, /pushing this worker's own branch, or any other branch, without the user explicitly authorizing that exact push in the current conversation/);
+  // A scheduled tick can take bounded local work but can never itself unlock a push.
+  assert.match(denied, /scheduled timer or autonomy tick may take at most one bounded, local-commit-only step and report status, but must never by itself authorize a push of any branch/);
+});
+
+test("CLAUDE_AUTONOMY_TICK_PROMPT keeps autonomy ticks local-commit-only and never itself authorizes a push", () => {
+  assert.match(CLAUDE_AUTONOMY_TICK_PROMPT, /test, and commit locally, only to your own branch/);
+  assert.match(CLAUDE_AUTONOMY_TICK_PROMPT, /Do not push any branch -- an autonomy tick can never itself authorize a push; only the user, explicitly, in a live conversation, can\./);
+  assert.match(CLAUDE_AUTONOMY_TICK_PROMPT, /that reply is normal Orkestr-routed output, not sending an external message/);
+  assert.doesNotMatch(CLAUDE_AUTONOMY_TICK_PROMPT, /commit, and push/);
+});
+
+test("mission composition delivers the corrected local-commit-only worker policy end-to-end, and release-train promotion is unaffected", async (t) => {
+  const { calls, env } = await fixture(t, "push-authorization-composition");
+  const profile = await readyProfile("owner", "Primary", env);
+  let thread = await claudeThread("owner", profile.id, env, "push-authorization-worker");
+  await setThreadStandingMission(thread.id, "Keep the backlog board green.", "admin", env);
+  thread = await getThread(thread.id, env);
+
+  await enqueueThreadInput(thread.id, { text: "do the safe thing", source: "test" }, env);
+  await deliverClaudeCodePendingInputs(thread, env);
+  const [workerNotice] = await recordedAppendSystemPrompts(calls);
+  assert.ok(workerNotice.includes(CLAUDE_AUTONOMY_MISSION_POLICY));
+  assert.match(workerNotice, /pushing this worker's own branch, or any other branch, without the user explicitly authorizing that exact push in the current conversation/);
+  assert.match(workerNotice, /Orkestr automatically routes these to the bound connector, which is not sending an external message/);
+  assert.ok(workerNotice.includes("Standing mission: Keep the backlog board green."));
+
+  // Promoting to release_train still fully replaces the worker text with the
+  // stronger, unmodified release-train policy -- this fix must not touch or
+  // weaken agent-release-role-policy.js's release-train gates.
+  await setThreadAgentReleaseRole(thread.id, "release_train", { actorUserId: "admin" }, env);
+  thread = await getThread(thread.id, env);
+  const releaseTrainPolicy = agentReleaseRolePolicy(thread);
+  assert.equal(releaseTrainPolicy.requiresExplicitPhaseRequest, true);
+  assert.equal(releaseTrainPolicy.canPushMain, true);
+  assert.match(releaseTrainPolicy.promptText, /only when the user has explicitly requested that specific release phase in the current conversation/);
+  const switchedNotice = resolveStandingMissionAppendText(thread, env);
+  assert.doesNotMatch(switchedNotice, /pushing this worker's own branch/);
+  assert.match(switchedNotice, /Rules \(release train role/);
 });
 
 test("Claude standing mission is delivered on the first turn and again on a resumed turn", async (t) => {
