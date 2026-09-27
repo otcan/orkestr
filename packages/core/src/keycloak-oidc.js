@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
-import { readJson, writeSecretJson } from "../../storage/src/store.js";
+import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { authProvider } from "./auth-config.js";
 import { publicUrlConfig } from "./public-url-config.js";
@@ -10,6 +10,15 @@ import { createOidcSecuritySession, revokeOidcSecuritySessions } from "./securit
 const stateTtlMs = 10 * 60 * 1000;
 const stateAuditTtlMs = 24 * 60 * 60 * 1000;
 const defaultPendingStateLimit = 500;
+// Short-window creation budgets: independent of the long-lived (10-minute)
+// pending-state cap above, these bound the *rate* new login starts can be
+// created at all, so one client (or a burst across many clients) cannot
+// monopolize or rapidly fill the pending-state pool before the TTL cap ever
+// engages.
+const defaultClientBurstLimit = 5;
+const defaultClientBurstWindowMs = 60 * 1000;
+const defaultGlobalBurstLimit = 100;
+const defaultGlobalBurstWindowMs = 60 * 1000;
 const discoveryCache = new Map();
 
 function clean(value = "") {
@@ -191,6 +200,48 @@ function pendingStateLimit(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(1, Math.min(Math.floor(parsed), 10_000)) : defaultPendingStateLimit;
 }
 
+function clientBurstLimit(env = process.env) {
+  const parsed = Number(env.ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_LIMIT ?? defaultClientBurstLimit);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(Math.floor(parsed), 1_000)) : defaultClientBurstLimit;
+}
+
+function clientBurstWindowMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_KEYCLOAK_OIDC_CLIENT_BURST_WINDOW_MS ?? defaultClientBurstWindowMs);
+  return Number.isFinite(parsed) ? Math.max(50, Math.floor(parsed)) : defaultClientBurstWindowMs;
+}
+
+function globalBurstLimit(env = process.env) {
+  const parsed = Number(env.ORKESTR_KEYCLOAK_OIDC_GLOBAL_BURST_LIMIT ?? defaultGlobalBurstLimit);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(Math.floor(parsed), 100_000)) : defaultGlobalBurstLimit;
+}
+
+function globalBurstWindowMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_KEYCLOAK_OIDC_GLOBAL_BURST_WINDOW_MS ?? defaultGlobalBurstWindowMs);
+  return Number.isFinite(parsed) ? Math.max(50, Math.floor(parsed)) : defaultGlobalBurstWindowMs;
+}
+
+// The caller (route layer) is responsible for deriving a trustworthy,
+// deployment-specific client key -- e.g. from a source IP resolved through
+// its own trusted-proxy configuration. This module never parses headers or
+// IPs itself; it only ever persists a one-way hash of whatever key it is
+// given, so no raw IP or other identifying value is ever written to disk,
+// logged, or attached to a security event. A missing key still shares one
+// bounded "anonymous" bucket rather than bypassing the limiter entirely.
+function clientKeyHash(clientKey = "") {
+  return sha256(clean(clientKey) || "anonymous-oidc-login-client");
+}
+
+function retryAfterSeconds(oldestCreatedAt, windowMs, now) {
+  return Math.max(1, Math.ceil((oldestCreatedAt + windowMs - now) / 1000));
+}
+
+function oidcRateLimitedError(scope, seconds) {
+  const error = oidcError("oidc_login_rate_limited", 429);
+  error.retryAfterSeconds = seconds;
+  error.rateLimitScope = scope;
+  return error;
+}
+
 async function discovery(settings, env = process.env, fetchImpl = fetch) {
   const issuer = assertHttpsUrl(settings.issuer, "oidc_issuer_invalid", env).toString().replace(/\/+$/, "");
   const key = `${issuer}|${settings.clientId}`;
@@ -220,7 +271,7 @@ async function discovery(settings, env = process.env, fetchImpl = fetch) {
   return value;
 }
 
-export async function beginKeycloakLogin({ returnTo = "", loginHint = "", requestOrigin = "", env = process.env, fetchImpl = fetch } = {}) {
+export async function beginKeycloakLogin({ returnTo = "", loginHint = "", requestOrigin = "", clientKey = "", env = process.env, fetchImpl = fetch } = {}) {
   const settings = keycloakOidcSettings(env);
   if (!settings.enabled) throw oidcError("oidc_login_unavailable", 404);
   const provider = await discovery(settings, env, fetchImpl);
@@ -228,17 +279,56 @@ export async function beginKeycloakLogin({ returnTo = "", loginHint = "", reques
   const state = randomToken(24);
   const nonce = randomToken(24);
   const codeVerifier = randomToken(48);
+  const keyHash = clientKeyHash(clientKey);
+  let rateLimitEvent = null;
   await mutateStates(env, async (states) => {
-    const pending = states.states.filter((item) => !item.consumedAt && Date.parse(item.expiresAt || "") > Date.now());
-    if (pending.length >= pendingStateLimit(env)) throw oidcError("oidc_login_rate_limited", 429);
+    const now = Date.now();
+    const clientWindow = clientBurstWindowMs(env);
+    const globalWindow = globalBurstWindowMs(env);
+    // createdAt is absent on states written before this limiter existed;
+    // Date.parse(undefined) is NaN, so those entries are correctly treated
+    // as not-recent rather than as an unbounded burst match.
+    const clientRecent = states.states.filter((item) => item.clientKeyHash === keyHash && now - Date.parse(item.createdAt) < clientWindow);
+    if (clientRecent.length >= clientBurstLimit(env)) {
+      const oldest = Math.min(...clientRecent.map((item) => Date.parse(item.createdAt)));
+      const seconds = retryAfterSeconds(oldest, clientWindow, now);
+      rateLimitEvent = { scope: "client_burst", seconds };
+      throw oidcRateLimitedError("client_burst", seconds);
+    }
+    const globalRecent = states.states.filter((item) => now - Date.parse(item.createdAt) < globalWindow);
+    if (globalRecent.length >= globalBurstLimit(env)) {
+      const oldest = Math.min(...globalRecent.map((item) => Date.parse(item.createdAt)));
+      const seconds = retryAfterSeconds(oldest, globalWindow, now);
+      rateLimitEvent = { scope: "global_burst", seconds };
+      throw oidcRateLimitedError("global_burst", seconds);
+    }
+    const pending = states.states.filter((item) => !item.consumedAt && Date.parse(item.expiresAt || "") > now);
+    if (pending.length >= pendingStateLimit(env)) {
+      const earliestExpiresAt = Math.min(...pending.map((item) => Date.parse(item.expiresAt)));
+      const seconds = Math.max(1, Math.ceil((earliestExpiresAt - now) / 1000));
+      rateLimitEvent = { scope: "pending_state_pool", seconds };
+      throw oidcRateLimitedError("pending_state_pool", seconds);
+    }
     states.states.push({
       stateHash: sha256(state),
       nonce,
       codeVerifier,
       returnTo: safeReturnPath(returnTo, env),
       redirectUri,
-      expiresAt: new Date(Date.now() + stateTtlMs).toISOString(),
+      expiresAt: new Date(now + stateTtlMs).toISOString(),
+      clientKeyHash: keyHash,
+      createdAt: new Date(now).toISOString(),
     });
+  }).catch(async (error) => {
+    if (rateLimitEvent) {
+      await appendEvent({
+        type: "security_oidc_login_rate_limited",
+        scope: rateLimitEvent.scope,
+        clientKeyHash: keyHash,
+        retryAfterSeconds: rateLimitEvent.seconds,
+      }, env).catch(() => {});
+    }
+    throw error;
   });
   const target = new URL(provider.authorizationEndpoint);
   target.searchParams.set("response_type", "code");
