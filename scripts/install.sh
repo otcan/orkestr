@@ -2154,13 +2154,16 @@ run_user="${ORKESTR_RUN_USER:-}"
 if [ -z "$run_user" ] && command -v systemctl >/dev/null 2>&1; then
   run_user="$(systemctl show -p User --value "${ORKESTR_SERVICE_NAME:-orkestr}.service" 2>/dev/null || true)"
 fi
-run_user="${run_user:-orkestr}"
 case "${1:-}" in
   update)
     exec node "$app_dir/apps/cli/bin/orkestr-oss.js" "$@"
     ;;
 esac
-if [ "$(id -u)" -eq 0 ] && [ "${ORKESTR_CLI_RUN_AS_ROOT:-0}" != "1" ] && id "$run_user" >/dev/null 2>&1; then
+# A blank User= (systemd reports "" for a service that runs as root, or the
+# unit/systemctl is unavailable) must never be defaulted to a guessed
+# nonprivileged account; only drop privileges when an explicit, resolved,
+# non-root service user is known.
+if [ "$(id -u)" -eq 0 ] && [ -n "$run_user" ] && [ "$run_user" != "root" ] && [ "${ORKESTR_CLI_RUN_AS_ROOT:-0}" != "1" ] && id "$run_user" >/dev/null 2>&1; then
   if ! command -v runuser >/dev/null 2>&1; then
     echo "Missing required command: runuser" >&2
     exit 1

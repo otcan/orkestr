@@ -660,3 +660,96 @@ test("installed CLI launcher prefers an explicit ORKESTR_APP_DIR override and re
   });
   assert.deepEqual(JSON.parse(legacyStdout.trim()), { appDir: legacyAppDir });
 });
+
+// A blank `systemctl show -p User --value` (a unit with no User=, which runs
+// as root) must never be defaulted to a guessed nonprivileged account, or a
+// root operator CLI call silently drops to that account and loses local
+// auth. This is deterministic regardless of the test runner's own privilege
+// level: fake `id -u` reports 0 so the launcher's root branch is reached
+// without needing the test itself to run as root, and a fake `runuser` marks
+// a file if it is ever invoked so the assertion doesn't depend on runuser
+// actually being able to switch users on the test host.
+async function writeFakeCommand(binDir, name, script) {
+  const file = path.join(binDir, name);
+  await fs.writeFile(file, `#!/usr/bin/env bash\n${script}\n`, { mode: 0o755 });
+}
+
+test("installed CLI launcher preserves root execution when the service user cannot be resolved", async () => {
+  const script = await fs.readFile("scripts/install.sh", "utf8");
+  const match = script.match(/cat > \/usr\/local\/bin\/orkestr <<'EOF'\n([\s\S]*?)\nEOF\n/);
+  assert.ok(match, "expected to find the /usr/local/bin/orkestr launcher heredoc");
+  const launcherBody = match[1];
+  assert.doesNotMatch(launcherBody, /run_user="\$\{run_user:-orkestr\}"/);
+
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-launcher-root-user-"));
+  const launcherPath = path.join(cwd, "orkestr");
+  await fs.writeFile(launcherPath, launcherBody.replace(/^#!.*\n/, "#!/usr/bin/env bash\n"), { mode: 0o755 });
+
+  const currentLink = path.join(cwd, "opt-orkestr-current");
+  await writeCliEntrypointStub(currentLink, currentLink);
+
+  const binDir = path.join(cwd, "fake-bin");
+  await fs.mkdir(binDir, { recursive: true });
+  const runuserMarker = path.join(cwd, "runuser-invoked");
+  await writeFakeCommand(binDir, "id", [
+    'if [ "$1" = "-u" ]; then echo 0; exit 0; fi',
+    'exec /usr/bin/id "$@"',
+  ].join("\n"));
+  await writeFakeCommand(binDir, "runuser", [
+    `touch ${JSON.stringify(runuserMarker)}`,
+    'exit 1',
+  ].join("\n"));
+  const fakePath = `${binDir}:${process.env.PATH}`;
+
+  // Scenario 1: systemd resolves the unit but it has no User= (blank value).
+  const systemctlBinDir = path.join(cwd, "fake-systemctl-bin");
+  await fs.mkdir(systemctlBinDir, { recursive: true });
+  await writeFakeCommand(systemctlBinDir, "systemctl", [
+    'if [ "$1" = "show" ]; then echo ""; exit 0; fi',
+    'exit 1',
+  ].join("\n"));
+  const { stdout: blankUserStdout } = await execFileAsync("bash", [launcherPath, "status"], {
+    env: {
+      PATH: `${binDir}:${systemctlBinDir}:${process.env.PATH}`,
+      ORKESTR_ENV_FILE: path.join(cwd, "missing.env"),
+      ORKESTR_CURRENT_LINK: currentLink,
+      ORKESTR_SERVICE_NAME: "orkestr-ui",
+    },
+  });
+  assert.deepEqual(JSON.parse(blankUserStdout.trim()), { appDir: currentLink });
+  assert.equal(await fs.stat(runuserMarker).then(() => true).catch(() => false), false);
+
+  // Scenario 2: no ORKESTR_RUN_USER and systemctl is unavailable at all.
+  const { stdout: noUserStdout } = await execFileAsync("bash", [launcherPath, "status"], {
+    env: {
+      PATH: fakePath,
+      ORKESTR_ENV_FILE: path.join(cwd, "missing.env"),
+      ORKESTR_CURRENT_LINK: currentLink,
+    },
+  });
+  assert.deepEqual(JSON.parse(noUserStdout.trim()), { appDir: currentLink });
+  assert.equal(await fs.stat(runuserMarker).then(() => true).catch(() => false), false);
+
+  // Control: an explicit non-root service user still drops privileges.
+  await writeFakeCommand(binDir, "id", [
+    'if [ "$1" = "-u" ]; then echo 0; exit 0; fi',
+    'if [ "$1" = "nonroot-service-user" ]; then exit 0; fi',
+    'exec /usr/bin/id "$@"',
+  ].join("\n"));
+  await writeFakeCommand(binDir, "getent", [
+    'if [ "$1" = "passwd" ] && [ "$2" = "nonroot-service-user" ]; then',
+    '  echo "nonroot-service-user:x:1500:1500::/home/nonroot-service-user:/bin/bash"',
+    "  exit 0",
+    "fi",
+    'exec /usr/bin/getent "$@"',
+  ].join("\n"));
+  await assert.rejects(execFileAsync("bash", [launcherPath, "status"], {
+    env: {
+      PATH: fakePath,
+      ORKESTR_ENV_FILE: path.join(cwd, "missing.env"),
+      ORKESTR_CURRENT_LINK: currentLink,
+      ORKESTR_RUN_USER: "nonroot-service-user",
+    },
+  }));
+  assert.equal(await fs.stat(runuserMarker).then(() => true).catch(() => false), true);
+});
