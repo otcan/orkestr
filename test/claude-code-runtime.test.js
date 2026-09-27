@@ -10,6 +10,7 @@ import {
   CLAUDE_CODE_BACKGROUND_TASK_RETRY_NOTICE,
   CLAUDE_CODE_FAILED_TURN_NOTICE,
   CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE,
+  CLAUDE_CODE_ROOT_ACCESS_NOTICE,
   claudeCodeArgs,
   claudeCodeEventTelemetry,
   mergeClaudeCodeTelemetry,
@@ -519,6 +520,20 @@ test("Claude runtime voids a failed turn through the system prompt when the next
     CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE,
   ]);
   assert.deepEqual(recorded[2].args.slice(-2), ["--resume", "claude_session_fixture"]);
+});
+
+test("Claude runtime advertises configured root access on every turn", () => {
+  const args = claudeCodeArgs({}, {}, { ORKESTR_CLAUDE_CODE_ROOT_ACCESS: "1" });
+  const at = args.indexOf("--append-system-prompt");
+  assert.notEqual(at, -1);
+  assert.equal(args[at + 1], [
+    CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE,
+    CLAUDE_CODE_ROOT_ACCESS_NOTICE,
+  ].join("\n\n"));
+
+  const disabled = claudeCodeArgs({}, {}, {});
+  const disabledAt = disabled.indexOf("--append-system-prompt");
+  assert.equal(disabled[disabledAt + 1], CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE);
 });
 
 test("Claude runtime auto-retries a single background-task attempt in the foreground and projects no false completion", async (t) => {
