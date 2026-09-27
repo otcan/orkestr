@@ -5,6 +5,7 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { getThread, updateThread } from "./threads.js";
 import { sanitizeStandingMissionText, standingMissionMaxChars } from "./claude-standing-mission.js";
+import { nextClaudeSystemPolicyRevision } from "./claude-system-policy-revision.js";
 
 function nonEmptyString(value) {
   return String(value || "").trim();
@@ -45,6 +46,7 @@ export async function setThreadStandingMission(threadId, rawMission, actorUserId
     standingMission: mission,
     standingMissionUpdatedAt: nowIso(),
     standingMissionUpdatedBy: nonEmptyString(actorUserId) || null,
+    claudeSystemPolicyRevision: nextClaudeSystemPolicyRevision(),
   }, env);
   await appendEvent({
     type: "thread_standing_mission_updated",
@@ -65,6 +67,7 @@ export async function clearThreadStandingMission(threadId, actorUserId, env = pr
     standingMission: null,
     standingMissionUpdatedAt: nowIso(),
     standingMissionUpdatedBy: nonEmptyString(actorUserId) || null,
+    claudeSystemPolicyRevision: nextClaudeSystemPolicyRevision(),
   }, env);
   await appendEvent({
     type: "thread_standing_mission_cleared",

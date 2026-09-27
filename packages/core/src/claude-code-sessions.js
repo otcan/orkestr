@@ -3,6 +3,7 @@ import { userDataPaths } from "../../storage/src/paths.js";
 import { readJson, writeSecretJson } from "../../storage/src/store.js";
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { normalizeUserId } from "./users.js";
+import { claudeSystemPolicyRevision } from "./claude-system-policy-revision.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -27,6 +28,7 @@ function exactBinding(thread = {}) {
     ownerUserId: normalizedOwner(thread.ownerUserId || thread.userId),
     threadId: clean(thread.id),
     profileId: clean(thread?.executor?.accountProfileId || thread?.executor?.metadata?.accountProfileId),
+    policyRevision: claudeSystemPolicyRevision(thread),
   };
 }
 
@@ -40,7 +42,8 @@ export async function getClaudeCodeSession(thread = {}, env = process.env) {
   const found = (await readSessions(binding.ownerUserId, env)).find((entry) =>
     entry.threadId === binding.threadId &&
     entry.profileId === binding.profileId &&
-    entry.ownerUserId === binding.ownerUserId,
+    entry.ownerUserId === binding.ownerUserId &&
+    clean(entry.policyRevision) === binding.policyRevision,
   );
   return clean(found?.sessionId);
 }

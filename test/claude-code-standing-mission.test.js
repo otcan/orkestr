@@ -184,6 +184,9 @@ test("an existing Claude worker switches its per-turn system policy after an aud
   assert.match(notices[0], /Denied: merging, rebasing, or pushing main/);
   assert.match(notices[1], /Rules \(release train role/);
   assert.doesNotMatch(notices[1], /Denied: merging, rebasing, or pushing main/);
+  const recorded = (await fs.readFile(calls, "utf8")).trim().split("\n").map(JSON.parse);
+  assert.equal(recorded[0].args.includes("--resume"), false);
+  assert.equal(recorded[1].args.includes("--resume"), false, "trusted role changes must rotate the Claude session");
 });
 
 test("Claude standing mission coexists with the failed-turn notice without replacing it", async (t) => {

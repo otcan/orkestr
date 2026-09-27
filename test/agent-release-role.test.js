@@ -47,6 +47,7 @@ test("setThreadAgentReleaseRole persists an explicit release_train grant and aud
 
   const reloaded = await getThread(thread.id, env);
   assert.equal(reloaded.agentReleaseRole, AGENT_RELEASE_ROLE_RELEASE_TRAIN);
+  assert.match(reloaded.claudeSystemPolicyRevision, /^[0-9a-f-]{36}$/);
   assert.equal(isReleaseTrainThread(reloaded), true);
 
   const events = await listEvents(env, 20);

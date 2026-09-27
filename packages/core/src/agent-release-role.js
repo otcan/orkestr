@@ -5,6 +5,7 @@ import {
   agentReleaseRolePolicy,
   threadAgentReleaseRole,
 } from "./agent-release-role-policy.js";
+import { nextClaudeSystemPolicyRevision } from "./claude-system-policy-revision.js";
 
 export {
   AGENT_RELEASE_ROLE_RELEASE_TRAIN,
@@ -43,7 +44,12 @@ export async function setThreadAgentReleaseRole(threadId, role, { actorUserId = 
   const before = await getThread(threadId, env);
   if (!before) throw httpError("thread_not_found", 404);
   const previousRole = threadAgentReleaseRole(before);
-  const updated = await updateThread(before.id, { agentReleaseRole: normalizedRole }, env);
+  const updated = await updateThread(before.id, {
+    agentReleaseRole: normalizedRole,
+    // Claude CLI resume sessions retain their original system context. Fence
+    // the old session so this trusted role change takes effect next turn.
+    claudeSystemPolicyRevision: nextClaudeSystemPolicyRevision(),
+  }, env);
   await appendEvent({
     type: "thread_agent_release_role_changed",
     threadId: updated.id,
