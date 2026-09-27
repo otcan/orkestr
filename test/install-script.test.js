@@ -554,6 +554,30 @@ test("public domain smoke runner validates Caddy/TLS and browser pairing", async
   assert.match(script, /orkestr security revoke/);
 });
 
+// A root test runner can read a chmod 0000 file (DAC checks are skipped for
+// uid 0), so a real permission-denied file only proves the fallback for
+// nonprivileged runs. A path that was never created fails bash's `[ -r ... ]`
+// test identically for every uid, including root, so it exercises the same
+// "service env file cannot be read" branch of the launcher portably.
+async function writeUnreadableEnvFile(cwd, contents) {
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  if (isRoot) return path.join(cwd, "never-created.env");
+  const file = path.join(cwd, "protected-orkestr.env");
+  await fs.writeFile(file, contents);
+  await fs.chmod(file, 0o000);
+  return file;
+}
+
+async function writeCliEntrypointStub(dir, appDir) {
+  const entrypoint = path.join(dir, "apps", "cli", "bin", "orkestr-oss.js");
+  await fs.mkdir(path.dirname(entrypoint), { recursive: true });
+  await fs.writeFile(entrypoint, "console.log(JSON.stringify({ appDir: '" + appDir + "' }))");
+  await fs.chmod(entrypoint, 0o644);
+  const mode = (await fs.stat(entrypoint)).mode & 0o777;
+  assert.equal(mode & 0o444, 0o444, `${entrypoint} must be readable by owner, group and other`);
+  return entrypoint;
+}
+
 test("installed CLI launcher resolves the active release symlink when the service env file is unreadable", async () => {
   const script = await fs.readFile("scripts/install.sh", "utf8");
   const match = script.match(/cat > \/usr\/local\/bin\/orkestr <<'EOF'\n([\s\S]*?)\nEOF\n/);
@@ -569,22 +593,12 @@ test("installed CLI launcher resolves the active release symlink when the servic
   await fs.writeFile(launcherPath, launcherBody.replace(/^#!.*\n/, "#!/usr/bin/env bash\n"), { mode: 0o755 });
 
   const legacyAppDir = path.join(cwd, "opt-orkestr-app-obsolete");
-  await fs.mkdir(path.join(legacyAppDir, "apps", "cli", "bin"), { recursive: true });
-  await fs.writeFile(
-    path.join(legacyAppDir, "apps", "cli", "bin", "orkestr-oss.js"),
-    "console.log(JSON.stringify({ appDir: '" + legacyAppDir + "' }))",
-  );
+  await writeCliEntrypointStub(legacyAppDir, legacyAppDir);
 
   const currentLink = path.join(cwd, "opt-orkestr-current");
-  await fs.mkdir(path.join(currentLink, "apps", "cli", "bin"), { recursive: true });
-  await fs.writeFile(
-    path.join(currentLink, "apps", "cli", "bin", "orkestr-oss.js"),
-    "console.log(JSON.stringify({ appDir: '" + currentLink + "' }))",
-  );
+  await writeCliEntrypointStub(currentLink, currentLink);
 
-  const unreadableEnvFile = path.join(cwd, "protected-orkestr.env");
-  await fs.writeFile(unreadableEnvFile, `ORKESTR_APP_DIR=${legacyAppDir}\nORKESTR_RELEASE_DEPLOY=1\n`);
-  await fs.chmod(unreadableEnvFile, 0o000);
+  const unreadableEnvFile = await writeUnreadableEnvFile(cwd, `ORKESTR_APP_DIR=${legacyAppDir}\nORKESTR_RELEASE_DEPLOY=1\n`);
 
   try {
     const { stdout } = await execFileAsync("bash", [launcherPath, "status"], {
@@ -592,6 +606,9 @@ test("installed CLI launcher resolves the active release symlink when the servic
         PATH: process.env.PATH,
         ORKESTR_ENV_FILE: unreadableEnvFile,
         ORKESTR_CURRENT_LINK: currentLink,
+        // Exercise app-dir resolution on its own, independent of whether an
+        // "orkestr" system user (and runuser) is available on the test host.
+        ORKESTR_CLI_RUN_AS_ROOT: "1",
       },
     });
     assert.deepEqual(JSON.parse(stdout.trim()), { appDir: currentLink });
@@ -611,18 +628,10 @@ test("installed CLI launcher prefers an explicit ORKESTR_APP_DIR override and re
   await fs.writeFile(launcherPath, launcherBody.replace(/^#!.*\n/, "#!/usr/bin/env bash\n"), { mode: 0o755 });
 
   const overrideDir = path.join(cwd, "explicit-override");
-  await fs.mkdir(path.join(overrideDir, "apps", "cli", "bin"), { recursive: true });
-  await fs.writeFile(
-    path.join(overrideDir, "apps", "cli", "bin", "orkestr-oss.js"),
-    "console.log(JSON.stringify({ appDir: '" + overrideDir + "' }))",
-  );
+  await writeCliEntrypointStub(overrideDir, overrideDir);
 
   const currentLink = path.join(cwd, "opt-orkestr-current");
-  await fs.mkdir(path.join(currentLink, "apps", "cli", "bin"), { recursive: true });
-  await fs.writeFile(
-    path.join(currentLink, "apps", "cli", "bin", "orkestr-oss.js"),
-    "console.log(JSON.stringify({ appDir: '" + currentLink + "' }))",
-  );
+  await writeCliEntrypointStub(currentLink, currentLink);
 
   const { stdout: overrideStdout } = await execFileAsync("bash", [launcherPath, "status"], {
     env: {
@@ -630,16 +639,13 @@ test("installed CLI launcher prefers an explicit ORKESTR_APP_DIR override and re
       ORKESTR_ENV_FILE: path.join(cwd, "missing.env"),
       ORKESTR_APP_DIR: overrideDir,
       ORKESTR_CURRENT_LINK: currentLink,
+      ORKESTR_CLI_RUN_AS_ROOT: "1",
     },
   });
   assert.deepEqual(JSON.parse(overrideStdout.trim()), { appDir: overrideDir });
 
   const legacyAppDir = path.join(cwd, "legacy-app-dir");
-  await fs.mkdir(path.join(legacyAppDir, "apps", "cli", "bin"), { recursive: true });
-  await fs.writeFile(
-    path.join(legacyAppDir, "apps", "cli", "bin", "orkestr-oss.js"),
-    "console.log(JSON.stringify({ appDir: '" + legacyAppDir + "' }))",
-  );
+  await writeCliEntrypointStub(legacyAppDir, legacyAppDir);
   const legacyEnvFile = path.join(cwd, "legacy-readable.env");
   await fs.writeFile(legacyEnvFile, `ORKESTR_APP_DIR=${legacyAppDir}\n`);
   const danglingLink = path.join(cwd, "opt-orkestr-current-dangling");
@@ -649,6 +655,7 @@ test("installed CLI launcher prefers an explicit ORKESTR_APP_DIR override and re
       PATH: process.env.PATH,
       ORKESTR_ENV_FILE: legacyEnvFile,
       ORKESTR_CURRENT_LINK: danglingLink,
+      ORKESTR_CLI_RUN_AS_ROOT: "1",
     },
   });
   assert.deepEqual(JSON.parse(legacyStdout.trim()), { appDir: legacyAppDir });
