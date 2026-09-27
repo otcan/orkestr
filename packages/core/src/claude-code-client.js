@@ -69,6 +69,14 @@ export function claudeCodeMaxOutputBytes(env = process.env) {
   return Number.isFinite(parsed) && parsed >= 64 * 1024 ? Math.floor(parsed) : 16 * 1024 * 1024;
 }
 
+// Hard-capped at 3 regardless of env misconfiguration so a persistent
+// violation always becomes a durable, low-cardinality failure instead of
+// retrying indefinitely.
+export function claudeCodeMaxBackgroundTaskRetries(env = process.env) {
+  const parsed = Number(env.ORKESTR_CLAUDE_CODE_BACKGROUND_TASK_MAX_RETRIES ?? 1);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.min(3, Math.floor(parsed)) : 1;
+}
+
 export function claudeCodePermissionMode(thread = {}) {
   const requested = clean(thread?.executor?.metadata?.claudePermissionMode || thread?.claudePermissionMode || "acceptEdits");
   return new Set(["default", "plan", "acceptEdits", "dontAsk", "bypassPermissions"]).has(requested) ? requested : "acceptEdits";
@@ -104,7 +112,11 @@ export function claudeCodeArgs(thread = {}, options = {}, env = process.env) {
   // long-running worker never loses track of it once the initial handoff
   // message scrolls out of the effective context. It coexists with the
   // failed-turn notice below rather than replacing it.
-  const appendPieces = [CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE, clean(options.standingMission)];
+  const appendPieces = [
+    CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE,
+    options.backgroundTaskRetry ? CLAUDE_CODE_BACKGROUND_TASK_RETRY_NOTICE : "",
+    clean(options.standingMission),
+  ];
   if (clean(options.sessionId)) {
     // A resumed transcript keeps the user message of a turn that failed before
     // Claude answered (API errors are not replayed to the model). Without this
@@ -139,6 +151,16 @@ export const CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE = [
   "Orkestr runtime notice: this is a headless, non-interactive turn with no supervising terminal.",
   "Use only foreground commands and foreground agent calls -- never request run_in_background for a Bash or Agent tool call, since a backgrounded task can be silently killed the instant this turn's result is returned and this process will not run again to finish or report it.",
   "Never tell the user you will keep working, wait, monitor something, or notify them later; finish all necessary work and give the complete result before this turn ends.",
+].join(" ");
+
+// Delivered only on the automatic, bounded, foreground retry that follows a
+// detected run_in_background attempt (see claudeCodeMaxBackgroundTaskRetries).
+// Stronger and more specific than CLAUDE_CODE_FAILED_TURN_NOTICE: it names the
+// exact violation so the retry does not just repeat it.
+export const CLAUDE_CODE_BACKGROUND_TASK_RETRY_NOTICE = [
+  "Orkestr runtime notice: the immediately preceding attempt at this exact request was rejected because it tried to run a Bash or Agent tool call with run_in_background, which this headless runtime can never finish or report back on.",
+  "This is an automatic, bounded, foreground-only retry of that same request -- do not repeat the background-task attempt in any form.",
+  "Complete the request now using only foreground tool calls and give the full final result before this turn ends.",
 ].join(" ");
 
 function toolUseBlocks(event = {}) {

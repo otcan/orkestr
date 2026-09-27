@@ -7,6 +7,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { listEvents } from "../packages/storage/src/store.js";
 import {
   cancelClaudeCodeLogin,
+  CLAUDE_CODE_BACKGROUND_TASK_RETRY_NOTICE,
   CLAUDE_CODE_FAILED_TURN_NOTICE,
   CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE,
   claudeCodeArgs,
@@ -84,8 +85,27 @@ process.stdin.on("end", () => {
     tempDir: process.env.TMPDIR || "",
     tempDirWritable: Boolean(process.env.TMPDIR && fs.existsSync(process.env.TMPDIR)),
     leakedApiKey: Boolean(process.env.ANTHROPIC_API_KEY),
+    disableBackgroundTasks: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS || "",
+    leakedOpenAiKey: Boolean(process.env.OPENAI_API_KEY),
+    leakedCodexHome: Boolean(process.env.CODEX_HOME),
     prompt: prompt.trim()
   }) + "\\n");
+  if (prompt.includes("background task always") || prompt.includes("background task once")) {
+    const session = resumed || "claude_session_fixture";
+    process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: session }) + "\\n");
+    const violate = prompt.includes("background task always") || !resumed;
+    if (violate) {
+      process.stdout.write(JSON.stringify({ type: "assistant", session_id: session, message: { content: [
+        { type: "text", text: "I will keep working on this in the background and report back once it's done." },
+        { type: "tool_use", name: "Bash", input: { command: "sleep 999", run_in_background: true } }
+      ] } }) + "\\n");
+      process.stdout.write(JSON.stringify({ type: "result", subtype: "success", session_id: session, is_error: false, result: "Started a background task; I will finish and notify you shortly." }) + "\\n");
+      process.exit(0);
+    }
+    process.stdout.write(JSON.stringify({ type: "assistant", session_id: session, message: { content: [{ type: "text", text: "draft" }] } }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "result", session_id: session, model: "claude-sonnet-fixture", result: "Reply: " + prompt.trim(), is_error: false, usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 50 } }) + "\\n");
+    process.exit(0);
+  }
   if (prompt.includes("provider limit wording")) {
     const session = resumed || "claude_session_fixture";
     process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: session }) + "\\n");
@@ -137,6 +157,10 @@ process.stdin.on("end", () => {
     ORKESTR_CLAUDE_CODE_BIN: fake,
     ORKESTR_CLAUDE_CODE_LOGIN_TRANSPORT: "pipe",
     ANTHROPIC_API_KEY: "must-not-reach-subscription-runtime",
+    // A Codex thread's own connector/env config living alongside this Claude
+    // thread on the same host process -- must never reach the Claude child.
+    OPENAI_API_KEY: "must-not-reach-claude-child",
+    CODEX_HOME: "/private/codex-home-must-not-reach-claude-child",
   };
   t.after(async () => {
     resetClaudeCodeRuntimeForTest();
@@ -192,6 +216,33 @@ test("Claude runtime rejects multiline Git SSH commands", () => {
     }),
     /claude_code_git_ssh_command_invalid/,
   );
+});
+
+test("Claude child env unconditionally disables background tasks and never inherits Codex/OpenAI credentials", () => {
+  const source = {
+    TMPDIR: "/shared/tmp",
+    PATH: "/usr/bin:/bin",
+    // Present on the parent/host process for an unrelated Codex thread --
+    // must never reach the Claude child, since the env builder below is an
+    // explicit allowlist rather than a blocklist-based passthrough.
+    OPENAI_API_KEY: "codex-secret-must-not-leak",
+    CODEX_HOME: "/private/codex-home-must-not-leak",
+    CODEX_AUTH_TOKEN: "codex-auth-must-not-leak",
+  };
+  const runtime = claudeCodeRuntimeEnv({ credentialRoot: "/srv/orkestr/profiles/opaque" }, {}, source);
+  assert.equal(runtime.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, "1");
+  assert.equal("OPENAI_API_KEY" in runtime, false);
+  assert.equal("CODEX_HOME" in runtime, false);
+  assert.equal("CODEX_AUTH_TOKEN" in runtime, false);
+  assert.equal(runtime.PATH, "/usr/bin:/bin");
+  // The source env object itself (e.g. process.env) is read, never mutated.
+  assert.deepEqual(source, {
+    TMPDIR: "/shared/tmp",
+    PATH: "/usr/bin:/bin",
+    OPENAI_API_KEY: "codex-secret-must-not-leak",
+    CODEX_HOME: "/private/codex-home-must-not-leak",
+    CODEX_AUTH_TOKEN: "codex-auth-must-not-leak",
+  });
 });
 
 async function claudeThread(ownerUserId, profileId, env, id = "claude-thread") {
@@ -351,6 +402,9 @@ test("Claude runtime selects the exact profile, strips inherited API credentials
   const recorded = (await fs.readFile(calls, "utf8")).trim().split("\n").map(JSON.parse);
   assert.equal(recorded.length, 2);
   assert.equal(recorded[0].leakedApiKey, false);
+  assert.equal(recorded[0].disableBackgroundTasks, "1");
+  assert.equal(recorded[0].leakedOpenAiKey, false);
+  assert.equal(recorded[0].leakedCodexHome, false);
   assert.equal(recorded[0].configDir.includes(primary.id), true);
   assert.equal(recorded[0].configDir.includes(home), true);
   assert.equal(recorded[0].tempDir, path.join(recorded[0].configDir, "tmp"));
@@ -430,6 +484,103 @@ test("Claude runtime voids a failed turn through the system prompt when the next
     CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE,
   ]);
   assert.deepEqual(recorded[2].args.slice(-2), ["--resume", "claude_session_fixture"]);
+});
+
+test("Claude runtime auto-retries a single background-task attempt in the foreground and projects no false completion", async (t) => {
+  const { calls, env } = await fixture(t, "background-task-once");
+  const profile = await readyProfile("owner", "Background retry", env);
+  const thread = await claudeThread("owner", profile.id, env, "claude-background-once");
+  await enqueueThreadInput(thread.id, {
+    text: "background task once",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    accountId: "account-fixture",
+    chatId: "chat-fixture",
+    sourceEventId: "event-fixture",
+  }, env);
+
+  assert.equal((await deliverClaudeCodePendingInputs(thread, env)).length, 1);
+
+  const recorded = (await fs.readFile(calls, "utf8")).trim().split("\n").map(JSON.parse);
+  assert.equal(recorded.length, 2);
+  assert.equal(recorded[0].args.includes("--resume"), false);
+  assert.deepEqual(recorded[1].args.slice(-2), ["--resume", "claude_session_fixture"]);
+  const notices = recorded.map((call) => {
+    const at = call.args.indexOf("--append-system-prompt");
+    return at >= 0 ? call.args[at + 1] : null;
+  });
+  assert.equal(notices[0], CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE);
+  assert.equal(notices[1], [
+    CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE,
+    CLAUDE_CODE_BACKGROUND_TASK_RETRY_NOTICE,
+    CLAUDE_CODE_FAILED_TURN_NOTICE,
+  ].join("\n\n"));
+
+  // The turn ends up fully completed with exactly one visible outcome: no
+  // false completion from the rejected first attempt ever reaches the user.
+  const messages = await listThreadMessages(thread.id, env);
+  const assistant = messages.filter((message) => message.role === "assistant");
+  assert.deepEqual(assistant.map((message) => [message.phase, message.text]), [
+    ["commentary", "Claude Code started working on your request."],
+    ["final_answer", "Reply: background task once"],
+  ]);
+  assert.equal(JSON.stringify(messages).includes("I will keep working"), false);
+  assert.equal(JSON.stringify(messages).includes("Started a background task"), false);
+
+  const events = await listEvents(env, 200);
+  assert.equal(events.filter((event) => event.type === "claude_code_background_task_blocked").length, 1);
+  assert.equal(events.filter((event) => event.type === "claude_code_background_task_retry").length, 1);
+  assert.equal(events.filter((event) => event.type === "claude_code_turn_failed").length, 0);
+  assert.equal(events.filter((event) => event.type === "claude_code_turn_completed").length, 1);
+  assert.equal(JSON.stringify(events).includes("I will keep working"), false);
+  assert.equal(JSON.stringify(events).includes("Started a background task"), false);
+
+  const updated = await getThread(thread.id, env);
+  assert.equal(updated.runtime.lastTurnStatus, "completed");
+  assert.equal(updated.lastError, null);
+});
+
+test("Claude runtime fences a persistent background-task violation into one durable low-cardinality failure", async (t) => {
+  const { calls, env } = await fixture(t, "background-task-always");
+  const profile = await readyProfile("owner", "Background durable failure", env);
+  const thread = await claudeThread("owner", profile.id, env, "claude-background-always");
+  await enqueueThreadInput(thread.id, {
+    text: "background task always",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    accountId: "account-fixture",
+    chatId: "chat-fixture",
+    sourceEventId: "event-fixture",
+  }, env);
+
+  await deliverClaudeCodePendingInputs(thread, env).catch(() => {});
+
+  // Bounded: exactly (1 initial + maxRetries) fake-binary invocations, never
+  // more, regardless of how many times the model keeps violating the rule.
+  const recorded = (await fs.readFile(calls, "utf8")).trim().split("\n").map(JSON.parse);
+  assert.equal(recorded.length, 2);
+
+  const messages = await listThreadMessages(thread.id, env);
+  const assistant = messages.filter((message) => message.role === "assistant");
+  // Exactly one "started working" commentary despite two attempts -- the
+  // progress reporter is shared across the retry, not recreated per attempt.
+  assert.deepEqual(assistant.map((message) => [message.phase, message.text]), [
+    ["commentary", "Claude Code started working on your request."],
+  ]);
+  assert.equal(JSON.stringify(messages).includes("I will keep working"), false);
+  assert.equal(JSON.stringify(messages).includes("Started a background task"), false);
+
+  const events = await listEvents(env, 200);
+  assert.equal(events.filter((event) => event.type === "claude_code_background_task_blocked").length, 2);
+  assert.equal(events.filter((event) => event.type === "claude_code_background_task_retry").length, 1);
+  const failedEvents = events.filter((event) => event.type === "claude_code_turn_failed");
+  assert.equal(failedEvents.length, 1);
+  assert.equal(failedEvents[0].failureCode, "claude_code_background_task_attempted");
+  assert.equal(events.filter((event) => event.type === "claude_code_turn_completed").length, 0);
+
+  const updated = await getThread(thread.id, env);
+  assert.equal(updated.lastError, "claude_code_background_task_attempted");
+  assert.equal(updated.runtime.lastTurnStatus, "failed");
 });
 
 test("Claude runtime records exact router delivery phases for WhatsApp input", async (t) => {
