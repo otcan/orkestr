@@ -234,13 +234,14 @@ test("assistant message updates do not publish duplicate ciphertext for an exist
   const thread = await createThread({ id: "thread-update-dedup", ownerUserId: "tenant-a", name: "Update dedupe", cwd: home }, runtimeEnv);
   const sourcePath = path.join(home, "report.zip");
   await fs.writeFile(sourcePath, "one report", { mode: 0o600 });
-  const text = `[report.zip](${sourcePath})`;
+  const text = "Report attached.";
 
   const message = await appendThreadMessage(thread.id, {
     role: "assistant",
     source: "codex-app-server",
     state: "completed",
     text,
+    attachments: [{ path: sourcePath, filename: "report.zip" }],
   }, runtimeEnv);
   const unchanged = await updateThreadMessage(thread.id, message.id, { text }, runtimeEnv);
   const revised = await updateThreadMessage(thread.id, message.id, { text: `Ready: ${text}` }, runtimeEnv);
@@ -330,7 +331,8 @@ test("a newly enrolled browser can reissue an unchanged source without server-si
     role: "assistant",
     source: "codex-app-server",
     state: "completed",
-    text: `[reissue.txt](${sourcePath})`,
+    text: "Attached.",
+    attachments: [{ path: sourcePath, filename: "reissue.txt" }],
   }, runtimeEnv);
   const previousPath = encryptedPublishedAttachmentPath(thread, message.attachments[0], runtimeEnv);
   const later = await enroll(runtimeEnv, "Later browser");
@@ -367,7 +369,8 @@ test("attachment reissue fails closed when the original source has changed", asy
     role: "assistant",
     source: "codex-app-server",
     state: "completed",
-    text: `[changed.txt](${sourcePath})`,
+    text: "Attached.",
+    attachments: [{ path: sourcePath, filename: "changed.txt" }],
   }, runtimeEnv);
   await fs.writeFile(sourcePath, "replacement with different bytes", { mode: 0o600 });
 

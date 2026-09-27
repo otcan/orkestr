@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import { appendEvent } from "../../storage/src/store.js";
-import { resolveThreadAttachments } from "./thread-attachments.js";
 import {
   encryptedPublishedAttachmentPath,
   publishThreadAttachmentsEncrypted,
+  validateEncryptedWhatsAppDeliverySource,
 } from "./encrypted-attachment-publication.js";
 import { listThreadMessages, updateThreadMessage } from "./threads.js";
 
@@ -25,12 +25,13 @@ export async function reissueEncryptedThreadAttachment({ thread = {}, attachment
   const attachments = Array.isArray(current.attachments) ? current.attachments : [];
   const attachment = attachments.find((candidate) => clean(candidate.id) === wanted);
   if (!attachment || attachment.encrypted !== true) throw failure("attachment_not_encrypted", 409);
-  const sourceAttachmentId = clean(attachment.sourceAttachmentId);
-  if (!sourceAttachmentId) throw failure("attachment_reissue_source_unavailable", 409);
+  if (!clean(attachment.sourceAttachmentId)) throw failure("attachment_reissue_source_unavailable", 409);
 
-  const resolved = await resolveThreadAttachments({ thread, text: current.text, attachments: [], env });
-  const source = resolved.attachments.find((candidate) => clean(candidate.id) === sourceAttachmentId);
-  if (!source) throw failure("attachment_reissue_source_unavailable", 409);
+  // The durably recorded delivery source (path + checksum) is the reissue's
+  // only source of truth; it must never depend on re-parsing message text.
+  const validated = await validateEncryptedWhatsAppDeliverySource(attachment, { thread, env });
+  if (!validated.ok) throw failure("attachment_reissue_source_unavailable", 409);
+  const source = validated.attachment;
   const publication = await publishThreadAttachmentsEncrypted({ thread, attachments: [source], env });
   const replacement = publication.attachments[0];
   if (!replacement?.encrypted) throw failure("attachment_reissue_failed", 409);
