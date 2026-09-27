@@ -3,8 +3,11 @@
 Claude worker threads can run a small amount of standing, unsupervised work
 between explicit handoffs. This is opt-in per thread and stays inside a
 permit/deny policy that only an admin-set, persisted, typed field can widen
-(`agentReleaseRole` in `packages/core/src/agent-release-role.js`) -- chat,
-task, or timer/autonomy-tick text can never widen it.
+(`agentReleaseRole`, read via `threadAgentReleaseRole` in
+`packages/core/src/agent-release-role-policy.js`, written only through the
+admin-gated `packages/core/src/agent-release-role.js` API) -- chat, task, or
+timer/autonomy-tick text can never widen it. Unknown, missing, or malformed
+values fail closed to `worker`.
 
 ## Standing mission
 
@@ -18,32 +21,52 @@ the other.
 Only the thread's own persisted `standingMission` and `agentReleaseRole`
 fields feed this text -- never message content, tool output, task/handoff
 text, or anything else a turn produced -- so the only way to change what a
-worker is told is through the admin-gated APIs below. A permit/deny policy is
-always prepended when a mission is set, selected only by the thread's
-persisted `agentReleaseRole` (default `worker`):
+worker is told is through the admin-gated APIs below. When a mission is set,
+`resolveStandingMissionPolicy` (`packages/core/src/claude-standing-mission.js`)
+prepends a permit/deny policy selected only by `agentReleaseRolePolicy(thread)`
+(`packages/core/src/agent-release-role-policy.js`) -- the same function that
+builds the one-time worker handoff prompt's role line and rules
+(`packages/core/src/thread-workers.js`), so both prompt surfaces state
+identical permissions instead of two independently maintained copies:
 
-- **Permitted** (`worker`, the default -- `CLAUDE_AUTONOMY_MISSION_POLICY` in
-  `packages/core/src/claude-standing-mission.js`): select explicitly unowned
-  backlog work; inspect, implement, test, commit, and push changes only to
-  the worker's own stored branch; choose a different safe task if blocked;
-  report status or hand off to the parent thread.
-- **Denied** (`worker`): merging, rebasing, or pushing `main` or any release
-  branch; running releases, deploys, or production restarts; production or
-  data repair; reading or writing secrets; sending external messages or
-  writing to Jira; indefinite monitoring without separate explicit
-  authorization.
-- **`release_train`** (`CLAUDE_RELEASE_TRAIN_MISSION_POLICY`, granted only
-  through `PUT /api/threads/:threadId/release-role`): additionally permits
-  following docs/release-train.md -- inventorying/syncing workers,
-  integrating, testing, pushing main/tags, watching CI, and deploying -- but
-  only for a release phase the user has explicitly requested in the current
-  conversation. Being ticked by a timer, or holding the role at all, is never
-  itself that request. Force-pushing, destructive recovery, discarding dirty
-  work, secrets access, and the rest of the worker denials still apply
-  unchanged, and incomplete branch/fleet alignment must be reported honestly.
+- **`worker`** (default -- `CLAUDE_AUTONOMY_MISSION_POLICY` in
+  `claude-standing-mission.js`): select explicitly unowned backlog work;
+  inspect, implement, test, commit, and push changes only to the worker's own
+  stored branch; choose a different safe task if blocked; report status or
+  hand off to the parent thread. Denied: merging, rebasing, or pushing `main`
+  or any release branch; running releases, deploys, or production restarts;
+  production or data repair; reading or writing secrets; sending external
+  messages or writing to Jira; indefinite monitoring without separate
+  explicit authorization.
+- **`release_train`** (granted only through
+  `PUT /api/threads/:threadId/release-role`): additionally permits
+  inventorying and syncing workers, integrating worker branches, testing,
+  pushing to main and tags, watching CI, and deploying, following every phase
+  in docs/release-train.md -- but merge-to-main, tagging, push, or deploy only
+  when the user has explicitly requested that specific release phase in the
+  current conversation. A scheduled timer or autonomy tick may inventory and
+  report status but never by itself authorizes those actions. Every worker
+  denial still applies unchanged (no force-push or destructive recovery
+  without an explicit request naming that action on non-shared-release-history
+  branches, no discarding dirty work instead of checkpointing it first, no
+  secrets access, no external messages/Jira), and incomplete branch/fleet
+  alignment must be reported honestly instead of declaring the train complete.
 
 Threads with no standing mission set behave exactly as before -- no extra
 system prompt is appended -- regardless of release role.
+
+### Policy-revision session fencing
+
+A resumed Claude Code CLI session (`--resume`) can otherwise retain context
+from before an admin changed what a thread is told. Setting or clearing the
+standing mission, and changing `agentReleaseRole`, all bump the thread's
+`claudeSystemPolicyRevision` (`packages/core/src/claude-system-policy-revision.js`,
+a fresh `crypto.randomUUID()` each time). `getClaudeCodeSession`
+(`packages/core/src/claude-code-sessions.js`) only returns a stored session id
+when its saved `policyRevision` still matches the thread's current one; a
+mismatch is treated as no session, so the next turn starts a fresh,
+non-resumed Claude CLI process instead of one that could carry forward
+pre-change policy or mission text.
 
 ### Admin API
 
@@ -51,12 +74,16 @@ system prompt is appended -- regardless of release role.
 GET    /api/threads/:threadId/mission
 PUT    /api/threads/:threadId/mission   { "mission": "text" }
 DELETE /api/threads/:threadId/mission
+GET    /api/threads/:threadId/release-role
+PUT    /api/threads/:threadId/release-role   { "role": "worker" | "release_train" }
 ```
 
-Admin-only (`assertThreadAdminOnly`), length-capped
-(`ORKESTR_CLAUDE_STANDING_MISSION_MAX_CHARS`, default 4000), and audited via
-`thread_standing_mission_updated` / `thread_standing_mission_cleared` events.
-This is intentionally not a general thread-patch route.
+Admin-only (`assertThreadAdminOnly`). The mission API is length-capped
+(`ORKESTR_CLAUDE_STANDING_MISSION_MAX_CHARS`, default 4000) and audited via
+`thread_standing_mission_updated` / `thread_standing_mission_cleared` events;
+the release-role API is audited via `thread_agent_release_role_changed`
+(`packages/core/src/agent-release-role.js`). Neither is a general
+thread-patch route.
 
 ### CLI
 
@@ -64,6 +91,8 @@ This is intentionally not a general thread-patch route.
 orkestr thread mission get   <thread> [--json]
 orkestr thread mission set   <thread> <mission text> [--json]
 orkestr thread mission clear <thread> [--json]
+orkestr worker release-role get <thread> [--json]
+orkestr worker release-role set <thread> <worker|release_train> [--json]
 ```
 
 ## Orphaned turn recovery
