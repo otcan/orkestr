@@ -31,12 +31,12 @@ per owner:
 ## WhatsApp debug footer
 
 When the debug footer is enabled, every Codex and Claude reply shows the active
-agent, its model/effort, and both providers' remaining quota. Reset times are
-shown only for the active provider. `?` means unknown; `(stale)` and
+agent, its model/effort, and both providers' remaining quota and reset times,
+so the owner can see when the other provider's quota returns before switching. `?` means unknown; `(stale)` and
 `(limited)` mark old observations and rate-limited accounts.
 
 ```text
-dbg: m:gpt-5.5/xh · agent:codex · rt:api · msg:final · codex 5h:62% wk:80% 5h-reset:12 Jan 14:00 UTC wk-reset:15 Jan 09:00 UTC · claude 5h:41% wk:77% · q:0 · load:20% · api:3% · help:/help · mode-switch:/plan · rt-switch:/switch-terminal · switch:/claude
+dbg: m:gpt-5.5/xh · agent:codex · rt:api · msg:final · codex 5h:62% wk:80% 5h-reset:12 Jan 14:00 UTC wk-reset:15 Jan 09:00 UTC · claude 5h:41% wk:77% 5h-reset:12 Jan 15:30 UTC wk-reset:16 Jan 07:00 UTC · q:0 · load:20% · api:3% · help:/help · mode-switch:/plan · rt-switch:/switch-terminal · switch:/claude
 dbg: m:sonnet/m · agent:claude · rt:claude · msg:final · codex 5h:62% wk:80% (stale) · claude 5h:41% wk:77% 5h-reset:12 Jan 13:00 UTC · q:0 · load:20% · api:3% · help:/help · switch:/codex
 ```
 

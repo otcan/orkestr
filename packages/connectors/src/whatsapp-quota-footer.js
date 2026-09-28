@@ -15,33 +15,32 @@ function windowValue(pct, status) {
   return "?";
 }
 
-export function providerQuotaSegment(quota = null, provider = "codex", { active = false, timezone = "UTC" } = {}) {
+export function providerQuotaSegment(quota = null, provider = "codex", { timezone = "UTC" } = {}) {
   const entry = quota || {};
   const parts = [
     provider,
     `5h:${windowValue(entry.fiveHourRemainingPct, entry.fiveHourStatus)}`,
     `wk:${windowValue(entry.weeklyRemainingPct, entry.weeklyStatus)}`,
   ];
-  if (active) {
-    const fiveHourReset = entry.fiveHourResetsAt ? capacityResetLabel(Date.parse(entry.fiveHourResetsAt), timezone) : "";
-    const weeklyReset = entry.weeklyResetsAt ? capacityResetLabel(Date.parse(entry.weeklyResetsAt), timezone) : "";
-    if (fiveHourReset) parts.push(`5h-reset:${fiveHourReset}`);
-    if (weeklyReset) parts.push(`wk-reset:${weeklyReset}`);
-  }
+  // Reset times are shown for both providers so the owner can see when the
+  // inactive provider's quota comes back before switching to it.
+  const fiveHourReset = entry.fiveHourResetsAt ? capacityResetLabel(Date.parse(entry.fiveHourResetsAt), timezone) : "";
+  const weeklyReset = entry.weeklyResetsAt ? capacityResetLabel(Date.parse(entry.weeklyResetsAt), timezone) : "";
+  if (fiveHourReset) parts.push(`5h-reset:${fiveHourReset}`);
+  if (weeklyReset) parts.push(`wk-reset:${weeklyReset}`);
   if (entry.limited) parts.push("(limited)");
   if (entry.stale) parts.push("(stale)");
   return parts.join(" ");
 }
 
 export function dualProviderQuotaSegments(thread = {}, env = process.env, now = Date.now()) {
-  const active = threadQuotaProvider(thread);
   const snapshot = mergeThreadIntoProviderQuota(thread?.whatsAppDebugProviderQuota || null, thread, {
     now,
     staleMs: providerQuotaStaleMs(env),
   });
   const timezone = thread?.whatsAppDebugOwnerTimezone || "UTC";
   return ["codex", "claude"].map((provider) =>
-    providerQuotaSegment(snapshot[provider], provider, { active: provider === active, timezone }));
+    providerQuotaSegment(snapshot[provider], provider, { timezone }));
 }
 
 export function executorSwitchHint(thread = {}) {
