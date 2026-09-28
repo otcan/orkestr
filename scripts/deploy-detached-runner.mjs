@@ -31,6 +31,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// The API stores the message before it waits for WhatsApp delivery, so a
+// delivery timeout or unconfirmed delivery still means the notice was posted.
+// Retrying those would post the same report again; only retry when the message
+// was not recorded (for example while the service is still restarting).
+export function noticeRecorded(exitCode, output = "") {
+  if (exitCode === 0) return true;
+  return /whatsapp_delivery_timeout|whatsapp_send_not_confirmed|delivery=|pending=true/.test(String(output || ""));
+}
+
 // Posts a thread notice through the Orkestr CLI (api-session message). Retries
 // while the service restarts; failures only affect the report, not the deploy.
 export async function postThreadNotice({ orkestrBin, threadId, deployId, text, phase = "commentary", attempts = 1, delayMs = 5_000, env = process.env, spawnImpl = spawn }) {
@@ -45,12 +54,16 @@ export async function postThreadNotice({ orkestrBin, threadId, deployId, text, p
     "--json",
   ];
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const code = await new Promise((resolve) => {
-      const child = spawnImpl(orkestrBin, args, { env, stdio: "ignore" });
-      child.on("error", () => resolve(1));
-      child.on("exit", (exitCode) => resolve(exitCode ?? 1));
+    const { code, output } = await new Promise((resolve) => {
+      let captured = "";
+      const child = spawnImpl(orkestrBin, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+      const collect = (chunk) => { if (captured.length < 16_384) captured += String(chunk); };
+      child.stdout?.on("data", collect);
+      child.stderr?.on("data", collect);
+      child.on("error", () => resolve({ code: 1, output: captured }));
+      child.on("close", (exitCode) => resolve({ code: exitCode ?? 1, output: captured }));
     });
-    if (code === 0) return { posted: true, attempt };
+    if (noticeRecorded(code, output)) return { posted: true, attempt, deliveryPending: code !== 0 };
     if (attempt < attempts) await sleep(delayMs);
   }
   return { posted: false, reason: "post_failed" };

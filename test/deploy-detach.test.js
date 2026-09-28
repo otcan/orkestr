@@ -172,3 +172,30 @@ test("CLI update --detach requires a versioned release deploy", async () => {
   assert.equal(spawned.length, 0);
   assert.match(stderr.text(), /--detach requires a versioned release/);
 });
+
+test("a notice that was recorded but timed out on WhatsApp delivery is not posted again", async (t) => {
+  const dir = await tempDir(t, "timeout");
+  const posts = path.join(dir, "posts.jsonl");
+  const orkestr = path.join(dir, "fake-orkestr.mjs");
+  await fs.writeFile(orkestr, `#!/usr/bin/env node
+import fs from "node:fs";
+fs.appendFileSync(${JSON.stringify(posts)}, "x\\n");
+process.stderr.write("whatsapp_delivery_timeout delivery=timeout reason=WhatsApp delivery did not complete pending=true\\n");
+process.exit(1);
+`, { mode: 0o755 });
+  const deploy = path.join(dir, "fake-deploy.sh");
+  await fs.writeFile(deploy, "#!/bin/bash\necho 'Orkestr deployed main-abc1234def56 (abc1234def5678901234567890abcdef12345678).'\nexit 0\n", { mode: 0o755 });
+  const code = await runDetachedDeploy([
+    "--deploy-id", "d-timeout", "--dir", dir, "--script", deploy, "--thread", "thread-1", "--orkestr-bin", orkestr, "--", "install",
+  ], { ...process.env, ORKESTR_DETACHED_DEPLOY_REPORT_ATTEMPTS: "5", ORKESTR_DETACHED_DEPLOY_REPORT_DELAY_MS: "0" });
+  assert.equal(code, 0);
+  assert.equal((await fs.readFile(posts, "utf8")).trim().split("\n").length, 2, "one start notice and one report");
+  assert.equal(JSON.parse(await fs.readFile(path.join(dir, "result.json"), "utf8")).reportPosted, true);
+});
+
+test("a notice is retried only while the message was not recorded", async (t) => {
+  const { noticeRecorded } = await import("../scripts/deploy-detached-runner.mjs");
+  assert.equal(noticeRecorded(0, ""), true);
+  assert.equal(noticeRecorded(1, "whatsapp_send_not_confirmed delivery=failed"), true);
+  assert.equal(noticeRecorded(1, "fetch failed: connect ECONNREFUSED 127.0.0.1:19812"), false);
+});
