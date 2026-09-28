@@ -174,7 +174,19 @@ if (["list", "health", "start", "stop", "restart"].includes(command)) {
   const { port } = server.address();
 
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/oauth/gmail/start?account=person@example.com`, { redirect: "manual" });
+    // ORK-512: GET only renders the confirmation form; the explicit POST
+    // gesture consumes its one-time intent and opens the virtual browser.
+    const page = await fetch(`http://127.0.0.1:${port}/oauth/gmail/start?account=person@example.com`, { redirect: "manual" });
+    const pageHtml = await page.text();
+    assert.equal(page.status, 200);
+    assert.deepEqual(openedUrls, []);
+    const field = (name) => pageHtml.match(new RegExp(`name="${name}" value="([^"]*)"`))[1];
+    const response = await fetch(`http://127.0.0.1:${port}/oauth/gmail/start`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ intentId: field("intentId"), token: field("token"), account: field("account") }),
+    });
     const html = await response.text();
     const openedUrl = new URL(openedUrls[0]);
 

@@ -1084,10 +1084,16 @@ test("user management API is admin-only and can pair a browser to a managed user
       clientId: "gmail-client",
       redirectUri: `${baseUrl}/oauth/gmail/callback`,
     }, process.env);
-    const userGmailOAuth = await read(await fetch(`${baseUrl}/api/users/alice-example.test/connectors/gmail/oauth/start`, {
+    // ORK-512: admin user OAuth start consumes a one-time intent.
+    const userGmailIntent = await read(await fetch(`${baseUrl}/api/users/alice-example.test/connectors/gmail/oauth/intent`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: adminCookie },
       body: JSON.stringify({ account: "alice-oauth@example.test" }),
+    }));
+    const userGmailOAuth = await read(await fetch(`${baseUrl}/api/users/alice-example.test/connectors/gmail/oauth/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ account: "alice-oauth@example.test", intentId: userGmailIntent.intentId, token: userGmailIntent.token }),
     }));
     assert.equal(userGmailOAuth.userId, "alice-example.test");
     assert.match(userGmailOAuth.authorizeUrl, /accounts\.google\.com/);

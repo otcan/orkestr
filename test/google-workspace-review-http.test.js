@@ -128,8 +128,18 @@ test("reviewer password opens the actual isolated Orkestr cockpit", async () => 
     assert.match(actionsHtml, /Create test draft/);
     assert.match(actionsHtml, /href="\/thread\/review-thread"/);
 
-    const oauth = await (await fetch(`${root}/api/connectors/gmail/oauth/start?capabilities=gmail_send`, {
-      headers: { cookie: sessionCookie },
+    // ORK-512: start is a two-step POST; a client-supplied capability list
+    // still cannot override the reviewer scope set chosen by the server.
+    const oauthHeaders = { cookie: sessionCookie, "content-type": "application/json" };
+    const oauthIntent = await (await fetch(`${root}/api/connectors/gmail/oauth/intent`, {
+      method: "POST",
+      headers: oauthHeaders,
+      body: JSON.stringify({ capabilities: ["gmail_send"] }),
+    })).json();
+    const oauth = await (await fetch(`${root}/api/connectors/gmail/oauth/start`, {
+      method: "POST",
+      headers: oauthHeaders,
+      body: JSON.stringify({ intentId: oauthIntent.intentId, token: oauthIntent.token }),
     })).json();
     assert.ok(oauth.authorizeUrl, JSON.stringify(oauth));
     const authorizeUrl = new URL(oauth.authorizeUrl);

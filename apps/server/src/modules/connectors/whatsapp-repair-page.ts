@@ -6,9 +6,18 @@ function htmlEscape(value: unknown): string {
     .replace(/"/g, "&quot;");
 }
 
-export function whatsappRepairPageHtml(accountId = ""): string {
-  const safeAccount = String(accountId || "sender").trim() || "sender";
+// ORK-513: an administrator page names the account it repairs. The public page
+// shown to an email-link holder is identical for every account; its one-time
+// repair intent arrives in the URL fragment and is read client-side, so the
+// server never echoes account or intent data to an unauthenticated caller.
+export function whatsappRepairPageHtml({ accountId = "", admin = false }: { accountId?: string; admin?: boolean } = {}): string {
+  const safeAccount = admin ? String(accountId || "sender").trim() || "sender" : "";
   const accountJson = JSON.stringify(safeAccount);
+  const accountRows = admin
+    ? `<dt>Account</dt>
+        <dd>${htmlEscape(safeAccount)}</dd>
+        `
+    : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -41,9 +50,7 @@ export function whatsappRepairPageHtml(accountId = ""): string {
       <h1>WhatsApp Repair</h1>
       <p>This page stays open while Orkestr prepares a fresh pairing QR and emails it to the configured repair mailbox.</p>
       <dl>
-        <dt>Account</dt>
-        <dd>${htmlEscape(safeAccount)}</dd>
-        <dt>Delivery</dt>
+        ${accountRows}<dt>Delivery</dt>
         <dd>Configured repair mailbox</dd>
       </dl>
       <button id="send" type="button">Email Fresh QR</button>
@@ -53,11 +60,18 @@ export function whatsappRepairPageHtml(accountId = ""): string {
   </main>
   <script>
     const accountId = ${accountJson};
+    const fragment = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
+    const intent = fragment.get("repair") || "";
+    if (intent) history.replaceState(null, "", location.pathname + location.search);
     const button = document.getElementById("send");
     const status = document.getElementById("status");
     function setStatus(text, error) {
       status.textContent = text;
       status.className = error ? "status error" : "status";
+    }
+    if (!accountId && !intent) {
+      button.disabled = true;
+      setStatus("Open the repair link from the most recent WhatsApp disconnect email, or sign in as an administrator.", true);
     }
     button.addEventListener("click", async () => {
       button.disabled = true;
@@ -66,14 +80,15 @@ export function whatsappRepairPageHtml(accountId = ""): string {
         const response = await fetch("/api/connectors/whatsapp/bridge/repair/send-email", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ accountId })
+          body: JSON.stringify(accountId ? { accountId } : { intent })
         });
         const raw = await response.text();
         let payload = {};
         try { payload = raw ? JSON.parse(raw) : {}; } catch {}
-        if (!response.ok || payload.ok === false) throw new Error(payload.error || "qr_email_failed");
+        if (!response.ok || payload.ok === false) throw new Error(accountId ? payload.error || "qr_email_failed" : "This repair link is invalid, expired, or already used.");
         if (payload.skippedReason === "already_ready") setStatus("WhatsApp is already paired for this account.");
         else if (payload.skippedReason === "cooldown") setStatus("A QR email was sent recently. Check the repair mailbox before requesting another one.");
+        else if (!accountId) { setStatus("Request accepted. If this account needs pairing, a QR email goes to the configured repair mailbox."); button.disabled = true; return; }
         else setStatus("QR email sent to " + ((payload.recipients || []).join(", ") || "the configured repair mailbox") + ".");
       } catch (error) {
         setStatus(error && error.message ? error.message : "Could not send QR email.", true);

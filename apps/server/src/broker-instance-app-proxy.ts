@@ -5,10 +5,8 @@ import tls from "node:tls";
 import type { INestApplication } from "@nestjs/common";
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
-import { randomUUID } from "node:crypto";
-import { startGmailOAuth } from "../../../packages/connectors/src/gmail.js";
 import { googleWorkspaceBrokeredConnectorSetupPath } from "../../../packages/connectors/src/google-workspace.js";
-import { googleWorkspaceDefaultGmailCapabilities } from "../../../packages/connectors/src/google-workspace-scopes.js";
+import { brokerGoogleWorkspaceOAuthPath, handleBrokerGoogleWorkspaceOAuth } from "./broker-google-workspace-oauth.js";
 import { encryptBrokerInstanceProxyPayload, resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
 import { clearSessionCookieHeaders, instanceAppSessionCookiePath, securityCookieName, securitySessionForToken } from "../../../packages/core/src/security.js";
 import { listTenantVms } from "../../../packages/core/src/tenant-vm-registry.js";
@@ -200,20 +198,6 @@ function clean(value: unknown): string {
   return String(value || "").trim();
 }
 
-function stringArray(value: unknown): string[] {
-  const values = Array.isArray(value) ? value : clean(value).split(/[\s,]+/g);
-  const result: string[] = [];
-  const seen = new Set<string>();
-  for (const item of values) {
-    const text = clean(item);
-    const key = text.toLowerCase();
-    if (!text || seen.has(key)) continue;
-    seen.add(key);
-    result.push(text);
-  }
-  return result;
-}
-
 function authIntentAllowsGoogleConnect(session: any, instanceId: string): boolean {
   if (!session || clean(session.instanceId) !== instanceId) return false;
   const intent = session.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
@@ -224,71 +208,14 @@ function authIntentAllowsGoogleConnect(session: any, instanceId: string): boolea
     allowedActions.some((action: string) => /^orkestr_auth\.google\.connect(?::|$)/.test(clean(action)));
 }
 
-function brokerGoogleWorkspaceStartRequest(request: any, route: BrokerAppRoute): URL | null {
-  if (String(request?.method || "GET").toUpperCase() !== "GET") return null;
-  const parsed = new URL(route.upstreamPath || "/", "http://tenant.local");
-  return parsed.pathname === "/api/connectors/gmail/oauth/start" ? parsed : null;
-}
-
+// ORK-512: the auth-intent Gmail start is a two-step POST flow handled on the
+// parent; see broker-google-workspace-oauth.ts.
 async function handleBrokerGoogleWorkspaceStart(request: any, response: any, route: BrokerAppRoute): Promise<boolean> {
-  const parsed = brokerGoogleWorkspaceStartRequest(request, route);
-  if (!parsed) return false;
+  if (!brokerGoogleWorkspaceOAuthPath(route)) return false;
   const session = request?.orkestrSecuritySession || null;
   if (!authIntentAllowsGoogleConnect(session, route.instanceId)) return false;
-  const intent = session.authIntent && typeof session.authIntent === "object" ? session.authIntent : {};
   const owner = await ownerUserForBrokerInstance(route.instanceId);
-  const userId = clean(owner.userId || intent.userId || session.userId);
-  const tenantVmId = clean(intent.tenantVmId || owner.tenantVmId);
-  const account = clean(parsed.searchParams.get("account")).toLowerCase();
-  const googleConnectionId = clean(parsed.searchParams.get("accountId") || parsed.searchParams.get("account_id") || intent.googleConnectionId);
-  const oauthAppId = clean(parsed.searchParams.get("oauthApp") || parsed.searchParams.get("oauth_app") || intent.oauthAppId);
-  const alias = clean(parsed.searchParams.get("alias") || intent.connectionAlias);
-  const useMode = clean(parsed.searchParams.get("useMode") || parsed.searchParams.get("use_mode") || intent.connectionUseMode);
-  const setAsMain = ["1", "true", "yes"].includes(clean(parsed.searchParams.get("setAsMain") || parsed.searchParams.get("set_as_main") || intent.setAsMain).toLowerCase());
-  const setAsThreadDefault = ["1", "true", "yes"].includes(clean(parsed.searchParams.get("setAsThreadDefault") || parsed.searchParams.get("set_as_thread_default") || intent.setAsThreadDefault).toLowerCase());
-  const capabilities = stringArray(parsed.searchParams.getAll("capability").length
-    ? parsed.searchParams.getAll("capability")
-    : parsed.searchParams.get("capabilities") || googleWorkspaceDefaultGmailCapabilities());
-  const connectId = clean(intent.connectId || session.challengeId || session.id) || randomUUID();
-  try {
-    const threadId = clean(intent.threadId);
-    const chatId = clean(intent.chatId);
-    const accountId = clean(intent.accountId);
-    const started = await startGmailOAuth(process.env, {
-      userId,
-      provider: "google_workspace",
-      capabilities,
-      account,
-      googleConnectionId,
-      oauthAppId,
-      alias,
-      useMode,
-      setAsMain,
-      setAsThreadDefault,
-      ignoreConfiguredAccount: true,
-      connectId,
-      threadId,
-      chatId,
-      accountId,
-      brokerInstanceId: route.instanceId,
-      brokerTenantVmId: tenantVmId,
-      brokerTenantUserId: userId,
-      brokerTenantThreadId: threadId,
-      brokerTenantChatId: chatId,
-      brokerTenantAccountId: accountId,
-    });
-    sendJson(response, 200, {
-      ...started,
-      ok: true,
-      provider: "google_workspace",
-      connectId,
-    });
-  } catch (error) {
-    sendJson(response, Number((error as any)?.statusCode || 400) || 400, {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  await handleBrokerGoogleWorkspaceOAuth(request, response, route, owner, sendJson);
   return true;
 }
 

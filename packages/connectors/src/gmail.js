@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { appendEvent, readJson, writeJson, writeSecretJson } from "../../storage/src/store.js";
-import { connectorFile, connectorScopePaths, listConnectorScopePaths } from "./connector-storage.js";
+import { connectorFile, connectorScopePaths } from "./connector-storage.js";
+import { claimGmailOAuthState } from "./gmail-oauth-state.js";
 import {
   encryptBrokerClientPayload,
   encryptBrokerInstancePayload,
@@ -595,6 +596,7 @@ export async function startGmailOAuth(env = process.env, options = {}) {
     connectId: clean(options.connectId),
     account,
     userId: scope.userId || "",
+    initiatorUserId: clean(options.initiatorUserId || options.principal?.userId),
     tenantVmId,
     threadId: clean(options.threadId || thread.id),
     chatId: clean(options.chatId || binding.chatId),
@@ -804,27 +806,6 @@ export async function getGmailAccessToken(env = process.env, fetchImpl = fetch, 
   return refreshed.accessToken;
 }
 
-async function findOAuthState(state, env = process.env) {
-  let sawSavedState = false;
-  for (const scope of await listConnectorScopePaths(env)) {
-    const savedState = await readJson(connectorFile(scope, "oauth", "gmail-state.json"), {});
-    if (!savedState.state) continue;
-    sawSavedState = true;
-    if (!state || state === savedState.state) {
-      return {
-        savedState,
-        scopeOptions: scope.userId ? { userId: scope.userId } : {},
-      };
-    }
-  }
-  if (sawSavedState || state) {
-    const error = new Error("gmail_oauth_state_mismatch");
-    error.statusCode = 400;
-    throw error;
-  }
-  return { savedState: {}, scopeOptions: {} };
-}
-
 async function provisionBrokeredGmailGrant(savedState = {}, token = {}, env = process.env, fetchImpl = fetch) {
   const brokerInstanceId = clean(savedState.brokerInstanceId);
   if (!brokerInstanceId) return null;
@@ -883,7 +864,7 @@ async function provisionBrokeredGmailGrant(savedState = {}, token = {}, env = pr
   return payload;
 }
 
-export async function finishGmailOAuth(query, env = process.env, fetchImpl = fetch) {
+export async function finishGmailOAuth(query, env = process.env, fetchImpl = fetch, context = {}) {
   const code = String(query.get("code") || "").trim();
   const state = String(query.get("state") || "").trim();
   if (!code) {
@@ -891,7 +872,7 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     error.statusCode = 400;
     throw error;
   }
-  const { savedState, scopeOptions } = await findOAuthState(state, env);
+  const { savedState, scopeOptions } = await claimGmailOAuthState(state, context, env);
   const brokered = Boolean(clean(savedState.brokerInstanceId));
   const token = await exchangeGmailCode(code, env, fetchImpl, {
     ...scopeOptions,
