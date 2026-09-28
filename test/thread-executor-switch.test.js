@@ -402,3 +402,32 @@ test("a deferred switch is applied from the Codex app-server turn completion", a
   assert.equal(after.pendingExecutorSwitch, undefined);
   assert.equal(after.executorStates.codex.codexThreadId, OLD_CODEX_ID);
 });
+
+test("an attached-terminal Codex thread is moved off the terminal before switching to Claude", async (t) => {
+  const { env } = await fixture(t, "raw-terminal");
+  await readyProfile(env);
+  const terminal = { runtimeKind: "raw-terminal", terminalMode: "raw-terminal", runtime: { runtimeKind: "raw-terminal", state: "ready", terminalMode: "raw-terminal" } };
+  await codexThread("raw-terminal", env, terminal);
+  const { leaveRawTerminalForExecutorSwitch } = await import("../packages/core/src/raw-terminal-exit.js");
+  const slept = [];
+  const runtime = fakeRuntime({
+    leaveRawTerminal: (thread, env) => leaveRawTerminalForExecutorSwitch(thread, env, { sleepThread: async (id, options) => { slept.push({ id, options }); } }),
+  });
+  t.after(setExecutorSwitchRuntimeForTest(runtime));
+
+  // An agent never closes its own terminal session.
+  await assert.rejects(switchThreadExecutor("raw-terminal", "claude", { runtime, actor: "self", reason: "quota" }, env), /executor_switch_raw_terminal_unsupported/);
+  // A busy terminal is only closed on an explicit "now".
+  await updateThread("raw-terminal", { state: "working" }, env);
+  await assert.rejects(switchThreadExecutor("raw-terminal", "claude", { runtime }, env), /executor_switch_raw_terminal_busy/);
+  assert.equal(slept.length, 0);
+
+  await updateThread("raw-terminal", { state: "ready" }, env);
+  const result = await switchThreadExecutor("raw-terminal", "claude", { runtime }, env);
+  assert.equal(result.changed, true);
+  assert.deepEqual(slept.map((entry) => [entry.id, entry.options.kill]), [["raw-terminal", true]]);
+  const after = await getThread("raw-terminal", env);
+  assert.equal(threadUsesClaudeCode(after), true);
+  assert.notEqual(after.terminalMode, "raw-terminal");
+  assert.notEqual(after.runtime?.terminalMode, "raw-terminal");
+});

@@ -34,6 +34,11 @@ claude_code_runtime_surface_switch_unsupported`; switch to Codex with
 `/agent codex` first. `/agent api` and `/agent terminal` keep the runtime surface
 meaning.
 
+A Codex thread on the attached-terminal surface is moved off the terminal
+(session closed, thread returned to the API surface) before switching to
+Claude. A busy terminal is only closed when the request says `now`
+(`/claude now`); an agent's own self-switch never closes its terminal.
+
 If `ORKESTR_CLAUDE_CODE_MODELS` is set (a comma-separated list), Claude model
 names must be in that list.
 

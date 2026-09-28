@@ -7,6 +7,7 @@ import { normalizeCodexModel, normalizeReasoningEffort } from "./codex-app-serve
 import { writeExecutorHandoff } from "./executor-handoff.js";
 import { listLlmAccountProfiles, resolveLlmAccountProfile } from "./llm-account-profiles.js";
 import { isAdminPrincipal } from "./policy.js";
+import { leaveRawTerminalForExecutorSwitch } from "./raw-terminal-exit.js";
 import { threadUsesRawTerminalMode } from "./raw-terminal-mode.js";
 import {
   EXECUTOR_CLAUDE,
@@ -70,6 +71,7 @@ async function defaultRuntime() {
     interruptClaude: claude.interruptClaudeCodeThread,
     claudeTurnActive: (threadId) => claude.hasActiveClaudeCodeSupervisor(threadId),
     requestDelivery: (threadId, env) => leases.requestThreadInputDelivery(threadId, env, 0),
+    leaveRawTerminal: (thread, env) => leaveRawTerminalForExecutorSwitch(thread, env, { sleepThread: leases.sleepThread }),
   };
 }
 
@@ -130,6 +132,19 @@ function assertSwitchableSource(thread) {
   if (from === "api-agent") throw switchError("executor_switch_unsupported_runtime", 409);
   if (threadUsesRawTerminalMode(thread)) throw switchError("executor_switch_raw_terminal_unsupported", 409, { hint: "Use /switch api before switching executors." });
   return from;
+}
+
+// A thread on the attached-terminal Codex surface is moved off it before an
+// executor switch. A busy terminal is only closed on an explicit "now", and an
+// agent never closes its own terminal session.
+async function leaveTerminalIfSwitching(thread, to, { self, when, runtime }, env) {
+  if (!threadUsesRawTerminalMode(thread) || activeThreadExecutor(thread) === to) return thread;
+  if (self) throw switchError("executor_switch_raw_terminal_unsupported", 409, { hint: "Use /switch api before switching executors." });
+  if (clean(thread.state).toLowerCase() === "working" && when !== "now") {
+    throw switchError("executor_switch_raw_terminal_busy", 409, { hint: "The terminal is busy; add 'now' to close it and switch." });
+  }
+  if (!runtime.leaveRawTerminal) throw switchError("executor_switch_raw_terminal_unsupported", 409, { hint: "Use /switch api before switching executors." });
+  return runtime.leaveRawTerminal(thread, env);
 }
 
 function requestFields(target, options = {}) {
@@ -249,7 +264,7 @@ async function waitForPendingApplied(threadId, env) {
 }
 
 export async function switchThreadExecutor(threadId, target, options = {}, env = process.env) {
-  const thread = await getThread(threadId, env);
+  let thread = await getThread(threadId, env);
   if (!thread) throw switchError("thread_not_found", 404);
   const to = normalizeExecutorTarget(target);
   if (!to) throw switchError("executor_target_invalid", 400);
@@ -259,6 +274,7 @@ export async function switchThreadExecutor(threadId, target, options = {}, env =
   if (!["now", "after_turn"].includes(when)) throw switchError("executor_switch_when_invalid", 400);
   if (self) when = "after_turn";
   const request = await validateRequest(thread, { ...requestFields(to, options), when }, options, env);
+  thread = await leaveTerminalIfSwitching(thread, to, { self, when, runtime }, env);
   const from = assertSwitchableSource(thread);
   if (self) {
     if (!request.reason) throw switchError("executor_self_switch_reason_required", 400);

@@ -24,6 +24,7 @@ const errorReplies = {
   codex_effort_invalid: "That Codex reasoning effort is not valid.",
   executor_self_switch_rate_limited: "Executor self-switch is rate limited. Try again later.",
   executor_switch_raw_terminal_unsupported: "This thread is in attached-terminal mode. Use /switch api first.",
+  executor_switch_raw_terminal_busy: "The attached terminal is busy. Send /claude now (or /codex now) to close it and switch.",
   executor_switch_unsupported_runtime: "This thread's runtime cannot switch executors.",
   executor_switch_start_failed: "The target executor failed to start; the thread stays on its previous executor.",
 };
