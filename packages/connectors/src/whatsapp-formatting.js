@@ -1,6 +1,7 @@
 import os from "node:os";
 import { modelControlsReadOnlyReason } from "../../core/src/codex-model-controls.js";
-import { capacityResetDate, capacityResetLabel } from "./whatsapp-capacity-reset.js";
+import { dualProviderQuotaSegments, executorSwitchHint } from "./whatsapp-quota-footer.js";
+import { threadQuotaProvider } from "../../core/src/provider-quota-snapshot.js";
 import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { codexAssistantSource, threadSuppressesWhatsAppDebugFooter } from "./whatsapp-mirror-policy.js";
 
@@ -282,72 +283,6 @@ function processCpuDebugPercent() {
   return Math.max(0, Math.min(999, percent));
 }
 
-function codexRateLimitsRecord(thread = {}) {
-  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
-  return thread?.codexRateLimits && typeof thread.codexRateLimits === "object"
-    ? thread.codexRateLimits
-    : metadata.codexRateLimits && typeof metadata.codexRateLimits === "object"
-      ? metadata.codexRateLimits
-      : null;
-}
-
-function providerRateLimitsRecord(thread = {}) {
-  if (!claudeCodeThread(thread)) return codexRateLimitsRecord(thread);
-  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
-  return thread?.claudeRateLimits && typeof thread.claudeRateLimits === "object"
-    ? thread.claudeRateLimits
-    : metadata.claudeRateLimits && typeof metadata.claudeRateLimits === "object"
-      ? metadata.claudeRateLimits
-      : null;
-}
-
-function codexRateLimitWindowMinutes(record = null) {
-  const minutes = Number(record?.window_minutes);
-  return Number.isFinite(minutes) && minutes > 0 ? minutes : null;
-}
-
-function providerRateLimitRecordForPeriod(thread = {}, period = "") {
-  const limits = providerRateLimitsRecord(thread);
-  if (!limits) return null;
-  const entries = ["primary", "secondary"]
-    .map((key) => ({ key, record: limits?.[key] && typeof limits[key] === "object" ? limits[key] : null }))
-    .filter((entry) => entry.record);
-  const weekly = period === "weekly";
-  const byWindow = entries.find((entry) => {
-    const minutes = codexRateLimitWindowMinutes(entry.record);
-    if (!minutes) return false;
-    return weekly ? minutes >= 10080 : minutes <= 360;
-  });
-  if (byWindow) return byWindow.record;
-  const fallbackKey = weekly ? "secondary" : "primary";
-  const fallback = limits?.[fallbackKey] && typeof limits[fallbackKey] === "object" ? limits[fallbackKey] : null;
-  return codexRateLimitWindowMinutes(fallback) ? null : fallback;
-}
-
-function providerRateLimitsDebugValue(thread = {}, period = "") {
-  const limit = providerRateLimitRecordForPeriod(thread, period);
-  if (!limit) return claudeCodeThread(thread) ? "unknown" : "";
-  const reset = Number(limit.resets_at);
-  if (claudeCodeThread(thread) && Number.isFinite(reset) && reset > 0 && reset * (reset < 1e12 ? 1000 : 1) <= Date.now()) {
-    return "unknown";
-  }
-  if (String(limit.status || "").trim().toLowerCase() === "allowed" && limit.used_percent == null) return "available";
-  if (limit.used_percent === null || limit.used_percent === undefined || limit.used_percent === "") {
-    return claudeCodeThread(thread) ? "unknown" : "";
-  }
-  const used = Number(limit.used_percent);
-  if (!Number.isFinite(used) || used < 0 || used > 100) return claudeCodeThread(thread) ? "unknown" : "";
-  const remaining = Math.max(0, Math.min(100, 100 - used));
-  return `${Math.round(remaining)}%`;
-}
-
-function futureProviderResetLabel(thread = {}, period = "") {
-  const reset = providerRateLimitRecordForPeriod(thread, period)?.resets_at;
-  const date = capacityResetDate(reset);
-  if (!date || date.getTime() <= Date.now()) return "";
-  return capacityResetLabel(reset, thread.whatsAppDebugOwnerTimezone);
-}
-
 export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "", thread = null) {
   if (!footerEnabled(env)) return false;
   if (thread && threadRequiresTenantIsolation(thread, env)) return false;
@@ -371,28 +306,20 @@ function runtimeSwitchHint(runtimeSurface = "") {
 
 export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
   const isClaude = claudeCodeThread(thread);
+  const agent = threadQuotaProvider(thread) || "api-agent";
   const mode = codexModeDebugValue(message, thread);
   const runtimeSurface = runtimeSurfaceDebugValue(thread);
   const runtimeSwitch = runtimeSwitchHint(runtimeSurface);
+  const executorSwitch = executorSwitchHint(thread);
   const queueNotice = String(deliveryType || "").trim() === "queue_notice";
-  const fiveHourRemaining = providerRateLimitsDebugValue(thread, "fiveHour");
-  const weeklyRemaining = providerRateLimitsDebugValue(thread, "weekly");
-  const fiveHourReset = isClaude ? futureProviderResetLabel(thread, "fiveHour") : "";
-  const weeklyReset = isClaude
-    ? futureProviderResetLabel(thread, "weekly")
-    : capacityResetLabel(providerRateLimitRecordForPeriod(thread, "weekly")?.resets_at, thread.whatsAppDebugOwnerTimezone);
   const parts = [
     `m:${modelDebugLabel(message, thread, env)}`,
-    ...(isClaude ? ["agent:claude-code"] : []),
+    `agent:${agent}`,
     ...(!isClaude && codexFastDebugValue(message, thread) ? ["fast:on"] : []),
     ...(!isClaude && mode ? [`mode:${mode}`] : []),
     ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),
     `msg:${footerMessageType(deliveryType)}`,
-    ...(isClaude ? ["quota:remaining"] : []),
-    ...(fiveHourRemaining ? [`5h:${fiveHourRemaining}`] : []),
-    ...(fiveHourReset ? [`5h-reset:${fiveHourReset}`] : []),
-    ...(weeklyRemaining ? [`wk:${weeklyRemaining}`] : []),
-    ...(weeklyReset ? [`${isClaude ? "wk-reset" : "reset"}:${weeklyReset}`] : []),
+    ...dualProviderQuotaSegments(thread, env),
     ...(queueNotice
       ? [`queue:${queueNoticeDebugCount(messages, message)}`, `reason:${queueNoticeDebugReason(message)}`]
       : [`q:${queueDebugCount(messages, message)}`]),
@@ -402,6 +329,7 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
     ...(!isClaude && env.ORKESTR_SETTINGS_COMMANDS_ENABLED !== "0" && !modelControlsReadOnlyReason(thread, env) && !thread.codexSettingsUncertain ? ["model:/model", "effort:/effort", "fast:/fast"] : []),
     ...(!isClaude ? [mode === "plan" ? "mode-switch:/code" : "mode-switch:/plan"] : []),
     ...(runtimeSwitch ? [`rt-switch:${runtimeSwitch}`] : []),
+    ...(executorSwitch ? [executorSwitch] : []),
   ];
   return `dbg: ${parts.join(" · ")}`;
 }

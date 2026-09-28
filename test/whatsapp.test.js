@@ -333,17 +333,17 @@ function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^
     ? ` · rt-switch:${runtime === "api" ? "/switch-terminal" : "/switch-api"}`
     : "(?: · rt-switch:/switch-[a-z-]+)?";
   const pattern = new RegExp(
-    `\\n\\ndbg: m:${model === "[^·\\n]+" ? model : escapedModel}` +
+    `\\n\\ndbg: m:${model === "[^·\\n]+" ? model : escapedModel} · agent:codex` +
       (mode ? ` · mode:${mode}` : "") +
       (runtime ? ` · rt:${runtime}` : "(?: · rt:[a-z-]+)?") +
       ` · msg:${messageType}` +
-      (fiveHour ? ` · 5h:${fiveHour}` : "(?: · 5h:\\d+%)?") +
-      (weekly ? ` · wk:${weekly}` : "(?: · wk:\\d+%)?") +
+      ` · codex 5h:${fiveHour || "(?:\\d+%|\\?)"} wk:${weekly || "(?:\\d+%|\\?)"}[^·\\n]*` +
+      " · claude 5h:[^ ·]+ wk:[^·\\n]+" +
       `${queuePart} · load:\\d+% · api:\\d+% · help:/help` +
       (modelControls ? " · model:/model · effort:/effort · fast:/fast" : "") +
       (mode === "plan" ? " · mode-switch:/code" : " · mode-switch:/plan") +
       runtimeSwitch +
-      "$",
+      " · switch:/claude$",
   );
   assert.match(text, pattern);
 }
@@ -13330,7 +13330,7 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
   assert.equal(stripDebugFooter(calls[0].body.text), "Milestone: routing check started.");
   assert.match(
     calls[0].body.text,
-    /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · 5h:88% · wk:66% · q:0 · load:\d+% · api:\d+% · help:\/help · mode-switch:\/code$/,
+    /\n\ndbg: m:gpt-5\.5\/xh · agent:codex · mode:plan · msg:update · codex 5h:88% wk:66%[^·\n]* · claude 5h:\? wk:\? · q:0 · load:\d+% · api:\d+% · help:\/help · mode-switch:\/code · switch:\/claude$/,
   );
 });
 
@@ -13419,8 +13419,7 @@ test("whatsapp debug footer classifies a single weekly Codex limit by window", a
   });
 
   assert.equal(delivery.delivered.length, 1);
-  assert.match(calls[0].body.text, / · wk:96% · /);
-  assert.doesNotMatch(calls[0].body.text, / · 5h:\d+%/);
+  assert.match(calls[0].body.text, / · codex 5h:\? wk:96% · /);
 });
 
 test("whatsapp debug footer reads live Codex rate limits when thread metadata is stale", async (t) => {

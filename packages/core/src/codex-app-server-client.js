@@ -1008,6 +1008,7 @@ export class CodexAppServerClient {
         await updateThread(thread.id, {
           codexTokenUsage: params.usage || params.tokenUsage || null,
           codexRateLimits: params.rateLimits || null,
+          ...(params.rateLimits ? { codexRateLimitsObservedAt: new Date().toISOString() } : {}),
           executor: {
             ...(thread.executor || {}),
             metadata: {

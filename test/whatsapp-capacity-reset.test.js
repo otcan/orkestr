@@ -4,9 +4,12 @@ import { capacityResetDate, capacityResetLabel, withWhatsAppOwnerTimezone } from
 import { appendWhatsAppDebugFooter, whatsappDebugFooter } from "../packages/connectors/src/whatsapp-formatting.js";
 
 const epochMs = Date.parse("2026-09-20T12:00:00Z");
+// Reset windows in the past no longer describe current usage, so footer
+// fixtures use a far-future reset with the same calendar label.
+const futureResetMs = Date.parse("2099-09-20T12:00:00Z");
 const thread = {
   id: "capacity-fixture", ownerUserId: "owner-a",
-  codexRateLimits: { primary: { used_percent: 20, window_minutes: 300 }, secondary: { used_percent: 40, window_minutes: 10080, resets_at: epochMs / 1000 } },
+  codexRateLimits: { primary: { used_percent: 20, window_minutes: 300 }, secondary: { used_percent: 40, window_minutes: 10080, resets_at: futureResetMs / 1000 } },
 };
 
 test("capacity reset accepts seconds, milliseconds and numeric strings with explicit timezone", () => {
@@ -28,7 +31,7 @@ test("capacity reset omits missing, malformed, implausible and non-scalar values
 
 test("weekly reset follows window classification, not primary/secondary position", () => {
   const swapped = { ...thread, codexRateLimits: { primary: thread.codexRateLimits.secondary, secondary: thread.codexRateLimits.primary }, whatsAppDebugOwnerTimezone: "Europe/Berlin" };
-  assert.match(whatsappDebugFooter({ thread: swapped }), /wk:60% · reset:20 Sept 14:00 Europe\/Berlin · /);
+  assert.match(whatsappDebugFooter({ thread: swapped }), / · codex 5h:80% wk:60% wk-reset:20 Sept 14:00 Europe\/Berlin · claude 5h:\? wk:\? · /);
   const missing = { ...thread, codexRateLimits: { primary: { ...thread.codexRateLimits.primary, resets_at: epochMs } } };
   assert.doesNotMatch(whatsappDebugFooter({ thread: missing }), /reset:/);
   const invalid = { ...thread, codexRateLimits: { secondary: { ...thread.codexRateLimits.secondary, resets_at: "bad" } } };
@@ -38,7 +41,7 @@ test("weekly reset follows window classification, not primary/secondary position
 test("footer reset respects existing suppression and replaces rather than duplicates footer", () => {
   const options = { thread, message: { source: "codex-app-server", role: "assistant" }, env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1", ORKESTR_ADMIN_USER_ID: "owner-a" } };
   const once = appendWhatsAppDebugFooter("Reply.", options);
-  assert.match(once, /reset:20 Sept 12:00 UTC/);
+  assert.match(once, /wk-reset:20 Sept 12:00 UTC/);
   assert.equal((appendWhatsAppDebugFooter(once, options).match(/reset:/g) || []).length, 1);
   assert.equal(appendWhatsAppDebugFooter(once, { ...options, appendDebugFooter: false }), "Reply.");
   assert.equal(appendWhatsAppDebugFooter("Reply.", { ...options, env: { ...options.env, ORKESTR_WHATSAPP_DEBUG_FOOTER: "0" } }), "Reply.");
