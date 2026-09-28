@@ -55,6 +55,48 @@ interactive input (explicit `/now` and "Send now" still interrupt). The
 per-binding opt-outs and `ORKESTR_WHATSAPP_INBOUND_STEER_DEFAULT=0` apply to
 Claude Code threads the same way they apply to Codex.
 
+### Claude Code turn limits and visibility
+
+Each Claude Code turn is supervised with these limits:
+
+| Limit | Env | Default |
+| --- | --- | --- |
+| Whole turn | `ORKESTR_CLAUDE_CODE_TIMEOUT_MS` | 30 min |
+| Single tool call | `ORKESTR_CLAUDE_TOOL_DEADLINE_MS` | 20 min |
+| Single sub-agent call (`Agent`, legacy `Task`) | `ORKESTR_CLAUDE_AGENT_TOOL_DEADLINE_MS` | `0` (exempt) |
+| No stream output | `ORKESTR_CLAUDE_SEMANTIC_INACTIVITY_MS` | 10 min |
+
+Sub-agent calls are exempt from the per-tool deadline by default; they remain
+bounded by the turn timeout and the no-output detector. Tools running inside a
+sub-agent keep their own per-tool deadline, measured from their own start, so
+nested activity neither extends nor shortens another tool's deadline.
+
+Claude's own short text written between tool calls is mirrored to the bound
+chat as `commentary`, like Codex commentary. It is released only after a later
+tool call shows it was not the final answer, deduplicated, whitespace-trimmed,
+capped (`ORKESTR_CLAUDE_INTERIM_TEXT_MAX_CHARS`, default 600), and throttled
+with coalescing (`ORKESTR_CLAUDE_INTERIM_TEXT_MIN_INTERVAL_MS`, default 20 s;
+`ORKESTR_CLAUDE_INTERIM_TEXT_MAX_MESSAGES`, default 40). Sub-agent narration
+is not mirrored. Generic "Claude Code is ..." labels are only a fallback after
+Claude has written no text for `ORKESTR_CLAUDE_PROGRESS_LABEL_FALLBACK_MS`
+(default 60 s).
+
+The standing headless notice asks Claude to announce long steps, keep tool
+calls and sub-agent tasks short, split large jobs into phases across turns, and
+always end with a summary of done, partial (with branch and worktree paths),
+and next work.
+
+When Orkestr stops a turn itself (tool deadline, turn timeout, no-output
+stall, or output cap), it appends a visible final reply that names the reason,
+the tool and elapsed time, and a best-effort, time-bounded
+(`ORKESTR_CLAUDE_PARTIAL_WORK_TIMEOUT_MS`, default 8 s) partial-work summary:
+repository path, branch, and changed-file count for the thread workspace and
+any git worktree whose path appeared in the turn's tool inputs. File contents
+are never included. The session is kept, so replying "continue" resumes it with
+a notice that the previous turn was stopped and may have left partial work.
+User-requested interrupts (`/stop`, `/now`, instant interrupt) never produce
+this notice.
+
 ## Liveness
 
 Runtime age is not failure evidence. Live model output, tool and MCP activity,
@@ -90,6 +132,7 @@ newer execution.
 ```bash
 node --test test/codex-app-server.test.js
 node --import ./test/test-bootstrap.mjs --test test/claude-code-instant-interrupt.test.js
+node --import ./test/test-bootstrap.mjs --test test/claude-turn-visibility.test.js test/claude-turn-kill-notice.test.js
 node --test test/runtime-liveness.test.js test/connectors-mcp.test.js
 node --test test/tenant-api-agent.test.js
 node --test test/whatsapp-connector-outbox.test.js test/whatsapp-live-mirror-recovery.test.js

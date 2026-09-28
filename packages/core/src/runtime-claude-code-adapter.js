@@ -34,6 +34,8 @@ import {
   recoverOrphanedAttempt,
 } from "./claude-code-supervised-process.js";
 import { runClaudeCodeProcess, supervisionIdentityPath } from "./claude-code-process-runner.js";
+import { appendClaudeCodeKillNotice, claudeCodeTerminationReason } from "./claude-code-kill-notice.js";
+import { createClaudeCodeWorkspaceTracker } from "./claude-code-partial-work.js";
 import { resolveStandingMissionAppendText } from "./claude-standing-mission.js";
 import { claudeCodeStatusPayload } from "./claude-code-status.js";
 import { claudeCodeTelemetryPatch } from "./claude-code-telemetry.js";
@@ -178,6 +180,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
     onPersisted: () => deliveryScheduler?.(thread.id, env, 0),
   }, env);
   await progress.start();
+  const workspace = createClaudeCodeWorkspaceTracker();
 
   const maxBackgroundTaskRetries = claudeCodeMaxBackgroundTaskRetries(env);
   let backgroundTaskRetries = 0;
@@ -186,16 +189,10 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
   try {
     let result;
     try {
-      // A detected run_in_background attempt gets a small, hard-bounded
-      // number of *immediate* foreground retries of this same input/session
-      // (not a deferred requeue -- the caller is still awaiting this call).
-      // Each retry runs under a fresh attemptId and a stronger notice naming
-      // the exact violation. Exceeding the bound re-throws so the surrounding
-      // catch below reports one durable, low-cardinality failure instead of
-      // looping forever; no assistant final or progress "started" commentary
-      // is ever emitted for a discarded intermediate attempt, so a retry
-      // that eventually succeeds or fails still produces exactly one visible
-      // outcome for the user.
+      // A detected run_in_background attempt gets a small, hard-bounded number
+      // of *immediate* foreground retries of this same input/session under a
+      // fresh attemptId and a stronger notice. Exceeding the bound re-throws
+      // into one durable failure; discarded attempts emit no visible output.
       for (;;) {
         try {
           result = await runClaudeCodeProcess({
@@ -220,6 +217,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
             // first would leak that false claim to WhatsApp before the
             // rejection below ever happens.
             onEvent: (event) => {
+              workspace.observe(event);
               if (!claudeCodeEventBackgroundToolUse(event)) progress.observe(event);
             },
             // Forward supervisor heartbeats to the progress reporter.
@@ -315,7 +313,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
       ...(failureTelemetry?.tokenUsage ? { claudeTokenUsage: failureTelemetry.tokenUsage } : {}),
       ...(failureTelemetry?.rateLimits ? { claudeRateLimits: failureTelemetry.rateLimits, claudeRateLimitsObservedAt: nowIso() } : {}),
       ...(failureTelemetry?.contextWindow ? { claudeContextWindow: failureTelemetry.contextWindow } : {}),
-      runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "failed", activeTurnId: null, lastTurnId: attemptId, lastTurnStatus: "failed", lastTurnError: failureCode },
+      runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "failed", activeTurnId: null, lastTurnId: attemptId, lastTurnStatus: "failed", lastTurnError: failureCode, lastTurnTermination: claudeCodeTerminationReason(error) || null },
     }, env).catch(() => thread);
     if (failureCode === "claude_code_rate_limited") {
       await updateLlmAccountProfileState(thread.ownerUserId, profile.id, "rate_limited", { failureCode, credentialRevision: profile.credentialRevision || 0 }, env).catch(() => {});
@@ -324,6 +322,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
     }
     await appendTurnLifecycleEvent("failed", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "failed", source: "claude-code", error: failureCode }, env).catch(() => {});
     await appendEvent({ type: "claude_code_turn_failed", threadId: thread.id, profileId: profile.id, turnId: attemptId, failureCode }, env);
+    await appendClaudeCodeKillNotice({ thread, parent: freshMessage, attemptId, error, workspace, env });
     deliveryScheduler?.(thread.id, env, 0);
     const publicError = new Error(failureCode);
     publicError.code = failureCode;

@@ -68,6 +68,11 @@ mismatch is treated as no session, so the next turn starts a fresh,
 non-resumed Claude CLI process instead of one that could carry forward
 pre-change policy or mission text.
 
+The standing headless runtime notice (see
+[runtime control](runtime-control.md#claude-code-turn-limits-and-visibility))
+is appended on every turn, including resumed ones, so changing its wording
+takes effect on the next turn without a policy-revision bump.
+
 ### Admin API
 
 ```

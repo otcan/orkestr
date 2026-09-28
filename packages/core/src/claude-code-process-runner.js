@@ -169,6 +169,18 @@ export async function runClaudeCodeProcess({
         // actually running under (captured from its own init event) so it
         // resumes the same transcript instead of starting a fresh one.
         if (failureCode === "claude_code_background_task_attempted") error.sessionId = observedSessionId;
+        if (supervisor.failureCode) {
+          // Orkestr stopped the turn itself; keep what a kill notice and a
+          // later "continue" need (the session transcript holds partial work).
+          const toolTimeout = supervisor.toolTimeout;
+          error.sessionId = observedSessionId;
+          error.termination = {
+            toolName: toolTimeout?.toolName || supervisor.currentToolName || "",
+            toolElapsedMs: toolTimeout?.elapsedMs ?? supervisor.toolElapsedMs,
+            turnElapsedMs: Date.now() - supervisor.startedAt,
+            userInterrupted: supervisor.interrupted,
+          };
+        }
         return finish(error);
       }
       if (!observedSessionId) {
