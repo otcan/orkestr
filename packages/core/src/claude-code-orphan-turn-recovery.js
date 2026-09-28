@@ -16,6 +16,7 @@ import {
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { claudeCodeOutputEventId, existingClaudeCodeOutput } from "./claude-code-router-trace.js";
 import { hasActiveClaudeCodeSupervisor } from "./runtime-claude-code-adapter.js";
+import { settleOrphanedClaudeCodeTurnInputs } from "./claude-code-interrupt-resume.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -73,6 +74,13 @@ export async function recoverOrphanedClaudeCodeTurn(threadOrId, env = process.en
       observedVia: "claude_code_orphan_turn_recovery",
       error: null,
     }, env);
+    await settleOrphanedClaudeCodeTurnInputs(thread, activeTurnId, {
+      state: "completed",
+      deliveryState: "delivered",
+      deliveredAt: nowIso(),
+      observedVia: "claude_code_orphan_turn_recovery",
+      error: null,
+    }, env).catch(() => []);
     const updated = await updateThread(thread.id, {
       state: "ready",
       runtime: {
@@ -96,6 +104,11 @@ export async function recoverOrphanedClaudeCodeTurn(threadOrId, env = process.en
     deliveryState: "failed",
     error: "claude_code_turn_interrupted",
   }, env);
+  await settleOrphanedClaudeCodeTurnInputs(thread, activeTurnId, {
+    state: "failed",
+    deliveryState: "failed",
+    error: "claude_code_turn_interrupted",
+  }, env).catch(() => []);
   const updated = await updateThread(thread.id, {
     state: "failed",
     lastError: "claude_code_turn_interrupted",

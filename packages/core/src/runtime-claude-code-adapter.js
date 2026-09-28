@@ -17,7 +17,6 @@ import {
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
 import { getClaudeCodeSession, setClaudeCodeSession } from "./claude-code-sessions.js";
-import { codexInputText } from "./codex-app-server-common.js";
 import {
   claudeCodeOutputEventId,
   appendClaudeCodeFinal,
@@ -36,6 +35,17 @@ import {
 } from "./claude-code-supervised-process.js";
 import { runClaudeCodeProcess, supervisionIdentityPath } from "./claude-code-process-runner.js";
 import { resolveStandingMissionAppendText } from "./claude-standing-mission.js";
+import {
+  claudeCodeInputRequestsInterrupt,
+  claudeCodeResumePrompt,
+  collectClaudeCodeResumeBatch,
+  consumeClaudeCodeInterruptResume,
+  normalizeClaudeCodeNowInputs,
+  persistInterruptedClaudeCodeSession,
+  requestClaudeCodeInstantInterrupt,
+  resetClaudeCodeInterruptResumeForTest,
+  settleClaudeCodeCoalescedInputs,
+} from "./claude-code-interrupt-resume.js";
 
 export { assertClaudeCodeHostOwner, threadUsesClaudeCode } from "./claude-code-runtime-policy.js";
 
@@ -106,7 +116,7 @@ export async function startClaudeCodeThread(thread, env = process.env) {
   return { thread: updated, started: true };
 }
 
-async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
+async function sendClaudeCodeInputReserved(thread, message, env = process.env, options = {}) {
   if (activeTurns.has(thread.id)) {
     const error = new Error("claude_code_turn_active");
     error.statusCode = 409;
@@ -115,6 +125,9 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
   const profile = await profileForThread(thread, env, true);
   const freshMessage = await getThreadMessage(thread.id, message.id, env);
   if (!freshMessage || !pendingStates.has(clean(freshMessage.state))) return { skipped: true, message: freshMessage || message };
+  const coalesced = options.coalesce ? await collectClaudeCodeResumeBatch(thread, freshMessage, env) : [];
+  const resumeAfterInterrupt = claudeCodeInputRequestsInterrupt(freshMessage, env) && consumeClaudeCodeInterruptResume(thread);
+  const prompt = claudeCodeResumePrompt(freshMessage, coalesced, { interrupted: resumeAfterInterrupt });
   // Reassigned across an automatic background-task retry (below) so every
   // downstream success/failure code path reports the attempt that actually
   // produced the outcome.
@@ -149,6 +162,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
     executorKind: "claude-code",
     executorTurnId: attemptId,
   }, env);
+  await settleClaudeCodeCoalescedInputs(thread, freshMessage, coalesced, "running", attemptId, env);
   await recordClaudeCodeRouterTrace(runningMessage || freshMessage, "delivery_started", {
     threadId: thread.id,
     attempt: deliveryAttempt,
@@ -191,7 +205,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
           result = await runClaudeCodeProcess({
             thread,
             profile,
-            prompt: codexInputText(freshMessage),
+            prompt,
             sessionId,
             priorTurnFailed,
             backgroundTaskRetry: backgroundTaskRetryNotice,
@@ -248,8 +262,11 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
       await progress.flush();
     }
     if (result.interrupted) {
+      await persistInterruptedClaudeCodeSession(thread, result.sessionId, env);
       const updated = await completeInterruptedClaudeCodeTurn(thread, freshMessage, attemptId, env);
-      return { interrupted: true, message: await getThreadMessage(thread.id, message.id, env), thread: updated };
+      await settleClaudeCodeCoalescedInputs(thread, freshMessage, coalesced, "interrupted", attemptId, env);
+      deliveryScheduler?.(thread.id, env, 0);
+      return { interrupted: true, message: await getThreadMessage(thread.id, message.id, env), thread: updated, coalescedMessageIds: coalesced.map((item) => item.id) };
     }
     await profileForThread(thread, env, true);
     const nextSessionId = clean(result.sessionId);
@@ -272,6 +289,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
       executorTurnId: attemptId,
       error: null,
     }, env);
+    await settleClaudeCodeCoalescedInputs(thread, freshMessage, coalesced, "completed", attemptId, env);
     const updated = await updateThread(thread.id, {
       state: "ready",
       ...claudeCodeTelemetryPatch(result.telemetry),
@@ -288,11 +306,12 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
     await appendTurnLifecycleEvent("completed", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "completed", source: "claude-code" }, env).catch(() => {});
     await appendEvent({ type: "claude_code_turn_completed", threadId: thread.id, profileId: profile.id, turnId: attemptId }, env);
     deliveryScheduler?.(thread.id, env, 0);
-    return { message: completedMessage, assistant, thread: updated };
+    return { message: completedMessage, assistant, thread: updated, coalescedMessageIds: coalesced.map((item) => item.id) };
   } catch (error) {
     const failureCode = publicClaudeCodeFailure(error);
     const failureTelemetry = error?.telemetry || null;
     await updateThreadMessage(thread.id, freshMessage.id, { state: "failed", deliveryState: "failed", error: failureCode }, env).catch(() => {});
+    await settleClaudeCodeCoalescedInputs(thread, freshMessage, coalesced, "failed", attemptId, env, failureCode);
     const updated = await updateThread(thread.id, {
       state: "failed",
       lastError: failureCode,
@@ -317,7 +336,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
   }
 }
 
-export async function sendClaudeCodeInput(thread, message, env = process.env) {
+export async function sendClaudeCodeInput(thread, message, env = process.env, options = {}) {
   if (turnReservations.has(thread.id) || activeTurns.has(thread.id)) {
     const error = new Error("claude_code_turn_active");
     error.statusCode = 409;
@@ -325,7 +344,7 @@ export async function sendClaudeCodeInput(thread, message, env = process.env) {
   }
   turnReservations.add(thread.id);
   try {
-    return await sendClaudeCodeInputReserved(thread, message, env);
+    return await sendClaudeCodeInputReserved(thread, message, env, options);
   } finally {
     turnReservations.delete(thread.id);
   }
@@ -334,8 +353,8 @@ export async function sendClaudeCodeInput(thread, message, env = process.env) {
 export async function deliverClaudeCodePendingInputs(thread, env = process.env) {
   const delivered = [];
   for (;;) {
-    const candidates = (await listThreadMessageCandidates(thread.id, { states: [...pendingStates] }, env))
-      .filter((message) => message.role === "user");
+    const candidates = await normalizeClaudeCodeNowInputs(thread, (await listThreadMessageCandidates(thread.id, { states: [...pendingStates] }, env))
+      .filter((message) => message.role === "user"), env);
     const control = candidates.find((message) => {
       const command = parseThreadInputCommand(message);
       return command.command === "stop" || command.command === "interrupt";
@@ -354,20 +373,25 @@ export async function deliverClaudeCodePendingInputs(thread, env = process.env) 
       if (activeTurns.has(thread.id)) break;
       continue;
     }
-    if (turnReservations.has(thread.id) || activeTurns.has(thread.id)) break;
+    if (turnReservations.has(thread.id) || activeTurns.has(thread.id)) {
+      if (candidates.some((message) => claudeCodeInputRequestsInterrupt(message, env))) await steerActiveClaudeCodeTurn(thread, env);
+      break;
+    }
     const next = candidates[0];
     if (!next) break;
     const current = await getThread(thread.id, env) || thread;
     let result;
     try {
-      result = await sendClaudeCodeInput(current, next, env);
+      result = await sendClaudeCodeInput(current, next, env, { coalesce: true });
     } catch (error) {
+      // Another delivery pass won the turn reservation; it owns these inputs.
+      if (error?.message === "claude_code_turn_active") break;
       if (error?.rateLimitPreflight !== true) throw error;
       await deferClaudeCodeRateLimitedInput(current, next, error, deliveryScheduler, env);
       break;
     }
     if (result.skipped) break;
-    delivered.push(next.id);
+    delivered.push(next.id, ...(result.coalescedMessageIds || []));
   }
   return delivered;
 }
@@ -380,6 +404,34 @@ export async function interruptClaudeCodeThread(thread, env = process.env) {
   supervisor.interrupt();
   await appendEvent({ type: "claude_code_turn_interrupt_requested", threadId: thread.id, turnId: supervisor.attemptId }, env);
   return { interrupted: true, turnId: supervisor.attemptId };
+}
+
+// A turn marks its whole input batch running before its process is spawned, so
+// inputs still pending once the supervisor exists arrived after that batch.
+async function steerActiveClaudeCodeTurn(thread, env = process.env) {
+  const supervisor = activeTurns.get(thread.id);
+  if (!supervisor) {
+    if (!turnReservations.has(thread.id)) return { interrupted: false, reason: "no_active_turn" };
+    // Reserved but not yet spawned (or finishing): retry once it can be signalled.
+    deliveryScheduler?.(thread.id, env, 250);
+    return { interrupted: false, reason: "turn_starting" };
+  }
+  const pending = (await listThreadMessageCandidates(thread.id, { states: [...pendingStates] }, env))
+    .filter((message) => message.role === "user");
+  if (!pending.some((message) => claudeCodeInputRequestsInterrupt(message, env))) return { interrupted: false, reason: "no_interrupt_input" };
+  if (activeTurns.get(thread.id) !== supervisor) {
+    deliveryScheduler?.(thread.id, env, 0);
+    return { interrupted: false, reason: "turn_changed" };
+  }
+  return requestClaudeCodeInstantInterrupt({ thread, supervisor, env });
+}
+
+// Interrupt-and-resume entry point for pending inputs that must take effect now
+// (WhatsApp/WebUI steer, `/now`, "Send now"). Sends SIGINT first and falls back
+// to the supervisor's SIGTERM/SIGKILL path; the resumed turn is started by the
+// delivery pass that owned the interrupted turn or by the delivery scheduler.
+export async function interruptClaudeCodeThreadForInput(thread, env = process.env) {
+  return steerActiveClaudeCodeTurn(thread, env);
 }
 
 export async function claudeCodeThreadStatus(thread, env = process.env, counts = {}) {
@@ -460,6 +512,7 @@ export function resetClaudeCodeRuntimeForTest() {
   for (const supervisor of activeTurns.values()) supervisor.terminate("test_reset");
   activeTurns.clear();
   turnReservations.clear();
+  resetClaudeCodeInterruptResumeForTest();
 }
 
 export function setClaudeCodeDeliveryScheduler(handler) {
