@@ -5884,7 +5884,7 @@ test("local whatsapp exact recovery resolves a bare event id from the scoped bro
   }
 });
 
-test("local whatsapp inbound records one history-only warning and permits late recovery when media retries are exhausted", async () => {
+test("local whatsapp inbound records one history-only warning, stops replays, and permits explicit late recovery when media retries are exhausted", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-media-failed-"));
   const env = {
     ORKESTR_HOME: home,
@@ -5892,6 +5892,7 @@ test("local whatsapp inbound records one history-only warning and permits late r
     ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_ATTEMPTS: "2",
     ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_RETRY_MS: "0",
     ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS: "100",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_RETRY_DELAYS_MS: "off",
   };
   const chatId = "chat-media-failed@g.us";
   let attempts = 0;
@@ -5937,9 +5938,10 @@ test("local whatsapp inbound records one history-only warning and permits late r
   assert.equal(result.error, "whatsapp_inbound_media_download_failed");
   assert.equal(result.retryable, true);
   assert.equal(result.mediaFailureWarning.recorded, true);
-  assert.equal(repeated.mediaFailureWarning.recorded, false);
-  assert.equal(repeated.mediaFailureWarning.duplicate, true);
-  assert.equal(attempts, 4);
+  assert.equal(result.mediaRetry.state, "failed_terminal");
+  assert.equal(repeated.skipped, "inbound_media_failed_terminal");
+  assert.equal(repeated.mediaFailureWarning, undefined);
+  assert.equal(attempts, 2);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].role, "assistant");
   assert.equal(messages[0].source, "whatsapp-inbound-media-warning");
@@ -5951,7 +5953,9 @@ test("local whatsapp inbound records one history-only warning and permits late r
   assert.match(messages[0].text, /not sent to the assistant/);
 
   mediaReady = true;
-  const recovered = await handleInboundMessage("sender", message, env);
+  const replayed = await handleInboundMessage("sender", message, env);
+  assert.equal(replayed.skipped, "inbound_media_failed_terminal");
+  const recovered = await handleInboundMessage("sender", message, env, { mediaRetryExplicit: true });
   messages = await listThreadMessages("media-failed-thread", env);
 
   assert.equal(recovered.routed.threadId, "media-failed-thread");
@@ -5971,6 +5975,7 @@ test("local whatsapp voice download exhaustion is visible without creating a use
     ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_ATTEMPTS: "1",
     ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_RETRY_MS: "0",
     ORKESTR_WHATSAPP_INBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS: "100",
+    ORKESTR_WHATSAPP_INBOUND_MEDIA_RETRY_DELAYS_MS: "off",
   };
   const chatId = "chat-voice-failed@g.us";
   await createThread({

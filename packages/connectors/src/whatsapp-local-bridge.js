@@ -31,7 +31,10 @@ import { listHostNativeGmailAccounts, sendHostNativeGmailMessage } from "./gmail
 import { connectorAuthStatus } from "./connector-auth.js";
 import { listConnectorScopePaths } from "./connector-storage.js";
 import { claimWhatsAppInboundFailureNotice } from "./whatsapp-inbound-notice-ledger.js";
-import { recordWhatsAppInboundMediaFailure } from "./whatsapp-inbound-media-failures.js";
+import { createInboundMediaDiagnostics } from "./whatsapp-inbound-media-diagnostics.js";
+import { browserBlobInboundMedia, browserStoreInboundMedia, requestInboundMediaReupload } from "./whatsapp-inbound-media-browser.js";
+import { inboundMediaProcessingGate, markInboundMediaDelivered } from "./whatsapp-inbound-media-state.js";
+import { runDueInboundMediaRetries, settleInboundMediaDownloadFailure } from "./whatsapp-inbound-media-retry.js";
 import {
   claimPendingOutboundAttachmentEcho,
   forgetPendingOutboundAttachmentEcho,
@@ -3520,100 +3523,31 @@ async function refreshedInboundMediaMessage(message, client = null) {
   return refreshed?.hasMedia && typeof refreshed.downloadMedia === "function" ? refreshed : message;
 }
 
-async function downloadInboundMediaFromBrowserBlob(message, client = null, env = process.env) {
-  const eventId = serializedMessageId(message);
-  if (!eventId || !client?.pupPage || typeof client.pupPage.evaluate !== "function") return null;
-  return withInboundMediaDownloadTimeout(client.pupPage.evaluate(async (messageId) => {
-    const collections = window.require?.("WAWebCollections");
-    const model = collections?.Msg?.get?.(messageId)
-      || (typeof collections?.Msg?.getMessagesById === "function"
-        ? (await collections.Msg.getMessagesById([messageId]))?.messages?.[0]
-        : null);
-    if (!model) return null;
-
-    let resolved = null;
-    if (typeof window.WWebJS?.resolveMediaBlob === "function") {
-      resolved = await window.WWebJS.resolveMediaBlob(messageId);
-    } else {
-      if (!model.mediaData || model.mediaData.mediaStage === "REUPLOADING") return null;
-      await model.downloadMedia({
-        downloadEvenIfExpensive: true,
-        rmrReason: 1,
-        isUserInitiated: true,
-      });
-      const stage = String(model.mediaData?.mediaStage || "");
-      if (stage.includes("ERROR") || stage === "FETCHING") return null;
-      const cache = window.require?.("WAWebMediaInMemoryBlobCache")?.InMemoryMediaBlobCache;
-      const cached = cache?.get?.(model.mediaObject?.filehash);
-      const blob = cached || model.mediaObject?.mediaBlob?.forceToBlob?.() || null;
-      if (blob) {
-        resolved = {
-          blob,
-          mimetype: model.mimetype,
-          filename: model.filename,
-          filesize: model.size,
-        };
-      }
-    }
-    if (!resolved?.blob || typeof resolved.blob.arrayBuffer !== "function") return null;
-    return {
-      data: await window.WWebJS.arrayBufferToBase64Async(await resolved.blob.arrayBuffer()),
-      mimetype: String(resolved.mimetype || model.mimetype || ""),
-      filename: String(resolved.filename || model.filename || ""),
-      filesize: Number(resolved.filesize || model.size || 0) || undefined,
-    };
-  }, eventId), env);
+async function downloadInboundMediaFromBrowserBlob(message, client = null, env = process.env, diagnostics = null) {
+  return browserBlobInboundMedia({
+    client,
+    eventId: serializedMessageId(message),
+    withTimeout: (promise) => withInboundMediaDownloadTimeout(promise, env),
+    onMedia: (media) => diagnostics?.noteBrowserMedia(media),
+  });
 }
 
-async function downloadInboundMediaFromBrowserStore(message, client = null, env = process.env) {
-  const eventId = serializedMessageId(message);
-  const chatId = localWhatsAppMessageRouteFields(message).chatId;
-  if (!eventId || !client?.pupPage || typeof client.pupPage.evaluate !== "function") return null;
-  return withInboundMediaDownloadTimeout(client.pupPage.evaluate(async (messageId, expectedChatId) => {
-    const idValues = (value) => {
-      if (!value) return [];
-      if (typeof value === "string" || typeof value === "number") return [String(value)];
-      return [value._serialized, value.id, value.id?._serialized, value.id?.id]
-        .filter((candidate) => typeof candidate === "string" || typeof candidate === "number")
-        .map(String);
-    };
-    const matchesMessageId = (candidate) => [candidate?.id, candidate?.__x_id]
-      .flatMap(idValues)
-      .includes(messageId);
-    const collections = window.require?.("WAWebCollections");
-    let model = collections?.Msg?.get?.(messageId) || null;
-    if (!model && typeof collections?.Msg?.getMessagesById === "function") {
-      model = (await collections.Msg.getMessagesById([messageId]))?.messages?.[0] || null;
-    }
-    if (!model && expectedChatId) {
-      const widFactory = window.require?.("WAWebWidFactory");
-      const chatWid = widFactory?.createWid ? widFactory.createWid(expectedChatId) : expectedChatId;
-      const chat = collections?.Chat?.get?.(chatWid) || collections?.Chat?.get?.(expectedChatId);
-      const messages = typeof chat?.msgs?.getModelsArray === "function" ? chat.msgs.getModelsArray() : [];
-      model = messages.find(matchesMessageId) || null;
-    }
-    if (!model?.directPath || !model?.mediaKey) return null;
-    const mockQpl = {
-      addAnnotations() { return this; },
-      addPoint() { return this; },
-    };
-    const decrypted = await window.require("WAWebDownloadManager").downloadManager.downloadAndMaybeDecrypt({
-      directPath: model.directPath,
-      encFilehash: model.encFilehash,
-      filehash: model.filehash,
-      mediaKey: model.mediaKey,
-      mediaKeyTimestamp: model.mediaKeyTimestamp,
-      type: model.type,
-      signal: new AbortController().signal,
-      downloadQpl: mockQpl,
-    });
-    return {
-      data: await window.WWebJS.arrayBufferToBase64Async(decrypted),
-      mimetype: String(model.mimetype || ""),
-      filename: String(model.filename || ""),
-      filesize: Number(model.size || 0) || undefined,
-    };
-  }, eventId, chatId), env);
+async function downloadInboundMediaFromBrowserStore(message, client = null, env = process.env, diagnostics = null) {
+  return browserStoreInboundMedia({
+    client,
+    eventId: serializedMessageId(message),
+    chatId: localWhatsAppMessageRouteFields(message).chatId,
+    withTimeout: (promise) => withInboundMediaDownloadTimeout(promise, env),
+    onMedia: (media) => diagnostics?.noteBrowserMedia(media),
+  });
+}
+
+async function requestLocalWhatsAppInboundMediaReupload(client, eventId = "", env = process.env) {
+  return requestInboundMediaReupload({
+    client,
+    eventId,
+    withTimeout: (promise) => withInboundMediaDownloadTimeout(promise, env),
+  });
 }
 
 async function downloadInboundMedia(accountId, message, env = process.env, { client = null } = {}) {
@@ -3622,6 +3556,7 @@ async function downloadInboundMedia(accountId, message, env = process.env, { cli
   const eventId = serializedMessageId(message);
   let candidate = message;
   let lastError = null;
+  const diagnostics = createInboundMediaDiagnostics(message);
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       let media = null;
@@ -3631,6 +3566,7 @@ async function downloadInboundMedia(accountId, message, env = process.env, { cli
           media = await withInboundMediaDownloadTimeout(candidate.downloadMedia(), env);
         } catch (error) {
           primaryError = error;
+          diagnostics.record(attempt, "primary", error);
         }
       }
       const hasDownloadedMedia = Array.isArray(media)
@@ -3639,7 +3575,7 @@ async function downloadInboundMedia(accountId, message, env = process.env, { cli
       if (!hasDownloadedMedia) {
         let blobError = null;
         try {
-          media = await downloadInboundMediaFromBrowserBlob(candidate || message, client, env);
+          media = await downloadInboundMediaFromBrowserBlob(candidate || message, client, env, diagnostics);
           if (media?.data) {
             await appendEvent({
               type: "whatsapp_local_inbound_media_download_browser_blob_recovered",
@@ -3651,13 +3587,14 @@ async function downloadInboundMedia(accountId, message, env = process.env, { cli
           }
         } catch (fallbackError) {
           blobError = fallbackError;
+          diagnostics.record(attempt, "browser_blob", fallbackError);
         }
         const hasBrowserBlobMedia = Array.isArray(media)
           ? media.some((item) => item?.data)
           : Boolean(media?.data);
         if (!hasBrowserBlobMedia) {
           try {
-            media = await downloadInboundMediaFromBrowserStore(candidate || message, client, env);
+            media = await downloadInboundMediaFromBrowserStore(candidate || message, client, env, diagnostics);
             if (media?.data) {
               await appendEvent({
                 type: "whatsapp_local_inbound_media_download_browser_store_recovered",
@@ -3668,6 +3605,7 @@ async function downloadInboundMedia(accountId, message, env = process.env, { cli
               }, env).catch(() => {});
             }
           } catch (fallbackError) {
+            diagnostics.record(attempt, "browser_store", fallbackError);
             if (!primaryError) primaryError = blobError || fallbackError;
           }
         }
@@ -3695,22 +3633,29 @@ async function downloadInboundMedia(accountId, message, env = process.env, { cli
         eventId,
         attempt,
         error: error?.message || String(error),
+        errorDetail: diagnostics.summary(error).error,
       }, env).catch(() => {});
       if (retryMs > 0) await wait(retryMs);
       candidate = await refreshedInboundMediaMessage(message, client);
     }
   }
+  const failure = diagnostics.summary(lastError);
   await appendEvent({
     type: "whatsapp_local_inbound_media_download_failed",
     accountId,
     eventId,
     attempts,
     error: lastError?.message || String(lastError || "whatsapp_inbound_media_not_ready"),
+    errorDetail: failure.error,
+    attemptErrors: failure.attemptErrors,
+    media: failure.media,
+    browserMedia: failure.browserMedia,
   }, env).catch(() => {});
   const error = new Error("whatsapp_inbound_media_download_failed");
   error.statusCode = 503;
   error.retryable = true;
   error.cause = lastError;
+  error.diagnostics = failure;
   throw error;
 }
 
@@ -4236,9 +4181,24 @@ export async function handleInboundMessage(accountId, message, env = process.env
   if (outboundAttachmentsRecentlySent(accountId, chatId, inboundAttachmentEchoCandidates(message), env)) {
     return { skipped: fromMe ? "outbound_echo_attachment" : "outbound_echo_cross_account_attachment", eventId, chatId };
   }
+  const mediaRetryAttempt = Number(options.mediaRetryAttempt || 0) || 0;
+  const mediaType = String(message?.type || message?._data?.type || "");
+  const mediaGate = message?.hasMedia
+    ? await inboundMediaProcessingGate({ accountId, eventId, scheduledAttempt: mediaRetryAttempt, explicit: options.mediaRetryExplicit === true }, env)
+    : { action: "process" };
+  if (mediaGate.action === "skip") {
+    return { skipped: mediaGate.reason, eventId, chatId, from, fromMe: routeFromMe, mediaState: mediaGate.entry?.state || "" };
+  }
   let attachments;
   try {
-    attachments = await saveInboundMedia(accountId, message, env, { client: options.client || null });
+    if (mediaGate.action === "reuse") {
+      attachments = mediaGate.attachments;
+    } else {
+      attachments = await saveInboundMedia(accountId, message, env, { client: options.client || null });
+      if (message?.hasMedia && attachments.length) {
+        await markInboundMediaDelivered({ accountId, eventId, chatId, messageType: mediaType, attachments }, env).catch(() => {});
+      }
+    }
   } catch (error) {
     await appendEvent({
       type: "whatsapp_local_inbound_media_save_failed",
@@ -4261,12 +4221,17 @@ export async function handleInboundMessage(accountId, message, env = process.env
       return { skipped: "outbound_echo_attachment_pending_send", eventId, chatId };
     }
     if (!failedInboundMediaCanRouteAsLinkText(message, text)) {
-      const warning = await recordWhatsAppInboundMediaFailure({
+      const settled = await settleInboundMediaDownloadFailure({
         accountId,
         eventId,
         chatId,
-        messageType: message?.type || message?._data?.type || "",
-      }, env).catch(() => ({ recorded: false, reason: "warning_record_failed" }));
+        messageType: mediaType,
+        scheduledAttempt: mediaRetryAttempt,
+        diagnostics: error?.diagnostics || null,
+      }, env, { nowMs: Number(options.mediaRetryNowMs || 0) || Date.now() });
+      if (settled.state === "pending_retry" && !mediaRetryAttempt && options.client) {
+        void requestLocalWhatsAppInboundMediaReupload(options.client, eventId, env).catch(() => null);
+      }
       return {
         error: error?.message || String(error),
         retryable: error?.retryable === true,
@@ -4274,7 +4239,8 @@ export async function handleInboundMessage(accountId, message, env = process.env
         chatId,
         from,
         fromMe: routeFromMe,
-        mediaFailureWarning: warning,
+        mediaRetry: { state: settled.state, attempt: settled.attempt, nextAt: settled.nextAt },
+        mediaFailureWarning: settled.warning,
       };
     }
     attachments = [];
@@ -4739,7 +4705,7 @@ async function recoverLocalWhatsAppMessagesById({ accountId = "", chatId = "", e
       skipped.push({ eventId, reason: "from_me" });
       continue;
     }
-    const result = await handleInboundMessage(normalized, message, env, { client: runtime.client });
+    const result = await handleInboundMessage(normalized, message, env, { client: runtime.client, mediaRetryExplicit: true });
     if (result?.forwarded || (result?.routed && !result.routed.duplicate)) {
       routed.push({ eventId, threadId: result?.routed?.threadId || "", messageId: result?.routed?.messageId || "" });
     } else {
@@ -5044,6 +5010,7 @@ async function recoverBoundChatsAfterListFailure({
 }
 
 async function recoverUnreadLocalWhatsAppMessagesOnce(env = process.env, options = {}) {
+  const mediaRetries = await runLocalWhatsAppInboundMediaRetries(env, options);
   const accountIds = options.accountIds || localWhatsAppAccountIdsForEnv(env);
   const threads = options.threads || await listThreads(env).catch(() => []);
   const maxChats = localWhatsAppUnreadRecoveryMaxChats(env);
@@ -5172,11 +5139,42 @@ async function recoverUnreadLocalWhatsAppMessagesOnce(env = process.env, options
       failed: failed.length,
     }, env).catch(() => {});
   }
-  return { enabled: true, checked, recovered, routed, skipped, failed };
+  return { enabled: true, checked, recovered, routed, skipped, failed, mediaRetries };
+}
+
+async function loadLocalWhatsAppInboundMediaRetryMessage(entry = {}, env = process.env) {
+  const normalized = normalizeAccountId(entry.accountId, env);
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!runtime?.client || !state.ready || state.runtimeUsable === false) return { deferred: true, reason: "runtime_not_ready" };
+  const client = runtime.client;
+  let message = typeof client.getMessageById === "function"
+    ? await client.getMessageById(entry.eventId).catch(() => null)
+    : null;
+  if (!message) message = await readCachedLocalWhatsAppMessageById(client, entry.eventId, entry.chatId).catch(() => null);
+  return { message, client, accountId: normalized };
+}
+
+// Runs delayed inbound media retries whose persisted `nextAt` is due. Driven by
+// the periodic unread scan, so pending retries resume after a restart.
+export async function runLocalWhatsAppInboundMediaRetries(env = process.env, options = {}) {
+  const nowMs = Number(options.nowMs || Date.now());
+  return runDueInboundMediaRetries({
+    env,
+    nowMs,
+    loadMessage: (entry) => loadLocalWhatsAppInboundMediaRetryMessage(entry, env),
+    requestReupload: (entry, loaded) => requestLocalWhatsAppInboundMediaReupload(loaded.client, entry.eventId, env),
+    processMessage: (entry, loaded, attempt) => handleInboundMessage(loaded.accountId || entry.accountId, loaded.message, env, {
+      client: loaded.client,
+      mediaRetryAttempt: attempt,
+      mediaRetryNowMs: nowMs,
+    }),
+  }).catch((error) => ({ due: 0, results: [], error: error?.message || String(error) }));
 }
 
 export async function recoverUnreadLocalWhatsAppMessages(env = process.env, options = {}) {
   if (!localWhatsAppUnreadRecoveryEnabled(env) && !options.force) {
+    await runLocalWhatsAppInboundMediaRetries(env, options);
     return { enabled: false, checked: [], recovered: [], routed: 0, skipped: [], failed: [] };
   }
   const nowMs = Number(options.nowMs || Date.now());
