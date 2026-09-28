@@ -35,6 +35,8 @@ import { pickThread as defaultPickThread } from "./thread-picker.js";
 import { threadMissionCommand } from "./thread-mission-command.js";
 import { executorSwitchCommand } from "./executor-switch-command.js";
 import { workerPushBranchCommand } from "./worker-branch-push-command.js";
+import { detachedDeployStatusCommand, launchDetachedDeploy } from "./update-detach.js";
+import { formatDeployReport } from "../../../scripts/deploy-detached-summary.mjs";
 
 export async function runCli(argv = process.argv.slice(2), context = {}) {
   const global = parseGlobalFlags(argv);
@@ -1598,7 +1600,7 @@ async function updateCommand(argv, ctx) {
   if (subcommand === "status") return updateStatusCommand(rest, ctx);
   if (subcommand === "rollback") return updateRollbackCommand(rest, ctx);
   if (subcommand !== "install" && subcommand !== "run") {
-    throw new Error("Usage: orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke] [--all-instances] [--wait-active] [--active-timeout seconds|--allow-interrupt]\n       orkestr update status [--json]\n       orkestr update rollback [--to release-id]");
+    throw new Error("Usage: orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke] [--all-instances] [--wait-active] [--active-timeout seconds|--allow-interrupt] [--detach [--thread id|--no-thread]]\n       orkestr update status [--deploy-id id] [--json]\n       orkestr update rollback [--to release-id]");
   }
   return updateInstallCommand(rest, ctx);
 }
@@ -1654,6 +1656,19 @@ async function updateInstallCommand(argv, ctx) {
         ...(checkOnly ? ["--check-only"] : []),
       ]
     : [...(checkOnly ? ["--check-only"] : [])];
+  if (argv.includes("--detach")) {
+    if (!release || inPlace || checkOnly) throw new Error("--detach requires a versioned release deploy (--release/--track-main) and cannot be combined with --in-place or --check-only");
+    return launchDetachedDeploy({
+      argv,
+      deployArgs: args,
+      script,
+      env,
+      ctx,
+      flagValue,
+      envArgs: systemdRunEnvArgs(env),
+      requestJson: (apiPath, options = {}) => requestJson(apiPath, { ...ctx, ...options }),
+    });
+  }
   const label = release && !inPlace ? "versioned release update" : "in-place update";
   if (!argv.includes("--json")) ctx.stdout.write(`Starting Orkestr ${label}${ref ? ` for ${ref}` : ""}...\n`);
   if (release && !inPlace) {
@@ -1669,6 +1684,8 @@ async function updateInstallCommand(argv, ctx) {
 }
 
 async function updateStatusCommand(argv, ctx) {
+  const deployId = flagValue(argv, "--deploy-id");
+  if (deployId) return detachedDeployStatusCommand(deployId, argv, ctx, formatDeployReport);
   const script = updateScriptPath("deploy-git-release.sh");
   return spawnInherited(ctx.spawnImpl, "bash", [script, "status", ...(argv.includes("--json") ? ["--json"] : [])], { env: ctx.env });
 }
