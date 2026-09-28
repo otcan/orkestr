@@ -70,6 +70,7 @@ import {
 import {
   assertClaudeCodeHostOwner,
   interruptClaudeCodeThread,
+  interruptClaudeCodeThreadForInput,
   startClaudeCodeThread,
   threadUsesClaudeCode,
 } from "../../../../../packages/core/src/runtime-claude-code-adapter.js";
@@ -1167,16 +1168,21 @@ export class ThreadsController {
     if (!thread) throw httpError("thread_not_found", 404);
     await this.assertThreadSanitized("thread.interrupt", principal, thread, body);
     if (threadUsesClaudeCode(thread)) {
-      const interrupted = await interruptClaudeCodeThread(thread).catch(() => ({ interrupted: false }));
       if (String(body.text || "").trim() || (Array.isArray(body.attachments) && body.attachments.length)) {
+        // Interrupt-and-resume: enqueue first so the stopped turn's delivery
+        // pass resumes the same Claude session with this input.
         const message = await enqueueThreadInputForPrincipal(thread.id, {
           ...body,
           source: body.source || "interrupt",
           forceDeliveryAfterInterrupt: true,
+          steerActiveTurn: true,
+          codexDeliveryMode: "instant_steer",
         }, principal);
-        requestThreadInputDelivery(thread.id, process.env, 100);
-        return { ok: true, interrupted: Boolean((interrupted as any).interrupted), message, delivered: [] };
+        const interrupted = await interruptClaudeCodeThreadForInput(thread).catch(() => ({ interrupted: false }));
+        requestThreadInputDelivery(thread.id, process.env, 0);
+        return { ok: true, interrupted: Boolean((interrupted as any).interrupted), message, delivered: [], queued: true, queueItemId: message.id, reason: "interrupt" };
       }
+      const interrupted = await interruptClaudeCodeThread(thread).catch(() => ({ interrupted: false }));
       return { ok: true, interrupted: Boolean((interrupted as any).interrupted), thread: await threadRuntimeSummary(thread, await listThreadMessages(thread.id)) };
     }
     if (threadUsesCodexAppServer(thread)) {

@@ -1,4 +1,5 @@
 const CONTROL_COMMANDS = new Set([
+  "now",
   "interrupt",
   "cancel",
   "quit",
@@ -63,8 +64,12 @@ export function parseThreadInputCommand(input = {}) {
 
   const runtimeAlias = RUNTIME_ALIAS_COMMANDS.has(command);
   return {
+    // `/now <text>` interrupts the active turn and sends <text> immediately;
+    // `/interrupt` stays an alias of the preemptive `/stop`.
     command: runtimeAlias || command === "rt" || command === "runtime"
       ? "runtime_type"
+      : command === "now"
+        ? "interrupt"
       : command === "interrupt" || command === "cancel" || command === "quit"
         ? "stop"
         : command === "restart"

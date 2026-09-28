@@ -730,7 +730,7 @@
             [sending]="sending"
             [sendingNow]="sendingNow"
             [implementingPlan]="implementingPlan"
-            [threadInputReady]="threadInputReady()"
+            [threadInputReady]="threadInputReadyFor(selectedThread())"
             [actionBusy]="busy"
             [retryingMessageIds]="resendingMessageIds"
             (implementPlan)="implementPlanSelected()"
@@ -1437,7 +1437,7 @@
               type="button"
               title="Interrupt the active Codex turn"
               (click)="stopSelected()"
-              [disabled]="busy || !threadInputReady() || thread.state === 'sleeping' || thread.status === 'sleeping'"
+              [disabled]="busy || !threadInputReadyFor(thread) || thread.state === 'sleeping' || thread.status === 'sleeping'"
             >STOP</button>
             @if (hasActionablePendingApproval(thread)) {
               <input name="approve-text" [(ngModel)]="approveText" (ngModelChange)="persistThreadTextField('approveText', $event)" placeholder="Approval text" />
@@ -1489,7 +1489,7 @@
           [sending]="sending"
           [sendingNow]="sendingNow"
           [implementingPlan]="implementingPlan"
-          [inputReady]="threadInputReady()"
+          [inputReady]="threadInputReadyFor(thread)"
           [adminMode]="isAdminMode()"
           [slashHelpOpen]="slashHelpOpen"
           [showPlanBanner]="showPlanComposerBanner(thread)"

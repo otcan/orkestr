@@ -15506,7 +15506,7 @@ test("whatsapp /status reuses the first router reply when inbound state misses a
   assert.match(stripDebugFooter(calls[0].body.text), /^Thread: WA Status Command Duplicate Thread\nStatus: /);
 });
 
-test("whatsapp treats removed /now syntax as ordinary default-steer text", async () => {
+test("whatsapp routes /now as an interrupt-and-send command", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-now-notice-"));
   const env = externalBridgeEnv(home);
   await createThread({
@@ -15536,9 +15536,10 @@ test("whatsapp treats removed /now syntax as ordinary default-steer text", async
   assert.equal(routed.message.codexDeliveryMode, "instant_steer");
   assert.equal(routed.message.steerActiveTurn, true);
   assert.equal(routed.message.text, "/now fix the pairing number");
-  assert.notEqual(routed.message.deliveryState, "interrupting");
-  assert.equal(delivery.delivered.length, 0);
-  assert.equal(calls.length, 0);
+  assert.equal(routed.message.deliveryState, "interrupting");
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].body.text, /^Interrupting the current Codex turn and queued your message: "fix the pairing number"/);
+  assert.equal(delivery.delivered.length, 1);
 });
 
 test("whatsapp inbound marks Codex API threads for default active-turn steer", async () => {

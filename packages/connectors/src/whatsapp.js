@@ -14,6 +14,7 @@ import { claudeCodeRateLimitGate } from "../../core/src/claude-code-rate-limit.j
 import { classifyApprovalReply } from "../../core/src/runtime-settings.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
+import { isInstantInterruptCapableThread } from "../../core/src/instant-interrupt-capability.js";
 import {
   acknowledgeRuntimeFinalDelivery,
   recordRuntimeFinalDeliveryFailure,
@@ -1650,22 +1651,6 @@ function isCodexAppServerThread(thread = {}) {
     pickString(thread.executor?.transport).toLowerCase() === "app-server";
 }
 
-function isCodexSteerCapableThread(thread = {}) {
-  if (!thread || typeof thread !== "object" || Array.isArray(thread)) return false;
-  if (isCodexAppServerThread(thread)) return true;
-  const values = [
-    thread.runtimeKind,
-    thread.runtime?.runtimeKind,
-    thread.terminalMode,
-    thread.runtime?.terminalMode,
-    thread.executor?.transport,
-    thread.executor?.metadata?.transport,
-    thread.executor?.metadata?.runtimeKind,
-  ].map((value) => pickString(value).toLowerCase());
-  return values.some((value) => ["raw-terminal", "codex-tmux"].includes(value)) ||
-    pickString(thread.executorId, thread.executor?.id, thread.executor?.type).toLowerCase() === "codex";
-}
-
 function deliveryModeRequestsInstantSteer(value = "") {
   const mode = pickString(value).toLowerCase().replace(/[\s-]+/g, "_");
   return ["1", "true", "on", "yes", "enabled", "enable", "instant_steer", "steer", "active_turn_steer", "steer_active_turn"].includes(mode);
@@ -1735,7 +1720,7 @@ function whatsappInboundInstantSteerEnabled({ thread = null, binding = null, cha
   const bindingChatId = pickString(binding?.chatId, thread?.binding?.chatId, chatId);
   if (bindingChatId && configuredChats.has(bindingChatId)) return true;
   if (candidates.some((candidate) => bindingRequestsWhatsAppInstantSteer(candidate))) return true;
-  return isCodexSteerCapableThread(thread) && whatsappInboundInstantSteerDefaultEnabled(env);
+  return isInstantInterruptCapableThread(thread, env) && whatsappInboundInstantSteerDefaultEnabled(env);
 }
 
 function shouldUseApiAgentForWhatsAppThread(thread = {}, env = process.env) {
@@ -5910,7 +5895,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
 async function annotateInitialThreadQueueNotice(threadId, message, env = process.env) {
   if (!threadId || !message?.id || message.duplicate) return message;
   const status = await runtimeStatus(threadId, env).catch(() => null);
-  const deliveryState = initialQueueDeliveryState(status, message);
+  const deliveryState = initialQueueDeliveryState(status, message, env);
   if (!deliveryState) return message;
   const rateLimit = status?.runtimeKind === "claude-code" && status?.error === "claude_code_rate_limited"
     ? claudeCodeRateLimitGate(status)

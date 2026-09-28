@@ -757,6 +757,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.openSetup("codex", true);
   }
 
+  // Send, Send now, retry and interrupt work on Claude Code threads without a
+  // connected Codex agent; Codex-only actions keep guardCodexRuntime().
+  threadInputReadyFor(thread: ThreadSummary | null): boolean {
+    return this.threadRuntimeMode(thread) === "claude-code" || this.threadInputReady();
+  }
+
+  private guardThreadInputRuntime(thread: ThreadSummary | null): boolean {
+    if (this.threadRuntimeMode(thread) === "claude-code") return true;
+    return this.guardCodexRuntime();
+  }
+
   private guardCodexRuntime(): boolean {
     if (this.threadInputReady()) return true;
     this.error = "Connect Codex Agent before using the coding-agent runtime.";
@@ -1323,7 +1334,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.pendingFiles.some(file => file.uploadState !== "ready")) { this.error = "Wait for uploads, retry, or remove unfinished attachments."; return; }
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
-    if (!this.guardCodexRuntime()) return;
+    if (!this.guardThreadInputRuntime(thread)) return;
     this.error = "";
     const pendingFiles = [...this.pendingFiles];
     const optimisticId = this.appendOptimisticUserMessage(thread.id, originalText, pendingFiles);
@@ -1403,7 +1414,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.pendingFiles.some(file => file.uploadState !== "ready")) { this.error = "Wait for uploads, retry, or remove unfinished attachments."; return; }
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
-    if (!this.guardCodexRuntime()) return;
+    if (!this.guardThreadInputRuntime(thread)) return;
     this.error = "";
     const pendingFiles = [...this.pendingFiles];
     const optimisticId = this.appendOptimisticUserMessage(thread.id, originalText, pendingFiles, "interrupt", "interrupting");
@@ -1449,7 +1460,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const thread = this.selectedThread();
     const messageId = String(message.id || "").trim();
     if (!thread || !messageId || this.sending || this.sendingNow || this.implementingPlan || this.resendingMessageIds[messageId]) return;
-    if (!this.guardCodexRuntime()) return;
+    if (!this.guardThreadInputRuntime(thread)) return;
     const remembered = this.uiSendRetryPayloads.get(messageId);
     if (remembered && remembered.threadId !== thread.id) return;
     const pendingAttachments = (message.attachments || []).some((attachment) => attachment["pending"] === true);
@@ -1624,7 +1635,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async interruptSelected(): Promise<void> {
     const thread = this.selectedThread();
     if (!thread) return;
-    if (!this.guardCodexRuntime()) return;
+    if (!this.guardThreadInputRuntime(thread)) return;
     this.busy = true;
     try {
       await firstValueFrom(this.api.interruptThread(thread.id, this.interruptText.trim()));
@@ -4266,7 +4277,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   composerPlaceholder(thread: ThreadSummary | null): string {
-    if (thread && !this.threadInputReady()) return "Connect Codex Agent to send tasks";
+    if (thread && !this.threadInputReadyFor(thread)) return "Connect Codex Agent to send tasks";
     return thread ? `Message ${this.threadTitle(thread)}` : "Message";
   }
 
