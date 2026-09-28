@@ -544,20 +544,25 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.notEqual(oauthCallbackResponse.status, 403);
     assert.doesNotMatch(oauthCallbackBody, /auth_intent_session_scope_denied/);
 
-    const waRepairResponse = await fetch(`http://127.0.0.1:${port}/api/connectors/whatsapp/bridge/repair?accountId=sender`, { headers: { cookie } });
+    const waRepairResponse = await fetch(`http://127.0.0.1:${port}/api/connectors/whatsapp/bridge/repair?accountId=sender`, { headers: { cookie: adminCookie } });
     const waRepairHtml = await waRepairResponse.text();
     assert.equal(waRepairResponse.status, 200);
     assert.match(waRepairHtml, /WhatsApp Repair/);
     assert.match(waRepairHtml, /Email Fresh QR/);
+    const waRepairIntent = JSON.parse(waRepairHtml.match(/const intent = (\{.*?\});/)[1]);
+    assert.ok(waRepairIntent.intentId);
+    assert.ok(waRepairIntent.token);
 
     const waRepairPostResponse = await fetch(`http://127.0.0.1:${port}/api/connectors/whatsapp/bridge/repair/send-email`, {
       method: "POST",
-      headers: { cookie, "content-type": "application/json" },
-      body: JSON.stringify({ accountId: "sender" }),
+      headers: { cookie: adminCookie, "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "sender", intentId: waRepairIntent.intentId, token: waRepairIntent.token }),
     });
     const waRepairPostPayload = await waRepairPostResponse.json();
-    assert.equal(waRepairPostResponse.status, 409);
-    assert.equal(waRepairPostPayload.error, "recipient_missing");
+    // ORK-513 minimizes disclosure: a failed repair send always reports the
+    // same generic error/status, never the specific recipient/account reason.
+    assert.equal(waRepairPostResponse.status, 503);
+    assert.equal(waRepairPostPayload.error, "repair_unavailable");
 
     const appResponse = await fetch(`http://127.0.0.1:${port}/app`, { headers: { cookie }, redirect: "manual" });
     const appPayload = await appResponse.json();
