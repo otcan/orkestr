@@ -370,24 +370,6 @@ export const threadStandingMissionUpdateSchema = {
   },
 };
 
-export const threadExecutorUpdateSchema = {
-  ...idParams("threadId"),
-  body: {
-    type: "object",
-    required: ["executor"],
-    properties: {
-      executor: stringValue,
-      model: stringValue,
-      effort: stringValue,
-      profileId: stringValue,
-      when: stringValue,
-      reason: stringValue,
-      actor: stringValue,
-    },
-    additionalProperties: false,
-  },
-};
-
 export const threadWorkerPushBranchSchema = {
   ...idParams("threadId"),
   body: {

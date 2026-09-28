@@ -26,7 +26,7 @@ test("GET /api/quota/providers returns both providers without raw telemetry", as
       else process.env[key] = value;
     }
     resetProviderQuotaCacheForTest();
-    await fs.rm(home, { recursive: true, force: true });
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   resetProviderQuotaCacheForTest();
   await createThread({

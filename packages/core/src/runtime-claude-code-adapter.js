@@ -35,6 +35,8 @@ import {
 } from "./claude-code-supervised-process.js";
 import { runClaudeCodeProcess, supervisionIdentityPath } from "./claude-code-process-runner.js";
 import { resolveStandingMissionAppendText } from "./claude-standing-mission.js";
+import { claudeCodeStatusPayload } from "./claude-code-status.js";
+import { claudeCodeTelemetryPatch } from "./claude-code-telemetry.js";
 import { claimExecutorHandoffForMessage } from "./executor-handoff-delivery.js";
 import { applyPendingExecutorSwitchAfterTurn } from "./executor-switch-hooks.js";
 import {
@@ -62,15 +64,6 @@ function clean(value = "") {
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function claudeCodeTelemetryPatch(telemetry = {}) {
-  return {
-    ...(telemetry?.model ? { claudeModelResolved: telemetry.model } : {}),
-    ...(telemetry?.tokenUsage ? { claudeTokenUsage: telemetry.tokenUsage } : {}),
-    ...(telemetry?.rateLimits ? { claudeRateLimits: telemetry.rateLimits, claudeRateLimitsObservedAt: nowIso() } : {}),
-    ...(telemetry?.contextWindow ? { claudeContextWindow: telemetry.contextWindow } : {}),
-  };
 }
 
 function accountProfileId(thread = {}) {
@@ -460,43 +453,7 @@ export async function claudeCodeThreadStatus(thread, env = process.env, counts =
     thread = recovery.thread;
     if (recovery.recovered) deliveryScheduler?.(thread.id, env, 0);
   }
-  const persistedState = clean(thread.runtime?.state || thread.state || "ready").toLowerCase();
-  const state = supervisor ? "working" : persistedState === "working" ? "interrupted" : persistedState;
-
-  // Semantic liveness: staleWorking is true when the process is alive but has not
-  // produced meaningful output for longer than ORKESTR_CLAUDE_STALE_WORKING_MS.
-  const staleWorking = supervisor ? supervisor.tickStaleWorking() : false;
-  const staleWorkingSince = supervisor ? (supervisor.staleWorkingSince || null) : null;
-  const staleWorkingReason = staleWorking ? "semantic_inactivity" : null;
-
-  return {
-    state,
-    status: state,
-    runtimeState: state,
-    runtimeKind: "claude-code",
-    provider: "anthropic",
-    promptReady: state === "ready" && profileState === "ready",
-    promptReadyStable: state === "ready" && profileState === "ready",
-    working: Boolean(supervisor),
-    foregroundWorking: Boolean(supervisor),
-    // typingActive is false when the process is stale (transport alive, semantics silent).
-    typingActive: Boolean(supervisor) && !staleWorking,
-    backgroundWork: false,
-    staleWorking,
-    staleWorkingSince,
-    staleWorkingReason,
-    pendingCount: Number(counts.pendingCount || 0),
-    runningCount: Number(counts.runningCount || 0),
-    accountProfileId: accountProfileId(thread) || null,
-    accountState: profileState,
-    activeTurnId: supervisor?.attemptId || null,
-    error: state === "interrupted" ? "claude_code_runtime_interrupted" : thread.lastError || null,
-    model: thread.claudeModel || thread.executor?.metadata?.claudeModel || thread.claudeModelResolved || null,
-    effort: thread.claudeEffort || thread.executor?.metadata?.claudeEffort || null,
-    permissionMode: thread.claudePermissionMode || thread.executor?.metadata?.claudePermissionMode || "acceptEdits",
-    tokenUsage: thread.claudeTokenUsage || null,
-    rateLimits: thread.claudeRateLimits || null,
-  };
+  return claudeCodeStatusPayload({ thread, supervisor, profileState, counts, accountProfileId: accountProfileId(thread) });
 }
 
 export async function resumeClaudeCodeThread(thread, env = process.env) {

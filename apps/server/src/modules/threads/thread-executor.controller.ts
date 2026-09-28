@@ -8,7 +8,7 @@ import {
   switchThreadExecutor,
   threadExecutorSummary,
 } from "../../../../../packages/core/src/thread-executor-switch.js";
-import { threadExecutorUpdateSchema } from "../../../../../packages/shared/src/api-schemas.js";
+import { threadExecutorUpdateSchema } from "../../../../../packages/shared/src/thread-executor-schemas.js";
 import { httpError, validateRequestSchema } from "../../common/http.js";
 import { ThreadActionSanitizerService } from "./thread-application.services.js";
 

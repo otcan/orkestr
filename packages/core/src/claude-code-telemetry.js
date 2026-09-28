@@ -112,3 +112,13 @@ function validModelTelemetry(value = "") {
   value = clean(value);
   return /^[a-zA-Z0-9._:-]{1,120}$/.test(value) ? value : null;
 }
+
+// Thread-record patch for telemetry observed in one Claude Code turn.
+export function claudeCodeTelemetryPatch(telemetry = {}) {
+  return {
+    ...(telemetry?.model ? { claudeModelResolved: telemetry.model } : {}),
+    ...(telemetry?.tokenUsage ? { claudeTokenUsage: telemetry.tokenUsage } : {}),
+    ...(telemetry?.rateLimits ? { claudeRateLimits: telemetry.rateLimits, claudeRateLimitsObservedAt: new Date().toISOString() } : {}),
+    ...(telemetry?.contextWindow ? { claudeContextWindow: telemetry.contextWindow } : {}),
+  };
+}

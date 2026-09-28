@@ -1833,7 +1833,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(template, /@if \(activePanel === "settings" && isAdminMode\(\)\)/);
   assert.match(template, /@if \(activePanel === "workers" && isAdminMode\(\)\)/);
   assert.match(template, /@if \(isAdminMode\(\)\) \{\s*<div class="codex-control-scroll"/s);
-  assert.match(template, /\[inputReady\]="threadInputReady\(\)"/);
+  assert.match(template, /\[inputReady\]="threadInputReady(For\(thread\)|\(\))"/);
   assert.match(composerTemplate, /\[disabled\]="!inputReady"/);
   assert.match(styles, /\.instance-topbar-nav/);
   assert.match(styles, /\.instance-topbar-brand/);
