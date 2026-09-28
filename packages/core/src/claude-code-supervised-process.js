@@ -100,17 +100,32 @@ export async function recoverOrphanedAttempt(identityFilePath) {
   return { recovered: true, pgid, attemptId: cleanStr(identity.attemptId), verifiedPid: member.pid };
 }
 
+// Sub-agent tool calls (Claude Code `Agent`, legacy `Task`) legitimately run
+// for a long time while their own nested tools make progress. They get a
+// separate deadline (0 = exempt) and stay bounded by the turn timeout and the
+// semantic-stall detector.
+export function claudeCodeSubAgentTool(name = "") {
+  return ["agent", "task"].includes(cleanStr(name).toLowerCase());
+}
+
 // Read env-based tuning with safe defaults.
 export function supervisedProcessDefaults(env = process.env) {
   function posMs(key, fallback) {
     const v = Number(env[key] ?? fallback);
     return Number.isFinite(v) && v > 0 ? v : fallback;
   }
+  function nonNegMs(key, fallback) {
+    const raw = env[key];
+    if (raw === undefined || cleanStr(raw) === "") return fallback;
+    const v = Number(raw);
+    return Number.isFinite(v) && v >= 0 ? v : fallback;
+  }
   return {
     gracePeriodMs: posMs("ORKESTR_CLAUDE_GRACE_PERIOD_MS", 5_000),
     semanticInactivityMs: posMs("ORKESTR_CLAUDE_SEMANTIC_INACTIVITY_MS", 10 * 60_000),
     staleWorkingMs: posMs("ORKESTR_CLAUDE_STALE_WORKING_MS", 2 * 60_000),
-    toolDeadlineMs: posMs("ORKESTR_CLAUDE_TOOL_DEADLINE_MS", 10 * 60_000),
+    toolDeadlineMs: posMs("ORKESTR_CLAUDE_TOOL_DEADLINE_MS", 20 * 60_000),
+    agentToolDeadlineMs: nonNegMs("ORKESTR_CLAUDE_AGENT_TOOL_DEADLINE_MS", 0),
     heartbeatIntervalMs: posMs("ORKESTR_CLAUDE_HEARTBEAT_INTERVAL_MS", 60_000),
     heartbeatThresholdMs: posMs("ORKESTR_CLAUDE_HEARTBEAT_THRESHOLD_MS", 30_000),
   };
@@ -126,6 +141,7 @@ export function supervisedProcessDefaults(env = process.env) {
 //   semanticInactivityMs          — terminate if no semantic output seen for this long
 //   staleWorkingMs                — mark staleWorking after this much semantic silence
 //   toolDeadlineMs                — terminate if a single tool call exceeds this duration
+//   agentToolDeadlineMs           — same for sub-agent (Agent/Task) calls; 0 = exempt
 //   heartbeatIntervalMs           — interval between onHeartbeat calls while tool is active
 //   heartbeatThresholdMs          — minimum tool elapsed time before heartbeats start
 //   onSemanticStall()             — callback when semantic inactivity triggers termination
@@ -140,7 +156,8 @@ export function spawnSupervised(options = {}) {
     gracePeriodMs = 5_000,
     semanticInactivityMs = 10 * 60_000,
     staleWorkingMs = 2 * 60_000,
-    toolDeadlineMs = 10 * 60_000,
+    toolDeadlineMs = 20 * 60_000,
+    agentToolDeadlineMs = 0,
     heartbeatIntervalMs = 60_000,
     heartbeatThresholdMs = 30_000,
     onSemanticStall = null,
@@ -169,6 +186,7 @@ export function spawnSupervised(options = {}) {
   let _staleWorkingSince = null;
   let _interruptMode = null;
   let _resultObserved = false;
+  let _toolTimeout = null;
 
   let lastSemanticEvidenceAt = startedAt;
   const activeTools = new Map();
@@ -176,6 +194,32 @@ export function spawnSupervised(options = {}) {
 
   function currentTool() {
     return [...activeTools.values()].sort((a, b) => a.startedAt - b.startedAt)[0] || null;
+  }
+
+  function toolDeadlineFor(name) {
+    return claudeCodeSubAgentTool(name) ? agentToolDeadlineMs : toolDeadlineMs;
+  }
+
+  // The tool whose own deadline expires first; exempt tools never qualify.
+  function nextExpiringTool() {
+    let next = null;
+    for (const tool of activeTools.values()) {
+      if (!(tool.deadlineMs > 0)) continue;
+      const expiresAt = tool.startedAt + tool.deadlineMs;
+      if (!next || expiresAt < next.expiresAt) next = { tool, expiresAt };
+    }
+    return next;
+  }
+
+  function forgetTool(id) {
+    activeTools.delete(id);
+    // A finished sub-agent cannot leave nested tool calls behind.
+    for (const [childId, tool] of activeTools) if (tool.parentId === id) activeTools.delete(childId);
+  }
+
+  function forgetToolsWithoutId(parentId) {
+    if (!parentId) { activeTools.clear(); return; }
+    for (const [childId, tool] of activeTools) if (tool.parentId === parentId) activeTools.delete(childId);
   }
 
   let forceKillTimer = null;
@@ -222,18 +266,23 @@ export function spawnSupervised(options = {}) {
     semanticInactivityTimer.unref?.();
   }
 
+  // Deadlines are derived from each tool's own start time, so unrelated
+  // (for example nested sub-agent) tool events can neither extend nor
+  // shorten another tool's deadline when the timer is re-armed.
   function resetToolDeadlineTimer() {
     if (toolDeadlineTimer) { clearTimeout(toolDeadlineTimer); toolDeadlineTimer = null; }
-    const tool = currentTool();
-    if (_settled || !tool || toolDeadlineMs <= 0) return;
-    const remainingMs = Math.max(1, toolDeadlineMs - (Date.now() - tool.startedAt));
+    const next = nextExpiringTool();
+    if (_settled || !next) return;
+    const remainingMs = Math.max(1, next.expiresAt - Date.now());
     toolDeadlineTimer = setTimeout(() => {
-      const overdueTool = currentTool();
-      if (!_settled && overdueTool) {
-        const elapsedMs = Date.now() - overdueTool.startedAt;
-        doTerminate("claude_code_tool_timeout");
-        onToolTimeout?.({ toolName: overdueTool.name, elapsedMs });
-      }
+      toolDeadlineTimer = null;
+      const overdue = nextExpiringTool();
+      if (_settled || !overdue) return;
+      if (overdue.expiresAt > Date.now()) { resetToolDeadlineTimer(); return; }
+      const elapsedMs = Date.now() - overdue.tool.startedAt;
+      _toolTimeout = { toolName: overdue.tool.name, elapsedMs };
+      doTerminate("claude_code_tool_timeout");
+      onToolTimeout?.({ toolName: overdue.tool.name, elapsedMs });
     }, remainingMs);
     toolDeadlineTimer.unref?.();
   }
@@ -288,6 +337,9 @@ export function spawnSupervised(options = {}) {
     get lastSemanticEvidenceAt() { return lastSemanticEvidenceAt; },
     get currentToolName() { return currentTool()?.name || null; },
     get toolElapsedMs() { const tool = currentTool(); return tool ? Date.now() - tool.startedAt : null; },
+    get startedAt() { return startedAt; },
+    // { toolName, elapsedMs } of the tool that tripped its deadline, if any.
+    get toolTimeout() { return _toolTimeout; },
 
     // Call with each JSON event line emitted by the Claude process.
     observeEvent(event = {}) {
@@ -307,22 +359,27 @@ export function spawnSupervised(options = {}) {
       // Claude stream-json nests tool_use/tool_result blocks in message.content.
       // Track every outstanding tool id so one completed tool cannot hide a
       // different stuck tool.
+      // Events emitted inside a sub-agent carry parent_tool_use_id.
       const content = Array.isArray(event.message?.content) ? event.message.content : [];
+      const parentId = cleanStr(event.parent_tool_use_id || event.parentToolUseId);
       for (const block of content) {
         const blockType = cleanStr(block?.type).toLowerCase();
         if (blockType === "tool_use") {
           const id = cleanStr(block.id) || `anonymous-${++anonymousToolSequence}`;
-          activeTools.set(id, { id, name: cleanStr(block.name) || "unknown", startedAt: Date.now() });
+          // A re-emitted tool_use must not restart that tool's clock.
+          if (activeTools.has(id)) continue;
+          const name = cleanStr(block.name) || "unknown";
+          activeTools.set(id, { id, name, parentId, startedAt: Date.now(), deadlineMs: toolDeadlineFor(name) });
         } else if (blockType === "tool_result") {
           const id = cleanStr(block.tool_use_id || block.toolUseId);
-          if (id) activeTools.delete(id);
-          else activeTools.clear();
+          if (id) forgetTool(id);
+          else forgetToolsWithoutId(parentId);
         }
       }
       if (type === "tool_result") {
         const id = cleanStr(event.tool_use_id || event.toolUseId);
-        if (id) activeTools.delete(id);
-        else activeTools.clear();
+        if (id) forgetTool(id);
+        else forgetToolsWithoutId(parentId);
       } else if (type === "result") {
         _resultObserved = true;
         activeTools.clear();

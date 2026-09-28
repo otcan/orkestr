@@ -106,18 +106,23 @@ test("supervisedProcessDefaults reads env vars with safe fallbacks", { timeout: 
   assert.equal(defaults.gracePeriodMs, 5_000);
   assert.equal(defaults.semanticInactivityMs, 10 * 60_000);
   assert.equal(defaults.staleWorkingMs, 2 * 60_000);
-  assert.equal(defaults.toolDeadlineMs, 10 * 60_000);
+  assert.equal(defaults.toolDeadlineMs, 20 * 60_000);
+  assert.equal(defaults.agentToolDeadlineMs, 0);
 
   const custom = supervisedProcessDefaults({
     ORKESTR_CLAUDE_GRACE_PERIOD_MS: "200",
     ORKESTR_CLAUDE_SEMANTIC_INACTIVITY_MS: "3000",
     ORKESTR_CLAUDE_STALE_WORKING_MS: "1000",
     ORKESTR_CLAUDE_TOOL_DEADLINE_MS: "4000",
+    ORKESTR_CLAUDE_AGENT_TOOL_DEADLINE_MS: "9000",
   });
   assert.equal(custom.gracePeriodMs, 200);
   assert.equal(custom.semanticInactivityMs, 3_000);
   assert.equal(custom.staleWorkingMs, 1_000);
   assert.equal(custom.toolDeadlineMs, 4_000);
+  assert.equal(custom.agentToolDeadlineMs, 9_000);
+  assert.equal(supervisedProcessDefaults({ ORKESTR_CLAUDE_AGENT_TOOL_DEADLINE_MS: "0" }).agentToolDeadlineMs, 0);
+  assert.equal(supervisedProcessDefaults({ ORKESTR_CLAUDE_AGENT_TOOL_DEADLINE_MS: "-5" }).agentToolDeadlineMs, 0);
 });
 
 // ---------------------------------------------------------------------------
