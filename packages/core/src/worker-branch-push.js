@@ -11,6 +11,7 @@ import { promisify } from "node:util";
 import { appendEvent } from "../../storage/src/store.js";
 import { getThread, updateThread } from "./threads.js";
 import { assertWorkerGitOwnership, inspectWorkerGitOwnership } from "./worker-git-ownership.js";
+import { ownerGitExecIdentity, runOwnerAwareGit } from "./git-owner-exec.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,7 +29,7 @@ function httpError(message, statusCode = 400, extra = {}) {
 async function git(repoPath, args, options = {}) {
   const { stdout, stderr } = await execFileAsync("git", ["-C", repoPath, ...args], {
     maxBuffer: 8 * 1024 * 1024,
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+    env: { ...process.env, ...options.env, GIT_OPTIONAL_LOCKS: "0" },
     ...(Number.isInteger(options.uid) ? { uid: options.uid } : {}),
     ...(Number.isInteger(options.gid) ? { gid: options.gid } : {}),
   });
@@ -80,12 +81,12 @@ export function isProtectedWorkerBranchName(branchName, baseBranch = "") {
   return Boolean(base && value === base);
 }
 
-async function assertRemoteNotAhead(repoPath, storedBranch) {
+async function assertRemoteNotAhead(repoPath, storedBranch, options = {}) {
   const remoteRef = `refs/remotes/origin/${storedBranch}`;
-  const advertised = await git(repoPath, ["ls-remote", "--heads", "origin", `refs/heads/${storedBranch}`]);
+  const advertised = await git(repoPath, ["ls-remote", "--heads", "origin", `refs/heads/${storedBranch}`], options);
   if (!advertised.stdout) return;
-  await git(repoPath, ["fetch", "--no-tags", "origin", `refs/heads/${storedBranch}:${remoteRef}`]);
-  const counts = await git(repoPath, ["rev-list", "--left-right", "--count", `${remoteRef}...HEAD`]);
+  await git(repoPath, ["fetch", "--no-tags", "origin", `refs/heads/${storedBranch}:${remoteRef}`], options);
+  const counts = await git(repoPath, ["rev-list", "--left-right", "--count", `${remoteRef}...HEAD`], options);
   const [behindRaw] = counts.stdout.split(/\s+/);
   const behind = Number(behindRaw);
   if (Number.isFinite(behind) && behind > 0) {
@@ -138,12 +139,20 @@ export async function pushWorkerOwnBranch(threadId, options = {}, env = process.
 
   const checkout = threadCheckoutPath(thread);
   const effectiveUid = process.geteuid?.();
-  const checkoutStat = await fs.stat(checkout).catch(() => null);
-  const privilegedRuntimeCheckout = effectiveUid === 0 && checkoutStat && checkoutStat.uid !== 0;
-  const ownership = privilegedRuntimeCheckout
-    ? await inspectWorkerGitOwnership(checkout)
-    : await assertWorkerGitOwnership(checkout);
-  const ownerOptions = privilegedRuntimeCheckout ? { uid: ownership.ownerUid, gid: ownership.ownerGid } : {};
+  // Preferred: run Git as the allowlisted checkout owner. Privileged staging
+  // remains the fallback when owner execution is disabled or not applicable.
+  const ownerExec = await ownerGitExecIdentity(checkout, env);
+  const checkoutStat = ownerExec ? null : await fs.stat(checkout).catch(() => null);
+  const privilegedRuntimeCheckout = !ownerExec && effectiveUid === 0 && checkoutStat && checkoutStat.uid !== 0;
+  let ownerOptions = {};
+  if (ownerExec) {
+    ownerOptions = ownerExec.execOptions;
+  } else if (privilegedRuntimeCheckout) {
+    const ownership = await inspectWorkerGitOwnership(checkout);
+    ownerOptions = { uid: ownership.ownerUid, gid: ownership.ownerGid };
+  } else {
+    await assertWorkerGitOwnership(checkout);
+  }
   const repoPath = await resolveGitRoot(checkout, ownerOptions);
   if (!repoPath) throw httpError("thread_repo_not_found", 404);
 
@@ -160,14 +169,16 @@ export async function pushWorkerOwnBranch(threadId, options = {}, env = process.
     throw httpError("worker_remote_mismatch", 409, { remoteUrl, storedRemoteUrl });
   }
 
+  let executedAsUid = effectiveUid ?? null;
   if (privilegedRuntimeCheckout) {
     await pushFromPrivilegedStaging(repoPath, storedBranch, remoteUrl);
   } else {
-    await assertRemoteNotAhead(repoPath, storedBranch);
-    // -u (never --force) sets the local upstream when the service and checkout
-    // share an identity. Privileged services instead use isolated staging so
-    // they never leave root-owned files in a runtime user's checkout.
-    await git(repoPath, ["push", "-u", "origin", `HEAD:refs/heads/${storedBranch}`]);
+    await assertRemoteNotAhead(repoPath, storedBranch, ownerOptions);
+    // -u (never --force) sets the local upstream when Git runs as the checkout
+    // owner (same uid, or owner-aware execution). Otherwise privileged services
+    // use isolated staging so they never leave root-owned files in the checkout.
+    // runOwnerAwareGit re-checks ownership immediately before pushing.
+    ({ executedAsUid } = await runOwnerAwareGit(repoPath, ["push", "-u", "origin", `HEAD:refs/heads/${storedBranch}`], env));
   }
 
   const remoteBranch = `origin/${storedBranch}`;
@@ -182,8 +193,9 @@ export async function pushWorkerOwnBranch(threadId, options = {}, env = process.
     threadId: thread.id,
     branchName: storedBranch,
     remoteBranch,
+    executedAsUid,
     operatorUserId: nonEmptyString(options.operatorUserId) || null,
   }, env).catch(() => {});
 
-  return { pushed: true, branchName: storedBranch, remoteBranch, thread: updated };
+  return { pushed: true, branchName: storedBranch, remoteBranch, thread: updated, executedAsUid };
 }

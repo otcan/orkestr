@@ -7,7 +7,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThread } from "./threads.js";
 import { runtimeStatus } from "./runtime-leases.js";
-import { assertWorkerGitOwnership } from "./worker-git-ownership.js";
+import { resolveGitExec, runOwnerAwareGit, scopedGitExecOptions, withGitOwnerScope } from "./git-owner-exec.js";
 import { agentReleaseRolePolicy } from "./agent-release-role.js";
 
 const execFileAsync = promisify(execFile);
@@ -48,10 +48,13 @@ function workerBranchName(parent, workerId, input = {}) {
 }
 
 async function git(repoPath, args, options = {}) {
+  // Inside a git-owner scope, read probes run as the checkout's allowlisted owner.
+  const owner = options.uid === undefined ? await scopedGitExecOptions(repoPath) : {};
   const { stdout, stderr } = await execFileAsync("git", ["-C", repoPath, ...args], {
     maxBuffer: 8 * 1024 * 1024,
+    ...owner,
     ...options,
-    env: { ...process.env, ...options.env, GIT_OPTIONAL_LOCKS: "0" },
+    env: { ...process.env, ...owner.env, ...options.env, GIT_OPTIONAL_LOCKS: "0" },
   });
   return { stdout: String(stdout || "").trim(), stderr: String(stderr || "").trim() };
 }
@@ -399,6 +402,10 @@ function threadCheckoutPath(thread) {
 }
 
 export async function detectThreadGitState(threadOrId, env = process.env) {
+  return withGitOwnerScope(env, () => detectThreadGitStateScoped(threadOrId, env));
+}
+
+async function detectThreadGitStateScoped(threadOrId, env) {
   const thread = typeof threadOrId === "string" ? await getThread(threadOrId, env) : threadOrId;
   if (!thread) return {};
   const checkout = threadCheckoutPath(thread);
@@ -437,6 +444,10 @@ export async function detectThreadGitState(threadOrId, env = process.env) {
 }
 
 export async function detectThreadRepo(threadId, env = process.env) {
+  return withGitOwnerScope(env, () => detectThreadRepoScoped(threadId, env));
+}
+
+async function detectThreadRepoScoped(threadId, env) {
   const thread = await getThread(threadId, env);
   if (!thread) throw httpError("thread_not_found", 404);
   const repoPath = await resolveParentRepo(thread, {});
@@ -505,11 +516,15 @@ export async function refreshThreadGitState(threadOrId, env = process.env) {
 }
 
 export async function syncThreadWorkerWithParent(threadId, env = process.env) {
+  return withGitOwnerScope(env, () => syncThreadWorkerWithParentScoped(threadId, env));
+}
+
+async function syncThreadWorkerWithParentScoped(threadId, env) {
   const thread = await getThread(threadId, env);
   if (!thread) throw httpError("thread_not_found", 404);
   if (!nonEmptyString(thread.parentThreadId)) throw httpError("thread_is_not_worker", 400);
 
-  await assertWorkerGitOwnership(threadCheckoutPath(thread));
+  const preflight = await resolveGitExec(threadCheckoutPath(thread), env);
   const state = await detectThreadGitState(thread, env);
   const repoPath = await resolveGitRoot(threadCheckoutPath(thread)).catch(() => null);
   if (!repoPath) throw httpError("thread_repo_not_found", 404);
@@ -523,11 +538,11 @@ export async function syncThreadWorkerWithParent(threadId, env = process.env) {
   if (parentAhead > 0) throw httpError("worker_has_unmerged_commits", 409, { gitParentAhead: parentAhead });
   if (parentBehind <= 0) {
     const updated = await updateThread(thread.id, gitStatePatch(state), env);
-    return { synced: false, reason: "already_synced", thread: updated, gitState: state };
+    return { synced: false, reason: "already_synced", thread: updated, gitState: state, executedAsUid: preflight.executedAsUid };
   }
 
-  await assertWorkerGitOwnership(repoPath);
-  await git(repoPath, ["merge", "--ff-only", parentHead]);
+  // Ownership is re-checked immediately before the merge.
+  const { executedAsUid } = await runOwnerAwareGit(repoPath, ["merge", "--ff-only", parentHead], env);
   const nextState = await detectThreadGitState(thread, env);
   const updated = await updateThread(thread.id, gitStatePatch(nextState), env);
   await appendEvent({
@@ -536,8 +551,9 @@ export async function syncThreadWorkerWithParent(threadId, env = process.env) {
     parentThreadId: thread.parentThreadId,
     parentHead,
     previousBehind: parentBehind,
+    executedAsUid,
   }, env);
-  return { synced: true, thread: updated, gitState: nextState };
+  return { synced: true, thread: updated, gitState: nextState, executedAsUid };
 }
 
 function workerSortKey(thread) {
@@ -577,6 +593,7 @@ function workerSyncResult(thread, fields = {}) {
     gitDirtyFiles: null,
     gitRemoteAhead: null,
     gitRemoteBehind: null,
+    executedAsUid: null,
     ...fields,
   };
 }
@@ -592,17 +609,21 @@ function workerSyncStateFields(state = {}) {
 }
 
 async function pushWorkerBranch(thread, state = {}, env = process.env) {
-  await assertWorkerGitOwnership(threadCheckoutPath(thread));
+  return withGitOwnerScope(env, () => pushWorkerBranchScoped(thread, state, env));
+}
+
+async function pushWorkerBranchScoped(thread, state, env) {
+  await resolveGitExec(threadCheckoutPath(thread), env);
   const repoPath = await resolveGitRoot(threadCheckoutPath(thread)).catch(() => null);
   if (!repoPath) return { pushed: false, reason: "thread_repo_not_found" };
   const branchName = nonEmptyString(state.branchName || thread.branchName || await currentBranch(repoPath));
   const remoteBranch = nonEmptyString(state.remoteBranch || thread.remoteBranch || await remoteTrackingBranch(repoPath, branchName));
   if (!branchName || branchName === "HEAD" || branchName === "detached") return { pushed: false, reason: "worker_branch_unknown" };
   if (!remoteBranch.startsWith("origin/")) return { pushed: false, reason: "worker_remote_not_origin" };
-  await git(repoPath, ["push", "origin", `HEAD:${remoteBranch.slice("origin/".length)}`]);
+  const { executedAsUid } = await runOwnerAwareGit(repoPath, ["push", "origin", `HEAD:${remoteBranch.slice("origin/".length)}`], env);
   const nextState = await detectThreadGitState(thread, env);
   const updated = await updateThread(thread.id, gitStatePatch(nextState), env);
-  return { pushed: true, thread: updated, gitState: nextState };
+  return { pushed: true, thread: updated, gitState: nextState, executedAsUid };
 }
 
 export async function syncSafeThreadWorkersWithParents(input = {}, env = process.env) {
@@ -621,8 +642,9 @@ export async function syncSafeThreadWorkersWithParents(input = {}, env = process
   for (const worker of workers) {
     let current = worker;
     let state = {};
+    let executedAsUid = null;
     try {
-      await assertWorkerGitOwnership(threadCheckoutPath(worker));
+      ({ executedAsUid } = await resolveGitExec(threadCheckoutPath(worker), env));
       const refreshed = await refreshThreadGitState(worker.id, env);
       current = refreshed.thread || worker;
       state = refreshed.gitState || {};
@@ -636,7 +658,7 @@ export async function syncSafeThreadWorkersWithParents(input = {}, env = process
       continue;
     }
 
-    const stateFields = workerSyncStateFields(state);
+    const stateFields = { ...workerSyncStateFields(state), executedAsUid };
     const parentAhead = Number(state.gitParentAhead || 0);
     const parentBehind = Number(state.gitParentBehind || 0);
     const dirtyFiles = Number(state.gitDirtyFiles || 0);
@@ -697,6 +719,7 @@ export async function syncSafeThreadWorkersWithParents(input = {}, env = process
       }
       results.push(workerSyncResult(current, {
         ...workerSyncStateFields(state),
+        executedAsUid: pushResult.executedAsUid ?? synced.executedAsUid ?? executedAsUid,
         synced: Boolean(synced.synced),
         pushed: Boolean(pushResult.pushed),
         reason: pushResult.pushed ? "synced_and_pushed" : (synced.synced ? pushResult.reason || "synced" : synced.reason || "already_synced"),
