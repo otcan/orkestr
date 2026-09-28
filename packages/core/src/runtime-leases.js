@@ -36,6 +36,7 @@ import {
   updateThreadMessage,
 } from "./threads.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
+import { processQueuedExecutorCommands } from "./thread-executor-commands.js";
 import { completeLegacySettingsCommand } from "./codex-settings-command-legacy.js";
 import { handleWhatsAppSettingsCommand } from "../../connectors/src/whatsapp-settings-command.js";
 import { recordRouterTraceEvent } from "./router-traces.js";
@@ -3902,12 +3903,14 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
     await appendEvent({ type: "thread_input_delivery_deferred", threadId, reason: "deploy_draining" }, env).catch(() => {});
     return [];
   }
-  const thread = await getThread(threadId, env);
+  let thread = await getThread(threadId, env);
   if (!thread) return [];
   if (String(thread.retiredAt || "").trim() || ["retiring", "retired"].includes(String(thread.state || "").trim().toLowerCase())) {
     await appendEvent({ type: "thread_input_delivery_blocked", threadId: thread.id, reason: "thread_retired" }, env).catch(() => null);
     return [];
   }
+  const executorCommands = await processQueuedExecutorCommands(thread, env).catch(() => []);
+  if (executorCommands.length) thread = await getThread(thread.id, env) || thread;
   if (threadUsesApiAgent(thread, env)) {
     if (options.processApiAgent !== true) {
       await appendEvent({ type: "thread_input_delivery_skipped", threadId: thread.id, reason: "api_agent_thread" }, env).catch(() => null);

@@ -21,6 +21,8 @@ const CONTROL_COMMANDS = new Set([
   "rt",
   "runtime",
   "agent",
+  "claude",
+  "codex",
   "api",
   "terminal",
   "term",
@@ -28,7 +30,10 @@ const CONTROL_COMMANDS = new Set([
   "attached",
 ]);
 
-const RUNTIME_ALIAS_COMMANDS = new Set(["agent", "api", "terminal", "term", "tmux", "attached"]);
+const RUNTIME_ALIAS_COMMANDS = new Set(["api", "terminal", "term", "tmux", "attached"]);
+// `/agent api|terminal` keeps its legacy runtime-surface meaning; bare `/agent`
+// and `/agent <executor>` address the executor switch (Codex <-> Claude Code).
+const LEGACY_AGENT_RUNTIME_TOKENS = new Set(["api", "app", "app-server", "structured", "terminal", "term", "tmux", "attached", "attach", "raw", "raw-terminal"]);
 
 function switchModeCommand(text = "") {
   const match = String(text || "").trimStart().match(/^([a-z][a-z0-9_-]*)(?:\b|$)([\s:.,-]*)([\s\S]*)$/i);
@@ -58,6 +63,15 @@ export function parseThreadInputCommand(input = {}) {
   if (command === "switch") {
     const mode = switchModeCommand(rawText);
     if (mode) return { command: mode.command, rawCommand: command, text: mode.text };
+    return { command: "runtime_type", rawCommand: command, text: rawText };
+  }
+
+  if (command === "claude" || command === "codex") {
+    return { command: "executor", rawCommand: command, text: [command, rawText].filter(Boolean).join(" ").trim() };
+  }
+  if (command === "agent") {
+    const token = rawText.split(/\s+/)[0].toLowerCase();
+    if (!LEGACY_AGENT_RUNTIME_TOKENS.has(token)) return { command: "executor", rawCommand: command, text: rawText };
     return { command: "runtime_type", rawCommand: command, text: rawText };
   }
 

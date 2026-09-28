@@ -2,6 +2,7 @@ import { executeSettingsCommand, parseSettingsCommand } from "../../core/src/cod
 import { getThread } from "../../core/src/threads.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
 import { modelControlsReadOnlyReason } from "../../core/src/codex-model-controls.js";
+import { threadUsesClaudeCode } from "../../core/src/claude-code-runtime-policy.js";
 import { resolveWhatsAppBinding } from "./whatsapp-account-bindings.js";
 import { settingsOperationKey, withSettingsOperationLock, runSettingsOperation, readSettingsOperation,
   recordSettingsReplyState, settingsControlAlert } from "../../core/src/codex-settings-operations.js";
@@ -79,7 +80,7 @@ export async function deliverWhatsAppSettingsReplies(env, send) {
       if (!current || resourceOwnerUserId(current, env) !== job.ownerUserId || current.deletedAt ||
           !binding?.selected?.enabled || !binding.selected.routeEligible || binding.selected.ownerUserId !== job.ownerUserId ||
           String(binding.selected?.chatId || "") !== job.chatId ||
-          (modelControlsReadOnlyReason(current, env) && result.ok)) {
+          (!threadUsesClaudeCode(current) && modelControlsReadOnlyReason(current, env) && result.ok)) {
         await recordSettingsReplyState(key, "suppressed", env);
         await markConnectorOutboxJob(job.id, { state: "suppressed", error: "settings_reply_scope_changed" }, env);
         return;
