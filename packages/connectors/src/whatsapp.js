@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { publicWhatsAppPartialDelivery } from "./whatsapp-delivery-evidence.js";
 import { hasWhatsAppPartialDelivery } from "./whatsapp-replay-safety.js";
 import { withWhatsAppOwnerTimezone } from "./whatsapp-capacity-reset.js";
+import { withWhatsAppProviderQuota } from "./whatsapp-quota-footer.js";
 import path from "node:path";
 import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
@@ -6168,7 +6169,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       debugThreadPromise ||= kind === "thread"
         ? threadWithLiveCodexDebugMetadata(thread, env).then((value) =>
           [env.ORKESTR_WHATSAPP_DEBUG_FOOTER, env.WA_DEBUG_FOOTER, env.WA_APPEND_DEBUG_FOOTER].some((flag) => /^(1|true|on|yes)$/i.test(String(flag || "").trim()))
-            ? withWhatsAppOwnerTimezone(value, env) : value)
+            ? withWhatsAppOwnerTimezone(value, env).then((enriched) => withWhatsAppProviderQuota(enriched, env)) : value)
         : Promise.resolve(thread);
       return debugThreadPromise;
     };

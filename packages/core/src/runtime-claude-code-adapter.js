@@ -68,7 +68,7 @@ function claudeCodeTelemetryPatch(telemetry = {}) {
   return {
     ...(telemetry?.model ? { claudeModelResolved: telemetry.model } : {}),
     ...(telemetry?.tokenUsage ? { claudeTokenUsage: telemetry.tokenUsage } : {}),
-    ...(telemetry?.rateLimits ? { claudeRateLimits: telemetry.rateLimits } : {}),
+    ...(telemetry?.rateLimits ? { claudeRateLimits: telemetry.rateLimits, claudeRateLimitsObservedAt: nowIso() } : {}),
     ...(telemetry?.contextWindow ? { claudeContextWindow: telemetry.contextWindow } : {}),
   };
 }
@@ -320,7 +320,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
       lastError: failureCode,
       ...(failureTelemetry?.model ? { claudeModelResolved: failureTelemetry.model } : {}),
       ...(failureTelemetry?.tokenUsage ? { claudeTokenUsage: failureTelemetry.tokenUsage } : {}),
-      ...(failureTelemetry?.rateLimits ? { claudeRateLimits: failureTelemetry.rateLimits } : {}),
+      ...(failureTelemetry?.rateLimits ? { claudeRateLimits: failureTelemetry.rateLimits, claudeRateLimitsObservedAt: nowIso() } : {}),
       ...(failureTelemetry?.contextWindow ? { claudeContextWindow: failureTelemetry.contextWindow } : {}),
       runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "failed", activeTurnId: null, lastTurnId: attemptId, lastTurnStatus: "failed", lastTurnError: failureCode },
     }, env).catch(() => thread);

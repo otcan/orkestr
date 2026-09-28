@@ -26,6 +26,7 @@ import { UsersModule } from "./modules/users/users.module.js";
 import { AttachmentEncryptionModule } from "./modules/attachment-encryption/attachment-encryption.module.js";
 import { VagentModule } from "./modules/vagent/vagent.module.js";
 import { LlmAccountsModule } from "./modules/llm-accounts/llm-accounts.module.js";
+import { ProviderQuotaModule } from "./modules/provider-quota/provider-quota.module.js";
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { LlmAccountsModule } from "./modules/llm-accounts/llm-accounts.module.js
     AttachmentEncryptionModule,
     VagentModule,
     LlmAccountsModule,
+    ProviderQuotaModule,
   ],
 })
 export class AppModule {}

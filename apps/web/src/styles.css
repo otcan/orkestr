@@ -1650,6 +1650,21 @@ ork-first-thread-wizard.first-thread-host {
   text-transform: uppercase;
 }
 
+.codex-model-row .executor-badge {
+  flex: none;
+  color: #0b1a0d;
+  background: #8cff9b;
+  border-radius: 4px;
+  font-size: 0.6rem;
+  font-weight: 900;
+  padding: 1px 5px;
+  text-transform: uppercase;
+}
+
+.codex-model-row .executor-badge[data-executor="claude"] {
+  background: #f5b37a;
+}
+
 .codex-meter-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
