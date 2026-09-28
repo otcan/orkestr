@@ -3,6 +3,14 @@ import { Injectable, inject } from "@angular/core";
 import { Observable } from "rxjs";
 import type { ProviderQuotaSnapshot } from "./provider-quota";
 
+export interface ThreadExecutorSummary {
+  threadId: string;
+  executor: string;
+  model?: string | null;
+  effort?: string | null;
+  pendingExecutorSwitch?: { target?: string; requestedAt?: string; actor?: string; reason?: string } | null;
+}
+
 export interface HealthResponse {
   ok: boolean;
   name: string;
@@ -2679,6 +2687,14 @@ export class ApiService {
 
   codexAppServerStatus(): Observable<CodexAppServerStatus> {
     return this.http.get<CodexAppServerStatus>(this.api("/codex/app-server/status"));
+  }
+
+  threadExecutor(id: string): Observable<{ ok: boolean; executor: ThreadExecutorSummary }> {
+    return this.http.get<{ ok: boolean; executor: ThreadExecutorSummary }>(this.api(`/threads/${encodeURIComponent(id)}/executor`));
+  }
+
+  setThreadExecutor(id: string, body: { executor: "codex" | "claude-code"; model?: string; effort?: string; when?: "now" | "after_turn"; reason?: string }): Observable<{ ok: boolean; executor: ThreadExecutorSummary; replyText?: string }> {
+    return this.http.put<{ ok: boolean; executor: ThreadExecutorSummary; replyText?: string }>(this.api(`/threads/${encodeURIComponent(id)}/executor`), body);
   }
 
   providerQuota(): Observable<{ quota: ProviderQuotaSnapshot }> {

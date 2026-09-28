@@ -381,6 +381,7 @@
           <h2>{{ threadTitle(thread) }}</h2>
           <p class="subline">
             <span class="status-pill" [class]="statusClass(thread)">{{ statusLabel(thread) }}</span>
+            <ork-executor-switcher [threadId]="thread.id" [activeProvider]="activeExecutorProvider(thread)" [working]="threadIsWorking(thread)" (switched)="onExecutorSwitched()"></ork-executor-switcher>
             <ork-provider-quota-indicator [activeProvider]="activeExecutorProvider(thread)"></ork-provider-quota-indicator>
             @if (threadBranchLabel(thread)) {
               <span class="branch-pill">{{ threadBranchLabel(thread) }}</span>

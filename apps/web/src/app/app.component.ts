@@ -71,6 +71,7 @@ import {
 import { canonicalThreadPanelUrl, navigateCanonicalThreadTarget, navigateLegacyThreadPath } from "./canonical-thread-navigation.js";
 import { describeUiSendFailure, UiSendFailureDescription } from "./ui-send-failure.js";
 import { ProviderQuotaIndicatorComponent } from "./provider-quota-indicator.component";
+import { ExecutorSwitcherComponent } from "./executor-switcher.component";
 import { QuotaProvider, claudeEffortLabel, claudeModelName, executorLabel, threadExecutorProvider } from "./provider-quota";
 
 type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "userConnectors";
@@ -108,7 +109,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, ProviderQuotaIndicatorComponent],
+  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -4281,6 +4282,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   composerPlaceholder(thread: ThreadSummary | null): string {
     if (thread && !this.threadInputReadyFor(thread)) return "Connect Codex Agent to send tasks";
     return thread ? `Message ${this.threadTitle(thread)}` : "Message";
+  }
+
+  threadIsWorking(thread: ThreadSummary | null): boolean {
+    const record = thread as unknown as { state?: string; working?: boolean } | null;
+    return Boolean(record && (record.working || record.state === "working"));
+  }
+
+  onExecutorSwitched(): void {
+    void this.refresh(false);
   }
 
   activeExecutorProvider(thread: ThreadSummary | null): QuotaProvider | "" {

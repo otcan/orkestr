@@ -23,7 +23,7 @@ test("dual quota indicator shows both providers from the owner-scoped quota API"
   assert.match(indicator, /\[title\]="tooltip\(provider\)"/);
   assert.match(indicator, /stale/);
   assert.doesNotMatch(indicator, /localStorage|sessionStorage|console\.log/);
-  assert.match(app, /ProviderQuotaIndicatorComponent\]/);
+  assert.match(app, /ProviderQuotaIndicatorComponent[,\]]/);
   assert.match(template, /<ork-provider-quota-indicator \[activeProvider\]="activeExecutorProvider\(thread\)">/);
   assert.match(template, /class="executor-badge"[^>]*>\{\{ activeExecutorLabel\(thread\) \}\}/);
 });
