@@ -37,6 +37,8 @@ export function claudeCodeStatusPayload({ thread = {}, supervisor = null, profil
     accountProfileId: accountProfileId || null,
     accountState: profileState,
     activeTurnId: supervisor?.attemptId || null,
+    // "detached" turns survive a UI service restart; "pipe" turns do not.
+    claudeTransport: supervisor ? (supervisor.transport || "pipe") : null,
     error: state === "interrupted" ? "claude_code_runtime_interrupted" : thread.lastError || null,
     model: thread.claudeModel || thread.executor?.metadata?.claudeModel || thread.claudeModelResolved || null,
     effort: thread.claudeEffort || thread.executor?.metadata?.claudeEffort || null,

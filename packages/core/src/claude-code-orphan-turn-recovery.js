@@ -17,6 +17,8 @@ import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { claudeCodeOutputEventId, existingClaudeCodeOutput } from "./claude-code-router-trace.js";
 import { hasActiveClaudeCodeSupervisor } from "./runtime-claude-code-adapter.js";
 import { settleOrphanedClaudeCodeTurnInputs } from "./claude-code-interrupt-resume.js";
+import { reattachDetachedClaudeCodeTurn } from "./claude-code-turn-reattach.js";
+import { cleanupDetachedClaudeCodeTurns } from "./claude-code-turn-finalize.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -59,6 +61,11 @@ export async function recoverOrphanedClaudeCodeTurn(threadOrId, env = process.en
   const activeTurnId = clean(thread?.runtime?.activeTurnId);
   if (!activeTurnId) return { recovered: false, reason: "no_active_turn" };
   if (hasActiveClaudeCodeSupervisor(thread.id)) return { recovered: false, reason: "turn_live" };
+  // A detached turn survives a server restart: reattach to it (or replay its
+  // finished log) instead of failing a turn that can still deliver its answer.
+  const reattach = await reattachDetachedClaudeCodeTurn(thread, env).catch(() => null);
+  if (reattach?.reattached) return { recovered: false, reason: "reattached", reattached: true, turnId: reattach.turnId, done: reattach.done };
+  if (reattach?.reason === "turn_live" || hasActiveClaudeCodeSupervisor(thread.id)) return { recovered: false, reason: "turn_live" };
 
   const message = await correlatedRunningMessage(thread, activeTurnId, env);
   if (!message) return { recovered: false, reason: "no_correlated_message" };
@@ -96,6 +103,7 @@ export async function recoverOrphanedClaudeCodeTurn(threadOrId, env = process.en
       threadId: thread.id, runtimeKind: "claude-code", turnId: activeTurnId, state: "completed", source: "claude_code_orphan_recovery",
     }, env).catch(() => {});
     await appendEvent({ type: "claude_code_turn_recovered", threadId: thread.id, turnId: activeTurnId, outcome: "completed" }, env).catch(() => {});
+    await cleanupDetachedClaudeCodeTurns(thread.id, env);
     return { recovered: true, outcome: "completed", thread: updated, messageId: message.id };
   }
 
@@ -125,6 +133,7 @@ export async function recoverOrphanedClaudeCodeTurn(threadOrId, env = process.en
     threadId: thread.id, runtimeKind: "claude-code", turnId: activeTurnId, state: "failed", source: "claude_code_orphan_recovery", error: "claude_code_turn_interrupted",
   }, env).catch(() => {});
   await appendEvent({ type: "claude_code_turn_recovered", threadId: thread.id, turnId: activeTurnId, outcome: "failed" }, env).catch(() => {});
+  await cleanupDetachedClaudeCodeTurns(thread.id, env);
   return { recovered: true, outcome: "failed", thread: updated, messageId: message.id };
 }
 
@@ -140,5 +149,6 @@ export async function recoverOrphanedClaudeCodeTurns(env = process.env) {
     results.push({ threadId: thread.id, ...result });
   }
   const recovered = results.filter((result) => result.recovered).length;
-  return { recovered, results };
+  const reattached = results.filter((result) => result.reattached).length;
+  return { recovered, reattached, results };
 }
