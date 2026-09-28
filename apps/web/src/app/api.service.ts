@@ -1,6 +1,7 @@
 import { HttpClient } from "@angular/common/http";
 import { Injectable, inject } from "@angular/core";
 import { Observable } from "rxjs";
+import type { ProviderQuotaSnapshot } from "./provider-quota";
 
 export interface HealthResponse {
   ok: boolean;
@@ -2678,6 +2679,10 @@ export class ApiService {
 
   codexAppServerStatus(): Observable<CodexAppServerStatus> {
     return this.http.get<CodexAppServerStatus>(this.api("/codex/app-server/status"));
+  }
+
+  providerQuota(): Observable<{ quota: ProviderQuotaSnapshot }> {
+    return this.http.get<{ quota: ProviderQuotaSnapshot }>(this.api("/quota/providers"));
   }
 
   llmAccounts(provider = ""): Observable<{ enabled: boolean; accounts: LlmAccountProfile[] }> {

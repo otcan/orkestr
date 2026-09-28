@@ -381,6 +381,7 @@
           <h2>{{ threadTitle(thread) }}</h2>
           <p class="subline">
             <span class="status-pill" [class]="statusClass(thread)">{{ statusLabel(thread) }}</span>
+            <ork-provider-quota-indicator [activeProvider]="activeExecutorProvider(thread)"></ork-provider-quota-indicator>
             @if (threadBranchLabel(thread)) {
               <span class="branch-pill">{{ threadBranchLabel(thread) }}</span>
             }
@@ -448,6 +449,7 @@
             [attr.aria-expanded]="modelDetailsOpen"
           >
             <span class="codex-model-row">
+              <b class="executor-badge" [attr.data-executor]="activeExecutorProvider(thread)">{{ activeExecutorLabel(thread) }}</b>
               <strong>{{ codexModelName(thread) }}</strong>
               <span>{{ codexReasoningEffortLabel(thread) }}</span>
             </span>

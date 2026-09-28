@@ -70,6 +70,8 @@ import {
 } from "./thread-uploads";
 import { canonicalThreadPanelUrl, navigateCanonicalThreadTarget, navigateLegacyThreadPath } from "./canonical-thread-navigation.js";
 import { describeUiSendFailure, UiSendFailureDescription } from "./ui-send-failure.js";
+import { ProviderQuotaIndicatorComponent } from "./provider-quota-indicator.component";
+import { QuotaProvider, claudeEffortLabel, claudeModelName, executorLabel, threadExecutorProvider } from "./provider-quota";
 
 type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
@@ -106,7 +108,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
+  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, ProviderQuotaIndicatorComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -4270,7 +4272,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return thread ? `Message ${this.threadTitle(thread)}` : "Message";
   }
 
+  activeExecutorProvider(thread: ThreadSummary | null): QuotaProvider | "" {
+    return thread ? threadExecutorProvider(thread) : "";
+  }
+
+  activeExecutorLabel(thread: ThreadSummary | null): string {
+    return thread ? executorLabel(threadExecutorProvider(thread)) : "";
+  }
+
   codexModelName(thread: ThreadSummary | null): string {
+    if (thread && threadExecutorProvider(thread) === "claude") return claudeModelName(thread);
     return String(
       thread?.codexModel ||
       this.objectValue(thread?.runtime, "codexModel") ||
@@ -4281,6 +4292,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   codexReasoningEffortLabel(thread: ThreadSummary | null): string {
     if (!thread) return "";
+    if (threadExecutorProvider(thread) === "claude") return claudeEffortLabel(thread);
     return String(thread.codexReasoningEffort || "default").trim();
   }
 
@@ -4393,6 +4405,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   codexCapacityTooltip(thread: ThreadSummary | null): string {
     return [
+      `Agent: ${this.activeExecutorLabel(thread)}`,
       `Model: ${this.codexModelName(thread)}`,
       `Reasoning: ${this.codexReasoningEffortLabel(thread) || "default"}`,
       `5h remaining: ${this.codexRateRemainingLabel(thread, "primary")}`,
