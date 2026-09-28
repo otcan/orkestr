@@ -7808,10 +7808,11 @@ test("thread summary keeps inline proposed plan mentions as final answers", asyn
   assert.equal(summary.planAvailable, false);
 });
 
-test("thread input commands use plain messages for steering and normalize stop aliases", () => {
+test("thread input commands parse /now as interrupt-and-send and normalize stop aliases", () => {
   assert.deepEqual(parseThreadInputCommand({ text: "/now run this immediately" }), {
-    command: null,
-    text: "/now run this immediately",
+    command: "interrupt",
+    rawCommand: "now",
+    text: "run this immediately",
   });
   assert.deepEqual(parseThreadInputCommand({ text: "/steer keep going with this detail" }), {
     command: null,

@@ -167,6 +167,8 @@ export function spawnSupervised(options = {}) {
   let _interrupted = false;
   let _failureCode = null;
   let _staleWorkingSince = null;
+  let _interruptMode = null;
+  let _resultObserved = false;
 
   let lastSemanticEvidenceAt = startedAt;
   const activeTools = new Map();
@@ -180,6 +182,7 @@ export function spawnSupervised(options = {}) {
   let semanticInactivityTimer = null;
   let toolDeadlineTimer = null;
   let heartbeatTimer = null;
+  let gracefulInterruptTimer = null;
 
   // Persist identity for orphan recovery (fire-and-forget; errors are non-fatal).
   const identityWritten = identityFilePath
@@ -267,6 +270,10 @@ export function spawnSupervised(options = {}) {
 
     get settled() { return _settled; },
     get interrupted() { return _interrupted; },
+    // "graceful" (SIGINT first) or "terminate" (SIGTERM/SIGKILL); null until interrupted.
+    get interruptMode() { return _interruptMode; },
+    // True once the stream emitted its terminal result event.
+    get resultObserved() { return _resultObserved; },
     get failureCode() { return _failureCode; },
     set failureCode(v) { if (v && !_failureCode) _failureCode = v; },
 
@@ -317,6 +324,7 @@ export function spawnSupervised(options = {}) {
         if (id) activeTools.delete(id);
         else activeTools.clear();
       } else if (type === "result") {
+        _resultObserved = true;
         activeTools.clear();
       }
       if (activeTools.size === 0) {
@@ -342,7 +350,25 @@ export function spawnSupervised(options = {}) {
     // Mark as user-interrupted and terminate the process group.
     interrupt() {
       _interrupted = true;
+      if (!_interruptMode) _interruptMode = "terminate";
       doTerminate(null);
+    },
+
+    // Mark as user-interrupted and send SIGINT to the process group so the
+    // CLI can stop like a terminal Ctrl-C and flush its session transcript.
+    // Falls back to the SIGTERM/SIGKILL path when the group is still alive
+    // after graceMs. Returns false when already settled or interrupted.
+    gracefulInterrupt(graceMs = gracePeriodMs) {
+      if (_settled || _interrupted) return false;
+      _interrupted = true;
+      _interruptMode = "graceful";
+      sendSignalToGroup("SIGINT");
+      gracefulInterruptTimer = setTimeout(() => {
+        gracefulInterruptTimer = null;
+        if (!_settled) doTerminate(null);
+      }, Math.max(0, Number(graceMs) || 0));
+      gracefulInterruptTimer.unref?.();
+      return true;
     },
 
     // Called exactly once when the child process exits and the promise settles.
@@ -353,6 +379,7 @@ export function spawnSupervised(options = {}) {
       if (toolDeadlineTimer) { clearTimeout(toolDeadlineTimer); toolDeadlineTimer = null; }
       if (heartbeatTimer) { clearTimeout(heartbeatTimer); heartbeatTimer = null; }
       if (forceKillTimer) { clearTimeout(forceKillTimer); forceKillTimer = null; }
+      if (gracefulInterruptTimer) { clearTimeout(gracefulInterruptTimer); gracefulInterruptTimer = null; }
     },
 
     // Verify the identity file still names this attempt before any PGID cleanup.

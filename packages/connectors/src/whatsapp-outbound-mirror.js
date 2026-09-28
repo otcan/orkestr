@@ -2,6 +2,7 @@ import { updateAgentMessage } from "../../core/src/messages.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { updateThreadMessage } from "../../core/src/threads.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
+import { claudeCodeInputRequestsInterrupt } from "../../core/src/claude-code-interrupt-resume.js";
 import { whatsappBindingIsRouteEligible } from "./whatsapp-inbound-routing.js";
 import { stripWhatsAppDebugFooter } from "./whatsapp-formatting.js";
 import { shouldMirrorWhatsAppProgress, shouldMirrorWhatsAppReply } from "./whatsapp-mirror-policy.js";
@@ -162,17 +163,20 @@ function messageRequestsInstantSteer(message = null) {
     pickString(message?.codexDeliveryMode).toLowerCase() === "instant_steer";
 }
 
-export function initialQueueDeliveryState(status = null, message = null) {
+export function initialQueueDeliveryState(status = null, message = null, env = process.env) {
   const parsed = parseThreadInputCommand({ text: message?.text || "" });
+  const runtimeKind = String(status?.runtimeKind || status?.runtimeState || "").trim().toLowerCase();
+  // Claude Code applies `/now <text>` and interactive steer input by
+  // interrupting and resuming the turn, so there is nothing to queue behind.
+  if (runtimeKind === "claude-code" && parsed.command === "interrupt" && pickString(parsed.text)) return "";
   if (parsed.command === "interrupt") return "interrupting";
   if (!status) return "";
   const state = String(status.state || "").trim().toLowerCase();
-  const runtimeKind = String(status.runtimeKind || status.runtimeState || "").trim().toLowerCase();
   if (runtimeKind === "api-agent") {
     return state === "working" ? "awaiting_runtime_completion" : "waiting_runtime_ready";
   }
   if (runtimeKind === "claude-code") {
-    if (state === "working") return "awaiting_runtime_completion";
+    if (state === "working") return claudeCodeInputRequestsInterrupt(message, env) ? "" : "awaiting_runtime_completion";
     if (["sleeping", "waking", "unloaded", "notloaded"].includes(state)) return "waiting_runtime_start";
     if (status.promptReady === false) return "waiting_runtime_ready";
     return "";

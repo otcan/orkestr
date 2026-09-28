@@ -86,6 +86,8 @@ export async function runClaudeCodeProcess({
     let resultError = "";
     let backgroundToolAttempt = "";
     let telemetry = {};
+    let resultSucceeded = false;
+    let completedDuringInterrupt = false;
     let submissionPromise = Promise.resolve();
     const timeout = setTimeout(() => {
       if (!supervisor.settled) supervisor.terminate("claude_code_timeout");
@@ -102,7 +104,7 @@ export async function runClaudeCodeProcess({
       else resolve({
         text: resultText || assistantText,
         sessionId: observedSessionId,
-        interrupted: supervisor.interrupted,
+        interrupted: supervisor.interrupted && !completedDuringInterrupt,
         telemetry,
       });
     }
@@ -125,6 +127,7 @@ export async function runClaudeCodeProcess({
       if (clean(event.type).toLowerCase() === "result") {
         if (text) resultText = text;
         if (event.is_error === true || event.isError === true) resultError = clean(event.error || event.result || "claude_code_failed");
+        else resultSucceeded = true;
       } else if (text) assistantText = text;
     });
     supervisor.proc.stderr.on("data", (chunk) => {
@@ -136,7 +139,11 @@ export async function runClaudeCodeProcess({
       await submissionPromise;
       const statusTelemetry = await readClaudeCodeStatusTelemetry(statusCapture.capturePath);
       if (statusTelemetry) telemetry = mergeClaudeCodeTelemetry(telemetry, statusTelemetry);
-      if (supervisor.interrupted) return finish();
+      // A graceful interrupt that raced a turn already emitting its successful
+      // result is a natural completion: keep the answer instead of discarding it.
+      completedDuringInterrupt = supervisor.interrupted && supervisor.interruptMode === "graceful" &&
+        resultSucceeded && Boolean(resultText || assistantText) && Boolean(observedSessionId);
+      if (supervisor.interrupted && !completedDuringInterrupt) return finish();
       // A detected background-task attempt overrides an otherwise-clean exit:
       // the turn's own result text may claim it will keep working or notify
       // later, which this headless process can never honor once it exits.
@@ -144,7 +151,7 @@ export async function runClaudeCodeProcess({
       // standard failed-turn path (below) already retries on the next input.
       const failureCode = supervisor.failureCode ||
         (resultError ? classifyClaudeCodeFailure(resultError) : "") ||
-        (code === 0 ? "" : classifyClaudeCodeFailure(stderr || `exit_${code}_${signal || ""}`)) ||
+        (code === 0 || completedDuringInterrupt ? "" : classifyClaudeCodeFailure(stderr || `exit_${code}_${signal || ""}`)) ||
         (backgroundToolAttempt ? "claude_code_background_task_attempted" : "");
       if (failureCode) {
         if (failureCode === "claude_code_background_task_attempted") {

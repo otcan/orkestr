@@ -44,9 +44,9 @@ export const SLASH_COMMANDS: SlashCommandInfo[] = [
   },
   {
     command: "/now",
-    aliases: ["/interrupt"],
+    aliases: [],
     label: "Interrupt send",
-    detail: "Interrupt the current run and send the remaining text immediately.",
+    detail: "Interrupt the current turn and send the remaining text immediately. Claude Code resumes the same session with it.",
     acceptsText: true,
   },
   {
@@ -58,9 +58,9 @@ export const SLASH_COMMANDS: SlashCommandInfo[] = [
   },
   {
     command: "/stop",
-    aliases: [],
+    aliases: ["/interrupt", "/cancel", "/quit"],
     label: "Stop runtime",
-    detail: "Stop the active Codex runtime for this thread.",
+    detail: "Interrupt the active turn for this thread. Text after the command is not sent.",
     acceptsText: false,
   },
   {

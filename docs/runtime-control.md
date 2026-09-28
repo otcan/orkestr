@@ -13,11 +13,47 @@ ORK-369.
   `codexDeliveryMode: passive`.
 - A thread/chat binding or `ORKESTR_WHATSAPP_INBOUND_STEER_DEFAULT=0` can opt a
   WhatsApp route out of interactive steering.
-- `/now` and `/steer` have no control meaning and are passed as ordinary text.
+- `/now <text>` interrupts the active turn and sends `<text>` immediately, on
+  every executor. The WebUI "Send now" button, `POST /api/threads/:id/interrupt`
+  with `text`, `orkestr interrupt <thread> "<text>"`, and
+  `orkestr send <thread> "<text>" --now` do the same. A bare `/now` behaves like
+  `/stop`.
+- `/steer` has no control meaning and is passed as ordinary text.
 - `/interrupt`, `/stop`, `/cancel`, and `/quit` are equivalent preemptive stop
   commands. They cancel pending approval/input requests, interrupt the active
   execution, cancel older queued work, and leave the thread ready for new input.
 - Text after a stop command is never forwarded to the model.
+
+### Claude Code interrupt-and-resume
+
+Claude Code runs one `claude -p` process per turn and closes its stdin after
+the prompt, so input cannot be steered into a running turn. Interactive input
+(WhatsApp, WebUI send) that arrives while a Claude Code turn is running
+therefore interrupts and resumes instead:
+
+1. Orkestr sends `SIGINT` to the turn's process group and waits
+   `ORKESTR_CLAUDE_CODE_INTERRUPT_GRACE_MS` (default `3000`) for the stream to
+   end and the session transcript to flush, then falls back to
+   `SIGTERM`/`SIGKILL`.
+2. The session id reported by the interrupted turn is persisted, so the next
+   turn resumes the same conversation including partial work.
+3. The interrupted input is marked `interrupted`
+   (`observedVia: claude_code_interrupted`).
+4. Every interrupting input that arrived before the next turn starts is
+   coalesced, in order, into one resumed turn prefixed with a short note that
+   the previous turn was interrupted. Each coalesced input records
+   `coalescedIntoMessageId` and the shared `executorTurnId`; the final answer
+   is linked to the first input.
+5. A turn that already produced its final result during the grace window
+   completes normally and the new input runs next. Duplicate interrupt
+   requests for the same turn are ignored, and completed inputs are never
+   replayed.
+
+No "queued behind current work" notice is sent for such input.
+`ORKESTR_CLAUDE_CODE_INSTANT_INTERRUPT=0` restores plain queueing for
+interactive input (explicit `/now` and "Send now" still interrupt). The
+per-binding opt-outs and `ORKESTR_WHATSAPP_INBOUND_STEER_DEFAULT=0` apply to
+Claude Code threads the same way they apply to Codex.
 
 ## Liveness
 
@@ -53,6 +89,7 @@ newer execution.
 
 ```bash
 node --test test/codex-app-server.test.js
+node --import ./test/test-bootstrap.mjs --test test/claude-code-instant-interrupt.test.js
 node --test test/runtime-liveness.test.js test/connectors-mcp.test.js
 node --test test/tenant-api-agent.test.js
 node --test test/whatsapp-connector-outbox.test.js test/whatsapp-live-mirror-recovery.test.js

@@ -27,6 +27,7 @@ import { defaultApiBase, requestJson } from "./api-client.js";
 import { createCommand } from "./create-command.js";
 import { desktopCommand } from "./desktop-command.js";
 import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
+import { interruptCommand, sendNowCommand } from "./interrupt-command.js";
 import { jiraCommand } from "./jira-command.js";
 import { mailboxesCommand } from "./mailbox-command.js";
 import { tenantSliceCommand } from "./tenant-slice-command.js";
@@ -87,6 +88,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "attach") return await attach(args, ctx);
     if (command === "send") return await send(args, ctx);
     if (command === "switch") return await executorSwitchCommand(args, ctx);
+    if (command === "interrupt") return await interruptCommand(args, ctx);
     if (command === "wake") return await postThreadAction("wake", args, ctx);
     if (command === "sleep") return await postThreadAction("sleep", args, ctx);
     if (command === "reset") return await postThreadAction("reset", args, ctx);
@@ -2130,6 +2132,7 @@ async function sendRepliesToWhatsApp(argv, target, ctx) {
 }
 
 async function send(argv, ctx) {
+  if (argv.includes("--now")) return sendNowCommand(argv, ctx);
   const json = argv.includes("--json");
   const values = positional(argv);
   const target = values[0];
@@ -2211,6 +2214,8 @@ Common thread commands:
   orkestr send <thread-name-or-id> "<message>" [--reply-whatsapp|--no-reply-whatsapp] [--idempotency-key <key>] [--json]
   orkestr switch <thread-name-or-id> [codex|claude] [--model m] [--effort e] [--now] [--reason text] [--json]
   orkestr switch --self codex|claude --reason text [--model m] [--json]
+  orkestr send <thread-name-or-id> "<message>" --now [--json]
+  orkestr interrupt <thread-name-or-id> ["<message>"] [--json]
   orkestr wake <thread-name-or-id> [--json]
   orkestr reset <thread-name-or-id> [--json]
   orkestr hard-reset <thread-name-or-id> [--json]
