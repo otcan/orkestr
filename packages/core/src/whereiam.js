@@ -18,8 +18,12 @@ import {
 } from "./user-skills.js";
 import { desktopAccessPolicySummary, filterDesktopSessionsForThread } from "./desktop-access.js";
 import { agentReleaseRolePolicy, threadAgentReleaseRole } from "./agent-release-role.js";
+import { isTerminalTaskAgentThread } from "./task-agent-state.js";
 
 const desktopInventoryLiveCache = new Map();
+// Larger than any gap between path-candidate scores, so a finished task agent
+// that shares a worktree only wins when no other thread claims that path.
+const terminalTaskAgentPathPenalty = 200;
 
 function nowIso() {
   return new Date().toISOString();
@@ -526,7 +530,9 @@ export async function whereAmI(input = {}, env = process.env) {
       for (const candidate of threadPathCandidates(thread, lease)) {
         const candidatePath = await realOrResolved(candidate.path);
         const pathMatch = scorePathMatch({ ...candidate, path: candidatePath }, cwd);
-        if (pathMatch) scored.push({ thread, lease, match: pathMatch, score: pathMatch.score });
+        if (!pathMatch) continue;
+        const penalty = isTerminalTaskAgentThread(thread) ? terminalTaskAgentPathPenalty : 0;
+        scored.push({ thread, lease, match: pathMatch, score: pathMatch.score - penalty });
       }
     }
     scored.sort((left, right) => right.score - left.score);

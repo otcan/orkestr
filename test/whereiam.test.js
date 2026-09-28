@@ -142,6 +142,46 @@ test("whereAmI resolves the current thread from a nested workspace path", async 
   assert.equal(payload.commands.connectorStatus, "orkestr status --json");
 });
 
+test("whereAmI prefers the owning thread over a finished task agent sharing its worktree", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-home-"));
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-repo-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "whereiam-parent", name: "Parent", repoPath: repo }, env);
+  await createThread({
+    id: "whereiam-finished-task",
+    name: "Finished task",
+    cwd: repo,
+    threadKind: "task-agent",
+    agentTaskId: "task-1",
+    agentTaskStatus: "completed",
+    parentThreadId: "whereiam-parent",
+  }, env);
+
+  const payload = await whereAmI({ cwd: repo }, env);
+
+  assert.equal(payload.thread.id, "whereiam-parent");
+  assert.equal(payload.matchedBy, "thread.repoPath");
+});
+
+test("whereAmI still resolves a finished task agent when it is the only path owner", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-home-"));
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-repo-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "whereiam-only-task",
+    name: "Only task",
+    cwd: repo,
+    threadKind: "task-agent",
+    agentTaskId: "task-2",
+    agentTaskStatus: "completed",
+  }, env);
+
+  const payload = await whereAmI({ cwd: repo }, env);
+
+  assert.equal(payload.thread.id, "whereiam-only-task");
+  assert.equal(payload.matchedBy, "thread.cwd");
+});
+
 test("whereAmI exposes public tenant setup URL without wildcard bind API base", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-public-url-"));
   const workspace = path.join(home, "users", "firat", "workspaces", "jobs");
