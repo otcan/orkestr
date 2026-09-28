@@ -98,3 +98,11 @@ test("browser store fallback self-decrypts InvalidMediaFileType rejections witho
   await assert.rejects(browserStoreInboundMedia({ client: other, eventId: "EVENT2", selfDecrypt: async () => { called = true; } }));
   assert.equal(called, false);
 });
+
+test("recovered store models use the caption, not the base64 thumbnail, as media message text", async () => {
+  const { storeModelBodyText } = await import("../packages/connectors/src/whatsapp-local-bridge.js");
+  assert.equal(storeModelBodyText({ type: "image", body: "/9j/4AAQSkZJRgABAQAAAQABAAD", caption: "" }), "");
+  assert.equal(storeModelBodyText({ type: "image", body: "/9j/4AAQ", caption: "invoice" }), "invoice");
+  assert.equal(storeModelBodyText({ type: "chat", body: "hello" }), "hello");
+  assert.equal(storeModelBodyText({ type: "poll_creation", pollName: "Lunch?" }), "Lunch?");
+});

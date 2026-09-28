@@ -4106,6 +4106,15 @@ function failedInboundMediaCanRouteAsLinkText(message = {}, text = "") {
   return type === "chat" && /\bhttps?:\/\/\S+/i.test(String(text || ""));
 }
 
+// Raw WhatsApp Web store models keep a base64 thumbnail in `body` for media
+// messages; like whatsapp-web.js's Message wrapper, use the caption instead.
+const STORE_MEDIA_TYPES = new Set(["image", "video", "gif", "sticker", "document", "audio", "ptt", "ptv"]);
+export function storeModelBodyText(model = null) {
+  const type = String(model?.type || "").toLowerCase();
+  if (STORE_MEDIA_TYPES.has(type)) return String(model?.caption || "");
+  return String(model?.body || model?.caption || model?.pollName || model?.eventName || "");
+}
+
 export async function handleInboundMessage(accountId, message, env = process.env, options = {}) {
   const fromMe = Boolean(message?.fromMe);
   if (options.ownOnly && !fromMe) return { skipped: "not_own_message" };
@@ -4494,7 +4503,7 @@ async function readCachedLocalWhatsAppChatMessages(client, chatId = "", limit = 
           _serialized: stableMessageId,
           remote,
         },
-        body: String(model?.body || model?.caption || model?.pollName || model?.eventName || ""),
+        body: storeModelBodyText(model),
         type: String(model?.type || message?.type || ""),
         fromMe: Boolean(model?.id?.fromMe ?? message?.id?.fromMe ?? model?.fromMe),
         from: serialized(model?.from || message?.from || messageId.remote || targetChatId),
@@ -4574,7 +4583,7 @@ async function readCachedLocalWhatsAppBoundChats(client, chatIds = [], limit = 2
       ].filter(Boolean).join("_");
       return {
         id: { ...messageId, _serialized: stableMessageId, remote },
-        body: String(model?.body || model?.caption || model?.pollName || model?.eventName || ""),
+        body: storeModelBodyText(model),
         type: String(model?.type || message?.type || ""),
         fromMe: Boolean(model?.id?.fromMe ?? message?.id?.fromMe ?? model?.fromMe),
         from: serialized(model?.from || message?.from || messageId.remote || targetChatId),
@@ -4665,7 +4674,7 @@ async function readCachedLocalWhatsAppMessageById(client, eventId = "", chatId =
         _serialized: stableMessageId,
         remote,
       },
-      body: String(model?.body || model?.caption || model?.pollName || model?.eventName || ""),
+      body: storeModelBodyText(model),
       type: String(model?.type || message?.type || ""),
       fromMe: Boolean(model?.id?.fromMe ?? message?.id?.fromMe ?? model?.fromMe),
       from: serialized(model?.from || message?.from || messageIdModel.remote || expectedChatId),
