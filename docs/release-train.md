@@ -248,6 +248,37 @@ orkestr instances --probe
 orkestr update --release --ref <tag-or-main-or-sha> --channel <channel>
 ```
 
+### Deploys started by an agent turn
+
+A release train run from inside an Orkestr thread (a Codex or Claude Code turn)
+must use `--detach`:
+
+```bash
+orkestr update --release --ref <tag-or-main-or-sha> --channel <channel> --all-instances --wait-active --detach
+orkestr update status --deploy-id <id>
+```
+
+`--detach` refuses to start while another `orkestr-deploy-*` or
+`orkestr-release-*` unit is active, then runs the deployer in a transient
+`orkestr-deploy-<id>` systemd unit (through `sudo -n` when not root). The deploy
+therefore outlives the service restart and the requesting turn. The calling
+thread (`--thread <id>`, or resolved from the current directory; `--no-thread`
+skips it) is excluded from the active-work guard, gets a short "deploy started"
+notice, and receives the final report once the restarted service answers:
+release id, smoke/health/exposure checks, instance fan-out and worker sync. The
+result and log stay in `/var/tmp/orkestr-deploys/<id>/`
+(`ORKESTR_DETACHED_DEPLOY_DIR`). A detached deploy exits `75` from the deployer
+when another deploy holds the lock, instead of the legacy silent `0`.
+
+Claude Code turns run detached from the UI service by default
+(`ORKESTR_CLAUDE_DETACHED_TURNS=0` restores the legacy stdio pipe). Their
+stream-json output is written to a per-turn log under
+`$ORKESTR_HOME/runtimes/claude-code/turns/`, and the restarted service reattaches
+to a turn that is still running, or replays one that finished while it was down,
+so the final answer is delivered exactly once. The active-work guard treats
+these turns (`claudeTransport=detached`) as restart-safe, like Codex app-server
+turns over websocket or proxy; legacy piped Claude turns remain unsafe.
+
 When a central broker owns multiple Orkestr instances, the release train must
 inventory them before deployment with `orkestr instances --probe`. Runtime state
 may list additional instances in `release-instances.json` or through
@@ -349,6 +380,10 @@ public exposure gate after the service restart. The gate must observe `401` or
 `/api/whereiam`. A `200` from any of those routes means the deploy is unsafe and
 must not be reported complete. Disable this only for disposable local tests with
 `ORKESTR_DEPLOY_EXPOSURE_CHECK=0`.
+
+The deployer exits `3` when the local release is healthy but one or more
+remote fan-out instances failed (`ORKESTR_DEPLOY_REMOTE_PARTIAL_EXIT_CODE`), so
+callers can tell this apart from a failed local deploy.
 
 The final report must include version, tag or release id, commit, channel,
 deployment time, and rollback target if available.
