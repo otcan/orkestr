@@ -431,3 +431,26 @@ test("an attached-terminal Codex thread is moved off the terminal before switchi
   assert.notEqual(after.terminalMode, "raw-terminal");
   assert.notEqual(after.runtime?.terminalMode, "raw-terminal");
 });
+
+test("a full-access Codex thread switched to Claude gets bypassPermissions only when the host allows it", async (t) => {
+  const { env } = await fixture(t, "permission-parity");
+  await readyProfile(env);
+  const fullAccess = { codexSandbox: "danger-full-access", codexApprovalPolicy: "never" };
+  const runtime = fakeRuntime();
+  t.after(setExecutorSwitchRuntimeForTest(runtime));
+
+  await codexThread("parity-default", env, fullAccess);
+  await switchThreadExecutor("parity-default", "claude", { runtime }, env);
+  assert.equal((await getThread("parity-default", env)).executor.metadata.claudePermissionMode, "acceptEdits");
+
+  const allowed = { ...env, ORKESTR_CLAUDE_CODE_ALLOW_BYPASS_PERMISSIONS: "1" };
+  await codexThread("parity-full", allowed, fullAccess);
+  await switchThreadExecutor("parity-full", "claude", { runtime }, allowed);
+  const full = await getThread("parity-full", allowed);
+  assert.equal(full.executor.metadata.claudePermissionMode, "bypassPermissions");
+  assert.equal(full.claudePermissionMode, "bypassPermissions");
+
+  await codexThread("parity-sandboxed", allowed, { codexSandbox: "workspace-write", codexApprovalPolicy: "on-request" });
+  await switchThreadExecutor("parity-sandboxed", "claude", { runtime }, allowed);
+  assert.equal((await getThread("parity-sandboxed", allowed)).executor.metadata.claudePermissionMode, "acceptEdits");
+});

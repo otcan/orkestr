@@ -225,7 +225,7 @@ async function performSwitch(thread, request, runtime, env) {
     effort: request.effort || (to === EXECUTOR_CLAUDE ? previousTarget.claudeEffort : previousTarget.codexReasoningEffort),
   };
   const targetPatch = to === EXECUTOR_CLAUDE
-    ? claudeTargetPatch(thread, { profileId: request.profileId, ...settings, restore: previousTarget })
+    ? claudeTargetPatch(thread, { profileId: request.profileId, ...settings, restore: previousTarget, env })
     : codexTargetPatch(thread, { ...settings, restore: previousTarget });
   const lastExecutorSwitch = { from, to, actor: request.actor, reason: request.reason || null, when: request.when, at: now };
   const patch = {

@@ -151,9 +151,25 @@ export function leavingThreadFields(leaving) {
   return leaving === EXECUTOR_CLAUDE ? [...CLAUDE_THREAD_FIELDS] : [...CODEX_THREAD_FIELDS];
 }
 
-export function claudeTargetPatch(thread, { profileId, model, effort, restore = {} }) {
+function truthyFlag(value) {
+  return ["1", "true", "yes", "on"].includes(clean(value).toLowerCase());
+}
+
+// A thread first moved to Claude inherits the Codex side's access level: a
+// full-access, no-approval Codex thread gets Claude's bypassPermissions mode
+// when the host allows it; anything else starts at acceptEdits. A thread that
+// ran on Claude before keeps its previous mode.
+export function defaultClaudePermissionMode(thread = {}, env = process.env) {
+  if (!truthyFlag(env.ORKESTR_CLAUDE_CODE_ALLOW_BYPASS_PERMISSIONS)) return "acceptEdits";
+  const metadata = thread?.executor?.metadata || {};
+  const sandbox = clean(thread.codexSandbox || metadata.codexSandbox || env.ORKESTR_CODEX_SANDBOX).toLowerCase();
+  const approval = clean(thread.codexApprovalPolicy || metadata.codexApprovalPolicy || env.ORKESTR_CODEX_APPROVAL_POLICY).toLowerCase();
+  return sandbox === "danger-full-access" && approval === "never" ? "bypassPermissions" : "acceptEdits";
+}
+
+export function claudeTargetPatch(thread, { profileId, model, effort, restore = {}, env = process.env }) {
   const { executor, metadata } = cleanedExecutorObjects(thread, EXECUTOR_CODEX);
-  const permissionMode = clean(restore.claudePermissionMode) || "acceptEdits";
+  const permissionMode = clean(restore.claudePermissionMode) || defaultClaudePermissionMode(thread, env);
   const settings = definedEntries({ claudeModel: clean(model), claudeEffort: clean(effort) });
   return {
     state: "ready",
