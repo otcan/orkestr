@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   attachDetachedClaudeTurn,
+  claudeCodeDetachedTransport,
   detachedTurnProcessAlive,
   detachedTurnState,
   listDetachedTurnRecords,
@@ -114,6 +115,35 @@ test("a recycled pid is never mistaken for the turn process", async (t) => {
   assert.equal(await detachedTurnState(record), "exited");
 });
 
+test("detached turns run in their own systemd scope and keep the wrapper pid", async (t) => {
+  const home = await tempHome(t, "scope");
+  const log = path.join(home, "systemd-run.log");
+  const fakeSystemdRun = path.join(home, "systemd-run");
+  // Like `systemd-run --scope`: register (here: log) and exec the command.
+  await fs.writeFile(fakeSystemdRun, `#!/bin/sh
+echo "$@" >> ${JSON.stringify(log)}
+while [ $# -gt 0 ]; do case "$1" in --*) shift;; *) break;; esac; done
+exec "$@"
+`, { mode: 0o755 });
+  const env = { ORKESTR_HOME: home, ORKESTR_CLAUDE_DETACHED_POLL_MS: "10", ORKESTR_CLAUDE_DETACHED_SCOPE: "1", ORKESTR_SYSTEMD_RUN_BIN: fakeSystemdRun };
+  assert.equal(claudeCodeDetachedTransport(env), "detached");
+  assert.equal(claudeCodeDetachedTransport({ ...env, ORKESTR_CLAUDE_DETACHED_SCOPE: "0" }), "detached-unscoped");
+  assert.equal(claudeCodeDetachedTransport({ ...env, ORKESTR_CLAUDE_DETACHED_TURNS: "0" }), "pipe");
+  const facade = spawnDetachedClaudeTurn({
+    command: "/bin/sh", args: ["-c", LINE_SCRIPT], cwd: home, childEnv: { PATH: process.env.PATH, PAUSE: "1" },
+    prompt: "scoped", threadId: "t5", attemptId: "a5_x", env,
+  });
+  const { lines, closed } = collect(facade);
+  const record = await readDetachedTurnRecord("t5", "a5_x", env);
+  assert.match(record.scopeUnit, /^orkestr-claude-a5-x-\d+\.scope$/);
+  await waitFor(async () => (await fs.readFile(log, "utf8").catch(() => "")).includes("--scope"));
+  assert.equal(detachedTurnProcessAlive(record), true, "the exec'd wrapper keeps the recorded pid");
+  assert.deepEqual(await closed, { code: 0, signal: null });
+  assert.equal(JSON.parse(lines.at(-1).line).result, "scoped");
+  const args = await fs.readFile(log, "utf8");
+  assert.match(args, /--scope --quiet --collect --unit=orkestr-claude-a5-x-\d+\.scope/);
+});
+
 async function claudeFixture(t, name, pauseSec) {
   const home = await tempHome(t, name);
   const fake = path.join(home, "fake-claude.sh");
@@ -188,7 +218,8 @@ test("a detached turn still running after a server restart is reattached and del
   const { env, thread } = await claudeFixture(t, "restart-running", 2);
   const record = await startTurnThenKillServer(env, thread.id, "survive restart");
   assert.equal(await detachedTurnState(record), "running");
-  assert.equal((await getThread(thread.id, env)).runtime.claudeTransport, "detached");
+  // Unscoped here: tests do not run as root under systemd.
+  assert.equal((await getThread(thread.id, env)).runtime.claudeTransport, claudeCodeDetachedTransport(env));
 
   const recovery = await recoverOrphanedClaudeCodeTurns(env);
   assert.equal(recovery.reattached, 1);

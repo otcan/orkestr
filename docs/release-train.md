@@ -275,9 +275,13 @@ Claude Code turns run detached from the UI service by default
 stream-json output is written to a per-turn log under
 `$ORKESTR_HOME/runtimes/claude-code/turns/`, and the restarted service reattaches
 to a turn that is still running, or replays one that finished while it was down,
-so the final answer is delivered exactly once. The active-work guard treats
-these turns (`claudeTransport=detached`) as restart-safe, like Codex app-server
-turns over websocket or proxy; legacy piped Claude turns remain unsafe.
+so the final answer is delivered exactly once. When Orkestr runs as root under
+systemd, each turn is started in its own transient `orkestr-claude-*.scope`, so
+a service with `KillMode=control-group` does not kill it on restart
+(`ORKESTR_CLAUDE_DETACHED_SCOPE=0|1` overrides the automatic choice). The
+active-work guard treats scoped turns (`claudeTransport=detached`) as
+restart-safe, like Codex app-server turns over websocket or proxy; unscoped
+(`detached-unscoped`) and legacy piped Claude turns remain unsafe.
 
 When a central broker owns multiple Orkestr instances, the release train must
 inventory them before deployment with `orkestr instances --probe`. Runtime state

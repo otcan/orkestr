@@ -58,6 +58,35 @@ export function claudeCodeDetachedTurnsEnabled(env = process.env) {
   return !falsy(env.ORKESTR_CLAUDE_DETACHED_TURNS);
 }
 
+// A detached turn still lives in the Orkestr service's cgroup. Hosts whose
+// service uses KillMode=control-group kill it on every restart, so when
+// Orkestr runs as root under systemd each turn is moved into its own transient
+// scope. `systemd-run --scope` execs the command itself, so the recorded pid is
+// still the wrapper's. ORKESTR_CLAUDE_DETACHED_SCOPE=0 disables it, =1 forces
+// it; the default is automatic.
+function systemdRunBinary(env = process.env) {
+  const explicit = clean(env.ORKESTR_SYSTEMD_RUN_BIN);
+  if (explicit) return explicit;
+  return ["/usr/bin/systemd-run", "/bin/systemd-run"].find((candidate) => fsSync.existsSync(candidate)) || "";
+}
+
+export function claudeCodeDetachedScope(env = process.env) {
+  const mode = clean(env.ORKESTR_CLAUDE_DETACHED_SCOPE).toLowerCase();
+  if (falsy(mode)) return null;
+  const forced = ["1", "true", "yes", "on"].includes(mode);
+  const root = typeof process.getuid === "function" && process.getuid() === 0;
+  if (!forced && (process.platform !== "linux" || !root || !fsSync.existsSync("/run/systemd/system"))) return null;
+  const binary = systemdRunBinary(env);
+  return binary ? { binary } : null;
+}
+
+// "detached" turns survive a service restart (own scope); "detached-unscoped"
+// turns only survive when the service does not kill its whole cgroup.
+export function claudeCodeDetachedTransport(env = process.env) {
+  if (!claudeCodeDetachedTurnsEnabled(env)) return "pipe";
+  return claudeCodeDetachedScope(env) ? "detached" : "detached-unscoped";
+}
+
 export function claudeCodeDetachedPollMs(env = process.env) {
   const parsed = Number(env.ORKESTR_CLAUDE_DETACHED_POLL_MS || 50);
   return Number.isFinite(parsed) && parsed >= 5 ? Math.min(parsed, 5_000) : 50;
@@ -331,7 +360,13 @@ export function spawnDetachedClaudeTurn({ command, args = [], cwd, childEnv = {}
   fsSync.writeFileSync(paths.prompt, `${String(prompt || "").replace(/\n*$/g, "")}\n`, { mode: 0o600 });
   fsSync.writeFileSync(paths.events, "", { mode: 0o600 });
   fsSync.writeFileSync(paths.stderr, "", { mode: 0o600 });
-  const child = spawn("/bin/sh", ["-c", WRAPPER_SCRIPT, "orkestr-claude-turn", paths.prompt, paths.events, paths.stderr, paths.exit, command, ...args], {
+  const scope = claudeCodeDetachedScope(env);
+  const scopeUnit = scope ? `orkestr-claude-${safeSegment(attemptId)}-${process.pid}.scope`.replace(/_/g, "-") : "";
+  const wrapperArgv = ["/bin/sh", "-c", WRAPPER_SCRIPT, "orkestr-claude-turn", paths.prompt, paths.events, paths.stderr, paths.exit, command, ...args];
+  const launch = scope
+    ? [scope.binary, ["--scope", "--quiet", "--collect", `--unit=${scopeUnit}`, `--description=Orkestr Claude turn ${clean(attemptId)}`, ...wrapperArgv]]
+    : [wrapperArgv[0], wrapperArgv.slice(1)];
+  const child = spawn(launch[0], launch[1], {
     cwd,
     env: childEnv,
     stdio: "ignore",
@@ -340,6 +375,7 @@ export function spawnDetachedClaudeTurn({ command, args = [], cwd, childEnv = {}
   const record = {
     version: 1,
     transport: "detached",
+    scopeUnit: scopeUnit || null,
     threadId: clean(threadId),
     attemptId: clean(attemptId),
     pid: child.pid || null,

@@ -36,7 +36,7 @@ import {
   finalizeClaudeCodeTurnFailure,
   finalizeClaudeCodeTurnResult,
 } from "./claude-code-turn-finalize.js";
-import { claudeCodeDetachedTurnsEnabled } from "./claude-code-detached-turn.js";
+import { claudeCodeDetachedTransport } from "./claude-code-detached-turn.js";
 import { reattachDetachedClaudeCodeTurn } from "./claude-code-turn-reattach.js";
 import {
   claudeCodeInputRequestsInterrupt,
@@ -158,9 +158,9 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
       runtimeKind: "claude-code",
       state: "working",
       activeTurnId: attemptId,
-      // Read by the deploy active-work guard: a detached turn survives a UI
-      // service restart, a "pipe" turn does not.
-      claudeTransport: claudeCodeDetachedTurnsEnabled(env) ? "detached" : "pipe",
+      // Read by the deploy active-work guard: only a "detached" turn (in its
+      // own systemd scope) survives a UI service restart.
+      claudeTransport: claudeCodeDetachedTransport(env),
     },
   }, env);
   await appendTurnLifecycleEvent("started", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "working", source: "claude-code" }, env).catch(() => {});
