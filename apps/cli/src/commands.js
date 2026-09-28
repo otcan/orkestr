@@ -32,6 +32,7 @@ import { mailboxesCommand } from "./mailbox-command.js";
 import { tenantSliceCommand } from "./tenant-slice-command.js";
 import { pickThread as defaultPickThread } from "./thread-picker.js";
 import { threadMissionCommand } from "./thread-mission-command.js";
+import { executorSwitchCommand } from "./executor-switch-command.js";
 import { workerPushBranchCommand } from "./worker-branch-push-command.js";
 
 export async function runCli(argv = process.argv.slice(2), context = {}) {
@@ -85,6 +86,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "task-agent" || command === "task_agent") return await taskAgentCommand(args, ctx);
     if (command === "attach") return await attach(args, ctx);
     if (command === "send") return await send(args, ctx);
+    if (command === "switch") return await executorSwitchCommand(args, ctx);
     if (command === "wake") return await postThreadAction("wake", args, ctx);
     if (command === "sleep") return await postThreadAction("sleep", args, ctx);
     if (command === "reset") return await postThreadAction("reset", args, ctx);
@@ -2207,6 +2209,8 @@ Common thread commands:
   orkestr connect google --review-environment --thread <reviewer-thread-id> [--json]
   orkestr attach [thread-name-or-id] [--print] [--read-only] [--takeover] [--interrupt] [--yes] [--interval seconds] [--timeout duration] [--json]
   orkestr send <thread-name-or-id> "<message>" [--reply-whatsapp|--no-reply-whatsapp] [--idempotency-key <key>] [--json]
+  orkestr switch <thread-name-or-id> [codex|claude] [--model m] [--effort e] [--now] [--reason text] [--json]
+  orkestr switch --self codex|claude --reason text [--model m] [--json]
   orkestr wake <thread-name-or-id> [--json]
   orkestr reset <thread-name-or-id> [--json]
   orkestr hard-reset <thread-name-or-id> [--json]

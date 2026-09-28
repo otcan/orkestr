@@ -7930,7 +7930,7 @@ test("thread input commands use plain messages for steering and normalize stop a
   assert.equal(parseThreadInputCommand({ text: "normal message" }).command, null);
 });
 
-test("thread input /agent shortcut rejects removed runtime type for admins", async () => {
+test("thread input /agent shows the active executor instead of a removed runtime type", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-rt-agent-"));
   const priorHome = process.env.ORKESTR_HOME;
   const priorRecoverOnStart = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
@@ -7953,17 +7953,16 @@ test("thread input /agent shortcut rejects removed runtime type for admins", asy
     const command = messages.find((message) => message.text === "/agent");
 
     assert.equal(response.status, 202);
-    assert.equal(payload.ok, false, JSON.stringify(payload));
+    assert.equal(payload.ok, true, JSON.stringify(payload));
     assert.equal(payload.commandHandled, true);
     assert.equal(payload.applied, false);
-    assert.match(payload.replyText, /Use \/switch api or \/switch terminal/);
-    assert.doesNotMatch(payload.replyText, /\/switch agent/);
+    assert.match(payload.replyText, /Active executor: Codex/);
+    assert.equal(payload.executor.executor, "codex");
     assert.notEqual(thread.runtimeKind, "api-agent");
     assert.notEqual(thread.executorId, "api-agent");
     assert.notEqual(thread.executor?.type, "api-agent");
-    assert.equal(command.state, "failed");
-    assert.equal(command.observedVia, "orkestr_runtime_type_command_invalid");
-    assert.match(command.error, /Use \/switch api or \/switch terminal/);
+    assert.equal(command.state, "completed");
+    assert.equal(command.observedVia, "orkestr_executor_command");
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     restoreEnvValue("ORKESTR_HOME", priorHome);
