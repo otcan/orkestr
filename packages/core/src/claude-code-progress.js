@@ -1,16 +1,10 @@
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import { appendThreadMessage, listThreadMessages } from "./threads.js";
 import { replyDeliveryProjectionParent, trustedHushReplyDeliveryIntent } from "./reply-delivery-intent.js";
+import { createClaudeCodeInterimTextMirror, redactClaudeCodeProgressText as redactProgressText } from "./claude-code-interim-text.js";
 
 function clean(value = "") {
   return String(value || "").trim();
-}
-
-function redactProgressText(value = "") {
-  return clean(value)
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
-    .replace(/(authorization|token|secret|password|api[_-]?key|cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[redacted]")
-    .replace(/\/(?:root|home|opt|etc|var|run|tmp)\/[^\s"'`<>()[\]{}]+/g, "[redacted-path]");
 }
 
 function whatsappOrigin(message = {}) {
@@ -35,21 +29,22 @@ function toolProgressText(blocks = []) {
   return "Claude Code is continuing with repository tools.";
 }
 
-export function claudeCodeProgressText(event = {}) {
+// Generic label for a tool-backed event. It never includes tool input and is
+// only used as a fallback while Claude itself has not narrated for a while.
+export function claudeCodeToolProgressLabel(event = {}) {
   const blocks = eventContent(event);
   if (!blocks.some((block) => clean(block?.type).toLowerCase() === "tool_use")) return "";
-  const text = blocks
-    .filter((block) => ["text", "output_text"].includes(clean(block?.type).toLowerCase()))
-    .map((block) => clean(block?.text || block?.content))
-    .filter(Boolean)
-    .join("\n")
-    .trim();
-  return redactProgressText(text || toolProgressText(blocks)).slice(0, 1600);
+  return toolProgressText(blocks);
 }
 
 function progressIntervalMs(env = process.env) {
   const parsed = Number(env.ORKESTR_CLAUDE_PROGRESS_MIN_INTERVAL_MS ?? 15_000);
   return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 15_000;
+}
+
+function labelFallbackMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CLAUDE_PROGRESS_LABEL_FALLBACK_MS ?? 60_000);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 60_000;
 }
 
 function progressLimit(env = process.env) {
@@ -73,18 +68,11 @@ export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = 
   let persisted = 0;
   let lastPersistedAt = 0;
   let lastHeartbeatAt = 0;
+  let lastClaudeTextAt = Date.now();
   let pending = Promise.resolve();
 
-  function queue(text, key, { force = false, affectsThrottle = true } = {}) {
-    text = redactProgressText(text).slice(0, 1600);
-    if (!enabled || !text || seen.has(text) || persisted >= progressLimit(env)) return pending;
-    const now = Date.now();
-    if (!force && now - lastPersistedAt < progressIntervalMs(env)) return pending;
-    seen.add(text);
-    persisted += 1;
-    if (affectsThrottle) lastPersistedAt = now;
-    sequence += 1;
-    const eventId = `claude-code:${clean(thread.id)}:${clean(attemptId)}:progress:${clean(key) || sequence}`;
+  function persist(text, kind, key) {
+    const eventId = `claude-code:${clean(thread.id)}:${clean(attemptId)}:${kind}:${clean(key) || sequence}`;
     pending = pending.then(async () => {
       const existing = (await listThreadMessages(thread.id, env)).find((message) => message.eventId === eventId);
       if (existing) return existing;
@@ -112,13 +100,38 @@ export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = 
     return pending;
   }
 
+  function queue(text, key, { force = false, affectsThrottle = true } = {}) {
+    text = redactProgressText(text).slice(0, 1600);
+    if (!enabled || !text || seen.has(text) || persisted >= progressLimit(env)) return pending;
+    const now = Date.now();
+    if (!force && now - lastPersistedAt < progressIntervalMs(env)) return pending;
+    seen.add(text);
+    persisted += 1;
+    if (affectsThrottle) lastPersistedAt = now;
+    sequence += 1;
+    return persist(text, "progress", key);
+  }
+
+  // Claude's own narration has its own dedupe/throttle/cap budget.
+  const interim = createClaudeCodeInterimTextMirror({
+    env,
+    publish(text) {
+      if (!enabled) return;
+      lastClaudeTextAt = Date.now();
+      sequence += 1;
+      void persist(text, "text", sequence);
+    },
+  });
+
   return {
     start() {
       return queue("Claude Code started working on your request.", "started", { force: true, affectsThrottle: false });
     },
     observe(event = {}) {
-      const text = claudeCodeProgressText(event);
-      if (text) void queue(text, sequence + 1);
+      if (interim.observe(event)) lastClaudeTextAt = Date.now();
+      if (Date.now() - lastClaudeTextAt < labelFallbackMs(env)) return;
+      const label = claudeCodeToolProgressLabel(event);
+      if (label) void queue(label, sequence + 1);
     },
     // Rate-limited heartbeat for long-running tool calls.
     // Emits a safe "still working" message with elapsed duration — no tool
@@ -128,37 +141,12 @@ export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = 
       const now = Date.now();
       if (now - lastHeartbeatAt < progressIntervalMs(env)) return pending;
       lastHeartbeatAt = now;
-      const elapsed = formatElapsed(toolElapsedMs);
-      const text = `Claude Code is still working (${elapsed} elapsed).`;
       sequence += 1;
-      const eventId = `claude-code:${clean(thread.id)}:${clean(attemptId)}:heartbeat:${sequence}`;
-      pending = pending.then(async () => {
-        const existing = (await listThreadMessages(thread.id, env)).find((m) => m.eventId === eventId);
-        if (existing) return existing;
-        const message = await appendThreadMessage(thread.id, {
-          role: "assistant",
-          source: "claude-code",
-          phase: "commentary",
-          state: "completed",
-          text,
-          parentMessageId: parentMessage.id,
-          eventId,
-          executorKind: "claude-code",
-          executorTurnId: attemptId,
-          connector: deliveryParent.connector || "",
-          chatId: deliveryParent.chatId || "",
-          accountId: deliveryParent.accountId || "",
-          sourceEventId: parentMessage.sourceEventId || "",
-          routerTraceId: parentMessage.routerTraceId || "",
-          turnId: parentMessage.turnId || "",
-        }, env);
-        markConnectorDeliverySignal(message);
-        await onPersisted?.(message);
-        return message;
-      }).catch(() => null);
-      return pending;
+      return persist(`Claude Code is still working (${formatElapsed(toolElapsedMs)} elapsed).`, "heartbeat", sequence);
     },
+    // Ends interim mirroring (held or throttled text may be the final answer).
     flush() {
+      interim.finish();
       return pending;
     },
   };

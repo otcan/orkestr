@@ -20,7 +20,8 @@ import {
   submitClaudeCodeLoginCode,
 } from "../packages/core/src/claude-code-client.js";
 import { changeClaudeModelControls, readClaudeModelControls } from "../packages/core/src/claude-model-controls.js";
-import { claudeCodeProgressText } from "../packages/core/src/claude-code-progress.js";
+import { claudeCodeToolProgressLabel } from "../packages/core/src/claude-code-progress.js";
+import { normalizeClaudeCodeInterimText } from "../packages/core/src/claude-code-interim-text.js";
 import { createWorkerReplyDeliveryIntent } from "../packages/core/src/reply-delivery-intent.js";
 import { setThreadConnectorDeliverySignalHandler } from "../packages/core/src/connector-delivery-signals.js";
 import { getClaudeCodeSession } from "../packages/core/src/claude-code-sessions.js";
@@ -810,32 +811,25 @@ test("Claude delegated worker projects progress and final from explicit intent, 
   assert.equal(Boolean(privateOutputs[0].chatId), false);
 });
 
-test("Claude progress projection requires tool-backed assistant events and never exposes tool input", () => {
-  assert.equal(claudeCodeProgressText({
+test("Claude progress fallback labels require tool-backed events and never expose tool input", () => {
+  assert.equal(claudeCodeToolProgressLabel({
     type: "assistant",
     message: { content: [{ type: "text", text: "This is the final answer." }] },
   }), "");
-  assert.equal(claudeCodeProgressText({
+  assert.equal(claudeCodeToolProgressLabel({
     type: "assistant",
     message: { content: [{ type: "tool_use", name: "Edit", input: { token: "must-not-leak" } }] },
   }), "Claude Code is applying changes.");
-  const described = claudeCodeProgressText({
+  const label = claudeCodeToolProgressLabel({
     type: "assistant",
     message: { content: [
       { type: "text", text: "I am checking the focused tests." },
       { type: "tool_use", name: "Bash", input: { command: "private command" } },
     ] },
   });
-  assert.equal(described, "I am checking the focused tests.");
-  assert.equal(described.includes("private command"), false);
-  const redacted = claudeCodeProgressText({
-    type: "assistant",
-    message: { content: [
-      { type: "text", text: "I am reading /home/example/private/config.json with token=must-not-leak and Bearer secret-value." },
-      { type: "tool_use", name: "Read", input: { path: "/home/example/private/config.json" } },
-    ] },
-  });
-  assert.equal(redacted, "I am reading [redacted-path] with token=[redacted] and Bearer [redacted]");
+  assert.equal(label, "Claude Code is running a repository command or check.");
+  assert.equal(normalizeClaudeCodeInterimText("I am reading /home/example/private/config.json with token=must-not-leak and Bearer secret-value."),
+    "I am reading [redacted-path] with token=[redacted] and Bearer [redacted]");
 });
 
 test("Claude WhatsApp turns persist bounded progress before the final answer", async (t) => {
