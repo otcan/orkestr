@@ -1494,6 +1494,7 @@ try {
       item.gitParentBehind === null || item.gitParentBehind === undefined ? "" : `parentBehind=${item.gitParentBehind}`,
       item.gitParentAhead === null || item.gitParentAhead === undefined ? "" : `parentAhead=${item.gitParentAhead}`,
       item.gitDirtyFiles === null || item.gitDirtyFiles === undefined ? "" : `dirty=${item.gitDirtyFiles}`,
+      item.executedAsUid === null || item.executedAsUid === undefined ? "" : `executedAsUid=${item.executedAsUid}`,
       item.error ? `error=${item.error}` : "",
       item.blocker ? `blocker=${JSON.stringify(item.blocker)}` : "",
     ].filter(Boolean).join(" ");
