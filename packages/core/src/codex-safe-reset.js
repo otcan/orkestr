@@ -4,15 +4,7 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { getThread, listThreadMessages, updateThread } from "./threads.js";
 import { clean, codexSessionId, codexThreadId, nowIso } from "./codex-app-server-common.js";
-
-function checkpointMessageText(message) {
-  const role = clean(message?.role || "unknown");
-  const phase = clean(message?.phase || "");
-  const stamp = clean(message?.timestamp || message?.createdAt || "");
-  const text = clean(message?.text || "");
-  const header = [role, phase, stamp].filter(Boolean).join(" ");
-  return [`### ${header || "message"}`, "", text || "(empty)"].join("\n");
-}
+import { checkpointMessageText } from "./executor-handoff.js";
 
 export async function writeCodexSafeResetCheckpoint(thread, context = {}, env = process.env) {
   const paths = await ensureDataDirs(env);

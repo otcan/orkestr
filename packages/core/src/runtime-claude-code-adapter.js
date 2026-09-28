@@ -36,6 +36,8 @@ import {
 } from "./claude-code-supervised-process.js";
 import { runClaudeCodeProcess, supervisionIdentityPath } from "./claude-code-process-runner.js";
 import { resolveStandingMissionAppendText } from "./claude-standing-mission.js";
+import { claimExecutorHandoffForMessage } from "./executor-handoff-delivery.js";
+import { applyPendingExecutorSwitchAfterTurn } from "./executor-switch-hooks.js";
 
 export { assertClaudeCodeHostOwner, threadUsesClaudeCode } from "./claude-code-runtime-policy.js";
 
@@ -113,8 +115,9 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env) {
     throw error;
   }
   const profile = await profileForThread(thread, env, true);
-  const freshMessage = await getThreadMessage(thread.id, message.id, env);
+  let freshMessage = await getThreadMessage(thread.id, message.id, env);
   if (!freshMessage || !pendingStates.has(clean(freshMessage.state))) return { skipped: true, message: freshMessage || message };
+  freshMessage = await claimExecutorHandoffForMessage(thread, freshMessage, "claude-code", env);
   // Reassigned across an automatic background-task retry (below) so every
   // downstream success/failure code path reports the attempt that actually
   // produced the outcome.
@@ -328,6 +331,7 @@ export async function sendClaudeCodeInput(thread, message, env = process.env) {
     return await sendClaudeCodeInputReserved(thread, message, env);
   } finally {
     turnReservations.delete(thread.id);
+    await applyPendingExecutorSwitchAfterTurn(thread.id, env);
   }
 }
 
@@ -357,7 +361,20 @@ export async function deliverClaudeCodePendingInputs(thread, env = process.env) 
     if (turnReservations.has(thread.id) || activeTurns.has(thread.id)) break;
     const next = candidates[0];
     if (!next) break;
+    if (parseThreadInputCommand(next).command === "executor") {
+      const { processQueuedExecutorCommands } = await import("./thread-executor-commands.js");
+      const handled = await processQueuedExecutorCommands(thread, env);
+      delivered.push(...handled);
+      if (handled.length) continue;
+      break;
+    }
     const current = await getThread(thread.id, env) || thread;
+    if (!threadUsesClaudeCode(current)) {
+      // An executor switch was applied at turn completion; the remaining
+      // queue belongs to the new executor.
+      deliveryScheduler?.(thread.id, env, 0);
+      break;
+    }
     let result;
     try {
       result = await sendClaudeCodeInput(current, next, env);
