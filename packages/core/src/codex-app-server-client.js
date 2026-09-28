@@ -64,6 +64,7 @@ import {
   classifyCodexRemoteCompactionFailure,
   recordCodexRemoteCompactionRecovery,
 } from "./codex-remote-compaction-recovery.js";
+import { applyPendingExecutorSwitchAfterTurn } from "./executor-switch-hooks.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -911,6 +912,7 @@ export class CodexAppServerClient {
             source: "codex-app-server",
             reason: remoteCompactionFailure?.classification || errorText,
           }, this.env).catch(() => {});
+          await applyPendingExecutorSwitchAfterTurn(thread.id, this.env);
           if (status === "completed" && runtimeFinalDeliveryPending(thread, turnId)) {
             await recordRuntimeLiveness(thread.id, {
               runtimeGeneration: threadId,

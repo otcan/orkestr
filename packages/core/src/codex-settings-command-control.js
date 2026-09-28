@@ -4,6 +4,8 @@ import { changeCodexModelControls, modelControlsReadOnlyReason } from "./codex-m
 import { getThread } from "./threads.js";
 import { canAccessOwner, resourceOwnerUserId } from "./policy.js";
 import { runSettingsOperation, readSettingsOperation, settingsOperationKey } from "./codex-settings-operations.js";
+import { threadUsesClaudeCode } from "./claude-code-runtime-policy.js";
+import { executeClaudeSettingsCommand } from "./claude-settings-command.js";
 
 export function parseSettingsCommand(text) {
   // Settings are never prompts, even on unsupported runtimes.
@@ -23,6 +25,12 @@ export async function executeSettingsCommand({ thread, text, principal = null, s
   if (!authorized) return { ok: false, outcome: "denied", replyText: "Only the thread owner or an Orkestr admin can use model controls." };
   thread = current;
   const key = sourceOperationKey || settingsOperationKey([surface, resourceOwnerUserId(thread, env), thread.id, randomUUID()]);
+  if (threadUsesClaudeCode(thread)) {
+    if (env.ORKESTR_SETTINGS_COMMANDS_ENABLED === "0") {
+      return { ok: false, outcome: "read_only", replyText: "Chat settings commands are disabled. Use model settings in the WebUI." };
+    }
+    return executeClaudeSettingsCommand(thread, parsed, { key, surface, hasAttachments }, env);
+  }
   const reason = env.ORKESTR_SETTINGS_COMMANDS_ENABLED === "0"
     ? "Chat settings commands are disabled. Use model settings in the WebUI."
     : modelControlsReadOnlyReason(thread, env);

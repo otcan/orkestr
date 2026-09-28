@@ -443,12 +443,28 @@ export async function createThreadForPrincipal(input = {}, principal, env = proc
   }, env);
 }
 
-export async function updateThread(threadId, patch = {}, env = process.env) {
+// options.unset: dotted field paths deleted after the shallow merge (the merge
+// alone can never remove a key). options.replaceObjects: patch.executor and
+// patch.binding replace the stored objects instead of merging into them.
+export async function updateThread(threadId, patch = {}, env = process.env, options = {}) {
   const operationEnv = snapshotEnvironment(env);
-  return withCanonicalPublicReferenceLock(() => updateThreadLocked(threadId, patch, operationEnv), operationEnv);
+  return withCanonicalPublicReferenceLock(() => updateThreadLocked(threadId, patch, operationEnv, options), operationEnv);
 }
 
-async function updateThreadLocked(threadId, patch = {}, env = process.env) {
+function unsetThreadPath(record, dottedPath) {
+  const parts = String(dottedPath || "").split(".").filter(Boolean);
+  if (!parts.length) return;
+  let cursor = record;
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    const value = cursor[parts[index]];
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    cursor[parts[index]] = { ...value };
+    cursor = cursor[parts[index]];
+  }
+  delete cursor[parts[parts.length - 1]];
+}
+
+async function updateThreadLocked(threadId, patch = {}, env = process.env, options = {}) {
   const id = normalizeThreadId(threadId);
   const threads = await listThreads(env);
   const expectedRevision = threadRecordSnapshotRevision(threads);
@@ -460,13 +476,15 @@ async function updateThreadLocked(threadId, patch = {}, env = process.env) {
     if (thread.publicRefAssignedAt && Object.prototype.hasOwnProperty.call(patch, "publicRefAssignedAt") && patch.publicRefAssignedAt !== thread.publicRefAssignedAt) {
       throw Object.assign(new Error("thread_public_ref_metadata_immutable"), { statusCode: 400 });
     }
+    const replaceObjects = options?.replaceObjects === true;
     const candidate = {
       ...thread,
       ...patch,
-      executor: patch.executor ? { ...(thread.executor || {}), ...patch.executor } : thread.executor,
-      binding: patch.binding ? { ...(thread.binding || {}), ...patch.binding } : thread.binding,
+      executor: patch.executor ? (replaceObjects ? { ...patch.executor } : { ...(thread.executor || {}), ...patch.executor }) : thread.executor,
+      binding: patch.binding ? (replaceObjects ? { ...patch.binding } : { ...(thread.binding || {}), ...patch.binding }) : thread.binding,
       updatedAt: nowIso(),
     };
+    for (const unsetPath of Array.isArray(options?.unset) ? options.unset : []) unsetThreadPath(candidate, unsetPath);
     const replyDeliveryEpoch = nextThreadReplyDeliveryEpoch(thread, candidate);
     if (replyDeliveryEpoch) candidate.replyDeliveryEpoch = replyDeliveryEpoch;
     else delete candidate.replyDeliveryEpoch;

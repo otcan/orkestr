@@ -58,6 +58,7 @@ import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { containedUserDeveloperInstructions } from "./tenant-policy.js";
 import { relocateLegacyUserWorkspace } from "./workspace-files.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
+import { claimExecutorHandoffForMessage } from "./executor-handoff-delivery.js";
 import { performCodexAppServerSafeReset } from "./codex-safe-reset.js";
 import {
   activeCodexAuthFaultForThread,
@@ -1294,6 +1295,7 @@ async function recordInputAcknowledgement(thread, pending, id, turnId, env) {
 }
 
 async function startCodexAppServerTurn({ client, thread, id, pending, env, runtimeEnv = env, observedVia = "codex_app_server_turn_start" }) {
+  Object.assign(pending, await claimExecutorHandoffForMessage(thread, pending, "codex", env));
   await recordInputSubmission(client, thread, pending, id, "start", "", env);
   const result = await client.request("turn/start", turnStartParams(thread, pending, runtimeEnv));
   const turnId = clean(result?.turn?.id || result?.turnId);
@@ -1863,6 +1865,11 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
 }
 
 async function deliverCodexAppServerClaimedPendingInput(thread, next, env = process.env, delivered = []) {
+  if (parseThreadInputCommand(next).command === "executor") {
+    const { processQueuedExecutorCommands } = await import("./thread-executor-commands.js");
+    delivered.push(...await processQueuedExecutorCommands(thread, env));
+    return delivered;
+  }
   if (["model", "effort", "fast"].includes(parseThreadInputCommand(next).command)) {
     const completed = await completeLegacySettingsCommand(thread, next, env, handleWhatsAppSettingsCommand);
     if (completed?.messageId) delivered.push(completed.messageId);

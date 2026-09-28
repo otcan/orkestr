@@ -77,6 +77,7 @@ import { resolveLlmAccountProfile } from "../../../../../packages/core/src/llm-a
 import { claudeCodeEnabled } from "../../../../../packages/core/src/claude-code-client.js";
 import { adminUserId, normalizeUserId } from "../../../../../packages/core/src/users.js";
 import { refreshThreadGitState } from "../../../../../packages/core/src/thread-workers.js";
+import { executorCommandInputResponse } from "./thread-executor-command-input.js";
 import { codexThreadId, threadRuntimeSummary, threadSummaryPayload } from "../../thread-summary.js";
 import { ensureAttachmentsArray, httpError, validateRequestSchema } from "../../common/http.js";
 import {
@@ -742,7 +743,7 @@ export class ThreadsController {
     if (settingsCommand) {
       await getThreadForPrincipal(thread.id, principal);
       await this.assertThreadSanitized("thread.model-settings", principal, thread, { command: settingsCommand.command });
-      if (threadUsesClaudeCode(thread)) throw httpError("claude_code_settings_unsupported", 409);
+      if (threadUsesClaudeCode(thread) && settingsCommand.command === "fast") throw httpError("claude_code_settings_unsupported", 409);
       const sourceId = String(body.clientMessageId || body.idempotencyKey || "");
       const result = await executeSettingsCommand({ thread, text: String(body.text || ""), principal,
         sourceOperationKey: sourceId ? settingsOperationKey(["webui", thread.ownerUserId, principal.userId, thread.id, sourceId]) : "",
@@ -832,8 +833,18 @@ export class ThreadsController {
         thread: await threadRuntimeSummary((result as any).thread || thread, await listThreadMessages(thread.id)),
       };
     }
+    if (parsedCommand.command === "executor") {
+      await getThreadForPrincipal(thread.id, principal);
+      await this.assertThreadSanitized("thread.model-settings", principal, thread, { command: "executor" });
+      return executorCommandInputResponse(thread, parsedCommand, body, principal);
+    }
     if (parsedCommand.command === "runtime_type") {
       this.assertThreadAdminOnly("thread.runtime-type", principal);
+      if (threadUsesClaudeCode(thread)) {
+        throw httpError("claude_code_runtime_surface_switch_unsupported", 409, {
+          hint: "This is a Claude Code thread. Use /agent codex to switch it to Codex first.",
+        });
+      }
       const target = runtimeTypeTarget(parsedCommand.text || "");
       if (!target) {
         const message = await appendThreadMessage(thread.id, {
