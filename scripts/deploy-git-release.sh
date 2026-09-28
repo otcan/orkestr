@@ -784,7 +784,10 @@ active_thread_hard_count() {
 }
 
 active_thread_unsafe_count() {
-  node -e 'const report = JSON.parse(process.argv[1] || "{}"); const active = Array.isArray(report.active) ? report.active : []; const safeTransports = new Set(["proxy", "websocket"]); const restartSafe = (thread) => String(thread.runtimeKind || "").toLowerCase() === "codex-app-server" && safeTransports.has(String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase()); const unsafe = active.filter((thread) => !restartSafe(thread)); process.stdout.write(String(unsafe.length));' "$1"
+  # `restartSafe` comes from deploy-active-work-check.mjs (Codex app-server over
+  # websocket/proxy, or detached Claude Code turns); the transport fallback keeps
+  # reports from an older checker working.
+  node -e 'const report = JSON.parse(process.argv[1] || "{}"); const active = Array.isArray(report.active) ? report.active : []; const safeTransports = new Set(["proxy", "websocket"]); const restartSafe = (thread) => thread.restartSafe === true || (String(thread.runtimeKind || "").toLowerCase() === "codex-app-server" && safeTransports.has(String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase())); const unsafe = active.filter((thread) => !restartSafe(thread)); process.stdout.write(String(unsafe.length));' "$1"
 }
 
 active_report_unavailable() {
