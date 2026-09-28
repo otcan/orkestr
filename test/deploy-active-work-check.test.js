@@ -10,6 +10,7 @@ import {
   formatActiveThreads,
   summarizeActiveThreads,
   summarizeActiveThreadsWithOptions,
+  threadRestartSafe,
 } from "../scripts/deploy-active-work-check.mjs";
 
 test("deploy active-work checker treats live and queued thread work as active", () => {
@@ -96,4 +97,32 @@ test("deploy drain marker expires instead of permanently pausing delivery", asyn
   assert.equal(deployDrainActiveSync(env), true);
   await fs.writeFile(deployDrainPath(env), JSON.stringify({ state: "draining", expiresAt: new Date(Date.now() - 60_000).toISOString() }), "utf8");
   assert.equal(deployDrainActiveSync(env), false);
+});
+
+test("detached Claude Code turns are restart-safe while piped Claude turns are not", () => {
+  const detached = { id: "c1", state: "working", activeTurnId: "t1", runtimeKind: "claude-code", runtime: { runtimeKind: "claude-code", claudeTransport: "detached" } };
+  const piped = { id: "c2", state: "working", activeTurnId: "t2", runtimeKind: "claude-code", runtime: { runtimeKind: "claude-code", claudeTransport: "pipe" } };
+  const legacy = { id: "c3", state: "working", activeTurnId: "t3", runtimeKind: "claude-code" };
+  const codex = { id: "x1", state: "working", activeTurnId: "t4", runtimeKind: "codex-app-server", appServerTransport: "websocket" };
+  assert.equal(threadRestartSafe(detached), true);
+  assert.equal(threadRestartSafe(piped), false);
+  assert.equal(threadRestartSafe(legacy), false);
+  assert.equal(threadRestartSafe(codex), true);
+  const active = summarizeActiveThreads({ threads: [detached, piped, legacy, codex] });
+  assert.deepEqual(active.map((thread) => [thread.id, thread.restartSafe]), [["c1", true], ["c2", false], ["c3", false], ["x1", true]]);
+  assert.equal(active[0].claudeTransport, "detached");
+  assert.match(formatActiveThreads({ active }), /c1 .*claude=detached restart-safe/);
+});
+
+test("the deployer's unsafe count honours restartSafe from the active work report", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const script = await fs.readFile(path.join(process.cwd(), "scripts/deploy-git-release.sh"), "utf8");
+  const body = script.slice(script.indexOf("active_thread_unsafe_count() {"), script.indexOf("active_report_unavailable() {"));
+  const report = JSON.stringify({ active: [
+    { id: "c1", runtimeKind: "claude-code", restartSafe: true },
+    { id: "c2", runtimeKind: "claude-code", restartSafe: false },
+    { id: "x1", runtimeKind: "codex-app-server", codexAppServerTransport: "proxy" },
+  ] });
+  const count = execFileSync("bash", ["-c", `${body}\nactive_thread_unsafe_count "$1"`, "bash", report], { encoding: "utf8" });
+  assert.equal(count, "1");
 });

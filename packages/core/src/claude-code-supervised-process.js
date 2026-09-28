@@ -165,15 +165,21 @@ export function spawnSupervised(options = {}) {
     onHeartbeat = null,
   } = options;
 
-  const proc = spawn(command, args, {
-    cwd,
-    env: {
-      ...childEnv,
-      ORKESTR_CLAUDE_SUPERVISION_ATTEMPT_ID: cleanStr(attemptId),
-    },
-    stdio: ["pipe", "pipe", "pipe"],
-    detached: POSIX,
-  });
+  const spawnEnv = {
+    ...childEnv,
+    ORKESTR_CLAUDE_SUPERVISION_ATTEMPT_ID: cleanStr(attemptId),
+  };
+  // `spawnProcess` lets a transport (e.g. the detached, file-backed turn
+  // transport) supply a child-process-like object; its pid must lead its own
+  // process group just like a detached spawn.
+  const proc = typeof options.spawnProcess === "function"
+    ? options.spawnProcess({ command, args, cwd, env: spawnEnv })
+    : spawn(command, args, {
+      cwd,
+      env: spawnEnv,
+      stdio: ["pipe", "pipe", "pipe"],
+      detached: POSIX,
+    });
 
   const pid = proc.pid;
   // With detached:true on POSIX the child calls setsid() → PGID = PID.
@@ -314,6 +320,9 @@ export function spawnSupervised(options = {}) {
     proc,
     pid,
     pgid,
+    // "detached" when the turn runs outside this process's stdio (see
+    // claude-code-detached-turn.js) and so survives a server restart.
+    transport: proc?.detached ? "detached" : "pipe",
     attemptId: cleanStr(attemptId),
     identityWritten,
 

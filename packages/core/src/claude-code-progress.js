@@ -60,7 +60,7 @@ function formatElapsed(ms) {
   return minutes > 0 ? `${minutes}m ${secs}s` : `${secs}s`;
 }
 
-export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = {}, attemptId = "", onPersisted = null } = {}, env = process.env) {
+export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = {}, attemptId = "", onPersisted = null, eventKeyPrefix = "" } = {}, env = process.env) {
   const deliveryParent = replyDeliveryProjectionParent(parentMessage) || parentMessage;
   const enabled = whatsappOrigin(deliveryParent) && !trustedHushReplyDeliveryIntent(parentMessage);
   const seen = new Set();
@@ -72,7 +72,7 @@ export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = 
   let pending = Promise.resolve();
 
   function persist(text, kind, key) {
-    const eventId = `claude-code:${clean(thread.id)}:${clean(attemptId)}:${kind}:${clean(key) || sequence}`;
+    const eventId = `claude-code:${clean(thread.id)}:${clean(attemptId)}:${kind}:${clean(eventKeyPrefix)}${clean(key) || sequence}`;
     pending = pending.then(async () => {
       const existing = (await listThreadMessages(thread.id, env)).find((message) => message.eventId === eventId);
       if (existing) return existing;

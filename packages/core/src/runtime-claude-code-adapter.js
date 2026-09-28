@@ -5,8 +5,7 @@ import {
   claudeCodeMaxBackgroundTaskRetries,
 } from "./claude-code-client.js";
 import { appendEvent } from "../../storage/src/store.js";
-import { updateLlmAccountProfileState } from "./llm-account-profiles.js";
-import { deferClaudeCodeRateLimitedInput, recoverClaudeCodeThreadState, resolveClaudeCodeRuntimeProfile } from "./claude-code-rate-limit.js";
+import { deferClaudeCodeRateLimitedInput, recoverClaudeCodeThreadState } from "./claude-code-rate-limit.js";
 import {
   getThread,
   getThreadMessage,
@@ -16,49 +15,44 @@ import {
 } from "./threads.js";
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
-import { getClaudeCodeSession, setClaudeCodeSession } from "./claude-code-sessions.js";
-import {
-  claudeCodeOutputEventId,
-  appendClaudeCodeFinal,
-  existingClaudeCodeOutput,
-  recordClaudeCodeRouterTrace,
-} from "./claude-code-router-trace.js";
-import {
-  assertClaudeCodeHostOwner,
-  publicClaudeCodeFailure,
-  threadUsesClaudeCode,
-} from "./claude-code-runtime-policy.js";
+import { getClaudeCodeSession } from "./claude-code-sessions.js";
+import { recordClaudeCodeRouterTrace } from "./claude-code-router-trace.js";
+import { publicClaudeCodeFailure, threadUsesClaudeCode } from "./claude-code-runtime-policy.js";
 import { createClaudeCodeProgressReporter } from "./claude-code-progress.js";
-import { completeInterruptedClaudeCodeTurn } from "./claude-code-turn-state.js";
-import {
-  recoverOrphanedAttempt,
-} from "./claude-code-supervised-process.js";
+import { recoverOrphanedAttempt } from "./claude-code-supervised-process.js";
 import { runClaudeCodeProcess, supervisionIdentityPath } from "./claude-code-process-runner.js";
-import { appendClaudeCodeKillNotice, claudeCodeTerminationReason } from "./claude-code-kill-notice.js";
 import { createClaudeCodeWorkspaceTracker } from "./claude-code-partial-work.js";
 import { resolveStandingMissionAppendText } from "./claude-standing-mission.js";
 import { claudeCodeStatusPayload } from "./claude-code-status.js";
-import { claudeCodeTelemetryPatch } from "./claude-code-telemetry.js";
 import { claimExecutorHandoffForMessage } from "./executor-handoff-delivery.js";
 import { applyPendingExecutorSwitchAfterTurn } from "./executor-switch-hooks.js";
+import {
+  activeTurns,
+  scheduleClaudeCodeDelivery,
+  turnReservations,
+} from "./claude-code-active-turns.js";
+import {
+  claudeCodeProfileForThread as profileForThread,
+  finalizeClaudeCodeTurnFailure,
+  finalizeClaudeCodeTurnResult,
+} from "./claude-code-turn-finalize.js";
+import { claudeCodeDetachedTurnsEnabled } from "./claude-code-detached-turn.js";
+import { reattachDetachedClaudeCodeTurn } from "./claude-code-turn-reattach.js";
 import {
   claudeCodeInputRequestsInterrupt,
   claudeCodeResumePrompt,
   collectClaudeCodeResumeBatch,
   consumeClaudeCodeInterruptResume,
   normalizeClaudeCodeNowInputs,
-  persistInterruptedClaudeCodeSession,
   requestClaudeCodeInstantInterrupt,
   resetClaudeCodeInterruptResumeForTest,
   settleClaudeCodeCoalescedInputs,
 } from "./claude-code-interrupt-resume.js";
 
 export { assertClaudeCodeHostOwner, threadUsesClaudeCode } from "./claude-code-runtime-policy.js";
+export { setClaudeCodeDeliveryScheduler } from "./claude-code-active-turns.js";
 
-const activeTurns = new Map();
-const turnReservations = new Set();
 const pendingStates = new Set(["queued", "pending_delivery"]);
-let deliveryScheduler = null;
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -70,17 +64,6 @@ function nowIso() {
 
 function accountProfileId(thread = {}) {
   return clean(thread?.executor?.accountProfileId || thread?.executor?.metadata?.accountProfileId);
-}
-
-async function profileForThread(thread, env, requireReady = true) {
-  assertClaudeCodeHostOwner(thread, env);
-  if (requireReady && !claudeCodeEnabled(env)) {
-    const error = new Error("claude_code_disabled");
-    error.code = "claude_code_disabled";
-    error.statusCode = 409;
-    throw error;
-  }
-  return resolveClaudeCodeRuntimeProfile(thread, env, requireReady);
 }
 
 export async function startClaudeCodeThread(thread, env = process.env) {
@@ -130,6 +113,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
   // downstream success/failure code path reports the attempt that actually
   // produced the outcome.
   let attemptId = `claude_turn_${crypto.randomBytes(12).toString("base64url")}`;
+  const rootTurnId = attemptId;
 
   // Terminate any orphaned process group left by a previous crashed attempt
   // before writing the new attempt identity file.
@@ -169,7 +153,15 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
   thread = await updateThread(thread.id, {
     state: "working",
     lastError: null,
-    runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "working", activeTurnId: attemptId },
+    runtime: {
+      ...(thread.runtime || {}),
+      runtimeKind: "claude-code",
+      state: "working",
+      activeTurnId: attemptId,
+      // Read by the deploy active-work guard: a detached turn survives a UI
+      // service restart, a "pipe" turn does not.
+      claudeTransport: claudeCodeDetachedTurnsEnabled(env) ? "detached" : "pipe",
+    },
   }, env);
   await appendTurnLifecycleEvent("started", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "working", source: "claude-code" }, env).catch(() => {});
   await appendEvent({ type: "claude_code_turn_started", threadId: thread.id, profileId: profile.id, turnId: attemptId }, env);
@@ -177,7 +169,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
     thread,
     parentMessage: freshMessage,
     attemptId,
-    onPersisted: () => deliveryScheduler?.(thread.id, env, 0),
+    onPersisted: () => scheduleClaudeCodeDelivery(thread.id, env, 0),
   }, env);
   await progress.start();
   const workspace = createClaudeCodeWorkspaceTracker();
@@ -204,6 +196,8 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
             backgroundTaskRetry: backgroundTaskRetryNotice,
             standingMission: resolveStandingMissionAppendText(thread, env),
             attemptId,
+            messageId: freshMessage.id,
+            rootTurnId,
             onPromptSubmitted: () => recordClaudeCodeRouterTrace(runningMessage || freshMessage, "delivered_to_runtime", {
               threadId: thread.id,
               attempt: deliveryAttempt,
@@ -255,83 +249,18 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
     } finally {
       await progress.flush();
     }
-    if (result.interrupted) {
-      await persistInterruptedClaudeCodeSession(thread, result.sessionId, env);
-      const updated = await completeInterruptedClaudeCodeTurn(thread, freshMessage, attemptId, env);
-      await settleClaudeCodeCoalescedInputs(thread, freshMessage, coalesced, "interrupted", attemptId, env);
-      deliveryScheduler?.(thread.id, env, 0);
-      return { interrupted: true, message: await getThreadMessage(thread.id, message.id, env), thread: updated, coalescedMessageIds: coalesced.map((item) => item.id) };
-    }
-    await profileForThread(thread, env, true);
-    const nextSessionId = clean(result.sessionId);
-    await setClaudeCodeSession(thread, nextSessionId, env);
-    const eventId = claudeCodeOutputEventId(thread.id, attemptId);
-    let assistant = await existingClaudeCodeOutput(thread.id, eventId, env);
-    if (!assistant) {
-      // Appending the final raises the connector-delivery signal immediately.
-      // Persist its telemetry first so WhatsApp formats the final from the same
-      // completed Claude turn instead of the previous quota snapshot.
-      const telemetryPatch = claudeCodeTelemetryPatch(result.telemetry);
-      if (Object.keys(telemetryPatch).length) await updateThread(thread.id, telemetryPatch, env);
-      assistant = await appendClaudeCodeFinal(thread, freshMessage, attemptId, result.text, env);
-    }
-    const completedMessage = await updateThreadMessage(thread.id, freshMessage.id, {
-      state: "completed",
-      deliveryState: "delivered",
-      deliveredAt: nowIso(),
-      observedVia: "claude_code_stream_json",
-      executorTurnId: attemptId,
-      error: null,
-    }, env);
-    await settleClaudeCodeCoalescedInputs(thread, freshMessage, coalesced, "completed", attemptId, env);
-    const updated = await updateThread(thread.id, {
-      state: "ready",
-      ...claudeCodeTelemetryPatch(result.telemetry),
-      runtime: {
-        ...(thread.runtime || {}),
-        runtimeKind: "claude-code",
-        state: "ready",
-        activeTurnId: null,
-        lastTurnId: attemptId,
-        lastTurnStatus: "completed",
-        lastTurnError: null,
-      },
-    }, env);
-    await appendTurnLifecycleEvent("completed", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "completed", source: "claude-code" }, env).catch(() => {});
-    await appendEvent({ type: "claude_code_turn_completed", threadId: thread.id, profileId: profile.id, turnId: attemptId }, env);
-    deliveryScheduler?.(thread.id, env, 0);
-    return { message: completedMessage, assistant, thread: updated, coalescedMessageIds: coalesced.map((item) => item.id) };
+    return await finalizeClaudeCodeTurnResult({ thread, message: freshMessage, coalesced, attemptId, profile, result, env });
   } catch (error) {
-    const failureCode = publicClaudeCodeFailure(error);
-    const failureTelemetry = error?.telemetry || null;
-    await updateThreadMessage(thread.id, freshMessage.id, { state: "failed", deliveryState: "failed", error: failureCode }, env).catch(() => {});
-    await settleClaudeCodeCoalescedInputs(thread, freshMessage, coalesced, "failed", attemptId, env, failureCode);
-    const updated = await updateThread(thread.id, {
-      state: "failed",
-      lastError: failureCode,
-      ...(failureTelemetry?.model ? { claudeModelResolved: failureTelemetry.model } : {}),
-      ...(failureTelemetry?.tokenUsage ? { claudeTokenUsage: failureTelemetry.tokenUsage } : {}),
-      ...(failureTelemetry?.rateLimits ? { claudeRateLimits: failureTelemetry.rateLimits, claudeRateLimitsObservedAt: nowIso() } : {}),
-      ...(failureTelemetry?.contextWindow ? { claudeContextWindow: failureTelemetry.contextWindow } : {}),
-      runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "failed", activeTurnId: null, lastTurnId: attemptId, lastTurnStatus: "failed", lastTurnError: failureCode, lastTurnTermination: claudeCodeTerminationReason(error) || null },
-    }, env).catch(() => thread);
-    if (failureCode === "claude_code_rate_limited") {
-      await updateLlmAccountProfileState(thread.ownerUserId, profile.id, "rate_limited", { failureCode, credentialRevision: profile.credentialRevision || 0 }, env).catch(() => {});
-    } else if (failureCode === "claude_code_auth_required") {
-      await updateLlmAccountProfileState(thread.ownerUserId, profile.id, "login_required", { failureCode, credentialRevision: profile.credentialRevision || 0 }, env).catch(() => {});
-    }
-    await appendTurnLifecycleEvent("failed", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "failed", source: "claude-code", error: failureCode }, env).catch(() => {});
-    await appendEvent({ type: "claude_code_turn_failed", threadId: thread.id, profileId: profile.id, turnId: attemptId, failureCode }, env);
-    await appendClaudeCodeKillNotice({ thread, parent: freshMessage, attemptId, error, workspace, env });
-    deliveryScheduler?.(thread.id, env, 0);
-    const publicError = new Error(failureCode);
-    publicError.code = failureCode;
-    publicError.thread = updated;
-    throw publicError;
+    throw await finalizeClaudeCodeTurnFailure({ thread, message: freshMessage, coalesced, attemptId, profile, error, workspace, env });
   }
 }
 
 export async function sendClaudeCodeInput(thread, message, env = process.env, options = {}) {
+  // A detached turn left by a previous server process owns this thread until
+  // it is reattached and finished; never start (or orphan-kill) over it.
+  if (!turnReservations.has(thread.id) && !activeTurns.has(thread.id)) {
+    await reattachDetachedClaudeCodeTurn(thread, env).catch(() => null);
+  }
   if (turnReservations.has(thread.id) || activeTurns.has(thread.id)) {
     const error = new Error("claude_code_turn_active");
     error.statusCode = 409;
@@ -386,7 +315,7 @@ export async function deliverClaudeCodePendingInputs(thread, env = process.env) 
     if (!threadUsesClaudeCode(current)) {
       // An executor switch was applied at turn completion; the remaining
       // queue belongs to the new executor.
-      deliveryScheduler?.(thread.id, env, 0);
+      scheduleClaudeCodeDelivery(thread.id, env, 0);
       break;
     }
     let result;
@@ -396,7 +325,7 @@ export async function deliverClaudeCodePendingInputs(thread, env = process.env) 
       // Another delivery pass won the turn reservation; it owns these inputs.
       if (error?.message === "claude_code_turn_active") break;
       if (error?.rateLimitPreflight !== true) throw error;
-      await deferClaudeCodeRateLimitedInput(current, next, error, deliveryScheduler, env);
+      await deferClaudeCodeRateLimitedInput(current, next, error, scheduleClaudeCodeDelivery, env);
       break;
     }
     if (result.skipped) break;
@@ -422,14 +351,14 @@ async function steerActiveClaudeCodeTurn(thread, env = process.env) {
   if (!supervisor) {
     if (!turnReservations.has(thread.id)) return { interrupted: false, reason: "no_active_turn" };
     // Reserved but not yet spawned (or finishing): retry once it can be signalled.
-    deliveryScheduler?.(thread.id, env, 250);
+    scheduleClaudeCodeDelivery(thread.id, env, 250);
     return { interrupted: false, reason: "turn_starting" };
   }
   const pending = (await listThreadMessageCandidates(thread.id, { states: [...pendingStates] }, env))
     .filter((message) => message.role === "user");
   if (!pending.some((message) => claudeCodeInputRequestsInterrupt(message, env))) return { interrupted: false, reason: "no_interrupt_input" };
   if (activeTurns.get(thread.id) !== supervisor) {
-    deliveryScheduler?.(thread.id, env, 0);
+    scheduleClaudeCodeDelivery(thread.id, env, 0);
     return { interrupted: false, reason: "turn_changed" };
   }
   return requestClaudeCodeInstantInterrupt({ thread, supervisor, env });
@@ -450,7 +379,7 @@ export async function claudeCodeThreadStatus(thread, env = process.env, counts =
   if (!supervisor) {
     const recovery = await recoverClaudeCodeThreadState(thread, profileState, env);
     thread = recovery.thread;
-    if (recovery.recovered) deliveryScheduler?.(thread.id, env, 0);
+    if (recovery.recovered) scheduleClaudeCodeDelivery(thread.id, env, 0);
   }
   return claudeCodeStatusPayload({ thread, supervisor, profileState, counts, accountProfileId: accountProfileId(thread) });
 }
@@ -486,11 +415,4 @@ export function resetClaudeCodeRuntimeForTest() {
   activeTurns.clear();
   turnReservations.clear();
   resetClaudeCodeInterruptResumeForTest();
-}
-
-export function setClaudeCodeDeliveryScheduler(handler) {
-  deliveryScheduler = typeof handler === "function" ? handler : null;
-  return () => {
-    if (deliveryScheduler === handler) deliveryScheduler = null;
-  };
 }

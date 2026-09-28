@@ -56,6 +56,23 @@ function threadCodexAppServerTransport(thread = {}) {
   ).trim();
 }
 
+function threadClaudeTransport(thread = {}) {
+  return String(thread.claudeTransport || thread.runtime?.claudeTransport || "").trim();
+}
+
+const restartSafeAppServerTransports = new Set(["proxy", "websocket"]);
+
+// A turn survives a UI service restart when it runs outside the service's
+// stdio: Codex app-server over websocket/proxy, or a detached Claude Code turn
+// (file-backed output that the restarted server reattaches to).
+export function threadRestartSafe(thread = {}) {
+  const runtimeKind = (thread.runtimeKind !== undefined ? String(thread.runtimeKind) : threadRuntimeKind(thread)).toLowerCase();
+  const appServer = (thread.codexAppServerTransport !== undefined ? String(thread.codexAppServerTransport) : threadCodexAppServerTransport(thread)).toLowerCase();
+  if (runtimeKind === "codex-app-server" && restartSafeAppServerTransports.has(appServer)) return true;
+  const claudeTransport = (thread.claudeTransport !== undefined ? String(thread.claudeTransport) : threadClaudeTransport(thread)).toLowerCase();
+  return runtimeKind === "claude-code" && claudeTransport === "detached";
+}
+
 function valueSet(value) {
   return new Set(
     String(value || "")
@@ -126,6 +143,8 @@ export function summarizeActiveThreadsWithOptions(payload, options = {}) {
       sessionName: threadSessionName(thread),
       paneId: threadPaneId(thread),
       codexAppServerTransport: threadCodexAppServerTransport(thread),
+      claudeTransport: threadClaudeTransport(thread),
+      restartSafe: threadRestartSafe(thread),
       pendingCount: number(thread.pendingCount),
       runningCount: number(thread.runningCount),
       awaitingAckCount: number(thread.awaitingAckCount),
@@ -145,6 +164,8 @@ export function formatActiveThreads(report = {}) {
         thread.sessionName ? `session=${thread.sessionName}` : "",
         thread.paneId ? `pane=${thread.paneId}` : "",
         thread.codexAppServerTransport ? `appServer=${thread.codexAppServerTransport}` : "",
+        thread.claudeTransport ? `claude=${thread.claudeTransport}` : "",
+        thread.restartSafe ? "restart-safe" : "",
         thread.pendingCount ? `pending=${thread.pendingCount}` : "",
         thread.runningCount ? `running=${thread.runningCount}` : "",
         thread.awaitingAckCount ? `awaitingAck=${thread.awaitingAckCount}` : "",

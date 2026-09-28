@@ -52,6 +52,7 @@ Environment:
   ORKESTR_PUBLIC_SERVICE_HEALTH_URL Health URL for the isolated public service. Defaults to http://127.0.0.1:19812/api/health.
   ORKESTR_PUBLIC_SERVICE_VERSION_URL Version URL for release verification. Defaults to http://127.0.0.1:19812/api/version.
   ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE Exit code when another deploy holds the lock. Defaults to 0.
+  ORKESTR_DEPLOY_REMOTE_PARTIAL_EXIT_CODE Exit code when the local release is healthy but remote fan-out failed. Defaults to 3.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
   ORKESTR_DEPLOY_EXPOSURE_CHECK Check public no-cookie API exposure after restart. Defaults to 1.
   ORKESTR_DEPLOY_PUBLIC_BASE_URL Public app URL to probe. Defaults to configured Orkestr public URLs or /api/setup/status.
@@ -784,7 +785,10 @@ active_thread_hard_count() {
 }
 
 active_thread_unsafe_count() {
-  node -e 'const report = JSON.parse(process.argv[1] || "{}"); const active = Array.isArray(report.active) ? report.active : []; const safeTransports = new Set(["proxy", "websocket"]); const restartSafe = (thread) => String(thread.runtimeKind || "").toLowerCase() === "codex-app-server" && safeTransports.has(String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase()); const unsafe = active.filter((thread) => !restartSafe(thread)); process.stdout.write(String(unsafe.length));' "$1"
+  # `restartSafe` comes from deploy-active-work-check.mjs (Codex app-server over
+  # websocket/proxy, or detached Claude Code turns); the transport fallback keeps
+  # reports from an older checker working.
+  node -e 'const report = JSON.parse(process.argv[1] || "{}"); const active = Array.isArray(report.active) ? report.active : []; const safeTransports = new Set(["proxy", "websocket"]); const restartSafe = (thread) => thread.restartSafe === true || (String(thread.runtimeKind || "").toLowerCase() === "codex-app-server" && safeTransports.has(String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase())); const unsafe = active.filter((thread) => !restartSafe(thread)); process.stdout.write(String(unsafe.length));' "$1"
 }
 
 active_report_unavailable() {
@@ -1704,8 +1708,10 @@ install_command() {
     prune_release_directories
     echo "Orkestr deployed $release_id ($target_ref)."
     if [ "$fanout_status" -ne 0 ]; then
-      echo "Release instance broker failed for one or more remote instances." >&2
-      exit "$fanout_status"
+      # Local release is healthy; only remote fan-out failed. A distinct exit
+      # code lets callers tell this apart from a failed local deploy.
+      echo "Release instance broker failed for one or more remote instances (local release healthy)." >&2
+      exit "${ORKESTR_DEPLOY_REMOTE_PARTIAL_EXIT_CODE:-3}"
     fi
   else
     write_history_event "failed" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "health_check_failed"
