@@ -173,3 +173,20 @@ test("footer renders unknown quota as ? for both providers without a snapshot", 
   const text = appendWhatsAppDebugFooter("Done", { env: footerEnv, message: { source: "claude-code" }, thread });
   assert.match(text, / · codex 5h:\? wk:\? · claude 5h:\? wk:\? · /);
 });
+
+test("a reading from an already-rolled-over window never beats the current window", () => {
+  // Weekly-only records (no 5h window), as the Codex app-server reports them.
+  const weekly = (used, resetsInMs) => ({ primary: { used_percent: used, window_minutes: 10080, resets_at: futureSeconds(resetsInMs) }, secondary: null });
+  const current = codexThread({ id: "current", codexRateLimits: weekly(21, 6 * 24 * hour), codexRateLimitsObservedAt: undefined, updatedAt: iso(now - 30 * 60 * 1000) });
+  // Legacy record from the previous window: no observation stamp and a newer
+  // thread update caused by unrelated activity.
+  const previous = codexThread({ id: "previous", codexRateLimits: weekly(54, 5 * 60 * 1000), codexRateLimitsObservedAt: undefined, updatedAt: iso(now - 60 * 1000) });
+  for (const threads of [[current, previous], [previous, current]]) {
+    const snapshot = providerQuotaFromThreads(threads, { now });
+    assert.equal(snapshot.codex.weeklyRemainingPct, 79);
+    assert.equal(snapshot.codex.fiveHourRemainingPct, null);
+  }
+  // The calling thread's own stale-window record does not override the snapshot either.
+  const merged = mergeThreadIntoProviderQuota(providerQuotaFromThreads([current], { now }), previous, { now });
+  assert.equal(merged.codex.weeklyRemainingPct, 79);
+});

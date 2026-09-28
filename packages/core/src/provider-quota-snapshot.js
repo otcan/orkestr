@@ -142,14 +142,32 @@ export function providerQuotaFromThread(thread = {}, provider = "codex", { now =
   };
 }
 
+// Providers round reset times; readings within this skew are the same window.
+const windowSkewMs = 5 * 60 * 1000;
+
 function observedMs(entry) {
   return quotaEpochMs(entry?.observedAt) || 0;
 }
 
-// Fresh stamped telemetry beats legacy estimates; otherwise the newest wins.
+// A later reset time for the same window period means a newer window, so a
+// record from an already-rolled-over window can never beat the current one,
+// whatever its (possibly estimated) observation time says.
+function newerWindow(left, right) {
+  for (const key of ["weeklyResetsAt", "fiveHourResetsAt"]) {
+    const a = quotaEpochMs(left?.[key]);
+    const b = quotaEpochMs(right?.[key]);
+    if (a && b && Math.abs(a - b) > windowSkewMs) return b > a ? right : left;
+  }
+  return null;
+}
+
+// Newer windows win first; then fresh stamped telemetry beats legacy
+// estimates; otherwise the newest observation wins.
 function newer(left, right) {
   if (!left) return right;
   if (!right) return left;
+  const byWindow = newerWindow(left, right);
+  if (byWindow) return byWindow;
   const exact = (entry) => entry.source === "telemetry" && !entry.stale;
   if (exact(left) !== exact(right)) return exact(left) ? left : right;
   return observedMs(right) > observedMs(left) ? right : left;
