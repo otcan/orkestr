@@ -7,6 +7,7 @@
 // Node with a single-letter message only.
 
 import { inboundMediaBrowserFailureError } from "./whatsapp-inbound-media-diagnostics.js";
+import { selfDecryptWhatsAppMedia } from "./whatsapp-media-self-decrypt.js";
 
 function unwrap(result, source, onMedia) {
   if (result && typeof result === "object" && !result.data) {
@@ -96,7 +97,7 @@ export async function browserBlobInboundMedia({ client = null, eventId = "", wit
   return unwrap(result, "browser_blob", onMedia);
 }
 
-export async function browserStoreInboundMedia({ client = null, eventId = "", chatId = "", withTimeout = (promise) => promise, onMedia = null } = {}) {
+export async function browserStoreInboundMedia({ client = null, eventId = "", chatId = "", withTimeout = (promise) => promise, onMedia = null, selfDecrypt = selfDecryptWhatsAppMedia } = {}) {
   if (!eventId || !client?.pupPage || typeof client.pupPage.evaluate !== "function") return null;
   const result = await withTimeout(client.pupPage.evaluate(async (messageId, expectedChatId) => {
     const describeError = (error) => ({
@@ -174,9 +175,37 @@ export async function browserStoreInboundMedia({ client = null, eventId = "", ch
         filesize: Number(model.size || 0) || undefined,
       };
     } catch (error) {
-      return { error: describeError(error), media: describe(model) };
+      const out = { error: describeError(error), media: describe(model) };
+      // WhatsApp Web decrypted the file but rejected its sniffed content type.
+      // Hand the (secret, in-memory only) keys back so Node can decrypt it.
+      if (String(error?.name || "") === "InvalidMediaFileType" && model?.directPath && model?.mediaKey) {
+        const key = model.mediaKey;
+        const mediaKey = typeof key === "string" ? key : btoa(String.fromCharCode(...new Uint8Array(key)));
+        out.selfDecrypt = {
+          directPath: String(model.directPath),
+          mediaKey,
+          type: String(model.type || ""),
+          mimetype: String(model.mimetype || ""),
+          filename: String(model.filename || ""),
+          encFilehash: String(model.encFilehash || ""),
+          filehash: String(model.filehash || ""),
+        };
+      }
+      return out;
     }
   }, eventId, chatId));
+  if (result?.selfDecrypt && typeof selfDecrypt === "function") {
+    const keys = result.selfDecrypt;
+    delete result.selfDecrypt;
+    if (result.media && typeof onMedia === "function") onMedia(result.media);
+    try {
+      return await selfDecrypt(keys);
+    } catch (decryptError) {
+      const error = inboundMediaBrowserFailureError(result, "browser_store");
+      error.selfDecryptError = String(decryptError?.code || decryptError?.message || decryptError);
+      throw error;
+    }
+  }
   return unwrap(result, "browser_store", onMedia);
 }
 
