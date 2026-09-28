@@ -12,6 +12,13 @@ import { composeClaudeAppendSystemPrompt, resolveStandingMissionAppendText } fro
 export { claudeCodeRuntimeEnv, claudeCodeExecutionEnv } from "./claude-code-environment.js";
 export { claudeCodeEventTelemetry, mergeClaudeCodeTelemetry } from "./claude-code-telemetry.js";
 export { resolveStandingMissionAppendText } from "./claude-standing-mission.js";
+import { CLAUDE_CODE_BACKGROUND_TASK_RETRY_NOTICE, CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE, claudeCodePriorTurnNotice } from "./claude-code-runtime-notices.js";
+export {
+  CLAUDE_CODE_BACKGROUND_TASK_RETRY_NOTICE,
+  CLAUDE_CODE_FAILED_TURN_NOTICE,
+  CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE,
+  CLAUDE_CODE_TERMINATED_TURN_NOTICE,
+} from "./claude-code-runtime-notices.js";
 
 const execFileAsync = promisify(execFile);
 const loginSessions = new Map();
@@ -128,7 +135,7 @@ export function claudeCodeArgs(thread = {}, options = {}, env = process.env) {
     // A resumed transcript keeps the user message of a turn that failed before
     // Claude answered (API errors are not replayed to the model). Without this
     // notice the stale request merges with the new one and reads as an override.
-    if (options.priorTurnFailed) appendPieces.push(CLAUDE_CODE_FAILED_TURN_NOTICE);
+    appendPieces.push(claudeCodePriorTurnNotice(thread, options));
   }
   const appendSystemPrompt = composeClaudeAppendSystemPrompt(appendPieces);
   if (appendSystemPrompt) args.push("--append-system-prompt", appendSystemPrompt);
@@ -137,38 +144,6 @@ export function claudeCodeArgs(thread = {}, options = {}, env = process.env) {
   }
   return args;
 }
-
-export const CLAUDE_CODE_FAILED_TURN_NOTICE = [
-  "Orkestr runtime notice: the previous user turn in this conversation failed with a runtime or provider error before you answered it.",
-  "That turn is void; do not complete or enforce its instructions.",
-  "Treat only the latest user message as the current request.",
-].join(" ");
-
-// Delivered on every headless turn, unconditionally. This CLI runs under
-// -p/stream-json with no supervising terminal: once this process exits,
-// nothing is left to run, observe, or finish anything the model started in
-// the background, and no future turn is guaranteed to happen. A Bash or
-// Agent call made with run_in_background can be killed the instant this
-// turn ends while the turn's own result text still claims it will finish
-// and report back later -- a false completion. Background tasks are also
-// disabled at the runtime level (CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1) as
-// a fail-safe, but the model must not rely on that and must not narrate a
-// commitment this process cannot keep.
-export const CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE = [
-  "Orkestr runtime notice: this is a headless, non-interactive turn with no supervising terminal.",
-  "Use only foreground commands and foreground agent calls -- never request run_in_background for a Bash or Agent tool call, since a backgrounded task can be silently killed the instant this turn's result is returned and this process will not run again to finish or report it.",
-  "Never tell the user you will keep working, wait, monitor something, or notify them later; finish all necessary work and give the complete result before this turn ends.",
-].join(" ");
-
-// Delivered only on the automatic, bounded, foreground retry that follows a
-// detected run_in_background attempt (see claudeCodeMaxBackgroundTaskRetries).
-// Stronger and more specific than CLAUDE_CODE_FAILED_TURN_NOTICE: it names the
-// exact violation so the retry does not just repeat it.
-export const CLAUDE_CODE_BACKGROUND_TASK_RETRY_NOTICE = [
-  "Orkestr runtime notice: the immediately preceding attempt at this exact request was rejected because it tried to run a Bash or Agent tool call with run_in_background, which this headless runtime can never finish or report back on.",
-  "This is an automatic, bounded, foreground-only retry of that same request -- do not repeat the background-task attempt in any form.",
-  "Complete the request now using only foreground tool calls and give the full final result before this turn ends.",
-].join(" ");
 
 function toolUseBlocks(event = {}) {
   if (clean(event.type).toLowerCase() !== "assistant") return [];
