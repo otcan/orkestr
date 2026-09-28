@@ -18,6 +18,7 @@ import {
   listLocalWhatsAppChatParticipants,
   logoutLocalWhatsAppAccount,
   localWhatsAppUnreadRecoveryIntervalMs,
+  probeLocalWhatsAppStore,
   promoteLocalWhatsAppGroupParticipants,
   recoverLocalWhatsAppChatMessages,
   recoverUnreadLocalWhatsAppMessages,
@@ -29,6 +30,7 @@ import {
   stopLocalWhatsAppTyping,
 } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { publicWhatsAppGroupCreateFailure } from "../packages/connectors/src/whatsapp-group-create-evidence.js";
+import { publicHistoryReadHealth } from "../packages/connectors/src/whatsapp-history-health.js";
 import {
   publicAccessPolicy,
   requireWaServicePolicy,
@@ -210,6 +212,7 @@ function publicAccount(account = {}) {
           groupCreate: clean(account.capabilities.groupCreate),
         }
       : {},
+    ...publicHistoryReadFields(account),
     provenance: account.provenance && typeof account.provenance === "object" && !Array.isArray(account.provenance)
       ? {
           accountId: clean(account.provenance.accountId),
@@ -222,6 +225,17 @@ function publicAccount(account = {}) {
           pageId: clean(account.provenance.pageId),
         }
       : null,
+  };
+}
+
+function publicHistoryReadFields(account = {}) {
+  const historyRead = publicHistoryReadHealth(account.historyRead);
+  const warnings = (Array.isArray(account.warnings) ? account.warnings : [])
+    .map((warning) => clean(warning).replace(/[^a-z0-9_]/gi, "_").slice(0, 60))
+    .filter(Boolean);
+  return {
+    ...(historyRead ? { historyRead } : {}),
+    ...(warnings.length ? { warnings } : {}),
   };
 }
 
@@ -260,6 +274,7 @@ function publicDiagnosticHealth(status = {}, env = process.env) {
       state: clean(account.state),
       capabilities: account.capabilities && typeof account.capabilities === "object" ? account.capabilities : {},
       provenance: account.provenance && typeof account.provenance === "object" ? account.provenance : null,
+      ...publicHistoryReadFields(account),
       ...(account.groupCreateProtocol ? { groupCreateProtocol: account.groupCreateProtocol } : {}),
       error: clean(account.error).replace(/[^a-z0-9_:-]/gi, "_").slice(0, 120),
     })),
@@ -300,6 +315,7 @@ const defaultBridge = {
   listLocalWhatsAppChats,
   listLocalWhatsAppChatParticipants,
   logoutLocalWhatsAppAccount,
+  probeLocalWhatsAppStore,
   promoteLocalWhatsAppGroupParticipants,
   recoverLocalWhatsAppChatMessages,
   recoverUnreadLocalWhatsAppMessages,
@@ -380,6 +396,21 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       accountId: params.accountId,
       chatId: params.chatId,
       limit: Number(url.searchParams.get("limit") || 30) || 30,
+      env,
+    }));
+  }
+
+  params = routeMatch(url.pathname, "/accounts/:accountId/diagnostics/store-probe");
+  if (method === "GET" && params) {
+    requireAuth(req, env);
+    const chatId = clean(url.searchParams.get("chatId"));
+    if (!chatId) return json(res, 400, { ok: false, error: "whatsapp_chat_id_required" });
+    requireServicePolicy(req, url, env, {}, { accounts: [params.accountId], recipients: [chatId], recipientScope: "history" });
+    if (typeof bridge.probeLocalWhatsAppStore !== "function") return json(res, 501, { ok: false, error: "whatsapp_store_probe_unavailable" });
+    return json(res, 200, await bridge.probeLocalWhatsAppStore({
+      accountId: params.accountId,
+      chatId,
+      attemptLoad: url.searchParams.get("attemptLoad") !== "0",
       env,
     }));
   }

@@ -1998,10 +1998,14 @@ test("local whatsapp chat history uses browser store when getChatById throws bar
     assert.equal(result.fallback, "browser_store");
     assert.equal(result.messages[0].id, "cached-history-message");
     assert.equal(result.messages[0].body, "visible through browser store");
-    assert.deepEqual(calls, [
+    assert.deepEqual(calls.slice(0, 2), [
       ["getChatById", "history-browser-store@g.us"],
       ["browserStore", "history-browser-store@g.us", 5],
     ]);
+    // A short read triggers one bounded earlier-message load attempt.
+    assert.equal(calls.length, 3);
+    assert.equal(calls[2][2].targetCount, 5);
+    assert.equal(calls[2][2].maxPages, 3);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }

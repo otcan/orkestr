@@ -32,6 +32,9 @@ import { connectorAuthStatus } from "./connector-auth.js";
 import { listConnectorScopePaths } from "./connector-storage.js";
 import { claimWhatsAppInboundFailureNotice } from "./whatsapp-inbound-notice-ledger.js";
 import { createInboundMediaDiagnostics } from "./whatsapp-inbound-media-diagnostics.js";
+import { augmentShortHistory, findMessageBeyondMemory } from "./whatsapp-history-read.js";
+import { historyReadHealth, historyReadWarnings, resetHistoryReadHealthForTest } from "./whatsapp-history-health.js";
+import { runLocalWhatsAppStoreProbe } from "./whatsapp-store-probe.js";
 import { browserBlobInboundMedia, browserStoreInboundMedia, requestInboundMediaReupload } from "./whatsapp-inbound-media-browser.js";
 import { inboundMediaProcessingGate, markInboundMediaDelivered } from "./whatsapp-inbound-media-state.js";
 import { runDueInboundMediaRetries, settleInboundMediaDownloadFailure } from "./whatsapp-inbound-media-retry.js";
@@ -2037,6 +2040,8 @@ async function accountSnapshot(accountId, env = process.env, options = {}) {
       groupCreate: runtimeReady ? "unknown" : runtimeUnavailable ? "unavailable" : "unknown",
     },
     provenance: attestWhatsAppRuntimeProvenance({ accountId, runtime }),
+    historyRead: historyReadHealth(accountId),
+    warnings: historyReadWarnings(accountId),
     ...(readOnly && options.force === true && runtimeReady ? {
       groupCreateProtocol: await withLocalWhatsAppProbeTimeout(inspectWhatsAppGroupCreateProtocol(runtime.client), "whatsapp_group_protocol_probe", env)
         .catch(() => ({ available: false, adapter: "group_create_v1" })),
@@ -3411,6 +3416,7 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   // Repair QR email cooldown is file-based; reset is per-test ORKESTR_HOME, no in-memory clear needed.
   runtimeRecoveryHooksForTest = null;
   localWhatsAppRuntimeGeneration = 0;
+  resetHistoryReadHealthForTest();
 }
 
 export function setLocalWhatsAppRuntimeRecoveryHooksForTest(hooks = null) {
@@ -4692,8 +4698,10 @@ async function recoverLocalWhatsAppMessagesById({ accountId = "", chatId = "", e
       ? await runtime.client.getMessageById(eventId).catch(() => null)
       : null;
     if (!message) message = await readCachedLocalWhatsAppMessageById(runtime.client, eventId, id).catch(() => null);
+    let searched = null;
+    if (!message) ({ message, searched } = await findMessageBeyondMemory({ client: runtime.client, chatId: id, eventId, readById: readCachedLocalWhatsAppMessageById, env }));
     if (!message) {
-      skipped.push({ eventId, reason: "message_not_found" });
+      skipped.push({ eventId, reason: "message_not_found", ...(searched ? { detail: { searched } } : {}) });
       continue;
     }
     const route = localWhatsAppMessageRouteFields(message);
@@ -6590,12 +6598,14 @@ export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "
   } catch (error) {
     const cached = await readCachedLocalWhatsAppChatMessages(runtime.client, id, max).catch(() => null);
     if (cached?.found) {
+      const augmented = await augmentShortHistory({ accountId: normalized, client: runtime.client, chatId: id, requested: max, messages: cached.messages, readCollection: readCachedLocalWhatsAppChatMessages, env });
       return {
         accountId: normalized,
         chatId: id,
         ready: true,
         fallback: "browser_store",
-        messages: cached.messages.map((message) => ({
+        ...(augmented.load ? { historyLoad: augmented.load } : {}),
+        messages: augmented.messages.map((message) => ({
           id: serializedMessageId(message),
           body: String(message?.body || ""),
           type: String(message?.type || ""),
@@ -6619,11 +6629,17 @@ export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "
     await appendLocalWhatsAppChatReadFailure(normalized, id, error, env, { source: "chat_history" });
     return { accountId: normalized, chatId: id, ready: true, messages: [], error: error?.message || String(error) };
   }
+  const augmented = await augmentShortHistory({ accountId: normalized, client: runtime.client, chatId: id, requested: max, messages, readCollection: readCachedLocalWhatsAppChatMessages, env });
+  if (augmented.load && (augmented.load.errors.length || augmented.replaced)) {
+    await appendEvent({ type: "whatsapp_local_history_load", accountId: normalized, chatId: id, requested: max, returned: augmented.messages.length, replaced: augmented.replaced, load: augmented.load }, env).catch(() => {});
+  }
   return {
     accountId: normalized,
     chatId: id,
     ready: true,
-    messages: (Array.isArray(messages) ? messages : []).map((message) => ({
+    ...(augmented.replaced ? { fallback: "earlier_messages_loaded" } : {}),
+    ...(augmented.load ? { historyLoad: augmented.load } : {}),
+    messages: augmented.messages.map((message) => ({
       id: serializedMessageId(message),
       body: String(message?.body || ""),
       type: String(message?.type || ""),
@@ -6635,6 +6651,15 @@ export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "
       hasMedia: Boolean(message?.hasMedia),
     })),
   };
+}
+
+export async function probeLocalWhatsAppStore({ accountId = "", chatId = "", attemptLoad = true, env = process.env } = {}) {
+  const normalized = normalizeAccountId(accountId, env);
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!runtime?.client) return { ok: false, accountId: normalized, ready: false, state: state.state || "idle", reason: "runtime_unavailable" };
+  const probe = await runLocalWhatsAppStoreProbe(runtime.client, chatId, { attemptLoad }, env);
+  return { accountId: normalized, ready: state.ready === true, state: state.state || "", ...probe };
 }
 
 function localWhatsAppOperationRuntime(normalized = "") {
