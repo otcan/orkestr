@@ -38,6 +38,7 @@ import { runLocalWhatsAppStoreProbe } from "./whatsapp-store-probe.js";
 import { browserBlobInboundMedia, browserStoreInboundMedia, requestInboundMediaReupload } from "./whatsapp-inbound-media-browser.js";
 import { inboundMediaProcessingGate, markInboundMediaDelivered } from "./whatsapp-inbound-media-state.js";
 import { runDueInboundMediaRetries, settleInboundMediaDownloadFailure } from "./whatsapp-inbound-media-retry.js";
+import { confirmSentMessageById } from "./whatsapp-send-confirmation.js";
 import {
   claimPendingOutboundAttachmentEcho,
   forgetPendingOutboundAttachmentEcho,
@@ -1736,6 +1737,15 @@ export async function sendWhatsAppTextWithConfirmation({
         operationTimeoutMs,
       );
       if (!sendConfirmationRequired(env)) return sentMessage;
+      // A server ack on the returned id is definitive and survives degraded
+      // chat-history reads; only fall back to the history scan without it.
+      const byId = await withSendOperationTimeout(
+        confirmSentMessageById(client, sentMessage, env),
+        "whatsapp_send_confirm",
+        env,
+        operationTimeoutMs,
+      ).catch(() => ({ unknown: true }));
+      if (byId.confirmed) return byId.confirmed;
       const confirmed = await withSendOperationTimeout(
         confirmRecentOwnTextMessage(client, chatId, text, env, { sinceMs: sentAtMs - 5000 }),
         "whatsapp_send_confirm",
