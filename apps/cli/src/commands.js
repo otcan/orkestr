@@ -36,6 +36,7 @@ import { threadMissionCommand } from "./thread-mission-command.js";
 import { executorSwitchCommand } from "./executor-switch-command.js";
 import { workerPushBranchCommand } from "./worker-branch-push-command.js";
 import { detachedDeployStatusCommand, launchDetachedDeploy } from "./update-detach.js";
+import { releaseTrainCommand } from "./release-train-command.js";
 import { formatDeployReport } from "../../../scripts/deploy-detached-summary.mjs";
 
 export async function runCli(argv = process.argv.slice(2), context = {}) {
@@ -82,6 +83,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "start" || command === "stop" || command === "restart") return await serviceCommand([command, ...args], ctx);
     if (command === "update") return await updateCommand(args, ctx);
     if (command === "rollback") return await updateRollbackCommand(args, ctx);
+    if (command === "release-train") return await releaseTrainCommand(args, ctx, { updateScriptPath, systemdRunEnvArgs, requestJson, ...ctx.releaseTrainDeps });
     if (command === "logs") return await serviceCommand(["logs", ...args], ctx);
     if (command === "thread") return await threadCommand(args, ctx);
     if (command === "create") return await createCommand(args, ctx);
@@ -2242,6 +2244,7 @@ Advanced:
   orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke] [--all-instances] [--wait-active] [--active-timeout seconds|--allow-interrupt]
   orkestr update status [--json]
   orkestr update rollback [--to release-id]
+  orkestr release-train check|ci|deploy|sync-branches|run [--ref main|--sha sha] [--json]
   orkestr settings [--json]
   orkestr secret [list|set|delete] [--global|--user user-id] [--json]
   orkestr codex [status|migrate] [--dry-run] [--json]
