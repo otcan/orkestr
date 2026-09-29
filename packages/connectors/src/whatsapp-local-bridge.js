@@ -1746,6 +1746,25 @@ export async function sendWhatsAppTextWithConfirmation({
         operationTimeoutMs,
       ).catch(() => ({ unknown: true }));
       if (byId.confirmed) return byId.confirmed;
+      // Our message is in WhatsApp Web's store under the returned id but the
+      // server ack is late: it was handed over, so never send it a second time.
+      if (byId.stored) {
+        await appendEvent({
+          type: "whatsapp_local_send_confirmation_pending_ack",
+          chatId,
+          messageId: serializedMessageId(sentMessage),
+          ack: byId.ack,
+        }, env).catch(() => {});
+        return byId.stored;
+      }
+      await appendEvent({
+        type: "whatsapp_local_send_confirmation_by_id_failed",
+        chatId,
+        messageId: serializedMessageId(sentMessage),
+        reason: byId.reason || (byId.failed ? "ack_error" : "unknown"),
+        ack: byId.ack ?? null,
+        lookupError: byId.lookupError || "",
+      }, env).catch(() => {});
       const confirmed = await withSendOperationTimeout(
         confirmRecentOwnTextMessage(client, chatId, text, env, { sinceMs: sentAtMs - 5000 }),
         "whatsapp_send_confirm",

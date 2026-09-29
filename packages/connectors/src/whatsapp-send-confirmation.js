@@ -34,23 +34,32 @@ export function sendAckConfirmationDelayMs(env = process.env) {
 }
 
 // Returns { confirmed: message } when the server acked the message,
-// { failed: true } when WhatsApp marked it as an error, and { unknown: true }
-// when the id cannot be looked up or the ack never arrived.
+// { stored: message } when WhatsApp Web holds our message under the returned
+// id but no server ack arrived in time (it was handed to WhatsApp; resending
+// would duplicate it), { failed: true } when WhatsApp marked it as an error,
+// and { unknown: true } when the id cannot be looked up at all.
 export async function confirmSentMessageById(client, sentMessage, env = process.env) {
   const id = sentMessageId(sentMessage);
   if (!id || typeof client?.getMessageById !== "function") return { unknown: true, reason: "lookup_unavailable" };
   const attempts = sendAckConfirmationAttempts(env);
   const delayMs = sendAckConfirmationDelayMs(env);
   let lastAck = null;
+  let lastStored = null;
+  let lookupError = "";
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const stored = await client.getMessageById(id).catch(() => null);
+    const stored = await client.getMessageById(id).catch((error) => {
+      lookupError = String(error?.name || "Error") + ": " + String(error?.message || error).slice(0, 160);
+      return null;
+    });
     const ack = Number(stored?.ack ?? sentMessage?.ack);
     if (Number.isFinite(ack)) lastAck = ack;
     if (stored && stored.fromMe !== false && Number.isFinite(ack)) {
       if (ack >= ACK_SERVER) return { confirmed: stored, ack };
       if (ack === ACK_ERROR) return { failed: true, ack };
+      lastStored = stored;
     }
     if (attempt < attempts && delayMs > 0) await wait(delayMs);
   }
-  return { unknown: true, reason: "ack_not_received", ack: lastAck };
+  if (lastStored) return { stored: lastStored, ack: lastAck, reason: "ack_pending" };
+  return { unknown: true, reason: lookupError ? "lookup_failed" : "not_found", ack: lastAck, lookupError };
 }

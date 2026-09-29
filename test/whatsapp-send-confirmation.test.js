@@ -48,13 +48,36 @@ test("an errored ack is not confirmed and keeps the existing retry behaviour", a
   assert.equal(client.calls.send, 2);
 });
 
-test("id confirmation reports unknown without a lookup API or a server ack", async () => {
+test("a stored send with a late server ack is treated as sent and never resent", async () => {
+  const client = degradedHistoryClient({ acks: [0] });
+  const sent = await sendWhatsAppTextWithConfirmation({ client, chatId: "chat@g.us", text: "report", maxAttempts: 2, retryDelayMs: 0, env: FAST });
+  assert.equal(client.calls.send, 1, "a message already handed to WhatsApp must not be sent twice");
+  assert.equal(sent.ack, 0);
+});
+
+test("a send missing from the store keeps the retry for false-positive sends", async () => {
+  const client = degradedHistoryClient();
+  client.getMessageById = async () => { throw new Error("r"); };
+  await assert.rejects(
+    sendWhatsAppTextWithConfirmation({ client, chatId: "chat@g.us", text: "report", maxAttempts: 2, retryDelayMs: 0, env: FAST }),
+    /whatsapp_send_not_confirmed/,
+  );
+  assert.equal(client.calls.send, 2);
+});
+
+test("id confirmation distinguishes unavailable, missing, failed and pending lookups", async () => {
   assert.deepEqual(await confirmSentMessageById({}, { id: { _serialized: "x" } }, FAST), { unknown: true, reason: "lookup_unavailable" });
   const pending = degradedHistoryClient({ acks: [0] });
   const result = await confirmSentMessageById(pending, { id: { _serialized: "x" } }, FAST);
-  assert.equal(result.unknown, true);
-  assert.equal(result.reason, "ack_not_received");
+  assert.equal(result.reason, "ack_pending");
+  assert.ok(result.stored);
   assert.equal(pending.calls.lookups, 4);
+  const broken = { async getMessageById() { throw new TypeError("r"); } };
+  const failedLookup = await confirmSentMessageById(broken, { id: { _serialized: "x" } }, FAST);
+  assert.equal(failedLookup.reason, "lookup_failed");
+  assert.match(failedLookup.lookupError, /TypeError: r/);
+  const missing = await confirmSentMessageById({ async getMessageById() { return null; } }, { id: { _serialized: "x" } }, FAST);
+  assert.equal(missing.reason, "not_found");
   const foreign = degradedHistoryClient({ acks: [3], fromMe: false });
   assert.equal((await confirmSentMessageById(foreign, { id: { _serialized: "x" } }, FAST)).unknown, true);
 });
