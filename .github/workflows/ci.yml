@@ -222,11 +222,14 @@ jobs:
       - name: Verify content manifest and bind attestation subjects
         run: |
           set -euo pipefail
-          [[ "$RUNTIME_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          # upload-artifact reports the digest as bare hex; the REST API adds a
+          # sha256: prefix. Accept either and normalize to hex.
+          RUNTIME_DIGEST_HEX="${RUNTIME_DIGEST#sha256:}"
+          [[ "$RUNTIME_DIGEST_HEX" =~ ^[a-f0-9]{64}$ ]]
           node scripts/release-provenance/content-manifest.mjs --root "$RUNNER_TEMP/runtime-dist" --label dist \
             --output "$RUNNER_TEMP/runtime-dist-manifest.json" --expect "$RUNNER_TEMP/ci-manifest/runtime-dist-manifest.json"
           {
-            printf '%s  runtime-dist.zip\n' "${RUNTIME_DIGEST#sha256:}"
+            printf '%s  runtime-dist.zip\n' "$RUNTIME_DIGEST_HEX"
             (cd "$RUNNER_TEMP" && sha256sum runtime-dist-manifest.json)
           } > "$RUNNER_TEMP/provenance-subjects.sha256"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
