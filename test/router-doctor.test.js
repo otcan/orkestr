@@ -12,6 +12,10 @@ import { createThreadMessageRepository } from "../packages/storage/src/repositor
 import { listEvents } from "../packages/storage/src/store.js";
 import { createUiReplyDeliveryIntent } from "../packages/core/src/reply-delivery-intent.js";
 
+// These fixtures use fixed historical timestamps; widen the doctor window so the
+// checks stay in-window instead of being aggregated as historical findings.
+const FIXTURE_DATES_IN_WINDOW = { ORKESTR_WHATSAPP_DOCTOR_WINDOW_HOURS: "876000" };
+
 function runtimeEnv(home, extra = {}) {
   return {
     ORKESTR_HOME: home,
@@ -216,7 +220,7 @@ test("WhatsApp router doctor shares one bounded WhatsApp status call across thre
 
 test("WhatsApp router doctor backfills missing runtime delivery phases from assistant reply evidence", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-trace-backfill-"));
-  const env = runtimeEnv(home);
+  const env = runtimeEnv(home, FIXTURE_DATES_IN_WINDOW);
   const thread = await createWhatsAppThread(env);
   const routerTraceId = "rt_missing_delivery_phases";
   const turnId = "turn_missing_delivery_phases";
@@ -352,7 +356,7 @@ test("WhatsApp router doctor does not require runtime delivery for local termina
 
 test("WhatsApp router doctor backfills app-server delivered input without requiring an assistant reply", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-app-server-delivered-"));
-  const env = runtimeEnv(home);
+  const env = runtimeEnv(home, FIXTURE_DATES_IN_WINDOW);
   const thread = await createWhatsAppThread(env);
   const routerTraceId = "rt_app_server_delivered";
   const deliveredAt = "2026-07-12T18:00:20.000Z";
@@ -487,7 +491,7 @@ test("WhatsApp router doctor quarantines stale connector outbox claims without r
 
 test("WhatsApp router doctor repairs orphaned WhatsApp final answers by enqueuing one outbox job", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-orphan-final-"));
-  const env = runtimeEnv(home);
+  const env = runtimeEnv(home, FIXTURE_DATES_IN_WINDOW);
   const thread = await createWhatsAppThread(env);
   const final = await appendThreadMessage(thread.id, {
     id: "wa-final-orphan-1",
