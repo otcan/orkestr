@@ -28,4 +28,6 @@ test("release train runbook documents the provenance gate modes and remaining re
   assert.match(doc, /`ORKESTR_DEPLOY_ARTIFACT_PROVENANCE` \| `off`, `warn`, `enforce` \| `warn`/);
   assert.match(doc, /`rollback` is never gated/);
   assert.match(doc, /ORK-478/);
+  assert.match(doc, /orkestr release-train run \[--ref main\]/);
+  assert.match(doc, /dependency-advisory-watch\.mjs/);
 });

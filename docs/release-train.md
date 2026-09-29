@@ -457,6 +457,63 @@ After main is released:
 
 This keeps workers current without hiding unfinished work.
 
+## Automated Single-Ref Release
+
+`orkestr release-train` automates the common case where one ref (usually
+`main`) is already pushed and only needs checking, CI confirmation, deploy and
+branch alignment. It never pushes the release ref and never force-pushes.
+
+```bash
+orkestr release-train check [--ref main] [--repo path] [--json]
+orkestr release-train ci --sha <sha> [--wait] [--timeout-min 30] [--json]
+orkestr release-train deploy --sha <sha> [--channel main] [--thread id|--no-thread]
+orkestr release-train sync-branches --sha <sha> [--path-prefix p] [--dry-run] [--json]
+orkestr release-train run [--ref main] [--thread id|--no-thread]
+```
+
+- `check` resolves the ref, creates a fresh temporary `git worktree` of that
+  exact commit under the system temp dir (its own `npm ci --ignore-scripts
+  --no-audit`, never a shared or symlinked `node_modules`), runs the WhatsApp
+  media-id patch, `npm run build`, `npm run launcher:build`, `npm run test:ci`
+  with a short `TMPDIR`, and the dependency advisory scan for that commit, then
+  removes the worktree.
+- `ci` uses the provenance verifier to require the release policy's checks for
+  the exact commit; `--wait` polls while checks are missing or pending.
+- `deploy` requires recorded `check` and `ci` success for the sha, refuses while
+  an `orkestr-deploy-*`/`orkestr-release-*` unit is active or while any active
+  thread other than the calling one is not restart-safe (or the active-work
+  report is unavailable), then launches the detached deploy with
+  `--all-instances --wait-active`.
+- `sync-branches` fast-forwards every clean worktree branch (an untracked
+  `node_modules` entry is ignored) whose tip is an ancestor of the sha and pushes
+  them in one `git push origin`; dirty or diverged branches are reported with
+  their unique and missing commit counts and make the command exit non-zero.
+- `run` chains check, `ci --wait` and deploy and stops at the first failure.
+
+Results are recorded per commit in `ORKESTR_RELEASE_TRAIN_STATE_DIR` (default
+`$ORKESTR_HOME/release-train`), including the check log and the advisory report.
+
+### Dependency advisory watch
+
+`node scripts/security/dependency-advisory-watch.mjs` scans the current
+`origin/main` lockfile in a temporary worktree with the advisory scanner and
+exits non-zero with a short summary when the scan is blocked or new high or
+critical advisories appeared since the last run (state in
+`ORKESTR_ADVISORY_WATCH_STATE_DIR`, default `$ORKESTR_HOME/advisory-watch`).
+`--fix-branch [--branch-name name]` creates a local branch that runs `npm update
+--package-lock-only --ignore-scripts` for the affected transitive packages (and
+bumps exact direct pins only within the same major), commits it, rescans, and
+reports whether the block clears. It never pushes.
+
+Schedule it with an Orkestr timer from a private overlay, for example a daily
+timer whose command is:
+
+```bash
+node scripts/security/dependency-advisory-watch.mjs --repo /path/to/orkestr-checkout --json
+```
+
+and route a non-zero exit to the release owner's thread.
+
 ## Final Report
 
 Report:
