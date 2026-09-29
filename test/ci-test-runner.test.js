@@ -74,8 +74,15 @@ test("CI test runner discovers test files and builds node arguments", async () =
     "--test",
     "--test-concurrency=3",
     "--test-force-exit",
+    "--test-timeout=300000",
+    "--test-reporter=tap",
+    "--test-reporter-destination=stdout",
+    args[8],
+    "--test-reporter-destination=stderr",
     "test/b.test.js",
   ]);
+  assert.match(args[8], /^--test-reporter=.*scripts[\\/]ci-test-progress-reporter\.mjs$/);
+  assert.equal(buildNodeTestArgs({ testTimeoutMs: 0 }, []).some((arg) => arg.startsWith("--test-timeout")), false);
 });
 
 test("unsharded CI selects tests explicitly without running subprocess fixtures", async () => {

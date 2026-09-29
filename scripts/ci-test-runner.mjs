@@ -1,7 +1,12 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { runTestChild } from "./ci-test-child.mjs";
+
+const progressReporterPath = fileURLToPath(new URL("./ci-test-progress-reporter.mjs", import.meta.url));
+export const defaultTestTimeoutMs = 300_000;
+export const defaultWatchdogMs = 1_200_000;
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -224,8 +229,23 @@ export function parseCiTestRunnerArgs(argv = process.argv.slice(2), env = proces
     root: path.resolve(flagValue(argv, "--root", process.cwd())),
     concurrency: positiveInteger(flagValue(argv, "--concurrency", clean(env.ORKESTR_TEST_CONCURRENCY || "1")), 1),
     forceExit: env.ORKESTR_TEST_FORCE_EXIT !== "0",
+    // Per test (and per test file) timeout passed to node --test, so a hung
+    // file fails with its name instead of stalling the whole suite. 0 disables.
+    testTimeoutMs: nonNegativeInteger(env.ORKESTR_TEST_TIMEOUT_MS, defaultTestTimeoutMs),
+    // Overall watchdog for the node --test child. 0 disables.
+    watchdogMs: nonNegativeInteger(env.ORKESTR_TEST_WATCHDOG_MS, defaultWatchdogMs),
+    stdioGraceMs: nonNegativeInteger(env.ORKESTR_TEST_STDIO_GRACE_MS, 5_000),
+    progress: truthy(env.ORKESTR_TEST_PROGRESS),
+    progressEvery: positiveInteger(clean(env.ORKESTR_TEST_PROGRESS_EVERY || "10"), 10),
+    heartbeatMs: nonNegativeInteger(env.ORKESTR_TEST_PROGRESS_HEARTBEAT_MS, 60_000),
     shard,
   };
+}
+
+function nonNegativeInteger(value, fallback) {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
 }
 
 export function buildNodeTestArgs(options = {}, files = []) {
@@ -241,6 +261,16 @@ export function buildNodeTestArgs(options = {}, files = []) {
     // leaked handles, so the CI wrapper exits after the test runner completes.
     testArgs.push("--test-force-exit");
   }
+  const testTimeoutMs = nonNegativeInteger(options.testTimeoutMs, defaultTestTimeoutMs);
+  if (testTimeoutMs > 0) testArgs.push(`--test-timeout=${testTimeoutMs}`);
+  // Keep TAP on stdout exactly as before; the progress reporter writes
+  // file start/finish markers to stderr, which the runner strips.
+  testArgs.push(
+    "--test-reporter=tap",
+    "--test-reporter-destination=stdout",
+    `--test-reporter=${progressReporterPath}`,
+    "--test-reporter-destination=stderr",
+  );
   testArgs.push(...files);
   return testArgs;
 }
@@ -250,7 +280,18 @@ function summaryStartIndex(lines, tail) {
   return Math.max(tapPlanIndex, lines.length - tail);
 }
 
-export async function runCiTests(options = parseCiTestRunnerArgs()) {
+function reportWatchdog(result, options, logger) {
+  const lines = result.output.split(/\r?\n/);
+  const { progress } = result;
+  logger.error(`CI test run exceeded the ${options.watchdogMs}ms watchdog (ORKESTR_TEST_WATCHDOG_MS); killed the node --test process group.`);
+  logger.error(`Files completed: ${progress.done}/${progress.totalFiles}, failed: ${progress.failed}.`);
+  logger.error(`Still running: ${progress.running.map((item) => `${item.file} (${Math.round(item.forMs / 1000)}s)`).join(", ") || "none reported"}`);
+  logger.error(`Last started test files:\n  ${progress.lastStarted.join("\n  ") || "none reported"}`);
+  logger.error("\nOutput tail:");
+  logger.error(lines.slice(-80).join("\n").trimEnd());
+}
+
+export async function runCiTests(options = parseCiTestRunnerArgs(), logger = console) {
   const allFiles = discoverTestFiles(options.root);
   const files = selectShardFiles(allFiles, options.shard);
   // Use the same discovery for sharded and full runs; Node's implicit test/
@@ -270,44 +311,50 @@ export async function runCiTests(options = parseCiTestRunnerArgs()) {
   }
 
   if (options.shard.total > 1) {
-    console.log(`Running test shard ${options.shard.displayIndex}/${options.shard.total}: ${files.length}/${allFiles.length} files`);
+    logger.log(`Running test shard ${options.shard.displayIndex}/${options.shard.total}: ${files.length}/${allFiles.length} files`);
   }
   if (options.shard.total > 1 && files.length === 0) {
-    console.log("No tests selected for this shard.");
+    logger.log("No tests selected for this shard.");
     return { ok: true, code: 0 };
   }
 
-  const child = spawn(process.execPath, testArgs, {
+  const childEnv = buildCiTestEnv(process.env);
+  // When the runner itself runs under node --test, an inherited context would
+  // switch the nested runner to the internal child protocol instead of TAP.
+  delete childEnv.NODE_TEST_CONTEXT;
+  const result = await runTestChild({
+    args: testArgs,
     cwd: options.root,
-    env: buildCiTestEnv(process.env),
-    stdio: ["ignore", "pipe", "pipe"],
+    env: childEnv,
+    totalFiles: files.length,
+    watchdogMs: options.watchdogMs ?? defaultWatchdogMs,
+    stdioGraceMs: options.stdioGraceMs ?? 5_000,
+    progressEvery: options.progress ? positiveInteger(options.progressEvery, 10) : 0,
+    heartbeatMs: options.progress ? nonNegativeInteger(options.heartbeatMs, 60_000) : 0,
+    log: (line) => logger.log(line),
   });
 
-  const chunks = [];
-  function collect(chunk) {
-    chunks.push(Buffer.from(chunk));
+  if (result.timedOut) {
+    reportWatchdog(result, options, logger);
+    return { ok: false, code: 124, timedOut: true };
+  }
+  if (result.stdioTimedOut) {
+    logger.error("node --test exited but a leftover process kept its output pipes open; killed its process group.");
   }
 
-  child.stdout.on("data", collect);
-  child.stderr.on("data", collect);
-
-  const exitCode = await new Promise((resolve) => {
-    child.on("close", resolve);
-  });
-
-  const output = Buffer.concat(chunks).toString("utf8");
-  const lines = output.split(/\r?\n/);
+  const exitCode = result.exitCode;
+  const lines = result.output.split(/\r?\n/);
   const failedIndices = lines
     .map((line, index) => ({ line, index }))
     .filter(({ line }) => /^not ok \d+ - /u.test(line))
     .map(({ index }) => index);
 
   if (exitCode === 0) {
-    console.log(lines.slice(summaryStartIndex(lines, 20)).join("\n").trimEnd());
+    logger.log(lines.slice(summaryStartIndex(lines, 20)).join("\n").trimEnd());
     return { ok: true, code: 0 };
   }
 
-  console.error("CI test run failed. Showing failing TAP blocks and summary.");
+  logger.error("CI test run failed. Showing failing TAP blocks and summary.");
 
   if (failedIndices.length > 0) {
     const printed = new Set();
@@ -317,14 +364,14 @@ export async function runCiTests(options = parseCiTestRunnerArgs()) {
       for (let i = start; i < end; i += 1) printed.add(i);
     }
     for (const index of [...printed].sort((a, b) => a - b)) {
-      console.error(lines[index]);
+      logger.error(lines[index]);
     }
   } else {
-    console.error("No explicit TAP failure block was found.");
+    logger.error("No explicit TAP failure block was found.");
   }
 
-  console.error("\nTAP summary tail:");
-  console.error(lines.slice(summaryStartIndex(lines, 80)).join("\n").trimEnd());
+  logger.error("\nTAP summary tail:");
+  logger.error(lines.slice(summaryStartIndex(lines, 80)).join("\n").trimEnd());
 
   return { ok: false, code: exitCode ?? 1 };
 }
