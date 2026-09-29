@@ -57,6 +57,10 @@ Environment:
   ORKESTR_DEPLOY_EXPOSURE_CHECK Check public no-cookie API exposure after restart. Defaults to 1.
   ORKESTR_DEPLOY_PUBLIC_BASE_URL Public app URL to probe. Defaults to configured Orkestr public URLs or /api/setup/status.
   ORKESTR_DEPLOY_EXPOSURE_PRIVATE_PATHS Space-separated private paths that must return 401 before auth.
+  ORKESTR_DEPLOY_REQUIRE_CHECKS enforce|warn|off: required GitHub CI checks for the exact commit before build. Defaults to enforce (exit 77 when rejected).
+  ORKESTR_DEPLOY_ARTIFACT_PROVENANCE off|warn|enforce: CI runtime-dist artifact, digest and attestation checks. Defaults to warn.
+  ORKESTR_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN  Optional read token for the provenance gate; required for artifact download.
+  ORKESTR_DEPLOY_PROVENANCE_REPO owner/repo override when ORKESTR_REPO_URL is a mirror.
   ORKESTR_DEPLOY_NO_INTERRUPT   Refuse to restart while thread work is active. Defaults to 1.
   ORKESTR_DEPLOY_WAIT_ACTIVE    Wait for active thread work before restart. Defaults to 0.
   ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS  Max wait with --wait-active. Defaults to 900.
@@ -318,7 +322,7 @@ deploy_public_exposure_check() {
 }
 
 write_history_event() {
-  local status release_id ref commit previous_release release_dir backup_path error
+  local status release_id ref commit previous_release release_dir backup_path error provenance_file
   status="$1"
   release_id="$2"
   ref="$3"
@@ -327,11 +331,19 @@ write_history_event() {
   release_dir="$6"
   backup_path="$7"
   error="${8:-}"
+  provenance_file="${9:-}"
   mkdir -p "$(dirname "$deploy_history")"
   node - "$deploy_history" \
-    "$status" "$release_id" "$ref" "$commit" "$previous_release" "$release_dir" "$backup_path" "$error" "$deploy_channel" "$service_name" <<'NODE'
+    "$status" "$release_id" "$ref" "$commit" "$previous_release" "$release_dir" "$backup_path" "$error" "$deploy_channel" "$service_name" "$provenance_file" <<'NODE'
 const fs = require("node:fs");
-const [file, status, releaseId, ref, commit, previousRelease, releaseDir, backupPath, error, channel, serviceName] = process.argv.slice(2);
+const [file, status, releaseId, ref, commit, previousRelease, releaseDir, backupPath, error, channel, serviceName, provenanceFile] = process.argv.slice(2);
+const readJson = (target) => { try { return JSON.parse(fs.readFileSync(target, "utf8")); } catch { return null; } };
+// Release provenance (ORK-519): this deploy's gate record, or the record kept
+// in the release manifest (rollback reuses an already-accepted release).
+let provenance = provenanceFile ? readJson(provenanceFile) : null;
+let provenanceSource = provenance ? "deploy-gate" : null;
+const manifestProvenance = !provenance && releaseDir ? readJson(`${releaseDir}/release-manifest.json`)?.provenance || null : null;
+if (manifestProvenance) { provenance = manifestProvenance; provenanceSource = "release-manifest"; }
 let history = [];
 try {
   history = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -349,9 +361,25 @@ history.push({
   channel,
   serviceName,
   deployedAt: new Date().toISOString(),
+  provenance,
+  provenanceSource,
 });
 fs.writeFileSync(file, `${JSON.stringify(history.slice(-200), null, 2)}\n`);
 NODE
+}
+
+# Release provenance gate (ORK-519). Runs the deployer's own copy of the gate,
+# never the candidate release's, so a commit cannot weaken its own checks.
+# ORKESTR_DEPLOY_REQUIRE_CHECKS=enforce|warn|off (default enforce) and
+# ORKESTR_DEPLOY_ARTIFACT_PROVENANCE=off|warn|enforce (default warn).
+provenance_gate() {
+  local gate
+  gate="$script_dir/release-provenance/deploy-gate.mjs"
+  if [ ! -f "$gate" ]; then
+    echo "Release provenance gate is missing: $gate" >&2
+    return "$provenance_rejected_exit_code"
+  fi
+  node "$gate" "$@"
 }
 
 current_release_id() {
@@ -1060,6 +1088,7 @@ cleanup_deploy_drain_on_exit() {
 cleanup_deploy_on_exit() {
   local status=$?
   cleanup_deploy_drain_on_exit || true
+  if [ -n "${provenance_file:-}" ]; then rm -f "$provenance_file" || true; fi
   if [ "$status" -ne 0 ] && [ -n "${staging_release_dir:-}" ]; then
     echo "Cleaning failed release staging directory: $staging_release_dir" >&2
     cleanup_incomplete_release "$staging_release_dir" || true
@@ -1656,6 +1685,15 @@ install_command() {
     exit 1
   fi
 
+  provenance_file="$(mktemp "${TMPDIR:-/tmp}/orkestr-provenance.XXXXXX")"
+  gate_status=0
+  provenance_gate pre --repo-url "$repo_url" --sha "$target_ref" --output "$provenance_file" || gate_status=$?
+  if [ "$gate_status" -ne 0 ]; then
+    echo "Refusing to build or activate $target_ref: release provenance gate exited $gate_status." >&2
+    write_history_event "rejected" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "" "" "provenance_gate_rejected" "$provenance_file"
+    exit "$gate_status"
+  fi
+
   if [ -e "$release_dir" ] && ! release_is_complete "$release_dir"; then
     echo "Removing incomplete release before retry: $release_dir" >&2
     cleanup_incomplete_release "$release_dir"
@@ -1689,6 +1727,16 @@ install_command() {
     staging_release_dir=""
   fi
 
+  # Installed-tree digest, optional artifact comparison, and provenance record
+  # in release-manifest.json. Enforce mode fails here instead of activating.
+  gate_status=0
+  provenance_gate post --release-dir "$release_dir" --provenance "$provenance_file" || gate_status=$?
+  if [ "$gate_status" -ne 0 ]; then
+    echo "Refusing to activate $release_id: release provenance verification exited $gate_status." >&2
+    write_history_event "rejected" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "" "provenance_verification_failed" "$provenance_file"
+    exit "$gate_status"
+  fi
+
   repair_runtime_ownership
   deploy_guard_before_restart "$release_dir"
   ensure_codex_app_server_split_for_target "$release_dir"
@@ -1697,14 +1745,14 @@ install_command() {
   sync_versioned_env
   if restart_and_verify; then
     if ! verify_required_whatsapp_accounts; then
-      write_history_event "failed" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "whatsapp_required_accounts_not_ready"
+      write_history_event "failed" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "whatsapp_required_accounts_not_ready" "$provenance_file"
       exit 1
     fi
     fanout_status=0
     release_train_instance_fanout "$release_dir" "$target_ref" || fanout_status=$?
     send_release_whatsapp_notifications "$release_dir" "$target_ref" "$deployed_at"
     sync_safe_workers_after_deploy "$release_dir"
-    write_history_event "success" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path"
+    write_history_event "success" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "" "$provenance_file"
     prune_release_directories
     echo "Orkestr deployed $release_id ($target_ref)."
     if [ "$fanout_status" -ne 0 ]; then
@@ -1714,7 +1762,7 @@ install_command() {
       exit "${ORKESTR_DEPLOY_REMOTE_PARTIAL_EXIT_CODE:-3}"
     fi
   else
-    write_history_event "failed" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "health_check_failed"
+    write_history_event "failed" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "health_check_failed" "$provenance_file"
     exit 1
   fi
 }
@@ -1806,6 +1854,8 @@ deploy_drain_ttl_seconds="${ORKESTR_DEPLOY_DRAIN_TTL_SECONDS:-1800}"
 deploy_drain_started=0
 release_id=""
 staging_release_dir=""
+provenance_file=""
+provenance_rejected_exit_code=77
 
 case "$no_interrupt" in
   0|1) ;;

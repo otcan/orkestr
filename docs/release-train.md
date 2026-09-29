@@ -248,6 +248,49 @@ orkestr instances --probe
 orkestr update --release --ref <tag-or-main-or-sha> --channel <channel>
 ```
 
+### Release provenance gate
+
+The versioned deployer binds each install to the CI result of the exact commit
+it resolved (ORK-519). Right after `--ref` is resolved to a commit, and before
+any build or activation, `scripts/release-provenance/deploy-gate.mjs` (the copy
+shipped with the *running* deployer, never the candidate's) reads
+`/repos/{owner}/{repo}/commits/{sha}/check-runs` and requires every check in
+`scripts/release-provenance/release-policy.json` to be completed with
+conclusion `success`: `syntax`, `secret-scan`, `secret-policy`,
+`dependency-advisories`, `dependency-policy`, `build`, `smoke`, and at least
+four `test (N)` shards, all from one workflow run whose `head_sha` matches.
+`skipped` is not success.
+
+| Setting | Values | Default | Effect |
+| --- | --- | --- | --- |
+| `ORKESTR_DEPLOY_REQUIRE_CHECKS` | `enforce`, `warn`, `off` | `enforce` | Missing, failed, pending checks, head-sha mismatch, a non-GitHub source, or an unreadable API stop the deploy with exit `77`; `warn` logs and continues. |
+| `ORKESTR_DEPLOY_ARTIFACT_PROVENANCE` | `off`, `warn`, `enforce` | `warn` | Reads the run's `runtime-dist` artifact metadata (id, digest, expiry) and attestation presence; with a token, downloads it, checks the archive digest, and compares its content manifest (`server`, `launcher` subtrees) with the locally built `dist`. `enforce` requires a token and fails closed; it never silently falls back to an unverified local build. |
+| `ORKESTR_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | read-only token | unset | Optional for public repositories (unauthenticated API, 60 requests/hour); required for artifact download. Put it in the env file, never on the command line. It is never logged or recorded. |
+| `ORKESTR_DEPLOY_PROVENANCE_REPO` | `owner/repo` | derived from `ORKESTR_REPO_URL` | For mirrors. `git@github.com:owner/repo.git`, `ssh://` and `https://` remotes are parsed automatically. |
+
+Attestation signatures are verified with `gh attestation verify` only when the
+GitHub CLI is installed and the artifact was downloaded; otherwise the record
+says `attestation_unverified` (or `attestation_present_unverified` when the API
+lists an attestation for the digest). CI creates the attestation in the
+`provenance` job, only for `push`/`workflow_dispatch` builds, with
+`actions/attest-build-provenance` over the `runtime-dist` archive digest and the
+`runtime-dist-manifest` content manifest.
+
+After the build, the gate computes the installed-tree digest (`dist` and the
+release directory without `node_modules`) with the same
+`scripts/release-provenance/content-manifest.mjs` used in CI, and records the
+result under `provenance` in `release-manifest.json` and in the deployment
+history event: CI run id/url, required check set and conclusions, gate modes and
+result, artifact name/id/digest, attestation status, and tree digests. Rejected
+deploys get a `rejected` history event. `rollback` is never gated; it reuses an
+accepted release and copies that release's recorded provenance into the history.
+
+Break-glass: set `ORKESTR_DEPLOY_REQUIRE_CHECKS=warn` for one deploy and record
+the reason in the evidence packet. The deployer gate does not replace
+repository rules: required status checks and branch protection on `main`
+(ORK-478) are still a repo-admin setting, as are the trusted signer policy for
+attestations and the token the host uses for artifact download.
+
 ### Deploys started by an agent turn
 
 A release train run from inside an Orkestr thread (a Codex or Claude Code turn)
@@ -413,6 +456,63 @@ After main is released:
   pinned for investigation.
 
 This keeps workers current without hiding unfinished work.
+
+## Automated Single-Ref Release
+
+`orkestr release-train` automates the common case where one ref (usually
+`main`) is already pushed and only needs checking, CI confirmation, deploy and
+branch alignment. It never pushes the release ref and never force-pushes.
+
+```bash
+orkestr release-train check [--ref main] [--repo path] [--json]
+orkestr release-train ci --sha <sha> [--wait] [--timeout-min 30] [--json]
+orkestr release-train deploy --sha <sha> [--channel main] [--thread id|--no-thread]
+orkestr release-train sync-branches --sha <sha> [--path-prefix p] [--dry-run] [--json]
+orkestr release-train run [--ref main] [--thread id|--no-thread]
+```
+
+- `check` resolves the ref, creates a fresh temporary `git worktree` of that
+  exact commit under the system temp dir (its own `npm ci --ignore-scripts
+  --no-audit`, never a shared or symlinked `node_modules`), runs the WhatsApp
+  media-id patch, `npm run build`, `npm run launcher:build`, `npm run test:ci`
+  with a short `TMPDIR`, and the dependency advisory scan for that commit, then
+  removes the worktree.
+- `ci` uses the provenance verifier to require the release policy's checks for
+  the exact commit; `--wait` polls while checks are missing or pending.
+- `deploy` requires recorded `check` and `ci` success for the sha, refuses while
+  an `orkestr-deploy-*`/`orkestr-release-*` unit is active or while any active
+  thread other than the calling one is not restart-safe (or the active-work
+  report is unavailable), then launches the detached deploy with
+  `--all-instances --wait-active`.
+- `sync-branches` fast-forwards every clean worktree branch (an untracked
+  `node_modules` entry is ignored) whose tip is an ancestor of the sha and pushes
+  them in one `git push origin`; dirty or diverged branches are reported with
+  their unique and missing commit counts and make the command exit non-zero.
+- `run` chains check, `ci --wait` and deploy and stops at the first failure.
+
+Results are recorded per commit in `ORKESTR_RELEASE_TRAIN_STATE_DIR` (default
+`$ORKESTR_HOME/release-train`), including the check log and the advisory report.
+
+### Dependency advisory watch
+
+`node scripts/security/dependency-advisory-watch.mjs` scans the current
+`origin/main` lockfile in a temporary worktree with the advisory scanner and
+exits non-zero with a short summary when the scan is blocked or new high or
+critical advisories appeared since the last run (state in
+`ORKESTR_ADVISORY_WATCH_STATE_DIR`, default `$ORKESTR_HOME/advisory-watch`).
+`--fix-branch [--branch-name name]` creates a local branch that runs `npm update
+--package-lock-only --ignore-scripts` for the affected transitive packages (and
+bumps exact direct pins only within the same major), commits it, rescans, and
+reports whether the block clears. It never pushes.
+
+Schedule it with an Orkestr timer from a private overlay, for example a daily
+timer whose command is:
+
+```bash
+node scripts/security/dependency-advisory-watch.mjs --repo /path/to/orkestr-checkout --json
+```
+
+and route a non-zero exit to the release owner's thread.
 
 ## Final Report
 

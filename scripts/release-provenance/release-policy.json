@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "description": "GitHub Actions checks and artifacts a commit must have before the versioned deployer builds and activates it. Repository-level enforcement of the same checks (ORK-478 ruleset) is a separate repo-admin setting.",
+  "workflowName": "CI",
+  "requiredChecks": [
+    "syntax",
+    "secret-scan",
+    "secret-policy",
+    "dependency-advisories",
+    "dependency-policy",
+    "build",
+    "smoke"
+  ],
+  "requiredCheckPrefixes": [
+    { "prefix": "test (", "minCount": 4 }
+  ],
+  "artifacts": {
+    "runtime": "runtime-dist",
+    "manifest": "runtime-dist-manifest",
+    "compareSubtrees": ["server", "launcher"]
+  }
+}

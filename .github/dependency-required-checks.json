@@ -13,7 +13,8 @@
     "package.json",
     "package-lock.json",
     ".npmrc",
-    "scripts/security/**"
+    "scripts/security/**",
+    "scripts/release-provenance/**"
   ],
   "activationPrerequisites": [
     "Owner approves ORK-478 ruleset including no silent bypass and trusted policy review.",

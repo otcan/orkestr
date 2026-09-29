@@ -20,3 +20,14 @@ test("release train runbook gates worker deployments through the train", async (
     /orkestr-wa-readiness\.mjs --bridge-url <url> --require-routing-policy --require-access-policy --account sender --account responder/,
   );
 });
+
+test("release train runbook documents the provenance gate modes and remaining repo-level work", async () => {
+  const doc = await fs.readFile("docs/release-train.md", "utf8");
+  assert.match(doc, /### Release provenance gate/);
+  assert.match(doc, /`ORKESTR_DEPLOY_REQUIRE_CHECKS` \| `enforce`, `warn`, `off` \| `enforce`/);
+  assert.match(doc, /`ORKESTR_DEPLOY_ARTIFACT_PROVENANCE` \| `off`, `warn`, `enforce` \| `warn`/);
+  assert.match(doc, /`rollback` is never gated/);
+  assert.match(doc, /ORK-478/);
+  assert.match(doc, /orkestr release-train run \[--ref main\]/);
+  assert.match(doc, /dependency-advisory-watch\.mjs/);
+});
