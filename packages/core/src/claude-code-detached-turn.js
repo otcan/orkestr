@@ -33,13 +33,16 @@ const READ_CHUNK_BYTES = 256 * 1024;
 // no-op handler so a group signal stops Claude while the wrapper survives long
 // enough to write exit.json. Trapped (not ignored) signals reset to default in
 // the exec'd Claude process, so Ctrl-C style interrupts still reach it.
+// Received INT/TERM signals are appended to exit.json.signals (one line per
+// signal with a unix timestamp) so an unexpected end of a turn can be traced.
 const WRAPPER_SCRIPT = [
   "trap '' HUP",
-  "trap ':' INT TERM",
   "p=$1; o=$2; e=$3; x=$4; shift 4",
+  "trap 'printf \"INT %s\\n\" \"$(date +%s)\" >>\"$x.signals\"' INT",
+  "trap 'printf \"TERM %s\\n\" \"$(date +%s)\" >>\"$x.signals\"' TERM",
   "\"$@\" <\"$p\" >>\"$o\" 2>>\"$e\"",
   "c=$?",
-  "printf '{\"code\":%s}\\n' \"$c\" >\"$x.tmp\" && mv \"$x.tmp\" \"$x\"",
+  "printf '{\"code\":%s,\"at\":%s}\\n' \"$c\" \"$(date +%s)\" >\"$x.tmp\" && mv \"$x.tmp\" \"$x\"",
   "exit \"$c\"",
 ].join("\n");
 
@@ -142,6 +145,40 @@ export async function updateDetachedTurnRecord(record, patch = {}) {
   const { paths, ...stored } = { ...record, ...patch };
   await writeJsonAtomic(record.paths.record, stored).catch(() => {});
   return { ...stored, paths };
+}
+
+export function detachedTurnsArchiveRoot(env = process.env) {
+  return path.join(appHome(env), "runtimes", "claude-code", "turns-archive");
+}
+
+function archiveRetentionMs(env = process.env) {
+  const days = Number(env.ORKESTR_CLAUDE_DETACHED_ARCHIVE_DAYS ?? 3);
+  return Number.isFinite(days) && days >= 0 ? days * 24 * 60 * 60 * 1000 : 3 * 24 * 60 * 60 * 1000;
+}
+
+// Moves a finished turn's directory (event log, stderr, exit and signal
+// records) into the archive and prunes archived turns past retention, so the
+// cause of an unexpected turn end can still be inspected afterwards.
+export async function archiveDetachedTurn(record, env = process.env, nowMs = Date.now()) {
+  if (!record?.paths?.dir) return;
+  const retentionMs = archiveRetentionMs(env);
+  if (retentionMs > 0) {
+    const target = path.join(detachedTurnsArchiveRoot(env), path.basename(path.dirname(record.paths.dir)), `${path.basename(record.paths.dir)}-${nowMs}`);
+    await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 }).catch(() => {});
+    const moved = await fs.rename(record.paths.dir, target).then(() => true, () => false);
+    if (!moved) await removeDetachedTurn(record);
+    await fs.rmdir(path.dirname(record.paths.dir)).catch(() => {});
+  } else {
+    await removeDetachedTurn(record);
+  }
+  const root = detachedTurnsArchiveRoot(env);
+  for (const threadDir of await fs.readdir(root).catch(() => [])) {
+    for (const entry of await fs.readdir(path.join(root, threadDir)).catch(() => [])) {
+      const dir = path.join(root, threadDir, entry);
+      const stat = await fs.stat(dir).catch(() => null);
+      if (stat && nowMs - stat.mtimeMs > retentionMs) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
 }
 
 export async function removeDetachedTurn(record) {

@@ -16,7 +16,7 @@ import { completeInterruptedClaudeCodeTurn } from "./claude-code-turn-state.js";
 import { claudeCodeTelemetryPatch } from "./claude-code-telemetry.js";
 import { persistInterruptedClaudeCodeSession, settleClaudeCodeCoalescedInputs } from "./claude-code-interrupt-resume.js";
 import { scheduleClaudeCodeDelivery } from "./claude-code-active-turns.js";
-import { listDetachedTurnRecords, removeDetachedTurn } from "./claude-code-detached-turn.js";
+import { listDetachedTurnRecords, archiveDetachedTurn } from "./claude-code-detached-turn.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -43,7 +43,7 @@ export async function claudeCodeProfileForThread(thread, env, requireReady = tru
 export async function cleanupDetachedClaudeCodeTurns(threadId, env = process.env) {
   if (["1", "true", "yes", "on"].includes(clean(env.ORKESTR_CLAUDE_DETACHED_KEEP_LOGS).toLowerCase())) return;
   for (const record of await listDetachedTurnRecords(threadId, env).catch(() => [])) {
-    await removeDetachedTurn(record);
+    await archiveDetachedTurn(record, env);
   }
 }
 

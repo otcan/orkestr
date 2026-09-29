@@ -113,6 +113,8 @@ test("a recycled pid is never mistaken for the turn process", async (t) => {
   const status = await closed;
   assert.equal(status.signal, "SIGTERM");
   assert.equal(await detachedTurnState(record), "exited");
+  // The wrapper records the signal so an unexpected turn end can be traced.
+  assert.match(await fs.readFile(`${record.paths.exit}.signals`, "utf8"), /^TERM \d+$/m);
 });
 
 test("detached turns run in their own systemd scope and keep the wrapper pid", async (t) => {
