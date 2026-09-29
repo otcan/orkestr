@@ -35,6 +35,50 @@ for (const [name, before, after] of [
   ["ignored gate", "runs-on: ubuntu-latest", "runs-on: ubuntu-latest\n    continue-on-error: true"],
 ]) test(`rejects ${name}`, () => assert.throws(() => validateWorkflow(fixture.replace(before, after)), /workflow_/));
 
+const attestFixture = `on: [pull_request, push]
+permissions: {contents: read}
+jobs:
+  provenance:
+    if: \${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@${actionPins["actions/download-artifact"]}
+        with: {name: runtime-dist}
+      - run: sha256sum file > subjects.sha256
+      - uses: actions/attest-build-provenance@${actionPins["actions/attest-build-provenance"]}
+        with: {subject-checksums: subjects.sha256}
+`;
+test("trusted-event attestation job may hold OIDC and attestation write permissions", () => assert.deepEqual(validateWorkflow(attestFixture), { jobs: 1, actions: 2 }));
+for (const [name, before, after] of [
+  ["attestation on pull requests", "github.event_name == 'push' || ", "github.event_name == 'pull_request' || "],
+  ["attestation without event gate", "    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}\n", ""],
+  ["attestation job running npm", "run: sha256sum file", "run: npm ci && sha256sum file"],
+  ["attestation job with extra write scope", "      attestations: write", "      attestations: write\n      contents: write"],
+  ["attestation job with packages scope", "      attestations: write", "      attestations: write\n      packages: write"],
+  ["OIDC without attestation action", `      - uses: actions/attest-build-provenance@${actionPins["actions/attest-build-provenance"]}\n        with: {subject-checksums: subjects.sha256}\n`, ""],
+  ["unpinned attestation action", actionPins["actions/attest-build-provenance"], "v4"],
+]) test(`rejects ${name}`, () => assert.throws(() => validateWorkflow(attestFixture.replace(before, after)), /workflow_/));
+
+test("CI publishes a runtime content manifest and attests it from a trusted-event job", async () => {
+  const workflow = parse(await fs.readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+  const build = workflow.jobs.build;
+  assert.match(build.steps.find((step) => step.name === "Runtime content manifest").run, /content-manifest\.mjs --root dist/);
+  assert.ok(build.steps.some((step) => step.with?.name === "runtime-dist-manifest"));
+  assert.equal(build.outputs["runtime-digest"], "${{ steps.runtime-artifact.outputs.artifact-digest }}");
+  const job = workflow.jobs.provenance;
+  assert.deepEqual(job.permissions, { contents: "read", "id-token": "write", attestations: "write" });
+  assert.equal(workflow.permissions.contents, "read");
+  assert.equal(Object.keys(workflow.permissions).length, 1);
+  const attest = job.steps.find((step) => step.uses?.startsWith("actions/attest-build-provenance@"));
+  assert.equal(attest.uses, `actions/attest-build-provenance@${actionPins["actions/attest-build-provenance"]}`);
+  assert.match(attest.with["subject-checksums"], /provenance-subjects\.sha256/);
+  assert.match(job.steps.find((step) => step.name?.startsWith("Verify content manifest")).run, /--expect/);
+});
+
 test("all repository workflows satisfy policy and retain readable version annotations", async () => {
   const directory = new URL("../.github/workflows/", import.meta.url);
   assert.equal((await checkWorkflows(fileURLToPath(directory))).ok, true);

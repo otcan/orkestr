@@ -10,12 +10,32 @@ export const actionPins = Object.freeze({
   "actions/setup-node": "249970729cb0ef3589644e2896645e5dc5ba9c38", // v6.5.0
   "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02", // v4.6.2
   "actions/download-artifact": "d3f86a106a0bac45b974a628896c90dbdf5c8093", // v4.3.0
+  "actions/attest-build-provenance": "4d101475d8b20a2381f78447822ac1eab6504dd8", // v4.2.2
 });
+const attestAction = "actions/attest-build-provenance";
+// Only these actions may run in a job that holds OIDC/attestation write
+// permissions; the job must not build or execute candidate package code.
+const attestJobActions = new Set(["actions/checkout", "actions/setup-node", "actions/download-artifact", attestAction]);
+const trustedEventCondition = "${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}";
 const triggers = new Set(["workflow_dispatch", "pull_request", "merge_group", "push", "schedule"]);
 const record = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const requirePolicy = (condition, code) => { if (!condition) throw new Error(code); };
 function permissions(value) {
   requirePolicy(record(value) && Object.keys(value).every(key => key === "contents") && value.contents === "read", "workflow_permissions");
+}
+// Job-level attestation permissions: exactly contents:read + id-token:write +
+// attestations:write, only for an attestation job gated to trusted events that
+// runs no npm scripts and only uses the reviewed action subset.
+function attestationJob(job) {
+  const value = job.permissions;
+  if (!record(value) || !("id-token" in value || "attestations" in value)) return false;
+  requirePolicy(Object.keys(value).sort().join(",") === "attestations,contents,id-token" && value.contents === "read" &&
+    value["id-token"] === "write" && value.attestations === "write", "workflow_permissions");
+  requirePolicy(job.if === trustedEventCondition, "workflow_attestation_event");
+  const uses = (job.steps || []).filter(step => record(step) && typeof step.uses === "string").map(step => step.uses.split("@")[0]);
+  requirePolicy(uses.includes(attestAction) && uses.every(name => attestJobActions.has(name)), "workflow_attestation_actions");
+  requirePolicy((job.steps || []).every(step => !/\bnpm\b|\bnpx\b/.test(String(step?.run || ""))), "workflow_attestation_candidate_code");
+  return true;
 }
 
 export function validateWorkflow(source) {
@@ -33,7 +53,7 @@ export function validateWorkflow(source) {
   for (const job of Object.values(workflow.jobs)) {
     requirePolicy(record(job) && job["runs-on"] === "ubuntu-latest", "workflow_runner");
     requirePolicy(!["uses", "secrets", "container", "services", "environment"].some(key => key in job), "workflow_privileged_job");
-    if ("permissions" in job) permissions(job.permissions);
+    if ("permissions" in job && !attestationJob(job)) permissions(job.permissions);
     requirePolicy(!job["continue-on-error"], "workflow_ignored_failure");
     requirePolicy(Array.isArray(job.steps) && job.steps.length > 0, "workflow_steps");
     for (const step of job.steps) {
