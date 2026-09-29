@@ -328,8 +328,12 @@ export async function issueConnectorMcpResourceToken(input = {}, env = process.e
   const grantThreadId = clean(grant.threadId);
   const policyRevision = sourcePolicyRevision(state, grantThreadId, resourceType);
   if (!grantThreadId || !policyRevision) deny("resource_token_issue_stale");
-  const issuedAt = new Date().toISOString();
-  const requestedExpiresAt = Date.now() + requestedTtlMs;
+  // Read the clock once: separate reads can straddle a millisecond tick on a
+  // loaded host, making expiresAt - issuedAt exceed maxTokenLifetimeMs and the
+  // freshly issued token fail validLifetime() as resource_token_ttl_invalid.
+  const issuedAtMs = Date.now();
+  const issuedAt = new Date(issuedAtMs).toISOString();
+  const requestedExpiresAt = issuedAtMs + requestedTtlMs;
   const grantExpiresAt = Date.parse(clean(grant.effectiveExpiresAt || grant.expiresAt));
   // A bearer is never valid longer than the effective grant that authorized
   // it. Runtime revalidation remains the authority, while this bounds token

@@ -382,3 +382,18 @@ test("declared child scopes bind a nonzero policy epoch and are invalidated by p
     /connector_mcp_resource_grant_required/,
   );
 });
+
+test("issued resource tokens derive issuedAt and expiresAt from a single clock read", async (t) => {
+  const item = await fixture();
+  // Simulate a loaded host where the wall clock ticks between reads. Issuance
+  // must not produce an issuedAt/expiresAt span above the max lifetime, which
+  // access checks reject as connector_mcp_resource_token_ttl_invalid.
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => (clock += 50));
+  const issued = await issueConnectorMcpResourceToken(issueInput(item), item.env);
+  t.mock.restoreAll();
+  await assertResourceAccess(await authorizeConnectorMcpToken(issued.token, item.env), item.input, item.env);
+  const session = (await readThreadResourcePolicy(item.env)).resourceSessions[0];
+  assert.equal(Date.parse(session.expiresAt) - Date.parse(session.issuedAt), 5 * 60_000);
+  assert.equal(issued.expiresAt, session.expiresAt);
+});
