@@ -9,6 +9,7 @@ import { orphanedWhatsAppFinalAnswerIssues } from "./router-doctor-whatsapp-fina
 import { abortable, throwIfAborted } from "./router-doctor-abort.js";
 import { repairIssue } from "./router-doctor-repairs.js";
 import { hostBoundaryRouterIssues } from "./host-boundary-doctor.js";
+import { historicalSummaryChecks, partitionHistoricalChecks, summarizeHistoricalChecks, whatsappDoctorWindowHours } from "./router-doctor-history-window.js";
 function clean(value = "") {
   return String(value || "").trim();
 }
@@ -334,8 +335,11 @@ async function inspectThread(thread, options = {}) {
     }
   }
 
+  // Findings older than the doctor window are historical: they do not count as
+  // errors, but --repair still sees them exactly as before.
+  const { current, historical } = partitionHistoricalChecks(checks, { messages, traces: allTraces, env });
   if (repair) {
-    for (const item of checks) {
+    for (const item of [...current, ...historical]) {
       throwIfAborted(signal);
       const repaired = await repairIssue(item, {
         env,
@@ -368,8 +372,10 @@ async function inspectThread(thread, options = {}) {
     traceCount: traces.length,
     messageCount: messages.length,
     participantIdentity: participantIdentitySummary,
-    checks,
+    checks: current,
+    historical: summarizeHistoricalChecks(historical),
     repairs,
+    historicalChecks: historical,
   };
 }
 
@@ -428,9 +434,16 @@ export async function doctorWhatsAppRouter(options = {}) {
     throwIfAborted(signal);
     threadReports.push(await inspectThread(thread, { ...options, env, repair, whatsappStatusFn: sharedWhatsAppStatusFn }));
   }
+  const historicalChecks = threadReports.flatMap((report) => report.historicalChecks);
+  for (const report of threadReports) delete report.historicalChecks;
+  const historical = summarizeHistoricalChecks(historicalChecks);
 
   const routerOutbox = routerTraceId ? await abortable(listRouterOutbox({ routerTraceId }, env), signal) : [];
-  const checks = [...await hostBoundaryRouterIssues(env), ...threadReports.flatMap((report) => report.checks)];
+  const checks = [
+    ...await hostBoundaryRouterIssues(env),
+    ...threadReports.flatMap((report) => report.checks),
+    ...historicalSummaryChecks(historicalChecks, env),
+  ];
   const repairs = threadReports.flatMap((report) => report.repairs);
   const errors = checks.filter((item) => item.severity === "error").length;
   const warnings = checks.filter((item) => item.severity === "warn").length;
@@ -444,7 +457,16 @@ export async function doctorWhatsAppRouter(options = {}) {
         : "WhatsApp/router invariants passed.",
     repair,
     generatedAt: nowIso(),
-    counts: { threads: threadReports.length, checks: checks.length, errors, warnings, repairs: repairs.length },
+    counts: {
+      threads: threadReports.length,
+      checks: checks.length,
+      errors,
+      warnings,
+      repairs: repairs.length,
+      historical: historical.total,
+      historicalOrphanedFinals: historical.orphanedFinals.count,
+    },
+    windowHours: whatsappDoctorWindowHours(env),
     checks,
     repairs,
     threads: threadReports,
