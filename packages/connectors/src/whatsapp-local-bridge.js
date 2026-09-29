@@ -1627,6 +1627,10 @@ function sendConfirmationRequired(env = process.env) {
   return !disabledEnvValue(env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED || env.WA_SEND_CONFIRMATION_REQUIRED);
 }
 
+function resendUnconfirmedSends(env = process.env) {
+  return ["1", "true", "yes", "on"].includes(String(env.ORKESTR_WHATSAPP_RESEND_UNCONFIRMED || "").trim().toLowerCase());
+}
+
 function sendConfirmationAttempts(env = process.env) {
   const parsed = Number(env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_ATTEMPTS || env.WA_SEND_CONFIRMATION_ATTEMPTS || 4);
   return Number.isFinite(parsed) ? Math.max(1, Math.floor(parsed)) : 4;
@@ -1740,7 +1744,11 @@ export async function sendWhatsAppTextWithConfirmation({
       // A server ack on the returned id is definitive and survives degraded
       // chat-history reads; only fall back to the history scan without it.
       const byId = await withSendOperationTimeout(
-        confirmSentMessageById(client, sentMessage, env),
+        // WhatsApp Web may return the sent message with only its local id;
+        // the browser-store lookup finds it by that id within the chat.
+        confirmSentMessageById(client, sentMessage, env, {
+          lookupByLocalId: (localId) => readCachedLocalWhatsAppMessageById(client, localId, chatId),
+        }),
         "whatsapp_send_confirm",
         env,
         operationTimeoutMs,
@@ -1778,6 +1786,19 @@ export async function sendWhatsAppTextWithConfirmation({
           chatId,
           reason: confirmationSkipReason || "confirmation_unavailable",
           messageId: serializedMessageId(sentMessage),
+        }, env).catch(() => {});
+        return sentMessage;
+      }
+      // sendMessage returned a WhatsApp message id and WhatsApp did not report
+      // an error: the text was handed to WhatsApp Web, which delivers it itself.
+      // Resending on an unverifiable confirmation duplicated messages for
+      // recipients, so only ORKESTR_WHATSAPP_RESEND_UNCONFIRMED=1 restores it.
+      if (!byId.failed && serializedMessageId(sentMessage) && !resendUnconfirmedSends(env)) {
+        await appendEvent({
+          type: "whatsapp_local_send_confirmation_unverified",
+          chatId,
+          messageId: serializedMessageId(sentMessage),
+          reason: byId.reason || "unknown",
         }, env).catch(() => {});
         return sentMessage;
       }
@@ -4712,6 +4733,7 @@ async function readCachedLocalWhatsAppMessageById(client, eventId = "", chatId =
       timestamp: Number(model?.t || model?.timestamp || message?.t || message?.timestamp || 0) || 0,
       hasMedia: Boolean(model?.directPath || model?.hasMedia || message?.directPath || message?.mediaKey),
       isStatus: Boolean(model?.isStatus || message?.isStatus),
+      ack: Number.isFinite(Number(model?.ack ?? message?.ack)) ? Number(model?.ack ?? message?.ack) : null,
     };
   }, id, targetChatId);
 }

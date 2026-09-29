@@ -3765,6 +3765,7 @@ test("local whatsapp send rejects normal successes that are not visible in chat 
       maxAttempts: 1,
       retryDelayMs: 0,
       env: {
+        ORKESTR_WHATSAPP_RESEND_UNCONFIRMED: "1",
         ORKESTR_WHATSAPP_SEND_CONFIRMATION_ATTEMPTS: "1",
         ORKESTR_WHATSAPP_SEND_CONFIRMATION_DELAY_MS: "0",
       },
@@ -3798,7 +3799,8 @@ test("local whatsapp send retries normal successes that are not confirmed", asyn
     text: "eventually visible",
     retryDelayMs: 0,
     env: {
-      ORKESTR_WHATSAPP_SEND_CONFIRMATION_ATTEMPTS: "1",
+      ORKESTR_WHATSAPP_RESEND_UNCONFIRMED: "1",
+        ORKESTR_WHATSAPP_SEND_CONFIRMATION_ATTEMPTS: "1",
       ORKESTR_WHATSAPP_SEND_CONFIRMATION_DELAY_MS: "0",
     },
   });
@@ -8799,6 +8801,7 @@ test("local whatsapp unconfirmed sends do not reset the runtime", async () => {
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_RESEND_UNCONFIRMED: "1",
     ORKESTR_WHATSAPP_SEND_CONFIRMATION_ATTEMPTS: "1",
     ORKESTR_WHATSAPP_SEND_CONFIRMATION_DELAY_MS: "0",
   };

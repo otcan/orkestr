@@ -59,10 +59,18 @@ test("a send missing from the store keeps the retry for false-positive sends", a
   const client = degradedHistoryClient();
   client.getMessageById = async () => { throw new Error("r"); };
   await assert.rejects(
-    sendWhatsAppTextWithConfirmation({ client, chatId: "chat@g.us", text: "report", maxAttempts: 2, retryDelayMs: 0, env: FAST }),
+    sendWhatsAppTextWithConfirmation({ client, chatId: "chat@g.us", text: "report", maxAttempts: 2, retryDelayMs: 0, env: { ...FAST, ORKESTR_WHATSAPP_RESEND_UNCONFIRMED: "1" } }),
     /whatsapp_send_not_confirmed/,
   );
   assert.equal(client.calls.send, 2);
+});
+
+test("by default an unverifiable send with a message id is not resent", async () => {
+  const client = degradedHistoryClient();
+  client.getMessageById = async () => { throw new Error("r"); };
+  const sent = await sendWhatsAppTextWithConfirmation({ client, chatId: "chat@g.us", text: "report", maxAttempts: 2, retryDelayMs: 0, env: FAST });
+  assert.equal(client.calls.send, 1);
+  assert.match(sent.id._serialized, /SENT1$/);
 });
 
 test("id confirmation distinguishes unavailable, missing, failed and pending lookups", async () => {
@@ -80,4 +88,39 @@ test("id confirmation distinguishes unavailable, missing, failed and pending loo
   assert.equal(missing.reason, "not_found");
   const foreign = degradedHistoryClient({ acks: [3], fromMe: false });
   assert.equal((await confirmSentMessageById(foreign, { id: { _serialized: "x" } }, FAST)).unknown, true);
+});
+
+// Production shape: sendMessage returns only { fromMe, remote, id } and the
+// message is found through the WhatsApp Web store by its local id.
+function localIdOnlyClient({ ack = 1 } = {}) {
+  const calls = { send: 0, storeLookups: 0 };
+  return {
+    calls,
+    async sendMessage(chatId) {
+      calls.send += 1;
+      return { id: { fromMe: true, remote: chatId, id: `3EB0LOCAL${calls.send}` } };
+    },
+    async getChatById() { return { async fetchMessages() { return []; } }; },
+    pupPage: {
+      async evaluate(_fn, first, second) {
+        if (String(first).startsWith("3EB0LOCAL")) {
+          calls.storeLookups += 1;
+          return { id: { id: first, _serialized: `true_${second}_${first}`, remote: second }, fromMe: true, ack, body: "report" };
+        }
+        return { found: true, unreadCount: 0, messages: [] };
+      },
+    },
+  };
+}
+
+test("a send returning only a local id is confirmed through the browser store", async () => {
+  const acked = localIdOnlyClient({ ack: 1 });
+  const sent = await sendWhatsAppTextWithConfirmation({ client: acked, chatId: "chat@g.us", text: "report", maxAttempts: 2, retryDelayMs: 0, env: FAST });
+  assert.equal(acked.calls.send, 1);
+  assert.ok(acked.calls.storeLookups >= 1);
+  assert.equal(sent.ack, 1);
+
+  const pending = localIdOnlyClient({ ack: 0 });
+  await sendWhatsAppTextWithConfirmation({ client: pending, chatId: "chat@g.us", text: "report", maxAttempts: 2, retryDelayMs: 0, env: FAST });
+  assert.equal(pending.calls.send, 1, "stored but unacked must not be resent");
 });

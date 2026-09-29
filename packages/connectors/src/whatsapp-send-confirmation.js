@@ -21,6 +21,14 @@ function sentMessageId(message = {}) {
   return String(id?._serialized || "").trim();
 }
 
+// The local message id (e.g. "3EB0..."), which is all some sends return.
+function sentMessageLocalId(message = {}) {
+  const id = message?.id;
+  if (typeof id === "string") return id.split("_").filter(Boolean).at(-1) || id;
+  const local = id?.id;
+  return typeof local === "string" ? local.trim() : "";
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -38,16 +46,24 @@ export function sendAckConfirmationDelayMs(env = process.env) {
 // id but no server ack arrived in time (it was handed to WhatsApp; resending
 // would duplicate it), { failed: true } when WhatsApp marked it as an error,
 // and { unknown: true } when the id cannot be looked up at all.
-export async function confirmSentMessageById(client, sentMessage, env = process.env) {
+export async function confirmSentMessageById(client, sentMessage, env = process.env, { lookupByLocalId = null } = {}) {
   const id = sentMessageId(sentMessage);
-  if (!id || typeof client?.getMessageById !== "function") return { unknown: true, reason: "lookup_unavailable" };
+  const localId = sentMessageLocalId(sentMessage);
+  const canLookupSerialized = Boolean(id) && typeof client?.getMessageById === "function";
+  const canLookupLocal = Boolean(localId) && typeof lookupByLocalId === "function";
+  if (!canLookupSerialized && !canLookupLocal) return { unknown: true, reason: "lookup_unavailable" };
+  const lookup = async () => {
+    let found = canLookupSerialized ? await client.getMessageById(id) : null;
+    if (!found && canLookupLocal) found = await lookupByLocalId(localId);
+    return found;
+  };
   const attempts = sendAckConfirmationAttempts(env);
   const delayMs = sendAckConfirmationDelayMs(env);
   let lastAck = null;
   let lastStored = null;
   let lookupError = "";
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const stored = await client.getMessageById(id).catch((error) => {
+    const stored = await lookup().catch((error) => {
       lookupError = String(error?.name || "Error") + ": " + String(error?.message || error).slice(0, 160);
       return null;
     });
