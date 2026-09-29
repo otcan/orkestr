@@ -639,7 +639,7 @@ async function doctorCommand(argv, ctx) {
   if (subject === "resources" || subject === "resource" || subject === "runtimes") return doctorResourcesCommand(argv, ctx);
   if (subject === "whatsapp" || subject === "wa") return doctorWhatsAppRouterCommand(argv.slice(1), ctx);
   if (subject === "router") return doctorRouterCommand(argv.slice(1), ctx);
-  throw new Error("Usage: orkestr doctor [system|timers|resources|whatsapp|router] [--repair] [--json]");
+  throw new Error("Usage: orkestr doctor [system|timers|resources|whatsapp|router] [--repair [--repair-historical]] [--json]");
 }
 
 async function doctorWhatsAppRouterCommand(argv, ctx) {
@@ -653,6 +653,7 @@ async function doctorWhatsAppRouterCommand(argv, ctx) {
   if (trace) params.set("trace", trace);
   if (argv.includes("--repair") || argv.includes("--repair-safe")) params.set("repair", "1");
   if (argv.includes("--unsafe")) params.set("unsafe", "1");
+  if (argv.includes("--repair-historical")) params.set("repairHistorical", "1");
   if (staleMs) params.set("staleMs", staleMs);
   if (timeoutMs) params.set("timeoutMs", timeoutMs);
   const parsedTimeoutMs = Number(timeoutMs || 30_000);
@@ -2214,7 +2215,7 @@ function writeUsage(stream) {
   orkestr update
   orkestr rollback [--to release-id]
   orkestr logs [--service orkestr] [--lines 100] [--no-follow]
-  orkestr doctor [system|timers|resources|whatsapp|router] [--repair] [--watch] [--json]
+  orkestr doctor [system|timers|resources|whatsapp|router] [--repair [--repair-historical]] [--watch] [--json]
 
 Common thread commands:
   orkestr list [--json] [--api http://127.0.0.1:19812]

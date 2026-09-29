@@ -141,16 +141,21 @@ test("ORKESTR_WHATSAPP_DOCTOR_WINDOW_HOURS overrides the window", async () => {
   assert.equal(wide.counts.historical, 0);
 });
 
-test("repair still processes historical orphaned finals as before", async () => {
+test("repair leaves historical orphaned finals alone unless explicitly requested", async () => {
   const { env, thread } = await setup("orkestr-doctor-window-repair-");
   const final = await appendOrphanFinal(thread, env, "wa-final-old-repair", hoursAgo(24 * 20));
+  const recent = await appendOrphanFinal(thread, env, "wa-final-new-repair", hoursAgo(1));
+  const finalJobs = async (id) => (await readConnectorOutbox(env)).jobs.filter((job) => job.sourceMessageId === id && job.deliveryType === "final");
 
   const repaired = await runDoctor(thread, env, { repair: true, ensureConnectorOutboxJobFn: ensureConnectorOutboxJob });
-  const jobs = (await readConnectorOutbox(env)).jobs.filter((job) => job.sourceMessageId === final.id && job.deliveryType === "final");
+  assert.equal(repaired.repairs.some((item) => item.messageId === final.id), false);
+  assert.equal(repaired.repairs.some((item) => item.code === "enqueue_orphaned_final_answer_mirror" && item.messageId === recent.id), true);
+  assert.equal((await finalJobs(final.id)).length, 0, "a default repair must not re-send an old final");
+  assert.equal((await finalJobs(recent.id)).length, 1);
 
-  assert.equal(repaired.repairs.some((item) => item.code === "enqueue_orphaned_final_answer_mirror" && item.messageId === final.id), true);
-  assert.equal(jobs.length, 1);
-  assert.equal(repaired.counts.errors, 0);
+  const explicit = await runDoctor(thread, env, { repair: true, repairHistorical: true, ensureConnectorOutboxJobFn: ensureConnectorOutboxJob });
+  assert.equal(explicit.repairs.some((item) => item.code === "enqueue_orphaned_final_answer_mirror" && item.messageId === final.id), true);
+  assert.equal((await finalJobs(final.id)).length, 1);
 });
 
 test("partition keeps non per-message checks and untimestamped checks current", () => {

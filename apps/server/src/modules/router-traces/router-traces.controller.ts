@@ -142,6 +142,7 @@ export class RouterTracesController {
       routerTraceId: clean(query.trace || query.routerTraceId),
       repair,
       repairSafe: !boolQuery(query.unsafe),
+      repairHistorical: boolQuery(query.repairHistorical),
       staleMs: numberQuery(query.staleMs),
       signal,
       recordRunEvent: false,

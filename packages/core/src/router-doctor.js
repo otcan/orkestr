@@ -336,10 +336,11 @@ async function inspectThread(thread, options = {}) {
   }
 
   // Findings older than the doctor window are historical: they do not count as
-  // errors, but --repair still sees them exactly as before.
+  // errors, and --repair leaves them alone unless repairHistorical is set, so a
+  // repair never re-sends months-old WhatsApp finals by accident.
   const { current, historical } = partitionHistoricalChecks(checks, { messages, traces: allTraces, env });
   if (repair) {
-    for (const item of [...current, ...historical]) {
+    for (const item of options.repairHistorical === true ? [...current, ...historical] : current) {
       throwIfAborted(signal);
       const repaired = await repairIssue(item, {
         env,
