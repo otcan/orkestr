@@ -13,8 +13,8 @@ function major(version) {
 }
 
 test("framework and upload dependencies stay above the reviewed security floors", () => {
-  assert.equal(versionAt("node_modules/@angular/core"), "21.2.21");
-  assert.equal(versionAt("node_modules/@angular/build"), "21.2.21");
+  assert.equal(versionAt("node_modules/@angular/core"), "21.2.24");
+  assert.equal(versionAt("node_modules/@angular/build"), "21.2.24");
   assert.equal(versionAt("node_modules/@nestjs/platform-express"), "11.2.3");
   assert.equal(versionAt("node_modules/multer"), "2.4.0");
   assert.equal(versionAt("node_modules/qs"), "6.16.0");
