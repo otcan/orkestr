@@ -21,6 +21,7 @@ import {
   recordRuntimeFinalDeliveryFailure,
 } from "../../core/src/runtime-final-delivery.js";
 import { appendLocalAttachmentFailureNotes, prepareWhatsAppOutboundAttachments } from "./whatsapp-outbound-attachments.js";
+import { formatWhatsAppHelp, whatsappHelpCommand } from "./whatsapp-help.js";
 import { approveDesktopShareChallenge } from "../../core/src/desktop-shares.js";
 import {
   ensureRouterTurn,
@@ -4097,6 +4098,7 @@ function formatWhatsAppRouterStatus({ thread = {}, status = {}, messages = [], n
 }
 
 async function handleWhatsAppRouterStatusCommand({
+  help = false,
   input = {},
   thread,
   messageInput,
@@ -4124,7 +4126,8 @@ async function handleWhatsAppRouterStatusCommand({
     runningCount: messages.filter((message) => message?.role === "user" && message.state === "running").length,
     error: String(error?.message || error || "status_unavailable").slice(0, 200),
   }));
-  const replyText = formatWhatsAppRouterStatus({ thread, status, messages });
+  const statusText = formatWhatsAppRouterStatus({ thread, status, messages });
+  const replyText = help ? formatWhatsAppHelp({ thread, statusText, env }) : statusText;
   const message = await appendThreadMessage(thread.id, {
     ...messageInput,
     role: "user",
@@ -4175,7 +4178,7 @@ async function handleWhatsAppRouterStatusCommand({
       }, env).catch(() => {});
       return {
         duplicate: true,
-        handledCommand: "status",
+        handledCommand: help ? "help" : "status",
         event,
         agentId: null,
         threadId,
@@ -4206,7 +4209,7 @@ async function handleWhatsAppRouterStatusCommand({
   await writeWhatsAppState(state, env);
   await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId, messageId: message.id, state: "completed" }, env).catch(() => null);
   await recordRouterTraceEvent({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, sourceEventId: eventId, threadId, messageId: message.id, phase: "routed" }, env).catch(() => {});
-  await recordRouterTraceEvent({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, sourceEventId: eventId, threadId, messageId: message.id, phase: "completed", reason: "status_command", terminal: true }, env).catch(() => {});
+  await recordRouterTraceEvent({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, sourceEventId: eventId, threadId, messageId: message.id, phase: "completed", reason: help ? "help_command" : "status_command", terminal: true }, env).catch(() => {});
   await appendEvent({
     type: "whatsapp_router_status_command",
     eventId,
@@ -4222,7 +4225,7 @@ async function handleWhatsAppRouterStatusCommand({
   }, env).catch(() => {});
   return {
     duplicate: false,
-    handledCommand: "status",
+    handledCommand: help ? "help" : "status",
     event,
     agentId: null,
     threadId,
@@ -5030,8 +5033,9 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     state: "received",
     mirrorPolicy: "reply_to_source",
   }, env).catch(() => null);
-  if (threadId && thread && whatsappRouterStatusCommand(text)) {
+  if (threadId && thread && (whatsappRouterStatusCommand(text) || whatsappHelpCommand(text))) {
     return handleWhatsAppRouterStatusCommand({
+      help: whatsappHelpCommand(text),
       input,
       thread,
       messageInput,

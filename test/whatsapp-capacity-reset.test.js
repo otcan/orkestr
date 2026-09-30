@@ -31,18 +31,24 @@ test("capacity reset omits missing, malformed, implausible and non-scalar values
 
 test("weekly reset follows window classification, not primary/secondary position", () => {
   const swapped = { ...thread, codexRateLimits: { primary: thread.codexRateLimits.secondary, secondary: thread.codexRateLimits.primary }, whatsAppDebugOwnerTimezone: "Europe/Berlin" };
-  assert.match(whatsappDebugFooter({ thread: swapped }), / · codex 5h:80% wk:60% wk-reset:20 Sept 14:00 Europe\/Berlin · claude 5h:\? wk:\? · /);
+  // Only the weekly window carries a reset, so only it shows a countdown.
+  assert.match(whatsappDebugFooter({ thread: swapped }), /\ncodex 5h: 80% wk: 60% \(\d+d\d+h\)\nclaude: no data\n/);
   const missing = { ...thread, codexRateLimits: { primary: { ...thread.codexRateLimits.primary, resets_at: epochMs } } };
-  assert.doesNotMatch(whatsappDebugFooter({ thread: missing }), /reset:/);
+  assert.doesNotMatch(whatsappDebugFooter({ thread: missing }), /\(\d+[dhm][^)]*\)|reset:/);
   const invalid = { ...thread, codexRateLimits: { secondary: { ...thread.codexRateLimits.secondary, resets_at: "bad" } } };
-  assert.doesNotMatch(whatsappDebugFooter({ thread: invalid }), /reset:/);
+  const invalidFooter = whatsappDebugFooter({ thread: invalid });
+  assert.match(invalidFooter, /\ncodex wk: 60%\n/);
+  assert.doesNotMatch(invalidFooter, /\(\d+[dhm][^)]*\)|reset:/);
 });
 
 test("footer reset respects existing suppression and replaces rather than duplicates footer", () => {
   const options = { thread, message: { source: "codex-app-server", role: "assistant" }, env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1", ORKESTR_ADMIN_USER_ID: "owner-a" } };
   const once = appendWhatsAppDebugFooter("Reply.", options);
-  assert.match(once, /wk-reset:20 Sept 12:00 UTC/);
-  assert.equal((appendWhatsAppDebugFooter(once, options).match(/reset:/g) || []).length, 1);
+  assert.match(once, /\ncodex 5h: 80% wk: 60% \(\d+d\d+h\)\n/);
+  const twice = appendWhatsAppDebugFooter(once, options);
+  assert.equal((twice.match(/^dbg: /gm) || []).length, 1);
+  assert.equal((twice.match(/^codex /gm) || []).length, 1);
+  assert.equal((twice.match(/\(\d+d\d+h\)/g) || []).length, 1);
   assert.equal(appendWhatsAppDebugFooter(once, { ...options, appendDebugFooter: false }), "Reply.");
   assert.equal(appendWhatsAppDebugFooter("Reply.", { ...options, env: { ...options.env, ORKESTR_WHATSAPP_DEBUG_FOOTER: "0" } }), "Reply.");
   assert.equal(appendWhatsAppDebugFooter("Reply.", { ...options, thread: { ...thread, binding: { suppressWhatsAppDebugFooter: true } } }), "Reply.");

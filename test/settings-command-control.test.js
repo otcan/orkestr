@@ -13,6 +13,7 @@ import { handleWhatsAppSettingsCommand, deliverWhatsAppSettingsReplies } from ".
 import { ensureConnectorOutboxJob, listConnectorOutboxJobs, writeConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
 import { upsertWhatsAppBindingRecord } from "../packages/connectors/src/whatsapp-binding-registry.js";
 import { whatsappDebugFooter } from "../packages/connectors/src/whatsapp-formatting.js";
+import { formatWhatsAppHelp } from "../packages/connectors/src/whatsapp-help.js";
 import { routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { CodexAppServerClient, stopCodexAppServerClients } from "../packages/core/src/codex-app-server-client.js";
 import { renderOpenMetrics, resetObservabilityForTests } from "../packages/core/src/observability.js";
@@ -183,11 +184,18 @@ test("journal serializes independent processes and never reexecutes after restar
   assert.equal((await runSettingsOperation({ key: interrupted, surface: "whatsapp", command: "fast" }, () => assert.fail("must not reexecute"), f.env)).outcome, "unconfirmed");
 });
 
-test("footer advertises commands only on supported writable settings", async t => {
+test("/help advertises settings commands only on supported writable settings; the footer never does", async t => {
   const f = await fixture(t);
-  assert.match(whatsappDebugFooter({ thread: f.thread, env: f.env }), /model:\/model · effort:\/effort · fast:\/fast/);
-  for (const thread of [{ ...f.thread, codexSettingsUncertain: true }, { ...f.thread, ownerUserId: "contained-user" }, { id: "terminal" }]) {
-    assert.doesNotMatch(whatsappDebugFooter({ thread, env: f.env }), /model:\/model|effort:\/effort|fast:\/fast/);
+  assert.doesNotMatch(whatsappDebugFooter({ thread: f.thread, env: f.env }), /model:\/model|effort:\/effort|fast:\/fast/);
+  const help = formatWhatsAppHelp({ thread: f.thread, env: f.env });
+  for (const command of ["model", "effort", "fast"]) assert.match(help, new RegExp(`^\\/${command} `, "m"));
+  for (const [thread, env] of [
+    [{ ...f.thread, codexSettingsUncertain: true }, f.env],
+    [{ ...f.thread, ownerUserId: "contained-user" }, f.env],
+    [{ id: "terminal" }, f.env],
+    [f.thread, { ...f.env, ORKESTR_SETTINGS_COMMANDS_ENABLED: "0" }],
+  ]) {
+    assert.doesNotMatch(formatWhatsAppHelp({ thread, env }), /^\/(?:model|effort|fast) /m);
   }
 });
 

@@ -1,6 +1,5 @@
 import os from "node:os";
-import { modelControlsReadOnlyReason } from "../../core/src/codex-model-controls.js";
-import { dualProviderQuotaSegments, executorSwitchHint } from "./whatsapp-quota-footer.js";
+import { dualProviderQuotaLines } from "./whatsapp-quota-footer.js";
 import { threadQuotaProvider } from "../../core/src/provider-quota-snapshot.js";
 import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { codexAssistantSource, threadSuppressesWhatsAppDebugFooter } from "./whatsapp-mirror-policy.js";
@@ -100,8 +99,12 @@ function footerEnabled(env = process.env) {
   ].some(debugFooterFlagEnabled);
 }
 
+// Matches the multi-line footer ("dbg: ..." then provider quota lines and the
+// queue/load line) and the older single-line "dbg: m:..." footer.
+const WHATSAPP_DEBUG_FOOTER_PATTERN = /\s*\ndbg:[^\n]*(?:\n(?:codex|claude)\b[^\n]*){0,2}(?:\n(?:q|queue):[^\n]*)?\s*$/i;
+
 export function stripWhatsAppDebugFooter(text) {
-  return String(text || "").replace(/\s*\ndbg:\s*m:[^\n]*\s*$/i, "").trim();
+  return String(text || "").replace(WHATSAPP_DEBUG_FOOTER_PATTERN, "").trim();
 }
 
 function shortReasoningEffort(value) {
@@ -297,42 +300,32 @@ function footerMessageType(deliveryType = "") {
     : "final";
 }
 
-function runtimeSwitchHint(runtimeSurface = "") {
-  const surface = String(runtimeSurface || "").trim().toLowerCase();
-  if (!surface || surface === "claude") return "";
-  if (surface === "api") return "/switch-terminal";
-  return "/switch-api";
-}
-
+// Four lines: identity and message type, one quota line per provider (with
+// time left until each reset), then queue and host load. Commands (model,
+// effort, fast, plan/code, runtime and executor switches) are listed by /help.
 export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
   const isClaude = claudeCodeThread(thread);
   const agent = threadQuotaProvider(thread) || "api-agent";
   const mode = codexModeDebugValue(message, thread);
   const runtimeSurface = runtimeSurfaceDebugValue(thread);
-  const runtimeSwitch = runtimeSwitchHint(runtimeSurface);
-  const executorSwitch = executorSwitchHint(thread);
   const queueNotice = String(deliveryType || "").trim() === "queue_notice";
-  const parts = [
-    `m:${modelDebugLabel(message, thread, env)}`,
-    `agent:${agent}`,
-    ...(!isClaude && codexFastDebugValue(message, thread) ? ["fast:on"] : []),
-    ...(!isClaude && mode ? [`mode:${mode}`] : []),
+  const identity = [
+    `dbg: ${agent}/${modelDebugLabel(message, thread, env)}`,
     ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),
+    ...(!isClaude && mode ? [`mode:${mode}`] : []),
+    ...(!isClaude && codexFastDebugValue(message, thread) ? ["fast:on"] : []),
     // WhatsApp renders *text* bold, so the message type stands out.
     `msg:*${footerMessageType(deliveryType)}*`,
-    ...dualProviderQuotaSegments(thread, env),
+  ];
+  const load = [
     ...(queueNotice
       ? [`queue:${queueNoticeDebugCount(messages, message)}`, `reason:${queueNoticeDebugReason(message)}`]
       : [`q:${queueDebugCount(messages, message)}`]),
     `load:${loadDebugPercent()}%`,
     `api:${processCpuDebugPercent()}%`,
     "help:/help",
-    ...(!isClaude && env.ORKESTR_SETTINGS_COMMANDS_ENABLED !== "0" && !modelControlsReadOnlyReason(thread, env) && !thread.codexSettingsUncertain ? ["model:/model", "effort:/effort", "fast:/fast"] : []),
-    ...(!isClaude ? [mode === "plan" ? "mode-switch:/code" : "mode-switch:/plan"] : []),
-    ...(runtimeSwitch ? [`rt-switch:${runtimeSwitch}`] : []),
-    ...(executorSwitch ? [executorSwitch] : []),
   ];
-  return `dbg: ${parts.join(" · ")}`;
+  return [identity.join(" · "), ...dualProviderQuotaLines(thread, env), load.join(" · ")].join("\n");
 }
 
 export function appendWhatsAppDebugFooter(text, options = {}) {

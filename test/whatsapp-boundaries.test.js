@@ -77,22 +77,25 @@ test("WhatsApp debug footer is gated and marks progress as update", () => {
     thread: { codexModeLive: "plan", runtimeKind: "codex-tmux", paneId: "%42" },
     messages: [{ id: "u1", role: "user", state: "queued" }],
   });
-  assert.match(enabled, /^Working\n\ndbg: /);
-  assert.match(enabled, /m:gpt-test/);
-  assert.match(enabled, /mode:plan/);
-  assert.match(enabled, /rt:tmux/);
-  assert.match(enabled, /msg:\*update\*/);
-  assert.match(enabled, /mode-switch:\/code/);
-  assert.match(enabled, /rt-switch:\/switch-api/);
+  assert.match(enabled, /^Working\n\ndbg: codex\/gpt-test · rt:tmux · mode:plan · msg:\*update\*\n/);
+  assert.match(enabled, /\nq:1 · load:\d+% · api:\d+% · help:\/help$/);
+  assert.doesNotMatch(enabled, /mode-switch:|rt-switch:|model:\/model|effort:\/effort|fast:\/fast|switch:\/claude/);
+
+  const fast = appendWhatsAppDebugFooter("Done", {
+    env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1", ORKESTR_DEFAULT_CODEX_MODEL: "gpt-test" },
+    message: { source: "codex-app-server", phase: "final_answer" },
+    thread: { runtimeKind: "codex-app-server", codexServiceTier: "priority", codexModeLive: "plan" },
+  });
+  assert.match(fast, /\ndbg: codex\/gpt-test · rt:api · mode:plan · fast:on · msg:\*final\*\n/);
 
   const apiRuntime = appendWhatsAppDebugFooter("Done", {
     env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1" },
     message: { source: "codex-app-server", phase: "final_answer" },
     thread: { runtimeKind: "codex-app-server" },
   });
-  assert.match(apiRuntime, /rt:api/);
-  assert.match(apiRuntime, /mode-switch:\/plan/);
-  assert.match(apiRuntime, /rt-switch:\/switch-terminal/);
+  assert.match(apiRuntime, /\ndbg: codex\/[^\n]* · rt:api · msg:\*final\*\n/);
+  assert.doesNotMatch(apiRuntime, /mode:plan|fast:on|mode-switch:|rt-switch:/);
+  assert.equal(stripWhatsAppDebugFooter(apiRuntime), "Done");
 });
 
 test("WhatsApp debug footer reports Claude Code model, runtime, and usage without Codex-only controls", () => {
@@ -113,9 +116,8 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
   });
 
-  assert.match(final, /^Done\n\ndbg: m:sonnet\/h · agent:claude · rt:claude · msg:\*final\* · codex 5h:\? wk:\? · claude 5h:80% wk:65% · q:0 · /);
-  assert.match(final, / · switch:\/codex$/);
-  assert.doesNotMatch(final, /fast:|mode:|model:\/model|mode-switch:|rt-switch:|switch:\/claude/);
+  assert.match(final, /^Done\n\ndbg: claude\/sonnet\/h · rt:claude · msg:\*final\*\ncodex: no data\nclaude 5h: 80% wk: 65%\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  assert.doesNotMatch(final, /fast:|mode:|model:\/model|mode-switch:|rt-switch:|switch:\//);
   assert.equal(stripWhatsAppDebugFooter(final), "Done");
 
   const waking = appendWhatsAppDebugFooter("Waking this thread.", {
@@ -125,8 +127,9 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
     messages: [],
   });
-  assert.match(waking, /^Waking this thread\.\n\ndbg: m:sonnet\/h · agent:claude · rt:claude · msg:\*update\* · codex 5h:\? wk:\? · claude 5h:80% wk:65% · queue:1 · reason:waking/);
-  assert.doesNotMatch(waking, /mode-switch:|rt-switch:/);
+  assert.match(waking, /^Waking this thread\.\n\ndbg: claude\/sonnet\/h · rt:claude · msg:\*update\*\ncodex: no data\nclaude 5h: 80% wk: 65%\nqueue:1 · reason:waking · load:\d+% · api:\d+% · help:\/help$/);
+  assert.doesNotMatch(waking, /mode-switch:|rt-switch:|switch:\//);
+  assert.equal(stripWhatsAppDebugFooter(waking), "Waking this thread.");
 });
 
 test("WhatsApp Claude footer replaces stale or unavailable usage with explicit safe states", () => {
@@ -145,8 +148,9 @@ test("WhatsApp Claude footer replaces stale or unavailable usage with explicit s
       executor: { type: "claude-code", metadata: {} },
     },
   });
-  assert.match(allowed, / · claude 5h:ok wk:\? 5h-reset:[^·]+ · /);
-  assert.doesNotMatch(allowed, / · 5h:0%/);
+  // The unreported weekly window is omitted rather than shown as "?".
+  assert.match(allowed, /\nclaude 5h: ok \((?:1h00|59m)\)\n/);
+  assert.doesNotMatch(allowed, /wk:|5h: 0%/);
 
   const expired = appendWhatsAppDebugFooter("Done", {
     env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1" },
@@ -163,9 +167,9 @@ test("WhatsApp Claude footer replaces stale or unavailable usage with explicit s
       executor: { type: "claude-code", metadata: {} },
     },
   });
-  assert.match(expired, / · claude 5h:\? wk:\? · /);
-  assert.doesNotMatch(expired, /5h-reset:|wk-reset:/);
-  assert.doesNotMatch(expired, / · 5h:0%/);
+  assert.match(expired, /\nclaude: no data\n/);
+  assert.doesNotMatch(expired, /\(\d+[dhm]/);
+  assert.doesNotMatch(expired, /5h: 0%/);
 });
 
 test("WhatsApp Claude footer validates percentages and classifies both reset windows", () => {
@@ -181,7 +185,12 @@ test("WhatsApp Claude footer validates percentages and classifies both reset win
       executor: { type: "claude-code", metadata: {} },
     },
   });
-  assert.match(final, / · claude 5h:0% wk:75% 5h-reset:25 Sept 12:20 UTC wk-reset:26 Sept 12:20 UTC · /);
+  // The 10080-minute primary window is weekly and the 300-minute secondary is
+  // the 5h window; the weekly reset is exactly one day after the 5h reset.
+  const windows = final.match(/\nclaude 5h: 0% \((\d+)d(\d+)h\) wk: 75% \((\d+)d(\d+)h\)\n/);
+  assert.ok(windows, final);
+  assert.equal(Number(windows[3]), Number(windows[1]) + 1);
+  assert.equal(windows[4], windows[2]);
 
   for (const used_percent of [-1, 101, "not-a-number"]) {
     const invalid = appendWhatsAppDebugFooter("Done", {
@@ -193,7 +202,7 @@ test("WhatsApp Claude footer validates percentages and classifies both reset win
         executor: { type: "claude-code", metadata: {} },
       },
     });
-    assert.match(invalid, / · claude 5h:\? wk:\? · /);
+    assert.match(invalid, /\nclaude: no data\n/);
   }
 });
 

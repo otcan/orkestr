@@ -148,30 +148,31 @@ test("provider quota enrichment is transient, bounded and fails open", async () 
   assert.equal(await withWhatsAppProviderQuota(null), null);
 });
 
-test("Codex footer always shows both providers, Codex controls and a switch hint to Claude", () => {
+test("Codex footer always shows both providers with reset countdowns and leaves commands to /help", () => {
   const thread = {
     ...codexThread({ codexRateLimitsObservedAt: undefined }),
     whatsAppDebugProviderQuota: providerQuotaFromThreads([claudeThread({ claudeRateLimitsObservedAt: iso(Date.now() - 60_000) })]),
   };
   const text = appendWhatsAppDebugFooter("Done", { env: footerEnv, message: { source: "codex-app-server" }, thread });
-  assert.match(text, /\n\ndbg: m:gpt-test\/h · agent:codex · rt:api · msg:\*final\* · codex 5h:62% wk:80% 5h-reset:[^·]+ wk-reset:[^·]+ · claude 5h:41% wk:77%(?: 5h-reset:[^·]+)?(?: wk-reset:[^·]+)? · q:0 · /);
-  assert.match(text, / · mode-switch:\/plan · rt-switch:\/switch-terminal · switch:\/claude$/);
+  assert.match(text, /\n\ndbg: codex\/gpt-test\/h · rt:api · msg:\*final\*\ncodex 5h: 62% \(\d+d\d+h\) wk: 80% \(\d+d\d+h\)\nclaude 5h: 41% \(\d+d\d+h\) wk: 77% \(\d+d\d+h\)\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  assert.doesNotMatch(text, /mode-switch:|rt-switch:|switch:\/claude|model:\/model|effort:\/effort|fast:\/fast/);
   assert.equal(stripWhatsAppDebugFooter(text), "Done");
 });
 
-test("Claude footer always shows both providers, hides Codex controls and hints the switch to Codex", () => {
+test("Claude footer always shows both providers, hides Codex controls and marks stale Codex quota", () => {
   const staleCodex = codexThread({ codexRateLimitsObservedAt: iso(Date.now() - 7 * hour) });
   const thread = { ...claudeThread({ claudeRateLimitsObservedAt: undefined }), whatsAppDebugProviderQuota: providerQuotaFromThreads([staleCodex]) };
   const text = appendWhatsAppDebugFooter("Done", { env: footerEnv, message: { source: "claude-code" }, thread });
-  assert.match(text, /\n\ndbg: m:sonnet\/m · agent:claude · rt:claude · msg:\*final\* · codex 5h:\d+% wk:\d+%(?: 5h-reset:[^·]+)?(?: wk-reset:[^·]+)? \(stale\) · claude 5h:41% wk:77% 5h-reset:[^·]+ wk-reset:[^·]+ · q:0 · /);
-  assert.match(text, / · help:\/help · switch:\/codex$/);
-  assert.doesNotMatch(text, /fast:|mode-switch:|rt-switch:|model:\/model/);
+  assert.match(text, /\n\ndbg: claude\/sonnet\/m · rt:claude · msg:\*final\*\ncodex 5h: \d+% \(\d+d\d+h\) wk: \d+% \(\d+d\d+h\) \(stale\)\nclaude 5h: 41% \(\d+d\d+h\) wk: 77% \(\d+d\d+h\)\nq:0 · /);
+  assert.match(text, / · help:\/help$/);
+  assert.doesNotMatch(text, /fast:|mode:|mode-switch:|rt-switch:|switch:\/codex|model:\/model/);
+  assert.equal(stripWhatsAppDebugFooter(text), "Done");
 });
 
-test("footer renders unknown quota as ? for both providers without a snapshot", () => {
+test("footer renders missing quota as no data for both providers without a snapshot", () => {
   const thread = { runtimeKind: "claude-code", executor: { type: "claude-code", metadata: {} } };
   const text = appendWhatsAppDebugFooter("Done", { env: footerEnv, message: { source: "claude-code" }, thread });
-  assert.match(text, / · codex 5h:\? wk:\? · claude 5h:\? wk:\? · /);
+  assert.match(text, /\ncodex: no data\nclaude: no data\nq:0 · /);
 });
 
 test("a reading from an already-rolled-over window never beats the current window", () => {

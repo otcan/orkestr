@@ -324,28 +324,29 @@ async function writeTestDeliveryClaim(home, { accountId, chatId, textKey, claime
   return { claimKey, filePath };
 }
 
-function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+", queueReason = "", runtime = "", fiveHour = "", weekly = "", modelControls = false } = {}) {
+function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+", queueReason = "", runtime = "", fiveHour = "", weekly = "" } = {}) {
   const escapedModel = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const quotaWindow = (label, value) => value ? ` ${label}: ${value}(?: \\([0-9dhm]+\\))?` : "";
+  const codexLine = fiveHour || weekly
+    ? `codex${quotaWindow("5h", fiveHour)}${quotaWindow("wk", weekly)}(?: \\(limited\\))?(?: \\(stale\\))?`
+    : "codex(?:: no data| [^\\n]+)";
   const queuePart = queueReason
-    ? ` · queue:\\d+ · reason:${queueReason}`
-    : " · q:\\d+";
-  const runtimeSwitch = runtime
-    ? ` · rt-switch:${runtime === "api" ? "/switch-terminal" : "/switch-api"}`
-    : "(?: · rt-switch:/switch-[a-z-]+)?";
+    ? `queue:\\d+ · reason:${queueReason}`
+    : "q:\\d+";
   const pattern = new RegExp(
-    `\\n\\ndbg: m:${model === "[^·\\n]+" ? model : escapedModel} · agent:codex` +
-      (mode ? ` · mode:${mode}` : "") +
+    `\\n\\ndbg: codex/${model === "[^·\\n]+" ? model : escapedModel}` +
       (runtime ? ` · rt:${runtime}` : "(?: · rt:[a-z-]+)?") +
+      (mode ? ` · mode:${mode}` : "") +
+      "(?: · fast:on)?" +
       ` · msg:\\*${messageType}\\*` +
-      ` · codex 5h:${fiveHour || "(?:\\d+%|\\?)"} wk:${weekly || "(?:\\d+%|\\?)"}[^·\\n]*` +
-      " · claude 5h:[^ ·]+ wk:[^·\\n]+" +
-      `${queuePart} · load:\\d+% · api:\\d+% · help:/help` +
-      (modelControls ? " · model:/model · effort:/effort · fast:/fast" : "") +
-      (mode === "plan" ? " · mode-switch:/code" : " · mode-switch:/plan") +
-      runtimeSwitch +
-      " · switch:/claude$",
+      `\\n${codexLine}` +
+      "\\nclaude(?:: no data| [^\\n]+)" +
+      `\\n${queuePart} · load:\\d+% · api:\\d+% · help:/help$`,
   );
   assert.match(text, pattern);
+  if (!mode) assert.doesNotMatch(text, / · mode:plan/);
+  // Command hints moved to /help; the footer no longer lists them.
+  assert.doesNotMatch(text, /model:\/model|effort:\/effort|fast:\/fast|mode-switch:|rt-switch:|switch:\/(?:claude|codex)/);
 }
 
 function externalBridgeEnv(home, extra = {}) {
@@ -13342,8 +13343,9 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
   assert.equal(stripDebugFooter(calls[0].body.text), "Milestone: routing check started.");
   assert.match(
     calls[0].body.text,
-    /\n\ndbg: m:gpt-5\.5\/xh · agent:codex · mode:plan · msg:\*update\* · codex 5h:88% wk:66%[^·\n]* · claude 5h:\? wk:\? · q:0 · load:\d+% · api:\d+% · help:\/help · mode-switch:\/code · switch:\/claude$/,
+    /\n\ndbg: codex\/gpt-5\.5\/xh · mode:plan · msg:\*update\*\ncodex 5h: 88% wk: 66%\nclaude: no data\nq:0 · load:\d+% · api:\d+% · help:\/help$/,
   );
+  assert.doesNotMatch(calls[0].body.text, /mode-switch:|switch:\/claude/);
 });
 
 test("whatsapp delivery appends debug footer for app-server final replies", async () => {
@@ -13431,7 +13433,9 @@ test("whatsapp debug footer classifies a single weekly Codex limit by window", a
   });
 
   assert.equal(delivery.delivered.length, 1);
-  assert.match(calls[0].body.text, / · codex 5h:\? wk:96% · /);
+  // Codex reports no 5h window here, so it is omitted instead of shown as "?".
+  assert.match(calls[0].body.text, /\ncodex wk: 96%\n/);
+  assert.doesNotMatch(calls[0].body.text, /codex 5h:/);
 });
 
 test("whatsapp debug footer reads live Codex rate limits when thread metadata is stale", async (t) => {
@@ -13506,7 +13510,7 @@ test("whatsapp debug footer reads live Codex rate limits when thread metadata is
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(stripDebugFooter(calls[0].body.text), "Final with live limits.");
-  assertDebugFooter(calls[0].body.text, { messageType: "final", model: "gpt-5.5/h", runtime: "api", fiveHour: "91%", weekly: "17%", modelControls: true });
+  assertDebugFooter(calls[0].body.text, { messageType: "final", model: "gpt-5.5/h", runtime: "api", fiveHour: "91%", weekly: "17%" });
 });
 
 test("whatsapp debug footer can be disabled", async () => {
@@ -13627,7 +13631,6 @@ test("whatsapp debug footer ignores stale stored plan mode when live mode is cod
   assert.equal(stripDebugFooter(calls[0].body.text), "Milestone: checking it.");
   assertDebugFooter(calls[0].body.text, { messageType: "update", model: "gpt-5.5/xh" });
   assert.doesNotMatch(calls[0].body.text, /mode:plan/);
-  assert.doesNotMatch(calls[0].body.text, /mode-switch:\/code/);
 });
 
 test("whatsapp inbound suppresses duplicate active thread inputs by content", async () => {
