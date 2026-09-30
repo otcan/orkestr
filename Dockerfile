@@ -3,10 +3,11 @@ FROM node:22-bookworm-slim AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+# Lifecycle scripts need the repository scripts, which are copied below.
+RUN npm ci --ignore-scripts --no-audit --no-fund
 
 COPY . .
-RUN npm run build
+RUN node scripts/patch-whatsapp-media-id.mjs && npm run build
 
 FROM node:22-bookworm-slim
 
@@ -67,6 +68,14 @@ COPY --from=build /app/apps ./apps
 COPY --from=build /app/packages ./packages
 COPY --from=build /app/scripts ./scripts
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
+# Production dependencies are installed with --ignore-scripts; apply the
+# pinned whatsapp-web.js media-id patch that postinstall would have applied.
+RUN node scripts/patch-whatsapp-media-id.mjs
+
+# `orkestr` on PATH, so `docker exec orkestr orkestr connect approve <code>`
+# (shown by the pairing page) works inside the container.
+RUN printf '#!/bin/sh\nexec node /app/apps/cli/bin/orkestr-oss.js "$@"\n' > /usr/local/bin/orkestr \
+  && chmod +x /usr/local/bin/orkestr
 
 RUN chmod +x /app/docker-entrypoint.sh /app/scripts/browserctl.mjs \
   && mkdir -p /data/codex \
