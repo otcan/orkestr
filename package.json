@@ -102,6 +102,9 @@
     "tar": "7.5.22",
     "whatsapp-web.js": {
       "puppeteer": "25.9.0"
+    },
+    "@angular/build": {
+      "undici": "7.29.1"
     }
   }
 }
