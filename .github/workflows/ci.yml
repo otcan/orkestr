@@ -6,6 +6,7 @@ on:
   merge_group:
   push:
     branches: [main]
+    tags: ['v*']
   schedule:
     - cron: '17 5 * * *'
 
@@ -304,3 +305,85 @@ jobs:
           path: dist
       - run: npm run smoke
       - run: npm run demo:coding-agent
+
+  image:
+    # Unprivileged: builds and smoke-tests the runtime image from the candidate
+    # tree with the default read-only token, then hands it off as an artifact.
+    needs: dependency-policy
+    if: ${{ github.event_name != 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Build runtime image
+        run: docker build --pull --tag orkestr-ci:candidate .
+      - name: Smoke runtime image
+        run: |
+          set -euo pipefail
+          docker run --detach --name orkestr-smoke --publish 127.0.0.1:3000:3000 orkestr-ci:candidate
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:3000/api/health >/dev/null; then ok=1; break; fi
+            sleep 2
+          done
+          if [ "$ok" != 1 ]; then docker logs orkestr-smoke; exit 1; fi
+          docker exec orkestr-smoke orkestr --help >/dev/null
+          docker stop orkestr-smoke
+      - name: Export runtime image
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/runtime-image"
+          docker save orkestr-ci:candidate | gzip > "$RUNNER_TEMP/runtime-image/orkestr-image.tar.gz"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: runtime-image
+          path: ${{ runner.temp }}/runtime-image/orkestr-image.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
+  image-publish:
+    # Publishes the already-built, smoke-tested image to GHCR for trusted
+    # main/v* refs only. No checkout and no npm/npx/node: this job never
+    # executes candidate code; it only loads, tags and pushes the artifact.
+    needs: [image, test, smoke, provenance, secret-policy, syntax]
+    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: runtime-image
+          path: ${{ runner.temp }}/runtime-image
+      - name: Load runtime image
+        run: docker load --input "$RUNNER_TEMP/runtime-image/orkestr-image.tar.gz"
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Push main image
+        if: ${{ github.ref == 'refs/heads/main' }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker tag orkestr-ci:candidate "$IMAGE:main"
+          docker tag orkestr-ci:candidate "$IMAGE:sha-${GITHUB_SHA::12}"
+          docker push "$IMAGE:main"
+          docker push "$IMAGE:sha-${GITHUB_SHA::12}"
+      - name: Push release image
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9A-Za-z._-]+$ ]]
+          docker tag orkestr-ci:candidate "$IMAGE:$GITHUB_REF_NAME"
+          docker tag orkestr-ci:candidate "$IMAGE:latest"
+          docker push "$IMAGE:$GITHUB_REF_NAME"
+          docker push "$IMAGE:latest"
+      - name: Log out of GHCR
+        if: ${{ always() }}
+        run: docker logout ghcr.io

@@ -28,6 +28,7 @@ test("OSS demo GO path exposes Docker, Helm, and k3s smoke contracts", async () 
   assert.match(dockerfile, /cloudflared --version/);
   assert.match(entrypoint, /CODEX_HOME="\$\{CODEX_HOME:-\$ORKESTR_HOME\/codex\}"/);
   assert.match(chart, /name: orkestr/);
+  assert.match(values, /repository: ghcr\.io\/otcan\/orkestr\n/);
   assert.match(values, /ORKESTR_PORT: "3000"/);
   assert.match(values, /whatsappNumber: ""/);
   assert.doesNotMatch(values, /instanceId: ""/);

@@ -37,6 +37,43 @@ function attestationJob(job) {
   requirePolicy((job.steps || []).every(step => !/\bnpm\b|\bnpx\b/.test(String(step?.run || ""))), "workflow_attestation_candidate_code");
   return true;
 }
+// Job-level registry publish permissions: exactly contents:read + packages:write,
+// only for trusted main/v* refs. The job may only download the image artifact
+// built by an unprivileged job (same run, fixed inputs) and run plain docker
+// load/login/tag/push: no checkout, no npm/npx/node, no custom shell, no command
+// substitution or redirection, so no candidate code ever runs with the token.
+const publishCondition = "${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && " +
+  "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}";
+const publishJobActions = new Set(["actions/download-artifact"]);
+const publishDownloadInputs = new Set(["name", "path"]);
+const publishCommands = new Set(["docker", "echo", "set", "test", "[["]);
+const publishDockerCommands = new Set(["load", "login", "logout", "tag", "push"]);
+export function publishRunAllowed(run) {
+  if (typeof run !== "string" || /[`<>]|\$\(|\b(?:npm|npx|node|eval|exec|source)\b/.test(run)) return false;
+  return run.split(/\n|&&|\|\||;|\|/).every(segment => {
+    const words = segment.trim().split(/\s+/).filter(Boolean);
+    while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words.shift();
+    if (!words.length || words[0].startsWith("#")) return true;
+    if (!publishCommands.has(words[0])) return false;
+    return words[0] !== "docker" || publishDockerCommands.has(words[1]);
+  });
+}
+function publishJob(job) {
+  const value = job.permissions;
+  if (!record(value) || !("packages" in value)) return false;
+  requirePolicy(Object.keys(value).sort().join(",") === "contents,packages" && value.contents === "read" &&
+    value.packages === "write", "workflow_permissions");
+  requirePolicy(job.if === publishCondition, "workflow_publish_event");
+  requirePolicy(!("defaults" in job), "workflow_publish_shell");
+  for (const step of job.steps || []) {
+    requirePolicy(record(step) && !("shell" in step), "workflow_publish_shell");
+    if (typeof step.uses === "string") {
+      requirePolicy(publishJobActions.has(step.uses.split("@")[0]), "workflow_publish_actions");
+      requirePolicy(Object.keys(step.with || {}).every(key => publishDownloadInputs.has(key)), "workflow_publish_actions");
+    } else requirePolicy(publishRunAllowed(step.run), "workflow_publish_candidate_code");
+  }
+  return true;
+}
 
 export function validateWorkflow(source) {
   requirePolicy(typeof source === "string" && Buffer.byteLength(source) <= 256 * 1024, "workflow_size");
@@ -53,7 +90,7 @@ export function validateWorkflow(source) {
   for (const job of Object.values(workflow.jobs)) {
     requirePolicy(record(job) && job["runs-on"] === "ubuntu-latest", "workflow_runner");
     requirePolicy(!["uses", "secrets", "container", "services", "environment"].some(key => key in job), "workflow_privileged_job");
-    if ("permissions" in job && !attestationJob(job)) permissions(job.permissions);
+    if ("permissions" in job && !attestationJob(job) && !publishJob(job)) permissions(job.permissions);
     requirePolicy(!job["continue-on-error"], "workflow_ignored_failure");
     requirePolicy(Array.isArray(job.steps) && job.steps.length > 0, "workflow_steps");
     for (const step of job.steps) {
