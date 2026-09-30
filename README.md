@@ -105,7 +105,7 @@ Tailscale, Caddy/TLS, or a VPN.
 ### Docker
 
 ```bash
-docker run -p 3000:3000 -v orkestr-data:/data orkestr/orkestr:latest
+docker run --name orkestr -p 3000:3000 -v orkestr-data:/data ghcr.io/otcan/orkestr:latest
 ```
 
 Then open:
@@ -113,6 +113,15 @@ Then open:
 ```text
 http://127.0.0.1:3000/setup
 ```
+
+The setup page shows a pairing code for this browser. Approve it from the host:
+
+```bash
+docker exec orkestr orkestr connect approve <code shown on the page>
+```
+
+Images are published to `ghcr.io/otcan/orkestr`: `latest` and `vX.Y.Z` for
+releases, `main` and `sha-<commit>` for the current `main` branch.
 
 The container stores Orkestr state in `/data`, including workspaces, browser
 profiles, secrets, and `CODEX_HOME=/data/codex`.

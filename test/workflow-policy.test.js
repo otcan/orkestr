@@ -3,7 +3,7 @@ import test from "node:test";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { validateWorkflow, actionPins, checkWorkflows } from "../scripts/security/workflow-policy.mjs";
+import { validateWorkflow, actionPins, checkWorkflows, publishRunAllowed } from "../scripts/security/workflow-policy.mjs";
 
 const fixture = `on: [pull_request, push]
 permissions: {contents: read}
@@ -62,6 +62,90 @@ for (const [name, before, after] of [
   ["OIDC without attestation action", `      - uses: actions/attest-build-provenance@${actionPins["actions/attest-build-provenance"]}\n        with: {subject-checksums: subjects.sha256}\n`, ""],
   ["unpinned attestation action", actionPins["actions/attest-build-provenance"], "v4"],
 ]) test(`rejects ${name}`, () => assert.throws(() => validateWorkflow(attestFixture.replace(before, after)), /workflow_/));
+
+const publishGate = "${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}";
+const publishFixture = `on: [pull_request, push]
+permissions: {contents: read}
+jobs:
+  image-publish:
+    if: ${publishGate}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@${actionPins["actions/download-artifact"]}
+        with: {name: runtime-image, path: image}
+      - run: docker load --input image/orkestr-image.tar.gz
+      - env:
+          GHCR_TOKEN: \${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/\${GITHUB_REPOSITORY,,}"
+          docker tag orkestr-ci:candidate "$IMAGE:main"
+          docker push "$IMAGE:main"
+`;
+test("trusted-ref publish job may hold packages write permission", () => assert.deepEqual(validateWorkflow(publishFixture), { jobs: 1, actions: 1 }));
+for (const [name, before, after] of [
+  ["publish job running npm", "docker load --input", "npm ci && docker load --input"],
+  ["publish job running npx", "docker load --input", "npx something; docker load --input"],
+  ["publish job running node", "docker load --input", "node build.js && docker load --input"],
+  ["publish job running a non-docker command", "docker push \"$IMAGE:main\"", "curl -X POST https://example.invalid"],
+  ["publish job running a candidate container", "docker push \"$IMAGE:main\"", "docker run orkestr-ci:candidate"],
+  ["publish job running a candidate build", "docker push \"$IMAGE:main\"", "docker build ."],
+  ["publish job command substitution", "docker push \"$IMAGE:main\"", "docker push \"$(cat tag)\""],
+  ["publish job redirection", "docker push \"$IMAGE:main\"", "echo x > run.sh"],
+  ["publish job custom shell", "      - run: docker load", "      - shell: python {0}\n        run: docker load"],
+  ["publish on pull requests", "github.event_name == 'push' || ", "github.event_name == 'pull_request' || "],
+  ["publish without event gate", `    if: ${publishGate}\n`, ""],
+  ["publish from any branch", "github.ref == 'refs/heads/main'", "startsWith(github.ref, 'refs/heads/')"],
+  ["publish with extra permissions", "      packages: write", "      packages: write\n      id-token: write"],
+  ["publish with contents write", "      contents: read\n      packages", "      contents: write\n      packages"],
+  ["publish job checking out candidate code", "    steps:\n", `    steps:\n      - uses: actions/checkout@${actionPins["actions/checkout"]}\n        with: {persist-credentials: false}\n`],
+  ["publish artifact from another run", "path: image}", "path: image, run-id: '1', github-token: x}"],
+  ["unpinned publish action", actionPins["actions/download-artifact"], "v4"],
+  ["publish secret expression", "${{ github.token }}", "${{ secrets.GHCR }}"],
+  ["packages write on an ordinary job", "      packages: write\n    steps:", "      packages: write\n    steps:\n      - run: npm test"],
+]) test(`rejects ${name}`, () => {
+  const source = publishFixture.replace(before, after);
+  assert.notEqual(source, publishFixture, `fixture replacement for ${name} did not apply`);
+  assert.throws(() => validateWorkflow(source), /^Error: workflow_(?!yaml)/);
+});
+test("packages write is rejected on a job that is not a publish job", () => assert.throws(() => validateWorkflow(fixture.replace("runs-on: ubuntu-latest", "runs-on: ubuntu-latest\n    permissions: {contents: read, packages: write}")), /workflow_/));
+test("publish run allowlist accepts docker/builtins only", () => {
+  assert.equal(publishRunAllowed("set -euo pipefail\n[[ \"$GITHUB_REF_NAME\" =~ ^v[0-9A-Za-z._-]+$ ]]\ndocker tag a b"), true);
+  for (const run of ["docker exec c sh", "sh -c 'docker push x'", "bash script.sh", "./publish.sh", "eval \"$X\"", undefined])
+    assert.equal(publishRunAllowed(run), false, String(run));
+});
+
+test("CI builds, smoke-tests and publishes the runtime image to GHCR only after all checks pass", async () => {
+  const source = await fs.readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const workflow = parse(source);
+  assert.deepEqual(workflow.on.push.tags, ["v*"]);
+  const image = workflow.jobs.image;
+  assert.equal(image.permissions, undefined);
+  const imageRuns = image.steps.map(step => step.run || "").join("\n");
+  assert.match(imageRuns, /docker build/);
+  assert.match(imageRuns, /\/api\/health/);
+  assert.match(imageRuns, /docker exec orkestr-smoke orkestr --help/);
+  assert.match(imageRuns, /docker save orkestr-ci:candidate \| gzip/);
+  const upload = image.steps.find(step => step.with?.name === "runtime-image");
+  assert.ok(upload.with["retention-days"] <= 7);
+  const publish = workflow.jobs["image-publish"];
+  assert.deepEqual(publish.permissions, { contents: "read", packages: "write" });
+  assert.equal(publish.if, publishGate);
+  for (const job of ["image", "test", "smoke", "provenance", "secret-policy", "syntax"]) assert.ok(publish.needs.includes(job), job);
+  assert.ok(publish.steps.every(step => !step.uses || step.uses.startsWith("actions/download-artifact@")));
+  const runs = publish.steps.map(step => step.run || "").join("\n");
+  assert.match(runs, /docker login ghcr\.io --username "\$GITHUB_ACTOR" --password-stdin/);
+  assert.match(runs, /:main"/);
+  assert.match(runs, /:sha-\$\{GITHUB_SHA::12\}"/);
+  assert.match(runs, /:\$GITHUB_REF_NAME"/);
+  assert.match(runs, /:latest"/);
+  assert.equal(publish.steps.find(step => step.name === "Push main image").if, "${{ github.ref == 'refs/heads/main' }}");
+  assert.equal(publish.steps.find(step => step.name === "Push release image").if, "${{ startsWith(github.ref, 'refs/tags/v') }}");
+});
 
 test("CI publishes a runtime content manifest and attests it from a trusted-event job", async () => {
   const workflow = parse(await fs.readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));

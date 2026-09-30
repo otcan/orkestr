@@ -1,5 +1,5 @@
 image:
-  repository: orkestr/orkestr
+  repository: ghcr.io/otcan/orkestr
   tag: latest
   pullPolicy: IfNotPresent
 

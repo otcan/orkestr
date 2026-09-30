@@ -18,7 +18,9 @@ test("public launch docs expose the minimum launch surface", async () => {
 
   assert.match(readme, /Why This Exists/);
   assert.match(readme, /Documentation Map/);
-  assert.match(readme, /docker run -p 3000:3000 -v orkestr-data:\/data orkestr\/orkestr:latest/);
+  assert.match(readme, /docker run --name orkestr -p 3000:3000 -v orkestr-data:\/data ghcr\.io\/otcan\/orkestr:latest/);
+  assert.match(readme, /docker exec orkestr orkestr connect approve <code shown on the page>/);
+  assert.doesNotMatch(readme, /orkestr\/orkestr:latest/);
   assert.match(readme, /helm install orkestr \.\/charts\/orkestr/);
   assert.match(readme, /curl -fsSL/);
   assert.match(readme, /docs\/user-guide\.md/);
