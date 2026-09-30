@@ -336,7 +336,7 @@ function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^
     `\\n\\ndbg: m:${model === "[^·\\n]+" ? model : escapedModel} · agent:codex` +
       (mode ? ` · mode:${mode}` : "") +
       (runtime ? ` · rt:${runtime}` : "(?: · rt:[a-z-]+)?") +
-      ` · msg:${messageType}` +
+      ` · msg:\\*${messageType}\\*` +
       ` · codex 5h:${fiveHour || "(?:\\d+%|\\?)"} wk:${weekly || "(?:\\d+%|\\?)"}[^·\\n]*` +
       " · claude 5h:[^ ·]+ wk:[^·\\n]+" +
       `${queuePart} · load:\\d+% · api:\\d+% · help:/help` +
@@ -13342,7 +13342,7 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
   assert.equal(stripDebugFooter(calls[0].body.text), "Milestone: routing check started.");
   assert.match(
     calls[0].body.text,
-    /\n\ndbg: m:gpt-5\.5\/xh · agent:codex · mode:plan · msg:update · codex 5h:88% wk:66%[^·\n]* · claude 5h:\? wk:\? · q:0 · load:\d+% · api:\d+% · help:\/help · mode-switch:\/code · switch:\/claude$/,
+    /\n\ndbg: m:gpt-5\.5\/xh · agent:codex · mode:plan · msg:\*update\* · codex 5h:88% wk:66%[^·\n]* · claude 5h:\? wk:\? · q:0 · load:\d+% · api:\d+% · help:\/help · mode-switch:\/code · switch:\/claude$/,
   );
 });
 

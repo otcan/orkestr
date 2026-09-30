@@ -318,7 +318,8 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
     ...(!isClaude && codexFastDebugValue(message, thread) ? ["fast:on"] : []),
     ...(!isClaude && mode ? [`mode:${mode}`] : []),
     ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),
-    `msg:${footerMessageType(deliveryType)}`,
+    // WhatsApp renders *text* bold, so the message type stands out.
+    `msg:*${footerMessageType(deliveryType)}*`,
     ...dualProviderQuotaSegments(thread, env),
     ...(queueNotice
       ? [`queue:${queueNoticeDebugCount(messages, message)}`, `reason:${queueNoticeDebugReason(message)}`]

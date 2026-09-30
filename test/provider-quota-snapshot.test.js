@@ -154,7 +154,7 @@ test("Codex footer always shows both providers, Codex controls and a switch hint
     whatsAppDebugProviderQuota: providerQuotaFromThreads([claudeThread({ claudeRateLimitsObservedAt: iso(Date.now() - 60_000) })]),
   };
   const text = appendWhatsAppDebugFooter("Done", { env: footerEnv, message: { source: "codex-app-server" }, thread });
-  assert.match(text, /\n\ndbg: m:gpt-test\/h · agent:codex · rt:api · msg:final · codex 5h:62% wk:80% 5h-reset:[^·]+ wk-reset:[^·]+ · claude 5h:41% wk:77%(?: 5h-reset:[^·]+)?(?: wk-reset:[^·]+)? · q:0 · /);
+  assert.match(text, /\n\ndbg: m:gpt-test\/h · agent:codex · rt:api · msg:\*final\* · codex 5h:62% wk:80% 5h-reset:[^·]+ wk-reset:[^·]+ · claude 5h:41% wk:77%(?: 5h-reset:[^·]+)?(?: wk-reset:[^·]+)? · q:0 · /);
   assert.match(text, / · mode-switch:\/plan · rt-switch:\/switch-terminal · switch:\/claude$/);
   assert.equal(stripWhatsAppDebugFooter(text), "Done");
 });
@@ -163,7 +163,7 @@ test("Claude footer always shows both providers, hides Codex controls and hints 
   const staleCodex = codexThread({ codexRateLimitsObservedAt: iso(Date.now() - 7 * hour) });
   const thread = { ...claudeThread({ claudeRateLimitsObservedAt: undefined }), whatsAppDebugProviderQuota: providerQuotaFromThreads([staleCodex]) };
   const text = appendWhatsAppDebugFooter("Done", { env: footerEnv, message: { source: "claude-code" }, thread });
-  assert.match(text, /\n\ndbg: m:sonnet\/m · agent:claude · rt:claude · msg:final · codex 5h:\d+% wk:\d+%(?: 5h-reset:[^·]+)?(?: wk-reset:[^·]+)? \(stale\) · claude 5h:41% wk:77% 5h-reset:[^·]+ wk-reset:[^·]+ · q:0 · /);
+  assert.match(text, /\n\ndbg: m:sonnet\/m · agent:claude · rt:claude · msg:\*final\* · codex 5h:\d+% wk:\d+%(?: 5h-reset:[^·]+)?(?: wk-reset:[^·]+)? \(stale\) · claude 5h:41% wk:77% 5h-reset:[^·]+ wk-reset:[^·]+ · q:0 · /);
   assert.match(text, / · help:\/help · switch:\/codex$/);
   assert.doesNotMatch(text, /fast:|mode-switch:|rt-switch:|model:\/model/);
 });

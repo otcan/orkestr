@@ -81,7 +81,7 @@ test("WhatsApp debug footer is gated and marks progress as update", () => {
   assert.match(enabled, /m:gpt-test/);
   assert.match(enabled, /mode:plan/);
   assert.match(enabled, /rt:tmux/);
-  assert.match(enabled, /msg:update/);
+  assert.match(enabled, /msg:\*update\*/);
   assert.match(enabled, /mode-switch:\/code/);
   assert.match(enabled, /rt-switch:\/switch-api/);
 
@@ -113,7 +113,7 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
   });
 
-  assert.match(final, /^Done\n\ndbg: m:sonnet\/h · agent:claude · rt:claude · msg:final · codex 5h:\? wk:\? · claude 5h:80% wk:65% · q:0 · /);
+  assert.match(final, /^Done\n\ndbg: m:sonnet\/h · agent:claude · rt:claude · msg:\*final\* · codex 5h:\? wk:\? · claude 5h:80% wk:65% · q:0 · /);
   assert.match(final, / · switch:\/codex$/);
   assert.doesNotMatch(final, /fast:|mode:|model:\/model|mode-switch:|rt-switch:|switch:\/claude/);
   assert.equal(stripWhatsAppDebugFooter(final), "Done");
@@ -125,7 +125,7 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
     messages: [],
   });
-  assert.match(waking, /^Waking this thread\.\n\ndbg: m:sonnet\/h · agent:claude · rt:claude · msg:update · codex 5h:\? wk:\? · claude 5h:80% wk:65% · queue:1 · reason:waking/);
+  assert.match(waking, /^Waking this thread\.\n\ndbg: m:sonnet\/h · agent:claude · rt:claude · msg:\*update\* · codex 5h:\? wk:\? · claude 5h:80% wk:65% · queue:1 · reason:waking/);
   assert.doesNotMatch(waking, /mode-switch:|rt-switch:/);
 });
 
