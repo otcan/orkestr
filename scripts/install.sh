@@ -722,6 +722,15 @@ sudo() {
     echo "Refusing to run sudo during a local macOS install." >&2
     return 1
   fi
+  # Minimal servers and containers often run as root without sudo installed.
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+    return
+  fi
+  if ! command -v sudo >/dev/null 2>&1; then
+    echo "Root is required for: $*. Re-run as root or install sudo." >&2
+    return 1
+  fi
   command sudo "$@"
 }
 
