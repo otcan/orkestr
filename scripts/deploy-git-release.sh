@@ -1593,6 +1593,19 @@ runtime_run_user() {
   echo "${user:-root}"
 }
 
+# Recursively chown the per-user runtime tree except each user's Claude Code
+# runtime (users/<id>/runtimes/claude-code). Claude runs as a dedicated
+# unprivileged user that owns those files; handing them to the service user in
+# the middle of a deploy broke the tools (temp and output files) of Claude
+# turns that were still running.
+chown_users_tree() {
+  local owner users_root
+  owner="$1"
+  users_root="$2"
+  [ -d "$users_root" ] || return 0
+  find "$users_root" -path "$users_root/*/runtimes/claude-code" -prune -o -exec chown -h "$owner" {} + 2>/dev/null || true
+}
+
 repair_runtime_ownership() {
   if [ "$(id -u)" -ne 0 ]; then
     return 0
@@ -1637,6 +1650,10 @@ repair_runtime_ownership() {
     "$runtime_home/watcher-alerts.json" \
     "$runtime_home/whatsapp.json"; do
     [ -e "$target" ] || continue
+    if [ "$target" = "$runtime_home/users" ]; then
+      chown_users_tree "$run_user:$run_group" "$target"
+      continue
+    fi
     chown -R "$run_user:$run_group" "$target" || true
   done
   mkdir -p "$codex_home"

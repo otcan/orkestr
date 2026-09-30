@@ -365,3 +365,26 @@ test("release manifest generator accepts an explicit display label override", as
   assert.equal(manifest.releaseLabel, "v0.1.0-alpha.27");
   assert.equal(manifest.buildId, "main-6fc115b12345");
 });
+
+test("deploy ownership repair never chowns users' Claude Code runtime trees", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const os = await import("node:os");
+  const script = await fs.readFile(path.join(process.cwd(), "scripts/deploy-git-release.sh"), "utf8");
+  const body = script.slice(script.indexOf("chown_users_tree() {"), script.indexOf("repair_runtime_ownership() {"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-chown-"));
+  const users = path.join(root, "users");
+  for (const file of ["admin/runtimes/claude-code/profile/tmp/claude-995/task.output", "admin/runtimes/codex/state.json", "admin/secrets/token.json"]) {
+    await fs.mkdir(path.dirname(path.join(users, file)), { recursive: true });
+    await fs.writeFile(path.join(users, file), "x");
+  }
+  const bin = path.join(root, "bin");
+  const log = path.join(root, "chown.log");
+  await fs.mkdir(bin);
+  await fs.writeFile(path.join(bin, "chown"), `#!/bin/sh\nfor a in "$@"; do echo "$a"; done >> "${log}"\n`, { mode: 0o755 });
+  execFileSync("bash", ["-c", `${body}\nchown_users_tree svc:svc "$1"`, "bash", users], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+  const touched = (await fs.readFile(log, "utf8")).split("\n").filter(Boolean);
+  assert.ok(touched.includes(path.join(users, "admin/runtimes/codex/state.json")));
+  assert.ok(touched.includes(path.join(users, "admin/secrets/token.json")));
+  assert.equal(touched.some((entry) => entry.includes("runtimes/claude-code")), false, touched.join("\n"));
+  await fs.rm(root, { recursive: true, force: true });
+});
