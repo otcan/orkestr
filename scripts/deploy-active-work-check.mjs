@@ -65,7 +65,19 @@ const restartSafeAppServerTransports = new Set(["proxy", "websocket"]);
 // A turn survives a UI service restart when it runs outside the service's
 // stdio: Codex app-server over websocket/proxy, or a detached Claude Code turn
 // (file-backed output that the restarted server reattaches to).
+// Queued, undelivered input is durable and survives a restart. A thread whose
+// only activity is queued input must not block a no-interrupt deploy: the
+// deploy drain itself defers delivery, so waiting on it would deadlock.
+function queuedInputOnly(thread = {}) {
+  const state = threadState(thread).toLowerCase();
+  return !thread.working && !thread.foregroundWorking && !thread.backgroundWork && !thread.typingActive &&
+    !String(thread.activeTurnId || thread.runtime?.activeTurnId || "").trim() &&
+    number(thread.runningCount) === 0 && number(thread.awaitingAckCount) === 0 &&
+    !["working", "processing", "running"].includes(state);
+}
+
 export function threadRestartSafe(thread = {}) {
+  if (queuedInputOnly(thread)) return true;
   const runtimeKind = (thread.runtimeKind !== undefined ? String(thread.runtimeKind) : threadRuntimeKind(thread)).toLowerCase();
   const appServer = (thread.codexAppServerTransport !== undefined ? String(thread.codexAppServerTransport) : threadCodexAppServerTransport(thread)).toLowerCase();
   if (runtimeKind === "codex-app-server" && restartSafeAppServerTransports.has(appServer)) return true;

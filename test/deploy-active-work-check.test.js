@@ -30,7 +30,7 @@ test("deploy active-work checker treats live and queued thread work as active", 
   assert.match(formatActiveThreads({ active }), /Working state=working/);
   assert.match(formatActiveThreads({ active }), /runtime=codex-app-server/);
   assert.match(formatActiveThreads({ active }), /appServer=proxy/);
-  assert.match(formatActiveThreads({ active }), /Queued state=ready pending=1/);
+  assert.match(formatActiveThreads({ active }), /Queued state=ready restart-safe pending=1/);
 });
 
 test("deploy active-work checker can ignore the invoking tmux pane only", () => {
@@ -125,4 +125,19 @@ test("the deployer's unsafe count honours restartSafe from the active work repor
   ] });
   const count = execFileSync("bash", ["-c", `${body}\nactive_thread_unsafe_count "$1"`, "bash", report], { encoding: "utf8" });
   assert.equal(count, "1");
+});
+
+test("threads with only queued input are restart-safe so the deploy drain cannot deadlock", () => {
+  const queued = { id: "q1", state: "waking", runtimeKind: "codex-app-server", pendingCount: 1, runningCount: 0, awaitingAckCount: 0 };
+  const running = { id: "r1", state: "waking", runtimeKind: "codex-app-server", pendingCount: 1, runningCount: 1 };
+  const awaiting = { id: "a1", state: "ready", runtimeKind: "codex-app-server", pendingCount: 0, awaitingAckCount: 1 };
+  const activeTurn = { id: "t1", state: "ready", runtimeKind: "codex-app-server", pendingCount: 1, activeTurnId: "turn-1" };
+  const working = { id: "w1", state: "working", runtimeKind: "codex-app-server", pendingCount: 1 };
+  assert.equal(threadRestartSafe(queued), true);
+  assert.equal(threadRestartSafe(running), false);
+  assert.equal(threadRestartSafe(awaiting), false);
+  assert.equal(threadRestartSafe(activeTurn), false);
+  assert.equal(threadRestartSafe(working), false);
+  const active = summarizeActiveThreads({ threads: [queued, running] });
+  assert.deepEqual(active.map((thread) => [thread.id, thread.restartSafe]), [["q1", true], ["r1", false]]);
 });
