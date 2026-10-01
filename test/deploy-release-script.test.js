@@ -170,6 +170,13 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /Environment=ORKESTR_CODEX_APP_SERVER_MODE=external/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-codex-app-server/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-codex-app-server/);
+  assert.match(script, /\/usr\/local\/bin\/orkestr-refresh-codex-app-server/);
+  assert.match(script, /write_codex_app_server_refresh_units/);
+  assert.match(script, /PathChanged=\$command_path/);
+  assert.match(script, /systemctl try-restart "\$\{service_name\}\.service"/);
+  assert.match(script, /systemctl enable --now "\$\{refresh_name\}\.path"/);
+  assert.doesNotMatch(script, /ORKESTR_CODEX_APP_SERVER_BINARY_POLL_SECONDS/);
+  assert.match(script, /KillMode=control-group/);
   assert.match(script, /workdir="\$deploy_root"/);
   assert.match(script, /write_codex_app_server_systemd_service 0/);
   assert.match(script, /codexAppServerTransport/);

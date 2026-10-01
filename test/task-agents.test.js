@@ -54,11 +54,13 @@ test("SRE task agents share the parent workspace without a worktree and narrow Y
   assert.equal(child.binding, null);
   assert.equal(child.codexSandbox, "read-only");
   assert.equal(child.codexApprovalPolicy, "never");
+  assert.equal(child.codexModel, null);
   assert.deepEqual(child.agentContextRefs, ["watcher logs", "release alpha.163"]);
   assert.equal(codexSandboxForThread(child, env), "read-only");
   const start = threadStartParams(child, env);
   assert.equal(start.sandbox, "read-only");
   assert.equal(start.approvalPolicy, "never");
+  assert.equal(start.model, "gpt-6-astra");
   assert.match(start.developerInstructions, /evidence-first investigation/i);
   assert.match(start.developerInstructions, /Operate read-only/i);
 
@@ -391,6 +393,7 @@ test("public task agent profiles do not expose developer instructions", () => {
   const profiles = listTaskAgentProfiles();
   assert.equal(profiles.length, 1);
   assert.equal(profiles[0].id, "sre_engineer");
+  assert.equal(profiles[0].modelRole, "demanding");
   assert.equal(Object.hasOwn(profiles[0], "developerInstructions"), false);
 });
 

@@ -20,7 +20,8 @@ import {
   updateThreadMessage,
 } from "./threads.js";
 import { defaultRuntimeSettings } from "./runtime-settings.js";
-import { taskAgentDeveloperInstructions } from "./task-agent-profiles.js";
+import { compatibleCodexReasoningEffort, defaultCodexModel, normalizeCodexModelRole } from "./codex-model-policy.js";
+import { taskAgentDeveloperInstructions, taskAgentModelRole } from "./task-agent-profiles.js";
 import { currentCodexGenerationId, resolveCurrentCodexGeneration } from "./codex-generation.js";
 
 export const appServerTransports = new Set(["app-server", "codex-app-server"]);
@@ -403,13 +404,32 @@ export function normalizeReasoningEffort(value) {
 }
 
 export function modelForThread(thread, env = process.env) {
-  if (threadUsesRestrictedCodexPolicy(thread, env)) return containedUserCodexModel();
+  if (threadUsesRestrictedCodexPolicy(thread, env)) return containedUserCodexModel(env);
+  const explicit = explicitlyConfiguredModelForThread(thread, env);
+  if (explicit) return explicit;
+  const role = codexModelRoleForThread(thread);
+  if (role !== "standard") return defaultCodexModel(role);
+  const configured = defaultRuntimeSettings(env).codex || {};
+  return normalizeCodexModel(configured.model) || defaultCodexModel(role);
+}
+
+export function explicitlyConfiguredModelForThread(thread, env = process.env) {
+  if (threadUsesRestrictedCodexPolicy(thread, env)) return normalizeCodexModel(env.ORKESTR_CONTAINED_CODEX_MODEL);
   return [
     thread.codexModel,
     thread.executor?.metadata?.codexModel,
-    process.env.ORKESTR_DEFAULT_CODEX_MODEL,
-    process.env.OPENAI_MODEL,
+    env.ORKESTR_DEFAULT_CODEX_MODEL,
+    env.OPENAI_MODEL,
   ].map(normalizeCodexModel).find(Boolean) || "";
+}
+
+export function codexModelRoleForThread(thread = {}) {
+  const explicitRole = clean(thread.codexModelRole || thread.executor?.metadata?.codexModelRole);
+  if (explicitRole) return normalizeCodexModelRole(explicitRole);
+  const taskRole = taskAgentModelRole(thread);
+  if (taskRole) return normalizeCodexModelRole(taskRole);
+  if (clean(thread.threadKind).toLowerCase() === "worker") return "lightweight";
+  return "standard";
 }
 
 export function effortForThread(thread, env = process.env) {
@@ -417,7 +437,7 @@ export function effortForThread(thread, env = process.env) {
   return [
     thread.codexReasoningEffort,
     thread.executor?.metadata?.codexReasoningEffort,
-    process.env.ORKESTR_DEFAULT_CODEX_REASONING,
+    env.ORKESTR_DEFAULT_CODEX_REASONING,
   ].map(normalizeReasoningEffort).find(Boolean) || "";
 }
 
@@ -497,7 +517,7 @@ export function turnStartParams(thread, message, env = process.env) {
   };
   if (mailboxTurnRestricted(message)) params.approvalPolicy = "never";
   const model = modelForThread(thread, env);
-  const effort = effortForThread(thread, env);
+  const effort = compatibleCodexReasoningEffort(model, effortForThread(thread, env));
   const serviceTier = serviceTierForThread(thread);
   if (model) params.model = model;
   if (effort) params.effort = effort;

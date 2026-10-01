@@ -61,7 +61,7 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.equal(plan.runtimeEnv.ORKESTR_JOBS_FIT_AGENT_CODEX_TIMEOUT_MS, "90000");
   assert.equal(plan.bootstrapProfilePath, "/etc/orkestr/tenant-bootstrap-profile.json");
   assert.equal(plan.bootstrapProfile.firstChat.name, "Alice Launch");
-  assert.equal(plan.bootstrapProfile.codex.model, "gpt-5.5");
+  assert.equal(plan.bootstrapProfile.codex.model, "gpt-6-sol");
   assert.equal(plan.bootstrapProfile.codex.reasoningEffort, "medium");
   assert.equal(plan.bootstrapProfile.policy.singleThreadLimit, true);
   assert.deepEqual(plan.bootstrapProfile.desks.map((desk) => desk.slug), ["linkedin"]);

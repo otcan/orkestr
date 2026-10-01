@@ -42,7 +42,7 @@ import {
   threadNeedsNativeCodexRuntimeMigration,
   threadUsesNativeCodexRuntime,
 } from "./runtime-codex-adapter.js";
-import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeReasoningEffort } from "./codex-app-server-common.js";
+import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeCodexServiceTier, normalizeReasoningEffort } from "./codex-app-server-common.js";
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
 import { threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { apiAgentRuntimeStatus, processApiAgentThreadInput, threadUsesApiAgent } from "./tenant-api-agent.js";
@@ -1220,8 +1220,29 @@ async function cachedRuntimeCodexThreadMetadata(threadOrId, env = process.env) {
   return value;
 }
 
-function codexMetadataUpdatePatch(thread = {}, codexMetadata = {}) {
-  const executorMetadata = { ...(thread?.executor?.metadata || {}), ...codexMetadata };
+export function codexMetadataUpdatePatch(thread = {}, codexMetadata = {}) {
+  const threadMetadata = thread?.executor?.metadata || {};
+  const topLevelUpdatedAt = String(thread?.codexModelUpdatedAt || "").trim();
+  const metadataUpdatedAt = String(threadMetadata.codexModelUpdatedAt || "").trim();
+  const configuredAt = topLevelUpdatedAt || metadataUpdatedAt;
+  const configuredSource = topLevelUpdatedAt ? thread : threadMetadata;
+  const configuredModel = normalizeCodexModel(configuredSource.codexModel);
+  const configuredEffort = normalizeReasoningEffort(configuredSource.codexReasoningEffort);
+  const configuredServiceTier = normalizeCodexServiceTier(configuredSource.codexServiceTier);
+  const resolvedMetadata = { ...codexMetadata };
+  if (configuredAt) {
+    if (configuredModel) resolvedMetadata.codexModel = configuredModel;
+    else delete resolvedMetadata.codexModel;
+    if (configuredEffort) resolvedMetadata.codexReasoningEffort = configuredEffort;
+    else delete resolvedMetadata.codexReasoningEffort;
+    if (configuredServiceTier) resolvedMetadata.codexServiceTier = configuredServiceTier;
+    else delete resolvedMetadata.codexServiceTier;
+    resolvedMetadata.codexModelUpdatedAt = configuredAt;
+  }
+  const executorMetadata = { ...threadMetadata, ...resolvedMetadata };
+  if (configuredAt && !configuredModel) delete executorMetadata.codexModel;
+  if (configuredAt && !configuredEffort) delete executorMetadata.codexReasoningEffort;
+  if (configuredAt && !configuredServiceTier) delete executorMetadata.codexServiceTier;
   if (codexMetadata.codexRolloutPath && codexMetadata.codexThreadId) {
     executorMetadata.codexRolloutGeneration = codexMetadata.codexThreadId;
   }
@@ -1230,15 +1251,22 @@ function codexMetadataUpdatePatch(thread = {}, codexMetadata = {}) {
   const provider = String(executorMetadata.codexModelProvider || "").trim();
   if (provider.startsWith("/") || provider.toLowerCase().endsWith(".jsonl")) delete executorMetadata.codexModelProvider;
   const patch = {
-    ...codexMetadata,
+    ...resolvedMetadata,
     executor: {
       ...(thread?.executor || {}),
       codexThreadId: codexMetadata.codexThreadId || thread?.executor?.codexThreadId || "",
       metadata: executorMetadata,
     },
   };
-  if (!codexMetadata.codexModel && thread?.codexModel && !normalizeCodexModel(thread.codexModel)) patch.codexModel = null;
-  if (!codexMetadata.codexReasoningEffort && thread?.codexReasoningEffort && !normalizeReasoningEffort(thread.codexReasoningEffort)) patch.codexReasoningEffort = null;
+  if (configuredAt) {
+    patch.codexModel = configuredModel || null;
+    patch.codexReasoningEffort = configuredEffort || null;
+    patch.codexServiceTier = configuredServiceTier || null;
+    patch.codexModelUpdatedAt = configuredAt;
+  } else {
+    if (!codexMetadata.codexModel && thread?.codexModel && !normalizeCodexModel(thread.codexModel)) patch.codexModel = null;
+    if (!codexMetadata.codexReasoningEffort && thread?.codexReasoningEffort && !normalizeReasoningEffort(thread.codexReasoningEffort)) patch.codexReasoningEffort = null;
+  }
   const threadProvider = String(thread?.codexModelProvider || "").trim();
   if (!codexMetadata.codexModelProvider && threadProvider && (threadProvider.startsWith("/") || threadProvider.toLowerCase().endsWith(".jsonl"))) {
     patch.codexModelProvider = null;

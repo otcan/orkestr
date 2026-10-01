@@ -853,16 +853,31 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     shouldRefreshMetadata,
     preloadedLiveCodexMetadata,
   );
+  const storedExecutorMetadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object"
+    ? thread.executor.metadata
+    : {};
+  const topLevelSettingsAt = String(thread?.codexModelUpdatedAt || "").trim();
+  const executorSettingsAt = String(storedExecutorMetadata.codexModelUpdatedAt || "").trim();
+  const explicitSettingsAt = topLevelSettingsAt || executorSettingsAt;
+  const explicitSettingsSource = topLevelSettingsAt ? thread : storedExecutorMetadata;
+  const explicitCodexSettings = explicitSettingsAt ? {
+    codexModel: normalizeCodexModel(explicitSettingsSource.codexModel) || null,
+    codexReasoningEffort: normalizeReasoningEffort(explicitSettingsSource.codexReasoningEffort) || null,
+    codexServiceTier: normalizeCodexServiceTier(explicitSettingsSource.codexServiceTier) || null,
+    codexModelUpdatedAt: explicitSettingsAt,
+  } : {};
   const orderedMessages = chronologicalMessages(messages);
   const codexThread = {
     ...thread,
     ...liveCodexMetadata,
+    ...explicitCodexSettings,
     executor: {
       ...(thread.executor || {}),
       codexThreadId: liveCodexMetadata.codexThreadId || thread.executor?.codexThreadId || "",
       metadata: {
-        ...(thread.executor?.metadata || {}),
+        ...storedExecutorMetadata,
         ...liveCodexMetadata,
+        ...explicitCodexSettings,
       },
     },
   };

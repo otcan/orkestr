@@ -236,7 +236,7 @@ test("tenant VM registry API is admin-only and returns public-safe records", asy
     assert.equal(provisioned.tenantVm.id, "alice-tenant");
     assert.equal(provisioned.namespace, "tenant-a");
     assert.equal(provisioned.bootstrapProfile.firstChat.name, "alice-wa");
-    assert.equal(provisioned.bootstrapProfile.codex.model, "gpt-5.5");
+    assert.equal(provisioned.bootstrapProfile.codex.model, "gpt-6-sol");
     assert.equal(provisioned.bootstrapProfile.policy.sanitizerRequired, true);
     assert.match(provisioned.manifest, /"kind": "VirtualMachine"/);
     assert.deepEqual(provisioned.commands.apply, ["kubectl", "apply", "-f", "-"]);

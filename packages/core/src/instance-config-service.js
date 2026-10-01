@@ -83,6 +83,8 @@ function importedRuntimeConfig(settings = {}, now = new Date().toISOString()) {
     },
     runtime: safeImportedValue({
       codex: {
+        model: codex.model,
+        fallbackModels: codex.fallbackModels,
         sandbox: codex.sandbox,
         approvalPolicy: codex.approvalPolicy,
         bypassApprovalsAndSandbox: codex.bypassApprovalsAndSandbox,

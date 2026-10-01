@@ -8,6 +8,16 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+function extractInstalledWrapper(script, target) {
+  const marker = `cat > ${target} <<'EOF'\n`;
+  const start = script.indexOf(marker);
+  assert.notEqual(start, -1);
+  const bodyStart = start + marker.length;
+  const end = script.indexOf("\nEOF\n", bodyStart);
+  assert.notEqual(end, -1);
+  return script.slice(bodyStart, end + 1);
+}
+
 test("install script exposes a host-native systemd VPS path", async () => {
   const script = await fs.readFile("scripts/install.sh", "utf8");
   const runtimeDepsScript = await fs.readFile("scripts/install-runtime-deps.sh", "utf8");
@@ -224,7 +234,15 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_PREPARE_DEFAULT_DESKTOPS/);
   assert.match(script, /orkestr-browserctl health "\$slug"/);
   assert.match(script, /write_codex_app_server_wrapper/);
+  assert.match(script, /write_codex_app_server_refresh_wrapper/);
   assert.match(script, /write_systemd_codex_app_server_service/);
+  assert.match(script, /write_systemd_codex_app_server_refresh_units/);
+  assert.match(script, /\/usr\/local\/bin\/orkestr-refresh-codex-app-server/);
+  assert.match(script, /PathChanged=\$command_path/);
+  assert.match(script, /systemctl try-restart "\$\{service_name\}\.service"/);
+  assert.match(script, /systemctl enable --now "\$\{refresh_name\}\.path"/);
+  assert.doesNotMatch(script, /ORKESTR_CODEX_APP_SERVER_BINARY_POLL_SECONDS/);
+  assert.match(script, /KillMode=control-group/);
   assert.match(script, /ORKESTR_INSTALL_WA_SERVICE[\s\S]*WHATSAPP_BRIDGE_MODE=\$wa_bridge_mode[\s\S]*write_systemd_wa_service[\s\S]*ORKESTR_WA_SERVICE_ENV_FILE[\s\S]*EnvironmentFile=-\$wa_env_file[\s\S]*ExecStart=\$node_bin scripts\/orkestr-wa-service\.mjs/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-codex-app-server/);
   assert.match(script, /Wants=network-online\.target \$\{codex_service_name\}\.service/);
@@ -265,6 +283,42 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.doesNotMatch(script, /orkestr\.install\.env/);
   assert.doesNotMatch(script, /ORKESTR_INSTALL_CONFIG/);
   assert.doesNotMatch(script, /--config-json/);
+});
+
+test("Codex app-server refresh wrapper restarts the service after an update event", async () => {
+  const installScript = await fs.readFile("scripts/install.sh", "utf8");
+  const deployScript = await fs.readFile("scripts/deploy-git-release.sh", "utf8");
+  const target = "/usr/local/bin/orkestr-refresh-codex-app-server";
+  const wrapper = extractInstalledWrapper(installScript, target);
+  assert.equal(extractInstalledWrapper(deployScript, target), wrapper);
+
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-refresh-"));
+  const bin = path.join(temp, "bin");
+  await fs.mkdir(bin);
+  const wrapperPath = path.join(temp, "orkestr-refresh-codex-app-server");
+  const codexPath = path.join(temp, "codex");
+  const systemctlPath = path.join(bin, "systemctl");
+  const systemctlLog = path.join(temp, "systemctl.log");
+  await fs.writeFile(wrapperPath, wrapper, { mode: 0o755 });
+  await fs.writeFile(codexPath, "#!/usr/bin/env bash\nprintf '%s\\n' 'codex-cli test'\n", { mode: 0o755 });
+  await fs.writeFile(
+    systemctlPath,
+    "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" > \"$FAKE_SYSTEMCTL_LOG\"\n",
+    { mode: 0o755 },
+  );
+
+  await execFileAsync("bash", [wrapperPath], {
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      ORKESTR_CODEX_BIN: codexPath,
+      ORKESTR_CODEX_APP_SERVER_SERVICE_NAME: "test-codex",
+      ORKESTR_CODEX_APP_SERVER_REFRESH_SETTLE_SECONDS: "0",
+      ORKESTR_ENV_FILE: path.join(temp, "missing.env"),
+      FAKE_SYSTEMCTL_LOG: systemctlLog,
+    },
+  });
+  assert.equal(await fs.readFile(systemctlLog, "utf8"), "try-restart test-codex.service\n");
 });
 
 test("uninstall script removes local service wrappers without requiring a clone", async () => {

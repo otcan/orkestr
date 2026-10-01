@@ -3,6 +3,7 @@ const profiles = [
     id: "sre_engineer",
     name: "SRE Engineer",
     description: "Investigates runtime, deployment, reliability, and infrastructure failures using scoped read-only evidence.",
+    modelRole: "demanding",
     sandbox: "read-only",
     approvalPolicy: "never",
     maxToolCalls: 32,
@@ -32,4 +33,9 @@ export function getTaskAgentProfile(profileId = "") {
 export function taskAgentDeveloperInstructions(thread = {}) {
   if (String(thread.threadKind || "").trim() !== "task-agent") return "";
   return getTaskAgentProfile(thread.agentProfileId)?.developerInstructions || "";
+}
+
+export function taskAgentModelRole(thread = {}) {
+  if (String(thread.threadKind || "").trim() !== "task-agent") return "";
+  return getTaskAgentProfile(thread.agentProfileId)?.modelRole || "";
 }

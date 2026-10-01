@@ -1,5 +1,6 @@
 import path from "node:path";
 import { appHome } from "../../storage/src/paths.js";
+import { defaultCodexModel } from "./codex-model-policy.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -17,8 +18,8 @@ export function containedUserPolicyPath(env = process.env) {
   return path.join(appHome(env), "policies", "contained-user-runtime.md");
 }
 
-export function containedUserCodexModel() {
-  return "gpt-5.5";
+export function containedUserCodexModel(env = process.env) {
+  return clean(env.ORKESTR_CONTAINED_CODEX_MODEL) || defaultCodexModel("standard");
 }
 
 export function containedUserCodexReasoningEffort() {

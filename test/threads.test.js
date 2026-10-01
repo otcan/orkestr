@@ -10,7 +10,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { resetThreadSummaryCachesForTest, threadRuntimeSummary, threadSummaryPayload, threadSummaryRuntimeSnapshot } from "../apps/server/src/thread-summary.ts";
 import { stableSummaryBody, summaryStreamClientBackpressured } from "../apps/server/src/thread-stream-summary.js";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { applyRuntimeCodexMode, clearRuntimeLeasesForThread, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, recoverStalePendingThreadInputs, resetThreadInputDeliveryTimersForTest, resetThreadRuntime, resolveCodexThreadMetadata, resolveCodexThreadMetadataBatch, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncPaneProgressForActiveLeases, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { applyRuntimeCodexMode, clearRuntimeLeasesForThread, codexMetadataUpdatePatch, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, recoverStalePendingThreadInputs, resetThreadInputDeliveryTimersForTest, resetThreadRuntime, resolveCodexThreadMetadata, resolveCodexThreadMetadataBatch, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncPaneProgressForActiveLeases, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { acquireRuntimeLeaseFileLock, withRuntimeLeaseLock } from "../packages/core/src/runtime-lease-lock.js";
 import { completeThreadSecurityApproveCommand } from "../packages/core/src/security-thread-command.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
@@ -6737,6 +6737,47 @@ test("thread summary ignores corrupt Codex model and reasoning metadata", async 
   }
 });
 
+test("thread summary keeps explicit model settings ahead of stale live metadata", async () => {
+  const configuredAt = "2026-08-28T07:45:00.000Z";
+  const codexThreadId = "88888888-8888-4888-8888-888888888888";
+  const summary = await threadRuntimeSummary({
+    id: "explicit-model-summary-thread",
+    name: "Explicit Model Summary Thread",
+    state: "ready",
+    runtimeKind: "codex-app-server",
+    codexThreadId,
+    codexModel: "gpt-5.6-sol",
+    codexReasoningEffort: "xhigh",
+    codexServiceTier: null,
+    codexModelUpdatedAt: configuredAt,
+    executor: {
+      type: "codex",
+      transport: "app-server",
+      codexThreadId,
+      metadata: {
+        codexThreadId,
+        codexModel: "gpt-5.6-sol",
+        codexReasoningEffort: "xhigh",
+        codexModelUpdatedAt: configuredAt,
+      },
+    },
+  }, [], {
+    cacheTtlMs: 0,
+    sampleRuntime: false,
+    codexMetadataById: new Map([[codexThreadId, {
+      codexThreadId,
+      codexModel: "gpt-5.6-terra",
+      codexReasoningEffort: "high",
+      codexServiceTier: "priority",
+    }]]),
+  });
+
+  assert.equal(summary.codexModel, "gpt-5.6-sol");
+  assert.equal(summary.codexReasoningEffort, "xhigh");
+  assert.equal(summary.codexServiceTier, null);
+  assert.equal(summary.codexModelUpdatedAt, configuredAt);
+});
+
 test("thread summary runtime snapshot mirrors live Codex active status", () => {
   const runtime = threadSummaryRuntimeSnapshot({
     runtime: {
@@ -7899,6 +7940,58 @@ test("thread input does not approve quoted assistant approval prose", async () =
   assert.equal(handled, null);
   assert.equal(pending.status, "pending");
   assert.equal(messages.some((message) => message.source === "security_command" && message.parentMessageId === input.id), false);
+});
+
+test("Codex metadata refresh preserves explicitly configured thread settings", () => {
+  const configuredAt = "2026-08-26T10:00:00.000Z";
+  const staleRuntimeMetadata = {
+    codexModel: "gpt-5.6-terra",
+    codexReasoningEffort: "high",
+    codexServiceTier: "priority",
+    codexTokenUsage: { total_tokens: 42 },
+  };
+  const configured = codexMetadataUpdatePatch({
+    codexModel: "gpt-5.6-sol",
+    codexReasoningEffort: "xhigh",
+    codexServiceTier: null,
+    codexModelUpdatedAt: configuredAt,
+    executor: {
+      metadata: {
+        codexModel: "gpt-5.6-terra",
+        codexReasoningEffort: "high",
+        codexServiceTier: "priority",
+      },
+    },
+  }, staleRuntimeMetadata);
+
+  assert.equal(configured.codexModel, "gpt-5.6-sol");
+  assert.equal(configured.codexReasoningEffort, "xhigh");
+  assert.equal(configured.codexServiceTier, null);
+  assert.equal(configured.codexModelUpdatedAt, configuredAt);
+  assert.equal(configured.executor.metadata.codexModel, "gpt-5.6-sol");
+  assert.equal(configured.executor.metadata.codexReasoningEffort, "xhigh");
+  assert.equal(Object.hasOwn(configured.executor.metadata, "codexServiceTier"), false);
+  assert.deepEqual(configured.codexTokenUsage, { total_tokens: 42 });
+
+  const reset = codexMetadataUpdatePatch({
+    codexModel: null,
+    codexReasoningEffort: null,
+    codexServiceTier: null,
+    codexModelUpdatedAt: configuredAt,
+    executor: { metadata: { ...staleRuntimeMetadata, codexModelUpdatedAt: configuredAt } },
+  }, staleRuntimeMetadata);
+
+  assert.equal(reset.codexModel, null);
+  assert.equal(reset.codexReasoningEffort, null);
+  assert.equal(reset.codexServiceTier, null);
+  assert.equal(Object.hasOwn(reset.executor.metadata, "codexModel"), false);
+  assert.equal(Object.hasOwn(reset.executor.metadata, "codexReasoningEffort"), false);
+  assert.equal(Object.hasOwn(reset.executor.metadata, "codexServiceTier"), false);
+
+  const legacy = codexMetadataUpdatePatch({}, staleRuntimeMetadata);
+  assert.equal(legacy.codexModel, "gpt-5.6-terra");
+  assert.equal(legacy.codexReasoningEffort, "high");
+  assert.equal(legacy.executor.metadata.codexModel, "gpt-5.6-terra");
 });
 
 test("thread runtime summary reads Codex model and limits from live metadata", async (t) => {
