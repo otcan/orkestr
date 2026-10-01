@@ -1,6 +1,7 @@
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson, writeJson } from "../../storage/src/store.js";
 import { normalizeDesktopAddressFields } from "./desktop-runtime-addresses.js";
+import { codexFallbackModels, defaultCodexModel } from "./codex-model-policy.js";
 
 const APPROVE_REPLIES = ["/approve", "approve", "approved", "yes", "y", "allow", "go", "proceed"];
 const DENY_REPLIES = ["/deny", "deny", "no", "n", "reject", "stop", "cancel"];
@@ -196,6 +197,8 @@ function defaultCodexSettings(env = process.env) {
   const yolo = legacyYolo || (sandbox === "danger-full-access" && approvalPolicy === "never");
   return {
     command,
+    model: firstValue(env.ORKESTR_DEFAULT_CODEX_MODEL, env.OPENAI_MODEL) || defaultCodexModel("standard"),
+    fallbackModels: codexFallbackModels("standard"),
     sandbox,
     approvalPolicy,
     bypassApprovalsAndSandbox: yolo,

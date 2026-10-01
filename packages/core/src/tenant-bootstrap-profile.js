@@ -1,9 +1,10 @@
 import path from "node:path";
 import { normalizeTenantControlPlane, publicTenantControlPlane } from "./tenant-control-plane.js";
 import { normalizeTenantVm } from "./tenant-vm-registry.js";
+import { defaultCodexModel } from "./codex-model-policy.js";
 
 const defaultWorkspaceRoot = "/opt/orkestr/workspace";
-const defaultCodexModel = "gpt-5.5";
+const defaultTenantCodexModel = defaultCodexModel("standard");
 const defaultCodexReasoningEffort = "medium";
 
 function clean(value = "") {
@@ -186,7 +187,7 @@ export function buildTenantBootstrapProfile(vmInput, input = {}, env = process.e
     },
     codex: {
       provider: "codex",
-      model: clean(inputBootstrap.codexModel || input.codexModel || vmBootstrap.codexModel || env.ORKESTR_TENANT_CODEX_MODEL) || defaultCodexModel,
+      model: clean(inputBootstrap.codexModel || input.codexModel || vmBootstrap.codexModel || env.ORKESTR_TENANT_CODEX_MODEL) || defaultTenantCodexModel,
       reasoningEffort: normalizeReasoningEffort(inputBootstrap.codexReasoningEffort || input.codexReasoningEffort || vmBootstrap.codexReasoningEffort || env.ORKESTR_TENANT_CODEX_REASONING),
       mode: clean(inputBootstrap.codexMode || input.codexMode || "code").toLowerCase() === "plan" ? "plan" : "code",
     },

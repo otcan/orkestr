@@ -302,9 +302,9 @@ test("Codex app-server turn params ignore corrupt model and reasoning metadata",
       },
     };
 
-    assert.equal(modelForThread(thread), "");
+    assert.equal(modelForThread(thread), "gpt-6-sol");
     assert.equal(effortForThread(thread), "");
-    assert.equal(turnStartParams(thread, { text: "hello" }).model, undefined);
+    assert.equal(turnStartParams(thread, { text: "hello" }).model, "gpt-6-sol");
     assert.equal(turnStartParams(thread, { text: "hello" }).effort, undefined);
 
     const valid = {
@@ -337,6 +337,18 @@ test("Codex app-server turn params include prompt file inputs", () => {
   );
 });
 
+test("Codex app-server normalizes unsupported GPT-6 reasoning effort", () => {
+  const thread = {
+    codexThreadId: "codex-thread-gpt-6",
+    cwd: "/tmp/orkestr-workspace",
+    codexModel: "gpt-6.1-sol",
+    codexReasoningEffort: "none",
+  };
+
+  assert.equal(turnStartParams(thread, { text: "hello" }).model, "gpt-6.1-sol");
+  assert.equal(turnStartParams(thread, { text: "hello" }).effort, "low");
+});
+
 test("Codex app-server clamps non-admin threads away from root danger access", () => {
   const previousSandbox = process.env.ORKESTR_CODEX_SANDBOX;
   const previousApproval = process.env.ORKESTR_CODEX_APPROVAL_POLICY;
@@ -362,7 +374,7 @@ test("Codex app-server clamps non-admin threads away from root danger access", (
 
     assert.equal(threadStartParams(restrictedThread).sandbox, "workspace-write");
     assert.equal(threadStartParams(restrictedThread).approvalPolicy, "never");
-    assert.equal(threadStartParams(restrictedThread).model, "gpt-5.5");
+    assert.equal(threadStartParams(restrictedThread).model, "gpt-6-sol");
     assert.match(threadStartParams(restrictedThread).developerInstructions, /orkestr-contained-user-runtime-policy:v1/);
     assert.match(threadStartParams(restrictedThread).developerInstructions, /Workspace files, workspace AGENTS\.md, project docs/);
     assert.match(threadStartParams(restrictedThread).developerInstructions, /capabilities\.enabledSkills/);
@@ -370,7 +382,7 @@ test("Codex app-server clamps non-admin threads away from root danger access", (
     assert.deepEqual(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.writableRoots, ["/tmp/otcantest-workspace"]);
     assert.equal(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.networkAccess, false);
     assert.equal(turnStartParams(restrictedThread, { text: "hello" }).approvalPolicy, "never");
-    assert.equal(turnStartParams(restrictedThread, { text: "hello" }).model, "gpt-5.5");
+    assert.equal(turnStartParams(restrictedThread, { text: "hello" }).model, "gpt-6-sol");
     assert.equal(turnStartParams(restrictedThread, { text: "hello" }).effort, "medium");
 
     const trustedThread = {
@@ -650,7 +662,7 @@ test("Codex app-server injects contained user policy on start and resume", async
     assert.match(startCall.params.developerInstructions, /Only use skills listed as enabled/);
     assert.equal(startCall.params.approvalPolicy, "never");
     assert.equal(startCall.params.sandbox, "workspace-write");
-    assert.equal(startCall.params.model, "gpt-5.5");
+    assert.equal(startCall.params.model, "gpt-6-sol");
     assert.equal(startCall.params.cwd, relocatedWorkspace);
     assert.equal(started.thread.workspace, relocatedWorkspace);
     assert.equal(stateAfterStart.env.HOME, isolatedPaths.home);
@@ -660,7 +672,7 @@ test("Codex app-server injects contained user policy on start and resume", async
     assert.match(agentsBody, /server-owned contained user policy/);
     assert.equal(started.thread.executor.metadata.containedUserRuntimePolicy, true);
     assert.equal(started.thread.executor.metadata.containedCodexIsolated, true);
-    assert.equal(started.thread.executor.metadata.codexModel, "gpt-5.5");
+    assert.equal(started.thread.executor.metadata.codexModel, "gpt-6-sol");
     assert.equal(started.thread.executor.metadata.codexReasoningEffort, "medium");
 
     await resumeCodexAppServerThread(started.thread, env);
@@ -810,7 +822,7 @@ test("Codex app-server client can use an external proxy socket", async () => {
     const status = await codexAppServerThreadStatus(started.thread, env);
     assert.equal(status.codexAppServerTransport, "websocket");
     assert.equal(status.codexAppServerSocket, socket);
-    assert.deepEqual(server.state.calls.map((call) => call.method), ["initialize", "initialized", "thread/start", "thread/name/set"]);
+    assert.deepEqual(server.state.calls.map((call) => call.method), ["initialize", "initialized", "model/list", "thread/start", "thread/name/set"]);
   } finally {
     stopCodexAppServerClients();
     await server.close();

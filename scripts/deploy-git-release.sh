@@ -906,6 +906,94 @@ EOF
   chmod 0755 /usr/local/bin/orkestr-codex-app-server
 }
 
+write_codex_app_server_refresh_wrapper() {
+  cat > /usr/local/bin/orkestr-refresh-codex-app-server <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
+if [ -r "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+codex_bin="${ORKESTR_CODEX_BIN:-codex}"
+service_name="${ORKESTR_CODEX_APP_SERVER_SERVICE_NAME:-orkestr-codex}"
+service_name="${service_name%.service}"
+settle_seconds="${ORKESTR_CODEX_APP_SERVER_REFRESH_SETTLE_SECONDS:-2}"
+attempts="${ORKESTR_CODEX_APP_SERVER_REFRESH_ATTEMPTS:-10}"
+case "$settle_seconds" in
+  ""|*[!0-9]*) settle_seconds=2 ;;
+esac
+case "$attempts" in
+  ""|0|*[!0-9]*) attempts=10 ;;
+esac
+stable=0
+for ((attempt = 1; attempt <= attempts; attempt += 1)); do
+  before="$($codex_bin --version 2>/dev/null || true)"
+  sleep "$settle_seconds"
+  after="$($codex_bin --version 2>/dev/null || true)"
+  if [ -n "$before" ] && [ "$before" = "$after" ]; then
+    stable=1
+    break
+  fi
+done
+if [ "$stable" != "1" ]; then
+  echo "Codex executable did not stabilize after an update; app-server was not restarted." >&2
+  exit 75
+fi
+exec systemctl try-restart "${service_name}.service"
+EOF
+  chmod 0755 /usr/local/bin/orkestr-refresh-codex-app-server
+}
+
+write_codex_app_server_refresh_units() {
+  local refresh_name codex_bin command_path resolved_path package_path path_entries
+  refresh_name="${codex_app_server_service_name}-refresh"
+  codex_bin="${ORKESTR_CODEX_BIN:-codex}"
+  command_path="$(command -v "$codex_bin" 2>/dev/null || true)"
+  if [ -z "$command_path" ]; then
+    echo "Skipping Codex update watcher because the Codex executable was not found." >&2
+    return 0
+  fi
+  resolved_path="$(readlink -f "$command_path" 2>/dev/null || printf '%s' "$command_path")"
+  path_entries="PathChanged=$command_path"
+  if [ "$resolved_path" != "$command_path" ]; then
+    path_entries="$path_entries
+PathChanged=$resolved_path"
+  fi
+  package_path="$(dirname "$(dirname "$resolved_path")")/package.json"
+  if [ -f "$package_path" ] && [ "$package_path" != "$resolved_path" ]; then
+    path_entries="$path_entries
+PathChanged=$package_path"
+  fi
+
+  cat > "/etc/systemd/system/${refresh_name}.service" <<EOF
+[Unit]
+Description=Refresh the Orkestr Codex app-server after a CLI update
+Documentation=https://github.com/otcan/orkestr
+
+[Service]
+Type=oneshot
+EnvironmentFile=-$env_file_path
+ExecStart=/usr/local/bin/orkestr-refresh-codex-app-server
+EOF
+
+  cat > "/etc/systemd/system/${refresh_name}.path" <<EOF
+[Unit]
+Description=Watch the Codex CLI used by Orkestr
+
+[Path]
+$path_entries
+Unit=${refresh_name}.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now "${refresh_name}.path"
+}
+
 write_codex_app_server_systemd_service() {
   local restart_service run_user run_group workdir
   restart_service="${1:-1}"
@@ -933,6 +1021,7 @@ EnvironmentFile=-$env_file_path
 ExecStart=/usr/local/bin/orkestr-codex-app-server
 Restart=on-failure
 RestartSec=3
+KillMode=control-group
 PrivateTmp=true
 
 [Install]
@@ -972,7 +1061,9 @@ ensure_codex_app_server_split_for_target() {
   if [ "$mode_external_requested" = "1" ] && codex_app_server_service_is_active; then
     if [ "$(id -u)" -eq 0 ]; then
       write_codex_app_server_wrapper
+      write_codex_app_server_refresh_wrapper
       write_codex_app_server_systemd_service 0
+      write_codex_app_server_refresh_units
       write_codex_app_server_main_service_dropin
     fi
     return 0
@@ -1004,7 +1095,9 @@ ensure_codex_app_server_split_for_target() {
   set_env_assignment ORKESTR_CODEX_APP_SERVER_SERVICE_NAME "$codex_app_server_service_name"
   mkdir -p "$(dirname "$socket")"
   write_codex_app_server_wrapper
+  write_codex_app_server_refresh_wrapper
   write_codex_app_server_systemd_service
+  write_codex_app_server_refresh_units
   write_codex_app_server_main_service_dropin
   codex_app_server_mode="external"
   echo "External Codex app-server ready: ${codex_app_server_service_name}.service ($socket)."

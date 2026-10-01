@@ -18,6 +18,7 @@ import {
   clean,
   codexAppServerEnabled,
   codexInputText,
+  codexModelRoleForThread,
   codexRuntimeEnvForThread,
   codexSessionId,
   codexThreadId,
@@ -25,6 +26,7 @@ import {
   containedCodexRuntimeMetadata,
   ensureContainedCodexRuntimeHome,
   effortForThread,
+  explicitlyConfiguredModelForThread,
   itemPhase,
   itemText,
   modelForThread,
@@ -43,6 +45,8 @@ import {
 } from "./codex-app-server-common.js";
 import { completeLegacySettingsCommand } from "./codex-settings-command-legacy.js";
 import { handleWhatsAppSettingsCommand } from "../../connectors/src/whatsapp-settings-command.js";
+import { compatibleCodexReasoningEffort, resolveCodexModelForCatalog } from "./codex-model-policy.js";
+import { liveCodexModelCatalog } from "./codex-model-controls.js";
 import { getCodexAppServerClient, stopCodexAppServerClients as stopCodexAppServerRuntimeClients } from "./codex-app-server-client.js";
 import { probeLiveCodexThreadState, readLiveCodexThreadState } from "./codex-app-server-live-state.js";
 import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
@@ -962,6 +966,10 @@ export async function startCodexAppServerThread(thread, env = process.env) {
   const runtimeEnv = codexRuntimeEnvForThread(thread, env);
   const client = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
   const startParams = threadStartParams(thread, runtimeEnv);
+  if (!threadUsesRestrictedCodexPolicy(thread, runtimeEnv) && !explicitlyConfiguredModelForThread(thread, runtimeEnv)) {
+    const models = await liveCodexModelCatalog(client).catch(() => []);
+    startParams.model = resolveCodexModelForCatalog(codexModelRoleForThread(thread), models);
+  }
   const containedMetadata = containedCodexRuntimeMetadata(thread, env) || {};
   const result = await client.request("thread/start", startParams);
   const codexThread = result?.thread || {};
@@ -990,8 +998,8 @@ export async function startCodexAppServerThread(thread, env = process.env) {
         transport: "app-server",
         codexThreadId: codexId,
         codexSessionId: sessionId,
-        codexModel: modelForThread(generationThread, runtimeEnv) || codexThread.model || null,
-        codexReasoningEffort: effortForThread(generationThread, runtimeEnv) || null,
+        codexModel: startParams.model || modelForThread(generationThread, runtimeEnv) || codexThread.model || null,
+        codexReasoningEffort: compatibleCodexReasoningEffort(startParams.model, effortForThread(generationThread, runtimeEnv)) || null,
         codexServiceTier: normalizeCodexServiceTier(startParams.serviceTier || codexThread.serviceTier) || null,
         codexModelProvider: codexThread.modelProvider || "openai",
         codexSandbox: startParams.sandbox,
