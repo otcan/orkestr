@@ -403,6 +403,51 @@ test("active runtime progress delivery fails closed when the captured MCP owner 
   assert.equal(posts.length, 0, "recovery must not redirect an MCP progress update to a replacement owner or binding");
 });
 
+test("progress recovery durably resolves old MCP parent and never mixes its destination with a replacement account", async (t) => {
+  const generation = "d0378d6e-3163-4c71-9539-1e88ae1c896d";
+  const env = await fixture(t, { binding: eligibleBinding, generation });
+  await createUser({ id: "owner-b" }, env);
+  const sent = await sendBridgeMessage("thread-a", {
+    text: "Synthetic old-parent progress request", requestId: "rollout-commentary-old-parent",
+  }, principal, env, { deliver() {} });
+  await updateThreadMessage("thread-a", sent.messageId, { codexThreadId: generation }, env);
+  for (let index = 0; index < 30; index += 1) {
+    await replyToBridgeThread("thread-a", { requestId: `old-parent-comment-${index}`, text: `Synthetic aged context ${index}` }, principal, env);
+  }
+
+  await ensureDataDirs(env);
+  const rolloutPath = path.join(env.ORKESTR_HOME, "rollout-commentary-old-parent.jsonl");
+  const timestamp = new Date().toISOString();
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ type: "session_meta", payload: { id: generation } }),
+    JSON.stringify({
+      timestamp,
+      type: "event_msg",
+      payload: { type: "agent_message", phase: "commentary", message: "Synthetic progress must not cross owner boundaries." },
+    }),
+  ].join("\n") + "\n", "utf8");
+  await fs.writeFile(dataPaths(env).runtimeLeases, JSON.stringify([{
+    id: "synthetic-old-parent-commentary-lease", threadId: "thread-a", sessionName: "synthetic-old-parent-commentary-session",
+    rolloutPath, rolloutGeneration: generation, rolloutOffset: 0, startedAt: timestamp,
+  }]), "utf8");
+  assert.equal((await syncActiveRuntimeRolloutMessages(env)).appended, 1);
+  const projected = (await listThreadMessages("thread-a", env)).find((message) => message.text === "Synthetic progress must not cross owner boundaries.");
+  assert.equal(projected.parentMessageId, sent.messageId);
+  assert.equal(projected.chatId, eligibleBinding.chatId, "projection retains the request-time chat snapshot");
+
+  await updateThread("thread-a", {
+    ownerUserId: "owner-b",
+    binding: { ...eligibleBinding, chatId: "synthetic-chat-b", responderAccountId: "synthetic-account-b", outboundAccountId: "synthetic-account-b" },
+  }, env);
+  const posts = [];
+  const result = await deliverWhatsAppReplies(env, async (_url, options = {}) => {
+    if (options.method === "POST") posts.push({ options, body: JSON.parse(String(options.body || "{}")) });
+    return response({ ok: true, ready: true, accounts: [{ id: "synthetic-account-b", ready: true }], ids: ["unexpected"] });
+  });
+  assert.equal(result.delivered.length, 0);
+  assert.equal(posts.length, 0, "durable parent lookup restores the MCP fence before any account/chat combination can be dispatched");
+});
+
 test("passive comments never qualify for execution-answer WhatsApp delivery", async (t) => {
   const env = await fixture(t, { binding: eligibleBinding });
   await replyToBridgeThread("thread-a", { requestId: "comment-1", text: "Context only" }, principal, env);

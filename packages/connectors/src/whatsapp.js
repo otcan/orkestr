@@ -6846,7 +6846,6 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       }
       if (message.role !== "assistant" || message.state !== "completed" || deliveredIds.has(message.id)) continue;
       if (shouldMirrorWhatsAppProgress(message, env)) {
-        const parent = messages.find((entry) => entry.id === message.parentMessageId);
         const bridgeExecutionReply = kind === "thread" && parent?.source === "thread_bridge_message";
         const whatsappOrigin = bridgeExecutionReply
           ? threadBridgeWhatsAppReplyOrigin({ parent, thread, kind })
