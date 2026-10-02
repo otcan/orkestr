@@ -2,7 +2,7 @@
 // `_meta` version, mirrored HTTP headers, server/discover, tools and the MCP
 // Events methods. Legacy clients that open with `initialize` stay on the SDK
 // transport (dual-era server); see thread-bridge-mcp.controller.ts.
-import { callThreadBridgeTool, threadBridgeToolDefinitions } from "./thread-bridge-mcp.js";
+import { callThreadBridgeTool, threadBridgeToolDefinitions, threadBridgeToolIsLongRunning } from "./thread-bridge-mcp.js";
 import { eventDefinitions, subscribeEvent, unsubscribeEvent } from "./mcp-events.js";
 
 export const MODERN_PROTOCOL_VERSION = "2026-07-28";
@@ -68,8 +68,8 @@ export function discoverResult() {
 
 // Returns { status, body } (body null for 202). `principal` is null when the
 // request carried no valid token; only server/discover is answered then.
-/** @param {{ body: any, headers?: Record<string, any>, principal?: any, env?: Record<string, any>, eventOptions?: Record<string, any> }} input */
-export async function handleModernMcpRequest({ body, headers = {}, principal = null, env = process.env, eventOptions = {} }) {
+/** @param {{ body: any, headers?: Record<string, any>, principal?: any, env?: Record<string, any>, eventOptions?: Record<string, any>, signal?: any }} input */
+export async function handleModernMcpRequest({ body, headers = {}, principal = null, env = process.env, eventOptions = {}, signal = null }) {
   if (body.method === "server/discover" && !body.params?._meta?.[META_VERSION]) {
     return complete(body.id ?? null, discoverResult());
   }
@@ -83,7 +83,7 @@ export async function handleModernMcpRequest({ body, headers = {}, principal = n
     case "tools/list":
       return complete(body.id, { tools: threadBridgeToolDefinitions(), ttlMs: 300_000, cacheScope: "private" });
     case "tools/call": {
-      const result = await callThreadBridgeTool(clean(params.name), params.arguments, principal, env);
+      const result = await callThreadBridgeTool(clean(params.name), params.arguments, principal, env, { signal });
       if (!result) return rpcError(body.id, -32602, `Unknown tool: ${clean(params.name)}`, 200);
       return complete(body.id, result);
     }
@@ -100,4 +100,11 @@ export async function handleModernMcpRequest({ body, headers = {}, principal = n
     default:
       return rpcError(body.id, -32601, "Method not found", 404);
   }
+}
+
+// Long-running tool calls are answered as an SSE stream (with keep-alives) when
+// the client accepts it, so idle/first-byte timeouts cannot cut them off.
+export function shouldStreamModernRequest(body = {}, headers = {}) {
+  return body?.method === "tools/call" && threadBridgeToolIsLongRunning(clean(body.params?.name)) &&
+    header(headers, "accept").includes("text/event-stream");
 }

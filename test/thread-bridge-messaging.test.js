@@ -108,3 +108,80 @@ test("sending is rate-limited per assistant", async (t) => {
   for (let index = 0; index < 30; index += 1) await sendBridgeMessage("thread-a", { text: `m${index}`, requestId: `rate-${index}` }, limited, env, NO_DELIVERY);
   await assert.rejects(sendBridgeMessage("thread-a", { text: "one more", requestId: "rate-31" }, limited, env), /bridge_message_rate_limited/);
 });
+
+// --- wait_for_reply: timing and precise input-to-reply correlation ---------
+
+const finalFor = (parentMessageId, text, extra = {}) => ({ role: "assistant", source: "claude-code", phase: "final_answer", state: "completed", text, parentMessageId, ...extra });
+
+test("wait_for_reply waits before the answer exists and returns it when it arrives", async (t) => {
+  const env = await fixture(t);
+  const sent = await sendBridgeMessage("thread-a", { text: "Please summarize", requestId: "before" }, principal, env, NO_DELIVERY);
+  const started = Date.now();
+  const waiting = waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 10, pollMs: 50 }, env);
+  setTimeout(() => { void appendThreadMessage("thread-a", finalFor(sent.messageId, "Summary ready."), env); }, 300);
+  const result = await waiting;
+  assert.equal(result.status, "answered");
+  assert.equal(result.reply.text, "Summary ready.");
+  assert.ok(Date.now() - started >= 250, "it really waited for the answer");
+});
+
+test("wait_for_reply returns still_working at the timeout and an existing answer immediately", async (t) => {
+  const env = await fixture(t);
+  const sent = await sendBridgeMessage("thread-a", { text: "Long task", requestId: "timeout" }, principal, env, NO_DELIVERY);
+  const started = Date.now();
+  const pending = await waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 1, pollMs: 50 }, env);
+  assert.equal(pending.status, "still_working");
+  assert.ok(Date.now() - started < 3000);
+  const answer = await appendThreadMessage("thread-a", finalFor(sent.messageId, "Finished."), env);
+  const done = await waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 1, pollMs: 50 }, env);
+  assert.equal(done.status, "answered");
+  assert.equal(done.reply.messageId, answer.id);
+});
+
+test("wait_for_reply never takes another input's answer in an active thread", async (t) => {
+  const env = await fixture(t);
+  const sent = await sendBridgeMessage("thread-a", { text: "Mine", requestId: "mine" }, principal, env, NO_DELIVERY);
+  // Activity after our input: the owner's own input and its answer.
+  const other = await appendThreadMessage("thread-a", { role: "user", source: "ui", text: "Owner question", state: "completed" }, env);
+  await appendThreadMessage("thread-a", finalFor(other.id, "Answer to the owner."), env);
+  await appendThreadMessage("thread-a", { role: "assistant", source: "watcher-alert", phase: "final_answer", state: "completed", text: "Unrelated alert" }, env);
+  const pending = await waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 1, pollMs: 50 }, env);
+  assert.equal(pending.status, "still_working", "later finals for other inputs do not count");
+  const mine = await appendThreadMessage("thread-a", finalFor(sent.messageId, "Answer to the assistant."), env);
+  const answered = await waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 1 }, env);
+  assert.equal(answered.reply.messageId, mine.id);
+  assert.equal(answered.reply.text, "Answer to the assistant.");
+});
+
+test("an answer from the same runtime turn counts when several inputs were batched", async (t) => {
+  const env = await fixture(t);
+  const first = await sendBridgeMessage("thread-a", { text: "First", requestId: "batch-1" }, principal, env, NO_DELIVERY);
+  const second = await sendBridgeMessage("thread-a", { text: "Second", requestId: "batch-2" }, principal, env, NO_DELIVERY);
+  await updateThreadMessage("thread-a", first.messageId, { state: "completed", executorTurnId: "turn_batch" }, env);
+  await updateThreadMessage("thread-a", second.messageId, { state: "completed", executorTurnId: "turn_batch" }, env);
+  await appendThreadMessage("thread-a", finalFor(second.messageId, "Both handled.", { executorTurnId: "turn_batch" }), env);
+  const result = await waitForBridgeReply("thread-a", first.messageId, principal, { timeoutSeconds: 1 }, env);
+  assert.equal(result.status, "answered");
+  assert.equal(result.reply.text, "Both handled.");
+});
+
+test("wait_for_reply reports turns that finish without a reply, and stops when cancelled", async (t) => {
+  const env = await fixture(t);
+  const silent = await sendBridgeMessage("thread-a", { text: "Just note this", requestId: "silent" }, principal, env, NO_DELIVERY);
+  await appendThreadMessage("thread-a", finalFor(silent.messageId, "NO_REPLY"), env);
+  assert.equal((await waitForBridgeReply("thread-a", silent.messageId, principal, { timeoutSeconds: 1 }, env)).status, "completed_without_reply");
+
+  const interrupted = await sendBridgeMessage("thread-a", { text: "Gets interrupted", requestId: "no-final" }, principal, env, NO_DELIVERY);
+  await updateThreadMessage("thread-a", interrupted.messageId, { state: "completed" }, env);
+  const noFinal = await waitForBridgeReply("thread-a", interrupted.messageId, principal, { timeoutSeconds: 10, pollMs: 100 }, env);
+  assert.equal(noFinal.status, "completed_without_reply");
+  assert.equal(noFinal.reason, "no_final_answer");
+
+  const cancelled = await sendBridgeMessage("thread-a", { text: "Client goes away", requestId: "cancel" }, principal, env, NO_DELIVERY);
+  const controller = new AbortController();
+  const started = Date.now();
+  setTimeout(() => controller.abort(), 200);
+  const stopped = await waitForBridgeReply("thread-a", cancelled.messageId, principal, { timeoutSeconds: 30, pollMs: 1000, signal: controller.signal }, env);
+  assert.equal(stopped.status, "still_working");
+  assert.ok(Date.now() - started < 2000, "an aborted wait returns promptly");
+});

@@ -17,7 +17,8 @@ import {
   validateAuthorizeRequest,
 } from "../../../../../packages/core/src/mcp-oauth.js";
 import { createThreadBridgeMcpServer } from "../../../../../packages/core/src/thread-bridge-mcp.js";
-import { handleModernMcpRequest, isModernMcpRequest } from "../../../../../packages/core/src/mcp-modern-protocol.js";
+import { handleModernMcpRequest, isModernMcpRequest, shouldStreamModernRequest } from "../../../../../packages/core/src/mcp-modern-protocol.js";
+import { sendMcpJson, streamMcpResponse, trackMcpRequest } from "./mcp-http.js";
 import { mcpLandingPage } from "../../../../../packages/core/src/mcp-landing-page.js";
 import { readSubscriptions } from "../../../../../packages/core/src/mcp-events.js";
 import { keycloakOidcEnabled } from "../../../../../packages/core/src/keycloak-oidc.js";
@@ -153,21 +154,34 @@ export class ThreadBridgeMcpController {
     assertEnabled();
     const principal = await mcpPrincipalFromAuthorization(String(request.headers?.authorization || ""));
     const body = request.body;
-    if (isModernMcpRequest(body, request.headers)) {
-      if (!principal && body?.method !== "server/discover") return unauthorized(response);
-      const result = await handleModernMcpRequest({ body, headers: request.headers, principal });
-      if (!result.body) return response.status(result.status).end();
-      return response.status(result.status).json(result.body);
+    const modern = isModernMcpRequest(body, request.headers);
+    const record = trackMcpRequest(request, response, { era: modern ? "2026-07-28" : "legacy", agentId: principal?.agentId || "" });
+    if (!principal && !(modern && body?.method === "server/discover")) {
+      record.finish("unauthorized", { httpStatus: 401 });
+      return unauthorized(response);
     }
-    if (!principal) return unauthorized(response);
-    const server = createThreadBridgeMcpServer({ principal });
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    response.once("close", () => {
-      void transport.close().catch(() => {});
-      void server.close().catch(() => {});
-    });
-    await server.connect(transport);
-    await transport.handleRequest(request, response, request.body);
+    try {
+      if (modern) {
+        const run = (signal: AbortSignal) => handleModernMcpRequest({ body, headers: request.headers, principal, signal });
+        if (shouldStreamModernRequest(body, request.headers)) return await streamMcpResponse(response, record, run);
+        const result = await run(record.signal);
+        return sendMcpJson(response, record, result.status, result.body);
+      }
+      const server = createThreadBridgeMcpServer({ principal });
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      response.once("close", () => {
+        record.finish(record.clientClosed() ? "client_closed" : "ok", { httpStatus: response.statusCode, transport: "sdk" });
+        void transport.close().catch(() => {});
+        void server.close().catch(() => {});
+      });
+      await server.connect(transport);
+      await transport.handleRequest(request, response, request.body);
+    } catch (error: any) {
+      // Any failure becomes a recorded JSON-RPC error instead of an opaque 500.
+      record.finish("exception", { rpcErrorCode: -32603, error: String(error?.message || error).slice(0, 200) });
+      if (response.headersSent) return response.end();
+      return response.status(500).json({ jsonrpc: "2.0", id: body?.id ?? null, error: { code: -32603, message: "Internal error" } });
+    }
   }
 
   // MCP clients get 405 (no GET stream); a browser gets a page explaining the

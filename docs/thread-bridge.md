@@ -259,8 +259,20 @@ server for clients such as ChatGPT plugins:
   on; it is idempotent by `request_id`, limited to 30 per hour per assistant,
   carries no chat route (the answer is not sent to WhatsApp) and is never
   echoed back to the sending assistant as an event. `wait_for_reply` waits
-  at most 45 s for the answer; `get_thread_status` reports working, queued,
-  idle or last_turn_failed. Connections approved before messaging existed must
+  at most 45 s for the answer to exactly that input: a completed final whose
+  `parentMessageId` is the input, or one from the same runtime turn when
+  several inputs were batched; later finals for other inputs never count. It
+  returns `answered`, `failed`, `completed_without_reply` (NO_REPLY, or the
+  input finished without a final) or `still_working`. When the client accepts
+  `text/event-stream`, the call is answered as an SSE stream that sends
+  keep-alive comments every 2 s, so idle or first-byte timeouts cannot cut it
+  off; a client disconnect cancels the wait. `get_thread_status` reports
+  working, queued, idle or last_turn_failed.
+- Every `POST /mcp` request is recorded as an `mcp_request` event (protocol
+  era, method, tool, duration, outcome, HTTP status, JSON-RPC error code,
+  client disconnect). Arguments and message content are never recorded.
+  Unexpected failures return a JSON-RPC `-32603` and are recorded as
+  `outcome: "exception"`. Connections approved before messaging existed must
   reconnect to get the new scope.
 - OAuth 2.1 with PKCE (S256) and dynamic client registration:
   `/.well-known/oauth-protected-resource[/mcp]`,

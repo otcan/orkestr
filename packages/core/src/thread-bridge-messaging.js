@@ -87,22 +87,59 @@ export async function bridgeThreadStatus(threadId, principal, env = process.env)
   };
 }
 
-// Waits (bounded) for the agent's answer to a message sent with send_message.
-export async function waitForBridgeReply(threadId, messageId, principal, { timeoutSeconds = 30, pollMs = 1000 } = {}, env = process.env) {
+function turnId(message = {}) {
+  return String(message.executorTurnId || message.codexTurnId || "").trim();
+}
+
+// The answer to one input: a completed final whose parentMessageId is the
+// input, or that belongs to the same runtime turn (several queued inputs can
+// be answered by one turn). A later final for another input never counts.
+export function correlatedFinal(input, candidates = []) {
+  const inputTurn = turnId(input);
+  return candidates.find((message) =>
+    message?.role === "assistant" && message.phase === "final_answer" && message.state === "completed" &&
+    (message.parentMessageId === input.id || (inputTurn && turnId(message) === inputTurn))) || null;
+}
+
+const terminalInputStates = new Set(["completed", "failed", "interrupted", "cancelled"]);
+const NO_FINAL_GRACE_MS = 3000;
+
+function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener?.("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+  });
+}
+
+// Waits (bounded) for the agent's answer to a message sent with
+// send_message. Returns answered, failed, completed_without_reply or
+// still_working; stops early when `signal` aborts (client disconnected).
+export async function waitForBridgeReply(threadId, messageId, principal, { timeoutSeconds = 30, pollMs = 1000, signal = null } = {}, env = process.env) {
   const grant = await authorization(principal, env);
   await target(threadId, grant, "observe", env);
   const sent = await getThreadMessage(threadId, String(messageId || ""), env);
   if (!sent || sent.source !== BRIDGE_MESSAGE_SOURCE || sent.bridgeAgentId !== principal.agentId) fail("bridge_message_not_found", 404);
   const deadline = Date.now() + Math.min(MAX_WAIT_SECONDS, Math.max(1, Number(timeoutSeconds) || 30)) * 1000;
+  let terminalSince = 0;
   for (;;) {
     await authorization(principal, env);
+    const input = (await getThreadMessage(threadId, sent.id, env)) || sent;
     const after = await listThreadMessageCandidates(threadId, { afterCursor: Number(sent.cursor || 0) }, env);
-    const finals = after.filter(finalAnswer);
-    const reply = finals.find((message) => message.parentMessageId === sent.id) || finals[0];
-    const input = await getThreadMessage(threadId, sent.id, env);
-    if (reply) return { status: "answered", inputState: input?.state || null, reply: summarize(reply, 16000) };
-    if (input?.state === "failed") return { status: "failed", inputState: "failed", error: String(input.error || "").slice(0, 500) || null };
-    if (Date.now() >= deadline) return { status: "still_working", inputState: input?.state || null, hint: "Call wait_for_reply again, or subscribe to thread.message.created." };
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const reply = correlatedFinal(input, after);
+    if (reply && finalAnswer(reply)) return { status: "answered", inputState: input.state || null, reply: summarize(reply, 16000) };
+    if (reply) return { status: "completed_without_reply", inputState: input.state || null, reason: "no_reply" };
+    if (input.state === "failed" || input.state === "interrupted" || input.state === "cancelled") {
+      return { status: "failed", inputState: input.state, error: String(input.error || "").slice(0, 500) || null };
+    }
+    // A finished input whose final never appears (e.g. an interrupted turn)
+    // is reported after a short grace instead of waiting for the deadline.
+    if (terminalInputStates.has(input.state)) {
+      terminalSince ||= Date.now();
+      if (Date.now() - terminalSince >= NO_FINAL_GRACE_MS) return { status: "completed_without_reply", inputState: input.state, reason: "no_final_answer" };
+    }
+    if (Date.now() >= deadline || signal?.aborted) {
+      return { status: "still_working", inputState: input.state || null, hint: "Call wait_for_reply again, or subscribe to thread.message.created." };
+    }
+    await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())), signal);
   }
 }
