@@ -11,6 +11,14 @@ import { publishThreadAttachmentsEncrypted } from "./encrypted-attachment-public
 
 const hash = value => createHash("sha256").update(value).digest("hex");
 export const stagingFailureNotice = "File could not be attached. Delivery is pending and will retry; no attachment has been sent.";
+export const stagingGaveUpNotice = "A file in this reply could not be attached, so it was sent without it.";
+// Source line references ("x.js:579:11", e.g. from stack traces) are never
+// files that a producer will write later; staging them only held the reply.
+const sourceLineReference = (value = "") => /:\d+(?::\d+)?$/.test(String(value));
+function maxStagingAttempts(env = process.env) {
+  const parsed = Number(env.ORKESTR_ATTACHMENT_STAGING_MAX_ATTEMPTS ?? 5);
+  return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : 5;
+}
 const routed = (thread, message) => message.role === "assistant" &&
   (message.connector === "whatsapp" || thread.binding?.connector === "whatsapp");
 const binding = (thread, message, env) => ({ ownerUserId: resourceOwnerUserId(thread, env), threadId: thread.id, messageId: message.id });
@@ -41,7 +49,7 @@ function publicResult(intent) {
   return {
     attachments: ready ? intent.attachments : [],
     encrypted: ready && intent.encrypted === true,
-    staging: { id: intent.id, state: intent.state, ...(ready ? {} : { notice: stagingFailureNotice }) },
+    staging: { id: intent.id, state: intent.state, ...(ready ? {} : { notice: intent.state === "failed" ? stagingGaveUpNotice : stagingFailureNotice }) },
   };
 }
 
@@ -62,7 +70,10 @@ async function attempt(file, intent, thread, message, env) {
     Object.assign(intent, { state: "ready", attachments: published.attachments, encrypted: published.encrypted === true, error: "" });
   } catch {
     // Never put source paths, filenames or provider errors in the public notice.
-    Object.assign(intent, { state: "failed_retryable", attachments: [], error: "outbound_attachment_staging_failed" });
+    // After a bounded number of attempts give up on the files so the reply text
+    // is delivered instead of being held forever.
+    const exhausted = intent.attempts >= maxStagingAttempts(env) || intent.sources.some((source) => sourceLineReference(source?.path));
+    Object.assign(intent, { state: exhausted ? "failed" : "failed_retryable", attachments: [], error: "outbound_attachment_staging_failed" });
   }
   const configuredDelay = Number(env.ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS ?? 30_000);
   const delay = Number.isFinite(configuredDelay) ? Math.max(0, configuredDelay) : 30_000;
@@ -82,7 +93,7 @@ export async function prepareRoutedReplyAttachments({ thread, message, resolutio
     return publishThreadAttachmentsEncrypted({ thread, attachments, env });
   }
   const missing = resolution.skipped.filter(item => item.reason === "attachment_path_missing" && item.path &&
-    classifyThreadAttachmentPath(item.path, { thread, env }).ok)
+    !sourceLineReference(item.path) && classifyThreadAttachmentPath(item.path, { thread, env }).ok)
     .map(item => ({ path: item.path, filename: path.basename(item.path), source: "explicit_attachment" }));
   const sources = [...new Map([...resolution.attachments, ...missing].map(item => [item.path || item.id || JSON.stringify(item), item])).values()];
   if (!sources.length) return { attachments: [] };
@@ -119,13 +130,13 @@ export async function recoverRoutedReplyAttachments(thread, message, env = proce
   return withStorageFileLock(file, async () => {
     const intent = await readJson(file, null);
     checkBinding(intent, thread, message, env);
-    if (intent.state === "ready" || Date.parse(intent.nextAttemptAt) > Date.now()) return publicResult(intent);
+    if (intent.state === "ready" || intent.state === "failed" || Date.parse(intent.nextAttemptAt) > Date.now()) return publicResult(intent);
     return attempt(file, intent, thread, message, env);
   });
 }
 
 export function assertReplyAttachmentStagingReady(message) {
-  if (message?.outboundAttachmentStaging && message.outboundAttachmentStaging.state !== "ready") {
+  if (message?.outboundAttachmentStaging && !["ready", "failed"].includes(message.outboundAttachmentStaging.state)) {
     const error = new Error(stagingFailureNotice);
     error.retryable = true;
     throw error;

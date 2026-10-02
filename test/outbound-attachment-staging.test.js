@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { syntheticWorkbook } from "./fixtures/synthetic-workbook.js";
 import { createThread, appendThreadMessage, listThreadMessages } from "../packages/core/src/threads.js";
-import { recoverRoutedReplyAttachments, cleanupOutboundStagingJournals, stagingFailureNotice } from "../packages/core/src/outbound-attachment-staging.js";
+import { recoverRoutedReplyAttachments, cleanupOutboundStagingJournals, stagingFailureNotice, assertReplyAttachmentStagingReady, stagingGaveUpNotice } from "../packages/core/src/outbound-attachment-staging.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -152,4 +152,30 @@ test("required-encryption publication failure preserves snapshot without plainte
   const visible = publicEncryptedAttachmentMessage({ ...reply, attachments: recovered.attachments });
   assert.equal(visible.attachments[0].deliverySource, undefined);
   assert.equal(visible.attachments[0].path, undefined);
+});
+
+test("staging gives up after the attempt limit so the reply text is delivered", async t => {
+  const f = await fixture(t);
+  f.env.ORKESTR_ATTACHMENT_STAGING_MAX_ATTEMPTS = "2";
+  f.env.ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS = "0";
+  const reply = await f.reply(); // source file never created
+  assert.equal(reply.outboundAttachmentStaging.state, "failed_retryable");
+  assert.throws(() => assertReplyAttachmentStagingReady(reply));
+  const second = await recoverRoutedReplyAttachments(f.thread, reply, f.env);
+  assert.equal(second.staging.state, "failed");
+  assert.equal(second.staging.notice, stagingGaveUpNotice);
+  assert.deepEqual(second.attachments, []);
+  const released = { ...reply, outboundAttachmentStaging: second.staging };
+  assert.doesNotThrow(() => assertReplyAttachmentStagingReady(released));
+  // Terminal: further recovery returns the same give-up result without retrying.
+  assert.equal((await recoverRoutedReplyAttachments(f.thread, reply, f.env)).staging.state, "failed");
+});
+
+test("stack-trace line references are never staged as missing producer files", async t => {
+  const f = await fixture(t);
+  const reply = await appendThreadMessage(f.thread.id, { role: "assistant", source: "codex-app-server", connector: "whatsapp",
+    chatId: "synthetic-chat", state: "completed", phase: "final_answer",
+    text: `[watcher:error] boom\n    at handler (${path.join(f.home, "dist", "controller.js")}:579:11)` }, f.env);
+  assert.equal(reply.outboundAttachmentStaging, undefined);
+  assert.notEqual(reply.deliveryState, "failed_retryable");
 });

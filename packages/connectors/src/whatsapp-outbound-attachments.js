@@ -5,7 +5,7 @@ import { prepareWhatsAppTableAttachments } from "./whatsapp-table-attachments.js
 import { appendWebUiEncryptedAttachmentNotice, webUiEncryptedAttachmentDelivery } from "./whatsapp-webui-encrypted-attachments.js";
 import { formatWhatsAppOutboundText } from "./whatsapp-formatting.js";
 import { updateThreadMessage } from "../../core/src/threads.js";
-import { recoverRoutedReplyAttachments } from "../../core/src/outbound-attachment-staging.js";
+import { recoverRoutedReplyAttachments, stagingGaveUpNotice } from "../../core/src/outbound-attachment-staging.js";
 import { snapshotCoversPath } from "../../core/src/outbound-attachment-snapshots.js";
 
 const pickString = (...values) => values.map(value => String(value || "").trim()).find(Boolean) || "";
@@ -14,7 +14,7 @@ const pickString = (...values) => values.map(value => String(value || "").trim()
 export async function prepareWhatsAppOutboundAttachments({ thread, message, principal, env, fetchImpl }) {
   if (message.outboundAttachmentStaging?.state === "failed_retryable") {
     const recovered = await recoverRoutedReplyAttachments(thread, message, env).catch(() => null);
-    if (recovered?.staging?.state === "ready") {
+    if (["ready", "failed"].includes(recovered?.staging?.state)) {
       const repaired = await updateThreadMessage(thread.id, message.id, {
         attachments: recovered.attachments, outboundAttachmentStaging: recovered.staging,
       }, env);
@@ -39,7 +39,8 @@ export async function prepareWhatsAppOutboundAttachments({ thread, message, prin
     appendLocalAttachmentFailureNotes(prepared.text, resolved.skipped.filter(
       item => !snapshotCoversPath(protectedDelivery.attachments, item.path),
     )), protectedDelivery.unavailableCount);
-  const formatted = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(body, { thread, principal, env }));
+  const stagingGaveUp = message.outboundAttachmentStaging?.state === "failed";
+  const formatted = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(stagingGaveUp ? `${body}\n\n${stagingGaveUpNotice}` : body, { thread, principal, env }));
   return {
     text: appendRemoteAttachmentFailureNotes(formatted, remote.skipped),
     attachments: protectedDelivery.attachments,
