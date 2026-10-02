@@ -241,3 +241,21 @@ test("auth method negotiation prefers a mutually supported method", () => {
   assert.equal(negotiateAuthMethod({ token_endpoint_auth_method: "private_key_jwt" }), "");
   assert.equal(negotiateAuthMethod({ token_endpoint_auth_methods_supported: ["private_key_jwt", "client_secret_basic"] }), "client_secret_basic");
 });
+
+test("a webhook POST failure stores only allowlisted diagnostics", async (t) => {
+  const { env } = await fixture(t);
+  const canary = Object.assign(new Error("private_customer_secret_abc"), { code: "sk-secretAbc123", name: "PrivateCustomerName" });
+  const fetchImpl = async (url, options) => {
+    const json = JSON.parse(options.body);
+    if (json.type === "verification") return { status: 200, text: JSON.stringify({ challenge: json.challenge }) };
+    throw canary;
+  };
+  await call(rpc("events/subscribe", { name: "thread.message.created", arguments: {}, delivery: { mode: "webhook", url: CALLBACK, secret: SECRET } }), env, { fetchImpl });
+  await appendThreadMessage("thread-a", { role: "user", source: "ui", text: "Trigger", state: "completed" }, env);
+  await runMcpEventDelivery(env, { fetchImpl });
+  const [subscription] = (await readSubscriptions(env)).subscriptions;
+  assert.equal(subscription.attempts, 1);
+  assert.equal(subscription.lastError, "Error");
+  const persisted = JSON.stringify(await readSubscriptions(env)) + JSON.stringify(await (await import("../packages/storage/src/store.js")).listEvents(env, 200));
+  assert.doesNotMatch(persisted, /private_customer_secret_abc|sk-secretAbc123|PrivateCustomerName/);
+});

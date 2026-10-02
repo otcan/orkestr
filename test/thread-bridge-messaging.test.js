@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appendThreadMessage, createThread, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, deleteThreadMessage, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser } from "../packages/core/src/users.js";
 import { listBridgeThreads, readBridgeChanges, readBridgeHistory } from "../packages/core/src/thread-bridge.js";
-import { bridgeThreadStatus, sendBridgeMessage, waitForBridgeReply } from "../packages/core/src/thread-bridge-messaging.js";
+import { bridgeThreadStatus, correlatedFinal, inputTurnOutcome, sendBridgeMessage, waitForBridgeReply } from "../packages/core/src/thread-bridge-messaging.js";
 import { callThreadBridgeTool } from "../packages/core/src/thread-bridge-mcp.js";
 import { runMcpEventDelivery } from "../packages/core/src/mcp-event-delivery.js";
 import { subscribeEvent } from "../packages/core/src/mcp-events.js";
@@ -107,4 +107,177 @@ test("sending is rate-limited per assistant", async (t) => {
   await fs.writeFile(path.join(env.ORKESTR_HOME, "thread-bridge-grants.json"), JSON.stringify([{ ...grant, agentId: "agent-rate" }]));
   for (let index = 0; index < 30; index += 1) await sendBridgeMessage("thread-a", { text: `m${index}`, requestId: `rate-${index}` }, limited, env, NO_DELIVERY);
   await assert.rejects(sendBridgeMessage("thread-a", { text: "one more", requestId: "rate-31" }, limited, env), /bridge_message_rate_limited/);
+});
+
+// --- wait_for_reply: timing and precise input-to-reply correlation ---------
+
+const finalFor = (parentMessageId, text, extra = {}) => ({ role: "assistant", source: "claude-code", phase: "final_answer", state: "completed", text, parentMessageId, ...extra });
+
+test("wait_for_reply waits before the answer exists and returns it when it arrives", async (t) => {
+  const env = await fixture(t);
+  const sent = await sendBridgeMessage("thread-a", { text: "Please summarize", requestId: "before" }, principal, env, NO_DELIVERY);
+  const started = Date.now();
+  const waiting = waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 10, pollMs: 50 }, env);
+  setTimeout(() => { void appendThreadMessage("thread-a", finalFor(sent.messageId, "Summary ready."), env); }, 300);
+  const result = await waiting;
+  assert.equal(result.status, "answered");
+  assert.equal(result.reply.text, "Summary ready.");
+  assert.ok(Date.now() - started >= 250, "it really waited for the answer");
+});
+
+test("wait_for_reply returns still_working at the timeout and an existing answer immediately", async (t) => {
+  const env = await fixture(t);
+  const sent = await sendBridgeMessage("thread-a", { text: "Long task", requestId: "timeout" }, principal, env, NO_DELIVERY);
+  const started = Date.now();
+  const pending = await waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 1, pollMs: 50 }, env);
+  assert.equal(pending.status, "still_working");
+  assert.ok(Date.now() - started < 3000);
+  const answer = await appendThreadMessage("thread-a", finalFor(sent.messageId, "Finished."), env);
+  const done = await waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 1, pollMs: 50 }, env);
+  assert.equal(done.status, "answered");
+  assert.equal(done.reply.messageId, answer.id);
+});
+
+test("wait_for_reply never takes another input's answer in an active thread", async (t) => {
+  const env = await fixture(t);
+  const sent = await sendBridgeMessage("thread-a", { text: "Mine", requestId: "mine" }, principal, env, NO_DELIVERY);
+  // Activity after our input: the owner's own input and its answer.
+  const other = await appendThreadMessage("thread-a", { role: "user", source: "ui", text: "Owner question", state: "completed" }, env);
+  await appendThreadMessage("thread-a", finalFor(other.id, "Answer to the owner."), env);
+  await appendThreadMessage("thread-a", { role: "assistant", source: "watcher-alert", phase: "final_answer", state: "completed", text: "Unrelated alert" }, env);
+  const pending = await waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 1, pollMs: 50 }, env);
+  assert.equal(pending.status, "still_working", "later finals for other inputs do not count");
+  const mine = await appendThreadMessage("thread-a", finalFor(sent.messageId, "Answer to the assistant."), env);
+  const answered = await waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 1 }, env);
+  assert.equal(answered.reply.messageId, mine.id);
+  assert.equal(answered.reply.text, "Answer to the assistant.");
+});
+
+test("an answer from the same runtime turn counts when several inputs were batched", async (t) => {
+  const env = await fixture(t);
+  const first = await sendBridgeMessage("thread-a", { text: "First", requestId: "batch-1" }, principal, env, NO_DELIVERY);
+  const second = await sendBridgeMessage("thread-a", { text: "Second", requestId: "batch-2" }, principal, env, NO_DELIVERY);
+  await updateThreadMessage("thread-a", first.messageId, { state: "completed", executorTurnId: "claude_turn_batchAAAAAAAAAAAA" }, env);
+  await updateThreadMessage("thread-a", second.messageId, { state: "completed", executorTurnId: "claude_turn_batchAAAAAAAAAAAA" }, env);
+  await appendThreadMessage("thread-a", finalFor(second.messageId, "Both handled.", { executorTurnId: "claude_turn_batchAAAAAAAAAAAA" }), env);
+  const result = await waitForBridgeReply("thread-a", first.messageId, principal, { timeoutSeconds: 1 }, env);
+  assert.equal(result.status, "answered");
+  assert.equal(result.reply.text, "Both handled.");
+});
+
+test("wait_for_reply reports turns that finish without a reply, and stops when cancelled", async (t) => {
+  const env = await fixture(t);
+  const silent = await sendBridgeMessage("thread-a", { text: "Just note this", requestId: "silent" }, principal, env, NO_DELIVERY);
+  await appendThreadMessage("thread-a", finalFor(silent.messageId, "NO_REPLY"), env);
+  assert.equal((await waitForBridgeReply("thread-a", silent.messageId, principal, { timeoutSeconds: 1 }, env)).status, "completed_without_reply");
+
+  // Only the runtime's record that this input's own turn completed counts.
+  const noReply = await sendBridgeMessage("thread-a", { text: "Ends without a final", requestId: "no-final" }, principal, env, NO_DELIVERY);
+  await updateThreadMessage("thread-a", noReply.messageId, { state: "completed", executorTurnId: "claude_turn_quietAAAAAAAAAAAA" }, env);
+  await updateThread("thread-a", { runtime: { activeTurnId: null, lastTurnId: "claude_turn_quietAAAAAAAAAAAA", lastTurnStatus: "completed", state: "ready" } }, env);
+  const noFinal = await waitForBridgeReply("thread-a", noReply.messageId, principal, { timeoutSeconds: 10, pollMs: 100 }, env);
+  assert.equal(noFinal.status, "completed_without_reply");
+  assert.equal(noFinal.reason, "no_final_answer");
+
+  const cancelled = await sendBridgeMessage("thread-a", { text: "Client goes away", requestId: "cancel" }, principal, env, NO_DELIVERY);
+  const controller = new AbortController();
+  const started = Date.now();
+  setTimeout(() => controller.abort(), 200);
+  const stopped = await waitForBridgeReply("thread-a", cancelled.messageId, principal, { timeoutSeconds: 30, pollMs: 1000, signal: controller.signal }, env);
+  assert.equal(stopped.status, "still_working");
+  assert.ok(Date.now() - started < 2000, "an aborted wait returns promptly");
+});
+
+test("Codex acceptance lifecycle: an input marked completed at turn/start is not a finished turn", async (t) => {
+  const env = await fixture(t);
+  // Real Codex adapter: turn/start accepted -> input completed with its turn
+  // id immediately, runtime active on that turn, answer arrives later.
+  const sent = await sendBridgeMessage("thread-a", { text: "Codex task", requestId: "codex-accept" }, principal, env, NO_DELIVERY);
+  await updateThreadMessage("thread-a", sent.messageId, { state: "completed", deliveryState: "delivered", codexTurnId: "turn_codex_1", codexThreadId: "codex_gen_a" }, env);
+  await updateThread("thread-a", { state: "working", runtime: { runtimeKind: "codex-app-server", codexThreadId: "codex_gen_a", activeTurnId: "turn_codex_1", state: "working" } }, env);
+  const started = Date.now();
+  const waiting = waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 15, pollMs: 100 }, env);
+  setTimeout(async () => {
+    // Codex projects the final with the turn id, then records the turn end.
+    await appendThreadMessage("thread-a", { role: "assistant", source: "codex-app-server", phase: "final_answer", state: "completed", text: "Codex answer", codexTurnId: "turn_codex_1", codexThreadId: "codex_gen_a" }, env);
+    await updateThread("thread-a", { state: "ready", runtime: { runtimeKind: "codex-app-server", codexThreadId: "codex_gen_a", activeTurnId: null, lastTurnId: "turn_codex_1", lastTurnStatus: "completed", state: "ready" } }, env);
+  }, 4500);
+  const result = await waiting;
+  assert.equal(result.status, "answered", "no false completed_without_reply while the Codex turn runs past the grace period");
+  assert.equal(result.reply.text, "Codex answer");
+  assert.ok(Date.now() - started >= 4000);
+
+  const running = await sendBridgeMessage("thread-a", { text: "Still running", requestId: "codex-running" }, principal, env, NO_DELIVERY);
+  await updateThreadMessage("thread-a", running.messageId, { state: "completed", codexTurnId: "turn_codex_2", codexThreadId: "codex_gen_a" }, env);
+  await updateThread("thread-a", { runtime: { runtimeKind: "codex-app-server", codexThreadId: "codex_gen_a", activeTurnId: "turn_codex_2", lastTurnId: "turn_codex_1", lastTurnStatus: "completed", state: "working" } }, env);
+  assert.equal((await waitForBridgeReply("thread-a", running.messageId, principal, { timeoutSeconds: 4, pollMs: 100 }, env)).status, "still_working");
+
+  await updateThread("thread-a", { runtime: { runtimeKind: "codex-app-server", codexThreadId: "codex_gen_a", activeTurnId: null, lastTurnId: "turn_codex_2", lastTurnStatus: "failed", state: "ready" } }, env);
+  assert.equal((await waitForBridgeReply("thread-a", running.messageId, principal, { timeoutSeconds: 4, pollMs: 100 }, env)).status, "failed");
+
+  // No evidence about this input's turn (runtime moved on): keep waiting.
+  const unknown = await sendBridgeMessage("thread-a", { text: "Unknown turn", requestId: "codex-unknown" }, principal, env, NO_DELIVERY);
+  await updateThreadMessage("thread-a", unknown.messageId, { state: "completed", codexTurnId: "turn_codex_3", codexThreadId: "codex_gen_a" }, env);
+  await updateThread("thread-a", { runtime: { runtimeKind: "codex-app-server", codexThreadId: "codex_gen_a", activeTurnId: null, lastTurnId: "turn_codex_4", lastTurnStatus: "completed", state: "ready" } }, env);
+  assert.equal((await waitForBridgeReply("thread-a", unknown.messageId, principal, { timeoutSeconds: 4, pollMs: 100 }, env)).status, "still_working");
+});
+
+test("hidden, deleted and superseded finals never mask a visible replacement; NO_REPLY is explicit", async (t) => {
+  const env = await fixture(t);
+  const sent = await sendBridgeMessage("thread-a", { text: "Answer me", requestId: "replaced" }, principal, env, NO_DELIVERY);
+  // Markers are written the way production writes them: by updates.
+  const superseded = await appendThreadMessage("thread-a", finalFor(sent.messageId, "NO_REPLY"), env);
+  await updateThreadMessage("thread-a", superseded.id, { supersededBy: "replacement" }, env);
+  const deleted = await appendThreadMessage("thread-a", finalFor(sent.messageId, "Draft that was deleted"), env);
+  await deleteThreadMessage("thread-a", deleted.id, { reason: "test" }, env);
+  const hidden = await appendThreadMessage("thread-a", finalFor(sent.messageId, "Internal note"), env);
+  await updateThreadMessage("thread-a", hidden.id, { visibility: "internal" }, env);
+  const visible = await appendThreadMessage("thread-a", finalFor(sent.messageId, "The real answer."), env);
+  const result = await waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 1, pollMs: 50 }, env);
+  assert.equal(result.status, "answered");
+  assert.equal(result.reply.messageId, visible.id);
+
+  // Pure helper: a visible answer beats a NO_REPLY; only-ineligible rows yield nothing.
+  const input = { id: "in-1" };
+  const base = { role: "assistant", phase: "final_answer", state: "completed", parentMessageId: "in-1" };
+  assert.equal(correlatedFinal(input, [{ ...base, id: "a", text: "NO_REPLY" }, { ...base, id: "b", text: "Real" }]).reply.id, "b");
+  assert.equal(correlatedFinal(input, [{ ...base, id: "a", text: "NO_REPLY" }]).noReply.id, "a");
+  assert.equal(correlatedFinal(input, [{ ...base, id: "a", text: "Old", supersededBy: "x" }, { ...base, id: "c", text: "Gone", deletedAt: "2026-01-01" }]), null);
+});
+
+test("same-turn matching requires the same runtime generation", () => {
+  const final = (extra) => ({ role: "assistant", phase: "final_answer", state: "completed", text: "Answer", parentMessageId: "someone-else", ...extra });
+  const inputA = { id: "in-a", codexTurnId: "1", codexThreadId: "codex_gen_a" };
+  // Codex turn ids repeat per generation: generation B's turn "1" is not ours.
+  assert.equal(correlatedFinal(inputA, [final({ id: "b1", codexTurnId: "1", codexThreadId: "codex_gen_b" })]), null);
+  assert.equal(correlatedFinal(inputA, [final({ id: "b2", codexTurnId: "1" })]), null, "a final without generation is not matched by turn alone");
+  assert.equal(correlatedFinal(inputA, [final({ id: "a1", codexTurnId: "1", codexThreadId: "codex_gen_a" })]).reply.id, "a1");
+  // Without any generation only unique Claude attempt ids may match by turn.
+  assert.equal(correlatedFinal({ id: "in-x", executorTurnId: "1" }, [final({ id: "x1", executorTurnId: "1" })]), null);
+  assert.equal(correlatedFinal({ id: "in-c", executorTurnId: "claude_turn_abcdefABCDEF123" }, [final({ id: "c1", executorTurnId: "claude_turn_abcdefABCDEF123" })]).reply.id, "c1");
+
+  // Turn-end evidence from the runtime counts only for the input's generation.
+  const thread = (generation) => ({ runtime: { codexThreadId: generation, activeTurnId: null, lastTurnId: "1", lastTurnStatus: "completed" } });
+  assert.equal(inputTurnOutcome(inputA, thread("codex_gen_b")), null);
+  assert.equal(inputTurnOutcome(inputA, thread("codex_gen_a")), "completed");
+});
+
+test("a generation-B final with the same turn id does not answer a generation-A input", async (t) => {
+  const env = await fixture(t);
+  const sent = await sendBridgeMessage("thread-a", { text: "Gen A question", requestId: "gen-a" }, principal, env, NO_DELIVERY);
+  await updateThreadMessage("thread-a", sent.messageId, { state: "completed", codexTurnId: "1", codexThreadId: "codex_gen_a" }, env);
+  await updateThread("thread-a", { runtime: { runtimeKind: "codex-app-server", codexThreadId: "codex_gen_b", activeTurnId: null, lastTurnId: "1", lastTurnStatus: "completed", state: "ready" } }, env);
+  await appendThreadMessage("thread-a", { role: "assistant", source: "codex-app-server", phase: "final_answer", state: "completed", text: "Gen B answer", codexTurnId: "1", codexThreadId: "codex_gen_b" }, env);
+  const result = await waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 4, pollMs: 100 }, env);
+  assert.equal(result.status, "still_working", "neither the other generation's final nor its turn record ends this wait");
+});
+
+test("a prolonged wait with a live signal leaves no abort listeners behind", async (t) => {
+  const env = await fixture(t);
+  const { getEventListeners } = await import("node:events");
+  const sent = await sendBridgeMessage("thread-a", { text: "Slow", requestId: "listeners" }, principal, env, NO_DELIVERY);
+  const controller = new AbortController();
+  const result = await waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 2, pollMs: 10, signal: controller.signal }, env);
+  assert.equal(result.status, "still_working");
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
 });

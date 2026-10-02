@@ -7,7 +7,8 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { bridgeMessageVisible } from "../../storage/src/thread-bridge-journal.js";
 import { authorization, target } from "./thread-bridge.js";
-import { enqueueThreadInput, getThreadMessage, listThreadMessageCandidates } from "./threads.js";
+import { enqueueThreadInput, getThread, getThreadMessage, listThreadMessageCandidates } from "./threads.js";
+import { currentCodexGenerationMatches } from "./codex-generation.js";
 
 export const BRIDGE_MESSAGE_SOURCE = "thread_bridge_message";
 const MAX_MESSAGES_PER_HOUR = 30;
@@ -87,22 +88,123 @@ export async function bridgeThreadStatus(threadId, principal, env = process.env)
   };
 }
 
-// Waits (bounded) for the agent's answer to a message sent with send_message.
-export async function waitForBridgeReply(threadId, messageId, principal, { timeoutSeconds = 30, pollMs = 1000 } = {}, env = process.env) {
+function turnId(message = {}) {
+  return String(message.executorTurnId || message.codexTurnId || "").trim();
+}
+
+// Runtime generation a turn id belongs to. Codex turn ids repeat per Codex
+// thread, so the Codex thread id is the generation; Claude attempt ids are
+// random per attempt (claude_turn_<96-bit>) and identify themselves.
+function turnGeneration(message = {}) {
+  return String(message.codexThreadId || message.executorThreadId || "").trim();
+}
+
+function claudeAttemptId(id = "") {
+  return /^claude_turn_[A-Za-z0-9_-]{12,}$/.test(id);
+}
+
+function sameRuntimeTurn(input, message) {
+  const inputTurn = turnId(input);
+  if (!inputTurn || turnId(message) !== inputTurn) return false;
+  const inputGeneration = turnGeneration(input);
+  const messageGeneration = turnGeneration(message);
+  if (inputGeneration || messageGeneration) return Boolean(inputGeneration) && inputGeneration === messageGeneration;
+  return claudeAttemptId(inputTurn);
+}
+
+// A final that can stand as the answer: completed and not deleted, hidden or
+// superseded (a replaced final must not mask its visible replacement).
+function eligibleFinal(message) {
+  return message?.role === "assistant" && message.phase === "final_answer" && message.state === "completed" &&
+    !message.deletedAt && !message.supersededBy && String(message.visibility || "").trim().toLowerCase() !== "internal";
+}
+
+function noReplyFinal(message) {
+  return String(message?.text || "").trim() === "NO_REPLY";
+}
+
+// The answer to one input among eligible finals: parentMessageId is the
+// input, or the same runtime turn of the same generation (batched inputs). A
+// later final for another input never counts. Returns { reply } with a
+// visible answer (preferred) or { noReply } for an explicit NO_REPLY.
+export function correlatedFinal(input, candidates = []) {
+  const matches = candidates.filter((message) => eligibleFinal(message) &&
+    (message.parentMessageId === input.id || sameRuntimeTurn(input, message)));
+  const reply = matches.find((message) => !noReplyFinal(message) && bridgeMessageVisible(message));
+  if (reply) return { reply };
+  const noReply = matches.find(noReplyFinal);
+  return noReply ? { noReply } : null;
+}
+
+const failedTurnStatuses = new Set(["failed", "interrupted", "aborted", "cancelled", "canceled"]);
+const NO_FINAL_GRACE_MS = 3000;
+
+// Whether the runtime turn that took this input has ended, from the
+// runtime's own turn record. Input state is not evidence: the Codex adapter
+// marks an input "completed" as soon as turn/start is accepted while the turn
+// keeps running. Unknown (no turn id yet, or the runtime has moved on) is
+// treated as not ended, so a reply is never declared missing early.
+export function inputTurnOutcome(input = {}, thread = {}) {
+  const inputTurn = turnId(input);
+  const runtime = thread?.runtime || {};
+  if (!inputTurn || String(runtime.activeTurnId || "") === inputTurn) return null;
+  // The runtime record describes the thread's current generation only; an
+  // input from another Codex generation with the same turn id is no evidence.
+  const inputGeneration = turnGeneration(input);
+  if (inputGeneration ? !currentCodexGenerationMatches(thread || {}, inputGeneration).ok : !claudeAttemptId(inputTurn)) return null;
+  if (String(runtime.lastTurnId || "") !== inputTurn) return null;
+  const status = String(runtime.lastTurnStatus || "").toLowerCase();
+  if (status === "completed") return "completed";
+  return failedTurnStatuses.has(status) ? "failed" : null;
+}
+
+// Resolves after `ms` or on abort; the abort listener is removed when the
+// timer fires, so long waits do not accumulate one listener per poll.
+export function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const onAbort = () => { clearTimeout(timer); resolve(); };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener?.("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+  });
+}
+
+// Waits (bounded) for the agent's answer to a message sent with
+// send_message. Returns answered, failed, completed_without_reply or
+// still_working; stops early when `signal` aborts (client disconnected).
+export async function waitForBridgeReply(threadId, messageId, principal, { timeoutSeconds = 30, pollMs = 1000, signal = null } = {}, env = process.env) {
   const grant = await authorization(principal, env);
   await target(threadId, grant, "observe", env);
   const sent = await getThreadMessage(threadId, String(messageId || ""), env);
   if (!sent || sent.source !== BRIDGE_MESSAGE_SOURCE || sent.bridgeAgentId !== principal.agentId) fail("bridge_message_not_found", 404);
   const deadline = Date.now() + Math.min(MAX_WAIT_SECONDS, Math.max(1, Number(timeoutSeconds) || 30)) * 1000;
+  let terminalSince = 0;
   for (;;) {
     await authorization(principal, env);
+    const input = (await getThreadMessage(threadId, sent.id, env)) || sent;
     const after = await listThreadMessageCandidates(threadId, { afterCursor: Number(sent.cursor || 0) }, env);
-    const finals = after.filter(finalAnswer);
-    const reply = finals.find((message) => message.parentMessageId === sent.id) || finals[0];
-    const input = await getThreadMessage(threadId, sent.id, env);
-    if (reply) return { status: "answered", inputState: input?.state || null, reply: summarize(reply, 16000) };
-    if (input?.state === "failed") return { status: "failed", inputState: "failed", error: String(input.error || "").slice(0, 500) || null };
-    if (Date.now() >= deadline) return { status: "still_working", inputState: input?.state || null, hint: "Call wait_for_reply again, or subscribe to thread.message.created." };
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const match = correlatedFinal(input, after);
+    if (match?.reply) return { status: "answered", inputState: input.state || null, reply: summarize(match.reply, 16000) };
+    if (match?.noReply) return { status: "completed_without_reply", inputState: input.state || null, reason: "no_reply" };
+    if (input.state === "failed" || input.state === "interrupted" || input.state === "cancelled") {
+      return { status: "failed", inputState: input.state, error: String(input.error || "").slice(0, 500) || null };
+    }
+    // Only the runtime's record that this input's own turn ended counts; the
+    // final may be projected just after it, hence the short grace.
+    const outcome = inputTurnOutcome(input, await getThread(threadId, env).catch(() => null));
+    if (outcome === "failed") return { status: "failed", inputState: input.state || null, error: "turn_failed" };
+    if (outcome === "completed") {
+      terminalSince ||= Date.now();
+      if (Date.now() - terminalSince >= NO_FINAL_GRACE_MS) return { status: "completed_without_reply", inputState: input.state || null, reason: "no_final_answer" };
+    } else {
+      terminalSince = 0;
+    }
+    if (Date.now() >= deadline || signal?.aborted) {
+      return { status: "still_working", inputState: input.state || null, hint: "Call wait_for_reply again, or subscribe to thread.message.created." };
+    }
+    await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())), signal);
   }
 }

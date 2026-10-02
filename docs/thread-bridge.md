@@ -259,8 +259,34 @@ server for clients such as ChatGPT plugins:
   on; it is idempotent by `request_id`, limited to 30 per hour per assistant,
   carries no chat route (the answer is not sent to WhatsApp) and is never
   echoed back to the sending assistant as an event. `wait_for_reply` waits
-  at most 45 s for the answer; `get_thread_status` reports working, queued,
-  idle or last_turn_failed. Connections approved before messaging existed must
+  at most 45 s for the answer to exactly that input: a completed final whose
+  `parentMessageId` is the input, or one from the same runtime turn of the
+  same generation when several inputs were batched (Codex turn ids repeat per
+  Codex thread, so the Codex thread id must match; Claude attempt ids are
+  unique). Deleted, internal or superseded finals are skipped, a visible
+  answer wins over `NO_REPLY`, and later finals for other inputs never count. It
+  returns `answered`, `failed`, `completed_without_reply` (a NO_REPLY final,
+  or the runtime recorded the input's own turn as completed without a final)
+  or `still_working`. Input state is not turn evidence: Codex marks an input
+  completed as soon as `turn/start` is accepted, so only the runtime's
+  `lastTurnId`/`lastTurnStatus` for that turn ends a wait early; without such
+  evidence the wait runs to its timeout. Protocol errors (header mismatch,
+  unsupported version, notifications) are answered before any streaming and
+  keep their HTTP status. When the client accepts
+  `text/event-stream`, the call is answered as an SSE stream that sends
+  keep-alive comments every 2 s, so idle or first-byte timeouts cannot cut it
+  off; a client disconnect cancels the wait. `get_thread_status` reports
+  working, queued, idle or last_turn_failed.
+- Every `POST /mcp` request is recorded as an `mcp_request` event (protocol
+  era, method, tool, duration, outcome, HTTP status, JSON-RPC error code,
+  client disconnect). Arguments, message content and raw error messages are
+  never recorded: failures keep only `errorClass` and `errorCode` from
+  explicit allowlists (`safe-error-diagnostics.js`; anything else becomes
+  `Error` / `null`, whatever its syntax) and an opaque `errorId`, which is
+  also returned to the client in `error.data.errorId` of the JSON-RPC
+  `-32603` so a reported failure can be matched to its record. Legacy (SDK)
+  responses are classified from a bounded in-memory copy of the written body
+  (`ok`, `tool_error`, `rpc_error` + code); the copy is not stored. Connections approved before messaging existed must
   reconnect to get the new scope.
 - OAuth 2.1 with PKCE (S256) and dynamic client registration:
   `/.well-known/oauth-protected-resource[/mcp]`,

@@ -106,14 +106,15 @@ const tools = {
   },
   wait_for_reply: {
     title: "Wait for a thread's reply",
-    description: "Wait up to timeout_seconds (max 45) for the agent's answer to a message you sent with send_message. Returns status answered (with the reply), failed, or still_working (call again later).",
+    description: "Wait up to timeout_seconds (max 45) for the agent's answer to the message you sent with send_message (matched to that message exactly, not to other activity in the thread). Returns status answered (with the reply), failed, completed_without_reply, or still_working (call again later).",
     inputSchema: {
       thread_id: z.string().min(1).max(128),
       message_id: z.string().min(1).max(128),
       timeout_seconds: z.number().int().min(1).max(45).optional(),
     },
     readOnly: true,
-    run: (input, principal, env) => waitForBridgeReply(input.thread_id, input.message_id, principal, { timeoutSeconds: input.timeout_seconds || 30 }, env),
+    longRunning: true,
+    run: (input, principal, env, context = {}) => waitForBridgeReply(input.thread_id, input.message_id, principal, { timeoutSeconds: input.timeout_seconds || 30, signal: context.signal || null }, env),
   },
 };
 
@@ -132,14 +133,20 @@ export function threadBridgeToolDefinitions() {
 }
 
 // Validates arguments and runs one tool; returns a CallToolResult.
-export async function callThreadBridgeTool(name, args, principal, env = process.env) {
+// Tools that may hold the request for a while; the HTTP layer streams them.
+export function threadBridgeToolIsLongRunning(name) {
+  return Object.prototype.hasOwnProperty.call(tools, name) && tools[name].longRunning === true;
+}
+
+// `context.signal` aborts long-running tools when the client disconnects.
+export async function callThreadBridgeTool(name, args, principal, env = process.env, context = {}) {
   const tool = Object.prototype.hasOwnProperty.call(tools, name) ? tools[name] : null;
   if (!tool) return null;
   const parsed = z.object(tool.inputSchema).safeParse(args || {});
   if (!parsed.success) return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: "invalid_arguments", issues: parsed.error.issues.map((issue) => issue.message) }) }] };
   try {
     requireScope(principal, tool.scope || "threads:read");
-    return result(await tool.run(parsed.data, principal, env));
+    return result(await tool.run(parsed.data, principal, env, context));
   } catch (error) {
     return failure(error);
   }
@@ -153,7 +160,7 @@ export function createThreadBridgeMcpServer({ principal, env = process.env }) {
       description: tool.description,
       inputSchema: tool.inputSchema,
       annotations: annotations(tool),
-    }, async (input) => callThreadBridgeTool(name, input, principal, env));
+    }, async (input, extra) => callThreadBridgeTool(name, input, principal, env, { signal: extra?.signal || null }));
   }
   return server;
 }
