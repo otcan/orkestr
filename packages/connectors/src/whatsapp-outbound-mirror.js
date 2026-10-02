@@ -160,7 +160,10 @@ export function threadBridgeWhatsAppReplyOrigin({ parent = null, thread = null, 
   if (kind !== "thread" || parent?.source !== "thread_bridge_message" || parent.bridgeWhatsAppReply === false) return false;
   if (!threadAllowsWhatsAppMirroring(thread)) return false;
   const binding = thread?.binding || {};
-  if (String(binding.connector || "").trim().toLowerCase() !== "whatsapp") return false;
+  // Same rule as request-time eligibility (whatsappReplyDeliveryBindingEligible)
+  // and every other binding check: an omitted connector is an implicit
+  // WhatsApp binding, so established bindings are not silently dropped.
+  if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") return false;
   if (!pickString(binding.chatId)) return false;
   const intent = trustedBridgeReplyDeliveryIntent(parent);
   if (!intent) return false;

@@ -322,3 +322,41 @@ test("MCP approval copy distinguishes passive comments from WhatsApp-delivered e
   assert.match(controller, /no WhatsApp message is sent when the thread has no eligible binding/);
   assert.doesNotMatch(controller, /agent's answer stays in Orkestr and is not sent to WhatsApp/);
 });
+
+test("an implicit WhatsApp binding (connector omitted) is delivered, consistent with request-time eligibility", async (t) => {
+  const { connector: _omitted, ...implicitBinding } = eligibleBinding;
+  const env = await fixture(t, { binding: implicitBinding });
+  const sent = await sendBridgeMessage("thread-a", { text: "Run the implicit-binding task", requestId: "implicit-1" }, principal, env, { deliver() {} });
+  const [input] = (await listThreadMessages("thread-a", env)).filter((message) => message.id === sent.messageId);
+  assert.equal(input.replyDeliveryIntent?.target?.chatId, implicitBinding.chatId, "request time treats the binding as WhatsApp");
+  const thread = { id: "thread-a", ownerUserId: "owner-a", binding: implicitBinding };
+  assert.equal(threadBridgeWhatsAppReplyOrigin({ parent: input, thread, kind: "thread" }), true, "delivery time agrees");
+  const answer = await appendThreadMessage("thread-a", {
+    role: "assistant", source: "claude-code", phase: "final_answer", state: "completed",
+    parentMessageId: input.id, text: "Implicit binding answer.",
+  }, env);
+  const sends = [];
+  const fetchImpl = async (url, options = {}) => {
+    if (options.method === "POST") sends.push({ body: JSON.parse(String(options.body || "{}")) });
+    return response({ ok: true, ids: ["synthetic-wa-receipt"] });
+  };
+  const result = await deliverWhatsAppReplies(env, fetchImpl);
+  assert.equal(result.delivered.some((delivery) => delivery.messageId === answer.id), true, "no silent drop");
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].body.to, implicitBinding.chatId);
+});
+
+test("a binding with an explicit non-WhatsApp connector is refused consistently up front", async (t) => {
+  const env = await fixture(t, { binding: { ...eligibleBinding, connector: "synthetic-other" } });
+  const sent = await sendBridgeMessage("thread-a", { text: "Other connector", requestId: "other-1" }, principal, env, { deliver() {} });
+  const [input] = (await listThreadMessages("thread-a", env)).filter((message) => message.id === sent.messageId);
+  assert.equal(input.replyDeliveryIntent?.status, "policy_skipped", "the refusal is recorded at request time");
+  assert.equal(input.replyDeliveryIntent?.reason, "binding_not_eligible");
+  await appendThreadMessage("thread-a", { role: "assistant", source: "claude-code", phase: "final_answer", state: "completed", parentMessageId: input.id, text: "Not for WhatsApp." }, env);
+  const sends = [];
+  await deliverWhatsAppReplies(env, async (url, options = {}) => {
+    if (options.method === "POST") sends.push(options);
+    return response({ ok: true, ids: ["x"] });
+  });
+  assert.equal(sends.length, 0);
+});
