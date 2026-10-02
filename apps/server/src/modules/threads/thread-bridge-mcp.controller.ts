@@ -1,0 +1,156 @@
+import { Body, Controller, Delete, Get, Headers, HttpCode, Post, Query, Req, Res } from "@nestjs/common";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import {
+  authorizationServerMetadata,
+  createConsent,
+  decideConsent,
+  exchangeMcpToken,
+  mcpOAuthEnabled,
+  mcpPrincipalFromAuthorization,
+  mcpPublicBase,
+  protectedResourceMetadata,
+  registerMcpClient,
+  revokeMcpToken,
+  validateAuthorizeRequest,
+} from "../../../../../packages/core/src/mcp-oauth.js";
+import { createThreadBridgeMcpServer } from "../../../../../packages/core/src/thread-bridge-mcp.js";
+import { keycloakOidcEnabled } from "../../../../../packages/core/src/keycloak-oidc.js";
+import { httpError } from "../../common/http.js";
+
+function assertEnabled() {
+  if (!mcpOAuthEnabled()) throw httpError("not_found", 404);
+}
+
+function escapeHtml(value: unknown) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char] as string));
+}
+
+function oauthFailure(response: any, error: any) {
+  const status = Number(error?.statusCode || 400);
+  return response.status(status).json({ error: error?.oauthError || "invalid_request", error_description: error?.description || String(error?.message || "") });
+}
+
+// Signed-in Orkestr user for the consent step; pre-pairing requests are
+// marked anonymous by the auth middleware and never count as a login.
+function signedInUser(request: any) {
+  const principal = request.orkestrPrincipal;
+  if (!principal || request.orkestrAnonymous === true || !principal.userId) return null;
+  return { userId: String(principal.userId), sessionId: String(request.orkestrSecuritySession?.id || "") };
+}
+
+function consentPage({ request, consentId, userId }: any) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connect ${escapeHtml(request.client.clientName)} to Orkestr</title>
+<style>body{font-family:system-ui,sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem;line-height:1.5}button{font-size:1rem;padding:.6rem 1.2rem;margin-right:.6rem}li{margin:.3rem 0}</style></head>
+<body><h1>Connect ${escapeHtml(request.client.clientName)}</h1>
+<p>Signed in to Orkestr as <strong>${escapeHtml(userId)}</strong>. <strong>${escapeHtml(request.client.clientName)}</strong> (returns to ${escapeHtml(request.redirectHost)}) asks to:</p>
+<ul><li>read the visible messages of <strong>all your threads</strong>, including future ones;</li>
+<li>add comments to your threads, labelled as coming from this assistant.</li></ul>
+<p>Comments are context only: they cannot start, steer or approve work and are never sent to WhatsApp. Access lasts 90 days; you can revoke it at any time.</p>
+<form method="post" action="/mcp-oauth/authorize"><input type="hidden" name="consent_id" value="${escapeHtml(consentId)}">
+<button type="submit" name="decision" value="approve">Allow</button><button type="submit" name="decision" value="deny">Deny</button></form></body></html>`;
+}
+
+@Controller()
+export class ThreadBridgeMcpController {
+  @Get(".well-known/oauth-protected-resource")
+  resourceMetadata() {
+    assertEnabled();
+    return protectedResourceMetadata();
+  }
+
+  @Get(".well-known/oauth-protected-resource/mcp")
+  resourceMetadataForPath() {
+    assertEnabled();
+    return protectedResourceMetadata();
+  }
+
+  @Get(".well-known/oauth-authorization-server")
+  serverMetadata() {
+    assertEnabled();
+    return authorizationServerMetadata();
+  }
+
+  @Post("mcp-oauth/register")
+  @HttpCode(201)
+  async register(@Body() body: Record<string, unknown> = {}, @Res() response: any) {
+    assertEnabled();
+    try { return response.status(201).json(await registerMcpClient(body)); } catch (error) { return oauthFailure(response, error); }
+  }
+
+  @Get("mcp-oauth/authorize")
+  async authorize(@Req() request: any, @Query() query: Record<string, string>, @Res() response: any) {
+    assertEnabled();
+    let validated: any;
+    try { validated = await validateAuthorizeRequest(query); } catch (error: any) {
+      return response.status(400).type("text/plain").send(`Cannot connect: ${error?.description || error?.message}`);
+    }
+    const user = signedInUser(request);
+    if (!user) {
+      const returnTo = `/mcp-oauth/authorize?${new URLSearchParams(query).toString()}`;
+      if (keycloakOidcEnabled()) return response.status(302).header("location", `/auth/login?return=${encodeURIComponent(returnTo)}`).send("Redirecting to sign in.");
+      return response.status(401).type("text/plain").send("Sign in to Orkestr in this browser first, then start the connection again.");
+    }
+    const consentId = await createConsent(validated, user);
+    return response.status(200).type("text/html").header("x-frame-options", "DENY").send(consentPage({ request: validated, consentId, userId: user.userId }));
+  }
+
+  @Post("mcp-oauth/authorize")
+  async decide(@Req() request: any, @Body() body: Record<string, string> = {}, @Res() response: any) {
+    assertEnabled();
+    const user = signedInUser(request);
+    if (!user) return response.status(401).type("text/plain").send("Sign in to Orkestr first.");
+    try {
+      const location = await decideConsent({ consentId: body.consent_id, userId: user.userId, sessionId: user.sessionId, approve: body.decision === "approve" });
+      return response.status(302).header("location", location).send("Redirecting.");
+    } catch (error: any) {
+      return response.status(400).type("text/plain").send(error?.description || "Approval failed.");
+    }
+  }
+
+  @Post("mcp-oauth/token")
+  async token(@Body() body: Record<string, string> = {}, @Headers("authorization") authorization = "", @Res() response: any) {
+    assertEnabled();
+    try { return response.status(200).header("pragma", "no-cache").json(await exchangeMcpToken(body, authorization)); } catch (error) { return oauthFailure(response, error); }
+  }
+
+  @Post("mcp-oauth/revoke")
+  @HttpCode(200)
+  async revoke(@Body() body: Record<string, string> = {}) {
+    assertEnabled();
+    await revokeMcpToken(body);
+    return {};
+  }
+
+  @Post("mcp")
+  async mcp(@Req() request: any, @Res() response: any) {
+    assertEnabled();
+    const principal = await mcpPrincipalFromAuthorization(String(request.headers?.authorization || ""));
+    if (!principal) {
+      return response.status(401)
+        .header("www-authenticate", `Bearer resource_metadata="${mcpPublicBase()}/.well-known/oauth-protected-resource/mcp"`)
+        .json({ error: "invalid_token" });
+    }
+    const server = createThreadBridgeMcpServer({ principal });
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    response.once("close", () => {
+      void transport.close().catch(() => {});
+      void server.close().catch(() => {});
+    });
+    await server.connect(transport);
+    await transport.handleRequest(request, response, request.body);
+  }
+
+  @Get("mcp")
+  mcpGet(@Res() response: any) {
+    assertEnabled();
+    return response.status(405).header("allow", "POST").json({ error: "method_not_allowed" });
+  }
+
+  @Delete("mcp")
+  mcpDelete(@Res() response: any) {
+    assertEnabled();
+    return response.status(405).header("allow", "POST").json({ error: "method_not_allowed" });
+  }
+}
+

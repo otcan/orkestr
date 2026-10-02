@@ -192,9 +192,12 @@ test("reply identity isolates idempotency and delegated comments cannot complete
     assert.equal(assistantMessage(message), false);
     assert.equal(terminalAssistantMessage(message), false);
   }
-  // A caller cannot broaden a locally configured reply grant to all threads.
+  // Comment scope comes only from the stored grant: "all" (granted through the
+  // owner's consent) allows every owned thread, an empty list allows none.
   await writeGrant({ ...grant, reply: "all" });
-  await assert.rejects(replyToBridgeThread("thread-a", input, principal, env), /bridge_thread_not_found/);
+  assert.ok((await replyToBridgeThread("thread-a", { requestId: "all-scope", text: "Comment" }, principal, env)).messageId);
+  await writeGrant({ ...grant, reply: [] });
+  await assert.rejects(replyToBridgeThread("thread-a", { requestId: "no-scope", text: "Comment" }, principal, env), /bridge_thread_not_found/);
 });
 
 test("invalid grants, JSON store, bad history continuation, and absent feature all fail closed", async t => {

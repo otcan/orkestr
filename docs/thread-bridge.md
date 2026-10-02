@@ -244,6 +244,34 @@ content classification or redaction, add a reviewed outbound content policy
 before connecting it. Never include actual account history or configuration in
 public examples, test fixtures, logs, or pull requests.
 
+## Remote MCP endpoint (stage 1)
+
+With `ORKESTR_THREAD_BRIDGE_ENABLED=1` the app origin also serves a remote MCP
+server for clients such as ChatGPT plugins:
+
+- `POST /mcp` (Streamable HTTP, stateless) with tools `list_threads`,
+  `read_thread`, `read_changes` and `comment_on_thread`.
+- OAuth 2.1 with PKCE (S256) and dynamic client registration:
+  `/.well-known/oauth-protected-resource[/mcp]`,
+  `/.well-known/oauth-authorization-server`, `/mcp-oauth/register`,
+  `/mcp-oauth/authorize`, `/mcp-oauth/token`, `/mcp-oauth/revoke`.
+- People authenticate with their normal Orkestr login (Keycloak when
+  configured). The consent page names the client and the scope (all threads,
+  comments); approving it writes the grant to `thread-bridge-grants.json`
+  (`authMethod: orkestr-oauth`, 90 days). Removing or disabling that grant
+  revokes access immediately.
+- Redirect URIs must be HTTPS on `ORKESTR_MCP_OAUTH_REDIRECT_HOSTS`
+  (default `chatgpt.com,chat.openai.com`). Access tokens last one hour;
+  refresh tokens rotate. Only token hashes are stored, under `secrets/`.
+- `ORKESTR_MCP_PUBLIC_URL` overrides the public base (default: the canonical
+  app URL).
+- History entries carry `actor.kind`: `human` only for messages typed by a
+  person (WhatsApp, web UI); timers, workers, watches, mailbox routing and CLI
+  sends are `automation`.
+
+MCP Events (push subscriptions) are not implemented yet; clients poll
+`read_changes`.
+
 ## Remaining work before a live connection
 
 The local contract above must not be confused with MCP Events support. The

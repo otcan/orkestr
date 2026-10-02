@@ -28,7 +28,7 @@ export function registerStaticFallback(app: INestApplication): void {
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.use(async (request: any, response: any, next: () => void) => {
     const url = String(request.originalUrl || request.url || "");
-    if (url.startsWith("/api/") || url.startsWith("/auth/") || url.startsWith("/oauth/") || url.startsWith("/connect/") || url === "/review/google" || url.startsWith("/review/google/") || url.startsWith("/google-marketing/oauth/")) {
+    if (url.startsWith("/api/") || url.startsWith("/auth/") || url.startsWith("/oauth/") || url.startsWith("/connect/") || url === "/review/google" || url.startsWith("/review/google/") || url.startsWith("/google-marketing/oauth/") || isMcpBridgePath(url)) {
       return next();
     }
     if (isDesktopSharePagePath(url)) {
@@ -80,6 +80,12 @@ export function registerStaticFallback(app: INestApplication): void {
       request.orkestrLauncherBoundary === true,
     );
   });
+}
+
+// Remote MCP endpoint and its OAuth server (thread-bridge-mcp.controller.ts).
+function isMcpBridgePath(requestUrl: string) {
+  const pathname = new URL(requestUrl || "/", "http://localhost").pathname;
+  return pathname === "/mcp" || pathname.startsWith("/mcp-oauth/") || pathname.startsWith("/.well-known/oauth-");
 }
 
 function isDesktopSharePagePath(requestUrl: string) {

@@ -35,7 +35,7 @@ async function authorization(principal, env) {
 }
 
 function allowed(thread, grant, scope, env) {
-  return thread && !thread.deletedAt && !isThreadRetired(thread) && resourceOwnerUserId(thread, env) === grant.ownerUserId && (scope === "reply" ? Array.isArray(grant.reply) && grant.reply.includes(thread.id) : inScope(grant.observe, thread.id));
+  return thread && !thread.deletedAt && !isThreadRetired(thread) && resourceOwnerUserId(thread, env) === grant.ownerUserId && inScope(scope === "reply" ? grant.reply : grant.observe, thread.id);
 }
 
 async function target(threadId, grant, scope, env) {
@@ -66,23 +66,37 @@ export async function readBridgeChanges(principal, options = {}, env = process.e
   return { ...page, events, lastDeliveredCursor: events.at(-1)?.cursor || null, threadIds };
 }
 
+// Only messages a person typed are "human". Timers, workers, watches, mailbox
+// routing, CLI sends and other machine inputs are role "user" in the
+// transcript but must never read as the owner's own instructions.
+const humanInputSources = new Set(["whatsapp_inbound", "whatsapp", "ui", "webui", "web", "manual", "mobile", "telegram_inbound"]);
+
+export function messageActor(message = {}) {
+  const source = String(message.source || "").trim().toLowerCase();
+  if (source === "thread_bridge_agent") return { kind: "delegated-agent", agentId: String(message.bridgeAgentId || "") };
+  if (message.role === "assistant") return { kind: "assistant" };
+  if (humanInputSources.has(source)) return { kind: "human" };
+  return { kind: "automation", source: source || "unknown" };
+}
+
 function projectMessage(message) {
   return {
     id: message.id,
     role: message.role,
     text: String(message.text || ""),
     createdAt: String(message.createdAt || ""),
-    actor: message.source === "thread_bridge_agent" ? { kind: "delegated-agent", agentId: String(message.bridgeAgentId || "") } : { kind: message.role },
+    actor: messageActor(message),
     contextOnly: true,
   };
 }
 
-export async function readBridgeHistory(threadId, principal, { after = "", limit = 100 } = {}, env = process.env) {
+export async function readBridgeHistory(threadId, principal, { after = "", limit = 100, latest = false } = {}, env = process.env) {
   const grant = await authorization(principal, env);
   await target(threadId, grant, "observe", env);
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) fail("bridge_limit_invalid", 400);
   const messages = (await listThreadMessages(threadId, env)).filter(bridgeMessageVisible);
-  const offset = after ? messages.findIndex(message => message.id === after) + 1 : 0;
+  // `latest` returns the newest page; continue forward from its last id.
+  const offset = latest && !after ? Math.max(0, messages.length - limit) : after ? messages.findIndex(message => message.id === after) + 1 : 0;
   if (after && !offset) fail("bridge_history_reset_required", 409);
   const selected = messages.slice(offset, offset + limit);
   await target(threadId, await authorization(principal, env), "observe", env);
