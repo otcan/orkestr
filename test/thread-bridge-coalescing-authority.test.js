@@ -274,3 +274,61 @@ test("MCP text is never a control command, whatever its stored metadata", async 
   const { completeLegacySettingsCommand } = await import("../packages/core/src/codex-settings-command-legacy.js");
   assert.equal(await completeLegacySettingsCommand({ id: "t" }, { id: "m", source: "thread_bridge_message", text: "/model gpt-x" }, {}, async () => { throw new Error("must not run"); }), null);
 });
+
+// Records queued before the source rule, whose "/now" was already rewritten
+// by normalizeClaudeCodeNowInputs into a forced instant steer.
+async function alreadyNormalizedOptOut(thread, env, requestId) {
+  const sent = await sendBridgeMessage(thread.id, { text: "synthetic-optout-secret", requestId, deliverToWhatsApp: false }, principal, env, NO_KICK);
+  await updateThreadMessage(thread.id, sent.messageId, {
+    commandProcessing: "", forceDeliveryAfterInterrupt: true, steerActiveTurn: true, codexDeliveryMode: "instant_steer",
+    deliveryState: "interrupt_resume_pending", observedVia: "claude_code_now_command",
+  }, env);
+  return sent;
+}
+
+test("an already-normalized queued MCP input neither interrupts nor steers", async (t) => {
+  const result = await runMixed(t, "normalized-alone", async (thread, env) => {
+    const b = await alreadyNormalizedOptOut(thread, env, "normalized-alone");
+    return [b, b];
+  });
+  const calls = result.prompts;
+  assert.equal(calls[0], "long task first");
+  assert.equal(calls[1], "synthetic-optout-secret", "it runs afterwards as its own plain turn, not as an interrupt resume");
+  assert.equal(result.messages.find((message) => message.text === "long task first").observedVia === "claude_code_interrupted", false, "the running turn was not interrupted");
+  assert.ok(result.posts.every((body) => !body.includes("synthetic-optout-secret")));
+});
+
+for (const mcpFirst of [false, true]) {
+  test(`an already-normalized opted-out MCP input never joins a WhatsApp steer turn (${mcpFirst ? "MCP first" : "WhatsApp first"})`, async (t) => {
+    const result = await runMixed(t, `normalized-${mcpFirst ? "mcp-first" : "wa-first"}`, async (thread, env) => {
+      const whatsapp = () => enqueueThreadInput(thread.id, { text: "synthetic-whatsapp-request", source: "whatsapp_inbound", connector: "whatsapp",
+        chatId: binding.chatId, accountId: binding.responderAccountId, ...steer }, env);
+      if (mcpFirst) {
+        const b = await alreadyNormalizedOptOut(thread, env, "normalized-b1");
+        const a = await whatsapp();
+        return [b, { messageId: a.id }];
+      }
+      const a = await whatsapp();
+      const b = await alreadyNormalizedOptOut(thread, env, "normalized-b2");
+      return [{ messageId: a.id }, b];
+    });
+    assert.ok(!result.prompts.some((prompt) => prompt.includes("synthetic-optout-secret") && prompt.includes("synthetic-whatsapp-request")), "never one shared prompt");
+    const optOut = result.messages.find((message) => message.source === "thread_bridge_message");
+    assert.equal(optOut.coalescedIntoMessageId || "", "");
+    assert.equal(result.finals.filter((final) => final.parentMessageId === optOut.id).length, 1);
+    assert.ok(!result.prompts.some((prompt) => prompt.startsWith(CLAUDE_CODE_INTERRUPT_RESUME_NOTE) && prompt.includes("synthetic-optout-secret")), "the MCP input never runs as an interrupt resume");
+    assert.ok(result.posts.every((body) => !body.includes("synthetic-optout-secret")), "opted-out content never reaches WhatsApp");
+  });
+}
+
+test("a legacy queued MCP /stop is literal text, not a stop", async (t) => {
+  const result = await runMixed(t, "legacy-stop", async (thread, env) => {
+    const sent = await sendBridgeMessage(thread.id, { text: "/stop", requestId: "legacy-stop" }, principal, env, NO_KICK);
+    await updateThreadMessage(thread.id, sent.messageId, { commandProcessing: "" }, env);
+    return [sent, sent];
+  });
+  assert.equal(result.messages.find((message) => message.text === "long task first").observedVia === "claude_code_interrupted", false, "the running turn was not stopped");
+  assert.ok(result.prompts.includes("/stop"), "delivered to the agent as literal text");
+  const stop = result.messages.find((message) => message.source === "thread_bridge_message");
+  assert.notEqual(stop.observedVia, "claude_code_control_command");
+});

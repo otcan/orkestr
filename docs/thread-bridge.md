@@ -265,8 +265,11 @@ server for clients such as ChatGPT plugins:
   control or settings command: `/now`, `/stop`, `/reset`, `/model` stay
   literal. This is enforced by source (`thread_bridge_message`), so inputs
   queued before the `commandProcessing: "disabled"` metadata existed are
-  covered too, and an MCP message cannot interrupt or be coalesced into
-  another request's turn. Independently, Claude Code only coalesces queued
+  covered too. By the same source rule an MCP message is always passive: it
+  never steers or force-interrupts a running Claude Code or Codex turn, even
+  if an older queued record carries `instant_steer` /
+  `forceDeliveryAfterInterrupt` flags from a rewritten `/now`, so it cannot
+  interrupt or be coalesced into another request's turn. Independently, Claude Code only coalesces queued
   steer inputs with the same reply authority (bridge agent, WhatsApp opt-out,
   origin chat/account, reply route); inputs left out wait for the running
   turn instead of interrupting it. `wait_for_reply` waits at most 45 s for

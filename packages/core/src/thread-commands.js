@@ -49,12 +49,20 @@ function switchModeCommand(text = "") {
   return null;
 }
 
+// Messages a connected assistant sent over MCP (send_message). By source they
+// are always passive, plain text: never a control/settings command, never a
+// steer or forced interrupt, whatever flags an older queued record carries
+// (e.g. a "/now" rewritten into instant_steer before this rule existed).
+export function delegatedAssistantInput(input = {}) {
+  return String(input?.source || "").trim() === "thread_bridge_message";
+}
+
 // Inputs whose text must never be read as an Orkestr control command. MCP
-// messages (thread_bridge_message) qualify by source, so inputs queued before
-// they carried commandProcessing metadata are covered too.
+// messages qualify by source, so inputs queued before they carried
+// commandProcessing metadata are covered too.
 export function commandInterpretationDisabled(input = {}) {
   return String(input.commandProcessing || "").trim().toLowerCase() === "disabled" ||
-    String(input.source || "").trim() === "thread_bridge_message";
+    delegatedAssistantInput(input);
 }
 
 export function parseThreadInputCommand(input = {}) {

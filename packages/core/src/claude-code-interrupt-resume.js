@@ -1,6 +1,6 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { findThreadMessage, listThreadMessageCandidates, updateThreadMessage } from "./threads.js";
-import { parseThreadInputCommand } from "./thread-commands.js";
+import { delegatedAssistantInput, parseThreadInputCommand } from "./thread-commands.js";
 import { codexInputText } from "./codex-app-server-common.js";
 import { getClaudeCodeSession, setClaudeCodeSession } from "./claude-code-sessions.js";
 
@@ -49,6 +49,7 @@ export function claudeCodeInterruptGraceMs(env = process.env) {
 }
 
 function inputRequestsSteer(message = {}) {
+  if (delegatedAssistantInput(message)) return false;
   const mode = clean(message.codexDeliveryMode).toLowerCase();
   if (mode === "passive") return false;
   return message.steerActiveTurn === true || mode === "instant_steer";
@@ -59,6 +60,8 @@ function inputRequestsSteer(message = {}) {
 // ORKESTR_CLAUDE_CODE_INSTANT_INTERRUPT=0 restores plain queueing.
 export function claudeCodeInputRequestsInterrupt(message = null, env = process.env) {
   if (!message || clean(message.role).toLowerCase() !== "user") return false;
+  // MCP messages never interrupt, even with legacy steer/force flags.
+  if (delegatedAssistantInput(message)) return false;
   if (message.forceDeliveryAfterInterrupt === true) return true;
   return claudeCodeInstantInterruptEnabled(env) && inputRequestsSteer(message);
 }

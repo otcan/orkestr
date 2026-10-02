@@ -61,7 +61,7 @@ import {
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { containedUserDeveloperInstructions } from "./tenant-policy.js";
 import { relocateLegacyUserWorkspace } from "./workspace-files.js";
-import { parseThreadInputCommand } from "./thread-commands.js";
+import { delegatedAssistantInput, parseThreadInputCommand } from "./thread-commands.js";
 import { claimExecutorHandoffForMessage } from "./executor-handoff-delivery.js";
 import { performCodexAppServerSafeReset } from "./codex-safe-reset.js";
 import {
@@ -135,6 +135,7 @@ function pendingInputEligibleForReadyRetry(message = {}) {
 }
 
 function shouldSteerActiveTurnInput(message = {}) {
+  if (delegatedAssistantInput(message)) return false;
   const deliveryMode = clean(message?.codexDeliveryMode).toLowerCase();
   if (deliveryMode === "passive") return false;
   return message?.steerActiveTurn === true || deliveryMode === "instant_steer";
@@ -1618,7 +1619,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
       }, env).catch(() => {});
     }
   }
-  if (activeTurnId && pending.forceDeliveryAfterInterrupt === true) {
+  if (activeTurnId && pending.forceDeliveryAfterInterrupt === true && !delegatedAssistantInput(pending)) {
     await client.request("turn/interrupt", { threadId: id, turnId: activeTurnId }).catch(() => null);
     client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: "", activeTurnObservedAt: null, status: { type: "idle" }, statusObservedAt: nowIso() });
     for (const [requestKey, request] of client.pendingRequests.entries()) {
