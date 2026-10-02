@@ -41,7 +41,7 @@ function appendChange(db, threadId, message, kind, owner) {
   db.prepare(`insert into orkestr_thread_bridge_changes
     (owner_id, cursor, thread_id, message_id, kind, origin_agent_id) values(?, ?, ?, ?, ?, ?)`)
     .run(owner, cursor, threadId, message.id, kind,
-      message.source === "thread_bridge_agent" ? String(message.bridgeAgentId || "") : "");
+      ["thread_bridge_agent", "thread_bridge_message"].includes(message.source) ? String(message.bridgeAgentId || "") : "");
 }
 
 // Must run inside the message mutation's SQLite transaction.

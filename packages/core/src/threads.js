@@ -117,6 +117,8 @@ const messageStringFields = [
   "threadWatchSourceThreadId",
   "threadWatchSourceMessageId",
   "threadWatchEvent",
+  "bridgeAgentId",
+  "bridgeGrantId",
 ];
 
 function safeThreadId(threadId) {

@@ -250,7 +250,18 @@ With `ORKESTR_THREAD_BRIDGE_ENABLED=1` the app origin also serves a remote MCP
 server for clients such as ChatGPT plugins:
 
 - `POST /mcp` (Streamable HTTP, stateless) with tools `list_threads`,
-  `read_thread`, `read_changes` and `comment_on_thread`.
+  `read_thread`, `read_changes`, `comment_on_thread`, `send_message`,
+  `get_thread_status` and `wait_for_reply`.
+- Messaging (`thread-bridge-messaging.js`) is a separate permission: OAuth
+  scope `threads:message` plus grant field `message` (`"all"` or thread IDs).
+  `send_message` queues input (`source: thread_bridge_message`, labelled with
+  the assistant's id, actor `delegated-agent`) that the thread's agent acts
+  on; it is idempotent by `request_id`, limited to 30 per hour per assistant,
+  carries no chat route (the answer is not sent to WhatsApp) and is never
+  echoed back to the sending assistant as an event. `wait_for_reply` waits
+  at most 45 s for the answer; `get_thread_status` reports working, queued,
+  idle or last_turn_failed. Connections approved before messaging existed must
+  reconnect to get the new scope.
 - OAuth 2.1 with PKCE (S256) and dynamic client registration:
   `/.well-known/oauth-protected-resource[/mcp]`,
   `/.well-known/oauth-authorization-server`, `/mcp-oauth/register`,

@@ -6,6 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import { listBridgeThreads, readBridgeChanges, readBridgeHistory, replyToBridgeThread } from "./thread-bridge.js";
 import { getThread } from "./threads.js";
+import { bridgeThreadStatus, sendBridgeMessage, waitForBridgeReply } from "./thread-bridge-messaging.js";
 
 function result(value) {
   return { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value };
@@ -83,6 +84,36 @@ const tools = {
       text: input.text,
       ...(input.caused_by_message_id ? { causedByMessageId: input.caused_by_message_id } : {}),
     }, principal, env),
+  },
+  send_message: {
+    title: "Send a message to an Orkestr thread",
+    description: "Send a message to a thread's agent. Unlike comment_on_thread this starts work: the agent receives it as input (labelled as coming from you, the connected assistant, not from the owner) and answers in the thread. The answer is not sent to WhatsApp; get it with wait_for_reply, read_thread or the thread.message.created event. Pass a request_id to make retries safe.",
+    inputSchema: {
+      thread_id: z.string().min(1).max(128),
+      text: z.string().min(1).max(16000),
+      request_id: z.string().regex(/^[a-zA-Z0-9_.-]{1,128}$/).optional(),
+    },
+    readOnly: false,
+    scope: "threads:message",
+    run: (input, principal, env) => sendBridgeMessage(input.thread_id, { text: input.text, requestId: input.request_id || randomUUID().replace(/-/g, "") }, principal, env),
+  },
+  get_thread_status: {
+    title: "Get an Orkestr thread's status",
+    description: "Whether a thread's agent is working, has queued messages, or is idle, plus its runtime/model and the start of its last answer.",
+    inputSchema: { thread_id: z.string().min(1).max(128) },
+    readOnly: true,
+    run: (input, principal, env) => bridgeThreadStatus(input.thread_id, principal, env),
+  },
+  wait_for_reply: {
+    title: "Wait for a thread's reply",
+    description: "Wait up to timeout_seconds (max 45) for the agent's answer to a message you sent with send_message. Returns status answered (with the reply), failed, or still_working (call again later).",
+    inputSchema: {
+      thread_id: z.string().min(1).max(128),
+      message_id: z.string().min(1).max(128),
+      timeout_seconds: z.number().int().min(1).max(45).optional(),
+    },
+    readOnly: true,
+    run: (input, principal, env) => waitForBridgeReply(input.thread_id, input.message_id, principal, { timeoutSeconds: input.timeout_seconds || 30 }, env),
   },
 };
 

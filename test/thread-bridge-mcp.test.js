@@ -101,7 +101,7 @@ test("ChatGPT-style OAuth connection reads all threads and comments through MCP"
   const client = new Client({ name: "test-dot", version: "1.0.0" });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${tokens.access_token}` } } }));
   t.after(() => client.close());
-  assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), ["comment_on_thread", "list_threads", "read_changes", "read_thread"]);
+  assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), ["comment_on_thread", "get_thread_status", "list_threads", "read_changes", "read_thread", "send_message", "wait_for_reply"]);
 
   const listed = (await client.callTool({ name: "list_threads", arguments: {} })).structuredContent;
   assert.deepEqual(listed.threads.map((thread) => thread.name).sort(), ["Jobs", "Sales"]);
@@ -131,7 +131,7 @@ test("ChatGPT-style OAuth connection reads all threads and comments through MCP"
   const modernList = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${refreshed.access_token}`, "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: meta } }) });
   assert.equal(modernList.status, 200);
-  assert.equal((await modernList.json()).result.tools.length, 4);
+  assert.equal((await modernList.json()).result.tools.length, 7);
   const modernNoToken = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list", params: { _meta: meta } }) });
   assert.equal(modernNoToken.status, 401);

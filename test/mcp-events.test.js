@@ -92,7 +92,7 @@ test("MCP 2.0 requests are validated against their headers and version", async (
 
   const tools = await call(list, env);
   assert.equal(tools.body.result.cacheScope, "private");
-  assert.deepEqual(tools.body.result.tools.map((tool) => tool.name), ["list_threads", "read_thread", "read_changes", "comment_on_thread"]);
+  assert.deepEqual(tools.body.result.tools.map((tool) => tool.name), ["list_threads", "read_thread", "read_changes", "comment_on_thread", "send_message", "get_thread_status", "wait_for_reply"]);
   const callBody = rpc("tools/call", { name: "list_threads", arguments: {} });
   const listed = await call(callBody, env);
   assert.deepEqual(listed.body.result.structuredContent.threads.map((thread) => thread.id).sort(), ["thread-a", "thread-b"]);

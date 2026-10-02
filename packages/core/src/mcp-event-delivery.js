@@ -6,7 +6,7 @@
 import crypto from "node:crypto";
 import { appendEvent } from "../../storage/src/store.js";
 import { bridgeMessageVisible } from "../../storage/src/thread-bridge-journal.js";
-import { listBridgeThreads, messageActor, readBridgeChanges } from "./thread-bridge.js";
+import { bridgeAgentSources, listBridgeThreads, messageActor, readBridgeChanges } from "./thread-bridge.js";
 import { canonicalThreadLink } from "./canonical-app-links.js";
 import { getThread, getThreadMessage } from "./threads.js";
 import { mutateSubscriptions, readSubscriptions, THREAD_MESSAGE_EVENT, webhookHeaders } from "./mcp-events.js";
@@ -41,7 +41,7 @@ export async function eventPayloadFor(subscription, event, env = process.env) {
   if (event.type !== "message.created") return null;
   if (subscription.arguments?.thread_id && subscription.arguments.thread_id !== event.threadId) return null;
   const message = await getThreadMessage(event.threadId, event.messageId, env).catch(() => null);
-  if (!bridgeMessageVisible(message) || message.source === "thread_bridge_agent") return null;
+  if (!bridgeMessageVisible(message) || bridgeAgentSources.has(message.source)) return null;
   const actor = messageActor(message).kind;
   if (!(subscription.arguments?.actors || ["assistant", "human"]).includes(actor)) return null;
   const thread = await getThread(event.threadId, env).catch(() => null);

@@ -17,7 +17,7 @@ const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const GRANT_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const CONSENT_TTL_MS = 10 * 60 * 1000;
 const MAX_CLIENTS = 200;
-export const MCP_OAUTH_SCOPES = Object.freeze(["threads:read", "threads:comment"]);
+export const MCP_OAUTH_SCOPES = Object.freeze(["threads:read", "threads:comment", "threads:message"]);
 export const MCP_OAUTH_AUTH_METHOD = "orkestr-oauth";
 
 function clean(value) {
@@ -267,6 +267,7 @@ async function upsertGrant({ userId, clientId, clientName }, env) {
       authMethod: MCP_OAUTH_AUTH_METHOD,
       observe: "all",
       reply: "all",
+      message: "all",
       createdAt: nowIso(),
       expiresAt: new Date(Date.now() + GRANT_TTL_MS).toISOString(),
     });

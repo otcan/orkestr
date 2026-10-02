@@ -15,7 +15,7 @@ const inScope = (scope, id) => scope === "all" || (Array.isArray(scope) && scope
 
 // This is an internal trust boundary: principal MUST come from an authentication
 // adapter, never JSON input, headers copied verbatim, or the admin fallback.
-async function authorization(principal, env) {
+export async function authorization(principal, env) {
   if (env.ORKESTR_THREAD_BRIDGE_ENABLED !== "1") fail("thread_bridge_disabled", 404);
   if (principal?.kind !== "delegated-agent" || !identifier(principal.ownerUserId) ||
       !identifier(principal.agentId) || !identifier(principal.grantId) ||
@@ -35,10 +35,11 @@ async function authorization(principal, env) {
 }
 
 function allowed(thread, grant, scope, env) {
-  return thread && !thread.deletedAt && !isThreadRetired(thread) && resourceOwnerUserId(thread, env) === grant.ownerUserId && inScope(scope === "reply" ? grant.reply : grant.observe, thread.id);
+  const granted = scope === "reply" ? grant.reply : scope === "message" ? grant.message : grant.observe;
+  return thread && !thread.deletedAt && !isThreadRetired(thread) && resourceOwnerUserId(thread, env) === grant.ownerUserId && inScope(granted, thread.id);
 }
 
-async function target(threadId, grant, scope, env) {
+export async function target(threadId, grant, scope, env) {
   if (!identifier(threadId)) fail("bridge_thread_not_found", 404);
   const thread = await getThread(threadId, env);
   // IDs only: aliases must never resolve to another account's same-named thread.
@@ -69,11 +70,14 @@ export async function readBridgeChanges(principal, options = {}, env = process.e
 // Only messages a person typed are "human". Timers, workers, watches, mailbox
 // routing, CLI sends and other machine inputs are role "user" in the
 // transcript but must never read as the owner's own instructions.
+// Comments (thread_bridge_agent) and messages (thread_bridge_message) written
+// by a connected assistant.
+export const bridgeAgentSources = new Set(["thread_bridge_agent", "thread_bridge_message"]);
 const humanInputSources = new Set(["whatsapp_inbound", "whatsapp", "ui", "webui", "web", "manual", "mobile", "telegram_inbound"]);
 
 export function messageActor(message = {}) {
   const source = String(message.source || "").trim().toLowerCase();
-  if (source === "thread_bridge_agent") return { kind: "delegated-agent", agentId: String(message.bridgeAgentId || "") };
+  if (bridgeAgentSources.has(source)) return { kind: "delegated-agent", agentId: String(message.bridgeAgentId || "") };
   if (message.role === "assistant") return { kind: "assistant" };
   if (humanInputSources.has(source)) return { kind: "human" };
   return { kind: "automation", source: source || "unknown" };

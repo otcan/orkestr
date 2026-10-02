@@ -69,8 +69,9 @@ function consentPage({ request, consentId, userId }: any) {
 <body><h1>Connect ${escapeHtml(request.client.clientName)}</h1>
 <p>Signed in to Orkestr as <strong>${escapeHtml(userId)}</strong>. <strong>${escapeHtml(request.client.clientName)}</strong> (returns to ${escapeHtml(request.redirectHost)}) asks to:</p>
 <ul><li>read the visible messages of <strong>all your threads</strong>, including future ones;</li>
-<li>add comments to your threads, labelled as coming from this assistant.</li></ul>
-<p>Comments are context only: they cannot start, steer or approve work and are never sent to WhatsApp. Access lasts 90 days; you can revoke it at any time.</p>
+<li>add comments to your threads, labelled as coming from this assistant;</li>
+<li><strong>send messages to your threads' agents</strong>, which then start work as if asked, labelled as coming from this assistant.</li></ul>
+<p>Comments are context only. Messages start work in the thread; the agent's answer stays in Orkestr and is not sent to WhatsApp. Nothing is ever sent as you. Access lasts 90 days; you can revoke it at any time.</p>
 <form method="post" action="/mcp-oauth/authorize"><input type="hidden" name="consent_id" value="${escapeHtml(consentId)}">
 <button type="submit" name="decision" value="approve">Allow</button><button type="submit" name="decision" value="deny">Deny</button></form></body></html>`;
 }
