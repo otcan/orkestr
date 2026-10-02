@@ -134,3 +134,11 @@ test("passive comments never qualify for execution-answer WhatsApp delivery", as
   assert.equal(result.delivered.length, 0);
   assert.equal(calls.length, 0, "a passive comment is never forwarded to WhatsApp");
 });
+
+test("MCP approval copy distinguishes passive comments from WhatsApp-delivered execution answers", async () => {
+  const controller = await fs.readFile(new URL("../apps/server/src/modules/threads/thread-bridge-mcp.controller.ts", import.meta.url), "utf8");
+  assert.match(controller, /Comments are context only and are not sent to WhatsApp/);
+  assert.match(controller, /agent's answer is also sent through the thread's existing eligible WhatsApp binding by default/);
+  assert.match(controller, /no WhatsApp message is sent when the thread has no eligible binding/);
+  assert.doesNotMatch(controller, /agent's answer stays in Orkestr and is not sent to WhatsApp/);
+});
