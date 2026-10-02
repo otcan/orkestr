@@ -4499,6 +4499,46 @@ function latestRolloutWhatsAppInput(messages = [], beforeTimestamp = null, threa
   ) || null;
 }
 
+function rolloutBridgeInputSelection(messages = [], beforeTimestamp = null, generation = "") {
+  // Without a rollout turn_id, only a unique running input or a unique recorded
+  // terminal turn that is still the latest user request can establish authority.
+  const expectedGeneration = String(generation || "").trim();
+  const beforeMs = beforeTimestamp ? timestampMs(beforeTimestamp) : 0;
+  const candidates = messages.filter((message) => {
+    if (message?.role !== "user" || message?.source !== "thread_bridge_message") return false;
+    if (!expectedGeneration) return true;
+    const messageGeneration = String(message.codexThreadId || message.executorThreadId || "").trim();
+    const state = String(message.state || "").trim().toLowerCase();
+    return messageGeneration === expectedGeneration &&
+      ["queued", "pending_delivery", "awaiting_ack", "delivering", "claimed", "running", "completed", "failed", "interrupted", "cancelled", "canceled"].includes(state) &&
+      (!beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000);
+  });
+  const running = candidates.filter((message) => String(message.state || "").trim().toLowerCase() === "running");
+  if (running.length === 1) return { parent: running[0], ambiguous: false };
+  if (candidates.some((message) => ["queued", "pending_delivery", "awaiting_ack", "delivering", "claimed"].includes(String(message.state || "").trim().toLowerCase()))) {
+    return { parent: null, ambiguous: true };
+  }
+  if (candidates.length !== 1) return { parent: null, ambiguous: candidates.length > 0 };
+  const [terminalInput] = candidates;
+  if (!String(terminalInput.codexTurnId || terminalInput.executorTurnId || "").trim()) {
+    return { parent: null, ambiguous: true };
+  }
+  const latestUser = [...messages].reverse().find((message) => {
+    if (message?.role !== "user") return false;
+    return !beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000;
+  });
+  if (latestUser?.id !== terminalInput.id) return { parent: null, ambiguous: true };
+  const completedMs = timestampMs(terminalInput.timestamp || terminalInput.createdAt);
+  const finalAfterInput = messages.some((message) =>
+    message?.role === "assistant" &&
+    String(message.phase || "").trim().toLowerCase() === "final_answer" &&
+    timestampMs(message.timestamp || message.createdAt) >= completedMs &&
+    (!beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000)
+  );
+  if (finalAfterInput) return { parent: null, ambiguous: true };
+  return { parent: terminalInput, ambiguous: false };
+}
+
 function whatsappParentChatId(parent = null, thread = null) {
   return String(parent?.chatId || thread?.binding?.chatId || "").trim();
 }
@@ -4611,9 +4651,11 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
     const textKey = rolloutMessageNearTextKey(message);
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
     const turnParent = exactRolloutTurnParent(existing, message, codexId);
+    const bridgeSelection = turnParent ? null : rolloutBridgeInputSelection(existing, message.timestamp, codexId);
+    const bridgeAuthorityAmbiguous = !turnParent && bridgeSelection?.ambiguous === true;
     const whatsappParent = turnParent
       ? (whatsappOrigin(turnParent) ? turnParent : replyDeliveryProjectionParent(turnParent))
-      : latestRolloutWhatsAppInput(existing, message.timestamp, thread);
+      : bridgeSelection?.parent || (!bridgeSelection?.ambiguous ? latestRolloutWhatsAppInput(existing, message.timestamp, thread) : null);
     const parentMessage = turnParent || whatsappParent;
     const parentTurnId = String(
       message.codexTurnId ||
@@ -4632,9 +4674,12 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
       phase: message.phase,
       eventId: message.eventId,
       parentMessageId: parentMessage?.id || null,
+      ...(parentMessage?.source === "thread_bridge_message" && parentMessage.bridgeWhatsAppReply === false
+        ? { bridgeWhatsAppReply: false }
+        : {}),
       connector: whatsappParent ? "whatsapp" : "",
-      chatId: whatsappParentChatId(whatsappParent, thread),
-      accountId: whatsappParentAccountId(whatsappParent, thread),
+      chatId: bridgeAuthorityAmbiguous ? "" : whatsappParentChatId(whatsappParent, thread),
+      accountId: bridgeAuthorityAmbiguous ? "" : whatsappParentAccountId(whatsappParent, thread),
       originSurface: "codex",
       originTransport: "codex-rollout",
       executorKind: "codex",
@@ -4888,9 +4933,11 @@ async function syncLeaseRollout(lease, env = process.env) {
     const textKey = rolloutMessageNearTextKey(message);
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
     const turnParent = exactRolloutTurnParent(existing, message, generation);
+    const bridgeSelection = turnParent ? null : rolloutBridgeInputSelection(existing, message.timestamp, generation);
+    const bridgeAuthorityAmbiguous = !turnParent && bridgeSelection?.ambiguous === true;
     const whatsappParent = turnParent
       ? (whatsappOrigin(turnParent) ? turnParent : replyDeliveryProjectionParent(turnParent))
-      : latestRolloutWhatsAppInput(existing, message.timestamp, thread);
+      : bridgeSelection?.parent || (!bridgeSelection?.ambiguous ? latestRolloutWhatsAppInput(existing, message.timestamp, thread) : null);
     const parentMessage = turnParent || whatsappParent;
     const parentTurnId = String(
       message.codexTurnId ||
@@ -4909,9 +4956,12 @@ async function syncLeaseRollout(lease, env = process.env) {
       phase: message.phase,
       eventId: message.eventId,
       parentMessageId: parentMessage?.id || null,
+      ...(parentMessage?.source === "thread_bridge_message" && parentMessage.bridgeWhatsAppReply === false
+        ? { bridgeWhatsAppReply: false }
+        : {}),
       connector: whatsappParent ? "whatsapp" : "",
-      chatId: whatsappParentChatId(whatsappParent, thread),
-      accountId: whatsappParentAccountId(whatsappParent, thread),
+      chatId: bridgeAuthorityAmbiguous ? "" : whatsappParentChatId(whatsappParent, thread),
+      accountId: bridgeAuthorityAmbiguous ? "" : whatsappParentAccountId(whatsappParent, thread),
       originSurface: "codex",
       originTransport: "codex-rollout",
       executorKind: "codex",

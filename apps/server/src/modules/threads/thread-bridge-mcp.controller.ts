@@ -72,7 +72,7 @@ function consentPage({ request, consentId, userId }: any) {
 <ul><li>read the visible messages of <strong>all your threads</strong>, including future ones;</li>
 <li>add comments to your threads, labelled as coming from this assistant;</li>
 <li><strong>send messages to your threads' agents</strong>, which then start work as if asked, labelled as coming from this assistant.</li></ul>
-<p>Comments are context only. Messages start work in the thread; the agent's answer stays in Orkestr and is not sent to WhatsApp. Nothing is ever sent as you. Access lasts 90 days; you can revoke it at any time.</p>
+<p>Comments are context only and are not sent to WhatsApp. Messages start work in the thread; the agent's answer is also sent through the thread's existing eligible WhatsApp binding by default, unless the assistant opts out. No other recipient can be selected, and no WhatsApp message is sent when the thread has no eligible binding. Nothing is ever sent as you. Access lasts 90 days; you can revoke it at any time.</p>
 <form method="post" action="/mcp-oauth/authorize"><input type="hidden" name="consent_id" value="${escapeHtml(consentId)}">
 <button type="submit" name="decision" value="approve">Allow</button><button type="submit" name="decision" value="deny">Deny</button></form></body></html>`;
 }
@@ -228,4 +228,3 @@ export class ThreadBridgeMcpController {
     return response.status(405).header("allow", "POST").json({ error: "method_not_allowed" });
   }
 }
-

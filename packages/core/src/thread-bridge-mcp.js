@@ -87,15 +87,20 @@ const tools = {
   },
   send_message: {
     title: "Send a message to an Orkestr thread",
-    description: "Send a message to a thread's agent. Unlike comment_on_thread this starts work: the agent receives it as input (labelled as coming from you, the connected assistant, not from the owner) and answers in the thread. The answer is not sent to WhatsApp; get it with wait_for_reply, read_thread or the thread.message.created event. Pass a request_id to make retries safe.",
+    description: "Send a message to a thread's agent. Unlike comment_on_thread this starts work: the agent receives it as input (labelled as coming from you, the connected assistant, not from the owner) and answers in the thread. The answer is also sent to WhatsApp by default through that thread's existing eligible WhatsApp binding; set deliver_to_whatsapp=false to opt out. No destination can be selected here. Pass a request_id to make retries safe.",
     inputSchema: {
       thread_id: z.string().min(1).max(128),
       text: z.string().min(1).max(16000),
       request_id: z.string().regex(/^[a-zA-Z0-9_.-]{1,128}$/).optional(),
+      deliver_to_whatsapp: z.boolean().optional(),
     },
     readOnly: false,
     scope: "threads:message",
-    run: (input, principal, env) => sendBridgeMessage(input.thread_id, { text: input.text, requestId: input.request_id || randomUUID().replace(/-/g, "") }, principal, env),
+    run: (input, principal, env) => sendBridgeMessage(input.thread_id, {
+      text: input.text,
+      requestId: input.request_id || randomUUID().replace(/-/g, ""),
+      deliverToWhatsApp: input.deliver_to_whatsapp,
+    }, principal, env),
   },
   get_thread_status: {
     title: "Get an Orkestr thread's status",

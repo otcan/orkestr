@@ -1,6 +1,7 @@
 import { updateAgentMessage } from "../../core/src/messages.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { updateThreadMessage } from "../../core/src/threads.js";
+import { replyDeliveryBindingFence, trustedBridgeReplyDeliveryIntent } from "../../core/src/reply-delivery-intent.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
 import { claudeCodeInputRequestsInterrupt } from "../../core/src/claude-code-interrupt-resume.js";
 import { whatsappBindingIsRouteEligible } from "./whatsapp-inbound-routing.js";
@@ -150,6 +151,21 @@ export function boundThreadWhatsAppAssistantOrigin({ message = {}, thread = null
   const phase = pickString(message.phase).toLowerCase();
   if (bindingChatId && !messageChatId && source === "orkestr_runtime" && phase === "runtime_interrupted") return true;
   return Boolean(bindingChatId && messageChatId === bindingChatId);
+}
+
+// MCP execution inputs are not WhatsApp inbound messages. Their completed
+// answers may still use the exact thread's current, eligible binding when the
+// input opted in (the default). Never infer or accept a chat target here.
+export function threadBridgeWhatsAppReplyOrigin({ parent = null, thread = null, kind = "" } = {}) {
+  if (kind !== "thread" || parent?.source !== "thread_bridge_message" || parent.bridgeWhatsAppReply === false) return false;
+  if (!threadAllowsWhatsAppMirroring(thread)) return false;
+  const binding = thread?.binding || {};
+  if (String(binding.connector || "").trim().toLowerCase() !== "whatsapp") return false;
+  if (!pickString(binding.chatId)) return false;
+  const intent = trustedBridgeReplyDeliveryIntent(parent);
+  if (!intent) return false;
+  const fence = replyDeliveryBindingFence(parent, thread);
+  return fence.applies && fence.allowed;
 }
 
 function whatsappMessageOrigin(message, state = null) {

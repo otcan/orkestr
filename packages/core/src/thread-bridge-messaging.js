@@ -2,13 +2,15 @@
 // comments, a message is queued as input and the thread's agent acts on it,
 // so it needs the separate "message" grant scope. Messages are labelled as
 // the assistant's (never the owner's) and are visible in the thread; the
-// input carries no chat route, so the agent's answer is not sent to WhatsApp.
+// input carries no chat route. The delivery worker may mirror the answer only
+// through the originating thread's existing eligible WhatsApp binding.
 // Rate-limited per assistant.
 import { appendEvent } from "../../storage/src/store.js";
 import { bridgeMessageVisible } from "../../storage/src/thread-bridge-journal.js";
 import { authorization, target } from "./thread-bridge.js";
 import { enqueueThreadInput, getThread, getThreadMessage, listThreadMessageCandidates } from "./threads.js";
 import { currentCodexGenerationMatches } from "./codex-generation.js";
+import { createBridgeReplyDeliveryIntent } from "./reply-delivery-intent.js";
 
 export const BRIDGE_MESSAGE_SOURCE = "thread_bridge_message";
 const MAX_MESSAGES_PER_HOUR = 30;
@@ -29,7 +31,7 @@ function rateLimit(agentId, now = Date.now()) {
 // `options.deliver` (tests) replaces the runtime delivery kick.
 export async function sendBridgeMessage(threadId, input = {}, principal, env = process.env, options = {}) {
   const grant = await authorization(principal, env);
-  await target(threadId, grant, "message", env);
+  const thread = await target(threadId, grant, "message", env);
   const text = typeof input.text === "string" ? input.text.trim() : "";
   if (!text || text.length > 16000) fail("bridge_message_invalid");
   const requestId = String(input.requestId || "");
@@ -47,6 +49,13 @@ export async function sendBridgeMessage(threadId, input = {}, principal, env = p
     clientMessageId,
     bridgeAgentId: principal.agentId,
     bridgeGrantId: principal.grantId,
+    bridgeWhatsAppReply: input.deliverToWhatsApp !== false,
+    ...(input.deliverToWhatsApp === false ? {} : {
+      replyDeliveryIntent: createBridgeReplyDeliveryIntent(thread, { enabled: true, ownerUserId: grant.ownerUserId }),
+    }),
+    ...(String(thread.codexThreadId || thread.executor?.codexThreadId || thread.runtime?.codexThreadId || "").trim()
+      ? { codexThreadId: String(thread.codexThreadId || thread.executor?.codexThreadId || thread.runtime?.codexThreadId || "").trim() }
+      : {}),
     codexDeliveryMode: "passive",
     steerActiveTurn: false,
   }, env);
