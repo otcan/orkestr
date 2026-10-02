@@ -19,6 +19,7 @@ import {
 import { desktopAccessPolicySummary, filterDesktopSessionsForThread } from "./desktop-access.js";
 import { agentReleaseRolePolicy, threadAgentReleaseRole } from "./agent-release-role.js";
 import { isTerminalTaskAgentThread } from "./task-agent-state.js";
+import { listThreadWatches } from "./thread-watches.js";
 
 const desktopInventoryLiveCache = new Map();
 // Larger than any gap between path-candidate scores, so a finished task agent
@@ -231,6 +232,21 @@ function publicWorkspace(thread = null, lease = null, cwd = "") {
   };
 }
 
+// Active watches this thread holds or is the target of (see thread-watches.js).
+async function threadWatchSummary(threadId, env = process.env) {
+  const watches = await listThreadWatches({ threadId }, env).catch(() => []);
+  return watches.map((watch) => ({
+    id: watch.id,
+    direction: watch.watcherThreadId === threadId ? "watching" : "watched_by",
+    threadId: watch.watcherThreadId === threadId ? watch.targetThreadId : watch.watcherThreadId,
+    mode: watch.mode,
+    on: watch.on,
+    payload: watch.payload,
+    auto: watch.auto,
+    expiresAt: watch.expiresAt,
+  }));
+}
+
 function commandHints() {
   return {
     whereiam: "orkestr whereiam --json",
@@ -238,6 +254,8 @@ function commandHints() {
     postApiSessionMessage: "orkestr api-session message \"<message>\" --api-session-id <stable-id>",
     listThreads: "orkestr list",
     sendThreadInput: "orkestr send <thread-name-or-id> \"<message>\"",
+    watchThread: "orkestr watch <thread-name-or-id> [--continuous] [--payload full|summary|none]",
+    listThreadWatches: "orkestr watch list",
     timers: "orkestr timers list",
     timerDoctor: "orkestr doctor timers",
     browserSessions: "curl \"$ORKESTR_API_BASE/api/browser-sessions\"",
@@ -605,6 +623,7 @@ export async function whereAmI(input = {}, env = process.env) {
           lastSeenAt: thread && apiSessionBinding?.threadId === thread.id ? clean(apiSessionBinding.lastSeenAt) || null : null,
         }
       : null,
+    watches: thread ? await threadWatchSummary(thread.id, env) : [],
     commands: commandHints(),
     generatedAt: nowIso(),
   };

@@ -10,6 +10,7 @@ import {
   ThreadWorkerService,
 } from "./thread-application.services.js";
 import { ThreadTimersController } from "./thread-timers.controller.js";
+import { ThreadWatchesController } from "./thread-watches.controller.js";
 import { ThreadWorkersController } from "./thread-workers.controller.js";
 import { ThreadMessagesController } from "./thread-messages.controller.js";
 import { ThreadRuntimeController } from "./thread-runtime.controller.js";
@@ -21,7 +22,7 @@ import { ThreadStandingMissionController } from "./thread-standing-mission.contr
 import { ThreadExecutorController } from "./thread-executor.controller.js";
 
 @Module({
-  controllers: [ThreadsController, ThreadRuntimeController, ThreadBindingController, ThreadWorkersController, ThreadTaskAgentsController, ThreadTimersController, ThreadMessagesController, ThreadResourceController, ThreadStandingMissionController, ThreadExecutorController],
+  controllers: [ThreadsController, ThreadRuntimeController, ThreadBindingController, ThreadWorkersController, ThreadTaskAgentsController, ThreadTimersController, ThreadWatchesController, ThreadMessagesController, ThreadResourceController, ThreadStandingMissionController, ThreadExecutorController],
   providers: [
     ThreadBindingService,
     ThreadActionSanitizerService,

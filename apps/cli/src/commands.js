@@ -30,6 +30,7 @@ import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTi
 import { interruptCommand, sendNowCommand } from "./interrupt-command.js";
 import { jiraCommand } from "./jira-command.js";
 import { mailboxesCommand } from "./mailbox-command.js";
+import { watchCommand, watchUsage } from "./watch-command.js";
 import { tenantSliceCommand } from "./tenant-slice-command.js";
 import { pickThread as defaultPickThread } from "./thread-picker.js";
 import { threadMissionCommand } from "./thread-mission-command.js";
@@ -91,6 +92,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "task-agent" || command === "task_agent") return await taskAgentCommand(args, ctx);
     if (command === "attach") return await attach(args, ctx);
     if (command === "send") return await send(args, ctx);
+    if (command === "watch" || command === "watches") return await watchCommand(args, ctx);
     if (command === "switch") return await executorSwitchCommand(args, ctx);
     if (command === "interrupt") return await interruptCommand(args, ctx);
     if (command === "wake") return await postThreadAction("wake", args, ctx);
@@ -2235,6 +2237,7 @@ Common thread commands:
   orkestr switch <thread-name-or-id> [codex|claude] [--model m] [--effort e] [--now] [--reason text] [--json]
   orkestr switch --self codex|claude --reason text [--model m] [--json]
   orkestr send <thread-name-or-id> "<message>" --now [--json]
+${watchUsage.join("\n")}
   orkestr interrupt <thread-name-or-id> ["<message>"] [--json]
   orkestr wake <thread-name-or-id> [--json]
   orkestr reset <thread-name-or-id> [--json]

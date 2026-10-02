@@ -84,6 +84,12 @@ Use dynamic discovery for live Orkestr context:
   \`file:///absolute/path\`. Links labelled with just the file name or path
   (code citations) and bare paths stay text only. Credential and config files
   are refused either way.
+- To be woken when another Orkestr thread (for example a worker) finishes a
+  turn, run \`orkestr watch <thread>\`: by default its next final answer (or a
+  failed turn) is delivered into this thread once. Add \`--continuous\` to keep
+  watching, \`--payload none\` for a notification without the text, and use
+  \`orkestr watch list\` / \`orkestr watch cancel <id>\`. Workers already
+  report finals starting with DONE or BLOCKED to their parent automatically.
 - Runtime settings are included in \`orkestr whereiam --json\` and can also be
   inspected with \`orkestr settings --json\`. Use those settings for managed
   desktop slugs, Gmail/Outlook auth routes, and permission-routing behavior.

@@ -113,6 +113,10 @@ const messageStringFields = [
   "mailboxExecutionPolicy",
   "mailboxContextClaimId",
   "commandProcessing",
+  "threadWatchId",
+  "threadWatchSourceThreadId",
+  "threadWatchSourceMessageId",
+  "threadWatchEvent",
 ];
 
 function safeThreadId(threadId) {

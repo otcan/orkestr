@@ -9,6 +9,7 @@ import { createThread, enqueueThreadInput, getThread, listThreadMessages, listTh
 import { runtimeStatus } from "./runtime-leases.js";
 import { resolveGitExec, runOwnerAwareGit, scopedGitExecOptions, withGitOwnerScope } from "./git-owner-exec.js";
 import { agentReleaseRolePolicy } from "./agent-release-role.js";
+import { ensureWorkerParentWatch } from "./thread-watches.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -881,6 +882,8 @@ function handoffPrompt(parent, worker, input = {}) {
     "Task:",
     task || "No task was supplied. Wait for parent/root instructions before making changes.",
     "",
+    "Reporting: when a task is finished, start your final answer with `DONE`; if you cannot finish, start it with `BLOCKED` and the reason. Orkestr forwards those finals (and failed turns) to the parent automatically, so you do not need `orkestr send`. Other replies stay in this thread.",
+    "",
     policy.promptText,
   ].join("\n");
 }
@@ -1011,6 +1014,9 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
         workerStatus: "queued",
       }, env);
     }
+    await ensureWorkerParentWatch(updatedWorker, env).catch((error) => appendEvent({
+      type: "thread_watch_failed", threadId: parent.id, workerThreadId: worker.id, error: error?.message || String(error),
+    }, env));
     await appendEvent({
       type: "thread_worker_created",
       threadId: parent.id,

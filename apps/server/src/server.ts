@@ -23,6 +23,8 @@ import {
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { clearWhatsAppDeliveryIdleCache } from "../../../packages/connectors/src/whatsapp.js";
 import { mailboxThreadDeliveryPumpIntervalMs, runMailboxDeliveryPump } from "../../../packages/connectors/src/mailbox-delivery-pump.js";
+import { runThreadWatchPump, threadWatchPumpIntervalMs } from "../../../packages/core/src/thread-watch-pump.js";
+import { ensureExistingWorkerWatches } from "../../../packages/core/src/thread-watches.js";
 import { mailboxVmRelayPumpIntervalMs, runVmMailboxRelayPump } from "../../../packages/connectors/src/mailbox-vm-relay.js";
 import { migrateThreadMessageStore } from "../../../packages/storage/src/thread-message-registry.js";
 import {
@@ -674,6 +676,16 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     });
   }, mailboxThreadDeliveryPumpIntervalMs(serverEnv));
   mailboxDeliveryPoll.unref?.();
+  const runThreadWatches = (source: string) => runThreadWatchPump(serverEnv).catch((error) => {
+    reportServerError(serverEnv, {
+      source,
+      code: "thread_watch_pump_failed",
+      message: error?.message || String(error),
+      error,
+    });
+  });
+  const threadWatchPoll = setInterval(() => void runThreadWatches("server.threadWatchPump"), threadWatchPumpIntervalMs(serverEnv));
+  threadWatchPoll.unref?.();
   const mailboxVmRelayPoll = setInterval(() => {
     runVmMailboxRelayPump(serverEnv).catch((error) => {
       reportServerError(serverEnv, {
@@ -732,6 +744,16 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
       error,
     });
   });
+  void ensureExistingWorkerWatches(serverEnv)
+    .then(() => runThreadWatches("server.threadWatchPump.startup"))
+    .catch((error) => {
+      reportServerError(serverEnv, {
+        source: "server.threadWatches.startup",
+        code: "thread_watch_startup_failed",
+        message: error?.message || String(error),
+        error,
+      });
+    });
   void runVmMailboxRelayPump(serverEnv).catch((error) => {
     reportServerError(serverEnv, {
       source: "server.mailboxVmRelayPump.startup",
@@ -759,6 +781,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     brokerClientHeartbeat.close();
     clearInterval(whatsappDeliveryPoll);
     clearInterval(mailboxDeliveryPoll);
+    clearInterval(threadWatchPoll);
     clearInterval(mailboxVmRelayPoll);
     clearInterval(inboundAttachmentCleanupPoll);
     whatsappDeliveryScheduler.close();
