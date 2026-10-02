@@ -262,8 +262,10 @@ server for clients such as ChatGPT plugins:
   `deliver_to_whatsapp=false` to opt out. If the thread has no eligible binding,
   no WhatsApp destination is inferred. The input is never echoed back to the
   sending assistant as an event. MCP message text is never parsed as an Orkestr
-  control command (`commandProcessing: "disabled"`: `/now`, `/stop`, `/reset`
-  stay literal), so an MCP message cannot interrupt or be coalesced into
+  control or settings command: `/now`, `/stop`, `/reset`, `/model` stay
+  literal. This is enforced by source (`thread_bridge_message`), so inputs
+  queued before the `commandProcessing: "disabled"` metadata existed are
+  covered too, and an MCP message cannot interrupt or be coalesced into
   another request's turn. Independently, Claude Code only coalesces queued
   steer inputs with the same reply authority (bridge agent, WhatsApp opt-out,
   origin chat/account, reply route); inputs left out wait for the running

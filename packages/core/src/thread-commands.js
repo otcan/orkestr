@@ -49,9 +49,17 @@ function switchModeCommand(text = "") {
   return null;
 }
 
+// Inputs whose text must never be read as an Orkestr control command. MCP
+// messages (thread_bridge_message) qualify by source, so inputs queued before
+// they carried commandProcessing metadata are covered too.
+export function commandInterpretationDisabled(input = {}) {
+  return String(input.commandProcessing || "").trim().toLowerCase() === "disabled" ||
+    String(input.source || "").trim() === "thread_bridge_message";
+}
+
 export function parseThreadInputCommand(input = {}) {
   const text = String(input.text || "");
-  if (String(input.commandProcessing || "").trim().toLowerCase() === "disabled") {
+  if (commandInterpretationDisabled(input)) {
     return { command: null, text };
   }
   const match = text.trimStart().match(/^\/([a-z][a-z0-9_-]*)(?:\b|$)([\s:.,-]*)([\s\S]*)$/i);

@@ -6,6 +6,8 @@ import { resourceOwnerUserId } from "./policy.js";
 // Compatibility drain only: preserve the old user record, never append an
 // assistant message or project a runtime final. New ingress must intercept first.
 export async function completeLegacySettingsCommand(thread, message, env, handleWhatsAppSettingsCommand) {
+  // MCP messages are never settings commands, whatever their stored metadata.
+  if (String(message?.source || "").trim() === "thread_bridge_message") return null;
   const parsed = parseSettingsCommand(message.text);
   if (!parsed) return null;
   const external = message.connector === "whatsapp" || message.source === "whatsapp_inbound";

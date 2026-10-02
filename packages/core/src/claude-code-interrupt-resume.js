@@ -137,7 +137,7 @@ export function replyAuthorityKey(message = {}) {
     clean(message.connector).toLowerCase(),
     clean(message.chatId),
     clean(message.accountId),
-    intent ? [clean(intent.issuedFor), clean(intent.mode), clean(target.threadId), clean(target.ownerUserId), clean(target.chatId), clean(target.accountId), clean(target.bindingRevision)] : null,
+    intent ? [clean(intent.issuedFor), clean(intent.mode), clean(target.threadId), clean(target.ownerUserId), clean(target.chatId), clean(target.accountId), clean(target.bindingRevision), clean(target.bindingEpoch)] : null,
   ]);
 }
 

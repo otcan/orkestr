@@ -9,7 +9,8 @@ import test from "node:test";
 import { createLlmAccountProfile, updateLlmAccountProfileState } from "../packages/core/src/llm-account-profiles.js";
 import { CLAUDE_CODE_INTERRUPT_RESUME_NOTE, replyAuthorityKey } from "../packages/core/src/claude-code-interrupt-resume.js";
 import { deliverClaudeCodePendingInputs, hasActiveClaudeCodeSupervisor, resetClaudeCodeRuntimeForTest, startClaudeCodeThread } from "../packages/core/src/runtime-claude-code-adapter.js";
-import { createThread, enqueueThreadInput, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
+import { createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
+import { createUiReplyDeliveryIntent, createWorkerReplyDeliveryIntent } from "../packages/core/src/reply-delivery-intent.js";
 import { createUser } from "../packages/core/src/users.js";
 import { sendBridgeMessage } from "../packages/core/src/thread-bridge-messaging.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
@@ -150,8 +151,8 @@ for (const order of ["default-then-optout", "optout-then-default"]) {
 
 for (const order of ["default-then-optout", "optout-then-default"]) {
   test(`queued MCP inputs from before the fix still never coalesce across opt-out (${order})`, async (t) => {
-    // Inputs stored before commandProcessing was set: /now is still parsed and
-    // they become steer inputs, so only the authority fence keeps them apart.
+    // Inputs stored before commandProcessing existed: the source alone keeps
+    // their "/now" literal, and the authority fence is a second barrier.
     const optOutFirst = order === "optout-then-default";
     const result = await runMixed(t, `legacy-${order}`, async (thread, env) => {
       const send = async (text, requestId, deliverToWhatsApp) => {
@@ -196,4 +197,80 @@ test("replyAuthorityKey distinguishes opt-out, agent, chat and reply route", () 
   assert.notEqual(replyAuthorityKey(base), replyAuthorityKey({ ...base, bridgeAgentId: "agent-b" }));
   assert.notEqual(replyAuthorityKey(base), replyAuthorityKey({ ...base, replyDeliveryIntent: { ...base.replyDeliveryIntent, target: { ...base.replyDeliveryIntent.target, bindingRevision: "r2" } } }));
   assert.notEqual(replyAuthorityKey({ source: "ui" }), replyAuthorityKey({ source: "whatsapp_inbound", connector: "whatsapp", chatId: "c" }));
+});
+
+// Cross-origin: a WhatsApp, UI or worker request (each with its real captured
+// reply route) next to an MCP request that opted out of WhatsApp.
+const primaries = {
+  whatsapp: (thread, env) => enqueueThreadInput(thread.id, { text: "/now synthetic-whatsapp-request", source: "whatsapp_inbound", connector: "whatsapp",
+    chatId: binding.chatId, accountId: binding.responderAccountId }, env),
+  ui: async (thread, env) => enqueueThreadInput(thread.id, { text: "synthetic-ui-request", source: "ui", originSurface: "webui", ...steer,
+    replyDeliveryIntent: createUiReplyDeliveryIntent(await getThread(thread.id, env), { mode: "bound_whatsapp", ownerUserId: "owner", env }) }, env),
+  worker: async (thread, env) => enqueueThreadInput(thread.id, { text: "synthetic-worker-request", source: "worker_assignment", ...steer,
+    replyDeliveryIntent: createWorkerReplyDeliveryIntent(await getThread(thread.id, env), { mode: "bound_whatsapp", ownerUserId: "owner" }) }, env),
+};
+
+async function legacyOptOut(thread, env, requestId) {
+  const sent = await sendBridgeMessage(thread.id, { text: "/now synthetic-optout-secret", requestId, deliverToWhatsApp: false }, principal, env, NO_KICK);
+  await updateThreadMessage(thread.id, sent.messageId, { commandProcessing: "" }, env);
+  return sent;
+}
+
+for (const [origin, enqueuePrimary] of Object.entries(primaries)) {
+  for (const mcpFirst of [false, true]) {
+    test(`${origin} request and an opted-out MCP request never share a turn (${mcpFirst ? "MCP first" : `${origin} first`})`, async (t) => {
+      const result = await runMixed(t, `${origin}-${mcpFirst ? "mcp-first" : "primary-first"}`, async (thread, env) => {
+        if (mcpFirst) {
+          const b = await legacyOptOut(thread, env, `cross-${origin}-b`);
+          const a = await enqueuePrimary(thread, env);
+          return [b, { messageId: a.id }];
+        }
+        const a = await enqueuePrimary(thread, env);
+        const b = await legacyOptOut(thread, env, `cross-${origin}-b`);
+        return [{ messageId: a.id }, b];
+      });
+      assert.ok(!result.prompts.some((prompt) => prompt.includes("synthetic-optout-secret") && /synthetic-(whatsapp|ui|worker)-request/.test(prompt)), "never one shared prompt");
+      const optOut = result.messages.find((message) => message.source === "thread_bridge_message");
+      assert.equal(optOut.coalescedIntoMessageId || "", "");
+      assert.equal(result.finals.filter((final) => final.parentMessageId === optOut.id).length, 1, "the MCP request has its own answer");
+      assert.ok(result.posts.every((body) => !body.includes("synthetic-optout-secret")), "opted-out content never reaches WhatsApp");
+    });
+  }
+}
+
+test("same-origin steer inputs with different captured owners or binding revisions are not coalesced", async (t) => {
+  const owners = await runMixed(t, "owners", async (thread, env) => {
+    const current = await getThread(thread.id, env);
+    const one = await enqueueThreadInput(thread.id, { text: "steer owner one", source: "worker_assignment", ...steer,
+      replyDeliveryIntent: createWorkerReplyDeliveryIntent(current, { mode: "bound_whatsapp", ownerUserId: "owner" }) }, env);
+    const two = await enqueueThreadInput(thread.id, { text: "steer owner two", source: "worker_assignment", ...steer,
+      replyDeliveryIntent: createWorkerReplyDeliveryIntent(current, { mode: "bound_whatsapp", ownerUserId: "synthetic-other-owner" }) }, env);
+    return [{ messageId: one.id }, { messageId: two.id }];
+  });
+  assert.ok(!owners.prompts.some((prompt) => prompt.includes("owner one") && prompt.includes("owner two")));
+
+  const revisions = await runMixed(t, "revisions", async (thread, env) => {
+    const one = await enqueueThreadInput(thread.id, { text: "steer before rebind", source: "worker_assignment", ...steer,
+      replyDeliveryIntent: createWorkerReplyDeliveryIntent(await getThread(thread.id, env), { mode: "bound_whatsapp", ownerUserId: "owner" }) }, env);
+    await updateThread(thread.id, { binding: { ...binding, chatId: "synthetic-chat-rebound" } }, env);
+    const two = await enqueueThreadInput(thread.id, { text: "steer after rebind", source: "worker_assignment", ...steer,
+      replyDeliveryIntent: createWorkerReplyDeliveryIntent(await getThread(thread.id, env), { mode: "bound_whatsapp", ownerUserId: "owner" }) }, env);
+    return [{ messageId: one.id }, { messageId: two.id }];
+  });
+  assert.ok(!revisions.prompts.some((prompt) => prompt.includes("before rebind") && prompt.includes("after rebind")));
+  for (const result of [owners, revisions]) {
+    assert.equal(result.finals.filter((final) => final.parentMessageId === result.first.messageId).length, 1);
+    assert.equal(result.finals.filter((final) => final.parentMessageId === result.second.messageId).length, 1);
+  }
+});
+
+test("MCP text is never a control command, whatever its stored metadata", async () => {
+  const { parseThreadInputCommand } = await import("../packages/core/src/thread-commands.js");
+  for (const text of ["/now do it", "/stop", "/reset", "/model gpt-x", "/claude"]) {
+    assert.equal(parseThreadInputCommand({ source: "thread_bridge_message", text }).command, null, text);
+    assert.equal(parseThreadInputCommand({ source: "thread_bridge_message", text, commandProcessing: "" }).command, null, text);
+  }
+  assert.equal(parseThreadInputCommand({ source: "whatsapp_inbound", text: "/stop" }).command, "stop", "other sources keep their commands");
+  const { completeLegacySettingsCommand } = await import("../packages/core/src/codex-settings-command-legacy.js");
+  assert.equal(await completeLegacySettingsCommand({ id: "t" }, { id: "m", source: "thread_bridge_message", text: "/model gpt-x" }, {}, async () => { throw new Error("must not run"); }), null);
 });
