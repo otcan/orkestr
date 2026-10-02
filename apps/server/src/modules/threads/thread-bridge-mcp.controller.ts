@@ -45,10 +45,14 @@ function signedInUser(request: any) {
 }
 
 // Browser form posts must come from this origin (CSRF guard on top of the
-// one-time consent id and SameSite session cookie).
+// one-time consent id and SameSite session cookie). The site-wide
+// "Referrer-Policy: no-referrer" makes browsers send "Origin: null" on form
+// POSTs, so a null/absent Origin is accepted only with the browser-controlled
+// "Sec-Fetch-Site: same-origin" header, which page scripts cannot set.
 function sameOrigin(request: any) {
-  const origin = String(request.headers?.origin || "");
-  return Boolean(origin) && origin === new URL(mcpPublicBase()).origin;
+  const origin = String(request.headers?.origin || "").trim();
+  if (origin && origin !== "null") return origin === new URL(mcpPublicBase()).origin;
+  return String(request.headers?.["sec-fetch-site"] || "").trim().toLowerCase() === "same-origin";
 }
 
 function unauthorized(response: any) {
@@ -59,6 +63,7 @@ function unauthorized(response: any) {
 
 function consentPage({ request, consentId, userId }: any) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="same-origin">
 <title>Connect ${escapeHtml(request.client.clientName)} to Orkestr</title>
 <style>body{font-family:system-ui,sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem;line-height:1.5}button{font-size:1rem;padding:.6rem 1.2rem;margin-right:.6rem}li{margin:.3rem 0}</style></head>
 <body><h1>Connect ${escapeHtml(request.client.clientName)}</h1>

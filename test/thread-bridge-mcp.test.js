@@ -60,7 +60,7 @@ async function connect(base) {
   assert.match(page, /all your threads/);
   const consentId = /name="consent_id" value="([^"]+)"/.exec(page)[1];
   const decision = await fetch(`${base}/mcp-oauth/authorize`, {
-    method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", origin: base },
+    method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", origin: "null", "sec-fetch-site": "same-origin" },
     body: new URLSearchParams({ consent_id: consentId, decision: "approve" }),
   });
   assert.equal(decision.status, 302);
@@ -142,6 +142,12 @@ test("ChatGPT-style OAuth connection reads all threads and comments through MCP"
   assert.match(page, new RegExp(`${base}/mcp`));
   assert.match(page, /ChatGPT/);
   const grantId = /name="grant_id" value="([^"]+)"/.exec(page)[1];
+  // Behind "Referrer-Policy: no-referrer" browsers send Origin: null; only a
+  // same-origin Sec-Fetch-Site makes that acceptable.
+  const nullCrossSite = await fetch(`${base}/mcp-oauth/connections/revoke`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", origin: "null", "sec-fetch-site": "cross-site" }, body: new URLSearchParams({ grant_id: grantId }) });
+  assert.equal(nullCrossSite.status, 403);
+  const noHeaders = await fetch(`${base}/mcp-oauth/connections/revoke`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_id: grantId }) });
+  assert.equal(noHeaders.status, 403);
   const crossSite = await fetch(`${base}/mcp-oauth/connections/revoke`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://evil.example" }, body: new URLSearchParams({ grant_id: grantId }) });
   assert.equal(crossSite.status, 403);
   const revoke = await fetch(`${base}/mcp-oauth/connections/revoke`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", origin: base }, body: new URLSearchParams({ grant_id: grantId }) });

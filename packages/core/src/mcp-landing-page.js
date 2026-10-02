@@ -24,6 +24,7 @@ export function mcpLandingPage({ resourceUrl, userId = "", connections = [], sub
       : "<p>No assistant is connected to your account yet.</p>"}`
     : `<p><a href="/auth/login?return=${encodeURIComponent("/mcp")}">Sign in</a> to see and revoke the assistants connected to your account.</p>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="same-origin">
 <title>Orkestr MCP server</title>
 <style>body{font-family:system-ui,sans-serif;max-width:46rem;margin:3rem auto;padding:0 1rem;line-height:1.5}code{background:#f2f2f2;padding:.15rem .35rem;border-radius:4px}
 table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.4rem;border-bottom:1px solid #ddd}.notice{background:#eef7ee;padding:.6rem;border-radius:6px}</style></head>
