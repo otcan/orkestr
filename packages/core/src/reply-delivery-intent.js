@@ -104,7 +104,7 @@ function createBoundWhatsAppReplyDeliveryIntent(thread = {}, options = {}) {
   const eligible = featureGate.enabled && whatsappReplyDeliveryBindingEligible(binding);
   const target = {
     threadId: clean(thread.id),
-    ownerUserId: clean(thread.ownerUserId),
+    ownerUserId: clean(options.ownerUserId || thread.ownerUserId),
     bindingId: bindingIdentity(binding),
     bindingRevision: whatsappReplyDeliveryBindingRevision(binding),
     chatId: clean(binding.chatId),

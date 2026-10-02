@@ -4632,6 +4632,9 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
       phase: message.phase,
       eventId: message.eventId,
       parentMessageId: parentMessage?.id || null,
+      ...(parentMessage?.source === "thread_bridge_message" && parentMessage.bridgeWhatsAppReply === false
+        ? { bridgeWhatsAppReply: false }
+        : {}),
       connector: whatsappParent ? "whatsapp" : "",
       chatId: whatsappParentChatId(whatsappParent, thread),
       accountId: whatsappParentAccountId(whatsappParent, thread),
@@ -4909,6 +4912,9 @@ async function syncLeaseRollout(lease, env = process.env) {
       phase: message.phase,
       eventId: message.eventId,
       parentMessageId: parentMessage?.id || null,
+      ...(parentMessage?.source === "thread_bridge_message" && parentMessage.bridgeWhatsAppReply === false
+        ? { bridgeWhatsAppReply: false }
+        : {}),
       connector: whatsappParent ? "whatsapp" : "",
       chatId: whatsappParentChatId(whatsappParent, thread),
       accountId: whatsappParentAccountId(whatsappParent, thread),

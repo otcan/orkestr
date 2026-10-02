@@ -50,7 +50,7 @@ export async function sendBridgeMessage(threadId, input = {}, principal, env = p
     bridgeGrantId: principal.grantId,
     bridgeWhatsAppReply: input.deliverToWhatsApp !== false,
     ...(input.deliverToWhatsApp === false ? {} : {
-      replyDeliveryIntent: createBridgeReplyDeliveryIntent(thread, { enabled: true }),
+      replyDeliveryIntent: createBridgeReplyDeliveryIntent(thread, { enabled: true, ownerUserId: grant.ownerUserId }),
     }),
     codexDeliveryMode: "passive",
     steerActiveTurn: false,

@@ -6192,6 +6192,13 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
     const messageSetKey = outboundMirrorMessageSetKey({ kind, agentId, threadId });
     for (const [messageIndex, message] of messages.entries()) {
       const messageCursor = outboundMirrorMessageCursor(message, messageIndex);
+      const parent = kind === "thread" && message.parentMessageId
+        ? messages.find((entry) => entry.id === message.parentMessageId) || await getThreadMessage(threadId, message.parentMessageId, env)
+        : null;
+      if (kind === "thread" && (
+        message.bridgeWhatsAppReply === false ||
+        (parent?.source === "thread_bridge_message" && parent.bridgeWhatsAppReply === false)
+      )) continue;
       const routerUpdateTarget = routerUpdateWhatsAppDeliveryTarget({
         message,
         thread,
@@ -7034,10 +7041,6 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         continue;
       }
-      const parent = messages.find((entry) => entry.id === message.parentMessageId) ||
-        (kind === "thread" && message.parentMessageId
-          ? await getThreadMessage(threadId, message.parentMessageId, env)
-          : null);
       if (!shouldMirrorWhatsAppReply(message)) {
         if (isNoReplyAssistantMessage(message)) {
           await patchUiReplyDeliveryParent({

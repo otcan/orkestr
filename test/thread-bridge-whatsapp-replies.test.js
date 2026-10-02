@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appendThreadMessage, createThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser } from "../packages/core/src/users.js";
 import { replyToBridgeThread } from "../packages/core/src/thread-bridge.js";
 import { sendBridgeMessage } from "../packages/core/src/thread-bridge-messaging.js";
@@ -12,6 +12,8 @@ import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { threadBridgeWhatsAppReplyOrigin } from "../packages/connectors/src/whatsapp-outbound-mirror.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { closeThreadMessageRegistryCache } from "../packages/storage/src/thread-message-registry.js";
+import { dataPaths, ensureDataDirs } from "../packages/storage/src/paths.js";
+import { syncActiveRuntimeRolloutMessages } from "../packages/core/src/runtime-leases.js";
 
 const principal = {
   kind: "delegated-agent", ownerUserId: "owner-a", agentId: "agent-a", grantId: "grant-a",
@@ -26,7 +28,7 @@ function response(payload, ok = true, status = 200) {
   return { ok, status, async json() { return payload; } };
 }
 
-async function fixture(t, { binding = undefined } = {}) {
+async function fixture(t, { binding = undefined, generation = "" } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-mcp-wa-replies-"));
   const env = {
     ORKESTR_HOME: home,
@@ -40,7 +42,14 @@ async function fixture(t, { binding = undefined } = {}) {
   await fs.writeFile(path.join(home, "thread-bridge-grants.json"), JSON.stringify([grant]));
   await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://fixture.invalid" }, env);
   await createUser({ id: "owner-a" }, env);
-  await createThread({ id: "thread-a", ownerUserId: "owner-a", name: "Synthetic thread", ...(binding ? { binding } : {}) }, env);
+  await createThread({
+    id: "thread-a", ownerUserId: "owner-a", name: "Synthetic thread", ...(binding ? { binding } : {}),
+    ...(generation ? {
+      state: "working", codexThreadId: generation,
+      executor: { type: "codex", codexThreadId: generation },
+      runtime: { runtimeKind: "codex-app-server", codexThreadId: generation, runtimeGeneration: generation },
+    } : {}),
+  }, env);
   t.after(async () => {
     await closeThreadMessageRegistryCache();
     await fs.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
@@ -191,6 +200,34 @@ test("authority is rechecked after account resolution immediately before dispatc
   assert.equal(sends.length, 0, "the request is revalidated after setup and before transport dispatch");
 });
 
+test("transport_send fault-boundary binding disable fails before any mocked POST", async (t) => {
+  const env = await fixture(t, { binding: eligibleBinding });
+  const sent = await sendBridgeMessage("thread-a", { text: "Validate at the send boundary", requestId: "fault-boundary-authority" }, principal, env, { deliver() {} });
+  const input = (await listThreadMessages("thread-a", env)).find((message) => message.id === sent.messageId);
+  await appendThreadMessage("thread-a", {
+    role: "assistant", source: "claude-code", phase: "final_answer", state: "completed",
+    parentMessageId: input.id, text: "Must stop at the send boundary.",
+  }, env);
+  let changed = false;
+  env.ORKESTR_TEST_RUNTIME_FAULT_INJECTOR = {
+    transport_send: async () => {
+      if (changed) return;
+      changed = true;
+      await updateThread("thread-a", {
+        binding: { ...eligibleBinding, enabled: false, routeEligible: false },
+      }, env);
+    },
+  };
+  const posts = [];
+  const result = await deliverWhatsAppReplies(env, async (_url, options = {}) => {
+    if (options.method === "POST") posts.push(options);
+    return response({ ok: true, ids: ["unexpected"] });
+  });
+  assert.equal(changed, true, "the fault hook ran immediately before the live fence");
+  assert.equal(result.delivered.length, 0);
+  assert.equal(posts.length, 0, "a disabled request-time binding cannot reach transport");
+});
+
 test("a binding change during transport never redirects or retries to the replacement owner", async (t) => {
   const env = await fixture(t, { binding: eligibleBinding });
   await createUser({ id: "owner-b" }, env);
@@ -241,6 +278,52 @@ test("explicit opt-out cannot be bypassed by a matching projected chatId", async
   });
   assert.equal(result.delivered.length, 0);
   assert.equal(calls.length, 0);
+});
+
+test("active runtime rollout preserves MCP opt-out before WhatsApp mirror routing", async (t) => {
+  const generation = "93f4314a-e4fc-45e1-8137-e1ba7412001d";
+  const env = await fixture(t, { binding: eligibleBinding, generation });
+  const sent = await sendBridgeMessage("thread-a", {
+    text: "Synthetic opt-out rollout request", requestId: "rollout-opt-out", deliverToWhatsApp: false,
+  }, principal, env, { deliver() {} });
+  await updateThreadMessage("thread-a", sent.messageId, {
+    codexThreadId: generation,
+    codexTurnId: "turn-mcp-opt-out",
+  }, env);
+
+  await ensureDataDirs(env);
+  const rolloutPath = path.join(env.ORKESTR_HOME, "rollout.jsonl");
+  const timestamp = new Date().toISOString();
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ type: "session_meta", payload: { id: generation } }),
+    JSON.stringify({
+      timestamp,
+      type: "response_item",
+      payload: {
+        type: "message", role: "assistant", phase: "final_answer", turn_id: "turn-mcp-opt-out",
+        content: [{ type: "output_text", text: "Synthetic private final." }],
+      },
+    }),
+  ].join("\n") + "\n", "utf8");
+  await fs.writeFile(dataPaths(env).runtimeLeases, JSON.stringify([{
+    id: "synthetic-rollout-lease", threadId: "thread-a", sessionName: "synthetic-rollout-session",
+    rolloutPath, rolloutGeneration: generation, rolloutOffset: 0, startedAt: timestamp,
+  }]), "utf8");
+
+  const projection = await syncActiveRuntimeRolloutMessages(env);
+  assert.equal(projection.appended, 1);
+  const projected = (await listThreadMessages("thread-a", env)).find((message) => message.text === "Synthetic private final.");
+  assert.equal(projected.parentMessageId, sent.messageId);
+  assert.equal(projected.chatId, eligibleBinding.chatId, "fixture reproduces binding-derived rollout projection");
+  assert.equal(projected.bridgeWhatsAppReply, false, "the projection carries authoritative opt-out state");
+
+  const posts = [];
+  const result = await deliverWhatsAppReplies(env, async (_url, options = {}) => {
+    if (options.method === "POST") posts.push(options);
+    return response({ ok: true, ready: true, accounts: [{ id: "synthetic-account-a", ready: true }], ids: ["unexpected"] });
+  });
+  assert.equal(result.delivered.length, 0);
+  assert.equal(posts.length, 0, "opt-out is enforced before every mirror/router origin path");
 });
 
 test("passive comments never qualify for execution-answer WhatsApp delivery", async (t) => {
