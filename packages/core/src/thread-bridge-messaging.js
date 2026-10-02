@@ -52,6 +52,9 @@ export async function sendBridgeMessage(threadId, input = {}, principal, env = p
     ...(input.deliverToWhatsApp === false ? {} : {
       replyDeliveryIntent: createBridgeReplyDeliveryIntent(thread, { enabled: true, ownerUserId: grant.ownerUserId }),
     }),
+    ...(String(thread.codexThreadId || thread.executor?.codexThreadId || thread.runtime?.codexThreadId || "").trim()
+      ? { codexThreadId: String(thread.codexThreadId || thread.executor?.codexThreadId || thread.runtime?.codexThreadId || "").trim() }
+      : {}),
     codexDeliveryMode: "passive",
     steerActiveTurn: false,
   }, env);

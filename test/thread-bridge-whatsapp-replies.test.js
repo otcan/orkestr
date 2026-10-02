@@ -326,6 +326,83 @@ test("active runtime rollout preserves MCP opt-out before WhatsApp mirror routin
   assert.equal(posts.length, 0, "opt-out is enforced before every mirror/router origin path");
 });
 
+test("active runtime commentary without a turn id retains MCP opt-out and cannot enter progress recovery", async (t) => {
+  const generation = "60bfb2e7-8690-49b9-bbb5-62ad910fc1bd";
+  const env = await fixture(t, { binding: eligibleBinding, generation });
+  const sent = await sendBridgeMessage("thread-a", {
+    text: "Synthetic opt-out commentary request", requestId: "rollout-commentary-opt-out", deliverToWhatsApp: false,
+  }, principal, env, { deliver() {} });
+  await ensureDataDirs(env);
+  const rolloutPath = path.join(env.ORKESTR_HOME, "rollout-commentary.jsonl");
+  const timestamp = new Date().toISOString();
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ type: "session_meta", payload: { id: generation } }),
+    JSON.stringify({
+      timestamp,
+      type: "event_msg",
+      payload: { type: "agent_message", phase: "commentary", message: "Synthetic private progress without a turn id." },
+    }),
+  ].join("\n") + "\n", "utf8");
+  await fs.writeFile(dataPaths(env).runtimeLeases, JSON.stringify([{
+    id: "synthetic-commentary-lease", threadId: "thread-a", sessionName: "synthetic-commentary-session",
+    rolloutPath, rolloutGeneration: generation, rolloutOffset: 0, startedAt: timestamp,
+  }]), "utf8");
+
+  const projection = await syncActiveRuntimeRolloutMessages(env);
+  assert.equal(projection.appended, 1);
+  const projected = (await listThreadMessages("thread-a", env)).find((message) => message.text === "Synthetic private progress without a turn id.");
+  assert.equal(projected.parentMessageId, sent.messageId, "the active generation supplies the durable execution parent when rollout commentary omits turn_id");
+  assert.equal(projected.bridgeWhatsAppReply, false, "progress projection preserves the MCP request's authoritative opt-out");
+
+  const posts = [];
+  const result = await deliverWhatsAppReplies(env, async (_url, options = {}) => {
+    if (options.method === "POST") posts.push(options);
+    return response({ ok: true, ready: true, accounts: [{ id: "synthetic-account-a", ready: true }], ids: ["unexpected"] });
+  });
+  assert.equal(result.delivered.length, 0);
+  assert.equal(posts.length, 0, "progress, cursor recovery and fallback origin paths all honor MCP opt-out");
+});
+
+test("active runtime progress delivery fails closed when the captured MCP owner or binding changes", async (t) => {
+  const generation = "8d6f2e99-b5e5-4c09-ad24-d15b32c5a1de";
+  const env = await fixture(t, { binding: eligibleBinding, generation });
+  await createUser({ id: "owner-b" }, env);
+  const sent = await sendBridgeMessage("thread-a", {
+    text: "Synthetic opted-in commentary request", requestId: "rollout-commentary-fenced",
+  }, principal, env, { deliver() {} });
+  await ensureDataDirs(env);
+  const rolloutPath = path.join(env.ORKESTR_HOME, "rollout-commentary-fenced.jsonl");
+  const timestamp = new Date().toISOString();
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ type: "session_meta", payload: { id: generation } }),
+    JSON.stringify({
+      timestamp,
+      type: "event_msg",
+      payload: { type: "agent_message", phase: "commentary", message: "Synthetic progress for the captured owner only." },
+    }),
+  ].join("\n") + "\n", "utf8");
+  await fs.writeFile(dataPaths(env).runtimeLeases, JSON.stringify([{
+    id: "synthetic-fenced-commentary-lease", threadId: "thread-a", sessionName: "synthetic-fenced-commentary-session",
+    rolloutPath, rolloutGeneration: generation, rolloutOffset: 0, startedAt: timestamp,
+  }]), "utf8");
+  assert.equal((await syncActiveRuntimeRolloutMessages(env)).appended, 1);
+  const projected = (await listThreadMessages("thread-a", env)).find((message) => message.text === "Synthetic progress for the captured owner only.");
+  assert.equal(projected.parentMessageId, sent.messageId);
+  assert.equal(projected.replyDeliveryIntent, undefined);
+
+  await updateThread("thread-a", {
+    ownerUserId: "owner-b",
+    binding: { ...eligibleBinding, chatId: "synthetic-chat-b", responderAccountId: "synthetic-account-b", outboundAccountId: "synthetic-account-b" },
+  }, env);
+  const posts = [];
+  const result = await deliverWhatsAppReplies(env, async (_url, options = {}) => {
+    if (options.method === "POST") posts.push(options);
+    return response({ ok: true, ready: true, accounts: [{ id: "synthetic-account-b", ready: true }], ids: ["unexpected"] });
+  });
+  assert.equal(result.delivered.length, 0);
+  assert.equal(posts.length, 0, "recovery must not redirect an MCP progress update to a replacement owner or binding");
+});
+
 test("passive comments never qualify for execution-answer WhatsApp delivery", async (t) => {
   const env = await fixture(t, { binding: eligibleBinding });
   await replyToBridgeThread("thread-a", { requestId: "comment-1", text: "Context only" }, principal, env);

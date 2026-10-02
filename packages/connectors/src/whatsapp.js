@@ -6847,11 +6847,13 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       if (message.role !== "assistant" || message.state !== "completed" || deliveredIds.has(message.id)) continue;
       if (shouldMirrorWhatsAppProgress(message, env)) {
         const parent = messages.find((entry) => entry.id === message.parentMessageId);
-        const whatsappOrigin =
-          parent?.connector === "whatsapp" ||
-          parent?.source === "whatsapp_inbound" ||
-          message.connector === "whatsapp" ||
-          boundThreadWhatsAppAssistantOrigin({ message, thread, kind });
+        const bridgeExecutionReply = kind === "thread" && parent?.source === "thread_bridge_message";
+        const whatsappOrigin = bridgeExecutionReply
+          ? threadBridgeWhatsAppReplyOrigin({ parent, thread, kind })
+          : parent?.connector === "whatsapp" ||
+            parent?.source === "whatsapp_inbound" ||
+            message.connector === "whatsapp" ||
+            boundThreadWhatsAppAssistantOrigin({ message, thread, kind });
         if (!whatsappOrigin) continue;
         const progressFence = replyDeliveryBindingFence(parent || {}, thread || {});
         if (progressFence.applies && !progressFence.allowed) {
@@ -6897,9 +6899,11 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           kind,
           env,
         });
-        const chatId = pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
+        const progressSnapshotChatId = progressFence.applies ? pickString(progressFence.intent?.target?.chatId) : "";
+        const progressSnapshotAccountId = progressFence.applies ? pickString(progressFence.intent?.target?.accountId) : "";
+        const chatId = progressSnapshotChatId || pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
         const accountId = kind === "thread"
-          ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
+          ? progressSnapshotAccountId || pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
           : pickString(message.accountId, parent?.accountId);
         const existingIntent = findWhatsAppOutboundIntent(outboundIntents, {
           kind,

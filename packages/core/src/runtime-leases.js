@@ -4499,6 +4499,20 @@ function latestRolloutWhatsAppInput(messages = [], beforeTimestamp = null, threa
   ) || null;
 }
 
+function latestRolloutBridgeInput(messages = [], beforeTimestamp = null, generation = "") {
+  const expectedGeneration = String(generation || "").trim();
+  if (!expectedGeneration) return null;
+  const beforeMs = beforeTimestamp ? timestampMs(beforeTimestamp) : 0;
+  return [...messages].reverse().find((message) => {
+    if (message?.role !== "user" || message?.source !== "thread_bridge_message") return false;
+    const messageGeneration = String(message.codexThreadId || message.executorThreadId || "").trim();
+    const state = String(message.state || "").trim().toLowerCase();
+    return messageGeneration === expectedGeneration &&
+      ["queued", "pending_delivery", "awaiting_ack", "delivering", "claimed", "running"].includes(state) &&
+      (!beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000);
+  }) || null;
+}
+
 function whatsappParentChatId(parent = null, thread = null) {
   return String(parent?.chatId || thread?.binding?.chatId || "").trim();
 }
@@ -4613,7 +4627,7 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
     const turnParent = exactRolloutTurnParent(existing, message, codexId);
     const whatsappParent = turnParent
       ? (whatsappOrigin(turnParent) ? turnParent : replyDeliveryProjectionParent(turnParent))
-      : latestRolloutWhatsAppInput(existing, message.timestamp, thread);
+      : latestRolloutBridgeInput(existing, message.timestamp, codexId) || latestRolloutWhatsAppInput(existing, message.timestamp, thread);
     const parentMessage = turnParent || whatsappParent;
     const parentTurnId = String(
       message.codexTurnId ||
@@ -4893,7 +4907,7 @@ async function syncLeaseRollout(lease, env = process.env) {
     const turnParent = exactRolloutTurnParent(existing, message, generation);
     const whatsappParent = turnParent
       ? (whatsappOrigin(turnParent) ? turnParent : replyDeliveryProjectionParent(turnParent))
-      : latestRolloutWhatsAppInput(existing, message.timestamp, thread);
+      : latestRolloutBridgeInput(existing, message.timestamp, generation) || latestRolloutWhatsAppInput(existing, message.timestamp, thread);
     const parentMessage = turnParent || whatsappParent;
     const parentTurnId = String(
       message.codexTurnId ||
