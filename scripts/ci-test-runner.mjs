@@ -1,3 +1,4 @@
+import { publishFailedTests } from "./ci-test-failure-report.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -355,6 +356,7 @@ export async function runCiTests(options = parseCiTestRunnerArgs(), logger = con
   }
 
   logger.error("CI test run failed. Showing failing TAP blocks and summary.");
+  publishFailedTests(lines, { root: options.root });
 
   if (failedIndices.length > 0) {
     const printed = new Set();
