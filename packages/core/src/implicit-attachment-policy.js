@@ -36,8 +36,12 @@ export function markdownLinkNamesFile(label = "", filePath = "") {
 }
 
 export function rejectImplicitAttachment(candidate, filePath, skipped) {
-  const citation = candidate.source === "markdown_link" && markdownLinkNamesFile(candidate.label, filePath);
-  if (isProseFilesystemMention(candidate.source) || citation) {
+  // The prose/citation rules judge links found in message text. A stored
+  // attachment (re-resolved during staging) keeps its source tag but not its
+  // label, and was already accepted, so only the sensitive-file check applies.
+  const fromText = !candidate.attachment;
+  const citation = fromText && candidate.source === "markdown_link" && markdownLinkNamesFile(candidate.label, filePath);
+  if ((fromText && isProseFilesystemMention(candidate.source)) || citation) {
     skipped.push({ path: "", raw: "", reason: "attachment_requires_explicit_selection" });
     return true;
   }

@@ -395,3 +395,26 @@ test("thread attachment path redaction is opt-in and role-aware", async () => {
   assert.match(redactedUserText, /reply \/safe-reset, \/codex, \/connect google, or \/help/);
   assert.equal((redactedUserText.match(/\[local file path omitted]/g) || []).length, 2);
 });
+
+test("a descriptively linked file survives staging re-resolution as a stored attachment", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-relink-"));
+  const workspace = path.join(home, "workspace");
+  await fs.mkdir(workspace);
+  const report = path.join(workspace, "2026-10-02.md");
+  await fs.writeFile(report, "# Daily run\n", "utf8");
+  const thread = { id: "relink-thread", ownerUserId: "alice", cwd: workspace, workspace };
+  const env = { ORKESTR_HOME: home };
+  const first = await resolveThreadAttachments({ thread, text: `[Daily run](${report})`, env });
+  assert.equal(first.attachments.length, 1);
+  // Outbound staging re-resolves the stored attachments; the source tag stays
+  // "markdown_link" but the link label is gone. This used to be rejected as a
+  // citation, so the reply was held forever.
+  const staged = await resolveThreadAttachments({ thread, attachments: first.attachments, env });
+  assert.equal(staged.skipped.length, 0, JSON.stringify(staged.skipped));
+  assert.equal(staged.attachments.length, 1);
+  // Sensitive files are still refused even when stored with a link source.
+  const secret = path.join(workspace, ".env.local");
+  await fs.writeFile(secret, "X=1", "utf8");
+  const refused = await resolveThreadAttachments({ thread, attachments: [{ path: secret, source: "markdown_link" }], env });
+  assert.equal(refused.attachments.length, 0);
+});
