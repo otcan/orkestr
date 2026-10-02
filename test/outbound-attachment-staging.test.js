@@ -81,16 +81,16 @@ for (const phase of ["final_answer", "commentary"]) for (const fault of ["missin
   assert.equal(duplicate.delivered.length, 0);
 });
 
-test("a prose-only mention of a producer file delivers as text and never stages an attachment", async t => {
+test("a file-name citation of a producer file delivers as text and never stages an attachment", async t => {
   const f = await fixture(t);
   await fs.writeFile(f.source, syntheticWorkbook);
   const reply = await appendThreadMessage(f.thread.id, { role: "assistant", source: "codex-app-server", connector: "whatsapp",
     chatId: "synthetic-chat", state: "completed", phase: "final_answer",
-    text: `Document: [workbook](${f.source})` }, f.env);
+    text: `Document: [synthetic.xlsx](${f.source})` }, f.env);
   assert.equal(reply.outboundAttachmentStaging, undefined);
   assert.equal(reply.attachments, undefined);
   assert.equal(reply.deliveryError, undefined);
-  assert.equal(reply.text, `Document: [workbook](${f.source})`);
+  assert.equal(reply.text, `Document: [synthetic.xlsx](${f.source})`);
   const journalDir = path.join(f.home, "outbound-attachment-staging", createHash("sha256").update(`admin\n${f.thread.id}`).digest("hex"));
   await assert.rejects(fs.stat(journalDir), { code: "ENOENT" });
   let sends = 0;

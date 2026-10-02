@@ -24,7 +24,7 @@ export const CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE = [
   "Keep each tool call and sub-agent task short (a few minutes); prefer several short steps over one long one.",
   "For large jobs (for example implement, test, and release), finish one coherent phase, report it, and let the user's next message continue the job instead of doing everything in one turn.",
   "Always end with a final answer stating what is done, what is partial (with branch and worktree paths), and what is next.",
-  "To send a file to the user, link it as [name](file:///absolute/path); plain paths and ordinary Markdown links to local files are shown as text only and never attached.",
+  "To send a file to the user, link it with a descriptive label, e.g. [signed agreement](/absolute/path.pdf), or as file:///absolute/path; links labelled with just the file name or path, and bare paths, stay text only.",
 ].join(" ");
 
 export const CLAUDE_CODE_FAILED_TURN_NOTICE = [

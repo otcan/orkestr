@@ -13,15 +13,31 @@ export function implicitAttachmentSource(source) {
   return ["markdown_link", "plain_path", "sandbox_markdown_uri", "sandbox_plain_uri"].includes(source);
 }
 
-// Ordinary prose mentions (a plain path or markdown link typed in a message) are not
-// an attachment request; only structured attachments and explicit sandbox: / file:///
-// artifact references may resolve to a file.
+// A bare path in prose is never an attachment request. A Markdown link is one
+// when its label describes the file ("[three pending drafts](/…/drafts.md)"),
+// but not when the label is just the file's name or path, which is how agents
+// cite source files ("[server.ts](/repo/src/server.ts)") in coding threads.
 export function isProseFilesystemMention(source) {
-  return source === "markdown_link" || source === "plain_path";
+  return source === "plain_path";
+}
+
+function normalizedLabel(label = "") {
+  return String(label || "").trim().replace(/^`+|`+$/g, "").replace(/:\d+(?::\d+)?$/, "").toLowerCase();
+}
+
+export function markdownLinkNamesFile(label = "", filePath = "") {
+  const text = normalizedLabel(label);
+  if (!text) return true;
+  const base = path.basename(String(filePath)).toLowerCase();
+  const full = String(filePath).toLowerCase();
+  if (text === base || text === full) return true;
+  // Path-like labels ("src/server.ts", "./README.md") are citations.
+  return /[\\/]/.test(text) && full.endsWith(text.replace(/^\.\//, ""));
 }
 
 export function rejectImplicitAttachment(candidate, filePath, skipped) {
-  if (isProseFilesystemMention(candidate.source)) {
+  const citation = candidate.source === "markdown_link" && markdownLinkNamesFile(candidate.label, filePath);
+  if (isProseFilesystemMention(candidate.source) || citation) {
     skipped.push({ path: "", raw: "", reason: "attachment_requires_explicit_selection" });
     return true;
   }

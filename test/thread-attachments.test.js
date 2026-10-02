@@ -25,7 +25,7 @@ test("prose and symlink mentions do not implicitly export credential-like files"
   assert.equal(result.skipped.every(x=>x.reason==="attachment_requires_explicit_selection"),true);
 });
 
-test("an ordinary markdown document location mentioned in prose does not become an attachment", async () => {
+test("a descriptively labelled markdown link attaches its file while a filename citation stays text", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-prose-markdown-"));
   const workspace = path.join(home, "workspace");
   await fs.mkdir(workspace);
@@ -33,14 +33,18 @@ test("an ordinary markdown document location mentioned in prose does not become 
   await fs.writeFile(docPath, "# Design notes\nordinary content", "utf8");
   const thread = { id: "prose-markdown-thread", ownerUserId: "alice", cwd: workspace, workspace };
 
-  const result = await resolveThreadAttachments({
+  const delivered = await resolveThreadAttachments({
     thread,
     text: `See the writeup here: [design notes](${docPath})`,
     env: { ORKESTR_HOME: home },
   });
+  assert.equal(delivered.attachments.length, 1);
+  assert.equal(delivered.attachments[0].path, await fs.realpath(docPath));
 
-  assert.equal(result.attachments.length, 0);
-  assert.ok(result.skipped.some((item) => item.reason === "attachment_requires_explicit_selection"));
+  for (const text of [`Edited [design-notes.md](${docPath})`, `See [workspace/design-notes.md](${docPath})`, `Line [design-notes.md:3](${docPath})`, `Bare path ${docPath}`]) {
+    const cited = await resolveThreadAttachments({ thread, text, env: { ORKESTR_HOME: home } });
+    assert.equal(cited.attachments.length, 0, text);
+  }
 });
 
 test("a structured attachment is preserved even when the message text has no path mention", async () => {
@@ -251,8 +255,14 @@ test("thread attachment policy allows temp artifacts for admin-owned threads onl
     text: `Screenshot: [mobile](${screenshotPath})`,
     env,
   });
-  assert.equal(resolved.attachments.length, 0);
-  assert.equal(resolved.skipped.some((item) => item.reason === "attachment_requires_explicit_selection"), true);
+  // A descriptively labelled link is a delivery request; the path policy decides.
+  assert.equal(resolved.attachments.length, 1);
+  const userResolved = await resolveThreadAttachments({
+    thread: userThread,
+    text: `Screenshot: [mobile](${screenshotPath})`,
+    env,
+  });
+  assert.equal(userResolved.attachments.length, 0);
 
   const structured = await resolveThreadAttachments({
     thread: adminThread,

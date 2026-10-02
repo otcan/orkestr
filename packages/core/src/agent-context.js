@@ -79,10 +79,11 @@ Use dynamic discovery for live Orkestr context:
   \`orkestr api-session message "<text>" --api-session-id <stable-id>\`. The
   command eagerly binds by cwd before posting and exits non-zero if the bound
   WhatsApp delivery cannot be confirmed.
-- To send a file to the chat user (WhatsApp or WebUI), link it explicitly
-  as \`[name](file:///absolute/path)\` or a bare \`file:///absolute/path\`.
-  Plain paths and ordinary Markdown links to local files stay text only and
-  are never attached. Credential and config files are refused either way.
+- To send a file to the chat user (WhatsApp or WebUI), link it with a
+  descriptive label, e.g. \`[signed agreement](/absolute/path.pdf)\`, or as
+  \`file:///absolute/path\`. Links labelled with just the file name or path
+  (code citations) and bare paths stay text only. Credential and config files
+  are refused either way.
 - Runtime settings are included in \`orkestr whereiam --json\` and can also be
   inspected with \`orkestr settings --json\`. Use those settings for managed
   desktop slugs, Gmail/Outlook auth routes, and permission-routing behavior.

@@ -20,7 +20,7 @@ import {
 export { isRemoteThreadAttachmentDescriptor };
 
 const explicitPathKeys = ["path", "saved_path", "filePath", "localPath"];
-const markdownLinkPattern = /!?\[[^\]\n]*]\(([^)\n]+)\)/g;
+const markdownLinkPattern = /!?\[([^\]\n]*)]\(([^)\n]+)\)/g;
 const plainAbsolutePathPattern = /(^|[\s([{"'`])((?:\/[^\s()[\]{}<>"'`|]+)+)/g;
 const trailingPathPunctuationPattern = /[.,;:!?]+$/;
 const applicationRoutePrefixes = new Set(["api"]);
@@ -245,9 +245,9 @@ export function extractThreadAttachmentPathCandidates({ text = "", attachments =
 
   const source = String(text || "");
   for (const match of source.matchAll(markdownLinkPattern)) {
-    if (/^(?:sandbox:|file:)/i.test(String(match[1] || "").trim().replace(/^<|>$/g, ""))) continue;
-    const candidate = resolveTextCandidate(match[1], thread);
-    if (candidate) candidates.push({ ...candidate, source: "markdown_link" });
+    if (/^(?:sandbox:|file:)/i.test(String(match[2] || "").trim().replace(/^<|>$/g, ""))) continue;
+    const candidate = resolveTextCandidate(match[2], thread);
+    if (candidate) candidates.push({ ...candidate, source: "markdown_link", label: match[1] });
   }
   for (const match of source.matchAll(plainAbsolutePathPattern)) {
     const candidate = resolveTextCandidate(match[2], thread);
