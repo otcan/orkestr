@@ -257,8 +257,11 @@ server for clients such as ChatGPT plugins:
   `send_message` queues input (`source: thread_bridge_message`, labelled with
   the assistant's id, actor `delegated-agent`) that the thread's agent acts
   on; it is idempotent by `request_id`, limited to 30 per hour per assistant,
-  carries no chat route (the answer is not sent to WhatsApp) and is never
-  echoed back to the sending assistant as an event. `wait_for_reply` waits
+  carries no chat route. The completed answer is also delivered through the
+  originating thread's existing eligible WhatsApp binding by default; set
+  `deliver_to_whatsapp=false` to opt out. If the thread has no eligible binding,
+  no WhatsApp destination is inferred. The input is never echoed back to the
+  sending assistant as an event. `wait_for_reply` waits
   at most 45 s for the answer; `get_thread_status` reports working, queued,
   idle or last_turn_failed. Connections approved before messaging existed must
   reconnect to get the new scope.

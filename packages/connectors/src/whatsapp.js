@@ -137,6 +137,7 @@ import {
   staleUntrackedWhatsAppProgress,
   staleUntrackedWhatsAppReply,
   threadAllowsWhatsAppMirroring,
+  threadBridgeWhatsAppReplyOrigin,
   whatsappOutboundDeliveryRetentionLimit,
   whatsappTypingTargetForThread,
 } from "./whatsapp-outbound-mirror.js";
@@ -7040,7 +7041,8 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         parent?.connector === "whatsapp" ||
         parent?.source === "whatsapp_inbound" ||
         message.connector === "whatsapp" ||
-        boundThreadWhatsAppAssistantOrigin({ message, thread, kind });
+        boundThreadWhatsAppAssistantOrigin({ message, thread, kind }) ||
+        threadBridgeWhatsAppReplyOrigin({ parent, thread, kind });
       if (!whatsappOrigin) continue;
       const replyDeliveryFence = replyDeliveryBindingFence(parent || {}, thread || {});
       const snapshotChatId = replyDeliveryFence.applies ? pickString(replyDeliveryFence.intent?.target?.chatId) : "";

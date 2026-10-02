@@ -152,6 +152,17 @@ export function boundThreadWhatsAppAssistantOrigin({ message = {}, thread = null
   return Boolean(bindingChatId && messageChatId === bindingChatId);
 }
 
+// MCP execution inputs are not WhatsApp inbound messages. Their completed
+// answers may still use the exact thread's current, eligible binding when the
+// input opted in (the default). Never infer or accept a chat target here.
+export function threadBridgeWhatsAppReplyOrigin({ parent = null, thread = null, kind = "" } = {}) {
+  if (kind !== "thread" || parent?.source !== "thread_bridge_message" || parent.bridgeWhatsAppReply === false) return false;
+  if (!threadAllowsWhatsAppMirroring(thread)) return false;
+  const binding = thread?.binding || {};
+  if (String(binding.connector || "").trim().toLowerCase() !== "whatsapp") return false;
+  return Boolean(pickString(binding.chatId));
+}
+
 function whatsappMessageOrigin(message, state = null) {
   if (!message) return false;
   if (message.connector === "whatsapp" || message.source === "whatsapp_inbound" || message.source === "whatsapp_client") return true;

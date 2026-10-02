@@ -2,7 +2,8 @@
 // comments, a message is queued as input and the thread's agent acts on it,
 // so it needs the separate "message" grant scope. Messages are labelled as
 // the assistant's (never the owner's) and are visible in the thread; the
-// input carries no chat route, so the agent's answer is not sent to WhatsApp.
+// input carries no chat route. The delivery worker may mirror the answer only
+// through the originating thread's existing eligible WhatsApp binding.
 // Rate-limited per assistant.
 import { appendEvent } from "../../storage/src/store.js";
 import { bridgeMessageVisible } from "../../storage/src/thread-bridge-journal.js";
@@ -46,6 +47,7 @@ export async function sendBridgeMessage(threadId, input = {}, principal, env = p
     clientMessageId,
     bridgeAgentId: principal.agentId,
     bridgeGrantId: principal.grantId,
+    bridgeWhatsAppReply: input.deliverToWhatsApp !== false,
     codexDeliveryMode: "passive",
     steerActiveTurn: false,
   }, env);
