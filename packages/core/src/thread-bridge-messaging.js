@@ -8,6 +8,7 @@ import { appendEvent } from "../../storage/src/store.js";
 import { bridgeMessageVisible } from "../../storage/src/thread-bridge-journal.js";
 import { authorization, target } from "./thread-bridge.js";
 import { enqueueThreadInput, getThread, getThreadMessage, listThreadMessageCandidates } from "./threads.js";
+import { currentCodexGenerationMatches } from "./codex-generation.js";
 
 export const BRIDGE_MESSAGE_SOURCE = "thread_bridge_message";
 const MAX_MESSAGES_PER_HOUR = 30;
@@ -91,14 +92,48 @@ function turnId(message = {}) {
   return String(message.executorTurnId || message.codexTurnId || "").trim();
 }
 
-// The answer to one input: a completed final whose parentMessageId is the
-// input, or that belongs to the same runtime turn (several queued inputs can
-// be answered by one turn). A later final for another input never counts.
-export function correlatedFinal(input, candidates = []) {
+// Runtime generation a turn id belongs to. Codex turn ids repeat per Codex
+// thread, so the Codex thread id is the generation; Claude attempt ids are
+// random per attempt (claude_turn_<96-bit>) and identify themselves.
+function turnGeneration(message = {}) {
+  return String(message.codexThreadId || message.executorThreadId || "").trim();
+}
+
+function claudeAttemptId(id = "") {
+  return /^claude_turn_[A-Za-z0-9_-]{12,}$/.test(id);
+}
+
+function sameRuntimeTurn(input, message) {
   const inputTurn = turnId(input);
-  return candidates.find((message) =>
-    message?.role === "assistant" && message.phase === "final_answer" && message.state === "completed" &&
-    (message.parentMessageId === input.id || (inputTurn && turnId(message) === inputTurn))) || null;
+  if (!inputTurn || turnId(message) !== inputTurn) return false;
+  const inputGeneration = turnGeneration(input);
+  const messageGeneration = turnGeneration(message);
+  if (inputGeneration || messageGeneration) return Boolean(inputGeneration) && inputGeneration === messageGeneration;
+  return claudeAttemptId(inputTurn);
+}
+
+// A final that can stand as the answer: completed and not deleted, hidden or
+// superseded (a replaced final must not mask its visible replacement).
+function eligibleFinal(message) {
+  return message?.role === "assistant" && message.phase === "final_answer" && message.state === "completed" &&
+    !message.deletedAt && !message.supersededBy && String(message.visibility || "").trim().toLowerCase() !== "internal";
+}
+
+function noReplyFinal(message) {
+  return String(message?.text || "").trim() === "NO_REPLY";
+}
+
+// The answer to one input among eligible finals: parentMessageId is the
+// input, or the same runtime turn of the same generation (batched inputs). A
+// later final for another input never counts. Returns { reply } with a
+// visible answer (preferred) or { noReply } for an explicit NO_REPLY.
+export function correlatedFinal(input, candidates = []) {
+  const matches = candidates.filter((message) => eligibleFinal(message) &&
+    (message.parentMessageId === input.id || sameRuntimeTurn(input, message)));
+  const reply = matches.find((message) => !noReplyFinal(message) && bridgeMessageVisible(message));
+  if (reply) return { reply };
+  const noReply = matches.find(noReplyFinal);
+  return noReply ? { noReply } : null;
 }
 
 const failedTurnStatuses = new Set(["failed", "interrupted", "aborted", "cancelled", "canceled"]);
@@ -113,6 +148,10 @@ export function inputTurnOutcome(input = {}, thread = {}) {
   const inputTurn = turnId(input);
   const runtime = thread?.runtime || {};
   if (!inputTurn || String(runtime.activeTurnId || "") === inputTurn) return null;
+  // The runtime record describes the thread's current generation only; an
+  // input from another Codex generation with the same turn id is no evidence.
+  const inputGeneration = turnGeneration(input);
+  if (inputGeneration ? !currentCodexGenerationMatches(thread || {}, inputGeneration).ok : !claudeAttemptId(inputTurn)) return null;
   if (String(runtime.lastTurnId || "") !== inputTurn) return null;
   const status = String(runtime.lastTurnStatus || "").toLowerCase();
   if (status === "completed") return "completed";
@@ -140,9 +179,9 @@ export async function waitForBridgeReply(threadId, messageId, principal, { timeo
     await authorization(principal, env);
     const input = (await getThreadMessage(threadId, sent.id, env)) || sent;
     const after = await listThreadMessageCandidates(threadId, { afterCursor: Number(sent.cursor || 0) }, env);
-    const reply = correlatedFinal(input, after);
-    if (reply && finalAnswer(reply)) return { status: "answered", inputState: input.state || null, reply: summarize(reply, 16000) };
-    if (reply) return { status: "completed_without_reply", inputState: input.state || null, reason: "no_reply" };
+    const match = correlatedFinal(input, after);
+    if (match?.reply) return { status: "answered", inputState: input.state || null, reply: summarize(match.reply, 16000) };
+    if (match?.noReply) return { status: "completed_without_reply", inputState: input.state || null, reason: "no_reply" };
     if (input.state === "failed" || input.state === "interrupted" || input.state === "cancelled") {
       return { status: "failed", inputState: input.state, error: String(input.error || "").slice(0, 500) || null };
     }

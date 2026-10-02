@@ -260,8 +260,11 @@ server for clients such as ChatGPT plugins:
   carries no chat route (the answer is not sent to WhatsApp) and is never
   echoed back to the sending assistant as an event. `wait_for_reply` waits
   at most 45 s for the answer to exactly that input: a completed final whose
-  `parentMessageId` is the input, or one from the same runtime turn when
-  several inputs were batched; later finals for other inputs never count. It
+  `parentMessageId` is the input, or one from the same runtime turn of the
+  same generation when several inputs were batched (Codex turn ids repeat per
+  Codex thread, so the Codex thread id must match; Claude attempt ids are
+  unique). Deleted, internal or superseded finals are skipped, a visible
+  answer wins over `NO_REPLY`, and later finals for other inputs never count. It
   returns `answered`, `failed`, `completed_without_reply` (a NO_REPLY final,
   or the runtime recorded the input's own turn as completed without a final)
   or `still_working`. Input state is not turn evidence: Codex marks an input
