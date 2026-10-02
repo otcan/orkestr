@@ -8,7 +8,9 @@ import { safeErrorDiagnostics } from "../packages/core/src/safe-error-diagnostic
 import { sleep } from "../packages/core/src/thread-bridge-messaging.js";
 import { listEvents } from "../packages/storage/src/store.js";
 // Nest helpers are TypeScript compiled by build:server; tests import the dist build.
-import { captureResponseOutcome, streamMcpResponse, trackMcpRequest } from "../dist/server/apps/server/src/modules/threads/mcp-http.js";
+import { captureResponseOutcome, respondWithMcpException, streamMcpResponse, trackMcpRequest } from "../dist/server/apps/server/src/modules/threads/mcp-http.js";
+import { runMcpEventDelivery } from "../packages/core/src/mcp-event-delivery.js";
+import { mutateSubscriptions, readSubscriptions } from "../packages/core/src/mcp-events.js";
 
 const PRIVATE = "Synthetic private text: customer 0000-SYNTHETIC";
 
@@ -44,15 +46,58 @@ async function recordedEvents(predicate) {
   return [];
 }
 
-test("diagnostics keep the error class, plain codes and an opaque id, never the message", () => {
-  const leaked = safeErrorDiagnostics(new TypeError(PRIVATE));
-  assert.equal(leaked.errorClass, "TypeError");
-  assert.equal(leaked.errorCode, null);
-  assert.match(leaked.errorId, /^err_[0-9a-f]{16}$/);
-  assert.doesNotMatch(JSON.stringify(leaked), /Synthetic|customer/);
-  assert.equal(safeErrorDiagnostics(new Error("bridge_grant_revoked")).errorCode, "bridge_grant_revoked");
+// Canaries shaped like every pattern a regex-based filter would have trusted.
+const CANARY_MESSAGE = "private_customer_secret_abc";
+const CANARY_CODE = "sk-secretAbc123";
+const CANARY_NAME = "PrivateCustomerName";
+const CANARIES = /private_customer_secret_abc|sk-secretAbc123|PrivateCustomerName|Synthetic private text/;
+
+function canaryError() {
+  return Object.assign(new Error(CANARY_MESSAGE), { code: CANARY_CODE, name: CANARY_NAME });
+}
+
+test("diagnostics emit only allowlisted classes and codes plus an opaque id", () => {
+  for (const error of [canaryError(), new Error(CANARY_MESSAGE), Object.assign(new Error("x"), { code: CANARY_CODE }), Object.assign(new Error(PRIVATE), { name: CANARY_NAME })]) {
+    const diagnostics = safeErrorDiagnostics(error);
+    assert.equal(diagnostics.errorClass, "Error");
+    assert.equal(diagnostics.errorCode, null);
+    assert.match(diagnostics.errorId, /^err_[0-9a-f]{16}$/);
+    assert.doesNotMatch(JSON.stringify(diagnostics), CANARIES);
+  }
+  assert.equal(safeErrorDiagnostics(new TypeError(PRIVATE)).errorClass, "TypeError");
+  assert.equal(safeErrorDiagnostics(new Error("bridge_grant_revoked")).errorCode, "bridge_grant_revoked", "a known code is emitted as the allowlisted constant");
   assert.equal(safeErrorDiagnostics(Object.assign(new Error(PRIVATE), { code: "ECONNRESET" })).errorCode, "ECONNRESET");
-  assert.equal(safeErrorDiagnostics(Object.assign(new Error("x"), { code: "has spaces and text" })).errorCode, null);
+  assert.equal(safeErrorDiagnostics(null).errorClass, "Error");
+});
+
+test("the catch-all MCP response records no canary and correlates by id", async (t) => {
+  await withHome(t);
+  const response = fakeResponse();
+  response.json = function json(value) { this.body = JSON.stringify(value); this.end(); return this; };
+  const request = { body: { jsonrpc: "2.0", id: 3, method: "tools/list" } };
+  const record = trackMcpRequest(request, response, { era: "2026-07-28" });
+  respondWithMcpException(response, record, 3, canaryError());
+  const [event] = await recordedEvents((entry) => entry.type === "mcp_request");
+  assert.equal(event.outcome, "exception");
+  assert.equal(event.errorClass, "Error");
+  assert.equal(event.errorCode, null);
+  assert.equal(response.statusCode, 500);
+  assert.equal(JSON.parse(response.body).error.data.errorId, event.errorId);
+  assert.doesNotMatch(JSON.stringify(await listEvents(process.env, 50)) + response.body, CANARIES);
+});
+
+test("MCP event delivery failures persist no canary", async (t) => {
+  await withHome(t);
+  const subscription = { id: "sub_synthetic", agentId: "agent-x", ownerUserId: "owner-x", url: "https://receiver.example.com/cb",
+    secret: `whsec_${Buffer.alloc(32, 3).toString("base64")}`, refreshBefore: "2099-01-01T00:00:00Z", cursor: "" };
+  await mutateSubscriptions(process.env, (state) => { state.subscriptions = [subscription]; });
+  // Pump-level failure (anything thrown while processing a subscription).
+  await runMcpEventDelivery(process.env, { deliverFn: async () => { throw canaryError(); } });
+  const [failure] = await recordedEvents((entry) => entry.type === "mcp_event_delivery_failed");
+  assert.equal(failure.errorClass, "Error");
+  assert.equal(failure.errorCode, null);
+  const persisted = JSON.stringify(await readSubscriptions(process.env)) + JSON.stringify(await listEvents(process.env, 50));
+  assert.doesNotMatch(persisted, CANARIES);
 });
 
 test("an exception during a streamed MCP call is recorded without its message and correlated by id", async (t) => {
@@ -61,7 +106,7 @@ test("an exception during a streamed MCP call is recorded without its message an
   const request = { body: { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "wait_for_reply" } } };
   response.req = request;
   const record = trackMcpRequest(request, response, { era: "2026-07-28" });
-  await streamMcpResponse(response, record, async () => { throw new Error(PRIVATE); });
+  await streamMcpResponse(response, record, async () => { throw Object.assign(new Error(PRIVATE), { code: CANARY_CODE, name: CANARY_NAME }); });
   const [event] = await recordedEvents((entry) => entry.type === "mcp_request");
   assert.equal(event.outcome, "exception");
   assert.equal(event.rpcErrorCode, -32603);
@@ -69,8 +114,9 @@ test("an exception during a streamed MCP call is recorded without its message an
   const payload = JSON.parse(response.body.split("\n").find((line) => line.startsWith("data: ")).slice(6));
   assert.equal(payload.error.code, -32603);
   assert.equal(payload.error.data.errorId, event.errorId, "the client gets the same opaque id");
-  assert.doesNotMatch(JSON.stringify(await listEvents(process.env, 50)), /Synthetic private text/);
-  assert.doesNotMatch(response.body, /Synthetic private text/);
+  assert.equal(event.errorCode, null);
+  assert.doesNotMatch(JSON.stringify(await listEvents(process.env, 50)), CANARIES);
+  assert.doesNotMatch(response.body, CANARIES);
 });
 
 test("legacy responses are classified from the written body", () => {

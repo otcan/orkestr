@@ -18,8 +18,7 @@ import {
 } from "../../../../../packages/core/src/mcp-oauth.js";
 import { createThreadBridgeMcpServer } from "../../../../../packages/core/src/thread-bridge-mcp.js";
 import { handleModernMcpRequest, isModernMcpRequest, preflightModernMcpRequest, shouldStreamModernRequest } from "../../../../../packages/core/src/mcp-modern-protocol.js";
-import { captureResponseOutcome, internalErrorPayload, sendMcpJson, streamMcpResponse, trackMcpRequest } from "./mcp-http.js";
-import { safeErrorDiagnostics } from "../../../../../packages/core/src/safe-error-diagnostics.js";
+import { captureResponseOutcome, respondWithMcpException, sendMcpJson, streamMcpResponse, trackMcpRequest } from "./mcp-http.js";
 import { mcpLandingPage } from "../../../../../packages/core/src/mcp-landing-page.js";
 import { readSubscriptions } from "../../../../../packages/core/src/mcp-events.js";
 import { keycloakOidcEnabled } from "../../../../../packages/core/src/keycloak-oidc.js";
@@ -185,10 +184,7 @@ export class ThreadBridgeMcpController {
       await transport.handleRequest(request, response, request.body);
     } catch (error: any) {
       // Any failure becomes a recorded JSON-RPC error instead of an opaque 500.
-      const diagnostics = safeErrorDiagnostics(error);
-      record.finish("exception", { rpcErrorCode: -32603, ...diagnostics });
-      if (response.headersSent) return response.end();
-      return response.status(500).json(internalErrorPayload(body?.id, diagnostics.errorId));
+      return respondWithMcpException(response, record, body?.id, error);
     }
   }
 

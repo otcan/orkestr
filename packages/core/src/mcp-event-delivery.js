@@ -131,7 +131,7 @@ export function runMcpEventDelivery(env = process.env, options = {}) {
     let delivered = 0;
     for (const subscription of live) {
       try {
-        const patch = await deliverSubscription(subscription, { env, ...options });
+        const patch = await (options.deliverFn || deliverSubscription)(subscription, { env, ...options });
         if (patch) patches.set(subscription.id, patch);
         delivered += Number(patch?.delivered || 0);
       } catch (error) {

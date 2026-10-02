@@ -50,6 +50,15 @@ export function trackMcpRequest(request: any, response: any, { era, agentId = ""
   };
 }
 
+// Catch-all for a failed MCP request: records only allowlisted diagnostics
+// and answers with a JSON-RPC -32603 carrying the opaque correlation id.
+export function respondWithMcpException(response: any, record: McpRequestRecord, id: unknown, error: unknown) {
+  const diagnostics = safeErrorDiagnostics(error);
+  record.finish("exception", { rpcErrorCode: -32603, ...diagnostics });
+  if (response.headersSent) return response.end();
+  return response.status(500).json(internalErrorPayload(id, diagnostics.errorId));
+}
+
 // JSON-RPC -32603 carrying only the opaque correlation id.
 export function internalErrorPayload(id: unknown, errorId: string) {
   return { jsonrpc: "2.0", id: id ?? null, error: { code: -32603, message: "Internal error", data: { errorId } } };
