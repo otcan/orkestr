@@ -4500,30 +4500,35 @@ function latestRolloutWhatsAppInput(messages = [], beforeTimestamp = null, threa
 }
 
 function rolloutBridgeInputSelection(messages = [], beforeTimestamp = null, generation = "") {
+  // Without a rollout turn_id, only a unique running input or a unique recorded
+  // terminal turn that is still the latest user request can establish authority.
   const expectedGeneration = String(generation || "").trim();
-  if (!expectedGeneration) return { parent: null, ambiguous: false };
   const beforeMs = beforeTimestamp ? timestampMs(beforeTimestamp) : 0;
   const candidates = messages.filter((message) => {
     if (message?.role !== "user" || message?.source !== "thread_bridge_message") return false;
+    if (!expectedGeneration) return true;
     const messageGeneration = String(message.codexThreadId || message.executorThreadId || "").trim();
     const state = String(message.state || "").trim().toLowerCase();
     return messageGeneration === expectedGeneration &&
-      ["queued", "pending_delivery", "awaiting_ack", "delivering", "claimed", "running", "completed"].includes(state) &&
+      ["queued", "pending_delivery", "awaiting_ack", "delivering", "claimed", "running", "completed", "failed", "interrupted", "cancelled", "canceled"].includes(state) &&
       (!beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000);
   });
   const running = candidates.filter((message) => String(message.state || "").trim().toLowerCase() === "running");
   if (running.length === 1) return { parent: running[0], ambiguous: false };
-  if (candidates.some((message) => String(message.state || "").trim().toLowerCase() !== "completed")) {
+  if (candidates.some((message) => ["queued", "pending_delivery", "awaiting_ack", "delivering", "claimed"].includes(String(message.state || "").trim().toLowerCase()))) {
     return { parent: null, ambiguous: true };
   }
   if (candidates.length !== 1) return { parent: null, ambiguous: candidates.length > 0 };
-  const [completed] = candidates;
+  const [terminalInput] = candidates;
+  if (!String(terminalInput.codexTurnId || terminalInput.executorTurnId || "").trim()) {
+    return { parent: null, ambiguous: true };
+  }
   const latestUser = [...messages].reverse().find((message) => {
     if (message?.role !== "user") return false;
     return !beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000;
   });
-  if (latestUser?.id !== completed.id) return { parent: null, ambiguous: true };
-  const completedMs = timestampMs(completed.timestamp || completed.createdAt);
+  if (latestUser?.id !== terminalInput.id) return { parent: null, ambiguous: true };
+  const completedMs = timestampMs(terminalInput.timestamp || terminalInput.createdAt);
   const finalAfterInput = messages.some((message) =>
     message?.role === "assistant" &&
     String(message.phase || "").trim().toLowerCase() === "final_answer" &&
@@ -4531,7 +4536,7 @@ function rolloutBridgeInputSelection(messages = [], beforeTimestamp = null, gene
     (!beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000)
   );
   if (finalAfterInput) return { parent: null, ambiguous: true };
-  return { parent: completed, ambiguous: false };
+  return { parent: terminalInput, ambiguous: false };
 }
 
 function whatsappParentChatId(parent = null, thread = null) {
