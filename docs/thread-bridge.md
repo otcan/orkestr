@@ -279,9 +279,13 @@ server for clients such as ChatGPT plugins:
   working, queued, idle or last_turn_failed.
 - Every `POST /mcp` request is recorded as an `mcp_request` event (protocol
   era, method, tool, duration, outcome, HTTP status, JSON-RPC error code,
-  client disconnect). Arguments and message content are never recorded.
-  Unexpected failures return a JSON-RPC `-32603` and are recorded as
-  `outcome: "exception"`. Connections approved before messaging existed must
+  client disconnect). Arguments, message content and raw error messages are
+  never recorded: failures keep only `errorClass`, a plain machine
+  `errorCode` (when the error carries one) and an opaque `errorId`, which is
+  also returned to the client in `error.data.errorId` of the JSON-RPC
+  `-32603` so a reported failure can be matched to its record. Legacy (SDK)
+  responses are classified from a bounded in-memory copy of the written body
+  (`ok`, `tool_error`, `rpc_error` + code); the copy is not stored. Connections approved before messaging existed must
   reconnect to get the new scope.
 - OAuth 2.1 with PKCE (S256) and dynamic client registration:
   `/.well-known/oauth-protected-resource[/mcp]`,

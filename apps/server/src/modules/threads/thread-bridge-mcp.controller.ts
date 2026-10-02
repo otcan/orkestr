@@ -18,7 +18,8 @@ import {
 } from "../../../../../packages/core/src/mcp-oauth.js";
 import { createThreadBridgeMcpServer } from "../../../../../packages/core/src/thread-bridge-mcp.js";
 import { handleModernMcpRequest, isModernMcpRequest, preflightModernMcpRequest, shouldStreamModernRequest } from "../../../../../packages/core/src/mcp-modern-protocol.js";
-import { sendMcpJson, streamMcpResponse, trackMcpRequest } from "./mcp-http.js";
+import { captureResponseOutcome, internalErrorPayload, sendMcpJson, streamMcpResponse, trackMcpRequest } from "./mcp-http.js";
+import { safeErrorDiagnostics } from "../../../../../packages/core/src/safe-error-diagnostics.js";
 import { mcpLandingPage } from "../../../../../packages/core/src/mcp-landing-page.js";
 import { readSubscriptions } from "../../../../../packages/core/src/mcp-events.js";
 import { keycloakOidcEnabled } from "../../../../../packages/core/src/keycloak-oidc.js";
@@ -173,8 +174,10 @@ export class ThreadBridgeMcpController {
       }
       const server = createThreadBridgeMcpServer({ principal });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      const legacyOutcome = captureResponseOutcome(response);
       response.once("close", () => {
-        record.finish(record.clientClosed() ? "client_closed" : "ok", { httpStatus: response.statusCode, transport: "sdk" });
+        const { outcome, ...details }: any = legacyOutcome();
+        record.finish(record.clientClosed() ? "client_closed" : outcome, { httpStatus: response.statusCode, transport: "sdk", ...details });
         void transport.close().catch(() => {});
         void server.close().catch(() => {});
       });
@@ -182,9 +185,10 @@ export class ThreadBridgeMcpController {
       await transport.handleRequest(request, response, request.body);
     } catch (error: any) {
       // Any failure becomes a recorded JSON-RPC error instead of an opaque 500.
-      record.finish("exception", { rpcErrorCode: -32603, error: String(error?.message || error).slice(0, 200) });
+      const diagnostics = safeErrorDiagnostics(error);
+      record.finish("exception", { rpcErrorCode: -32603, ...diagnostics });
       if (response.headersSent) return response.end();
-      return response.status(500).json({ jsonrpc: "2.0", id: body?.id ?? null, error: { code: -32603, message: "Internal error" } });
+      return response.status(500).json(internalErrorPayload(body?.id, diagnostics.errorId));
     }
   }
 

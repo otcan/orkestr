@@ -11,6 +11,7 @@ import { canonicalThreadLink } from "./canonical-app-links.js";
 import { getThread, getThreadMessage } from "./threads.js";
 import { mutateSubscriptions, readSubscriptions, THREAD_MESSAGE_EVENT, webhookHeaders } from "./mcp-events.js";
 import { safePublicFetch } from "./safe-public-fetch.js";
+import { safeErrorDiagnostics } from "./safe-error-diagnostics.js";
 
 const TEXT_LIMIT = 8000;
 const MAX_BODY_BYTES = 262_144;
@@ -66,7 +67,8 @@ async function post(subscription, payload, cursor, fetchImpl) {
   try {
     return await fetchImpl(subscription.url, { method: "POST", body, headers: webhookHeaders({ secret: subscription.secret, id: eventId, body, subscriptionId: subscription.id }) });
   } catch (error) {
-    return { status: 0, error: clean(error?.message) };
+    const { errorClass, errorCode } = safeErrorDiagnostics(error);
+    return { status: 0, error: errorCode || errorClass };
   }
 }
 
@@ -133,7 +135,7 @@ export function runMcpEventDelivery(env = process.env, options = {}) {
         if (patch) patches.set(subscription.id, patch);
         delivered += Number(patch?.delivered || 0);
       } catch (error) {
-        await appendEvent({ type: "mcp_event_delivery_failed", subscriptionId: subscription.id, error: clean(error?.message) }, env).catch(() => {});
+        await appendEvent({ type: "mcp_event_delivery_failed", subscriptionId: subscription.id, ...safeErrorDiagnostics(error) }, env).catch(() => {});
       }
     }
     if (patches.size) {

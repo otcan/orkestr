@@ -3,6 +3,7 @@
 // client-disconnect cancellation, and SSE responses with keep-alives for
 // long-running tool calls.
 import { appendEvent } from "../../../../../packages/storage/src/store.js";
+import { safeErrorDiagnostics } from "../../../../../packages/core/src/safe-error-diagnostics.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -49,7 +50,12 @@ export function trackMcpRequest(request: any, response: any, { era, agentId = ""
   };
 }
 
-function rpcOutcome(payload: any) {
+// JSON-RPC -32603 carrying only the opaque correlation id.
+export function internalErrorPayload(id: unknown, errorId: string) {
+  return { jsonrpc: "2.0", id: id ?? null, error: { code: -32603, message: "Internal error", data: { errorId } } };
+}
+
+export function rpcOutcome(payload: any) {
   if (payload?.error) return { outcome: "rpc_error", rpcErrorCode: Number(payload.error.code) || null };
   if (payload?.result?.isError) return { outcome: "tool_error" };
   return { outcome: "ok" };
@@ -82,13 +88,44 @@ export async function streamMcpResponse(response: any, record: McpRequestRecord,
     record.finish(rpcOutcome(result.body).outcome, { httpStatus: 200, transport: "sse", ...rpcOutcome(result.body) });
     response.write(`event: message\ndata: ${JSON.stringify(result.body)}\n\n`);
   } catch (error: any) {
-    record.finish("exception", { transport: "sse", rpcErrorCode: -32603, error: clean(error?.message).slice(0, 200) });
+    const diagnostics = safeErrorDiagnostics(error);
+    record.finish("exception", { transport: "sse", rpcErrorCode: -32603, ...diagnostics });
     if (!record.clientClosed()) {
       const id = (response.req?.body || {}).id ?? null;
-      response.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32603, message: "Internal error" } })}\n\n`);
+      response.write(`event: message\ndata: ${JSON.stringify(internalErrorPayload(id, diagnostics.errorId))}\n\n`);
     }
   } finally {
     clearInterval(keepAlive);
     response.end();
   }
+}
+
+// Legacy (SDK) transport: the SDK writes the response itself. Keep a bounded
+// in-memory copy so the outcome (ok / tool_error / rpc_error + code) can be
+// classified on close. The copy is parsed and discarded, never stored.
+export function captureResponseOutcome(response: any, limit = 65_536) {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  const keep = (chunk: unknown, encoding?: unknown) => {
+    if (chunk === undefined || chunk === null || typeof chunk === "function" || size >= limit) return;
+    const buffer = Buffer.isBuffer(chunk)
+      ? chunk
+      : ArrayBuffer.isView(chunk)
+        ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+        : Buffer.from(String(chunk), typeof encoding === "string" ? encoding as BufferEncoding : "utf8");
+    chunks.push(buffer.subarray(0, limit - size));
+    size += buffer.length;
+  };
+  const write = response.write.bind(response);
+  const end = response.end.bind(response);
+  response.write = (chunk: unknown, ...rest: unknown[]) => { keep(chunk, rest[0]); return write(chunk, ...rest); };
+  response.end = (chunk?: unknown, ...rest: unknown[]) => { keep(chunk, rest[0]); return end(chunk, ...rest); };
+  return () => {
+    const text = Buffer.concat(chunks).toString("utf8");
+    let payload: any = null;
+    const sse = text.split("\n").filter((line) => line.startsWith("data: ")).pop();
+    try { payload = JSON.parse(sse ? sse.slice(6) : text); } catch { payload = null; }
+    if (!payload) return { outcome: size >= limit ? "unclassified" : "no_body" };
+    return rpcOutcome(payload);
+  };
 }

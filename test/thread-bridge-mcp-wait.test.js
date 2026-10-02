@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { appendThreadMessage, createThread } from "../packages/core/src/threads.js";
 import { createUser } from "../packages/core/src/users.js";
 import { listEvents } from "../packages/storage/src/store.js";
@@ -132,4 +134,31 @@ test("protocol errors on a long-running call keep their HTTP status instead of b
     authorization: lastAuthorization, "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": "wait_for_reply" }, body: JSON.stringify(notification) });
   assert.equal(accepted.status, 202);
   assert.equal(accepted.headers.get("content-type"), null);
+});
+
+test("legacy (SDK) requests record ok, tool_error and rpc_error with the JSON-RPC code", async (t) => {
+  const { base } = await startConnected(t);
+  const client = new Client({ name: "legacy-synthetic", version: "1.0.0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: lastAuthorization } } }));
+  t.after(() => client.close());
+  await client.callTool({ name: "get_thread_status", arguments: { thread_id: "thread-w" } });
+  const toolError = await client.callTool({ name: "wait_for_reply", arguments: { thread_id: "thread-w", message_id: "not-a-sent-message" } });
+  assert.equal(toolError.isError, true);
+  // SDK 1.30 reports an unknown tool as a tool error, and a method the server
+  // does not offer as a JSON-RPC error.
+  assert.equal((await client.callTool({ name: "no_such_tool", arguments: {} })).isError, true);
+  await assert.rejects(client.listPrompts());
+  const byKey = {};
+  for (let attempt = 0; attempt < 40 && Object.keys(byKey).length < 4; attempt += 1) {
+    for (const event of await listEvents(process.env, 200)) {
+      if (event.type === "mcp_request" && event.era === "legacy" && event.method !== "initialize" && !String(event.method).startsWith("notifications/")) byKey[event.tool || event.method] = event;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(byKey.get_thread_status?.outcome, "ok");
+  assert.equal(byKey.wait_for_reply?.outcome, "tool_error");
+  assert.equal(byKey.no_such_tool?.outcome, "tool_error");
+  assert.equal(byKey["prompts/list"]?.outcome, "rpc_error");
+  assert.equal(byKey["prompts/list"]?.rpcErrorCode, -32601);
+  assert.equal(byKey.get_thread_status?.transport, "sdk");
 });

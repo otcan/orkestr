@@ -271,3 +271,13 @@ test("a generation-B final with the same turn id does not answer a generation-A 
   const result = await waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 4, pollMs: 100 }, env);
   assert.equal(result.status, "still_working", "neither the other generation's final nor its turn record ends this wait");
 });
+
+test("a prolonged wait with a live signal leaves no abort listeners behind", async (t) => {
+  const env = await fixture(t);
+  const { getEventListeners } = await import("node:events");
+  const sent = await sendBridgeMessage("thread-a", { text: "Slow", requestId: "listeners" }, principal, env, NO_DELIVERY);
+  const controller = new AbortController();
+  const result = await waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 2, pollMs: 10, signal: controller.signal }, env);
+  assert.equal(result.status, "still_working");
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+});
