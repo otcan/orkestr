@@ -69,7 +69,7 @@ export function codexAssistantPhase(message = {}) {
 }
 
 export function internalAssistantSource(message = {}) {
-  return ["watcher-alert", "watcher-alert-lifecycle"].includes(clean(message?.source));
+  return ["watcher-alert", "watcher-alert-lifecycle", "thread_bridge_agent"].includes(clean(message?.source));
 }
 
 const codexProgressPhases = new Set(["commentary", "awaiting_approval"]);

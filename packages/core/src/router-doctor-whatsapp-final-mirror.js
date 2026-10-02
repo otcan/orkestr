@@ -27,7 +27,7 @@ export function sourceRevisionForMessage(message = {}) {
 }
 
 export function whatsappAssistantFinal(message = {}, whatsappMessageFn = null) {
-  return message.role === "assistant" &&
+  return lower(message.source) !== "thread_bridge_agent" && message.role === "assistant" &&
     lower(message.state) === "completed" &&
     lower(message.phase || "final_answer") === "final_answer" &&
     (typeof whatsappMessageFn === "function" ? whatsappMessageFn(message) : lower(message.connector) === "whatsapp") &&
@@ -81,7 +81,7 @@ export function orphanedWhatsAppFinalAnswerIssues({
     const intent = trustedReplyDeliveryIntent(parent);
     if (!intent || !["pending_reply", "queued"].includes(lower(intent.status))) continue;
     const message = messages.find((candidate) =>
-      candidate.role === "assistant" &&
+      lower(candidate.source) !== "thread_bridge_agent" && candidate.role === "assistant" &&
       lower(candidate.state) === "completed" &&
       lower(candidate.phase || "final_answer") === "final_answer" &&
       clean(candidate.parentMessageId) === clean(parent.id)
@@ -108,7 +108,7 @@ export async function repairOrphanedWhatsAppFinalAnswer(item = {}, context = {})
   const { env, thread, ensureConnectorOutboxJobFn, accountIdForThreadFn, signal } = context;
   if (typeof ensureConnectorOutboxJobFn !== "function") return null;
   const message = (Array.isArray(context.messages) ? context.messages : []).find((entry) => clean(entry.id) === clean(item.messageId));
-  if (!message) return null;
+  if (!message || lower(message.source) === "thread_bridge_agent") return null;
   const parent = (Array.isArray(context.messages) ? context.messages : []).find((entry) => clean(entry.id) === clean(item.parentMessageId || message.parentMessageId));
   const fence = replyDeliveryBindingFence(parent || {}, thread || {});
   if (fence.applies && !fence.allowed) {

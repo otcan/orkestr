@@ -58,6 +58,7 @@ export class ThreadMessageListComponent {
   }
 
   messageRoleLabel(message: ThreadMessage): string {
+    if (message.source === "thread_bridge_agent") return `Delegated agent: ${String(message["bridgeAgentId"] || "unknown")}`;
     const role = String(message.role || "assistant").toLowerCase();
     if (role === "user") return "You";
     if (this.messagePhase(message) === "signal") return "Signal";

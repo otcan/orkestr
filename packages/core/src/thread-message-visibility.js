@@ -6,7 +6,7 @@ export function messageTurnId(message = {}) {
 }
 
 export function assistantMessage(message = {}) {
-  if (message?.role !== "assistant") return false;
+  if (message?.role !== "assistant" || message?.source === "thread_bridge_agent") return false;
   const state = clean(message.state).toLowerCase();
   return !state || state === "completed";
 }
