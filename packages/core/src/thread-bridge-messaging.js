@@ -9,6 +9,7 @@ import { appendEvent } from "../../storage/src/store.js";
 import { bridgeMessageVisible } from "../../storage/src/thread-bridge-journal.js";
 import { authorization, target } from "./thread-bridge.js";
 import { enqueueThreadInput, getThreadMessage, listThreadMessageCandidates } from "./threads.js";
+import { createBridgeReplyDeliveryIntent } from "./reply-delivery-intent.js";
 
 export const BRIDGE_MESSAGE_SOURCE = "thread_bridge_message";
 const MAX_MESSAGES_PER_HOUR = 30;
@@ -29,7 +30,7 @@ function rateLimit(agentId, now = Date.now()) {
 // `options.deliver` (tests) replaces the runtime delivery kick.
 export async function sendBridgeMessage(threadId, input = {}, principal, env = process.env, options = {}) {
   const grant = await authorization(principal, env);
-  await target(threadId, grant, "message", env);
+  const thread = await target(threadId, grant, "message", env);
   const text = typeof input.text === "string" ? input.text.trim() : "";
   if (!text || text.length > 16000) fail("bridge_message_invalid");
   const requestId = String(input.requestId || "");
@@ -48,6 +49,9 @@ export async function sendBridgeMessage(threadId, input = {}, principal, env = p
     bridgeAgentId: principal.agentId,
     bridgeGrantId: principal.grantId,
     bridgeWhatsAppReply: input.deliverToWhatsApp !== false,
+    ...(input.deliverToWhatsApp === false ? {} : {
+      replyDeliveryIntent: createBridgeReplyDeliveryIntent(thread, { enabled: true }),
+    }),
     codexDeliveryMode: "passive",
     steerActiveTurn: false,
   }, env);

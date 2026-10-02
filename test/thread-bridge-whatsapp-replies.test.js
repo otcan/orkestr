@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appendThreadMessage, createThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 import { createUser } from "../packages/core/src/users.js";
 import { replyToBridgeThread } from "../packages/core/src/thread-bridge.js";
 import { sendBridgeMessage } from "../packages/core/src/thread-bridge-messaging.js";
@@ -64,6 +64,9 @@ test("MCP send_message answers use only the existing thread binding and the dura
   assert.equal(input.source, "thread_bridge_message");
   assert.equal(input.bridgeAgentId, principal.agentId, "delegated-agent attribution is preserved");
   assert.equal(input.bridgeWhatsAppReply, true, "WhatsApp delivery defaults on");
+  assert.equal(input.replyDeliveryIntent.target.ownerUserId, "owner-a", "delivery authority is captured at request time");
+  assert.equal(input.replyDeliveryIntent.target.chatId, eligibleBinding.chatId);
+  assert.equal(input.replyDeliveryIntent.target.accountId, "synthetic-account-a");
   assert.equal(input.chatId || "", "", "the MCP input carries no caller-selected destination");
   const answer = await appendThreadMessage("thread-a", {
     role: "assistant", source: "claude-code", phase: "final_answer", state: "completed",
@@ -112,12 +115,132 @@ test("send_message supports an explicit WhatsApp opt-out without exposing recipi
   const sent = await sendBridgeMessage("thread-a", { text: "Keep this in thread", requestId: "opt-out", deliverToWhatsApp: false }, principal, env, { deliver() {} });
   const [input] = (await listThreadMessages("thread-a", env)).filter((message) => message.id === sent.messageId);
   assert.equal(input.bridgeWhatsAppReply, false);
+  assert.equal(input.replyDeliveryIntent, undefined);
   assert.equal(threadBridgeWhatsAppReplyOrigin({ parent: input, thread: { id: "thread-a", binding: eligibleBinding }, kind: "thread" }), false);
 
   const definition = threadBridgeToolDefinitions().find((tool) => tool.name === "send_message");
   assert.equal(definition.inputSchema.properties.deliver_to_whatsapp.type, "boolean");
   assert.equal("chat_id" in definition.inputSchema.properties, false);
   assert.equal("recipient" in definition.inputSchema.properties, false);
+});
+
+test("reply parent lookup survives more than the mirror cursor overlap of passive comments", async (t) => {
+  const env = await fixture(t, { binding: eligibleBinding });
+  const sent = await sendBridgeMessage("thread-a", { text: "Keep the request in the full history", requestId: "long-thread" }, principal, env, { deliver() {} });
+  for (let index = 0; index < 30; index += 1) {
+    await replyToBridgeThread("thread-a", { requestId: `comment-${index}`, text: `Synthetic context ${index}` }, principal, env);
+  }
+  const transport = async (_url, options = {}) => response({ ok: true, ids: ["synthetic-wa-receipt"] });
+  await deliverWhatsAppReplies(env, transport);
+  const input = (await listThreadMessages("thread-a", env)).find((message) => message.id === sent.messageId);
+  const answer = await appendThreadMessage("thread-a", {
+    role: "assistant", source: "claude-code", phase: "final_answer", state: "completed",
+    parentMessageId: input.id, text: "Answer after many comments.",
+  }, env);
+  const result = await deliverWhatsAppReplies(env, transport);
+  assert.equal(result.delivered.some((delivery) => delivery.messageId === answer.id), true);
+});
+
+test("request-time owner, WhatsApp binding and account changes fence delivery", async (t) => {
+  const env = await fixture(t, { binding: eligibleBinding });
+  await createUser({ id: "owner-b" }, env);
+  const sent = await sendBridgeMessage("thread-a", { text: "Do not follow a changed binding", requestId: "stale-authority" }, principal, env, { deliver() {} });
+  await updateThread("thread-a", {
+    ownerUserId: "owner-b",
+    binding: { ...eligibleBinding, chatId: "synthetic-chat-b", responderAccountId: "synthetic-account-b", outboundAccountId: "synthetic-account-b" },
+  }, env);
+  const input = (await listThreadMessages("thread-a", env)).find((message) => message.id === sent.messageId);
+  await appendThreadMessage("thread-a", {
+    role: "assistant", source: "claude-code", phase: "final_answer", state: "completed",
+    parentMessageId: input.id, text: "Must not reach the replacement owner.",
+  }, env);
+  const calls = [];
+  const result = await deliverWhatsAppReplies(env, async (_url, options = {}) => {
+    if (options.method === "POST") calls.push(options);
+    return response({ ok: true, ids: ["unexpected"] });
+  });
+  assert.equal(result.delivered.length, 0);
+  assert.equal(calls.length, 0, "a changed request-time authority is rejected before transport");
+});
+
+test("authority is rechecked after account resolution immediately before dispatch", async (t) => {
+  const env = await fixture(t, { binding: eligibleBinding });
+  await createUser({ id: "owner-b" }, env);
+  const sent = await sendBridgeMessage("thread-a", { text: "Recheck after transport setup", requestId: "pre-dispatch-authority" }, principal, env, { deliver() {} });
+  const input = (await listThreadMessages("thread-a", env)).find((message) => message.id === sent.messageId);
+  await appendThreadMessage("thread-a", {
+    role: "assistant", source: "claude-code", phase: "final_answer", state: "completed",
+    parentMessageId: input.id, text: "Must not dispatch after the account probe changes authority.",
+  }, env);
+  let changed = false;
+  const sends = [];
+  const result = await deliverWhatsAppReplies(env, async (url, options = {}) => {
+    if (new URL(url).pathname === "/health" && !changed) {
+      changed = true;
+      await updateThread("thread-a", {
+        ownerUserId: "owner-b",
+        binding: { ...eligibleBinding, chatId: "synthetic-chat-b", responderAccountId: "synthetic-account-b", outboundAccountId: "synthetic-account-b" },
+      }, env);
+      return response({ ok: true, accounts: [{ id: "synthetic-account-a", ready: true }] });
+    }
+    if (options.method === "POST") sends.push(options);
+    return response({ ok: true, ids: ["unexpected"] });
+  });
+  assert.equal(changed, true, "the synthetic account-resolution probe ran");
+  assert.equal(result.delivered.length, 0);
+  assert.equal(sends.length, 0, "the request is revalidated after setup and before transport dispatch");
+});
+
+test("a binding change during transport never redirects or retries to the replacement owner", async (t) => {
+  const env = await fixture(t, { binding: eligibleBinding });
+  await createUser({ id: "owner-b" }, env);
+  const sent = await sendBridgeMessage("thread-a", { text: "Fence transport-time authority", requestId: "in-flight-authority" }, principal, env, { deliver() {} });
+  const input = (await listThreadMessages("thread-a", env)).find((message) => message.id === sent.messageId);
+  await appendThreadMessage("thread-a", {
+    role: "assistant", source: "claude-code", phase: "final_answer", state: "completed",
+    parentMessageId: input.id, text: "In-flight synthetic answer.",
+  }, env);
+  const calls = [];
+  const result = await deliverWhatsAppReplies(env, async (_url, options = {}) => {
+    if (options.method === "POST") {
+      const body = JSON.parse(String(options.body || "{}"));
+      calls.push(body);
+      await updateThread("thread-a", {
+        ownerUserId: "owner-b",
+        binding: { ...eligibleBinding, chatId: "synthetic-chat-b", responderAccountId: "synthetic-account-b", outboundAccountId: "synthetic-account-b" },
+      }, env);
+    }
+    return response({ ok: true, ids: ["synthetic-wa-receipt"] });
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].to, eligibleBinding.chatId);
+  assert.equal(calls[0].accountId, "synthetic-account-a");
+  assert.notEqual(calls[0].to, "synthetic-chat-b");
+  assert.equal(result.delivered.length, 0, "authority mutation during transport is not recorded as a current delivery");
+  const retry = await deliverWhatsAppReplies(env, async (_url, options = {}) => {
+    if (options.method === "POST") calls.push(JSON.parse(String(options.body || "{}")));
+    return response({ ok: true, ids: ["unexpected-retry"] });
+  });
+  assert.equal(retry.delivered.length, 0);
+  assert.equal(calls.length, 1, "stale in-flight authority is terminal and cannot be redirected on retry");
+});
+
+test("explicit opt-out cannot be bypassed by a matching projected chatId", async (t) => {
+  const env = await fixture(t, { binding: eligibleBinding });
+  const sent = await sendBridgeMessage("thread-a", { text: "Stay in Orkestr", requestId: "projection-opt-out", deliverToWhatsApp: false }, principal, env, { deliver() {} });
+  const input = (await listThreadMessages("thread-a", env)).find((message) => message.id === sent.messageId);
+  await appendThreadMessage("thread-a", {
+    role: "assistant", source: "claude-code", phase: "final_answer", state: "completed",
+    parentMessageId: input.id, connector: "whatsapp", chatId: eligibleBinding.chatId,
+    accountId: "synthetic-account-a", text: "This projected target must be ignored.",
+  }, env);
+  const calls = [];
+  const result = await deliverWhatsAppReplies(env, async (_url, options = {}) => {
+    if (options.method === "POST") calls.push(options);
+    return response({ ok: true, ids: ["unexpected"] });
+  });
+  assert.equal(result.delivered.length, 0);
+  assert.equal(calls.length, 0);
 });
 
 test("passive comments never qualify for execution-answer WhatsApp delivery", async (t) => {

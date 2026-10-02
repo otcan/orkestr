@@ -1,6 +1,7 @@
 import { updateAgentMessage } from "../../core/src/messages.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { updateThreadMessage } from "../../core/src/threads.js";
+import { replyDeliveryBindingFence, trustedBridgeReplyDeliveryIntent } from "../../core/src/reply-delivery-intent.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
 import { claudeCodeInputRequestsInterrupt } from "../../core/src/claude-code-interrupt-resume.js";
 import { whatsappBindingIsRouteEligible } from "./whatsapp-inbound-routing.js";
@@ -160,7 +161,11 @@ export function threadBridgeWhatsAppReplyOrigin({ parent = null, thread = null, 
   if (!threadAllowsWhatsAppMirroring(thread)) return false;
   const binding = thread?.binding || {};
   if (String(binding.connector || "").trim().toLowerCase() !== "whatsapp") return false;
-  return Boolean(pickString(binding.chatId));
+  if (!pickString(binding.chatId)) return false;
+  const intent = trustedBridgeReplyDeliveryIntent(parent);
+  if (!intent) return false;
+  const fence = replyDeliveryBindingFence(parent, thread);
+  return fence.applies && fence.allowed;
 }
 
 function whatsappMessageOrigin(message, state = null) {

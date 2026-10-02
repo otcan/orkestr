@@ -152,6 +152,15 @@ export function createWorkerReplyDeliveryIntent(thread = {}, options = {}) {
   return intent;
 }
 
+export function createBridgeReplyDeliveryIntent(thread = {}, options = {}) {
+  if (options.enabled !== true) return null;
+  return createBoundWhatsAppReplyDeliveryIntent(thread, {
+    ...options,
+    mode: "bound_whatsapp",
+    issuedFor: "mcp-send-message",
+  });
+}
+
 // Set under the thread-record lock. Caller-supplied epochs cannot roll it back.
 export function nextThreadReplyDeliveryEpoch(previous = {}, next = {}) {
   const changed = clean(previous.ownerUserId) !== clean(next.ownerUserId) ||
@@ -172,7 +181,8 @@ function serverReplyDeliveryIntent(message = {}) {
     originSurface === "mobile" && originTransport === "hush-mobile";
   const trustedWorker = issuedFor === "worker-assignment" && source === "worker_assignment" &&
     originSurface === "orkestr-worker" && originTransport === "authenticated-http";
-  if (!trustedUi && !trustedHush && !trustedWorker) return null;
+  const trustedBridge = issuedFor === "mcp-send-message" && source === "thread_bridge_message";
+  if (!trustedUi && !trustedHush && !trustedWorker && !trustedBridge) return null;
   return intent;
 }
 
@@ -195,7 +205,7 @@ export function trustedHushReplyDeliveryIntent(message = {}) {
 }
 
 export function trustedReplyDeliveryIntent(message = {}) {
-  return trustedUiReplyDeliveryIntent(message) || trustedHushReplyDeliveryIntent(message) || trustedWorkerReplyDeliveryIntent(message);
+  return trustedUiReplyDeliveryIntent(message) || trustedHushReplyDeliveryIntent(message) || trustedWorkerReplyDeliveryIntent(message) || trustedBridgeReplyDeliveryIntent(message);
 }
 
 export function trustedWorkerReplyDeliveryIntent(message = {}) {
@@ -203,6 +213,14 @@ export function trustedWorkerReplyDeliveryIntent(message = {}) {
   if (!intent || intent.issuedFor !== "worker-assignment") return null;
   const target = intent.target;
   if (!target || !clean(target.threadId) || !clean(target.ownerUserId) || !clean(target.chatId) || !clean(target.bindingRevision)) return null;
+  return intent;
+}
+
+export function trustedBridgeReplyDeliveryIntent(message = {}) {
+  const intent = serverReplyDeliveryIntent(message);
+  if (!intent || clean(intent.issuedFor).toLowerCase() !== "mcp-send-message") return null;
+  const target = intent.target;
+  if (!target || !clean(target.threadId) || !clean(target.ownerUserId) || !clean(target.bindingRevision)) return null;
   return intent;
 }
 

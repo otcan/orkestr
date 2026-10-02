@@ -42,6 +42,7 @@ import {
   recordUiReplyDeliveryMetric,
   replyDeliveryBindingFence,
   replyDeliveryIntentStatusPatch,
+  trustedBridgeReplyDeliveryIntent,
   trustedHushReplyDeliveryIntent,
 } from "../../core/src/reply-delivery-intent.js";
 import { recordRuntimeControlMetric } from "../../core/src/observability.js";
@@ -3678,7 +3679,15 @@ async function sendClaimedWhatsAppText({
       config,
       env,
       fetchImpl,
+      ...(trustedBridgeReplyDeliveryIntent(parent || {}) ? {
+        beforeDispatch: () => assertLiveReplyDeliveryBinding({ parent, threadId, chatId, accountId }, env),
+      } : {}),
     });
+    if (trustedBridgeReplyDeliveryIntent(parent || {})) {
+      // A thread may be re-owned/rebound while the provider request is in flight.
+      // Never mark that stale authorization as a successful/current delivery.
+      await assertLiveReplyDeliveryBinding({ parent, threadId, chatId, accountId }, env);
+    }
     recordRuntimeControlMetric({ signal: "transport_send", outcome: "delivered" });
     const delivery = {
       kind,
@@ -5808,9 +5817,9 @@ async function listThreadMessageSets(env, state = null, config = {}, options = {
 }
 
 /**
- * @param {{ chatId?: string, text?: string, accountId?: string, mentions?: string[], attachments?: Array<Record<string, unknown>>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean, requestId?: string, correlationId?: string, config?: Record<string, unknown> | null, env?: Record<string, string | undefined>, fetchImpl?: typeof fetch }} [options]
+ * @param {{ chatId?: string, text?: string, accountId?: string, mentions?: string[], attachments?: Array<Record<string, unknown>>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean, requestId?: string, correlationId?: string, config?: Record<string, unknown> | null, env?: Record<string, string | undefined>, fetchImpl?: typeof fetch, beforeDispatch?: (() => Promise<void>) | null }} [options]
  */
-export async function sendWhatsAppText({ chatId = "", text = "", accountId = "", mentions = [], attachments = [], crossAccountEchoSuppression = true, routeSentMessage = false, requestId = "", correlationId = "", config = null, env = process.env, fetchImpl = fetch } = {}) {
+export async function sendWhatsAppText({ chatId = "", text = "", accountId = "", mentions = [], attachments = [], crossAccountEchoSuppression = true, routeSentMessage = false, requestId = "", correlationId = "", config = null, env = process.env, fetchImpl = fetch, beforeDispatch = null } = {}) {
   await validateOutboundSnapshots(attachments, env);
   const resolvedConfig = config || await readConnectorConfig("whatsapp", env).catch(() => ({}));
   const bridgeUrl = configuredBridgeUrl(resolvedConfig, env);
@@ -5824,6 +5833,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
     const localAttachments = await prepareLocalBridgeAttachments(normalizedAttachments, env);
     assertRequiredSnapshotsPresent(requiredOutboundSnapshots(normalizedAttachments), normalizedAttachments, localAttachments.skipped);
     if (localAttachments.skipped.length) throw Object.assign(new Error("whatsapp_attachment_preflight_failed"), { statusCode: 422, retryable: false });
+    if (typeof beforeDispatch === "function") await beforeDispatch();
     const payload = await sendLocalWhatsAppMessage({
       chatId,
       text,
@@ -5855,6 +5865,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
   const runtimeAccountId = await resolveBridgeRuntimeAccountId(accountId, { config: resolvedConfig, env, fetchImpl });
   const hasMedia = sendablePathAttachments.length || sendableInlineAttachments.length;
   const endpoint = whatsappBridgeEndpointUrl(bridgeUrl, hasMedia ? "/send-media" : "/send-text");
+  if (typeof beforeDispatch === "function") await beforeDispatch();
   const response = await fetchImpl(endpoint, {
     method: "POST",
     headers,
@@ -7023,7 +7034,10 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         continue;
       }
-      const parent = messages.find((entry) => entry.id === message.parentMessageId);
+      const parent = messages.find((entry) => entry.id === message.parentMessageId) ||
+        (kind === "thread" && message.parentMessageId
+          ? await getThreadMessage(threadId, message.parentMessageId, env)
+          : null);
       if (!shouldMirrorWhatsAppReply(message)) {
         if (isNoReplyAssistantMessage(message)) {
           await patchUiReplyDeliveryParent({
@@ -7037,12 +7051,13 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         continue;
       }
-      const whatsappOrigin =
-        parent?.connector === "whatsapp" ||
-        parent?.source === "whatsapp_inbound" ||
-        message.connector === "whatsapp" ||
-        boundThreadWhatsAppAssistantOrigin({ message, thread, kind }) ||
-        threadBridgeWhatsAppReplyOrigin({ parent, thread, kind });
+      const bridgeExecutionReply = kind === "thread" && parent?.source === "thread_bridge_message";
+      const whatsappOrigin = bridgeExecutionReply
+        ? threadBridgeWhatsAppReplyOrigin({ parent, thread, kind })
+        : parent?.connector === "whatsapp" ||
+          parent?.source === "whatsapp_inbound" ||
+          message.connector === "whatsapp" ||
+          boundThreadWhatsAppAssistantOrigin({ message, thread, kind });
       if (!whatsappOrigin) continue;
       const replyDeliveryFence = replyDeliveryBindingFence(parent || {}, thread || {});
       const snapshotChatId = replyDeliveryFence.applies ? pickString(replyDeliveryFence.intent?.target?.chatId) : "";
