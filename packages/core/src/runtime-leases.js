@@ -4499,18 +4499,21 @@ function latestRolloutWhatsAppInput(messages = [], beforeTimestamp = null, threa
   ) || null;
 }
 
-function latestRolloutBridgeInput(messages = [], beforeTimestamp = null, generation = "") {
+function rolloutBridgeInputSelection(messages = [], beforeTimestamp = null, generation = "") {
   const expectedGeneration = String(generation || "").trim();
-  if (!expectedGeneration) return null;
+  if (!expectedGeneration) return { parent: null, ambiguous: false };
   const beforeMs = beforeTimestamp ? timestampMs(beforeTimestamp) : 0;
-  return [...messages].reverse().find((message) => {
+  const candidates = messages.filter((message) => {
     if (message?.role !== "user" || message?.source !== "thread_bridge_message") return false;
     const messageGeneration = String(message.codexThreadId || message.executorThreadId || "").trim();
     const state = String(message.state || "").trim().toLowerCase();
     return messageGeneration === expectedGeneration &&
       ["queued", "pending_delivery", "awaiting_ack", "delivering", "claimed", "running"].includes(state) &&
       (!beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000);
-  }) || null;
+  });
+  const running = candidates.filter((message) => String(message.state || "").trim().toLowerCase() === "running");
+  if (running.length === 1) return { parent: running[0], ambiguous: false };
+  return { parent: null, ambiguous: candidates.length > 0 };
 }
 
 function whatsappParentChatId(parent = null, thread = null) {
@@ -4625,9 +4628,11 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
     const textKey = rolloutMessageNearTextKey(message);
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
     const turnParent = exactRolloutTurnParent(existing, message, codexId);
+    const bridgeSelection = turnParent ? null : rolloutBridgeInputSelection(existing, message.timestamp, codexId);
+    const bridgeAuthorityAmbiguous = !turnParent && bridgeSelection?.ambiguous === true;
     const whatsappParent = turnParent
       ? (whatsappOrigin(turnParent) ? turnParent : replyDeliveryProjectionParent(turnParent))
-      : latestRolloutBridgeInput(existing, message.timestamp, codexId) || latestRolloutWhatsAppInput(existing, message.timestamp, thread);
+      : bridgeSelection?.parent || (!bridgeSelection?.ambiguous ? latestRolloutWhatsAppInput(existing, message.timestamp, thread) : null);
     const parentMessage = turnParent || whatsappParent;
     const parentTurnId = String(
       message.codexTurnId ||
@@ -4650,8 +4655,8 @@ async function appendRolloutMessages({ thread, rolloutPath, generation = "", bod
         ? { bridgeWhatsAppReply: false }
         : {}),
       connector: whatsappParent ? "whatsapp" : "",
-      chatId: whatsappParentChatId(whatsappParent, thread),
-      accountId: whatsappParentAccountId(whatsappParent, thread),
+      chatId: bridgeAuthorityAmbiguous ? "" : whatsappParentChatId(whatsappParent, thread),
+      accountId: bridgeAuthorityAmbiguous ? "" : whatsappParentAccountId(whatsappParent, thread),
       originSurface: "codex",
       originTransport: "codex-rollout",
       executorKind: "codex",
@@ -4905,9 +4910,11 @@ async function syncLeaseRollout(lease, env = process.env) {
     const textKey = rolloutMessageNearTextKey(message);
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
     const turnParent = exactRolloutTurnParent(existing, message, generation);
+    const bridgeSelection = turnParent ? null : rolloutBridgeInputSelection(existing, message.timestamp, generation);
+    const bridgeAuthorityAmbiguous = !turnParent && bridgeSelection?.ambiguous === true;
     const whatsappParent = turnParent
       ? (whatsappOrigin(turnParent) ? turnParent : replyDeliveryProjectionParent(turnParent))
-      : latestRolloutBridgeInput(existing, message.timestamp, generation) || latestRolloutWhatsAppInput(existing, message.timestamp, thread);
+      : bridgeSelection?.parent || (!bridgeSelection?.ambiguous ? latestRolloutWhatsAppInput(existing, message.timestamp, thread) : null);
     const parentMessage = turnParent || whatsappParent;
     const parentTurnId = String(
       message.codexTurnId ||
@@ -4930,8 +4937,8 @@ async function syncLeaseRollout(lease, env = process.env) {
         ? { bridgeWhatsAppReply: false }
         : {}),
       connector: whatsappParent ? "whatsapp" : "",
-      chatId: whatsappParentChatId(whatsappParent, thread),
-      accountId: whatsappParentAccountId(whatsappParent, thread),
+      chatId: bridgeAuthorityAmbiguous ? "" : whatsappParentChatId(whatsappParent, thread),
+      accountId: bridgeAuthorityAmbiguous ? "" : whatsappParentAccountId(whatsappParent, thread),
       originSurface: "codex",
       originTransport: "codex-rollout",
       executorKind: "codex",
