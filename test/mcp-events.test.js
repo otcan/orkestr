@@ -12,7 +12,7 @@ import { readSubscriptions, signWebhook } from "../packages/core/src/mcp-events.
 import { runMcpEventDelivery } from "../packages/core/src/mcp-event-delivery.js";
 import { handleModernMcpRequest } from "../packages/core/src/mcp-modern-protocol.js";
 import { assertPublicHttpsUrl, publicAddress, safePublicFetch } from "../packages/core/src/safe-public-fetch.js";
-import { validateAuthorizeRequest } from "../packages/core/src/mcp-oauth.js";
+import { createConsent, decideConsent, exchangeMcpToken, mcpPrincipalFromAuthorization, negotiateAuthMethod, validateAuthorizeRequest } from "../packages/core/src/mcp-oauth.js";
 
 const VERSION = "2026-07-28";
 const SECRET = `whsec_${Buffer.alloc(32, 7).toString("base64")}`;
@@ -194,4 +194,50 @@ test("OAuth accepts Client ID Metadata Documents with allowed redirect URIs", as
   assert.equal(validated.client.clientName, "ChatGPT");
   const otherId = "https://chatgpt.com/oauth/other.json";
   await assert.rejects(validateAuthorizeRequest({ ...query, client_id: otherId }, env, async () => ({ status: 200, text: JSON.stringify(doc) })), /invalid_client/);
+});
+
+test("ChatGPT's client metadata (none + private_key_jwt) connects as a public PKCE client", async (t) => {
+  const { env } = await fixture(t);
+  env.ORKESTR_MCP_PUBLIC_URL = "https://app.example.test";
+  const clientId = "https://chatgpt.com/oauth/client-metadata.json";
+  const redirect = "https://chatgpt.com/connector_platform_oauth_redirect";
+  // As published by OpenAI: list of supported methods plus a legacy preference.
+  const doc = {
+    client_id: clientId, client_name: "ChatGPT", redirect_uris: [redirect],
+    token_endpoint_auth_methods_supported: ["none", "private_key_jwt"],
+    token_endpoint_auth_method: "private_key_jwt",
+  };
+  const fetchImpl = async () => ({ status: 200, text: JSON.stringify(doc) });
+  const verifier = crypto.randomBytes(32).toString("base64url");
+  const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
+  const request = await validateAuthorizeRequest({ client_id: clientId, redirect_uri: redirect, response_type: "code", code_challenge: challenge,
+    code_challenge_method: "S256", resource: "https://app.example.test/mcp", state: "s1" }, env, fetchImpl);
+  const consentId = await createConsent(request, { userId: "owner-a", sessionId: "session-1" }, env);
+  const location = new URL(await decideConsent({ consentId, userId: "owner-a", sessionId: "session-1", approve: true }, env));
+  assert.equal(location.searchParams.get("iss"), "https://app.example.test");
+  const body = { grant_type: "authorization_code", code: location.searchParams.get("code"), redirect_uri: redirect, client_id: clientId, code_verifier: verifier, resource: "https://app.example.test/mcp" };
+
+  await assert.rejects(exchangeMcpToken({ ...body, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer", client_assertion: "a.b.c" }, "", env, fetchImpl), /invalid_client/,
+    "the token request must use the agreed method (none)");
+  await assert.rejects(exchangeMcpToken({ ...body, code_verifier: "x".repeat(43) }, "", env, fetchImpl), /invalid_grant/, "PKCE is still enforced");
+  const consentAgain = await createConsent(request, { userId: "owner-a", sessionId: "session-1" }, env);
+  const code = new URL(await decideConsent({ consentId: consentAgain, userId: "owner-a", sessionId: "session-1", approve: true }, env)).searchParams.get("code");
+  const tokens = await exchangeMcpToken({ ...body, code }, "", env, fetchImpl);
+  assert.ok(tokens.access_token);
+  const connected = await mcpPrincipalFromAuthorization(`Bearer ${tokens.access_token}`, env);
+  assert.equal(connected.ownerUserId, "owner-a");
+  assert.match(connected.agentId, /^mcpdoc_[0-9a-f]{24}$/);
+
+  // A client that cannot act as a public client is refused with a clear reason.
+  const keyOnly = { ...doc, client_id: "https://other.chatgpt.com/meta.json", token_endpoint_auth_methods_supported: ["private_key_jwt"] };
+  await assert.rejects(validateAuthorizeRequest({ client_id: keyOnly.client_id, redirect_uri: redirect, response_type: "code", code_challenge: challenge, code_challenge_method: "S256" },
+    env, async () => ({ status: 200, text: JSON.stringify(keyOnly) })), /invalid_client/);
+});
+
+test("auth method negotiation prefers a mutually supported method", () => {
+  assert.equal(negotiateAuthMethod({ token_endpoint_auth_methods_supported: ["none", "private_key_jwt"], token_endpoint_auth_method: "private_key_jwt" }), "none");
+  assert.equal(negotiateAuthMethod({ token_endpoint_auth_method: "client_secret_post" }), "client_secret_post");
+  assert.equal(negotiateAuthMethod({}), "none");
+  assert.equal(negotiateAuthMethod({ token_endpoint_auth_method: "private_key_jwt" }), "");
+  assert.equal(negotiateAuthMethod({ token_endpoint_auth_methods_supported: ["private_key_jwt", "client_secret_basic"] }), "client_secret_basic");
 });

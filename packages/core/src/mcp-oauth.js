@@ -126,6 +126,23 @@ function metadataClientId(value) {
   } catch { return ""; }
 }
 
+// Token endpoint auth methods this server implements, in preference order.
+const SUPPORTED_AUTH_METHODS = ["none", "client_secret_basic", "client_secret_post"];
+
+// Picks the method both sides support. `token_endpoint_auth_methods_supported`
+// (list) wins over the legacy single `token_endpoint_auth_method` preference;
+// ChatGPT, for example, publishes ["none", "private_key_jwt"] with a legacy
+// preference of private_key_jwt and works as a public PKCE client.
+export function negotiateAuthMethod(metadata = {}, allowed = SUPPORTED_AUTH_METHODS) {
+  const listed = Array.isArray(metadata.token_endpoint_auth_methods_supported)
+    ? metadata.token_endpoint_auth_methods_supported.map(clean).filter(Boolean)
+    : [];
+  const preferred = clean(metadata.token_endpoint_auth_method);
+  const offered = listed.length ? listed : [preferred || "none"];
+  if (preferred && offered.includes(preferred) && allowed.includes(preferred)) return preferred;
+  return allowed.find((method) => offered.includes(method)) || "";
+}
+
 async function fetchClientMetadata(clientId, env, fetchImpl) {
   const cached = metadataCache.get(clientId);
   if (cached && cached.expiresAt > Date.now()) return cached.client;
@@ -138,8 +155,11 @@ async function fetchClientMetadata(clientId, env, fetchImpl) {
   if (!doc || doc.client_id !== clientId || !Array.isArray(doc.redirect_uris) || !doc.redirect_uris.length || !clean(doc.client_name)) {
     throw oauthError("invalid_client", "Client metadata document is invalid.");
   }
-  const authMethod = clean(doc.token_endpoint_auth_method) || "none";
-  if (authMethod !== "none") throw oauthError("invalid_client", "Only public metadata-document clients (token_endpoint_auth_method none) are supported.");
+  // Metadata-document clients have no shared secret, so only "none" (public
+  // client with PKCE) is possible here; private_key_jwt is not implemented.
+  if (negotiateAuthMethod(doc, ["none"]) !== "none") {
+    throw oauthError("invalid_client", "The client must support token_endpoint_auth_method \"none\" (public client with PKCE); private_key_jwt is not supported.");
+  }
   const redirectUris = doc.redirect_uris.map(clean).filter((uri) => redirectAllowed(uri, env));
   if (!redirectUris.length) throw oauthError("invalid_client", "No allowed redirect_uris in the client metadata document.");
   const client = { clientId, clientName: clean(doc.client_name).slice(0, 80), redirectUris, authMethod: "none", secretHash: "", metadataDocument: true };
@@ -164,8 +184,11 @@ export async function registerMcpClient(body = {}, env = process.env) {
   if (!redirectUris.length || redirectUris.length > 5) throw oauthError("invalid_redirect_uri", "Provide 1-5 redirect_uris.");
   const rejected = redirectUris.find((uri) => !redirectAllowed(uri, env));
   if (rejected) throw oauthError("invalid_redirect_uri", `Redirect URI not allowed: ${rejected}`);
-  const authMethod = clean(body.token_endpoint_auth_method) || "client_secret_basic";
-  if (!["none", "client_secret_post", "client_secret_basic"].includes(authMethod)) throw oauthError("invalid_client_metadata", "Unsupported token_endpoint_auth_method.");
+  const authMethod = negotiateAuthMethod({
+    token_endpoint_auth_method: clean(body.token_endpoint_auth_method) || (Array.isArray(body.token_endpoint_auth_methods_supported) ? "" : "client_secret_basic"),
+    token_endpoint_auth_methods_supported: body.token_endpoint_auth_methods_supported,
+  });
+  if (!authMethod) throw oauthError("invalid_client_metadata", `Unsupported token_endpoint_auth_method; use one of ${SUPPORTED_AUTH_METHODS.join(", ")}.`);
   const clientId = `mcp_${crypto.randomBytes(12).toString("hex")}`;
   const secret = authMethod === "none" ? "" : token("mcs");
   const client = {
@@ -280,12 +303,16 @@ function clientCredentials(body = {}, authorization = "") {
     const [id, ...rest] = Buffer.from(basic[1], "base64").toString("utf8").split(":");
     return { clientId: decodeURIComponent(id || ""), secret: decodeURIComponent(rest.join(":")) };
   }
-  return { clientId: clean(body.client_id), secret: clean(body.client_secret) };
+  return { clientId: clean(body.client_id), secret: clean(body.client_secret), assertion: clean(body.client_assertion) };
 }
 
 function authenticateClient(state, credentials, resolved = null) {
   const client = resolved || state.clients.find((entry) => entry.clientId === credentials.clientId);
   if (!client) throw oauthError("invalid_client", "Unknown client.", 401);
+  // The token request must use the method agreed at registration/metadata time.
+  if (client.authMethod === "none" && (credentials.secret || credentials.assertion)) {
+    throw oauthError("invalid_client", "This client is registered as a public client; send no client secret or assertion.", 401);
+  }
   if (client.authMethod !== "none") {
     const given = Buffer.from(sha256(credentials.secret || ""));
     if (!credentials.secret || !crypto.timingSafeEqual(given, Buffer.from(client.secretHash))) throw oauthError("invalid_client", "Client authentication failed.", 401);
