@@ -6,9 +6,13 @@ function clean(value = "") {
   return String(value || "").trim();
 }
 
-export function claudeCodeStatusPayload({ thread = {}, supervisor = null, profileState = "unknown", counts = {}, accountProfileId = "" } = {}) {
+// `starting` is true while a turn holds the thread's reservation but its
+// process supervisor is not registered yet (profile checks, batching, spawn).
+// That window is working, not an interrupted turn.
+export function claudeCodeStatusPayload({ thread = {}, supervisor = null, starting = false, profileState = "unknown", counts = {}, accountProfileId = "" } = {}) {
   const persistedState = clean(thread.runtime?.state || thread.state || "ready").toLowerCase();
-  const state = supervisor ? "working" : persistedState === "working" ? "interrupted" : persistedState;
+  const active = Boolean(supervisor) || starting === true;
+  const state = active ? "working" : persistedState === "working" ? "interrupted" : persistedState;
 
   // Semantic liveness: staleWorking is true when the process is alive but has not
   // produced meaningful output for longer than ORKESTR_CLAUDE_STALE_WORKING_MS.
@@ -24,10 +28,10 @@ export function claudeCodeStatusPayload({ thread = {}, supervisor = null, profil
     provider: "anthropic",
     promptReady: state === "ready" && profileState === "ready",
     promptReadyStable: state === "ready" && profileState === "ready",
-    working: Boolean(supervisor),
-    foregroundWorking: Boolean(supervisor),
+    working: active,
+    foregroundWorking: active,
     // typingActive is false when the process is stale (transport alive, semantics silent).
-    typingActive: Boolean(supervisor) && !staleWorking,
+    typingActive: active && !staleWorking,
     backgroundWork: false,
     staleWorking,
     staleWorkingSince,
@@ -36,7 +40,7 @@ export function claudeCodeStatusPayload({ thread = {}, supervisor = null, profil
     runningCount: Number(counts.runningCount || 0),
     accountProfileId: accountProfileId || null,
     accountState: profileState,
-    activeTurnId: supervisor?.attemptId || null,
+    activeTurnId: supervisor?.attemptId || (active ? clean(thread.runtime?.activeTurnId) || null : null),
     // "detached" turns survive a UI service restart; "pipe" turns do not.
     claudeTransport: supervisor ? (supervisor.transport || "pipe") : null,
     error: state === "interrupted" ? "claude_code_runtime_interrupted" : thread.lastError || null,

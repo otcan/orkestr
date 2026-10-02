@@ -379,12 +379,13 @@ export async function claudeCodeThreadStatus(thread, env = process.env, counts =
   const supervisor = activeTurns.get(thread.id);
   let profileState = "unknown";
   try { profileState = (await profileForThread(thread, env, false)).state; } catch {}
-  if (!supervisor) {
+  // A reserved (starting) turn owns the thread state; never reset it here.
+  if (!supervisor && !turnReservations.has(thread.id)) {
     const recovery = await recoverClaudeCodeThreadState(thread, profileState, env);
     thread = recovery.thread;
     if (recovery.recovered) scheduleClaudeCodeDelivery(thread.id, env, 0);
   }
-  return claudeCodeStatusPayload({ thread, supervisor, profileState, counts, accountProfileId: accountProfileId(thread) });
+  return claudeCodeStatusPayload({ thread, supervisor, starting: !supervisor && turnReservations.has(thread.id), profileState, counts, accountProfileId: accountProfileId(thread) });
 }
 
 export async function resumeClaudeCodeThread(thread, env = process.env) {

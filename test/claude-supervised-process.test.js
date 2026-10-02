@@ -690,7 +690,13 @@ test("claudeCodeThreadStatus reflects staleWorking from semantic inactivity", { 
   const home = await mktemp("orkestr-sup-stale-");
   const priorHome = process.env.ORKESTR_HOME;
   process.env.ORKESTR_HOME = home;
+  // Stop the fake turn before the home is removed, even when an assertion
+  // failed mid-test; otherwise the stalled process outlives the test and its
+  // late profile lookups hit a deleted home.
+  let running = null;
+  let stopTurn = async () => {};
   t.after(async () => {
+    await stopTurn();
     resetClaudeCodeRuntimeForTest();
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = priorHome;
@@ -724,7 +730,11 @@ setTimeout(() => {
     let thread = await claudeThread("owner", profile.id, env, "sup-stale-status");
     const msg = await enqueueThreadInput(thread.id, { text: "stall now", source: "test" }, env);
 
-    const running = sendClaudeCodeInput(thread, msg, env);
+    running = sendClaudeCodeInput(thread, msg, env);
+    stopTurn = async () => {
+      await interruptClaudeCodeThread(thread, env).catch(() => {});
+      await running.catch(() => {});
+    };
     // Wait for the process to start and emit init (transport-only — semantic
     // timer ticking). Polled rather than a fixed sleep: a loaded CI runner can
     // take longer than 100 ms to spawn the process.
@@ -747,9 +757,8 @@ setTimeout(() => {
     assert.equal(statusStale.staleWorkingReason, "semantic_inactivity");
     assert.equal(statusStale.typingActive, false, "typingActive false when stale");
 
-    // Interrupt and clean up.
-    await interruptClaudeCodeThread(thread, env);
-    await running.catch(() => {});
+    // Interrupt and clean up (t.after repeats this safely on failure).
+    await stopTurn();
     await new Promise((r) => setTimeout(r, 500));
   } catch (err) {
     throw err;
