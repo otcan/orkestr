@@ -145,7 +145,7 @@ test("local canonical gateway serves an instance-scoped SPA and uses uniform 404
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   t.after(async () => {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    await fs.rm(home, { recursive: true, force: true });
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
   const port = server.address().port;
   const known = await fetch(`http://127.0.0.1:${port}/instance/${instanceRef}/thread/${thread.publicRef}`);
@@ -325,7 +325,7 @@ test("broker canonical gateway preserves HTTP bodies, queries, HTML base, stream
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
-    await fs.rm(home, { recursive: true, force: true });
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   const upstream = http.createServer((request, response) => {

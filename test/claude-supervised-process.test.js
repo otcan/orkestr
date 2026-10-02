@@ -725,12 +725,18 @@ setTimeout(() => {
     const msg = await enqueueThreadInput(thread.id, { text: "stall now", source: "test" }, env);
 
     const running = sendClaudeCodeInput(thread, msg, env);
-    // Wait for the process to emit init (transport-only — semantic timer ticking).
-    await new Promise((r) => setTimeout(r, 100));
+    // Wait for the process to start and emit init (transport-only — semantic
+    // timer ticking). Polled rather than a fixed sleep: a loaded CI runner can
+    // take longer than 100 ms to spawn the process.
+    let statusFresh = null;
+    for (const started = Date.now(); Date.now() - started < 3_000;) {
+      thread = await getThread(thread.id, env);
+      statusFresh = await claudeCodeThreadStatus(thread, env);
+      if (statusFresh.working) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
 
     // Just after start: working is true.
-    thread = await getThread(thread.id, env);
-    const statusFresh = await claudeCodeThreadStatus(thread, env);
     assert.equal(statusFresh.working, true, "working while process is running");
 
     // Wait past staleWorkingMs.
