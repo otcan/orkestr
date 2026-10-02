@@ -21,6 +21,14 @@ const disabledValues = new Set(["0", "false", "off", "no", "disabled", "disable"
 const maxCoalescedInputs = 20;
 // threadId -> turnId of the turn most recently stopped for an instant interrupt.
 const instantInterruptedTurns = new Map();
+// threadId -> ids of pending steer inputs left out of the current batch because
+// their reply authority differs. They wait for the running turn instead of
+// interrupting it (which would drop that turn's answer).
+const deferredByAuthority = new Map();
+
+export function claudeCodeInputDeferredByAuthority(threadId, messageId) {
+  return deferredByAuthority.get(clean(threadId))?.has(clean(messageId)) === true;
+}
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -115,9 +123,27 @@ export function consumeClaudeCodeInterruptResume(thread = {}) {
   return clean(thread.runtime?.lastTurnStatus) === "interrupted" && clean(thread.runtime?.lastTurnId) === turnId;
 }
 
+// Who may receive the answer to an input. One coalesced turn produces one
+// answer that is routed through the primary input only, so inputs whose
+// answers may go to different places (another chat/account, another reply
+// route, or an MCP request that opted out of WhatsApp) must not share a turn.
+export function replyAuthorityKey(message = {}) {
+  const intent = message.replyDeliveryIntent && typeof message.replyDeliveryIntent === "object" ? message.replyDeliveryIntent : null;
+  const target = intent?.target && typeof intent.target === "object" ? intent.target : {};
+  const bridge = clean(message.source) === "thread_bridge_message";
+  return JSON.stringify([
+    bridge ? clean(message.bridgeAgentId) || "bridge" : "",
+    bridge ? message.bridgeWhatsAppReply !== false : null,
+    clean(message.connector).toLowerCase(),
+    clean(message.chatId),
+    clean(message.accountId),
+    intent ? [clean(intent.issuedFor), clean(intent.mode), clean(target.threadId), clean(target.ownerUserId), clean(target.chatId), clean(target.accountId), clean(target.bindingRevision)] : null,
+  ]);
+}
+
 // Pending interrupt inputs that directly follow `primary` in queue order and
-// can share its resume turn. Control commands and passive inputs end the run
-// so queue order is preserved.
+// can share its resume turn. Control commands, passive inputs and inputs with
+// a different reply authority end the run so queue order is preserved.
 export async function collectClaudeCodeResumeBatch(thread, primary, env = process.env) {
   if (!claudeCodeInputRequestsInterrupt(primary, env)) return [];
   const candidates = (await listThreadMessageCandidates(thread.id, { states: pendingStates }, env))
@@ -126,12 +152,21 @@ export async function collectClaudeCodeResumeBatch(thread, primary, env = proces
   if (index < 0) return [];
   const following = await normalizeClaudeCodeNowInputs(thread, candidates.slice(index + 1, index + 1 + maxCoalescedInputs), env);
   const batch = [];
+  const deferred = new Set();
+  const authority = replyAuthorityKey(primary);
   for (const message of following) {
     if (!pendingStates.includes(clean(message.state))) break;
     if (!claudeCodeInputRequestsInterrupt(message, env)) break;
     if (parseThreadInputCommand(message).command) break;
+    if (replyAuthorityKey(message) !== authority) {
+      // This input and every steer input queued behind it wait their turn.
+      for (const later of following.slice(following.indexOf(message))) deferred.add(clean(later.id));
+      break;
+    }
     batch.push(message);
   }
+  if (deferred.size) deferredByAuthority.set(clean(thread.id), deferred);
+  else deferredByAuthority.delete(clean(thread.id));
   return batch;
 }
 

@@ -49,6 +49,10 @@ export async function sendBridgeMessage(threadId, input = {}, principal, env = p
     clientMessageId,
     bridgeAgentId: principal.agentId,
     bridgeGrantId: principal.grantId,
+    // A delegated assistant's text is never an Orkestr control command:
+    // `/now`, `/stop`, `/reset` ... stay literal text, so an MCP message can
+    // neither interrupt nor be coalesced into another request's turn.
+    commandProcessing: "disabled",
     bridgeWhatsAppReply: input.deliverToWhatsApp !== false,
     ...(input.deliverToWhatsApp === false ? {} : {
       replyDeliveryIntent: createBridgeReplyDeliveryIntent(thread, { enabled: true, ownerUserId: grant.ownerUserId }),

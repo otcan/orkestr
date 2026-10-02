@@ -41,6 +41,7 @@ import { reattachDetachedClaudeCodeTurn } from "./claude-code-turn-reattach.js";
 import {
   claudeCodeInputRequestsInterrupt,
   claudeCodeResumePrompt,
+  claudeCodeInputDeferredByAuthority,
   collectClaudeCodeResumeBatch,
   consumeClaudeCodeInterruptResume,
   normalizeClaudeCodeNowInputs,
@@ -354,8 +355,10 @@ async function steerActiveClaudeCodeTurn(thread, env = process.env) {
     scheduleClaudeCodeDelivery(thread.id, env, 250);
     return { interrupted: false, reason: "turn_starting" };
   }
+  // Inputs held back from the running turn's batch because their reply
+  // authority differs queue behind it rather than interrupting it.
   const pending = (await listThreadMessageCandidates(thread.id, { states: [...pendingStates] }, env))
-    .filter((message) => message.role === "user");
+    .filter((message) => message.role === "user" && !claudeCodeInputDeferredByAuthority(thread.id, message.id));
   if (!pending.some((message) => claudeCodeInputRequestsInterrupt(message, env))) return { interrupted: false, reason: "no_interrupt_input" };
   if (activeTurns.get(thread.id) !== supervisor) {
     scheduleClaudeCodeDelivery(thread.id, env, 0);

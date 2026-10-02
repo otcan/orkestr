@@ -261,7 +261,13 @@ server for clients such as ChatGPT plugins:
   originating thread's existing eligible WhatsApp binding by default; set
   `deliver_to_whatsapp=false` to opt out. If the thread has no eligible binding,
   no WhatsApp destination is inferred. The input is never echoed back to the
-  sending assistant as an event. `wait_for_reply` waits at most 45 s for
+  sending assistant as an event. MCP message text is never parsed as an Orkestr
+  control command (`commandProcessing: "disabled"`: `/now`, `/stop`, `/reset`
+  stay literal), so an MCP message cannot interrupt or be coalesced into
+  another request's turn. Independently, Claude Code only coalesces queued
+  steer inputs with the same reply authority (bridge agent, WhatsApp opt-out,
+  origin chat/account, reply route); inputs left out wait for the running
+  turn instead of interrupting it. `wait_for_reply` waits at most 45 s for
   the answer to exactly that input: a completed final whose
   `parentMessageId` is the input, or one from the same runtime turn of the
   same generation when several inputs were batched (Codex turn ids repeat per
