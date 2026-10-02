@@ -567,6 +567,93 @@ test("ambiguous active MCP inputs fail closed instead of inheriting the thread's
   assert.equal(posts.length, 0);
 });
 
+test("late no-turn commentary keeps a completed MCP opt-out parent and stays out of WhatsApp", async (t) => {
+  const generation = "ca05f6a9-f7fb-4e4e-b642-01f977c7364b";
+  const env = await fixture(t, { binding: eligibleBinding, generation });
+  const request = await sendBridgeMessage("thread-a", {
+    text: "Synthetic completed opt-out request", requestId: "completed-optout-late-commentary", deliverToWhatsApp: false,
+  }, principal, env, { deliver() {} });
+  await updateThreadMessage("thread-a", request.messageId, { codexThreadId: generation, state: "completed" }, env);
+  await ensureDataDirs(env);
+  const rolloutPath = path.join(env.ORKESTR_HOME, "rollout-completed-optout-late.jsonl");
+  const timestamp = new Date(Date.now() + 1000).toISOString();
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ type: "session_meta", payload: { id: generation } }),
+    JSON.stringify({
+      timestamp,
+      type: "event_msg",
+      payload: { type: "agent_message", phase: "commentary", message: "Synthetic late output from the completed private request." },
+    }),
+  ].join("\n") + "\n", "utf8");
+  await fs.writeFile(dataPaths(env).runtimeLeases, JSON.stringify([{
+    id: "synthetic-completed-optout-late-lease", threadId: "thread-a", sessionName: "synthetic-completed-optout-late-session",
+    rolloutPath, rolloutGeneration: generation, rolloutOffset: 0, startedAt: timestamp,
+  }]), "utf8");
+  assert.equal((await syncActiveRuntimeRolloutMessages(env)).appended, 1);
+  const projected = (await listThreadMessages("thread-a", env)).find((message) => message.text === "Synthetic late output from the completed private request.");
+  assert.equal(projected.parentMessageId, request.messageId);
+  assert.equal(projected.bridgeWhatsAppReply, false, "completion before sync does not erase request-time opt-out authority");
+
+  const posts = [];
+  const result = await deliverWhatsAppReplies(env, async (_url, options = {}) => {
+    if (options.method === "POST") posts.push(options);
+    return response({ ok: true, ready: true, accounts: [{ id: "synthetic-account-a", ready: true }], ids: ["unexpected"] });
+  });
+  assert.equal(result.delivered.length, 0);
+  assert.equal(posts.length, 0);
+});
+
+test("ordinary unparented progress safely uses its existing bound-thread route", async (t) => {
+  const env = await fixture(t, { binding: eligibleBinding });
+  const progress = await appendThreadMessage("thread-a", {
+    role: "assistant", source: "codex-rollout", phase: "commentary", state: "completed",
+    chatId: eligibleBinding.chatId, accountId: "synthetic-account-a", text: "Synthetic unparented legacy progress.",
+  }, env);
+  const posts = [];
+  const result = await deliverWhatsAppReplies(env, async (_url, options = {}) => {
+    if (options.method === "POST") posts.push(JSON.parse(String(options.body || "{}")));
+    return response({ ok: true, ready: true, accounts: [{ id: "synthetic-account-a", ready: true }], ids: ["synthetic-progress-receipt"] });
+  });
+  assert.equal(result.delivered.some((delivery) => delivery.messageId === progress.id), true);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].to, eligibleBinding.chatId);
+});
+
+test("late no-turn final output keeps the completed MCP opt-out parent", async (t) => {
+  const generation = "74fb9ee6-8fbd-4da7-8681-8f46dad0dc2c";
+  const env = await fixture(t, { binding: eligibleBinding, generation });
+  const request = await sendBridgeMessage("thread-a", {
+    text: "Synthetic completed final opt-out request", requestId: "completed-optout-late-final", deliverToWhatsApp: false,
+  }, principal, env, { deliver() {} });
+  await updateThreadMessage("thread-a", request.messageId, { codexThreadId: generation, state: "completed" }, env);
+  await ensureDataDirs(env);
+  const rolloutPath = path.join(env.ORKESTR_HOME, "rollout-completed-optout-final.jsonl");
+  const timestamp = new Date(Date.now() + 1000).toISOString();
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ type: "session_meta", payload: { id: generation } }),
+    JSON.stringify({
+      timestamp,
+      type: "response_item",
+      payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Synthetic late private final." }] },
+    }),
+  ].join("\n") + "\n", "utf8");
+  await fs.writeFile(dataPaths(env).runtimeLeases, JSON.stringify([{
+    id: "synthetic-completed-optout-final-lease", threadId: "thread-a", sessionName: "synthetic-completed-optout-final-session",
+    rolloutPath, rolloutGeneration: generation, rolloutOffset: 0, startedAt: timestamp,
+  }]), "utf8");
+  assert.equal((await syncActiveRuntimeRolloutMessages(env)).appended, 1);
+  const projected = (await listThreadMessages("thread-a", env)).find((message) => message.text === "Synthetic late private final.");
+  assert.equal(projected.parentMessageId, request.messageId);
+  assert.equal(projected.bridgeWhatsAppReply, false);
+  const posts = [];
+  const result = await deliverWhatsAppReplies(env, async (_url, options = {}) => {
+    if (options.method === "POST") posts.push(options);
+    return response({ ok: true, ready: true, accounts: [{ id: "synthetic-account-a", ready: true }], ids: ["unexpected"] });
+  });
+  assert.equal(result.delivered.length, 0);
+  assert.equal(posts.length, 0);
+});
+
 test("legacy agent assistant replies retain their in-memory WhatsApp parent route", async (t) => {
   const env = await fixture(t);
   const parent = await appendAgentMessage("legacy-agent", {

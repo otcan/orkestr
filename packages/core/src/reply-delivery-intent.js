@@ -169,6 +169,7 @@ export function nextThreadReplyDeliveryEpoch(previous = {}, next = {}) {
 }
 
 function serverReplyDeliveryIntent(message = {}) {
+  if (!message || typeof message !== "object" || Array.isArray(message)) return null;
   const intent = message.replyDeliveryIntent;
   if (!intent || typeof intent !== "object" || Array.isArray(intent)) return null;
   if (intent.serverAuthored !== true || intent.channel !== "whatsapp" || intent.mode !== "bound_whatsapp") return null;

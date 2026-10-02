@@ -4508,12 +4508,30 @@ function rolloutBridgeInputSelection(messages = [], beforeTimestamp = null, gene
     const messageGeneration = String(message.codexThreadId || message.executorThreadId || "").trim();
     const state = String(message.state || "").trim().toLowerCase();
     return messageGeneration === expectedGeneration &&
-      ["queued", "pending_delivery", "awaiting_ack", "delivering", "claimed", "running"].includes(state) &&
+      ["queued", "pending_delivery", "awaiting_ack", "delivering", "claimed", "running", "completed"].includes(state) &&
       (!beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000);
   });
   const running = candidates.filter((message) => String(message.state || "").trim().toLowerCase() === "running");
   if (running.length === 1) return { parent: running[0], ambiguous: false };
-  return { parent: null, ambiguous: candidates.length > 0 };
+  if (candidates.some((message) => String(message.state || "").trim().toLowerCase() !== "completed")) {
+    return { parent: null, ambiguous: true };
+  }
+  if (candidates.length !== 1) return { parent: null, ambiguous: candidates.length > 0 };
+  const [completed] = candidates;
+  const latestUser = [...messages].reverse().find((message) => {
+    if (message?.role !== "user") return false;
+    return !beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000;
+  });
+  if (latestUser?.id !== completed.id) return { parent: null, ambiguous: true };
+  const completedMs = timestampMs(completed.timestamp || completed.createdAt);
+  const finalAfterInput = messages.some((message) =>
+    message?.role === "assistant" &&
+    String(message.phase || "").trim().toLowerCase() === "final_answer" &&
+    timestampMs(message.timestamp || message.createdAt) >= completedMs &&
+    (!beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000)
+  );
+  if (finalAfterInput) return { parent: null, ambiguous: true };
+  return { parent: completed, ambiguous: false };
 }
 
 function whatsappParentChatId(parent = null, thread = null) {
