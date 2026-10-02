@@ -17,7 +17,7 @@ import {
   validateAuthorizeRequest,
 } from "../../../../../packages/core/src/mcp-oauth.js";
 import { createThreadBridgeMcpServer } from "../../../../../packages/core/src/thread-bridge-mcp.js";
-import { handleModernMcpRequest, isModernMcpRequest, shouldStreamModernRequest } from "../../../../../packages/core/src/mcp-modern-protocol.js";
+import { handleModernMcpRequest, isModernMcpRequest, preflightModernMcpRequest, shouldStreamModernRequest } from "../../../../../packages/core/src/mcp-modern-protocol.js";
 import { sendMcpJson, streamMcpResponse, trackMcpRequest } from "./mcp-http.js";
 import { mcpLandingPage } from "../../../../../packages/core/src/mcp-landing-page.js";
 import { readSubscriptions } from "../../../../../packages/core/src/mcp-events.js";
@@ -162,6 +162,10 @@ export class ThreadBridgeMcpController {
     }
     try {
       if (modern) {
+        // Validation errors (400 header mismatch / unsupported version, 202
+        // for notifications) are answered as JSON before any stream starts.
+        const early = preflightModernMcpRequest(body, request.headers);
+        if (early) return sendMcpJson(response, record, early.status, early.body);
         const run = (signal: AbortSignal) => handleModernMcpRequest({ body, headers: request.headers, principal, signal });
         if (shouldStreamModernRequest(body, request.headers)) return await streamMcpResponse(response, record, run);
         const result = await run(record.signal);

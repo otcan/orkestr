@@ -7,7 +7,7 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { bridgeMessageVisible } from "../../storage/src/thread-bridge-journal.js";
 import { authorization, target } from "./thread-bridge.js";
-import { enqueueThreadInput, getThreadMessage, listThreadMessageCandidates } from "./threads.js";
+import { enqueueThreadInput, getThread, getThreadMessage, listThreadMessageCandidates } from "./threads.js";
 
 export const BRIDGE_MESSAGE_SOURCE = "thread_bridge_message";
 const MAX_MESSAGES_PER_HOUR = 30;
@@ -101,8 +101,23 @@ export function correlatedFinal(input, candidates = []) {
     (message.parentMessageId === input.id || (inputTurn && turnId(message) === inputTurn))) || null;
 }
 
-const terminalInputStates = new Set(["completed", "failed", "interrupted", "cancelled"]);
+const failedTurnStatuses = new Set(["failed", "interrupted", "aborted", "cancelled", "canceled"]);
 const NO_FINAL_GRACE_MS = 3000;
+
+// Whether the runtime turn that took this input has ended, from the
+// runtime's own turn record. Input state is not evidence: the Codex adapter
+// marks an input "completed" as soon as turn/start is accepted while the turn
+// keeps running. Unknown (no turn id yet, or the runtime has moved on) is
+// treated as not ended, so a reply is never declared missing early.
+export function inputTurnOutcome(input = {}, thread = {}) {
+  const inputTurn = turnId(input);
+  const runtime = thread?.runtime || {};
+  if (!inputTurn || String(runtime.activeTurnId || "") === inputTurn) return null;
+  if (String(runtime.lastTurnId || "") !== inputTurn) return null;
+  const status = String(runtime.lastTurnStatus || "").toLowerCase();
+  if (status === "completed") return "completed";
+  return failedTurnStatuses.has(status) ? "failed" : null;
+}
 
 function sleep(ms, signal) {
   return new Promise((resolve) => {
@@ -131,11 +146,15 @@ export async function waitForBridgeReply(threadId, messageId, principal, { timeo
     if (input.state === "failed" || input.state === "interrupted" || input.state === "cancelled") {
       return { status: "failed", inputState: input.state, error: String(input.error || "").slice(0, 500) || null };
     }
-    // A finished input whose final never appears (e.g. an interrupted turn)
-    // is reported after a short grace instead of waiting for the deadline.
-    if (terminalInputStates.has(input.state)) {
+    // Only the runtime's record that this input's own turn ended counts; the
+    // final may be projected just after it, hence the short grace.
+    const outcome = inputTurnOutcome(input, await getThread(threadId, env).catch(() => null));
+    if (outcome === "failed") return { status: "failed", inputState: input.state || null, error: "turn_failed" };
+    if (outcome === "completed") {
       terminalSince ||= Date.now();
-      if (Date.now() - terminalSince >= NO_FINAL_GRACE_MS) return { status: "completed_without_reply", inputState: input.state, reason: "no_final_answer" };
+      if (Date.now() - terminalSince >= NO_FINAL_GRACE_MS) return { status: "completed_without_reply", inputState: input.state || null, reason: "no_final_answer" };
+    } else {
+      terminalSince = 0;
     }
     if (Date.now() >= deadline || signal?.aborted) {
       return { status: "still_working", inputState: input.state || null, hint: "Call wait_for_reply again, or subscribe to thread.message.created." };

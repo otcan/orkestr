@@ -262,8 +262,14 @@ server for clients such as ChatGPT plugins:
   at most 45 s for the answer to exactly that input: a completed final whose
   `parentMessageId` is the input, or one from the same runtime turn when
   several inputs were batched; later finals for other inputs never count. It
-  returns `answered`, `failed`, `completed_without_reply` (NO_REPLY, or the
-  input finished without a final) or `still_working`. When the client accepts
+  returns `answered`, `failed`, `completed_without_reply` (a NO_REPLY final,
+  or the runtime recorded the input's own turn as completed without a final)
+  or `still_working`. Input state is not turn evidence: Codex marks an input
+  completed as soon as `turn/start` is accepted, so only the runtime's
+  `lastTurnId`/`lastTurnStatus` for that turn ends a wait early; without such
+  evidence the wait runs to its timeout. Protocol errors (header mismatch,
+  unsupported version, notifications) are answered before any streaming and
+  keep their HTTP status. When the client accepts
   `text/event-stream`, the call is answered as an SSE stream that sends
   keep-alive comments every 2 s, so idle or first-byte timeouts cannot cut it
   off; a client disconnect cancels the wait. `get_thread_status` reports

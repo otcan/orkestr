@@ -10,6 +10,7 @@ import { listEvents } from "../packages/storage/src/store.js";
 import { closeThreadMessageRegistryCache } from "../packages/storage/src/thread-message-registry.js";
 
 const REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect";
+let lastAuthorization = "";
 const META = { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
 const envKeys = ["ORKESTR_HOME", "ORKESTR_ADMIN_USER_ID", "ORKESTR_AUTH_REQUIRED", "ORKESTR_HOST_BOUNDARIES", "ORKESTR_AUTO_RUN_THREAD_INPUT",
   "ORKESTR_RECOVER_RUNNING_ON_START", "ORKESTR_WHATSAPP_AUTOSTART", "WHATSAPP_LOCAL_AUTOSTART", "ORKESTR_THREAD_BRIDGE_ENABLED",
@@ -46,6 +47,7 @@ async function startConnected(t) {
   const code = new URL(decision.headers.get("location")).searchParams.get("code");
   const tokens = await (await fetch(`${base}/mcp-oauth/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: REDIRECT, client_id: registration.client_id, code_verifier: verifier, resource: `${base}/mcp` }) })).json();
+  lastAuthorization = `Bearer ${tokens.access_token}`;
   let id = 0;
   const call = (name, args, accept = "application/json, text/event-stream", signal) => fetch(`${base}/mcp`, {
     method: "POST", signal,
@@ -110,4 +112,24 @@ test("a client disconnect cancels the wait and is recorded", async (t) => {
   assert.equal(record.clientClosed, true);
   assert.equal(record.outcome, "client_closed");
   assert.ok(record.durationMs < 5000, "the server stopped waiting after the disconnect");
+});
+
+test("protocol errors on a long-running call keep their HTTP status instead of becoming a 200 stream", async (t) => {
+  const { base, messageId } = await startConnected(t);
+  const body = { jsonrpc: "2.0", id: 99, method: "tools/call", params: { name: "wait_for_reply", arguments: { thread_id: "thread-w", message_id: messageId }, _meta: META } };
+  const mismatch = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream",
+    authorization: lastAuthorization, "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": "read_thread" }, body: JSON.stringify(body) });
+  assert.equal(mismatch.status, 400);
+  assert.match(mismatch.headers.get("content-type"), /application\/json/);
+  assert.equal((await mismatch.json()).error.code, -32020);
+  const oldVersion = { ...body, params: { ...body.params, _meta: { ...META, "io.modelcontextprotocol/protocolVersion": "1900-01-01" } } };
+  const unsupported = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream",
+    authorization: lastAuthorization, "mcp-protocol-version": "1900-01-01", "mcp-method": "tools/call", "mcp-name": "wait_for_reply" }, body: JSON.stringify(oldVersion) });
+  assert.equal(unsupported.status, 400);
+  assert.equal((await unsupported.json()).error.code, -32022);
+  const { id: _id, ...notification } = body;
+  const accepted = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream",
+    authorization: lastAuthorization, "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": "wait_for_reply" }, body: JSON.stringify(notification) });
+  assert.equal(accepted.status, 202);
+  assert.equal(accepted.headers.get("content-type"), null);
 });

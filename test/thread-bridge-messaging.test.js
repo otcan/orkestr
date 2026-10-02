@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appendThreadMessage, createThread, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser } from "../packages/core/src/users.js";
 import { listBridgeThreads, readBridgeChanges, readBridgeHistory } from "../packages/core/src/thread-bridge.js";
 import { bridgeThreadStatus, sendBridgeMessage, waitForBridgeReply } from "../packages/core/src/thread-bridge-messaging.js";
@@ -171,9 +171,11 @@ test("wait_for_reply reports turns that finish without a reply, and stops when c
   await appendThreadMessage("thread-a", finalFor(silent.messageId, "NO_REPLY"), env);
   assert.equal((await waitForBridgeReply("thread-a", silent.messageId, principal, { timeoutSeconds: 1 }, env)).status, "completed_without_reply");
 
-  const interrupted = await sendBridgeMessage("thread-a", { text: "Gets interrupted", requestId: "no-final" }, principal, env, NO_DELIVERY);
-  await updateThreadMessage("thread-a", interrupted.messageId, { state: "completed" }, env);
-  const noFinal = await waitForBridgeReply("thread-a", interrupted.messageId, principal, { timeoutSeconds: 10, pollMs: 100 }, env);
+  // Only the runtime's record that this input's own turn completed counts.
+  const noReply = await sendBridgeMessage("thread-a", { text: "Ends without a final", requestId: "no-final" }, principal, env, NO_DELIVERY);
+  await updateThreadMessage("thread-a", noReply.messageId, { state: "completed", executorTurnId: "turn_quiet" }, env);
+  await updateThread("thread-a", { runtime: { activeTurnId: null, lastTurnId: "turn_quiet", lastTurnStatus: "completed", state: "ready" } }, env);
+  const noFinal = await waitForBridgeReply("thread-a", noReply.messageId, principal, { timeoutSeconds: 10, pollMs: 100 }, env);
   assert.equal(noFinal.status, "completed_without_reply");
   assert.equal(noFinal.reason, "no_final_answer");
 
@@ -184,4 +186,38 @@ test("wait_for_reply reports turns that finish without a reply, and stops when c
   const stopped = await waitForBridgeReply("thread-a", cancelled.messageId, principal, { timeoutSeconds: 30, pollMs: 1000, signal: controller.signal }, env);
   assert.equal(stopped.status, "still_working");
   assert.ok(Date.now() - started < 2000, "an aborted wait returns promptly");
+});
+
+test("Codex acceptance lifecycle: an input marked completed at turn/start is not a finished turn", async (t) => {
+  const env = await fixture(t);
+  // Real Codex adapter: turn/start accepted -> input completed with its turn
+  // id immediately, runtime active on that turn, answer arrives later.
+  const sent = await sendBridgeMessage("thread-a", { text: "Codex task", requestId: "codex-accept" }, principal, env, NO_DELIVERY);
+  await updateThreadMessage("thread-a", sent.messageId, { state: "completed", deliveryState: "delivered", codexTurnId: "turn_codex_1" }, env);
+  await updateThread("thread-a", { state: "working", runtime: { runtimeKind: "codex-app-server", activeTurnId: "turn_codex_1", state: "working" } }, env);
+  const started = Date.now();
+  const waiting = waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 15, pollMs: 100 }, env);
+  setTimeout(async () => {
+    // Codex projects the final with the turn id, then records the turn end.
+    await appendThreadMessage("thread-a", { role: "assistant", source: "codex-app-server", phase: "final_answer", state: "completed", text: "Codex answer", codexTurnId: "turn_codex_1" }, env);
+    await updateThread("thread-a", { state: "ready", runtime: { runtimeKind: "codex-app-server", activeTurnId: null, lastTurnId: "turn_codex_1", lastTurnStatus: "completed", state: "ready" } }, env);
+  }, 4500);
+  const result = await waiting;
+  assert.equal(result.status, "answered", "no false completed_without_reply while the Codex turn runs past the grace period");
+  assert.equal(result.reply.text, "Codex answer");
+  assert.ok(Date.now() - started >= 4000);
+
+  const running = await sendBridgeMessage("thread-a", { text: "Still running", requestId: "codex-running" }, principal, env, NO_DELIVERY);
+  await updateThreadMessage("thread-a", running.messageId, { state: "completed", codexTurnId: "turn_codex_2" }, env);
+  await updateThread("thread-a", { runtime: { runtimeKind: "codex-app-server", activeTurnId: "turn_codex_2", lastTurnId: "turn_codex_1", lastTurnStatus: "completed", state: "working" } }, env);
+  assert.equal((await waitForBridgeReply("thread-a", running.messageId, principal, { timeoutSeconds: 4, pollMs: 100 }, env)).status, "still_working");
+
+  await updateThread("thread-a", { runtime: { runtimeKind: "codex-app-server", activeTurnId: null, lastTurnId: "turn_codex_2", lastTurnStatus: "failed", state: "ready" } }, env);
+  assert.equal((await waitForBridgeReply("thread-a", running.messageId, principal, { timeoutSeconds: 4, pollMs: 100 }, env)).status, "failed");
+
+  // No evidence about this input's turn (runtime moved on): keep waiting.
+  const unknown = await sendBridgeMessage("thread-a", { text: "Unknown turn", requestId: "codex-unknown" }, principal, env, NO_DELIVERY);
+  await updateThreadMessage("thread-a", unknown.messageId, { state: "completed", codexTurnId: "turn_codex_3" }, env);
+  await updateThread("thread-a", { runtime: { runtimeKind: "codex-app-server", activeTurnId: null, lastTurnId: "turn_codex_4", lastTurnStatus: "completed", state: "ready" } }, env);
+  assert.equal((await waitForBridgeReply("thread-a", unknown.messageId, principal, { timeoutSeconds: 4, pollMs: 100 }, env)).status, "still_working");
 });

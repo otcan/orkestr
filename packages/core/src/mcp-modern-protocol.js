@@ -66,6 +66,18 @@ export function discoverResult() {
   };
 }
 
+// Protocol-level checks that decide the HTTP status (discover without
+// version, header/version validation, notifications). Returns a response or
+// null when the request is valid and must be executed. Runs before any
+// streaming starts so these errors keep their 4xx status.
+export function preflightModernMcpRequest(body = {}, headers = {}) {
+  if (body.method === "server/discover" && !body.params?._meta?.[META_VERSION]) return null;
+  const invalid = validate(body, headers);
+  if (invalid) return invalid;
+  if (body.id === undefined || body.id === null) return { status: 202, body: null };
+  return null;
+}
+
 // Returns { status, body } (body null for 202). `principal` is null when the
 // request carried no valid token; only server/discover is answered then.
 /** @param {{ body: any, headers?: Record<string, any>, principal?: any, env?: Record<string, any>, eventOptions?: Record<string, any>, signal?: any }} input */
@@ -73,9 +85,8 @@ export async function handleModernMcpRequest({ body, headers = {}, principal = n
   if (body.method === "server/discover" && !body.params?._meta?.[META_VERSION]) {
     return complete(body.id ?? null, discoverResult());
   }
-  const invalid = validate(body, headers);
-  if (invalid) return invalid;
-  if (body.id === undefined || body.id === null) return { status: 202, body: null };
+  const early = preflightModernMcpRequest(body, headers);
+  if (early) return early;
   const params = body.params || {};
   switch (body.method) {
     case "server/discover":
