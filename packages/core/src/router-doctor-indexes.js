@@ -25,7 +25,7 @@ export function boundedResult(promise, ms = 5_000, fallback = {}) {
 }
 
 function deliveredAssistantMessage(message = {}) {
-  if (message.role !== "assistant") return false;
+  if (message.role !== "assistant" || lower(message.source) === "thread_bridge_agent") return false;
   if (lower(message.deliveryState) === "failed") return false;
   return ["completed", "delivered", ""].includes(lower(message.state)) ||
     ["completed", "delivered", ""].includes(lower(message.deliveryState));

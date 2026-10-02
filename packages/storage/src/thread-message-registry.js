@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { dataPaths, ensureDataDirs } from "./paths.js";
 import { readJson } from "./store.js";
+import { ensureThreadMessageSchema } from "./thread-message-schema.js";
+import { ensureThreadBridgeSchema, recordThreadBridgeChange, readThreadBridgeChanges, threadBridgeOwner, writeThreadBridgeReply } from "./thread-bridge-journal.js";
 const dbCache = new Map();
 const migratedThreads = new Map();
 let sqliteModulePromise = null;
@@ -22,60 +24,6 @@ async function loadSqlite() {
   }
 }
 
-function ensureSchema(db) {
-  db.exec(`
-    create table if not exists orkestr_thread_messages (
-      thread_id text not null,
-      id text not null,
-      position integer not null,
-      cursor integer not null,
-      role text,
-      state text,
-      source text,
-      phase text,
-      connector text,
-      chat_id text,
-      parent_message_id text,
-      event_id text,
-      codex_thread_id text,
-      codex_turn_id text,
-      codex_item_id text,
-      client_message_id text,
-      external_id text,
-      created_at text,
-      updated_at text,
-      data text not null,
-      primary key(thread_id, id),
-      unique(thread_id, position)
-    );
-    create index if not exists idx_orkestr_thread_messages_cursor
-      on orkestr_thread_messages(thread_id, cursor, position);
-    create index if not exists idx_orkestr_thread_messages_state
-      on orkestr_thread_messages(thread_id, state, position);
-    create index if not exists idx_orkestr_thread_messages_phase
-      on orkestr_thread_messages(thread_id, phase, position);
-    create index if not exists idx_orkestr_thread_messages_recent_delivery
-      on orkestr_thread_messages(thread_id, source, connector, role, state, created_at, position);
-    create index if not exists idx_orkestr_thread_messages_client
-      on orkestr_thread_messages(thread_id, client_message_id);
-    create index if not exists idx_orkestr_thread_messages_external
-      on orkestr_thread_messages(thread_id, external_id, chat_id);
-    create index if not exists idx_orkestr_thread_messages_parent
-      on orkestr_thread_messages(thread_id, parent_message_id, position);
-    create index if not exists idx_orkestr_thread_messages_event
-      on orkestr_thread_messages(thread_id, event_id);
-    create index if not exists idx_orkestr_thread_messages_codex_item
-      on orkestr_thread_messages(thread_id, codex_thread_id, codex_turn_id, codex_item_id, role, phase);
-    create table if not exists orkestr_thread_message_meta (
-      thread_id text primary key,
-      source_signature text not null default '',
-      revision integer not null default 0,
-      migrated_at text,
-      updated_at text not null
-    );
-  `);
-}
-
 async function openDatabase(env = process.env) {
   if (!sqliteThreadMessageStore(env)) return null;
   const sqlite = await loadSqlite();
@@ -86,7 +34,8 @@ async function openDatabase(env = process.env) {
   db.exec("pragma journal_mode = WAL");
   db.exec("pragma synchronous = NORMAL");
   db.exec("pragma busy_timeout = 5000");
-  ensureSchema(db);
+  ensureThreadMessageSchema(db);
+  ensureThreadBridgeSchema(db);
   dbCache.set(paths.threadMessagesDb, db);
   return db;
 }
@@ -197,6 +146,7 @@ async function ensureMigrated(db, threadId, env = process.env) {
 
   const signature = await sourceSignature(threadId, env);
   const messages = signature === "missing" ? [] : await readJson(sourcePath(threadId, env), []);
+  const bridgeOwner = await threadBridgeOwner(threadId, env);
   db.exec("begin immediate");
   try {
     db.prepare("delete from orkestr_thread_messages where thread_id = ?").run(threadId);
@@ -205,6 +155,7 @@ async function ensureMigrated(db, threadId, env = process.env) {
     for (const message of Array.isArray(messages) ? messages : []) {
       position += 1;
       insertMessage(insert, threadId, message, position);
+      recordThreadBridgeChange(db, threadId, null, message, bridgeOwner);
     }
     touchMeta(db, threadId, { source: signature, migrated: true });
     db.exec("commit");
@@ -370,10 +321,13 @@ export async function appendThreadMessageRecord(threadId, message, env = process
   const db = await openDatabase(env);
   if (!db) return false;
   await ensureMigrated(db, threadId, env);
+  const bridgeOwner = await threadBridgeOwner(threadId, env);
   db.exec("begin immediate");
   try {
     const next = db.prepare("select coalesce(max(position), 0) + 1 as position from orkestr_thread_messages where thread_id = ?").get(threadId);
+    const previous = db.prepare("select data from orkestr_thread_messages where thread_id = ? and id = ?").get(threadId, String(message?.id || ""));
     insertMessage(insertStatement(db), threadId, message, Number(next.position || 1));
+    recordThreadBridgeChange(db, threadId, previous ? JSON.parse(previous.data) : null, message, bridgeOwner);
     touchMeta(db, threadId);
     db.exec("commit");
   } catch (error) {
@@ -389,9 +343,12 @@ export async function updateThreadMessageRecord(threadId, messageId, message, en
   await ensureMigrated(db, threadId, env);
   const row = db.prepare("select position from orkestr_thread_messages where thread_id = ? and id = ?").get(threadId, messageId);
   if (!row) return null;
+  const bridgeOwner = await threadBridgeOwner(threadId, env);
   db.exec("begin immediate");
   try {
+    const previous = db.prepare("select data from orkestr_thread_messages where thread_id = ? and id = ?").get(threadId, messageId);
     insertMessage(insertStatement(db), threadId, message, Number(row.position || 1));
+    recordThreadBridgeChange(db, threadId, JSON.parse(previous.data), message, bridgeOwner);
     touchMeta(db, threadId);
     db.exec("commit");
   } catch (error) {
@@ -405,15 +362,20 @@ export async function replaceThreadMessageRecords(threadId, messages, env = proc
   const db = await openDatabase(env);
   if (!db) return false;
   await ensureMigrated(db, threadId, env);
+  const bridgeOwner = await threadBridgeOwner(threadId, env);
   db.exec("begin immediate");
   try {
+    const previous = new Map(db.prepare("select id, data from orkestr_thread_messages where thread_id = ?").all(threadId).map(row => [row.id, JSON.parse(row.data)]));
     db.prepare("delete from orkestr_thread_messages where thread_id = ?").run(threadId);
     const insert = insertStatement(db);
     let position = 0;
     for (const message of Array.isArray(messages) ? messages : []) {
       position += 1;
       insertMessage(insert, threadId, message, position);
+      recordThreadBridgeChange(db, threadId, previous.get(message.id) || null, message, bridgeOwner);
+      previous.delete(message.id);
     }
+    for (const message of previous.values()) recordThreadBridgeChange(db, threadId, message, null, bridgeOwner);
     touchMeta(db, threadId);
     db.exec("commit");
   } catch (error) {
@@ -428,8 +390,12 @@ export async function deleteThreadMessageRecords(threadId, env = process.env) {
   if (!db) return false;
   await ensureMigrated(db, threadId, env);
   await fs.rm(sourcePath(threadId, env), { force: true });
+  const bridgeOwner = await threadBridgeOwner(threadId, env);
   db.exec("begin immediate");
   try {
+    for (const row of db.prepare("select data from orkestr_thread_messages where thread_id = ?").all(threadId)) {
+      recordThreadBridgeChange(db, threadId, JSON.parse(row.data), null, bridgeOwner);
+    }
     db.prepare("delete from orkestr_thread_messages where thread_id = ?").run(threadId);
     touchMeta(db, threadId, { source: "missing" });
     db.exec("commit");
@@ -496,4 +462,20 @@ export async function closeThreadMessageRegistryCache() {
       // Best-effort cleanup for one-shot tests and CLI processes.
     }
   }
+}
+
+// Internal bridge primitives. Callers must authenticate and authorize first.
+export async function threadBridgeChanges(ownerId, options, env = process.env) {
+  const db = await openDatabase(env);
+  if (!db) throw Object.assign(new Error("bridge_requires_sqlite"), { statusCode: 503 });
+  return readThreadBridgeChanges(db, ownerId, options);
+}
+
+export async function appendThreadBridgeReply(threadId, message, identity, env = process.env) {
+  const db = await openDatabase(env);
+  if (!db) throw Object.assign(new Error("bridge_requires_sqlite"), { statusCode: 503 });
+  await ensureMigrated(db, threadId, env);
+  return writeThreadBridgeReply(db, threadId, message, identity,
+    (stored, position) => insertMessage(insertStatement(db), threadId, stored, position),
+    () => touchMeta(db, threadId));
 }
