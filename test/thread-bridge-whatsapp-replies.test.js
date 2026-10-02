@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { appendThreadMessage, createThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
+import { appendAgentMessage } from "../packages/core/src/messages.js";
 import { createUser } from "../packages/core/src/users.js";
 import { replyToBridgeThread } from "../packages/core/src/thread-bridge.js";
 import { sendBridgeMessage } from "../packages/core/src/thread-bridge-messaging.js";
@@ -564,6 +565,27 @@ test("ambiguous active MCP inputs fail closed instead of inheriting the thread's
   });
   assert.equal(result.delivered.length, 0);
   assert.equal(posts.length, 0);
+});
+
+test("legacy agent assistant replies retain their in-memory WhatsApp parent route", async (t) => {
+  const env = await fixture(t);
+  const parent = await appendAgentMessage("legacy-agent", {
+    role: "user", source: "whatsapp_inbound", state: "completed", connector: "whatsapp",
+    chatId: "synthetic-agent-chat", accountId: "synthetic-agent-account", text: "Synthetic legacy agent input.",
+  }, env);
+  const reply = await appendAgentMessage("legacy-agent", {
+    role: "assistant", source: "legacy-agent-runtime", state: "completed", parentMessageId: parent.id,
+    text: "Synthetic legacy agent answer.",
+  }, env);
+  const posts = [];
+  const result = await deliverWhatsAppReplies(env, async (_url, options = {}) => {
+    if (options.method === "POST") posts.push(JSON.parse(String(options.body || "{}")));
+    return response({ ok: true, ready: true, accounts: [{ id: "synthetic-agent-account", ready: true }], ids: ["synthetic-agent-receipt"] });
+  });
+  assert.equal(result.delivered.some((delivery) => delivery.messageId === reply.id), true);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].to, "synthetic-agent-chat");
+  assert.equal(posts[0].accountId, "synthetic-agent-account");
 });
 
 test("passive comments never qualify for execution-answer WhatsApp delivery", async (t) => {

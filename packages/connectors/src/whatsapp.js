@@ -6192,8 +6192,9 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
     const messageSetKey = outboundMirrorMessageSetKey({ kind, agentId, threadId });
     for (const [messageIndex, message] of messages.entries()) {
       const messageCursor = outboundMirrorMessageCursor(message, messageIndex);
-      const parent = kind === "thread" && message.parentMessageId
-        ? messages.find((entry) => entry.id === message.parentMessageId) || await getThreadMessage(threadId, message.parentMessageId, env)
+      const parent = message.parentMessageId
+        ? messages.find((entry) => entry.id === message.parentMessageId) ||
+          (kind === "thread" ? await getThreadMessage(threadId, message.parentMessageId, env) : null)
         : null;
       if (kind === "thread" && (
         message.bridgeWhatsAppReply === false ||
