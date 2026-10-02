@@ -25,6 +25,7 @@ import { clearWhatsAppDeliveryIdleCache } from "../../../packages/connectors/src
 import { mailboxThreadDeliveryPumpIntervalMs, runMailboxDeliveryPump } from "../../../packages/connectors/src/mailbox-delivery-pump.js";
 import { runThreadWatchPump, threadWatchPumpIntervalMs } from "../../../packages/core/src/thread-watch-pump.js";
 import { ensureExistingWorkerWatches } from "../../../packages/core/src/thread-watches.js";
+import { mcpEventDeliveryIntervalMs, runMcpEventDelivery } from "../../../packages/core/src/mcp-event-delivery.js";
 import { mailboxVmRelayPumpIntervalMs, runVmMailboxRelayPump } from "../../../packages/connectors/src/mailbox-vm-relay.js";
 import { migrateThreadMessageStore } from "../../../packages/storage/src/thread-message-registry.js";
 import {
@@ -686,6 +687,13 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   });
   const threadWatchPoll = setInterval(() => void runThreadWatches("server.threadWatchPump"), threadWatchPumpIntervalMs(serverEnv));
   threadWatchPoll.unref?.();
+  const mcpEventPoll = setInterval(() => {
+    if (serverEnv.ORKESTR_THREAD_BRIDGE_ENABLED !== "1") return;
+    void runMcpEventDelivery(serverEnv).catch((error) => {
+      reportServerError(serverEnv, { source: "server.mcpEvents", code: "mcp_event_delivery_failed", message: error?.message || String(error), error });
+    });
+  }, mcpEventDeliveryIntervalMs(serverEnv));
+  mcpEventPoll.unref?.();
   const mailboxVmRelayPoll = setInterval(() => {
     runVmMailboxRelayPump(serverEnv).catch((error) => {
       reportServerError(serverEnv, {
@@ -782,6 +790,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     clearInterval(whatsappDeliveryPoll);
     clearInterval(mailboxDeliveryPoll);
     clearInterval(threadWatchPoll);
+    clearInterval(mcpEventPoll);
     clearInterval(mailboxVmRelayPoll);
     clearInterval(inboundAttachmentCleanupPoll);
     whatsappDeliveryScheduler.close();

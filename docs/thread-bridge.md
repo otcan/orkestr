@@ -269,8 +269,36 @@ server for clients such as ChatGPT plugins:
   person (WhatsApp, web UI); timers, workers, watches, mailbox routing and CLI
   sends are `automation`.
 
-MCP Events (push subscriptions) are not implemented yet; clients poll
-`read_changes`.
+The endpoint is dual-era: requests carrying MCP 2.0 (`2026-07-28`) `_meta`
+are served statelessly (`server/discover`, mirrored-header validation,
+`resultType`), while legacy clients that open with `initialize` use the SDK
+transport. A browser opening `/mcp` gets a page with the address, setup steps
+and (signed in) the connected assistants with a revoke button. The OAuth server
+also accepts Client ID Metadata Documents (HTTPS `client_id`) and returns `iss`
+in authorization responses.
+
+### Live events (MCP Events)
+
+- `events/list` offers `thread.message.created` (arguments: optional
+  `thread_id`, `actors` subset of `human`/`assistant`/`automation`, default
+  human + assistant). The connected agent's own comments are never echoed.
+- `events/subscribe` requires `delivery.mode: "webhook"`, a public HTTPS URL
+  and a `whsec_` secret (24-64 bytes). The callback is verified with a signed
+  `{type: "verification", challenge}` request whose challenge must be echoed;
+  successful verification is cached for 24 h per client and URL.
+  Subscriptions are idempotent by owner, client, URL, event and arguments,
+  live 24 h by default (1 h - 7 d) and are stored in
+  `secrets/mcp-event-subscriptions.json`.
+- Delivery (`mcp-event-delivery.js`, every 5 s) replays the bridge journal
+  from each subscription's cursor, re-checks the grant each run, and posts one
+  Standard Webhooks-signed event per request (`webhook-id` = deterministic
+  `eventId`, `x-mcp-subscription-id`, body <= 256 KiB, text <= 8000 chars).
+  The cursor advances only after a 2xx; failures back off exponentially (up to
+  10 attempts per event), `410` removes the subscription, `413` skips the
+  event, and a revoked grant removes it.
+- Outbound requests resolve DNS once, refuse private/local/reserved
+  addresses, pin the validated address with the original hostname for TLS and
+  never follow redirects (`safe-public-fetch.js`).
 
 ## Remaining work before a live connection
 

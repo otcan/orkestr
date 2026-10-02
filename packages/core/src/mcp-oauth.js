@@ -9,6 +9,7 @@ import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.
 import { dataPaths } from "../../storage/src/paths.js";
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { explicitCanonicalAppBase } from "./canonical-app-links.js";
+import { safePublicFetch } from "./safe-public-fetch.js";
 
 const CODE_TTL_MS = 5 * 60 * 1000;
 const ACCESS_TTL_MS = 60 * 60 * 1000;
@@ -56,6 +57,8 @@ export function authorizationServerMetadata(env = process.env) {
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
     scopes_supported: [...MCP_OAUTH_SCOPES],
+    client_id_metadata_document_supported: true,
+    authorization_response_iss_parameter_supported: true,
   };
 }
 
@@ -111,6 +114,51 @@ function redirectAllowed(uri, env) {
   return parsed.protocol === "https:" && hosts.some((host) => parsed.hostname === host || parsed.hostname.endsWith(`.${host}`));
 }
 
+// Client ID Metadata Documents: an HTTPS client_id names a JSON document the
+// client hosts. Fetched without redirects to public addresses only, cached.
+const metadataCache = new Map();
+const METADATA_TTL_MS = 60 * 60 * 1000;
+
+function metadataClientId(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.pathname.length > 1 ? url.toString() : "";
+  } catch { return ""; }
+}
+
+async function fetchClientMetadata(clientId, env, fetchImpl) {
+  const cached = metadataCache.get(clientId);
+  if (cached && cached.expiresAt > Date.now()) return cached.client;
+  let response;
+  try { response = await fetchImpl(clientId, { headers: { accept: "application/json" }, maxBytes: 65_536 }); } catch (error) {
+    throw oauthError("invalid_client", `Client metadata document unavailable: ${clean(error?.message)}`);
+  }
+  let doc = null;
+  try { doc = response.status === 200 ? JSON.parse(response.text) : null; } catch { doc = null; }
+  if (!doc || doc.client_id !== clientId || !Array.isArray(doc.redirect_uris) || !doc.redirect_uris.length || !clean(doc.client_name)) {
+    throw oauthError("invalid_client", "Client metadata document is invalid.");
+  }
+  const authMethod = clean(doc.token_endpoint_auth_method) || "none";
+  if (authMethod !== "none") throw oauthError("invalid_client", "Only public metadata-document clients (token_endpoint_auth_method none) are supported.");
+  const redirectUris = doc.redirect_uris.map(clean).filter((uri) => redirectAllowed(uri, env));
+  if (!redirectUris.length) throw oauthError("invalid_client", "No allowed redirect_uris in the client metadata document.");
+  const client = { clientId, clientName: clean(doc.client_name).slice(0, 80), redirectUris, authMethod: "none", secretHash: "", metadataDocument: true };
+  metadataCache.set(clientId, { client, expiresAt: Date.now() + METADATA_TTL_MS });
+  return client;
+}
+
+export async function resolveMcpClient(clientId, env = process.env, fetchImpl = safePublicFetch) {
+  const id = clean(clientId);
+  if (metadataClientId(id)) return fetchClientMetadata(metadataClientId(id), env, fetchImpl);
+  return (await readState(env)).clients.find((entry) => entry.clientId === id) || null;
+}
+
+// Grant/agent ids must match the bridge identifier pattern; URL client ids
+// (metadata documents) are mapped to a stable hash.
+export function agentIdForClient(clientId) {
+  return /^[a-zA-Z0-9_.-]{1,100}$/.test(clientId) ? clientId : `mcpdoc_${sha256(clientId).slice(0, 24)}`;
+}
+
 export async function registerMcpClient(body = {}, env = process.env) {
   const redirectUris = Array.isArray(body.redirect_uris) ? body.redirect_uris.map(clean).filter(Boolean) : [];
   if (!redirectUris.length || redirectUris.length > 5) throw oauthError("invalid_redirect_uri", "Provide 1-5 redirect_uris.");
@@ -143,8 +191,8 @@ export async function registerMcpClient(body = {}, env = process.env) {
 }
 
 // Validates an authorization request; returns what the consent page shows.
-export async function validateAuthorizeRequest(query = {}, env = process.env) {
-  const client = (await readState(env)).clients.find((entry) => entry.clientId === clean(query.client_id));
+export async function validateAuthorizeRequest(query = {}, env = process.env, fetchImpl = safePublicFetch) {
+  const client = await resolveMcpClient(query.client_id, env, fetchImpl);
   if (!client) throw oauthError("invalid_client", "Unknown client_id.", 400);
   const redirectUri = clean(query.redirect_uri);
   if (!client.redirectUris.includes(redirectUri)) throw oauthError("invalid_request", "redirect_uri is not registered for this client.", 400);
@@ -180,7 +228,8 @@ export function redirectWith(uri, params = {}) {
 
 async function upsertGrant({ userId, clientId, clientName }, env) {
   const file = grantsPath(env);
-  const grantId = `grant_${clientId}`;
+  const agentId = agentIdForClient(clientId);
+  const grantId = `grant_${agentId}`;
   await withStorageFileLock(file, async () => {
     const grants = await readJson(file, []);
     const list = Array.isArray(grants) ? grants.filter((grant) => grant?.id !== grantId) : [];
@@ -188,7 +237,8 @@ async function upsertGrant({ userId, clientId, clientName }, env) {
       id: grantId,
       enabled: true,
       ownerUserId: userId,
-      agentId: clientId,
+      agentId,
+      clientId,
       agentName: clientName,
       issuer: "orkestr",
       authMethod: MCP_OAUTH_AUTH_METHOD,
@@ -221,7 +271,7 @@ export async function decideConsent({ consentId, userId, sessionId, approve }, e
     });
   });
   await appendEvent({ type: "mcp_oauth_consent_approved", userId, clientId: request.client.clientId, grantId }, env);
-  return redirectWith(request.redirectUri, { code, state: request.state });
+  return redirectWith(request.redirectUri, { code, state: request.state, iss: mcpPublicBase(env) });
 }
 
 function clientCredentials(body = {}, authorization = "") {
@@ -233,8 +283,8 @@ function clientCredentials(body = {}, authorization = "") {
   return { clientId: clean(body.client_id), secret: clean(body.client_secret) };
 }
 
-function authenticateClient(state, credentials) {
-  const client = state.clients.find((entry) => entry.clientId === credentials.clientId);
+function authenticateClient(state, credentials, resolved = null) {
+  const client = resolved || state.clients.find((entry) => entry.clientId === credentials.clientId);
   if (!client) throw oauthError("invalid_client", "Unknown client.", 401);
   if (client.authMethod !== "none") {
     const given = Buffer.from(sha256(credentials.secret || ""));
@@ -252,10 +302,12 @@ function issueTokens(state, { clientId, userId, grantId, resource, scopes }) {
   return { access_token: access, token_type: "Bearer", expires_in: ACCESS_TTL_MS / 1000, refresh_token: refresh, scope: scopes.join(" ") };
 }
 
-export async function exchangeMcpToken(body = {}, authorization = "", env = process.env) {
+export async function exchangeMcpToken(body = {}, authorization = "", env = process.env, fetchImpl = safePublicFetch) {
   const grantType = clean(body.grant_type);
+  const credentials = clientCredentials(body, authorization);
+  const resolved = metadataClientId(credentials.clientId) ? await resolveMcpClient(credentials.clientId, env, fetchImpl) : null;
   return mutate(env, (state) => {
-    const client = authenticateClient(state, clientCredentials(body, authorization));
+    const client = authenticateClient(state, credentials, resolved);
     if (grantType === "authorization_code") {
       const hash = sha256(clean(body.code));
       const code = state.codes.find((entry) => entry.hash === hash);
@@ -293,10 +345,35 @@ export async function mcpPrincipalFromAuthorization(authorization = "", env = pr
   return {
     kind: "delegated-agent",
     ownerUserId: entry.userId,
-    agentId: entry.clientId,
+    agentId: agentIdForClient(entry.clientId),
     grantId: entry.grantId,
     issuer: "orkestr",
     authMethod: MCP_OAUTH_AUTH_METHOD,
     scopes: entry.scopes,
   };
+}
+
+// Connections (grants created by consent) for the signed-in owner.
+export async function listMcpConnections(userId, env = process.env) {
+  const grants = await readJson(grantsPath(env), []);
+  return (Array.isArray(grants) ? grants : [])
+    .filter((grant) => grant?.authMethod === MCP_OAUTH_AUTH_METHOD && grant.ownerUserId === userId && grant.enabled === true && Date.parse(grant.expiresAt) > Date.now())
+    .map((grant) => ({ grantId: grant.id, clientName: grant.agentName || "MCP client", createdAt: grant.createdAt, expiresAt: grant.expiresAt, agentId: grant.agentId }));
+}
+
+// Revoking removes the grant and every token of that client for this owner;
+// event subscriptions stop at their next delivery run (grant check).
+export async function revokeMcpConnection(grantId, userId, env = process.env) {
+  const file = grantsPath(env);
+  let revoked = null;
+  await withStorageFileLock(file, async () => {
+    const grants = await readJson(file, []);
+    const list = Array.isArray(grants) ? grants : [];
+    revoked = list.find((grant) => grant?.id === clean(grantId) && grant.ownerUserId === userId && grant.authMethod === MCP_OAUTH_AUTH_METHOD) || null;
+    if (revoked) await writeSecretJson(file, list.filter((grant) => grant !== revoked));
+  });
+  if (!revoked) throw oauthError("not_found", "Unknown connection.", 404);
+  await mutate(env, (state) => { state.tokens = state.tokens.filter((entry) => !(entry.grantId === revoked.id && entry.userId === userId)); });
+  await appendEvent({ type: "mcp_oauth_connection_revoked", userId, grantId: revoked.id }, env);
+  return { grantId: revoked.id, clientName: revoked.agentName || "" };
 }

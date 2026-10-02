@@ -5,15 +5,21 @@ import {
   createConsent,
   decideConsent,
   exchangeMcpToken,
+  listMcpConnections,
   mcpOAuthEnabled,
   mcpPrincipalFromAuthorization,
   mcpPublicBase,
+  mcpResourceUrl,
   protectedResourceMetadata,
   registerMcpClient,
+  revokeMcpConnection,
   revokeMcpToken,
   validateAuthorizeRequest,
 } from "../../../../../packages/core/src/mcp-oauth.js";
 import { createThreadBridgeMcpServer } from "../../../../../packages/core/src/thread-bridge-mcp.js";
+import { handleModernMcpRequest, isModernMcpRequest } from "../../../../../packages/core/src/mcp-modern-protocol.js";
+import { mcpLandingPage } from "../../../../../packages/core/src/mcp-landing-page.js";
+import { readSubscriptions } from "../../../../../packages/core/src/mcp-events.js";
 import { keycloakOidcEnabled } from "../../../../../packages/core/src/keycloak-oidc.js";
 import { httpError } from "../../common/http.js";
 
@@ -36,6 +42,19 @@ function signedInUser(request: any) {
   const principal = request.orkestrPrincipal;
   if (!principal || request.orkestrAnonymous === true || !principal.userId) return null;
   return { userId: String(principal.userId), sessionId: String(request.orkestrSecuritySession?.id || "") };
+}
+
+// Browser form posts must come from this origin (CSRF guard on top of the
+// one-time consent id and SameSite session cookie).
+function sameOrigin(request: any) {
+  const origin = String(request.headers?.origin || "");
+  return Boolean(origin) && origin === new URL(mcpPublicBase()).origin;
+}
+
+function unauthorized(response: any) {
+  return response.status(401)
+    .header("www-authenticate", `Bearer resource_metadata="${mcpPublicBase()}/.well-known/oauth-protected-resource/mcp"`)
+    .json({ error: "invalid_token" });
 }
 
 function consentPage({ request, consentId, userId }: any) {
@@ -100,6 +119,7 @@ export class ThreadBridgeMcpController {
     assertEnabled();
     const user = signedInUser(request);
     if (!user) return response.status(401).type("text/plain").send("Sign in to Orkestr first.");
+    if (!sameOrigin(request)) return response.status(403).type("text/plain").send("This approval must be submitted from the Orkestr page.");
     try {
       const location = await decideConsent({ consentId: body.consent_id, userId: user.userId, sessionId: user.sessionId, approve: body.decision === "approve" });
       return response.status(302).header("location", location).send("Redirecting.");
@@ -126,11 +146,14 @@ export class ThreadBridgeMcpController {
   async mcp(@Req() request: any, @Res() response: any) {
     assertEnabled();
     const principal = await mcpPrincipalFromAuthorization(String(request.headers?.authorization || ""));
-    if (!principal) {
-      return response.status(401)
-        .header("www-authenticate", `Bearer resource_metadata="${mcpPublicBase()}/.well-known/oauth-protected-resource/mcp"`)
-        .json({ error: "invalid_token" });
+    const body = request.body;
+    if (isModernMcpRequest(body, request.headers)) {
+      if (!principal && body?.method !== "server/discover") return unauthorized(response);
+      const result = await handleModernMcpRequest({ body, headers: request.headers, principal });
+      if (!result.body) return response.status(result.status).end();
+      return response.status(result.status).json(result.body);
     }
+    if (!principal) return unauthorized(response);
     const server = createThreadBridgeMcpServer({ principal });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     response.once("close", () => {
@@ -141,10 +164,38 @@ export class ThreadBridgeMcpController {
     await transport.handleRequest(request, response, request.body);
   }
 
+  // MCP clients get 405 (no GET stream); a browser gets a page explaining the
+  // address and, when signed in, the assistants connected to the account.
   @Get("mcp")
-  mcpGet(@Res() response: any) {
+  async mcpGet(@Req() request: any, @Query("revoked") revoked = "", @Res() response: any) {
     assertEnabled();
-    return response.status(405).header("allow", "POST").json({ error: "method_not_allowed" });
+    if (!String(request.headers?.accept || "").includes("text/html")) {
+      return response.status(405).header("allow", "POST").json({ error: "method_not_allowed" });
+    }
+    const user = signedInUser(request);
+    const connections = user ? await listMcpConnections(user.userId) : [];
+    const subscriptions = user ? (await readSubscriptions()).subscriptions.filter((entry: any) => entry.ownerUserId === user.userId) : [];
+    return response.status(200).type("text/html").header("x-frame-options", "DENY").send(mcpLandingPage({
+      resourceUrl: mcpResourceUrl(),
+      userId: user?.userId || "",
+      connections,
+      subscriptions,
+      notice: revoked ? "Access revoked." : "",
+    }));
+  }
+
+  @Post("mcp-oauth/connections/revoke")
+  async revokeConnection(@Req() request: any, @Body() body: Record<string, string> = {}, @Res() response: any) {
+    assertEnabled();
+    const user = signedInUser(request);
+    if (!user) return response.status(401).type("text/plain").send("Sign in to Orkestr first.");
+    if (!sameOrigin(request)) return response.status(403).type("text/plain").send("Revoke from the Orkestr page.");
+    try {
+      await revokeMcpConnection(body.grant_id, user.userId);
+      return response.status(303).header("location", "/mcp?revoked=1").send("Revoked.");
+    } catch (error: any) {
+      return response.status(404).type("text/plain").send(error?.description || "Unknown connection.");
+    }
   }
 
   @Delete("mcp")

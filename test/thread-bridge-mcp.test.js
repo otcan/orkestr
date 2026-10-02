@@ -60,13 +60,14 @@ async function connect(base) {
   assert.match(page, /all your threads/);
   const consentId = /name="consent_id" value="([^"]+)"/.exec(page)[1];
   const decision = await fetch(`${base}/mcp-oauth/authorize`, {
-    method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded" },
+    method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", origin: base },
     body: new URLSearchParams({ consent_id: consentId, decision: "approve" }),
   });
   assert.equal(decision.status, 302);
   const location = new URL(decision.headers.get("location"));
   assert.equal(`${location.origin}${location.pathname}`, REDIRECT);
   assert.equal(location.searchParams.get("state"), "xyz");
+  assert.equal(location.searchParams.get("iss"), base);
   const tokenResponse = await fetch(`${base}/mcp-oauth/token`, {
     method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "authorization_code", code: location.searchParams.get("code"), redirect_uri: REDIRECT,
@@ -121,6 +122,34 @@ test("ChatGPT-style OAuth connection reads all threads and comments through MCP"
   const reused = await fetch(`${base}/mcp-oauth/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: tokens.refresh_token, client_id: registration.client_id }) });
   assert.equal(reused.status, 400, "refresh tokens rotate");
+
+  // MCP 2.0 (stateless) over HTTP on the same endpoint.
+  const meta = { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
+  const discover = await (await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2026-07-28", "mcp-method": "server/discover" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "server/discover", params: { _meta: meta } }) })).json();
+  assert.deepEqual(discover.result.capabilities, { tools: {}, events: {} });
+  const modernList = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${refreshed.access_token}`, "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: meta } }) });
+  assert.equal(modernList.status, 200);
+  assert.equal((await modernList.json()).result.tools.length, 4);
+  const modernNoToken = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list", params: { _meta: meta } }) });
+  assert.equal(modernNoToken.status, 401);
+
+  // A browser gets a page with the connection, and can revoke it there.
+  assert.equal((await fetch(`${base}/mcp`)).status, 405, "MCP clients still get 405 on GET");
+  const page = await (await fetch(`${base}/mcp`, { headers: { accept: "text/html" } })).text();
+  assert.match(page, new RegExp(`${base}/mcp`));
+  assert.match(page, /ChatGPT/);
+  const grantId = /name="grant_id" value="([^"]+)"/.exec(page)[1];
+  const crossSite = await fetch(`${base}/mcp-oauth/connections/revoke`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://evil.example" }, body: new URLSearchParams({ grant_id: grantId }) });
+  assert.equal(crossSite.status, 403);
+  const revoke = await fetch(`${base}/mcp-oauth/connections/revoke`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", origin: base }, body: new URLSearchParams({ grant_id: grantId }) });
+  assert.equal(revoke.status, 303);
+  assert.match(await (await fetch(`${base}/mcp?revoked=1`, { headers: { accept: "text/html" } })).text(), /No assistant is connected/);
+  const afterRevoke = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${refreshed.access_token}`, "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/list", params: { _meta: meta } }) });
+  assert.equal(afterRevoke.status, 401, "revoking deletes the client's tokens");
 });
 
 test("PKCE and one-time codes are enforced", async (t) => {
