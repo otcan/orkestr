@@ -4507,6 +4507,13 @@ async function readCachedLocalWhatsAppChatMessages(client, chatId = "", limit = 
   if (!id) return null;
   const max = Math.max(1, Math.min(100, Number(limit || 20) || 20));
   return client.pupPage.evaluate((targetChatId, targetLimit) => {
+    // In-page copy of storeModelBodyText: evaluate callbacks are serialized
+    // into the browser and cannot reference this module's scope.
+    const storeModelBodyText = (model) => {
+      const type = String(model?.type || "").toLowerCase();
+      if (["image", "video", "gif", "sticker", "document", "audio", "ptt", "ptv"].includes(type)) return String(model?.caption || "");
+      return String(model?.body || model?.caption || model?.pollName || model?.eventName || "");
+    };
     const serialized = (value) => {
       if (!value) return "";
       if (typeof value === "string") return value;
@@ -4591,6 +4598,13 @@ async function readCachedLocalWhatsAppBoundChats(client, chatIds = [], limit = 2
   const max = Math.max(1, Math.min(100, Number(limit || 20) || 20));
   const minimumTimestampMs = Math.max(0, Number(sinceMs || 0) || 0);
   return withLocalWhatsAppProbeTimeout(client.pupPage.evaluate((targetChatIds, targetLimit, minTimestampMs) => {
+    // In-page copy of storeModelBodyText: evaluate callbacks are serialized
+    // into the browser and cannot reference this module's scope.
+    const storeModelBodyText = (model) => {
+      const type = String(model?.type || "").toLowerCase();
+      if (["image", "video", "gif", "sticker", "document", "audio", "ptt", "ptv"].includes(type)) return String(model?.caption || "");
+      return String(model?.body || model?.caption || model?.pollName || model?.eventName || "");
+    };
     const serialized = (value) => {
       if (!value) return "";
       if (typeof value === "string") return value;
@@ -4674,6 +4688,13 @@ async function readCachedLocalWhatsAppMessageById(client, eventId = "", chatId =
   const targetChatId = String(chatId || "").trim();
   if (!id || !targetChatId) return null;
   return client.pupPage.evaluate(async (messageId, expectedChatId) => {
+    // In-page copy of storeModelBodyText: evaluate callbacks are serialized
+    // into the browser and cannot reference this module's scope.
+    const storeModelBodyText = (model) => {
+      const type = String(model?.type || "").toLowerCase();
+      if (["image", "video", "gif", "sticker", "document", "audio", "ptt", "ptv"].includes(type)) return String(model?.caption || "");
+      return String(model?.body || model?.caption || model?.pollName || model?.eventName || "");
+    };
     const serialized = (value) => {
       if (!value) return "";
       if (typeof value === "string") return value;
