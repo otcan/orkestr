@@ -3,7 +3,11 @@
     <div>
       <p class="eyebrow">Instance resources</p>
       <h3>Desktops</h3>
-      <p>{{ runningCount() }} of {{ browsers.length }} desktops running</p>
+      @if (!busy && !inventoryUnavailable && !reservationsUnavailable) {
+        <p>{{ runningCount() }} of {{ browsers.length }} desktops running</p>
+      } @else {
+        <p>Open and manage the browser desktops assigned to this Orkestr instance.</p>
+      }
     </div>
     <button class="secondary" type="button" (click)="load()" [disabled]="busy">Refresh</button>
   </header>
