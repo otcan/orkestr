@@ -101,7 +101,7 @@ async function readState(env) {
 /**
  * Runs `operation(links, { expired })` under the in-process + file lock for the
  * link store, then durably writes the (swept) list before resolving. The
- * operation mutates the array in place or returns `{ links }` to replace it.
+ * operation changes the array in place; its return value is passed back.
  */
 export async function mutateSecretLinks(env, operation) {
   await ensureDataDirs(env);
