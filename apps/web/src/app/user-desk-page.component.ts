@@ -1,4 +1,4 @@
-import { DatePipe } from "@angular/common";
+import { DatePipe, NgTemplateOutlet } from "@angular/common";
 import { Component, Input, OnChanges, OnInit, inject } from "@angular/core";
 import { firstValueFrom, timeout } from "rxjs";
 import { ApiService, BrowserSession, DesktopAccessWarning, DesktopLeaseRecord, ThreadSummary } from "./api.service";
@@ -14,9 +14,19 @@ const desktopErrorMessages: Record<string, string> = {
   lease_owned_by_other_thread: "Another thread has reserved this desktop.",
 };
 
+// Lists longer than this get a search box.
+const searchThreshold = 8;
+const attentionStatuses = ["failed", "partial", "error"];
+
+export interface DeskGroups {
+  main: BrowserSession[];
+  other: BrowserSession[];
+  attention: BrowserSession[];
+}
+
 @Component({
   selector: "ork-user-desk-page",
-  imports: [DatePipe],
+  imports: [DatePipe, NgTemplateOutlet],
   templateUrl: "./user-desk-page.component.html",
   styleUrl: "./user-desk-page.component.css",
 })
@@ -38,6 +48,8 @@ export class UserDeskPageComponent implements OnInit, OnChanges {
   @Input() threads: ThreadSummary[] = [];
   @Input() selectedThread: ThreadSummary | null = null;
   actionWarnings: Record<string, DesktopAccessWarning[]> = {};
+  query = "";
+  menuSlug = "";
 
   ngOnInit(): void {
     this.initialized = true;
@@ -56,6 +68,7 @@ export class UserDeskPageComponent implements OnInit, OnChanges {
       this.leases = [];
       this.shareUrl = "";
       this.actionWarnings = {};
+      this.menuSlug = "";
       this.loadedThreadId = threadId;
     }
     this.busy = true;
@@ -269,10 +282,6 @@ export class UserDeskPageComponent implements OnInit, OnChanges {
     return String(browser.label || browser.slug || browser.id || "Desk").trim();
   }
 
-  browserSummary(browser: BrowserSession): string {
-    return String(browser.notes || browser.purpose || browser.url || "Browser desk").trim();
-  }
-
   browserStatus(browser: BrowserSession): string {
     return String(browser.status || browser.state || "unknown").trim();
   }
@@ -294,11 +303,65 @@ export class UserDeskPageComponent implements OnInit, OnChanges {
     return this.browsers.filter((browser) => !this.browserLease(browser)).length;
   }
 
-  attentionCount(): number {
-    return this.browsers.filter((browser) => {
-      const lease = this.browserLease(browser);
-      return Boolean(browser.launchError) || Boolean(lease?.stale || lease?.expired) || this.browserWarnings(browser).length > 0;
-    }).length;
+  searchVisible(): boolean {
+    return this.browsers.length > searchThreshold;
+  }
+
+  setQuery(value: string): void {
+    this.query = String(value || "");
+  }
+
+  toggleMenu(browser: BrowserSession): void {
+    const slug = this.browserSlug(browser);
+    this.menuSlug = this.menuSlug === slug ? "" : slug;
+  }
+
+  menuOpen(browser: BrowserSession): boolean {
+    return Boolean(this.menuSlug) && this.menuSlug === this.browserSlug(browser);
+  }
+
+  // Failed, partial, launch-disabled, or never-prepared desktops cannot be
+  // used as-is; running desktops always stay in the main list.
+  needsAttention(browser: BrowserSession): boolean {
+    if (this.browserRunning(browser)) return false;
+    return Boolean(browser.launchError) || browser.launchDisabled === true
+      || attentionStatuses.includes(this.browserStatus(browser))
+      || !(browser.managed === true || this.browserConfigured(browser));
+  }
+
+  // Display grouping only; the server still authorizes every action. Without a
+  // per-thread access projection, every desktop is treated as openable.
+  threadCanOpen(browser: BrowserSession): boolean {
+    const access = browser.desktopAccess;
+    if (!access || typeof access !== "object") return true;
+    return access.allowed !== false && access.granted !== false && access.inventoryOnly !== true;
+  }
+
+  deskGroups(): DeskGroups {
+    const groups: DeskGroups = { main: [], other: [], attention: [] };
+    const query = this.searchVisible() ? this.query.trim().toLowerCase() : "";
+    const sorted = [...this.browsers].sort((left, right) =>
+      Number(this.browserRunning(right)) - Number(this.browserRunning(left))
+      || this.browserLabel(left).localeCompare(this.browserLabel(right)));
+    for (const browser of sorted) {
+      if (query && !`${this.browserLabel(browser)} ${this.browserSlug(browser)}`.toLowerCase().includes(query)) continue;
+      if (this.needsAttention(browser)) groups.attention.push(browser);
+      else if (!this.threadCanOpen(browser)) groups.other.push(browser);
+      else groups.main.push(browser);
+    }
+    return groups;
+  }
+
+  rowMessage(browser: BrowserSession): string {
+    if (browser.launchError) return String(browser.launchError);
+    const warnings = this.browserWarnings(browser);
+    if (!warnings.length) return "";
+    const first = String(warnings[0].message || this.warningTitle(warnings[0]));
+    return warnings.length > 1 ? `${first} (+${warnings.length - 1} more)` : first;
+  }
+
+  rowMessageIsError(browser: BrowserSession): boolean {
+    return Boolean(browser.launchError) || this.browserWarnings(browser).some((warning) => warning.severity === "error");
   }
 
   browserWarnings(browser: BrowserSession): DesktopAccessWarning[] {
@@ -315,15 +378,16 @@ export class UserDeskPageComponent implements OnInit, OnChanges {
   }
 
   browserHealthLabel(browser: BrowserSession): string {
-    if (browser.launchError) return "Needs attention";
     if (this.browserRunning(browser)) return "Running";
+    if (browser.launchError || attentionStatuses.includes(this.browserStatus(browser))) return "Failed";
+    if (browser.launchDisabled === true) return "Launch disabled";
     if (browser.managed === true || this.browserConfigured(browser)) return "Stopped";
     return "Not prepared";
   }
 
   browserHealthClass(browser: BrowserSession): string {
-    if (browser.launchError) return "bad";
     if (this.browserRunning(browser)) return "live";
+    if (this.needsAttention(browser)) return "bad";
     return "ready";
   }
 
@@ -350,13 +414,6 @@ export class UserDeskPageComponent implements OnInit, OnChanges {
     if (this.reservationsUnavailable) return "Reservation status unknown";
     if (!lease) return "Available";
     return String(lease.ownerThreadLabel || lease.threadName || lease.threadId || "Reserved").trim();
-  }
-
-  leaseClass(lease: DesktopLeaseRecord | null): string {
-    if (this.reservationsUnavailable) return "bad";
-    if (!lease) return "ready";
-    if (lease.stale || lease.expired) return "bad";
-    return "live";
   }
 
   actionBusy(browser: BrowserSession): boolean {

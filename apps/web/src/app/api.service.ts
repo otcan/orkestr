@@ -369,6 +369,8 @@ export interface BrowserSession {
   leaseOwnerLabel?: string | null;
   relatedThreads?: Array<Record<string, unknown>>;
   relatedThreadCount?: number;
+  // Per-thread access decision projected by the inventory endpoint.
+  desktopAccess?: { allowed?: boolean; granted?: boolean; shadowDenied?: boolean; inventoryOnly?: boolean; reason?: string } | null;
   warnings?: DesktopAccessWarning[];
 }
 

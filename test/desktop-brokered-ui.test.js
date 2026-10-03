@@ -108,6 +108,44 @@ test("reservation failures retain only a same-thread snapshot, block actions, an
   assert.equal(desk.actionBusy(browser), true);
 });
 
+test("desktop list groups running, stopped, other, and attention desktops for display only", async () => {
+  const desk = await deskWithApi({});
+  const ready = { managed: true };
+  desk.browsers = [
+    { slug: "zeta", status: "inactive", ...ready },
+    { slug: "alpha", status: "running", ...ready },
+    { slug: "broken", status: "failed", ...ready },
+    { slug: "partial", status: "partial", ...ready },
+    { slug: "fresh", status: "inactive" },
+    { slug: "off", status: "inactive", launchDisabled: true, ...ready },
+    { slug: "erred", status: "inactive", launchError: "Chrome missing", ...ready },
+    { slug: "foreign", status: "running", ...ready, desktopAccess: { allowed: true, granted: false, shadowDenied: true } },
+    { slug: "owned", status: "inactive", ...ready, desktopAccess: { allowed: true, granted: true } },
+  ];
+  const slugs = (list) => Array.from(list, (browser) => browser.slug);
+  let groups = desk.deskGroups();
+  assert.deepEqual(slugs(groups.main), ["alpha", "owned", "zeta"]);
+  assert.deepEqual(slugs(groups.other), ["foreign"]);
+  assert.deepEqual(slugs(groups.attention), ["broken", "erred", "fresh", "off", "partial"]);
+  assert.equal(desk.rowMessage(desk.browsers[6]), "Chrome missing");
+  assert.equal(desk.rowMessageIsError(desk.browsers[6]), true);
+  assert.equal(desk.browserHealthClass(desk.browsers[2]), "bad");
+
+  // Search only applies once the list is long enough to show the box.
+  desk.setQuery("zeta");
+  assert.equal(desk.searchVisible(), true);
+  assert.deepEqual(slugs(desk.deskGroups().main), ["zeta"]);
+  desk.browsers = desk.browsers.slice(0, 8);
+  assert.equal(desk.searchVisible(), false);
+  assert.equal(desk.deskGroups().main.length, 2);
+
+  desk.toggleMenu({ slug: "alpha" });
+  assert.equal(desk.menuOpen({ slug: "alpha" }), true);
+  assert.equal(desk.menuOpen({ slug: "zeta" }), false);
+  desk.toggleMenu({ slug: "alpha" });
+  assert.equal(desk.menuOpen({ slug: "alpha" }), false);
+});
+
 test("late inventory and lease responses cannot overwrite a newer thread refresh", async () => {
   const oldInventory = new rxjs.Subject();
   const oldLeases = new rxjs.Subject();

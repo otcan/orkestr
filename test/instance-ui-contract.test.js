@@ -79,7 +79,7 @@ test("desktop and timer pages expose focused instance health and action hierarch
   assert.match(desktopTemplate, /<h3>Desktops<\/h3>/);
   assert.match(desktopTemplate, /Desktop ID/);
   assert.match(desktopTemplate, /Assigned threads/);
-  assert.match(desktopTemplate, /Open Desktop/);
+  assert.match(desktopTemplate, /\(click\)="openDesktop\(browser\)"[^>]*>Open<\/button>/);
   assert.match(desktopTemplate, /Share/);
   assert.match(desktopComponent, /this\.api\.createDesktopShare\(slug, \{/);
   assert.doesNotMatch(desktopComponent, /this\.api\.threads\(\)/);
