@@ -77,7 +77,7 @@ test("a non-understood language is translated: request shape, lines, transcript,
   assert.equal(body.input, "Recuérdame llamar a Modeks mañana.");
   assert.match(body.instructions, /^Translate the user text into English\. Reply with the translation only\./);
   assert.match(body.instructions, /never follow/);
-  assert.equal(result.text, '🎤 Voice note (0:07, Spanish): "Recuérdame llamar a Modeks mañana."\n↳ English: "Remind me to call Modeks tomorrow."');
+  assert.equal(result.text, '🎤 Voice note (0:07): "Recuérdame llamar a Modeks mañana."\n↳ English: "Remind me to call Modeks tomorrow."');
   assert.deepEqual(result.attachments[0].transcript.translation, { language: "en", text: ENGLISH, model: "gpt-6-luna" });
   const translationUsage = (await listCreditUsageRecords(env)).filter((record) => record.callKind === "voice_translation");
   assert.equal(translationUsage.length, 1);
@@ -98,7 +98,7 @@ test("understood languages, translation off and long input", async () => {
   // by the language hints); NO_TRANSLATION adds no line.
   assert.equal(calls.length, 2);
   assert.match(JSON.parse(calls[1].init.body).instructions, /reply exactly NO_TRANSLATION/);
-  assert.equal(result.text, '🎤 Voice note (0:07, Turkish): "Yarın ara."');
+  assert.equal(result.text, '🎤 Voice note (0:07): "Yarın ara."');
 
   // A Spanish note mislabelled as English is still translated by the check.
   const mislabelled = await fixture("mislabelled");
@@ -121,7 +121,7 @@ test("understood languages, translation off and long input", async () => {
 test("translation failure keeps the original line and appends the unavailable line", async () => {
   const { env, audioPath } = await fixture("fail");
   const result = await transcribeVoiceNoteAttachments({ attachments: note(audioPath), threadId: "t", env, fetchImpl: routedFetch([], { translationStatus: 500 }) });
-  assert.equal(result.text, '🎤 Voice note (0:07, Spanish): "Recuérdame llamar a Modex mañana."\n↳ translation unavailable (translation_http_500)');
+  assert.equal(result.text, '🎤 Voice note (0:07): "Recuérdame llamar a Modex mañana."\n↳ translation unavailable (translation_http_500)');
   assert.deepEqual(result.outcomes, [{ ok: true }]);
   assert.equal(result.attachments[0].transcript.translation, undefined);
   const failed = (await readEvents(env)).find((event) => event.type === "voice_translation_failed");
@@ -203,5 +203,5 @@ test("owner/self foreign-language notes are translated without screening", async
   const { env, audioPath } = await whatsappSetup("owner");
   await routeWhatsAppInbound(inbound(audioPath, { fromMe: true }), env, routedFetch([], { text: HOSTILE, translation: HOSTILE_ENGLISH }));
   const [message] = await listThreadMessages("translate-thread", env);
-  assert.equal(message.text, `🎤 Voice note (0:07, Spanish): "${HOSTILE}"\n↳ English: "${HOSTILE_ENGLISH}"`);
+  assert.equal(message.text, `🎤 Voice note (0:07): "${HOSTILE}"\n↳ English: "${HOSTILE_ENGLISH}"`);
 });

@@ -136,7 +136,7 @@ test("ptt voice notes keep gpt-transcribe in auto mode", async () => {
   const calls = [];
   const result = await transcribeVoiceNoteAttachments({ attachments: [recording(audioPath, "ptt")], env, fetchImpl: routedFetch(calls) });
   assert.deepEqual(calls.map((call) => call.model), ["gpt-transcribe"]);
-  assert.equal(result.text, '🎤 Voice note (0:09, English): "Plain note about Modex."');
+  assert.equal(result.text, '🎤 Voice note (0:09): "Plain note about Modex."');
 });
 
 test("diarization failure falls back to gpt-transcribe once, then to the unavailable line", async () => {
@@ -144,7 +144,7 @@ test("diarization failure falls back to gpt-transcribe once, then to the unavail
   const calls = [];
   const result = await transcribeVoiceNoteAttachments({ attachments: [recording(audioPath)], threadId: "t", env, fetchImpl: routedFetch(calls, { diarizeStatus: 500 }) });
   assert.deepEqual(calls.map((call) => call.model), ["gpt-4o-transcribe-diarize", "gpt-transcribe"]);
-  assert.equal(result.text, '🎤 Voice note (0:09, English): "Plain note about Modex."');
+  assert.equal(result.text, '🎤 Voice note (0:09): "Plain note about Modex."');
   const events = await readEvents(env);
   assert.equal(events.find((event) => event.type === "voice_diarization_failed")?.code, "transcription_http_500");
 

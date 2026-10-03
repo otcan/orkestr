@@ -58,11 +58,11 @@ function knownDurationSeconds(attachment = {}) {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
 }
 
-export function voiceNoteTranscriptLine({ seconds = 0, languages = [], text = "" } = {}) {
-  const parts = [formatVoiceNoteDuration(seconds)];
-  const language = languageDisplayName(Array.isArray(languages) ? languages[0] : "");
-  if (language) parts.push(language);
-  return `🎤 Voice note (${parts.join(", ")}): "${clean(text)}"`;
+// No language in the header: the transcription label is biased by the
+// language hints (a Spanish note can be labelled English), and a wrong label
+// is worse than none. The translation line names its language.
+export function voiceNoteTranscriptLine({ seconds = 0, text = "" } = {}) {
+  return `🎤 Voice note (${formatVoiceNoteDuration(seconds)}): "${clean(text)}"`;
 }
 
 export function voiceNoteUnavailableLine({ seconds = 0, code = "transcription_failed" } = {}) {

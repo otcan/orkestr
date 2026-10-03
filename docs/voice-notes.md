@@ -14,11 +14,12 @@ file path.
   note:
 
   ```text
-  🎤 Voice note (0:07, English): "Remind me to call Example Corp tomorrow."
+  🎤 Voice note (0:07): "Remind me to call Example Corp tomorrow."
   ```
 
-  Languages are shown by their English name (`English`, `Spanish`, ...);
-  unknown codes show the ISO code.
+  The header carries no language: the transcription label is biased by the
+  language hints and can be wrong. Translation lines name their target
+  language (`↳ English: ...`).
 - The audio attachment is kept. A successful transcript is also stored on the
   attachment as `transcript: { text, model, languages, seconds }` so the WebUI
   and history keep it.
@@ -86,7 +87,7 @@ can come back labelled English, and recordings have no label), so:
 The original line stays and a translation line follows:
 
 ```text
-🎤 Voice note (0:07, Spanish): "Recuérdame llamar a Example Corp mañana."
+🎤 Voice note (0:07): "Recuérdame llamar a Example Corp mañana."
 ↳ English: "Remind me to call Example Corp tomorrow."
 ```
 

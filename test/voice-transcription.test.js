@@ -161,7 +161,7 @@ test("voice notes become input text, keep the attachment, record credits and saf
     fetchImpl: okFetch(SAMPLE),
   });
   const corrected = "Please ask Modeks about the Orkestr demo on Monday.";
-  assert.equal(result.text, `Context first\n🎤 Voice note (0:07, English): "${corrected}"`);
+  assert.equal(result.text, `Context first\n🎤 Voice note (0:07): "${corrected}"`);
   assert.equal(result.attachments[0].path, audioPath);
   assert.deepEqual(result.attachments[0].transcript, { text: corrected, model: "gpt-transcribe", languages: ["en"], seconds: 7 });
   const usage = (await listCreditUsageRecords(env)).filter((record) => record.callKind === "voice_transcription");
