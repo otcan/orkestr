@@ -363,24 +363,51 @@ export async function listManagedDesktopSessions(env = process.env, options = {}
   };
 }
 
+// browserctl commands whose provider rejected `target` as an unknown
+// subcommand; their routing reads use the full inventory.
+const targetReadUnsupported = new Set();
+
+// Exact read of one desktop: `{ session }`, `{ sessions }` from a provider that
+// ignores the subcommand, or null when the provider has no `target` command.
+async function readBrowserctlTarget(slug, env, options) {
+  const command = browserctlCommand(env);
+  if (env.ORKESTR_BROWSERCTL_TARGETED_READ === "0" || targetReadUnsupported.has(command)) return null;
+  try {
+    return await runBrowserctl(["target", slug], scopedBrowserctlEnv(env, options), {
+      timeoutMs: desktopInventoryTimeoutMs(env), signal: options.signal,
+    });
+  } catch (error) {
+    const detail = String(error?.message || "");
+    if (error?.cause?.code === 2 && /invalid choice/i.test(detail)) {
+      targetReadUnsupported.add(command);
+      return null;
+    }
+    if (error?.cause?.code === 1 && /not found/i.test(detail)) return { ok: true, session: null };
+    throw error;
+  }
+}
+
 // Internal routing lookup: no lease/thread/UI enrichment and no lifecycle actions.
-// Providers that support an exact target read can avoid a full inventory scan
-// for every desktop asset. Keep the list fallback for legacy providers. Neither
-// path uses the UI inventory cache, so a restart or port change is read fresh.
+// It runs for every desktop asset and websocket, so it reads the one desktop
+// with `browserctl target <slug>` (a full `list` takes seconds under load and
+// timed out the noVNC page); providers without `target` keep the list read.
+// Neither path uses the UI inventory cache, so a restart or port change is
+// read fresh.
 export async function readManagedDesktopSession(slug, env = process.env, options = {}) {
   const explicitUrl = browserSessionsUrl(env);
   const base = browserApiBase(env);
-  const targeted = !explicitUrl && !base && env.ORKESTR_BROWSERCTL_TARGETED_READ === "1";
-  const payload = explicitUrl || base
+  const remote = Boolean(explicitUrl || base);
+  const targeted = remote ? null : await readBrowserctlTarget(slug, env, options);
+  const payload = remote
     ? await fetchBrowserJson(appendRemoteScope(explicitUrl || `${base}/api/browser-sessions`, options), {
       timeoutMs: desktopInventoryTimeoutMs(env), signal: options.signal,
       headers: remoteDesktopHeaders(env, options),
     })
-    : await runBrowserctl(targeted ? ["target", slug] : ["list", "--json"], scopedBrowserctlEnv(env, options), {
+    : targeted || await runBrowserctl(["list", "--json"], scopedBrowserctlEnv(env, options), {
       timeoutMs: desktopInventoryTimeoutMs(env), signal: options.signal,
     });
   if (payload?.ok === false) throw Object.assign(new Error("desktop_inventory_unavailable"), { statusCode: 503 });
-  const candidates = targeted ? [payload?.session] : (Array.isArray(payload?.sessions) ? payload.sessions : []);
+  const candidates = Array.isArray(payload?.sessions) ? payload.sessions : payload?.session ? [payload.session] : [];
   const matches = candidates
     .filter((item) => String(item?.slug || item?.id || "").trim() === slug);
   if (matches.length !== 1) return null;

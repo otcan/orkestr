@@ -3,6 +3,17 @@ import { Component, Input, OnChanges, OnInit, inject } from "@angular/core";
 import { firstValueFrom, timeout } from "rxjs";
 import { ApiService, BrowserSession, DesktopAccessWarning, DesktopLeaseRecord, ThreadSummary } from "./api.service";
 
+// Plain-language text for the desktop errors owners actually hit; the code
+// stays visible for support.
+const desktopErrorMessages: Record<string, string> = {
+  desktop_grant_required: "The selected thread has no access to this desktop. Open it from the thread it is assigned to.",
+  desktop_thread_scope_required: "Select a thread before opening this desktop.",
+  desktop_lookup_timeout: "The desktop did not answer in time. Try again in a moment.",
+  desktop_not_running: "This desktop is not running. Start it first.",
+  browser_session_not_found: "This desktop no longer exists. Refresh the list.",
+  lease_owned_by_other_thread: "Another thread has reserved this desktop.",
+};
+
 @Component({
   selector: "ork-user-desk-page",
   imports: [DatePipe],
@@ -381,7 +392,8 @@ export class UserDeskPageComponent implements OnInit, OnChanges {
       const record = error as { error?: unknown; message?: unknown; status?: unknown; statusText?: unknown };
       if (record.error && typeof record.error === "object" && "error" in record.error) {
         const detail = (record.error as { error?: unknown }).error;
-        if (detail) return String(detail);
+        const code = String(detail || "");
+        if (code) return desktopErrorMessages[code] ? `${desktopErrorMessages[code]} (${code})` : code;
       }
       if (record.message) return String(record.message);
       if (record.status) return `HTTP ${record.status}${record.statusText ? ` ${record.statusText}` : ""}`;
