@@ -28,7 +28,7 @@ export function registerStaticFallback(app: INestApplication): void {
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.use(async (request: any, response: any, next: () => void) => {
     const url = String(request.originalUrl || request.url || "");
-    if (url.startsWith("/api/") || url.startsWith("/auth/") || url.startsWith("/oauth/") || url.startsWith("/connect/") || url === "/review/google" || url.startsWith("/review/google/") || url.startsWith("/google-marketing/oauth/") || isMcpBridgePath(url)) {
+    if (url.startsWith("/api/") || url.startsWith("/auth/") || url.startsWith("/oauth/") || url.startsWith("/connect/") || url === "/review/google" || url.startsWith("/review/google/") || url.startsWith("/google-marketing/oauth/") || isMcpBridgePath(url) || isSecretLinkPath(url)) {
       return next();
     }
     if (isDesktopSharePagePath(url)) {
@@ -86,6 +86,11 @@ export function registerStaticFallback(app: INestApplication): void {
 function isMcpBridgePath(requestUrl: string) {
   const pathname = new URL(requestUrl || "/", "http://localhost").pathname;
   return pathname === "/mcp" || pathname.startsWith("/mcp-oauth/") || pathname.startsWith("/.well-known/oauth-");
+}
+
+// One-time secret link pages (modules/secret-links).
+function isSecretLinkPath(requestUrl: string) {
+  return new URL(requestUrl || "/", "http://localhost").pathname.startsWith("/s/");
 }
 
 function isDesktopSharePagePath(requestUrl: string) {

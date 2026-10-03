@@ -25,6 +25,19 @@ function normalizeSecretName(value = "") {
     .slice(0, 160);
 }
 
+// Strict variant for names chosen by agents (for example one-time secret
+// request links): the name must already be in normalized form.
+export function validateSecureSecretName(value = "") {
+  const raw = clean(value);
+  const name = normalizeSecretName(raw);
+  if (!name || name !== raw.toLowerCase() || name.split("/").some((part) => !part || part === "." || part === "..")) {
+    const error = new Error("secret_name_invalid");
+    error.statusCode = 400;
+    throw error;
+  }
+  return name;
+}
+
 function secretFingerprint(value = "") {
   const text = String(value || "");
   return createHash("sha256").update(text).digest("hex").slice(0, 16);
@@ -75,6 +88,9 @@ async function decryptSecretValue(record = {}, env = process.env) {
     decipher.final(),
   ]).toString("utf8");
 }
+
+// Shared with secret-links.js so one-time links reuse the secure-input key.
+export { encryptSecretValue, decryptSecretValue };
 
 function publicHandle(record = {}) {
   if (record.scope === "global") return `secret://global/${record.name}`;

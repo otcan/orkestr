@@ -58,6 +58,12 @@ of relying on static thread or workspace text in this file.
 - Use Orkestr APIs for browser and desktop state: `GET /api/browser-sessions`,
   `GET /api/desktops/leases`, `POST /api/desktops/:slug/acquire`, heartbeat,
   and release.
+- When a secret must be exchanged with the owner, never paste it into chat,
+  WhatsApp, or thread messages, and never ask the owner to send one there. Use
+  one-time links instead: `orkestr secret share --from secret://...` (or
+  `--stdin`) to hand a secret to the owner, and `orkestr secret request <name>
+  [--thread <id>]` to receive one, then use the resulting `secret://` handle by
+  reference. See `docs/secret-links.md`.
 - Use connector status APIs for Gmail and WhatsApp. Do not read Gmail tokens,
   WhatsApp session state, browser profiles, or files under `ORKESTR_HOME/secrets`
   directly.

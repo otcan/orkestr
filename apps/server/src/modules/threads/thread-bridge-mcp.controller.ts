@@ -23,13 +23,10 @@ import { mcpLandingPage } from "../../../../../packages/core/src/mcp-landing-pag
 import { readSubscriptions } from "../../../../../packages/core/src/mcp-events.js";
 import { keycloakOidcEnabled } from "../../../../../packages/core/src/keycloak-oidc.js";
 import { httpError } from "../../common/http.js";
+import { escapeHtml, sameOriginFormPost } from "../../browser-page-security.js";
 
 function assertEnabled() {
   if (!mcpOAuthEnabled()) throw httpError("not_found", 404);
-}
-
-function escapeHtml(value: unknown) {
-  return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char] as string));
 }
 
 function oauthFailure(response: any, error: any) {
@@ -46,14 +43,9 @@ function signedInUser(request: any) {
 }
 
 // Browser form posts must come from this origin (CSRF guard on top of the
-// one-time consent id and SameSite session cookie). The site-wide
-// "Referrer-Policy: no-referrer" makes browsers send "Origin: null" on form
-// POSTs, so a null/absent Origin is accepted only with the browser-controlled
-// "Sec-Fetch-Site: same-origin" header, which page scripts cannot set.
+// one-time consent id and SameSite session cookie); see sameOriginFormPost.
 function sameOrigin(request: any) {
-  const origin = String(request.headers?.origin || "").trim();
-  if (origin && origin !== "null") return origin === new URL(mcpPublicBase()).origin;
-  return String(request.headers?.["sec-fetch-site"] || "").trim().toLowerCase() === "same-origin";
+  return sameOriginFormPost(request, [new URL(mcpPublicBase()).origin]);
 }
 
 function unauthorized(response: any) {

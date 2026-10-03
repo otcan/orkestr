@@ -263,6 +263,9 @@ function commandHints() {
     sanitizerCheck: "orkestr sanitizer check --action <action> --text <description> [--url <url>] --json",
     whatsappStatus: "orkestr whatsapp accounts list --json",
     connectorStatus: "orkestr status --json",
+    shareSecretWithOwner: "orkestr secret share --from secret://user/<owner>/<name> [--thread <thread-id>]",
+    requestSecretFromOwner: "orkestr secret request <name> [--thread <thread-id>]",
+    secretLinks: "orkestr secret links list",
   };
 }
 

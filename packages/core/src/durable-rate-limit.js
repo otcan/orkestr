@@ -76,3 +76,16 @@ export function positiveIntegerEnv(value, fallback, minimum = 1) {
   const parsed = Math.floor(Number(value));
   return Number.isFinite(parsed) && parsed >= minimum ? parsed : fallback;
 }
+
+/**
+ * Reports whether `key` still has room in `bucket` without recording a hit.
+ * @param {{ bucket: string; key: string; limit: number; windowMs: number; nowMs?: number }} options
+ * @param {Record<string, string | undefined>} [env]
+ */
+export async function peekDurableRateLimit({ bucket, key, limit, windowMs, nowMs = Date.now() }, env = process.env) {
+  const max = Math.max(1, Math.floor(Number(limit) || 1));
+  const window = Math.max(1_000, Math.floor(Number(windowMs) || 60_000));
+  const stored = await readJson(bucketPath(bucket, env), {});
+  const hits = recentHits(stored?.entries?.[durableRateLimitKey(key)], nowMs, window);
+  return { ok: hits.length < max, count: hits.length, limit: max, retryAfterMs: hits.length < max ? 0 : Math.max(0, Math.min(...hits) + window - nowMs) };
+}

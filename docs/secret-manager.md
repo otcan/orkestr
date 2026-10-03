@@ -73,3 +73,6 @@ The boundary is covered by:
 - setup UI static checks for the secure-input controller and panel
 - `npm run oss:boundary-check`
 - `npm run launch:check`
+
+One-time links for exchanging secrets with the owner are described in
+`docs/secret-links.md`.

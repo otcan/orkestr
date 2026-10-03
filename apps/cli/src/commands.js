@@ -29,6 +29,7 @@ import { desktopCommand } from "./desktop-command.js";
 import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
 import { interruptCommand, sendNowCommand } from "./interrupt-command.js";
 import { jiraCommand } from "./jira-command.js";
+import { secretLinksCommand } from "./secret-links-command.js";
 import { mailboxesCommand } from "./mailbox-command.js";
 import { watchCommand, watchUsage } from "./watch-command.js";
 import { tenantSliceCommand } from "./tenant-slice-command.js";
@@ -214,6 +215,9 @@ async function releaseInstancesCommand(argv, ctx) {
 async function secretCommand(argv, ctx) {
   const subcommand = argv[0]?.startsWith("--") ? "list" : argv[0] || "list";
   const rest = subcommand === "list" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  if (["share", "request", "links", "link"].includes(subcommand)) {
+    return secretLinksCommand(subcommand === "link" ? "links" : subcommand, rest, ctx, { readValue: secretValueFromInput });
+  }
   const json = argv.includes("--json") || rest.includes("--json");
   if (subcommand === "list" || subcommand === "ls") {
     const params = secretParams(rest);
@@ -254,7 +258,7 @@ async function secretCommand(argv, ctx) {
     else ctx.stdout.write(`Deleted secret ${payload.secret?.handle || name}\n`);
     return 0;
   }
-  throw new Error("Usage: orkestr secret [list|set|delete] [--global|--user user-id] [--json]");
+  throw new Error("Usage: orkestr secret [list|set|delete|share|request|links] [--global|--user user-id] [--json]");
 }
 
 function secretBodyTarget(argv = []) {
@@ -2251,6 +2255,9 @@ Advanced:
   orkestr release-train check|ci|deploy|sync-branches|run [--ref main|--sha sha] [--json]
   orkestr settings [--json]
   orkestr secret [list|set|delete] [--global|--user user-id] [--json]
+  orkestr secret share [--stdin|--from secret://...] [--ttl 15m] [--label text] [--thread id] [--json]
+  orkestr secret request <name> [--ttl 15m] [--label text] [--thread id] [--json]
+  orkestr secret links [list|revoke <id>] [--json]
   orkestr codex [status|migrate] [--dry-run] [--json]
   orkestr whatsapp accounts [list|add|status|diagnostics|update|pair|reconnect|disconnect|remove|doctor] [--json]
   orkestr whatsapp migrate [--dry-run] [--json]

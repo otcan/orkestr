@@ -81,6 +81,7 @@ import {
 import { recordServerShutdown } from "./server-lifecycle.js";
 import { trackUpgradedSockets } from "./http-server-lifecycle.js";
 import { mobileJsonBodyParser } from "./mobile-json-body.js";
+import { secretLinkFormBodyParser } from "./modules/secret-links/secret-link-pages.js";
 
 export {
   paneProgressMonitorIntervalMs,
@@ -110,6 +111,8 @@ export async function createApp(): Promise<INestApplication> {
   // Static fallback routes are registered before Nest initializes its default
   // parsers. Register the small form parser explicitly so the public instance
   // entry POST can resolve the submitted name/reference in the live server.
+  // One-time secret request links accept up to 16 KiB values (URL-encoded).
+  app.use("/s", secretLinkFormBodyParser());
   app.useBodyParser("urlencoded", { extended: false, limit: "8kb" });
   // Mobile proofs bind the exact JSON payload before authentication. Scope the
   // early parser to the direct mobile API so broker/canonical proxy requests
