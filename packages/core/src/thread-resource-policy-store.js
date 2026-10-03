@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { migrateLegacyDesktopGrants } from "./thread-resource-policy-sqlite-migration.js";
-import { readThreadResourcePolicySqliteState as readState } from "./thread-resource-policy-sqlite-state.js";
+import { readThreadResourceAccessSqliteState, readThreadResourcePolicySqliteState as readState } from "./thread-resource-policy-sqlite-state.js";
 import { assertTestStoragePath } from "../../storage/src/test-storage-isolation.js";
 import {
   clearThreadResourcePolicyPostgresCache,
@@ -474,4 +474,11 @@ export async function readThreadResourcePolicyState(env = process.env) {
   if (mode === "postgres" || mode === "postgresql") return readThreadResourcePolicyPostgresState(env);
   const db = await openThreadResourcePolicyDatabase(env);
   return readState(db);
+}
+
+// The subset an access decision needs; see readThreadResourceAccessSqliteState.
+export async function readThreadResourceAccessState(env = process.env) {
+  const mode = threadResourcePolicyStoreMode(env);
+  if (mode === "postgres" || mode === "postgresql") return readThreadResourcePolicyPostgresState(env);
+  return readThreadResourceAccessSqliteState(await openThreadResourcePolicyDatabase(env));
 }

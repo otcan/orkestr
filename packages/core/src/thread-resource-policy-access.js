@@ -3,6 +3,7 @@ import { appendEvent } from "../../storage/src/store.js";
 import { canAccessOwner, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
 import { getThread } from "./threads.js";
 import {
+  readThreadResourceAccessState,
   readThreadResourcePolicyState,
   withThreadResourcePolicyDeliveryFence,
   withThreadResourcePolicyTransaction,
@@ -26,6 +27,10 @@ const nowIso = () => new Date().toISOString();
 
 async function readState(env = process.env) {
   return normalizeThreadResourcePolicyState(await readThreadResourcePolicyState(env), env);
+}
+
+async function readAccessState(env = process.env) {
+  return normalizeThreadResourcePolicyState(await readThreadResourceAccessState(env), env);
 }
 
 async function mutateState(env, operation) {
@@ -151,7 +156,7 @@ async function evaluateThreadResourceAccess(input = {}, env = process.env) {
   if (!resourceType || !resource) { const decision = denial(base, `${resourceType || "resource"}_not_found`); await auditDecision(decision, env); return decision; }
   if (resource.boundaryId !== base.boundaryId) { const decision = denial(base, `${resourceType}_boundary_denied`); await auditDecision(decision, env); return decision; }
   if (mode === "off") return { ...base, allowed: true, granted: true, reason: `${resourceType}_access_disabled`, authorizationBinding: { resourceType, resourceId: resource.id, policyRevision: 0, grantRevision: 0, resourceGeneration: resource.generation } };
-  const state = await readState(env);
+  const state = await readAccessState(env);
   base.policyRevision = state.revision;
   let stored = state.resources.find((item) => item.id === resource.id && item.resourceType === resourceType) || null;
   // Legacy desktop records may have a pre-canonical resource ID. Their slug,

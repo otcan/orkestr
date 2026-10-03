@@ -101,9 +101,12 @@ export function normalizeResource(raw = {}, env = process.env) {
   // oXRM and mailbox native identifiers are only unique within their instance
   // boundary and owner. Never use a caller-provided native identifier as the
   // policy key for those types.
+  // threadResourceId reads only these; copying all of process.env per
+  // resource dominated every access check.
+  const idEnv = { ORKESTR_ADMIN_USER_ID: env.ORKESTR_ADMIN_USER_ID, ORKESTR_TENANT_VM_ID: boundaryId };
   const id = resourceType === "desktop"
-    ? clean(raw.id || raw.resourceId) || threadResourceId(resourceType, resourceKey, ownerUserId, { ...env, ORKESTR_TENANT_VM_ID: boundaryId })
-    : threadResourceId(resourceType, nativeId, ownerUserId, { ...env, ORKESTR_TENANT_VM_ID: boundaryId });
+    ? clean(raw.id || raw.resourceId) || threadResourceId(resourceType, resourceKey, ownerUserId, idEnv)
+    : threadResourceId(resourceType, nativeId, ownerUserId, idEnv);
   if (!resourceType || !resourceKey || !nativeId || !id || !ownerUserId || !boundaryId) return null;
   return {
     id,
@@ -129,7 +132,7 @@ export function normalizeGrant(raw = {}, env = process.env) {
   const resourceKey = safeThreadResourceSegment(raw.resourceKey || raw.key || raw.desktopSlug || raw.slug || raw.mailboxId || raw.instanceId || raw.resourceId || raw.id, "");
   const ownerUserId = normalizeUserId(raw.ownerUserId || raw.userId || env.ORKESTR_ADMIN_USER_ID || "admin");
   const boundaryId = safeThreadResourceSegment(raw.boundaryId || raw.tenantVmId || threadResourceBoundaryId(env));
-  const resourceId = clean(raw.resourceId || raw.desktopId) || threadResourceId(resourceType, resourceKey, ownerUserId, { ...env, ORKESTR_TENANT_VM_ID: boundaryId });
+  const resourceId = clean(raw.resourceId || raw.desktopId) || threadResourceId(resourceType, resourceKey, ownerUserId, { ORKESTR_ADMIN_USER_ID: env.ORKESTR_ADMIN_USER_ID, ORKESTR_TENANT_VM_ID: boundaryId });
   const threadId = clean(raw.threadId);
   if (!threadId || !resourceType || !resourceKey || !resourceId || !ownerUserId || !boundaryId) return null;
   const permissions = normalizeThreadResourcePermissions(resourceType, raw.permissions);
