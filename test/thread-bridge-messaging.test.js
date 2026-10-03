@@ -118,8 +118,10 @@ test("wait_for_reply waits before the answer exists and returns it when it arriv
   const sent = await sendBridgeMessage("thread-a", { text: "Please summarize", requestId: "before" }, principal, env, NO_DELIVERY);
   const started = Date.now();
   const waiting = waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 10, pollMs: 50 }, env);
-  setTimeout(() => { void appendThreadMessage("thread-a", finalFor(sent.messageId, "Summary ready."), env); }, 300);
+  let appended;
+  setTimeout(() => { appended = appendThreadMessage("thread-a", finalFor(sent.messageId, "Summary ready."), env); }, 300);
   const result = await waiting;
+  await appended;
   assert.equal(result.status, "answered");
   assert.equal(result.reply.text, "Summary ready.");
   assert.ok(Date.now() - started >= 250, "it really waited for the answer");
@@ -197,12 +199,16 @@ test("Codex acceptance lifecycle: an input marked completed at turn/start is not
   await updateThread("thread-a", { state: "working", runtime: { runtimeKind: "codex-app-server", codexThreadId: "codex_gen_a", activeTurnId: "turn_codex_1", state: "working" } }, env);
   const started = Date.now();
   const waiting = waitForBridgeReply("thread-a", sent.messageId, principal, { timeoutSeconds: 15, pollMs: 100 }, env);
-  setTimeout(async () => {
+  // The wait returns once the final exists, before the turn end below is
+  // recorded; that write is awaited so it cannot land after the next steps.
+  let projected;
+  setTimeout(() => { projected = (async () => {
     // Codex projects the final with the turn id, then records the turn end.
     await appendThreadMessage("thread-a", { role: "assistant", source: "codex-app-server", phase: "final_answer", state: "completed", text: "Codex answer", codexTurnId: "turn_codex_1", codexThreadId: "codex_gen_a" }, env);
     await updateThread("thread-a", { state: "ready", runtime: { runtimeKind: "codex-app-server", codexThreadId: "codex_gen_a", activeTurnId: null, lastTurnId: "turn_codex_1", lastTurnStatus: "completed", state: "ready" } }, env);
-  }, 4500);
+  })(); }, 4500);
   const result = await waiting;
+  await projected;
   assert.equal(result.status, "answered", "no false completed_without_reply while the Codex turn runs past the grace period");
   assert.equal(result.reply.text, "Codex answer");
   assert.ok(Date.now() - started >= 4000);
