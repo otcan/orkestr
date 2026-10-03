@@ -29,6 +29,7 @@ import { desktopCommand } from "./desktop-command.js";
 import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
 import { interruptCommand, sendNowCommand } from "./interrupt-command.js";
 import { jiraCommand } from "./jira-command.js";
+import { doctorVoiceCommand } from "./doctor-voice-command.js";
 import { secretLinksCommand } from "./secret-links-command.js";
 import { mailboxesCommand } from "./mailbox-command.js";
 import { watchCommand, watchUsage } from "./watch-command.js";
@@ -647,7 +648,8 @@ async function doctorCommand(argv, ctx) {
   if (subject === "resources" || subject === "resource" || subject === "runtimes") return doctorResourcesCommand(argv, ctx);
   if (subject === "whatsapp" || subject === "wa") return doctorWhatsAppRouterCommand(argv.slice(1), ctx);
   if (subject === "router") return doctorRouterCommand(argv.slice(1), ctx);
-  throw new Error("Usage: orkestr doctor [system|timers|resources|whatsapp|router] [--repair [--repair-historical]] [--json]");
+  if (subject === "voice" || subject === "transcription") return doctorVoiceCommand(argv, ctx);
+  throw new Error("Usage: orkestr doctor [system|timers|resources|whatsapp|router|voice] [--repair [--repair-historical]] [--json]");
 }
 
 async function doctorWhatsAppRouterCommand(argv, ctx) {

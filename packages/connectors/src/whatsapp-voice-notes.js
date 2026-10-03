@@ -5,10 +5,10 @@ import { buildTranscriptionGlossary } from "../../core/src/voice-transcription-g
 import { classifyWhatsAppInboundRequest } from "./whatsapp-inbound-security.js";
 import { comparableParticipantId, participantIdSet } from "./whatsapp-inbound-routing.js";
 
-// WhatsApp scope for voice-note transcription. Owner decision: own chats only.
-// A binding flag `transcribeVoiceNotes` overrides (true forces on, false
-// forces off); when unset, only the owner/self account in an owner-owned
-// thread is transcribed, so friend/client chats stay off by default.
+// WhatsApp scope for voice-note transcription. Owner decision: always on, in
+// every chat. ORKESTR_VOICE_TRANSCRIPTION=off stops it everywhere and a
+// binding flag `transcribeVoiceNotes: false` stops it for one chat. Speech
+// from anyone but the owner/self account is screened like typed text.
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -44,10 +44,8 @@ export function whatsappVoiceNoteSenderIsOwnerSelf({ inboundSecurity = {}, from 
   return Boolean(sender && participantIdSet(owners).has(sender));
 }
 
-export function whatsappVoiceNoteTranscriptionAllowed({ binding = {}, inboundSecurity = {}, from = "", thread = {}, env = process.env } = {}) {
-  if (binding?.transcribeVoiceNotes === false) return false;
-  if (binding?.transcribeVoiceNotes === true) return true;
-  return whatsappVoiceNoteSenderIsOwnerSelf({ inboundSecurity, from, thread, env });
+export function whatsappVoiceNoteTranscriptionAllowed({ binding = {} } = {}) {
+  return binding?.transcribeVoiceNotes !== false;
 }
 
 async function ownerDisplayName(thread = {}, env = process.env) {
@@ -73,7 +71,9 @@ export async function applyWhatsAppVoiceNoteTranscription({
   const unchanged = { text, attachments };
   if (!thread?.id || !Array.isArray(attachments) || !attachments.some(isAudioAttachment)) return unchanged;
   if (!whatsappVoiceNoteTranscriptionAllowed({ binding, inboundSecurity, from, thread, env })) return unchanged;
-  const role = clean(inboundSecurity?.effectiveRole || inboundSecurity?.trustLevel);
+  // Friend/client bindings record their external person with the "owner"
+  // role, so only the real owner/self account skips the screening.
+  const ownerSelf = whatsappVoiceNoteSenderIsOwnerSelf({ inboundSecurity, from, thread, env });
   const glossary = buildTranscriptionGlossary({
     threadName: thread.name,
     bindingName: clean(thread.bindingName) || clean(binding?.displayName),
@@ -88,9 +88,9 @@ export async function applyWhatsAppVoiceNoteTranscription({
     tenantId: resourceOwnerUserId(thread, env),
     threadId: thread.id,
     sourceChannel: "whatsapp",
-    // Non-owner senders were screened on their typed text only; screen the
+    // Other senders were screened on their typed text only; screen the
     // spoken text with the same classifier before it reaches the agent.
-    acceptTranscript: role === "owner" ? null : (spoken) => !classifyWhatsAppInboundRequest(spoken).malicious,
+    acceptTranscript: ownerSelf ? null : (spoken) => !classifyWhatsAppInboundRequest(spoken).malicious,
     env,
     fetchImpl,
   });

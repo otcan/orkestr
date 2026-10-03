@@ -1,4 +1,5 @@
 import { appendEvent } from "../../storage/src/store.js";
+import { recordVoiceTranscriptionOutcome } from "./voice-transcription-status.js";
 import { correctTranscriptNames } from "./voice-transcription-glossary.js";
 import {
   TranscriptionError,
@@ -132,6 +133,7 @@ export async function transcribeVoiceNoteAttachments({
           model: result.model,
           languages: result.languages,
         }, env).catch(() => {});
+        await recordVoiceTranscriptionOutcome({ ok: true, seconds: result.seconds }, env);
       } catch (error) {
         const code = transcriptionErrorCode(error);
         if (error?.billedSeconds) {
@@ -140,6 +142,7 @@ export async function transcribeVoiceNoteAttachments({
         lines.push(voiceNoteUnavailableLine({ seconds: knownDurationSeconds(attachment), code }));
         outcomes.push({ ok: false, code });
         await appendEvent({ type: "voice_transcription_failed", threadId, code }, env).catch(() => {});
+        await recordVoiceTranscriptionOutcome({ ok: false, code }, env);
       }
     }
     if (!lines.length) return null;

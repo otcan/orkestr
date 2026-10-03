@@ -44,27 +44,27 @@ words that sound like a single-word glossary entry (for example `Modex` ->
 
 ## Scope
 
-Owner decision: own chats only.
+Always on: every voice note in every WhatsApp chat is transcribed, as long as
+an API key is configured.
 
-- Binding flag `transcribeVoiceNotes: true` enables transcription for the chat.
-- `transcribeVoiceNotes: false` always disables it.
-- When the flag is unset, a note is transcribed only when the sender is the
-  owner/self account (the connected account itself, or a number listed in
-  `ORKESTR_WHATSAPP_OWNER_CONTACT_IDS`) and the thread belongs to the WhatsApp
-  owner user (`ORKESTR_WHATSAPP_OWNER_USER_ID`, else the admin user).
-  Friend/client chats are therefore off by default.
-- In groups WhatsApp usually identifies senders by a LID (`<id>@lid`), not by
-  their phone number, and the two cannot be matched to each other. List the
-  owner's LID in `ORKESTR_WHATSAPP_OWNER_ALIASES` (comma separated; unlike
-  `ORKESTR_WHATSAPP_OWNER_CONTACT_IDS` it is never used as group participants),
-  or set `transcribeVoiceNotes: true` on the chat binding.
-- For non-owner senders (flag set to `true`), the transcript is screened by the
-  same request classifier that screens typed WhatsApp text.
+- `ORKESTR_VOICE_TRANSCRIPTION=off` stops transcription everywhere.
+- The binding flag `transcribeVoiceNotes: false` stops it for one chat.
+- Speech from anyone other than the owner/self account is screened by the same
+  request classifier that screens typed WhatsApp text; a blocked transcript is
+  replaced by `transcription unavailable (transcription_policy_blocked)`.
+- The owner/self account is the connected account itself, a number in
+  `ORKESTR_WHATSAPP_OWNER_CONTACT_IDS`, or an id in
+  `ORKESTR_WHATSAPP_OWNER_ALIASES`, in a thread owned by the WhatsApp owner
+  user. In groups WhatsApp usually identifies senders by a LID (`<id>@lid`)
+  that cannot be matched to their phone number, so list the owner's LID in
+  `ORKESTR_WHATSAPP_OWNER_ALIASES` (unlike `ORKESTR_WHATSAPP_OWNER_CONTACT_IDS`
+  it is never used as group participants).
 
 ## Privacy
 
-Audio is uploaded to OpenAI (or the configured compatible endpoint). Only
-enable the flag for chats whose participants expect that. Transcript text, file
+Audio is uploaded to OpenAI (or the configured compatible endpoint), including
+voice notes from other people in the owner's chats. Turn it off per chat with
+`transcribeVoiceNotes: false` where participants would not expect that. Transcript text, file
 names, and keys are never written to `events.jsonl`, logs, or metrics; the only
 events are `voice_transcription_completed { threadId, seconds, model, languages }`
 and `voice_transcription_failed { threadId, code }`.
@@ -105,3 +105,14 @@ Resolution order:
 recorded in the credit ledger with `callKind: "voice_transcription"`,
 `sourceChannel: "whatsapp"`, and cost `billed seconds / 60 * price`. Before each
 call the day's voice-transcription spend is checked against the daily budget.
+
+## Health
+
+`orkestr doctor voice` (or `GET /api/voice-transcription/status`, admin only)
+shows the mode, model, whether a key is configured and where it comes from
+(never the key), today's spend against the daily budget, and today's and the
+last seven days' transcribed minutes and failures by error code. It exits
+non-zero when the key is missing, the budget is used up, or most of today's
+transcriptions failed. Counters live in `voice-transcription-stats.json` in the
+data directory and hold numbers and error codes only.
+
