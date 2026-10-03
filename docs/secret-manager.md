@@ -63,6 +63,10 @@ npm run secrets:migrate-env -- --env-file /path/to/private.env --write --user al
 Dry-run is the default. `--write` is required before anything is stored in
 secure-input.
 
+Voice-note transcription reads the OpenAI key from the global secure secret
+`openai_api_key` first (`orkestr secret set openai_api_key --global --stdin`);
+see `docs/voice-notes.md`.
+
 ## Verification
 
 The boundary is covered by:

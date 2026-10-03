@@ -28,6 +28,19 @@ function optionalBoolean(value, fallback = true) {
   return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
 }
 
+// Tri-state flag: true, false, or undefined (unset). An explicit null/"" in
+// the input clears it; omitting the key preserves the prior value.
+function optionalFlag(value, prior, provided = false) {
+  const parse = (raw) => {
+    if (typeof raw === "boolean") return raw;
+    const text = String(raw ?? "").trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(text)) return true;
+    if (["0", "false", "no", "off"].includes(text)) return false;
+    return undefined;
+  };
+  return provided ? parse(value) : parse(prior);
+}
+
 function unique(values = []) {
   const seen = new Set();
   const result = [];
@@ -173,6 +186,9 @@ export function normalizeWhatsAppPersistentBinding(input = {}, prior = {}, env =
     createdAt: pickString(prior.createdAt) || nowIso(),
     updatedAt: nowIso(),
   };
+  const transcribeVoiceNotes = optionalFlag(input.transcribeVoiceNotes, prior.transcribeVoiceNotes, Object.hasOwn(input, "transcribeVoiceNotes"));
+  if (transcribeVoiceNotes === undefined) delete binding.transcribeVoiceNotes;
+  else binding.transcribeVoiceNotes = transcribeVoiceNotes;
   binding = dualWriteWhatsAppParticipantIdentity(binding, env);
   assertRequiredTarget(binding);
   binding.id = pickString(input.id, input.bindingId, prior.id, prior.bindingId) || defaultBindingId(binding);

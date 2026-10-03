@@ -121,6 +121,7 @@ import {
 import { coalesceWhatsAppInboundRevision, finishWhatsAppInboundRevision } from "./whatsapp-inbound-revisions.js";
 import { resolveWhatsAppBinding } from "./whatsapp-account-bindings.js";
 import { whatsappBindingInboundAccountPolicy } from "./whatsapp-binding-account-policy.js";
+import { applyWhatsAppVoiceNoteTranscription } from "./whatsapp-voice-notes.js";
 import { whatsappWorkerHealth } from "./whatsapp-worker-client.js";
 import {
   boundThreadWhatsAppAssistantOrigin,
@@ -5019,6 +5020,12 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       sourceEventId: eventId, threadId: thread?.id || "", phase: "completed",
       reason: "settings_control", terminal: true }, env).catch(() => {});
     return settingsControl;
+  }
+  if (thread) {
+    ({ text, attachments } = await applyWhatsAppVoiceNoteTranscription({
+      thread, binding: { ...(thread.binding || {}), ...(threadRoute.binding || {}) },
+      inboundSecurity, from, chatId, text, attachments, env, fetchImpl,
+    }));
   }
   const messageInput = {
     role: "user", source: "whatsapp_inbound", originSurface: "whatsapp",
