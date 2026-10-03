@@ -20,6 +20,7 @@ import {
 } from "../packages/core/src/claude-code-supervised-process.js";
 import {
   claudeCodeThreadStatus,
+  hasActiveClaudeCodeSupervisor,
   deliverClaudeCodePendingInputs,
   interruptClaudeCodeThread,
   resetClaudeCodeRuntimeForTest,
@@ -735,18 +736,18 @@ setTimeout(() => {
       await interruptClaudeCodeThread(thread, env).catch(() => {});
       await running.catch(() => {});
     };
-    // Wait for the process to start and emit init (transport-only — semantic
-    // timer ticking). Polled rather than a fixed sleep: a loaded CI runner can
-    // take longer than 100 ms to spawn the process.
-    let statusFresh = null;
-    for (const started = Date.now(); Date.now() - started < 3_000;) {
-      thread = await getThread(thread.id, env);
-      statusFresh = await claudeCodeThreadStatus(thread, env);
-      if (statusFresh.working) break;
-      await new Promise((r) => setTimeout(r, 25));
+    // Bounded wait for the observable process supervisor (profile/setup and
+    // storage work before the spawn can take well over 100 ms on a loaded
+    // runner). A reserved-but-unspawned turn already reports working, but
+    // staleWorking needs a live supervisor, so wait for that, not a sleep.
+    for (const started = Date.now(); !hasActiveClaudeCodeSupervisor(thread.id) && Date.now() - started < 5_000;) {
+      await new Promise((r) => setTimeout(r, 10));
     }
+    assert.equal(hasActiveClaudeCodeSupervisor(thread.id), true, "the turn process supervisor is registered");
 
     // Just after start: working is true.
+    thread = await getThread(thread.id, env);
+    const statusFresh = await claudeCodeThreadStatus(thread, env);
     assert.equal(statusFresh.working, true, "working while process is running");
 
     // Wait past staleWorkingMs.
