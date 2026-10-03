@@ -14,7 +14,7 @@ import {
   updateThreadMessage,
 } from "./threads.js";
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
-import { parseThreadInputCommand } from "./thread-commands.js";
+import { delegatedAssistantInput, parseThreadInputCommand } from "./thread-commands.js";
 import { getClaudeCodeSession } from "./claude-code-sessions.js";
 import { recordClaudeCodeRouterTrace } from "./claude-code-router-trace.js";
 import { publicClaudeCodeFailure, threadUsesClaudeCode } from "./claude-code-runtime-policy.js";
@@ -363,6 +363,14 @@ async function steerActiveClaudeCodeTurn(thread, env = process.env) {
   if (activeTurns.get(thread.id) !== supervisor) {
     scheduleClaudeCodeDelivery(thread.id, env, 0);
     return { interrupted: false, reason: "turn_changed" };
+  }
+  // A turn answering a delegated (MCP) message is not interrupted by a steer
+  // input: the interrupted input would be settled without its own answer and
+  // the resumed turn would continue that request under the steer input's
+  // reply route. The steer input runs next instead.
+  const running = await listThreadMessageCandidates(thread.id, { states: ["running"] }, env);
+  if (running.some((message) => message.executorTurnId === supervisor.attemptId && delegatedAssistantInput(message))) {
+    return { interrupted: false, reason: "delegated_turn" };
   }
   return requestClaudeCodeInstantInterrupt({ thread, supervisor, env });
 }

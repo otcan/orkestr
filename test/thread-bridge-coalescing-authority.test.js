@@ -332,3 +332,26 @@ test("a legacy queued MCP /stop is literal text, not a stop", async (t) => {
   const stop = result.messages.find((message) => message.source === "thread_bridge_message");
   assert.notEqual(stop.observedVia, "claude_code_control_command");
 });
+
+test("a steer input does not interrupt a turn answering an MCP request; it runs next", async (t) => {
+  const { env, calls, thread } = await fixture(t, "steer-after-mcp");
+  const sent = await sendBridgeMessage(thread.id, { text: "long task synthetic-mcp-request", requestId: "steer-after-mcp", deliverToWhatsApp: false }, principal, env, NO_KICK);
+  const owner = deliverClaudeCodePendingInputs(thread, env);
+  await waitForStarted(calls, thread.id);
+  const ui = await primaries.ui(thread, env);
+  await deliverClaudeCodePendingInputs(thread, env);
+  await owner;
+  for (let round = 0; round < 200; round += 1) {
+    const open = (await listThreadMessages(thread.id, env)).filter((message) => message.role === "user" && !["completed", "failed", "cancelled"].includes(message.state));
+    if (!open.length && !hasActiveClaudeCodeSupervisor(thread.id)) break;
+    if (!hasActiveClaudeCodeSupervisor(thread.id)) await deliverClaudeCodePendingInputs(thread, env);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const entries = await readCalls(calls);
+  assert.ok(!entries.some((entry) => entry.signal), "the MCP turn was not interrupted");
+  const prompts = entries.filter((entry) => entry.turn).map((entry) => entry.prompt);
+  assert.deepEqual(prompts, ["long task synthetic-mcp-request", "synthetic-ui-request"]);
+  const finals = (await listThreadMessages(thread.id, env)).filter((message) => message.role === "assistant" && message.phase === "final_answer");
+  assert.equal(finals.filter((final) => final.parentMessageId === sent.messageId).length, 1, "the MCP request has its own answer");
+  assert.equal(finals.filter((final) => final.parentMessageId === ui.id).length, 1, "the steer input has its own answer");
+});
