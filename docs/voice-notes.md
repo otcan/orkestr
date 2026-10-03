@@ -55,8 +55,9 @@ Owner decision: own chats only.
   Friend/client chats are therefore off by default.
 - In groups WhatsApp usually identifies senders by a LID (`<id>@lid`), not by
   their phone number, and the two cannot be matched to each other. List the
-  owner's LID next to the phone number in `ORKESTR_WHATSAPP_OWNER_CONTACT_IDS`
-  (comma separated), or set `transcribeVoiceNotes: true` on the chat binding.
+  owner's LID in `ORKESTR_WHATSAPP_OWNER_ALIASES` (comma separated; unlike
+  `ORKESTR_WHATSAPP_OWNER_CONTACT_IDS` it is never used as group participants),
+  or set `transcribeVoiceNotes: true` on the chat binding.
 - For non-owner senders (flag set to `true`), the transcript is screened by the
   same request classifier that screens typed WhatsApp text.
 

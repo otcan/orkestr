@@ -121,13 +121,13 @@ test("binding flag true enables external chats and false disables owner chats", 
   assert.equal((await listThreadMessages("voice-thread", disabled.env))[0].text.includes("🎤"), false);
 });
 
-test("owner entries may be LID aliases: group messages identify the owner by LID", () => {
-  const env = { ORKESTR_ADMIN_USER_ID: "admin", ORKESTR_WHATSAPP_OWNER_CONTACT_IDS: "15550000001@c.us, 100000000000001@lid" };
+test("owner LID aliases (ORKESTR_WHATSAPP_OWNER_ALIASES) match group messages sent by LID", () => {
+  const env = { ORKESTR_ADMIN_USER_ID: "admin", ORKESTR_WHATSAPP_OWNER_CONTACT_IDS: "15550000001@c.us", ORKESTR_WHATSAPP_OWNER_ALIASES: "100000000000001@lid" };
   const thread = { ownerUserId: "admin" };
   assert.equal(whatsappVoiceNoteTranscriptionAllowed({ inboundSecurity: {}, from: "100000000000001@lid", thread, env }), true);
   assert.equal(whatsappVoiceNoteTranscriptionAllowed({ inboundSecurity: {}, from: "100000000000002@lid", thread, env }), false);
   // A phone-number entry alone does not match the same person's LID.
-  assert.equal(whatsappVoiceNoteTranscriptionAllowed({ inboundSecurity: {}, from: "100000000000001@lid", thread, env: { ...env, ORKESTR_WHATSAPP_OWNER_CONTACT_IDS: "15550000001@c.us" } }), false);
+  assert.equal(whatsappVoiceNoteTranscriptionAllowed({ inboundSecurity: {}, from: "100000000000001@lid", thread, env: { ...env, ORKESTR_WHATSAPP_OWNER_ALIASES: "" } }), false);
 });
 
 test("threads owned by another user are not owner/self chats", () => {

@@ -36,7 +36,12 @@ export function whatsappVoiceNoteSenderIsOwnerSelf({ inboundSecurity = {}, from 
   if (resourceOwnerUserId(thread || {}, env) !== whatsappOwnerUserId(env)) return false;
   if (inboundSecurity?.participant?.fromMe === true) return true;
   const sender = comparableParticipantId(from);
-  return Boolean(sender && participantIdSet(splitIds(env.ORKESTR_WHATSAPP_OWNER_CONTACT_IDS)).has(sender));
+  // ORKESTR_WHATSAPP_OWNER_ALIASES lists further ids of the same owner (in
+  // groups WhatsApp sends a LID that cannot be matched to the phone number).
+  // Unlike ORKESTR_WHATSAPP_OWNER_CONTACT_IDS it is never used as default
+  // group participants.
+  const owners = splitIds(env.ORKESTR_WHATSAPP_OWNER_CONTACT_IDS).concat(splitIds(env.ORKESTR_WHATSAPP_OWNER_ALIASES));
+  return Boolean(sender && participantIdSet(owners).has(sender));
 }
 
 export function whatsappVoiceNoteTranscriptionAllowed({ binding = {}, inboundSecurity = {}, from = "", thread = {}, env = process.env } = {}) {
