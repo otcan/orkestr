@@ -121,11 +121,13 @@ test("desktop list groups running, stopped, other, and attention desktops for di
     { slug: "erred", status: "inactive", launchError: "Chrome missing", ...ready },
     { slug: "foreign", status: "running", ...ready, desktopAccess: { allowed: true, granted: false, shadowDenied: true } },
     { slug: "owned", status: "inactive", ...ready, desktopAccess: { allowed: true, granted: true } },
+    { slug: "refused", status: "running", ...ready, desktopAccess: { allowed: false, granted: false } },
   ];
   const slugs = (list) => Array.from(list, (browser) => browser.slug);
   let groups = desk.deskGroups();
-  assert.deepEqual(slugs(groups.main), ["alpha", "owned", "zeta"]);
-  assert.deepEqual(slugs(groups.other), ["foreign"]);
+  // Shadow mode: no thread grant, but the server allows it, so Open is shown.
+  assert.deepEqual(slugs(groups.main), ["alpha", "foreign", "owned", "zeta"]);
+  assert.deepEqual(slugs(groups.other), ["refused"]);
   assert.deepEqual(slugs(groups.attention), ["broken", "erred", "fresh", "off", "partial"]);
   assert.equal(desk.rowMessage(desk.browsers[6]), "Chrome missing");
   assert.equal(desk.rowMessageIsError(desk.browsers[6]), true);
@@ -137,7 +139,7 @@ test("desktop list groups running, stopped, other, and attention desktops for di
   assert.deepEqual(slugs(desk.deskGroups().main), ["zeta"]);
   desk.browsers = desk.browsers.slice(0, 8);
   assert.equal(desk.searchVisible(), false);
-  assert.equal(desk.deskGroups().main.length, 2);
+  assert.equal(desk.deskGroups().main.length, 3);
 
   desk.toggleMenu({ slug: "alpha" });
   assert.equal(desk.menuOpen({ slug: "alpha" }), true);

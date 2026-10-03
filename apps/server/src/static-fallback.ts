@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import { serveDesktopSharePage } from "./desktop-share-page.js";
+import { publicUrlConfig } from "../../../packages/core/src/public-url-config.js";
 import path from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
@@ -32,7 +34,7 @@ export function registerStaticFallback(app: INestApplication): void {
       return next();
     }
     if (isDesktopSharePagePath(url)) {
-      return serveDesktopSharePage(response);
+      return serveDesktopSharePage(response, publicUrlConfig(process.env).appUrl);
     }
     const sharedAppHandled = await maybeHandleSharedAppRoute(request, response, url);
     if (sharedAppHandled) return;
@@ -233,192 +235,6 @@ function originalRequestUrl(request: any, requestUrl: string) {
   return `${originalRequestOrigin(request)}${requestUrl || "/"}`;
 }
 
-function serveDesktopSharePage(response: any) {
-  return response
-    .status(200)
-    .header("cache-control", "no-store")
-    .type("text/html; charset=utf-8")
-    .send(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Orkestr Desktop Access</title>
-  <style>
-    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101418; color: #f6f8fb; }
-    main { width: min(92vw, 520px); padding: 28px; border: 1px solid #2d3743; background: #171d24; border-radius: 8px; box-shadow: 0 18px 60px #0008; }
-    h1 { margin: 0 0 10px; font-size: 24px; letter-spacing: 0; }
-    p { margin: 10px 0; color: #c8d0db; line-height: 1.45; }
-    code { display: block; margin: 18px 0; padding: 16px; border-radius: 6px; background: #0b0f14; color: #9be7c1; font-size: 17px; overflow-wrap: anywhere; user-select: all; }
-    button, a.button { display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 0 16px; border-radius: 6px; border: 1px solid #5b6b7d; background: #e8edf3; color: #111820; font-weight: 700; text-decoration: none; }
-    small { display: block; margin-top: 16px; color: #8f9baa; }
-    .error { color: #ffb4a9; }
-    #viewer { position: fixed; inset: 0; background: #050708; }
-    #viewer iframe { width: 100%; height: 100%; border: 0; display: block; }
-  </style>
-</head>
-<body>
-  <main id="share-panel">
-    <h1>Orkestr Desktop Access</h1>
-    <p id="summary">Preparing a one-time desktop challenge.</p>
-    <code id="challenge">loading</code>
-    <button id="copy" type="button">Copy challenge</button>
-    <p id="status"></p>
-    <small id="lifecycle" aria-live="polite"></small>
-    <a id="open" class="button" href="#" hidden>Open desktop</a>
-    <a id="mobile" class="button" href="#" hidden>Mobile controls</a>
-    <small>This link only works for this browser after the exact command below is pasted back to the Orkestr chat.</small>
-  </main>
-  <section id="viewer" hidden><iframe id="desktop-frame" title="Orkestr desktop"></iframe></section>
-  <script>
-    const parts = location.pathname.split('/').filter(Boolean);
-    const shareIndex = parts.indexOf('desktop-share');
-    const shareParts = shareIndex >= 0 ? parts.slice(shareIndex) : parts;
-    const tenantShare = shareParts[0] === 'desktop-share' && shareParts[1] === 'tvm';
-    const tenantVmId = tenantShare ? decodeURIComponent(shareParts[2] || '') : '';
-    const subdomain = tenantShare ? decodeURIComponent(shareParts[3] || '') : (shareParts.length > 2 ? shareParts[1] : '');
-    const shareId = tenantShare ? decodeURIComponent(shareParts[4] || '') : (shareParts[shareParts.length - 1] || '');
-    const key = new URLSearchParams(location.search).get('key') || '';
-    const challenge = document.getElementById('challenge');
-    const statusNode = document.getElementById('status');
-    const lifecycleNode = document.getElementById('lifecycle');
-    const summary = document.getElementById('summary');
-    const open = document.getElementById('open');
-    const mobile = document.getElementById('mobile');
-    const copy = document.getElementById('copy');
-    const main = document.getElementById('share-panel');
-    const viewer = document.getElementById('viewer');
-    const desktopFrame = document.getElementById('desktop-frame');
-    const api = (action) => {
-      const base = tenantVmId
-        ? '/api/tenant-vms/' + encodeURIComponent(tenantVmId) + '/desktop-shares/' + encodeURIComponent(shareId) + '/' + action
-        : '/api/desktop-shares/' + encodeURIComponent(shareId) + '/' + action;
-      return base + '?key=' + encodeURIComponent(key) + (subdomain ? '&subdomain=' + encodeURIComponent(subdomain) : '');
-    };
-    function mobileDestination(value) {
-      const parsed = new URL(value, location.origin);
-      const parts = parsed.pathname.split('/').filter(Boolean);
-      if (parts[0] === 'desktop' && parts[1] && parts[2] === 'vnc.html') {
-        return '/desktop/' + encodeURIComponent(decodeURIComponent(parts[1])) + '/mobile';
-      }
-      if (parts[0] === 'tenant-vms' && parts[1] && parts[2] === 'desktop' && parts[3] && parts[4] === 'vnc.html') {
-        return '/tenant-vms/' + encodeURIComponent(decodeURIComponent(parts[1])) + '/desktop/' + encodeURIComponent(decodeURIComponent(parts[3])) + '/mobile';
-      }
-      return value;
-    }
-    async function json(url) {
-      const response = await fetch(url, { credentials: 'same-origin' });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok || body.ok === false) {
-        const error = new Error(body.renewal && body.renewal.message ? body.renewal.message : (body.error || body.message || 'desktop_share_failed'));
-        error.payload = body;
-        throw error;
-      }
-      return body;
-    }
-    function showExpired(error) {
-      const renewal = error && error.payload ? error.payload.renewal : null;
-      if (!renewal || !renewal.renewCommand) return false;
-      hideDesktop();
-      challenge.textContent = renewal.renewCommand;
-      summary.textContent = 'This desktop link expired.';
-      statusNode.textContent = renewal.message || 'Ask the Orkestr operator to create a fresh desktop link.';
-      statusNode.className = 'error';
-      copy.textContent = 'Copy renewal command';
-      return true;
-    }
-    function hideDesktop() {
-      viewer.hidden = true;
-      desktopFrame.removeAttribute('src');
-      main.hidden = false;
-      open.hidden = true;
-      open.removeAttribute('href');
-      mobile.hidden = true;
-      mobile.removeAttribute('href');
-    }
-    function showTerminal(error) {
-      const lifecycle = error && error.payload ? error.payload.lifecycle : null;
-      if (!lifecycle || !['superseded', 'revoked'].includes(lifecycle.status)) return false;
-      hideDesktop();
-      challenge.textContent = lifecycle.status === 'superseded' ? 'replaced' : 'revoked';
-      summary.textContent = lifecycle.status === 'superseded' ? 'This desktop share was replaced.' : 'This desktop share was revoked.';
-      statusNode.textContent = 'Return to the Orkestr chat and request a new desktop link.';
-      statusNode.className = 'error';
-      copy.hidden = true;
-      return true;
-    }
-    function showDesktop(desktopUrl) {
-      const target = new URL(desktopUrl, location.origin);
-      if (target.origin !== location.origin) throw new Error('desktop_share_origin_mismatch');
-      location.replace(target.href);
-    }
-    function lifecycleTime(value) {
-      if (!value) return 'unknown';
-      const time = new Date(value);
-      return Number.isNaN(time.getTime()) ? 'unknown' : time.toLocaleString();
-    }
-    function renderLifecycle(body) {
-      const share = body && body.share ? body.share : {};
-      const attempt = body && body.attempt ? body.attempt : {};
-      const generation = Number(share.shareGeneration || 0);
-      const shareStatus = share.status || 'pending';
-      const attemptStatus = attempt.status || 'not opened';
-      const approved = attempt.approvedAt ? ' approved ' + lifecycleTime(attempt.approvedAt) : '';
-      lifecycleNode.textContent = 'Generation ' + generation + ' · ' + shareStatus + ' · attempt ' + attemptStatus + approved + ' · expires ' + lifecycleTime(share.expiresAt);
-    }
-    async function poll() {
-      try {
-        const body = await json(api('status'));
-        renderLifecycle(body);
-        if (body.approved && body.desktopUrl) {
-          const desktopUrl = body.desktopUrl;
-          statusNode.textContent = 'Approved. Desktop connected.';
-          open.href = desktopUrl;
-          open.hidden = false;
-          const mobileUrl = mobileDestination(body.desktopUrl);
-          if (mobileUrl !== desktopUrl) {
-            mobile.href = mobileUrl;
-            mobile.hidden = false;
-          }
-          showDesktop(desktopUrl);
-        }
-        if (!body.approved) statusNode.textContent = 'Waiting for approval from chat.';
-        setTimeout(poll, 2000);
-      } catch (error) {
-        if (showExpired(error)) return;
-        if (showTerminal(error)) return;
-        statusNode.textContent = error.message || String(error);
-        statusNode.className = 'error';
-      }
-    }
-    async function start() {
-      try {
-        const body = await json(api('open'));
-        renderLifecycle(body);
-        const value = body.attempt && body.attempt.challenge ? body.attempt.challenge : '';
-        challenge.textContent = 'orkestr desktop approve ' + value;
-        summary.textContent = 'Copy this exact command and paste it into the Orkestr chat that requested the desktop.';
-        statusNode.textContent = 'Waiting for approval from chat.';
-        poll();
-      } catch (error) {
-        if (showExpired(error)) return;
-        if (showTerminal(error)) return;
-        challenge.textContent = 'not available';
-        statusNode.textContent = error.message || String(error);
-        statusNode.className = 'error';
-      }
-    }
-    copy.addEventListener('click', async () => {
-      await navigator.clipboard.writeText(challenge.textContent || '');
-      copy.textContent = 'Copied';
-      setTimeout(() => { copy.textContent = 'Copy challenge'; }, 1200);
-    });
-    start();
-  </script>
-</body>
-</html>`);
-}
 
 async function servePublicAsset(requestUrl: string, response: any) {
   const url = new URL(requestUrl, "http://localhost");

@@ -2186,7 +2186,7 @@ test("web shell keeps broker-mounted tenant routes under base href", async () =>
 test("mobile desktop shell wraps noVNC with phone-first controls", async () => {
   const proxy = await fs.readFile("apps/server/src/desktop-proxy.ts", "utf8");
   const shell = await fs.readFile("apps/server/src/mobile-desktop-shell.ts", "utf8");
-  const sharePage = await fs.readFile("apps/server/src/static-fallback.ts", "utf8");
+  const sharePage = await fs.readFile("apps/server/src/desktop-share-page.ts", "utf8");
 
   assert.match(proxy, /isMobileDesktopRoute/);
   assert.match(proxy, /serveMobileDesktopShell/);
@@ -2213,7 +2213,7 @@ test("mobile desktop shell wraps noVNC with phone-first controls", async () => {
 
 test("desktop share shell supervises noVNC and proxy terminates stale sockets", async () => {
   const proxy = await fs.readFile("apps/server/src/desktop-proxy.ts", "utf8");
-  const sharePage = await fs.readFile("apps/server/src/static-fallback.ts", "utf8");
+  const sharePage = await fs.readFile("apps/server/src/desktop-share-page.ts", "utf8");
   const shares = await fs.readFile("packages/core/src/desktop-shares.js", "utf8");
 
   assert.match(sharePage, /id="desktop-frame"/);
@@ -2224,6 +2224,11 @@ test("desktop share shell supervises noVNC and proxy terminates stale sockets", 
   assert.match(sharePage, /renderLifecycle\(body\)/);
   assert.match(sharePage, /share\.shareGeneration/);
   assert.match(sharePage, /attempt\.approvedAt/);
+  // The signed-in owner opens their own link without copying a challenge.
+  assert.match(sharePage, /async function approveAsOwner\(\)/);
+  assert.match(sharePage, /approve-as-owner/);
+  assert.match(sharePage, /Open with my Orkestr login/);
+  assert.match(sharePage, /Not the owner\? Approve from chat instead/);
   assert.doesNotMatch(sharePage, /location\.href = desktopUrl/);
   assert.match(proxy, /onDesktopShareLifecycle/);
   assert.match(proxy, /validateDesktopShareSession/);

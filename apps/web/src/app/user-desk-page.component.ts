@@ -334,7 +334,9 @@ export class UserDeskPageComponent implements OnInit, OnChanges {
   threadCanOpen(browser: BrowserSession): boolean {
     const access = browser.desktopAccess;
     if (!access || typeof access !== "object") return true;
-    return access.allowed !== false && access.granted !== false && access.inventoryOnly !== true;
+    // Follow the server's decision: in shadow mode a desktop without a thread
+    // grant is still allowed (granted: false), and Open works for it.
+    return access.allowed !== false && access.inventoryOnly !== true;
   }
 
   deskGroups(): DeskGroups {

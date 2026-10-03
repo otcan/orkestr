@@ -185,7 +185,8 @@ function safeReturnPath(value = "", env = process.env) {
   try {
     const parsed = new URL(raw, "http://orkestr.local");
     const appPath = parsed.pathname === "/apps" || parsed.pathname.startsWith("/apps/") || parsed.pathname === "/mcp-oauth/authorize" ||
-      /^\/s\/[A-Za-z0-9_-]+$/.test(parsed.pathname);
+      /^\/s\/[A-Za-z0-9_-]+$/.test(parsed.pathname) ||
+      /^\/desktop-share\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_-]+$/.test(parsed.pathname);
     const controlPlaneRoots = new Set(["", "launcher", "files", "desktops", "timers", "connectors", "settings", "instance", "thread"]);
     const controlPlaneRoot = parsed.pathname.split("/").filter(Boolean)[0] || "";
     const controlPlanePath = controlPlaneSettings(env).enabled && controlPlaneRoots.has(controlPlaneRoot);
