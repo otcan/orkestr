@@ -25,6 +25,7 @@ import { clearWhatsAppDeliveryIdleCache } from "../../../packages/connectors/src
 import { mailboxThreadDeliveryPumpIntervalMs, runMailboxDeliveryPump } from "../../../packages/connectors/src/mailbox-delivery-pump.js";
 import { runThreadWatchPump, threadWatchPumpIntervalMs } from "../../../packages/core/src/thread-watch-pump.js";
 import { ensureExistingWorkerWatches } from "../../../packages/core/src/thread-watches.js";
+import { createBackgroundTasks } from "./background-tasks.js";
 import { mcpEventDeliveryIntervalMs, runMcpEventDelivery } from "../../../packages/core/src/mcp-event-delivery.js";
 import { mailboxVmRelayPumpIntervalMs, runVmMailboxRelayPump } from "../../../packages/connectors/src/mailbox-vm-relay.js";
 import { migrateThreadMessageStore } from "../../../packages/storage/src/thread-message-registry.js";
@@ -617,9 +618,11 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   });
   const app = await createApp();
   const runRuntimeSync = createRuntimeWhatsAppSyncRunner(serverEnv);
+  // Every unawaited background run is tracked so close() can wait for it.
+  const background = createBackgroundTasks();
 
   const timer = setInterval(() => {
-    runTimerLoop(serverEnv, runRuntimeSync).catch((error) => {
+    background.track(runTimerLoop(serverEnv, runRuntimeSync)).catch((error) => {
       reportServerError(serverEnv, {
         source: "server.timerLoop",
         code: "timer_loop_failed",
@@ -630,7 +633,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   }, timerLoopIntervalMs());
 
   const runtimeMonitor = setInterval(() => {
-    runRuntimeSync().catch((error) => {
+    background.track(runRuntimeSync()).catch((error) => {
       reportServerError(serverEnv, {
         source: "server.runtimeMonitor",
         code: "runtime_monitor_failed",
@@ -641,7 +644,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   }, runtimeMonitorIntervalMs());
 
   const paneProgressMonitor = setInterval(() => {
-    syncPaneProgressForActiveLeases(serverEnv).catch((error) => {
+    background.track(syncPaneProgressForActiveLeases(serverEnv)).catch((error) => {
       reportServerError(serverEnv, {
         source: "server.paneProgress",
         code: "pane_progress_sync_failed",
@@ -651,7 +654,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     });
   }, paneProgressMonitorIntervalMs());
   const inboundAttachmentCleanupPoll = setInterval(() => {
-    sweepInboundAttachmentQuarantine(serverEnv).catch((error) => {
+    background.track(sweepInboundAttachmentQuarantine(serverEnv)).catch((error) => {
       reportServerError(serverEnv, {
         source: "server.inboundAttachmentCleanup",
         code: "inbound_attachment_cleanup_failed",
@@ -667,7 +670,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   }, whatsappDeliveryPollIntervalMs(serverEnv));
   whatsappDeliveryPoll.unref?.();
   const mailboxDeliveryPoll = setInterval(() => {
-    runMailboxDeliveryPump(serverEnv).catch((error) => {
+    background.track(runMailboxDeliveryPump(serverEnv)).catch((error) => {
       reportServerError(serverEnv, {
         source: "server.mailboxDeliveryPump",
         code: "mailbox_delivery_pump_failed",
@@ -677,7 +680,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     });
   }, mailboxThreadDeliveryPumpIntervalMs(serverEnv));
   mailboxDeliveryPoll.unref?.();
-  const runThreadWatches = (source: string) => runThreadWatchPump(serverEnv).catch((error) => {
+  const runThreadWatches = (source: string) => background.track(runThreadWatchPump(serverEnv)).catch((error) => {
     reportServerError(serverEnv, {
       source,
       code: "thread_watch_pump_failed",
@@ -689,13 +692,13 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   threadWatchPoll.unref?.();
   const mcpEventPoll = setInterval(() => {
     if (serverEnv.ORKESTR_THREAD_BRIDGE_ENABLED !== "1") return;
-    void runMcpEventDelivery(serverEnv).catch((error) => {
+    void background.track(runMcpEventDelivery(serverEnv)).catch((error) => {
       reportServerError(serverEnv, { source: "server.mcpEvents", code: "mcp_event_delivery_failed", message: error?.message || String(error), error });
     });
   }, mcpEventDeliveryIntervalMs(serverEnv));
   mcpEventPoll.unref?.();
   const mailboxVmRelayPoll = setInterval(() => {
-    runVmMailboxRelayPump(serverEnv).catch((error) => {
+    background.track(runVmMailboxRelayPump(serverEnv)).catch((error) => {
       reportServerError(serverEnv, {
         source: "server.mailboxVmRelayPump",
         code: "mailbox_vm_relay_pump_failed",
@@ -744,7 +747,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   attachTrustedOperatorProxyUpgrade(app.getHttpServer());
   await app.listen(port, host);
   whatsappDeliveryScheduler.schedule();
-  void runMailboxDeliveryPump(serverEnv).catch((error) => {
+  void background.track(runMailboxDeliveryPump(serverEnv)).catch((error) => {
     reportServerError(serverEnv, {
       source: "server.mailboxDeliveryPump.startup",
       code: "mailbox_delivery_pump_startup_failed",
@@ -752,8 +755,8 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
       error,
     });
   });
-  void ensureExistingWorkerWatches(serverEnv)
-    .then(() => runThreadWatches("server.threadWatchPump.startup"))
+  void background.track(ensureExistingWorkerWatches(serverEnv)
+    .then(() => runThreadWatches("server.threadWatchPump.startup")))
     .catch((error) => {
       reportServerError(serverEnv, {
         source: "server.threadWatches.startup",
@@ -762,7 +765,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
         error,
       });
     });
-  void runVmMailboxRelayPump(serverEnv).catch((error) => {
+  void background.track(runVmMailboxRelayPump(serverEnv)).catch((error) => {
     reportServerError(serverEnv, {
       source: "server.mailboxVmRelayPump.startup",
       code: "mailbox_vm_relay_pump_startup_failed",
@@ -796,6 +799,12 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     whatsappDeliveryScheduler.close();
     stopCodexAppServerClients();
     await stopLocalWhatsAppBridge(serverEnv).catch(() => {});
+    // Intervals are cleared above; wait for runs already in flight so nothing
+    // writes into ORKESTR_HOME after close() resolves.
+    const drained = await background.drain(10_000);
+    if (!drained.drained) {
+      reportServerError(serverEnv, { source: "server.close", code: "background_tasks_not_drained", message: `${drained.pending} background task(s) still running at shutdown` });
+    }
   });
 }
 
