@@ -35,6 +35,10 @@ const NORMAL = { text: "Plain note about Modex.", languages: [{ code: "en" }], u
 
 function routedFetch(calls, { diarize = DIARIZED, normal = NORMAL, diarizeStatus = 200 } = {}) {
   return async (url, init) => {
+    // The automatic translation check answers "already understood".
+    if (String(url).endsWith("/responses")) {
+      return new Response(JSON.stringify({ output: [{ type: "message", content: [{ type: "output_text", text: "NO_TRANSLATION" }] }], usage: { input_tokens: 40, output_tokens: 3 } }), { status: 200 });
+    }
     const model = init.body.get("model");
     calls.push({ url: String(url), model, form: init.body });
     if (model.includes("diarize")) {

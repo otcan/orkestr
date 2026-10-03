@@ -67,15 +67,23 @@ health counters work as for normal notes.
 
 Limitations of the diarize model: it accepts no keyword or language hints, so
 names rely on the offline correction pass only; speakers are labelled `A`,
-`B`, ... (no names); and it returns no language, so diarized recordings are
-never translated.
+`B`, ... (no names); and it returns no language, so recordings rely on the
+translation check below to decide whether to translate.
 
 ### Translation
 
-After a transcript is accepted, a note whose detected language is not in the
-understood languages is translated with the Responses API
-(`POST <base>/responses`, model `gpt-6-luna`). The original line stays and a
-translation line follows:
+After a transcript is accepted it is translated with the Responses API
+(`POST <base>/responses`, model `gpt-6-luna`) when it is not in one of the
+understood languages. Transcription language labels are not reliable for this
+(the transcription request hints the understood languages, so a Spanish note
+can come back labelled English, and recordings have no label), so:
+
+- a label outside the understood languages forces a translation;
+- otherwise the translation model checks the text itself and replies
+  `NO_TRANSLATION` when it is (mostly) in an understood language, which adds no
+  line. This check costs a few dozen tokens per note.
+
+The original line stays and a translation line follows:
 
 ```text
 🎤 Voice note (0:07, Spanish): "Recuérdame llamar a Example Corp mañana."

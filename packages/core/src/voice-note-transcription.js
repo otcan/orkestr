@@ -121,8 +121,13 @@ async function transcribeOneAttachment({ attachment, glossary, settings, deadlin
  */
 async function translateAcceptedTranscript({ transcript, apiKey, deadline, settings, tenantId, threadId, sourceChannel, env, fetchImpl }) {
   const translationSettings = voiceTranslationSettings(env);
-  const from = languageNeedingTranslation(transcript.languages, translationSettings);
-  if (!from) return {};
+  if (!translationSettings.enabled) return {};
+  // A language label outside the understood list forces a translation;
+  // otherwise the model checks the text itself ("auto"), since labels are
+  // biased by the language hints and recordings have none.
+  const flagged = languageNeedingTranslation(transcript.languages, translationSettings);
+  const mode = flagged ? "force" : "auto";
+  const from = flagged || "auto";
   const to = translationSettings.target;
   try {
     const remainingMs = deadline - Date.now();
@@ -133,6 +138,8 @@ async function translateAcceptedTranscript({ transcript, apiKey, deadline, setti
     const result = await translateText({
       text: transcript.text,
       targetName: languageDisplayName(to),
+      mode,
+      understoodNames: translationSettings.understoodLanguages.map(languageDisplayName),
       model: translationSettings.model,
       apiKey,
       timeoutMs: Math.min(settings.timeoutMs, remainingMs),
@@ -140,6 +147,7 @@ async function translateAcceptedTranscript({ transcript, apiKey, deadline, setti
       fetchImpl,
     });
     await recordVoiceTranslationUsage({ tenantId, threadId, sourceChannel, model: result.model, inputTokens: result.inputTokens, outputTokens: result.outputTokens }, env).catch(() => {});
+    if (result.skipped) return {};
     await appendEvent({ type: "voice_translation_completed", threadId, from, to, model: result.model }, env).catch(() => {});
     await recordVoiceTranslationOutcome({ ok: true }, env);
     return { translation: { language: to, text: result.text, model: result.model } };

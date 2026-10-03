@@ -45,6 +45,10 @@ async function setup(prefix, { binding = {}, extraEnv = {}, thread = {} } = {}) 
 
 function mockFetch(calls, { status = 200, text = TRANSCRIPT } = {}) {
   return async (url, init) => {
+    // The automatic translation check answers "already understood".
+    if (String(url).endsWith("/responses")) {
+      return new Response(JSON.stringify({ output: [{ type: "message", content: [{ type: "output_text", text: "NO_TRANSLATION" }] }], usage: { input_tokens: 40, output_tokens: 3 } }), { status: 200 });
+    }
     calls.push({ url: String(url), init });
     if (status !== 200) return new Response("{}", { status });
     return new Response(JSON.stringify({ text, languages: [{ code: "en" }], usage: { type: "duration", seconds: 7 } }), { status: 200 });

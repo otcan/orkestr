@@ -93,9 +93,19 @@ test("a non-understood language is translated: request shape, lines, transcript,
 test("understood languages, translation off and long input", async () => {
   const understood = await fixture("tr");
   const calls = [];
-  const result = await transcribeVoiceNoteAttachments({ attachments: note(understood.audioPath), env: understood.env, fetchImpl: routedFetch(calls, { text: "Yarın ara.", language: "tr" }) });
-  assert.equal(calls.length, 1);
+  const result = await transcribeVoiceNoteAttachments({ attachments: note(understood.audioPath), env: understood.env, fetchImpl: routedFetch(calls, { text: "Yarın ara.", language: "tr", translation: "NO_TRANSLATION" }) });
+  // An understood label still gets the model's own check (labels are biased
+  // by the language hints); NO_TRANSLATION adds no line.
+  assert.equal(calls.length, 2);
+  assert.match(JSON.parse(calls[1].init.body).instructions, /reply exactly NO_TRANSLATION/);
   assert.equal(result.text, '🎤 Voice note (0:07, Turkish): "Yarın ara."');
+
+  // A Spanish note mislabelled as English is still translated by the check.
+  const mislabelled = await fixture("mislabelled");
+  const mislabelledCalls = [];
+  const translated = await transcribeVoiceNoteAttachments({ attachments: note(mislabelled.audioPath), env: mislabelled.env, fetchImpl: routedFetch(mislabelledCalls, { language: "en" }) });
+  assert.match(JSON.parse(mislabelledCalls[1].init.body).instructions, /reply exactly NO_TRANSLATION/);
+  assert.match(translated.text, /↳ English: "/);
 
   const off = await fixture("off", { ORKESTR_TRANSLATION: "off" });
   const offCalls = [];

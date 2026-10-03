@@ -34,6 +34,10 @@ async function fixture(prefix, extra = {}) {
 
 function okFetch(payload, calls = []) {
   return async (url, init) => {
+    // The automatic translation check answers "already understood".
+    if (String(url).endsWith("/responses")) {
+      return new Response(JSON.stringify({ output: [{ type: "message", content: [{ type: "output_text", text: "NO_TRANSLATION" }] }], usage: { input_tokens: 40, output_tokens: 3 } }), { status: 200 });
+    }
     calls.push({ url, init });
     return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
   };
