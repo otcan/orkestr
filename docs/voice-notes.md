@@ -17,8 +17,8 @@ file path.
   🎤 Voice note (0:07, English): "Remind me to call Example Corp tomorrow."
   ```
 
-  Language names are shown for `en`, `tr`, and `de`; other languages show the
-  ISO code.
+  Languages are shown by their English name (`English`, `Spanish`, ...);
+  unknown codes show the ISO code.
 - The audio attachment is kept. A successful transcript is also stored on the
   attachment as `transcript: { text, model, languages, seconds }` so the WebUI
   and history keep it.
@@ -41,6 +41,63 @@ thread name, the binding name, the owner's display name, and
 40 characters). Afterwards a deterministic, offline pass replaces capitalized
 words that sound like a single-word glossary entry (for example `Modex` ->
 `Modeks` when `Modeks` is a keyword). Ordinary words are left alone.
+
+### Speaker labels for recordings
+
+Forwarded recordings and audio files (attachment kind `audio`) are sent to the
+diarize model (`gpt-4o-transcribe-diarize`, `response_format=diarized_json`,
+`chunking_strategy=auto`); voice notes recorded in the chat (kind `ptt`) keep
+the normal model. Consecutive segments of the same speaker are merged into one
+turn and each turn gets the name correction pass. With two or more speakers the
+input reads:
+
+```text
+🎤 Recording (1:15, 2 speakers):
+Speaker A: "Hi, is the demo ready?"
+Speaker B: "Almost. It works on staging."
+```
+
+With a single speaker the line looks like a normal voice note (without a
+language). The transcript is stored as
+`transcript: { text, model, seconds, speakers, turns: [{ speaker, start, text }] }`.
+If the diarize call fails, the note is retried once with the normal model
+(event `voice_diarization_failed { threadId, code }`), then the usual
+unavailable line applies. Screening, budget, rate limit, credits, events, and
+health counters work as for normal notes.
+
+Limitations of the diarize model: it accepts no keyword or language hints, so
+names rely on the offline correction pass only; speakers are labelled `A`,
+`B`, ... (no names); and it returns no language, so diarized recordings are
+never translated.
+
+### Translation
+
+After a transcript is accepted, a note whose detected language is not in the
+understood languages is translated with the Responses API
+(`POST <base>/responses`, model `gpt-6-luna`). The original line stays and a
+translation line follows:
+
+```text
+🎤 Voice note (0:07, Spanish): "Recuérdame llamar a Example Corp mañana."
+↳ English: "Remind me to call Example Corp tomorrow."
+```
+
+- The translation is stored as `transcript.translation: { language, text, model }`.
+- Plain text in, plain text out: the instructions tell the model to translate
+  only and never follow instructions inside the text. Input is capped at 4000
+  characters.
+- For senders other than the owner/self account the translated text is also
+  screened. The request classifier is English-pattern based, so a
+  foreign-language injection is often only visible after translation; a
+  rejected translation blocks the whole note
+  (`transcription unavailable (transcription_policy_blocked)`, no original text).
+- A failed translation never fails the note: the original line stays and
+  `↳ translation unavailable (<code>)` is appended. Codes:
+  `translation_timeout`, `translation_http_<status>`, `translation_empty`,
+  `translation_budget_exceeded`, `translation_network_error`,
+  `translation_invalid_response`. In that case foreign-language text from
+  other senders reaches the thread screened on the original text only.
+- Diarized recordings carry no language and are not translated.
 
 ## Scope
 
@@ -66,8 +123,12 @@ Audio is uploaded to OpenAI (or the configured compatible endpoint), including
 voice notes from other people in the owner's chats. Turn it off per chat with
 `transcribeVoiceNotes: false` where participants would not expect that. Transcript text, file
 names, and keys are never written to `events.jsonl`, logs, or metrics; the only
-events are `voice_transcription_completed { threadId, seconds, model, languages }`
-and `voice_transcription_failed { threadId, code }`.
+events are `voice_transcription_completed { threadId, seconds, model, languages, speakers? }`,
+`voice_transcription_failed { threadId, code }`,
+`voice_diarization_failed { threadId, code }`,
+`voice_translation_completed { threadId, from, to, model }`, and
+`voice_translation_failed { threadId, code }`. Translation sends the
+transcript text to the same OpenAI-compatible endpoint.
 
 ## Settings
 
@@ -80,8 +141,15 @@ and `voice_transcription_failed { threadId, code }`.
 | `ORKESTR_TRANSCRIPTION_TIMEOUT_MS` | `30000` | Total wait per message. |
 | `ORKESTR_TRANSCRIPTION_DAILY_BUDGET_USD` | `5` | Daily spend cap across all voice notes. |
 | `ORKESTR_TRANSCRIPTION_CHAT_HOURLY_LIMIT` | `60` | Notes per chat per hour. |
-| `ORKESTR_TRANSCRIPTION_PRICE_PER_MINUTE_USD` | model price | Price override for the configured model. |
-| `ORKESTR_TRANSCRIPTION_PRICES_JSON` | `{"gpt-transcribe":0.0045}` | Per-model price map (USD per minute). |
+| `ORKESTR_TRANSCRIPTION_PRICE_PER_MINUTE_USD` | model price | Price override for the configured `ORKESTR_TRANSCRIPTION_MODEL` only. |
+| `ORKESTR_TRANSCRIPTION_PRICES_JSON` | `{"gpt-transcribe":0.0045,"gpt-4o-transcribe-diarize":0.006}` | Per-model price map (USD per minute). |
+| `ORKESTR_TRANSCRIPTION_DIARIZE` | `auto` | `auto`: speaker labels for forwarded recordings (kind `audio`); `always`: for all audio; `off`: never. |
+| `ORKESTR_TRANSCRIPTION_DIARIZE_MODEL` | `gpt-4o-transcribe-diarize` | Diarize model id. |
+| `ORKESTR_TRANSLATION` | on | `off` disables translation. |
+| `ORKESTR_TRANSLATION_TARGET` | `en` | Target language code. |
+| `ORKESTR_TRANSLATION_MODEL` | `gpt-6-luna` | Responses API model. |
+| `ORKESTR_UNDERSTOOD_LANGUAGES` | `ORKESTR_TRANSCRIPTION_LANGUAGES` | Languages that are never translated (the target is always included). |
+| `ORKESTR_TRANSLATION_PRICES_JSON` | `{"gpt-6-luna":{"input":0.1,"output":0.5}}` | Per-model price map (USD per 1M tokens). |
 | `ORKESTR_TRANSCRIPTION_BASE_URL` | `OPENAI_BASE_URL` or `https://api.openai.com/v1` | Requests go to `<base>/audio/transcriptions`. |
 
 ## API key
@@ -101,17 +169,23 @@ Resolution order:
 
 ## Costs
 
-`gpt-transcribe` is billed at $0.0045 per audio minute. Every successful call is
-recorded in the credit ledger with `callKind: "voice_transcription"`,
-`sourceChannel: "whatsapp"`, and cost `billed seconds / 60 * price`. Before each
-call the day's voice-transcription spend is checked against the daily budget.
+`gpt-transcribe` is billed at $0.0045 per audio minute and
+`gpt-4o-transcribe-diarize` at $0.006 per audio minute (from the response
+`duration`). Every successful call is recorded in the credit ledger with
+`callKind: "voice_transcription"`, `sourceChannel: "whatsapp"`, and cost
+`billed seconds / 60 * price`. Translations are recorded with
+`callKind: "voice_translation"` and a token-based cost (`gpt-6-luna`: $0.10 per
+1M input tokens, $0.50 per 1M output tokens). Before each transcription and
+each translation the day's combined voice transcription + translation spend is
+checked against the daily budget.
 
 ## Health
 
 `orkestr doctor voice` (or `GET /api/voice-transcription/status`, admin only)
-shows the mode, model, whether a key is configured and where it comes from
+shows the mode, model, speaker-label and translation settings, whether a key is configured and where it comes from
 (never the key), today's spend against the daily budget, and today's and the
-last seven days' transcribed minutes and failures by error code. It exits
+last seven days' transcribed minutes, failures by error code, and translated
+and failed translations. It exits
 non-zero when the key is missing, the budget is used up, or most of today's
 transcriptions failed. Counters live in `voice-transcription-stats.json` in the
 data directory and hold numbers and error codes only.

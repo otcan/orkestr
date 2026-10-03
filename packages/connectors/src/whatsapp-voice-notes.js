@@ -89,7 +89,8 @@ export async function applyWhatsAppVoiceNoteTranscription({
     threadId: thread.id,
     sourceChannel: "whatsapp",
     // Other senders were screened on their typed text only; screen the
-    // spoken text with the same classifier before it reaches the agent.
+    // spoken text (and its translation) with the same classifier before it
+    // reaches the agent.
     acceptTranscript: ownerSelf ? null : (spoken) => !classifyWhatsAppInboundRequest(spoken).malicious,
     env,
     fetchImpl,

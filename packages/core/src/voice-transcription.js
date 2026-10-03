@@ -13,7 +13,10 @@ export const TRANSCRIPTION_SECRET_NAME = "openai_api_key";
 export const MAX_TRANSCRIPTION_BYTES = 25 * 1024 * 1024;
 const DEFAULT_MODEL = "gpt-transcribe";
 const DEFAULT_LANGUAGES = "en,tr,de";
-const DEFAULT_PRICE_PER_MINUTE_USD = { "gpt-transcribe": 0.0045 };
+const DEFAULT_PRICE_PER_MINUTE_USD = { "gpt-transcribe": 0.0045, "gpt-4o-transcribe-diarize": 0.006 };
+// Translation of accepted transcripts shares the voice-transcription budget.
+export const TRANSLATION_CALL_KIND = "voice_translation";
+const BUDGET_CALL_KINDS = new Set([TRANSCRIPTION_CALL_KIND, TRANSLATION_CALL_KIND]);
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -57,8 +60,10 @@ export function voiceTranscriptionMode(env = process.env) {
 }
 
 export function transcriptionPricePerMinuteUsd(model = DEFAULT_MODEL, env = process.env) {
+  // The single-price override applies to the configured transcription model only.
+  const configuredModel = clean(env.ORKESTR_TRANSCRIPTION_MODEL) || DEFAULT_MODEL;
   const override = finiteNumber(env.ORKESTR_TRANSCRIPTION_PRICE_PER_MINUTE_USD, null);
-  if (override !== null) return override;
+  if (override !== null && model === configuredModel) return override;
   const configured = parseJsonMap(env.ORKESTR_TRANSCRIPTION_PRICES_JSON);
   return finiteNumber(configured[model], finiteNumber(DEFAULT_PRICE_PER_MINUTE_USD[model], 0));
 }
@@ -128,6 +133,44 @@ function responseSeconds(payload = {}) {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
 }
 
+/** Reads a local audio file for upload; throws value-free codes. */
+export async function readAudioForUpload(filePath = "") {
+  const stats = await fs.stat(String(filePath || "")).catch(() => null);
+  if (!stats?.isFile()) throw new TranscriptionError("transcription_file_missing");
+  if (stats.size > MAX_TRANSCRIPTION_BYTES) throw new TranscriptionError("transcription_too_large");
+  const bytes = await fs.readFile(filePath).catch(() => null);
+  if (!bytes) throw new TranscriptionError("transcription_file_missing");
+  return bytes;
+}
+
+export function audioUploadBlob(bytes, mimetype = "") {
+  return { blob: new Blob([bytes], { type: clean(mimetype).split(";")[0] || "audio/ogg" }), name: uploadFileName(mimetype) };
+}
+
+/** POSTs a multipart form to {base}/audio/transcriptions and returns the JSON payload. */
+export async function postTranscriptionForm({ form, apiKey, baseUrl, timeoutMs, fetchImpl = globalThis.fetch }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1, Number(timeoutMs) || 1));
+  try {
+    const response = await fetchImpl(`${baseUrl}/audio/transcriptions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal: controller.signal,
+    });
+    if (!response?.ok) throw new TranscriptionError(`transcription_http_${Number(response?.status) || 0}`);
+    return await response.json().catch(() => {
+      throw new TranscriptionError("transcription_invalid_response");
+    });
+  } catch (error) {
+    if (error instanceof TranscriptionError) throw error;
+    if (controller.signal.aborted || error?.name === "AbortError") throw new TranscriptionError("transcription_timeout");
+    throw new TranscriptionError("transcription_network_error");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Sends one audio file to POST {base}/audio/transcriptions.
  * @returns {Promise<{ text: string; languages: string[]; seconds: number; model: string }>}
@@ -146,15 +189,12 @@ export async function transcribeAudioFile({
   const settings = voiceTranscriptionSettings(env);
   const key = clean(apiKey) || (await resolveTranscriptionApiKey(env)).apiKey;
   if (!key) throw new TranscriptionError("transcription_no_key");
-  const stats = await fs.stat(String(filePath || "")).catch(() => null);
-  if (!stats?.isFile()) throw new TranscriptionError("transcription_file_missing");
-  if (stats.size > MAX_TRANSCRIPTION_BYTES) throw new TranscriptionError("transcription_too_large");
-  const bytes = await fs.readFile(filePath).catch(() => null);
-  if (!bytes) throw new TranscriptionError("transcription_file_missing");
+  const bytes = await readAudioForUpload(filePath);
   const chosenModel = clean(model) || settings.model;
   const form = new FormData();
   form.append("model", chosenModel);
-  form.append("file", new Blob([bytes], { type: clean(mimetype).split(";")[0] || "audio/ogg" }), uploadFileName(mimetype));
+  const upload = audioUploadBlob(bytes, mimetype);
+  form.append("file", upload.blob, upload.name);
   for (const keyword of Array.isArray(keywords) ? keywords : []) {
     if (clean(keyword)) form.append("keywords[]", clean(keyword));
   }
@@ -162,28 +202,13 @@ export async function transcribeAudioFile({
     if (clean(language)) form.append("languages[]", clean(language));
   }
   form.append("response_format", "json");
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.max(1, Number(timeoutMs) || settings.timeoutMs));
-  let response;
-  let payload;
-  try {
-    response = await fetchImpl(`${settings.baseUrl}/audio/transcriptions`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${key}` },
-      body: form,
-      signal: controller.signal,
-    });
-    if (!response?.ok) throw new TranscriptionError(`transcription_http_${Number(response?.status) || 0}`);
-    payload = await response.json().catch(() => {
-      throw new TranscriptionError("transcription_invalid_response");
-    });
-  } catch (error) {
-    if (error instanceof TranscriptionError) throw error;
-    if (controller.signal.aborted || error?.name === "AbortError") throw new TranscriptionError("transcription_timeout");
-    throw new TranscriptionError("transcription_network_error");
-  } finally {
-    clearTimeout(timer);
-  }
+  const payload = await postTranscriptionForm({
+    form,
+    apiKey: key,
+    baseUrl: settings.baseUrl,
+    timeoutMs: Number(timeoutMs) || settings.timeoutMs,
+    fetchImpl,
+  });
   const text = clean(payload?.text);
   if (!text) throw new TranscriptionError("transcription_empty");
   return { text, languages: responseLanguages(payload), seconds: responseSeconds(payload), model: chosenModel };
@@ -193,11 +218,12 @@ function todayPrefix() {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Today's spend on voice transcription plus voice translation. */
 export async function voiceTranscriptionSpentTodayUsd(env = process.env) {
   const today = todayPrefix();
   const records = await listCreditUsageRecords(env).catch(() => []);
   return records
-    .filter((record) => record.callKind === TRANSCRIPTION_CALL_KIND && String(record.createdAt || "").startsWith(today))
+    .filter((record) => BUDGET_CALL_KINDS.has(record.callKind) && String(record.createdAt || "").startsWith(today))
     .reduce((sum, record) => sum + (Number(record.estimatedCostUsd) || 0), 0);
 }
 

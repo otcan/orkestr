@@ -17,16 +17,30 @@ function codes(entry = {}) {
   return list.length ? ` (${list.join(", ")})` : "";
 }
 
+function translationSummary(entry = {}) {
+  return `${entry.translated || 0} translated, ${entry.translationFailed || 0} translation failed`;
+}
+
+function featureLine(payload = {}) {
+  const diarize = payload.diarization || {};
+  const translation = payload.translation || {};
+  const translate = translation.enabled === false
+    ? "translation off"
+    : `translation to ${translation.target || "?"} via ${translation.model || "?"} (understood ${(translation.understoodLanguages || []).join(", ") || "?"})`;
+  return `  speaker labels ${diarize.mode || "?"} via ${diarize.model || "?"} · ${translate}`;
+}
+
 export function formatVoiceDoctor(payload = {}) {
   const today = payload.today || {};
   const week = payload.last7Days || {};
   const lines = [
     `Voice transcription: ${String(payload.status || "unknown").toUpperCase()}`,
     `  mode ${payload.mode || "?"} · model ${payload.model || "?"} · languages ${(payload.languages || []).join(", ") || "auto"}`,
+    featureLine(payload),
     `  API key ${payload.keyConfigured ? `configured (${payload.keySource})` : "missing"}`,
     `  spend today $${Number(payload.spentTodayUsd || 0).toFixed(4)} of $${Number(payload.dailyBudgetUsd || 0).toFixed(2)} · limit ${payload.chatHourlyLimit || "?"} notes/hour per chat`,
-    `  today ${today.completed || 0} transcribed (${minutes(today.seconds)}), ${today.failed || 0} failed${codes(today)}`,
-    `  last 7 days ${week.completed || 0} transcribed (${minutes(week.seconds)}), ${week.failed || 0} failed${codes(week)}`,
+    `  today ${today.completed || 0} transcribed (${minutes(today.seconds)}), ${today.failed || 0} failed${codes(today)} · ${translationSummary(today)}`,
+    `  last 7 days ${week.completed || 0} transcribed (${minutes(week.seconds)}), ${week.failed || 0} failed${codes(week)} · ${translationSummary(week)}`,
     `  last success ${payload.lastSuccessAt || "never"}${payload.lastFailure ? ` · last failure ${payload.lastFailure.at} (${payload.lastFailure.code})` : ""}`,
   ];
   for (const problem of payload.problems || []) lines.push(`  ✗ ${problem}`);
