@@ -3,31 +3,10 @@
     <div>
       <p class="eyebrow">Instance resources</p>
       <h3>Desktops</h3>
-      <p>Open and manage the browser desktops assigned to this Orkestr instance.</p>
+      <p>{{ runningCount() }} of {{ browsers.length }} desktops running</p>
     </div>
     <button class="secondary" type="button" (click)="load()" [disabled]="busy">Refresh</button>
   </header>
-
-  @if (!busy && !inventoryUnavailable && !reservationsUnavailable) {
-    <div class="instance-metric-strip" aria-label="Desktop summary">
-      <article>
-        <span>Total</span>
-        <strong>{{ browsers.length }}</strong>
-      </article>
-      <article>
-        <span>Running</span>
-        <strong>{{ runningCount() }}</strong>
-      </article>
-      <article>
-        <span>Available</span>
-        <strong>{{ availableCount() }}</strong>
-      </article>
-      <article [class.warning]="attentionCount() > 0">
-        <span>Needs attention</span>
-        <strong>{{ attentionCount() }}</strong>
-      </article>
-    </div>
-  }
 
   @if (error) {
     <div class="notice error">{{ error }}</div>
@@ -50,47 +29,10 @@
             <p class="eyebrow">{{ browser.type || "desktop" }}</p>
             <h4>{{ browserLabel(browser) }}</h4>
           </div>
-          <div class="desktop-pills">
-            <span [class]="browserHealthClass(browser)">{{ browserHealthLabel(browser) }}</span>
-            <span [class.live]="leaseClass(browserLease(browser)) === 'live'" [class.bad]="leaseClass(browserLease(browser)) === 'bad'">
-              {{ leaseLabel(browserLease(browser)) }}
-            </span>
-          </div>
+          <div class="desktop-pills"><span [class]="browserHealthClass(browser)">{{ browserHealthLabel(browser) }}</span></div>
         </div>
 
         <p class="desktop-purpose">{{ browserSummary(browser) }}</p>
-
-        <dl class="desktop-facts">
-          <div>
-            <dt>Desktop ID</dt>
-            <dd>{{ browserSlug(browser) }}</dd>
-          </div>
-          <div>
-            <dt>Scope</dt>
-            <dd>{{ browser.scopeLabel || "Private instance desktop" }}</dd>
-          </div>
-          <div>
-            <dt>Last activity</dt>
-            <dd>{{ browserLastActivity(browser) ? (browserLastActivity(browser) | date: "MMM d, HH:mm") : "No activity yet" }}</dd>
-          </div>
-        </dl>
-
-        @if (browserThreads(browser).length) {
-          <div class="desktop-threads">
-            <strong>Assigned threads</strong>
-            @for (thread of browserThreads(browser); track thread['id'] || thread['name']) {
-              <span>{{ browserThreadLabel(thread) }}</span>
-            }
-          </div>
-        }
-
-        @if (browserLease(browser)) {
-          <div class="desktop-lease" [class.stale]="browserLease(browser)?.stale || browserLease(browser)?.expired">
-            <strong>{{ reservationsUnavailable ? "Last known reservation (unverified)" : browserLease(browser)?.stale || browserLease(browser)?.expired ? "Lease needs release" : "Active lease" }}</strong>
-            <span>{{ leaseLabel(browserLease(browser)) }}</span>
-            <small>Heartbeat {{ browserLease(browser)?.heartbeatAt | date: "MMM d, HH:mm" }}</small>
-          </div>
-        }
 
         @if (browser.launchError) {
           <div class="notice error">{{ browser.launchError }}</div>
@@ -111,24 +53,50 @@
         <div class="desktop-actions instance-desktop-actions">
           @if (browserRunning(browser)) {
             <button type="button" (click)="openDesktop(browser)" [disabled]="actionBusy(browser)">Open Desktop</button>
-            <button class="secondary" type="button" (click)="shareDesktop(browser)" [disabled]="actionBusy(browser)">Share</button>
-          }
-          @if (!browserLease(browser) && primaryThread()) {
-            <button class="secondary" type="button" (click)="acquireDesk(browser)" [disabled]="actionBusy(browser)">Reserve</button>
-          }
-          @if (browserLease(browser)) {
-            <button class="secondary" type="button" (click)="releaseDesk(browser)" [disabled]="actionBusy(browser)">Release</button>
-          }
-          @if (canPrepare(browser)) {
-            <button class="secondary" type="button" (click)="browserAction(browser, 'prepare')" [disabled]="actionBusy(browser)">Prepare</button>
-          }
-          @if (canStart(browser)) {
-            <button class="secondary" type="button" (click)="browserAction(browser, 'start')" [disabled]="actionBusy(browser)">Start</button>
           } @else {
-            <button class="secondary" type="button" (click)="browserAction(browser, 'restart')" [disabled]="actionBusy(browser)">Restart</button>
-            <button class="secondary danger-soft" type="button" (click)="browserAction(browser, 'stop')" [disabled]="actionBusy(browser)">Stop</button>
+            <button type="button" (click)="browserAction(browser, 'start')" [disabled]="actionBusy(browser)">Start Desktop</button>
           }
         </div>
+
+        <details class="desktop-details">
+          <summary>Details and controls</summary>
+          <dl class="desktop-facts">
+            <div><dt>Desktop ID</dt><dd>{{ browserSlug(browser) }}</dd></div>
+            <div><dt>Scope</dt><dd>{{ browser.scopeLabel || "Private instance desktop" }}</dd></div>
+            <div><dt>Last activity</dt><dd>{{ browserLastActivity(browser) ? (browserLastActivity(browser) | date: "MMM d, HH:mm") : "No activity yet" }}</dd></div>
+          </dl>
+          @if (browserThreads(browser).length) {
+            <div class="desktop-threads">
+              <strong>Assigned threads</strong>
+              @for (thread of browserThreads(browser); track thread['id'] || thread['name']) {
+                <span>{{ browserThreadLabel(thread) }}</span>
+              }
+            </div>
+          }
+          @if (browserLease(browser)) {
+            <div class="desktop-lease" [class.stale]="browserLease(browser)?.stale || browserLease(browser)?.expired">
+              <strong>{{ reservationsUnavailable ? "Last known reservation (unverified)" : browserLease(browser)?.stale || browserLease(browser)?.expired ? "Lease needs release" : "Reserved" }}</strong>
+              <span>{{ leaseLabel(browserLease(browser)) }}</span>
+              <small>Heartbeat {{ browserLease(browser)?.heartbeatAt | date: "MMM d, HH:mm" }}</small>
+            </div>
+          }
+          <div class="desktop-actions instance-desktop-actions">
+            @if (browserRunning(browser)) {
+              <button class="secondary" type="button" (click)="shareDesktop(browser)" [disabled]="actionBusy(browser)">Share link</button>
+              <button class="secondary" type="button" (click)="browserAction(browser, 'restart')" [disabled]="actionBusy(browser)">Restart</button>
+              <button class="secondary danger-soft" type="button" (click)="browserAction(browser, 'stop')" [disabled]="actionBusy(browser)">Stop</button>
+            }
+            @if (!browserLease(browser) && primaryThread()) {
+              <button class="secondary" type="button" (click)="acquireDesk(browser)" [disabled]="actionBusy(browser)">Reserve</button>
+            }
+            @if (browserLease(browser)) {
+              <button class="secondary" type="button" (click)="releaseDesk(browser)" [disabled]="actionBusy(browser)">Release</button>
+            }
+            @if (canPrepare(browser)) {
+              <button class="secondary" type="button" (click)="browserAction(browser, 'prepare')" [disabled]="actionBusy(browser)">Prepare</button>
+            }
+          </div>
+        </details>
       </article>
     } @empty {
       <div class="empty-state">

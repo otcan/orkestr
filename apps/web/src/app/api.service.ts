@@ -353,6 +353,7 @@ export interface BrowserSession {
   profile?: string;
   profile_path?: string;
   configured?: boolean;
+  managed?: boolean;
   control?: Record<string, boolean>;
   safe_cleanup?: boolean;
   launchDisabled?: boolean;

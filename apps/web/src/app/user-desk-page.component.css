@@ -1,0 +1,19 @@
+.desktop-details {
+  margin-top: 14px;
+  border-top: 1px solid rgba(119, 205, 126, 0.18);
+  padding-top: 12px;
+}
+
+.desktop-details summary {
+  color: #b7d9b0;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+
+.desktop-details[open] summary {
+  margin-bottom: 12px;
+}
+
+.desktop-details .desktop-actions {
+  margin-top: 12px;
+}

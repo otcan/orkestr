@@ -364,22 +364,24 @@ export async function listManagedDesktopSessions(env = process.env, options = {}
 }
 
 // Internal routing lookup: no lease/thread/UI enrichment and no lifecycle actions.
-// Legacy browserctl providers only expose list; select one record before applying
-// any higher-level policy. Deliberately bypass the UI inventory cache so a port
-// or runtime generation change cannot reuse a cached routing record.
+// Providers that support an exact target read can avoid a full inventory scan
+// for every desktop asset. Keep the list fallback for legacy providers. Neither
+// path uses the UI inventory cache, so a restart or port change is read fresh.
 export async function readManagedDesktopSession(slug, env = process.env, options = {}) {
   const explicitUrl = browserSessionsUrl(env);
   const base = browserApiBase(env);
+  const targeted = !explicitUrl && !base && env.ORKESTR_BROWSERCTL_TARGETED_READ === "1";
   const payload = explicitUrl || base
     ? await fetchBrowserJson(appendRemoteScope(explicitUrl || `${base}/api/browser-sessions`, options), {
       timeoutMs: desktopInventoryTimeoutMs(env), signal: options.signal,
       headers: remoteDesktopHeaders(env, options),
     })
-    : await runBrowserctl(["list", "--json"], scopedBrowserctlEnv(env, options), {
+    : await runBrowserctl(targeted ? ["target", slug] : ["list", "--json"], scopedBrowserctlEnv(env, options), {
       timeoutMs: desktopInventoryTimeoutMs(env), signal: options.signal,
     });
   if (payload?.ok === false) throw Object.assign(new Error("desktop_inventory_unavailable"), { statusCode: 503 });
-  const matches = (Array.isArray(payload?.sessions) ? payload.sessions : [])
+  const candidates = targeted ? [payload?.session] : (Array.isArray(payload?.sessions) ? payload.sessions : []);
+  const matches = candidates
     .filter((item) => String(item?.slug || item?.id || "").trim() === slug);
   if (matches.length !== 1) return null;
   const session = tagSessionScope(normalizeBrowserctlSession(matches[0]), env, options);

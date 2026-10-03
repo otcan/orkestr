@@ -7,6 +7,7 @@ import { ApiService, BrowserSession, DesktopAccessWarning, DesktopLeaseRecord, T
   selector: "ork-user-desk-page",
   imports: [DatePipe],
   templateUrl: "./user-desk-page.component.html",
+  styleUrl: "./user-desk-page.component.css",
 })
 export class UserDeskPageComponent implements OnInit, OnChanges {
   private readonly api = inject(ApiService);
@@ -304,8 +305,8 @@ export class UserDeskPageComponent implements OnInit, OnChanges {
 
   browserHealthLabel(browser: BrowserSession): string {
     if (browser.launchError) return "Needs attention";
-    if (this.browserRunning(browser)) return "Ready";
-    if (this.browserConfigured(browser)) return "Stopped";
+    if (this.browserRunning(browser)) return "Running";
+    if (browser.managed === true || this.browserConfigured(browser)) return "Stopped";
     return "Not prepared";
   }
 
