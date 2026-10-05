@@ -567,6 +567,10 @@ function attachmentSetKey(attachments = []) {
 
 async function persistMessageAttachmentsIfChanged(threadId, message, attachments, env) {
   if (!threadId || !message?.id || !attachments.length) return;
+  // While attachment staging owns the reply's files (not yet ready, or given
+  // up), writing them back re-runs staging and creates a new revision on every
+  // delivery pass, which looped one reply thousands of times.
+  if (message.outboundAttachmentStaging && message.outboundAttachmentStaging.state !== "ready") return;
   if (attachmentSetKey(message.attachments || []) === attachmentSetKey(attachments)) return;
   await updateThreadMessage(threadId, message.id, { attachments }, env).catch(() => null);
 }

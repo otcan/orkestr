@@ -909,7 +909,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
       nextMessage.text = resolvedAttachments.text;
       attachmentOutcomes = resolvedAttachments.artifactOutcomes;
       const publishedAttachments = await prepareRoutedReplyAttachments({ thread, message: nextMessage, resolution: resolvedAttachments, env });
-      applyReplyAttachmentStaging(nextMessage, publishedAttachments);
+      applyReplyAttachmentStaging(nextMessage, publishedAttachments, env);
       if (publishedAttachments.encrypted === true) {
         attachmentOutcomes = attachmentOutcomes.map((outcome) => ({ ...outcome, filename: "encrypted-artifact" }));
       }
@@ -1189,7 +1189,7 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
         updated.text = resolvedAttachments.text;
         attachmentOutcomes = resolvedAttachments.artifactOutcomes;
         const publishedAttachments = await prepareRoutedReplyAttachments({ thread, message: updated, resolution: resolvedAttachments, env });
-        applyReplyAttachmentStaging(updated, publishedAttachments);
+        applyReplyAttachmentStaging(updated, publishedAttachments, env);
         if (publishedAttachments.encrypted === true) {
           attachmentOutcomes = attachmentOutcomes.map((outcome) => ({ ...outcome, filename: "encrypted-artifact" }));
         }

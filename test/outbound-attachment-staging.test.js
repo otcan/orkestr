@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { syntheticWorkbook } from "./fixtures/synthetic-workbook.js";
-import { createThread, appendThreadMessage, listThreadMessages } from "../packages/core/src/threads.js";
+import { createThread, appendThreadMessage, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { recoverRoutedReplyAttachments, cleanupOutboundStagingJournals, stagingFailureNotice, assertReplyAttachmentStagingReady, stagingGaveUpNotice } from "../packages/core/src/outbound-attachment-staging.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
@@ -178,4 +178,51 @@ test("stack-trace line references are never staged as missing producer files", a
     text: `[watcher:error] boom\n    at handler (${path.join(f.home, "dist", "controller.js")}:579:11)` }, f.env);
   assert.equal(reply.outboundAttachmentStaging, undefined);
   assert.notEqual(reply.deliveryState, "failed_retryable");
+});
+
+test("delivery passes do not re-edit a reply whose existing file fails to stage (no revision loop)", async t => {
+  const f = await fixture(t);
+  f.env.ORKESTR_ATTACHMENT_STAGING_MAX_ATTEMPTS = "50"; // isolate the loop from the journal's own give-up
+  // The file exists (so delivery resolves it) but staging cannot copy it.
+  await fs.writeFile(f.source, syntheticWorkbook);
+  const artifactDir = path.join(f.home, "uploads", f.thread.id, "artifacts");
+  await fs.mkdir(path.dirname(artifactDir), { recursive: true });
+  await fs.writeFile(artifactDir, "synthetic blocking file");
+  // Like the production case: the reply links the file in its text only.
+  const parent = (await listThreadMessages(f.thread.id, f.env)).find((item) => item.role === "user");
+  const reply = await appendThreadMessage(f.thread.id, { role: "assistant", source: "codex-app-server", connector: "whatsapp", chatId: "synthetic-chat",
+    parentMessageId: parent.id, state: "completed", phase: "final_answer", text: `Export complete.\n\nFull export: [synthetic workbook export](${f.source})` }, f.env);
+  assert.equal(reply.outboundAttachmentStaging?.state, "failed_retryable");
+  for (let pass = 0; pass < 4; pass++) {
+    await deliverWhatsAppReplies(f.env, async () => { throw new Error("no transport while staging fails"); });
+  }
+  const edits = (await fs.readFile(path.join(f.home, "events.jsonl"), "utf8")).split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((event) => event.type === "thread_message_edited" && event.messageId === reply.id);
+  assert.equal(edits.length, 0, "delivery passes must not edit the reply while staging owns its files");
+  const jobs = (await readConnectorOutbox(f.env)).jobs.filter((job) => job.sourceMessageId === reply.id);
+  assert.equal(new Set(jobs.map((job) => job.sourceRevision)).size, 1, "one delivery job lineage, not one per pass");
+});
+
+test("staging gives up across revisions even when each edit gets a fresh journal", async t => {
+  const f = await fixture(t);
+  f.env.ORKESTR_ATTACHMENT_STAGING_MAX_ATTEMPTS = "3";
+  const reply = await f.reply(); // source file never created
+  assert.equal(reply.outboundAttachmentStaging.state, "failed_retryable");
+  // Each text change keys a new staging journal; the per-message count still
+  // reaches the limit.
+  let current = reply;
+  for (let edit = 1; edit <= 3 && current.outboundAttachmentStaging?.state !== "failed"; edit++) {
+    current = await updateThreadMessage(f.thread.id, reply.id, { text: `Document ready.${" ".repeat(edit)}`, attachments: [{ path: f.source, filename: "synthetic.xlsx" }] }, f.env);
+  }
+  assert.equal(current.outboundAttachmentStaging.state, "failed");
+  assert.equal(current.outboundAttachmentStaging.notice, stagingGaveUpNotice);
+  assert.doesNotThrow(() => assertReplyAttachmentStagingReady(current));
+  const bodies = [];
+  const delivered = await deliverWhatsAppReplies(f.env, async (url, options) => {
+    if (options?.method === "POST") bodies.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ ok: true, ids: ["synthetic-gave-up-ack"] }), { headers: { "content-type": "application/json" } });
+  });
+  assert.equal(delivered.delivered.length, 1);
+  assert.equal(bodies.length, 1);
+  assert.match(JSON.stringify(bodies[0]), /could not be attached, so it was sent without it/);
 });

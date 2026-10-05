@@ -112,7 +112,18 @@ export async function prepareRoutedReplyAttachments({ thread, message, resolutio
   });
 }
 
-export function applyReplyAttachmentStaging(message, prepared) {
+export function applyReplyAttachmentStaging(message, prepared, env = process.env) {
+  // Staging journals are keyed by the reply text, and each failed attempt
+  // edits the message (new revision), so a journal's own attempt count can
+  // restart. Count failed attempts on the message as well, so the bounded
+  // give-up always applies and the reply is not held forever.
+  if (prepared.staging?.state === "failed_retryable") {
+    const attempts = (Number(message.outboundAttachmentStagingAttempts) || 0) + 1;
+    message.outboundAttachmentStagingAttempts = attempts;
+    if (attempts >= maxStagingAttempts(env)) {
+      prepared = { ...prepared, attachments: [], staging: { ...prepared.staging, state: "failed", notice: stagingGaveUpNotice } };
+    }
+  }
   if (prepared.staging) message.outboundAttachmentStaging = prepared.staging;
   else delete message.outboundAttachmentStaging;
   if (prepared.staging?.state === "failed_retryable") {
