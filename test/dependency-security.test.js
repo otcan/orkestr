@@ -22,7 +22,15 @@ test("framework and upload dependencies stay above the reviewed security floors"
     if (packagePath.endsWith("/node_modules/multer")) assert.equal(entry.version, "2.4.0", packagePath);
     if (packagePath.endsWith("/node_modules/qs")) assert.equal(entry.version, "6.16.0", packagePath);
   }
-  assert.equal(versionAt("node_modules/@modelcontextprotocol/sdk"), "1.30.0");
+  // GHSA-6qxp-vccf-f47h: 1.31.0, including the copy @angular/cli would nest
+  // (it pins 1.30.0; package.json overrides it).
+  assert.equal(versionAt("node_modules/@modelcontextprotocol/sdk"), "1.31.0");
+  for (const [packagePath, entry] of Object.entries(lock.packages)) {
+    if (packagePath.endsWith("/node_modules/@modelcontextprotocol/sdk")) assert.equal(entry.version, "1.31.0", packagePath);
+  }
+  // GHSA-wq5f-xc86-pv6w (bundled librsvg): sharp 0.35.5 or later.
+  const [sharpMajor, sharpMinor, sharpPatch] = versionAt("node_modules/sharp").split(".").map(Number);
+  assert.ok(sharpMajor > 0 || sharpMinor > 35 || (sharpMinor === 35 && sharpPatch >= 5), `sharp ${versionAt("node_modules/sharp")}`);
   assert.ok(versionAt("node_modules/tar") > "7.5.20");
 });
 
