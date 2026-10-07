@@ -105,6 +105,9 @@
     },
     "@angular/build": {
       "piscina": "5.3.2"
+    },
+    "@angular/cli": {
+      "@modelcontextprotocol/sdk": "1.31.0"
     }
   }
 }
