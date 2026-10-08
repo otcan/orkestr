@@ -82,6 +82,7 @@ import { recordServerShutdown } from "./server-lifecycle.js";
 import { trackUpgradedSockets } from "./http-server-lifecycle.js";
 import { mobileJsonBodyParser } from "./mobile-json-body.js";
 import { secretLinkFormBodyParser } from "./modules/secret-links/secret-link-pages.js";
+import { vaultImportJsonBodyParser } from "./modules/vault/vault-import-body.js";
 
 export {
   paneProgressMonitorIntervalMs,
@@ -113,6 +114,8 @@ export async function createApp(): Promise<INestApplication> {
   // entry POST can resolve the submitted name/reference in the live server.
   // One-time secret request links accept up to 16 KiB values (URL-encoded).
   app.use("/s", secretLinkFormBodyParser());
+  // Vault imports carry up to 2 MB of CSV/otpauth text (JSON-escaped).
+  app.use("/api/vault/import", vaultImportJsonBodyParser());
   app.useBodyParser("urlencoded", { extended: false, limit: "8kb" });
   // Mobile proofs bind the exact JSON payload before authentication. Scope the
   // early parser to the direct mobile API so broker/canonical proxy requests

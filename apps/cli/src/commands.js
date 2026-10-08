@@ -31,6 +31,7 @@ import { interruptCommand, sendNowCommand } from "./interrupt-command.js";
 import { jiraCommand } from "./jira-command.js";
 import { doctorVoiceCommand } from "./doctor-voice-command.js";
 import { secretLinksCommand } from "./secret-links-command.js";
+import { vaultCommand } from "./vault-command.js";
 import { mailboxesCommand } from "./mailbox-command.js";
 import { watchCommand, watchUsage } from "./watch-command.js";
 import { tenantSliceCommand } from "./tenant-slice-command.js";
@@ -69,6 +70,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "whereiam" || command === "whereami") return await whereiamCommand(args, ctx);
     if (command === "settings") return await settingsCommand(args, ctx);
     if (command === "secret" || command === "secrets") return await secretCommand(args, ctx);
+    if (command === "vault") return await vaultCommand(args, ctx);
     if (command === "doctor") return await doctorCommand(args, ctx);
     if (command === "sanitizer" || command === "sanitize") return await sanitizerCommand(args, ctx);
     if (command === "api-session" || command === "api") return await apiSessionCommand(args, ctx);
@@ -2260,6 +2262,10 @@ Advanced:
   orkestr secret share [--stdin|--from secret://...] [--ttl 15m] [--label text] [--thread id] [--json]
   orkestr secret request <name> [--ttl 15m] [--label text] [--thread id] [--json]
   orkestr secret links [list|revoke <id>] [--json]
+  orkestr vault list [--json]
+  orkestr vault exec <item> -- <command> [args...]
+  orkestr vault get <item> --field username|password
+  orkestr vault totp <item> [--wait seconds] [--json]
   orkestr codex [status|migrate] [--dry-run] [--json]
   orkestr whatsapp accounts [list|add|status|diagnostics|update|pair|reconnect|disconnect|remove|doctor] [--json]
   orkestr whatsapp migrate [--dry-run] [--json]

@@ -266,6 +266,9 @@ function commandHints() {
     shareSecretWithOwner: "orkestr secret share --from secret://user/<owner>/<name> [--thread <thread-id>]",
     requestSecretFromOwner: "orkestr secret request <name> [--thread <thread-id>]",
     secretLinks: "orkestr secret links list",
+    vaultList: "orkestr vault list",
+    vaultExec: "orkestr vault exec <item> -- <command> [args...]",
+    vaultTotp: "orkestr vault totp <item> --wait 120",
   };
 }
 

@@ -64,6 +64,11 @@ of relying on static thread or workspace text in this file.
   `--stdin`) to hand a secret to the owner, and `orkestr secret request <name>
   [--thread <id>]` to receive one, then use the resulting `secret://` handle by
   reference. See `docs/secret-links.md`.
+- Use `orkestr vault exec <item> -- <command>` to use credentials the owner
+  granted to this thread (values arrive as `VAULT_USERNAME` / `VAULT_PASSWORD`
+  env vars). Never print passwords into chat, WhatsApp or thread messages.
+  Authenticator codes (`orkestr vault totp <item> --wait 120`) need the owner's
+  approval for every code. See `docs/vault.md`.
 - Use connector status APIs for Gmail and WhatsApp. Do not read Gmail tokens,
   WhatsApp session state, browser profiles, or files under `ORKESTR_HOME/secrets`
   directly.
