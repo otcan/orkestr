@@ -1,0 +1,145 @@
+<section class="panel-body instance-resource-page vault-page">
+  @for (approval of approvals; track approval.id) {
+    <div class="vault-approval" role="alert">
+      <p><strong>{{ approval.threadName || approval.threadId }}</strong> wants a code for <strong>{{ approval.itemName || approval.itemId }}</strong></p>
+      <div class="vault-approval-actions">
+        <button type="button" (click)="decide(approval, 'approve')" [disabled]="busyId === approval.id">Approve</button>
+        <button class="secondary" type="button" (click)="decide(approval, 'deny')" [disabled]="busyId === approval.id">Deny</button>
+      </div>
+    </div>
+  }
+
+  <header class="vault-header">
+    <div class="vault-title">
+      <h3>Vault</h3>
+      @if (status) {
+        <p class="vault-count">{{ status.itemCount }} items · {{ status.totpCount }} with codes</p>
+      } @else if (loading) {
+        <p class="vault-count">Loading…</p>
+      }
+    </div>
+    @if (items.length) {
+      <input class="vault-search" type="search" placeholder="Search vault" aria-label="Search vault" autocomplete="off"
+        data-analytics-ignore data-private [value]="query" (input)="query = $any($event.target).value">
+    }
+    <div class="vault-header-actions">
+      <button type="button" (click)="openAdd()">+ Add</button>
+      <button class="secondary" type="button" (click)="importOpen = true">Import</button>
+    </div>
+  </header>
+
+  @if (reauthNeeded) {
+    <p class="vault-notice warn" role="alert">
+      <button class="secondary" type="button" (click)="signInAgain()">Sign in again to reveal</button>
+      <button class="vault-link" type="button" (click)="reauthNeeded = false">Dismiss</button>
+    </p>
+  }
+  @if (error) {
+    <p class="vault-notice error" role="alert">{{ error }}</p>
+  } @else if (notice) {
+    <p class="vault-notice" role="status">{{ notice }}</p>
+  }
+
+  @if (items.length) {
+    <ul class="vault-list">
+      @for (item of filteredItems(); track item.id) {
+        <li class="vault-row" [class.menu-open]="menuId === item.id" (orkVaultVisible)="setRowVisible(item, $event)">
+          <span class="vault-avatar" aria-hidden="true">{{ avatarLetter(item) }}</span>
+          <div class="vault-identity">
+            <strong>{{ item.name }}</strong>
+            <small>
+              @if (item.domain) {<span>{{ item.domain }}</span>}
+              @if (item.username) {<span class="vault-muted">{{ item.username }}</span>}
+            </small>
+          </div>
+          <div class="vault-row-actions">
+            @if (item.hasTotp) {
+              @let live = totp.code(item.id);
+              @if (live) {
+                <button class="vault-code" type="button" (click)="copyCode(item)" [attr.aria-label]="'Copy code for ' + item.name" title="Copy code">
+                  <span class="vault-code-digits" data-analytics-ignore data-private>{{ formatCode(live.code) }}</span>
+                  <svg class="vault-countdown" viewBox="0 0 20 20" aria-hidden="true">
+                    <circle cx="10" cy="10" r="8" class="track"></circle>
+                    <circle cx="10" cy="10" r="8" class="left" [attr.stroke-dashoffset]="50.27 * (1 - totp.fractionLeft(item.id))"></circle>
+                  </svg>
+                  <span class="vault-seconds">{{ totp.secondsLeft(item.id) }}s</span>
+                </button>
+              } @else {
+                <span class="vault-code pending">••• •••</span>
+              }
+            }
+            @if (item.hasPassword) {
+              <button class="secondary vault-small" type="button" (click)="copyPassword(item)" [disabled]="busyId === item.id">Copy password</button>
+            }
+            <button class="secondary vault-more" type="button" (click)="toggleMenu(item)" [attr.aria-expanded]="menuId === item.id" [attr.aria-label]="'More actions for ' + item.name">⋯</button>
+          </div>
+
+          @if (menuId === item.id) {
+            <div class="vault-menu">
+              @if (confirmDeleteId === item.id) {
+                <p class="vault-confirm">Delete <strong>{{ item.name }}</strong>? This cannot be undone.</p>
+                <div class="vault-menu-actions">
+                  <button class="danger" type="button" (click)="deleteItem(item)" [disabled]="busyId === item.id">Delete</button>
+                  <button class="secondary" type="button" (click)="confirmDeleteId = ''">Cancel</button>
+                </div>
+              } @else {
+                <div class="vault-menu-actions">
+                  <button class="secondary" type="button" (click)="openEdit(item)">Edit</button>
+                  @if (item.hasPassword) {
+                    <button class="secondary" type="button" (click)="showPassword(item)" [disabled]="busyId === item.id">Show password</button>
+                  }
+                  <button class="secondary" type="button" (click)="openGrants(item)">Assign to threads ({{ grantCount(item) }})</button>
+                  @if (item.hasTotp) {
+                    <button class="secondary" type="button" (click)="exportSecret(item)" [disabled]="busyId === item.id">Export authenticator secret</button>
+                  }
+                  <button class="danger-soft" type="button" (click)="confirmDeleteId = item.id">Delete</button>
+                </div>
+              }
+            </div>
+          }
+
+          @if (revealed?.itemId === item.id) {
+            <div class="vault-revealed">
+              <span>{{ revealed?.label }}</span>
+              <code data-analytics-ignore data-private>{{ revealed?.value || "(empty)" }}</code>
+              @if (revealed?.notes) {
+                <span>Notes</span>
+                <pre data-analytics-ignore data-private>{{ revealed?.notes }}</pre>
+              }
+              <div class="vault-menu-actions">
+                @if (revealed?.value) {
+                  <button class="secondary" type="button" (click)="copyRevealed()">Copy</button>
+                }
+                <button class="secondary" type="button" (click)="clearRevealed()">Hide</button>
+                <small class="vault-muted">Hidden automatically after 30 s.</small>
+              </div>
+            </div>
+          }
+        </li>
+      } @empty {
+        <li class="vault-row vault-no-match">No items match “{{ query }}”.</li>
+      }
+    </ul>
+  } @else if (loaded && !error) {
+    <div class="vault-empty">
+      <h4>Your vault is empty</h4>
+      <p>Store website passwords and authenticator codes here. Codes refresh live, and you decide which threads may use each item.</p>
+      <div class="vault-header-actions">
+        <button type="button" (click)="openAdd()">+ Add</button>
+        <button class="secondary" type="button" (click)="importOpen = true">Import</button>
+      </div>
+    </div>
+  }
+
+  @if (editing) {
+    <ork-vault-item-form [item]="editingItem()" [busy]="formBusy" [error]="formError"
+      (save)="saveItem($event)" (cancel)="editing = null"></ork-vault-item-form>
+  }
+  @if (importOpen) {
+    <ork-vault-import-dialog (imported)="importDone()" (close)="importOpen = false"></ork-vault-import-dialog>
+  }
+  @if (grantsItem) {
+    <ork-vault-grants-dialog [item]="grantsItem" [threads]="threads"
+      (saved)="grantsSaved($event)" (close)="grantsItem = null"></ork-vault-grants-dialog>
+  }
+</section>

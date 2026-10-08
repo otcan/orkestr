@@ -34,6 +34,7 @@
       <button class="secondary" type="button" [class.active]="activePanel === 'instanceApps'" (click)="openPanel('instanceApps')">Apps</button>
       <button class="secondary" type="button" [class.active]="activePanel === 'files'" (click)="openPanel('files')">Files</button>
       <button class="secondary" type="button" [class.active]="activePanel === 'instanceDesktops'" (click)="openPanel('instanceDesktops')">Desktops</button>
+      <button class="secondary" type="button" [class.active]="activePanel === 'instanceVault'" (click)="openPanel('instanceVault')">Vault</button>
       <button class="secondary" type="button" [class.active]="activePanel === 'instanceTimers'" (click)="openPanel('instanceTimers')">Timers</button>
       @if (currentViewLinkAvailable()) {
         <button class="secondary copy-link-action" type="button" (click)="copyCurrentViewLink()">{{ linkNotice || "COPY LINK" }}</button>
@@ -352,6 +353,8 @@
       <ork-user-timers-page></ork-user-timers-page>
     } @else if (activePanel === "instanceDesktops") {
       <ork-user-desk-page [threads]="threads" [selectedThread]="selectedThread()"></ork-user-desk-page>
+    } @else if (activePanel === "instanceVault") {
+      <ork-vault-page [threads]="threads"></ork-vault-page>
     } @else if (activePanel === "userConnectors") {
       <ork-user-connectors-page></ork-user-connectors-page>
     } @else if ((threadWizardOpen || !threads.length) && canCreateThreadFromSidebar()) {

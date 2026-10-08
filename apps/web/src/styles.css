@@ -1179,7 +1179,8 @@ textarea:focus {
   ork-ops-page,
   ork-user-connectors-page,
   ork-user-desk-page,
-  ork-user-timers-page
+  ork-user-timers-page,
+  ork-vault-page
 ) {
   display: block;
   grid-row: 1 / -1;
@@ -1194,7 +1195,8 @@ textarea:focus {
   ork-ops-page,
   ork-user-connectors-page,
   ork-user-desk-page,
-  ork-user-timers-page
+  ork-user-timers-page,
+  ork-vault-page
 ) > .panel-body {
   box-sizing: border-box;
   width: 100%;

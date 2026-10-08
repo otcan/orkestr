@@ -24,6 +24,7 @@ import { ThreadComposerComponent } from "./thread-composer.component";
 import { ThreadMessageListComponent } from "./thread-message-list.component";
 import { UserConnectorsPageComponent } from "./user-connectors-page.component";
 import { UserDeskPageComponent } from "./user-desk-page.component";
+import { VaultPageComponent } from "./vault-page.component";
 import { UserTimersPageComponent } from "./user-timers-page.component";
 import { hasProposedPlanEnvelope, renderMessageTextHtml } from "./message-renderer";
 import {
@@ -74,7 +75,7 @@ import { ProviderQuotaIndicatorComponent } from "./provider-quota-indicator.comp
 import { ExecutorSwitcherComponent } from "./executor-switcher.component";
 import { QuotaProvider, claudeEffortLabel, claudeModelName, executorLabel, threadExecutorProvider } from "./provider-quota";
 
-type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "userConnectors";
+type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "instanceVault" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
 type SetupPageMode = "setup" | "onboarding";
 type SetupSection = "system" | "security" | "secrets" | "maintenance" | "codex" | "gmail" | "whatsapp" | "browsers";
@@ -109,7 +110,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent],
+  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, VaultPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -697,7 +698,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   panelAllowedForCurrentUser(panel: Panel): boolean {
     if (this.isAdminMode()) return true;
     if (panel === "raw") return this.rawTerminalAvailable();
-    return ["chat", "history", "delivery", "timers", "files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "userConnectors"].includes(panel);
+    return ["chat", "history", "delivery", "timers", "files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "instanceVault", "userConnectors"].includes(panel);
   }
 
   isUserNavPanelActive(panel: Panel): boolean {
@@ -706,7 +707,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private isRouteLevelUserPanel(panel: Panel): boolean {
-    return ["files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "userConnectors"].includes(panel);
+    return ["files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "instanceVault", "userConnectors"].includes(panel);
   }
 
   rawTerminalAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
@@ -1044,6 +1045,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (this.activePanel === "raw") this.closeRawStream();
       this.activePanel = "instanceDesktops";
       this.pushPath("", "instanceDesktops");
+      this.updateDocumentTitle();
+      this.renderNow();
+      return;
+    }
+    if (panel === "instanceVault") {
+      this.modelDetailsOpen = false;
+      this.slashHelpOpen = false;
+      this.gitDetailsThreadId = "";
+      this.threadWizardOpen = false;
+      if (this.activePanel === "raw") this.closeRawStream();
+      this.activePanel = "instanceVault";
+      this.pushPath("", "instanceVault");
       this.updateDocumentTitle();
       this.renderNow();
       return;
@@ -3993,7 +4006,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private currentViewUrl(): string {
-    if (["files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops"].includes(this.activePanel)) {
+    if (["files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "instanceVault"].includes(this.activePanel)) {
       const target = this.pathForPanel("", this.activePanel);
       try {
         return new URL(target, globalThis.location?.href || "http://localhost/").toString();
@@ -5197,6 +5210,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (parts[0] === "settings" || parts[0] === "mailboxes") return "instanceSettings";
     if (parts[0] === "timers" || (parts[0] === "ng" && parts[1] === "timers")) return "instanceTimers";
     if (["desktops", "desk"].includes(parts[0]) || (parts[0] === "ng" && parts[1] === "desk")) return "instanceDesktops";
+    if (parts[0] === "vault" || (parts[0] === "ng" && parts[1] === "vault")) return "instanceVault";
     if (parts[0] === "jobs" || (parts[0] === "ng" && parts[1] === "jobs")) return "instanceSettings";
     if (parts[0] === "connectors") return parts[1] ? "userConnectors" : "instanceSettings";
     if (parts[0] === "ng" && parts[1] === "connectors") return parts[2] ? "userConnectors" : "instanceSettings";
@@ -5415,6 +5429,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (panel === "instanceSettings") return this.instancePath("/settings");
     if (panel === "instanceTimers") return this.instancePath("/timers");
     if (panel === "instanceDesktops") return this.instancePath("/desktops");
+    if (panel === "instanceVault") return this.instancePath("/vault");
     if (panel === "userConnectors") return this.appPath("/connectors");
     const thread = this.resolveThread(id);
     const canonical = thread ? this.canonicalPanelUrl(thread, panel) : "";
@@ -5691,6 +5706,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (this.activePanel === "instanceDesktops") {
       globalThis.document.title = "Desktops · Orkestr";
+      return;
+    }
+    if (this.activePanel === "instanceVault") {
+      globalThis.document.title = "Vault · Orkestr";
       return;
     }
     if (this.activePanel === "userConnectors") {

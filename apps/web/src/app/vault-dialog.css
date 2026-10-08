@@ -1,0 +1,91 @@
+.vault-dialog h3 {
+  margin: 0;
+}
+
+.vault-field {
+  display: grid;
+  gap: 6px;
+}
+
+.vault-field > label,
+.vault-dialog-hint {
+  color: #8cff9b;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.vault-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.vault-inline > input:not([type="checkbox"]) {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.vault-inline button {
+  min-height: 34px;
+  padding: 5px 12px;
+}
+
+.vault-generator {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(119, 205, 126, 0.16);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.vault-generator .checkbox-row {
+  gap: 6px;
+  font-size: 0.84rem;
+}
+
+.vault-form-error {
+  margin: 0;
+  border-radius: 8px;
+  background: rgba(83, 23, 17, 0.86);
+  color: #ffd1c4;
+  padding: 7px 11px;
+  font-size: 0.84rem;
+}
+
+.vault-dialog-text {
+  margin: 0;
+  color: rgba(235, 255, 230, 0.72);
+  font-size: 0.86rem;
+}
+
+.vault-dialog ul {
+  margin: 0;
+  padding-left: 18px;
+  color: rgba(235, 255, 230, 0.72);
+  font-size: 0.84rem;
+}
+
+.vault-thread-list {
+  display: grid;
+  gap: 4px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding-left: 0 !important;
+  list-style: none;
+}
+
+.vault-thread-list .checkbox-row {
+  gap: 8px;
+  color: #e8ffe8;
+}
+
+.vault-result {
+  margin: 0;
+  border-radius: 8px;
+  background: rgba(19, 46, 21, 0.6);
+  color: #c9f6ca;
+  padding: 8px 11px;
+  font-size: 0.86rem;
+}

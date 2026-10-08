@@ -1,0 +1,29 @@
+<div class="modal-backdrop" (click)="close.emit()">
+  <form class="worker-dialog vault-dialog" (click)="$event.stopPropagation()" (submit)="$event.preventDefault(); submit()">
+    <h3>Assign {{ item.name }} to threads</h3>
+    <p class="vault-dialog-text">Assigned threads may ask to use this item. Authenticator codes still need your approval.</p>
+    @if (searchVisible()) {
+      <input type="search" placeholder="Search threads" aria-label="Search threads" autocomplete="off"
+        [value]="query" (input)="query = $any($event.target).value">
+    }
+    <ul class="vault-thread-list">
+      @for (thread of visibleThreads(); track thread.id) {
+        <li>
+          <label class="checkbox-row">
+            <input type="checkbox" [checked]="selected.has(thread.id)" (change)="toggle(thread.id, $any($event.target).checked)">
+            {{ threadTitle(thread) }}
+          </label>
+        </li>
+      } @empty {
+        <li class="vault-dialog-text">No threads yet.</li>
+      }
+    </ul>
+    @if (error) {
+      <p class="vault-form-error" role="alert">{{ error }}</p>
+    }
+    <div class="dialog-actions">
+      <button class="secondary" type="button" (click)="close.emit()">Cancel</button>
+      <button type="submit" [disabled]="busy">{{ busy ? "Saving…" : "Save" }}</button>
+    </div>
+  </form>
+</div>
