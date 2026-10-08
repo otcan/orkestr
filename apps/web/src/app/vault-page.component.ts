@@ -130,11 +130,30 @@ export class VaultPageComponent implements OnInit, OnDestroy {
   setRowVisible(item: VaultItem, visible: boolean): void {
     if (visible) this.visibleIds.add(item.id);
     else this.visibleIds.delete(item.id);
-    if (visible && item.hasTotp) void this.tick();
+    if (visible && this.autoCode(item)) void this.tick();
   }
 
   visibleTotpIds(): string[] {
-    return this.items.filter((item) => item.hasTotp && this.visibleIds.has(item.id)).map((item) => item.id);
+    return this.items.filter((item) => this.autoCode(item) && this.visibleIds.has(item.id)).map((item) => item.id);
+  }
+
+  // Time-based codes refresh on their own; a counter-based (HOTP) code is
+  // used up when issued, so it is only fetched when the owner asks for it.
+  autoCode(item: VaultItem): boolean {
+    return item.hasTotp && item.totpType !== "hotp";
+  }
+
+  async nextHotp(item: VaultItem): Promise<void> {
+    if (this.busyId) return;
+    this.busyId = item.id;
+    try {
+      const code = await firstValueFrom(this.api.nextHotp(item.id));
+      await this.copy(code.code, "Code copied.");
+    } catch {
+      this.error = "Could not get a code.";
+    } finally {
+      this.busyId = "";
+    }
   }
 
   async tick(): Promise<void> {

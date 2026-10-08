@@ -241,6 +241,27 @@ test("authenticator codes are fetched only for visible rows while the page is vi
   assert.deepEqual(fetched, ["a", "b"]);
 });
 
+test("counter-based (HOTP) codes are never auto-fetched; Get code uses the explicit POST", async () => {
+  const fetched = [];
+  const advanced = [];
+  const { page } = await vaultPage({
+    totp: (id) => { fetched.push(id); return rxjs.of({ code: "111111", expiresInSeconds: 20, period: 30, digits: 6 }); },
+    nextHotp: (id) => { advanced.push(id); return rxjs.of({ code: "755224", expiresInSeconds: 0, period: 30, digits: 6 }); },
+  }, { navigator: { clipboard: { writeText: async () => undefined, readText: async () => "" } } });
+  const rows = [
+    { id: "time", name: "Time", hasTotp: true, totpType: "totp", hasPassword: false, threadGrants: [] },
+    { id: "counter", name: "Counter", hasTotp: true, totpType: "hotp", hasPassword: false, threadGrants: [] },
+  ];
+  page.items = rows;
+  page.setRowVisible(rows[0], true);
+  page.setRowVisible(rows[1], true);
+  await page.tick();
+  assert.deepEqual(fetched, ["time"], "the HOTP row is not fetched automatically");
+  assert.equal(page.autoCode(rows[1]), false);
+  await page.nextHotp(rows[1]);
+  assert.deepEqual(advanced, ["counter"]);
+});
+
 test("vault fields opt out of autofill and analytics", async () => {
   const [form, page, imports] = await Promise.all([
     read("vault-item-form.component.html"), read("vault-page.component.html"), read("vault-import-dialog.component.html"),

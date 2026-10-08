@@ -146,3 +146,18 @@ test("otpauth import accepts URI lists and reports invalid lines without values"
   assert.equal(plan.entries[1].input.name, "Other");
   assert.deepEqual(plan.reasons.map(({ row, reason }) => [row, reason]), [[2, "vault_otpauth_invalid"]]);
 });
+
+test("envelopes with a truncated GCM tag are rejected", async (t) => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const crypto = await import("../packages/core/src/vault-crypto.js");
+  const home = await mkdtemp(join(tmpdir(), "orkestr-vault-tag-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const env = { ORKESTR_HOME: home };
+  const envelope = await crypto.sealItemPayload({ password: "example-password" }, "alice", "vi_example", env);
+  const truncated = structuredClone(envelope);
+  truncated.payload.tag = Buffer.from(envelope.payload.tag, "base64url").subarray(0, 4).toString("base64url");
+  await assert.rejects(() => crypto.openItemPayload(truncated, "alice", "vi_example", env), { message: "vault_item_decrypt_failed" });
+  assert.equal((await crypto.openItemPayload(envelope, "alice", "vi_example", env)).password, "example-password");
+});

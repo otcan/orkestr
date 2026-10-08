@@ -150,10 +150,15 @@ export async function issueCodeInStore(owner, store, itemId, env = process.env) 
   return { code: result.code, expiresInSeconds: result.expiresInSeconds, period: result.period, digits: result.digits };
 }
 
-export async function ownerTotpCode(principal, itemId, env = process.env) {
+// A counter-based (HOTP) code is used up when issued, so it is only issued on
+// an explicit request (`advance`), never by the page's automatic refresh.
+export async function ownerTotpCode(principal, itemId, env = process.env, { advance = false } = {}) {
   const owner = assertVaultOwner(principal);
   await consumeVaultRateLimit("ownerTotp", owner, env);
-  return mutateVault(owner, (store) => issueCodeInStore(owner, store, itemId, env), env);
+  return mutateVault(owner, (store) => {
+    if (!advance && findItem(store, itemId).totpType === "hotp") throw vaultError("vault_hotp_requires_explicit_request", 409);
+    return issueCodeInStore(owner, store, itemId, env);
+  }, env);
 }
 
 /** Exports the TOTP secret as an otpauth:// URI. Requires a recent sign-in. */

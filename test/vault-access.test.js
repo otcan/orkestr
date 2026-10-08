@@ -189,12 +189,17 @@ test("TOTP approval flow: pending, approve, exactly one code, deny, expiry", asy
   assert.equal(events.includes(issued.code) && events.includes(`"code":"${issued.code}"`), false);
 });
 
-test("HOTP codes advance the stored counter on each code", async () => {
+test("HOTP codes advance only on explicit requests, never on the automatic read", async () => {
   const alice = owner("alice");
   const { item } = await createVaultItem(alice, { name: "Counter", totpUri: `otpauth://hotp/Example:alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=0` });
-  assert.equal((await ownerTotpCode(alice, item.id)).code, "755224");
-  assert.equal((await ownerTotpCode(alice, item.id)).code, "287082");
-  assert.equal((await ownerTotpCode(alice, item.id)).code, "359152");
+  assert.equal(item.totpType, "hotp");
+  // The page's automatic refresh (GET) must never use up a counter code.
+  await assert.rejects(() => ownerTotpCode(alice, item.id), { statusCode: 409 });
+  await assert.rejects(() => ownerTotpCode(alice, item.id), { statusCode: 409 });
+  const advance = { advance: true };
+  assert.equal((await ownerTotpCode(alice, item.id, process.env, advance)).code, "755224");
+  assert.equal((await ownerTotpCode(alice, item.id, process.env, advance)).code, "287082");
+  assert.equal((await ownerTotpCode(alice, item.id, process.env, advance)).code, "359152");
   await deleteVaultItem(alice, item.id);
 });
 

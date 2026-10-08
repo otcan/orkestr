@@ -105,9 +105,13 @@ function seal(key, plaintext, aad) {
 
 function open(key, box, aad) {
   try {
-    const decipher = createDecipheriv(ALG, key, Buffer.from(clean(box?.iv), "base64url"));
+    const iv = Buffer.from(clean(box?.iv), "base64url");
+    // Require full-length IVs and tags: GCM otherwise accepts truncated tags.
+    const tag = Buffer.from(clean(box?.tag), "base64url");
+    if (iv.length !== 12 || tag.length !== 16) throw new Error("vault_envelope_invalid");
+    const decipher = createDecipheriv(ALG, key, iv, { authTagLength: 16 });
     decipher.setAAD(aad);
-    decipher.setAuthTag(Buffer.from(clean(box?.tag), "base64url"));
+    decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(Buffer.from(clean(box?.data), "base64url")), decipher.final()]);
   } catch {
     throw vaultError("vault_item_decrypt_failed");

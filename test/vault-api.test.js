@@ -45,7 +45,7 @@ test("vault API: owner endpoints, agent endpoints and approval flow", async (t) 
   assert.equal(created.status, 201, created.text);
   assert.equal(created.text.includes(PASSWORD), false);
   const itemId = created.json.item.id;
-  assert.deepEqual(Object.keys(created.json.item).sort(), ["createdAt", "domain", "hasPassword", "hasTotp", "id", "lastUsedAt", "name", "tags", "threadGrants", "updatedAt", "url", "username"]);
+  assert.deepEqual(Object.keys(created.json.item).sort(), ["createdAt", "domain", "hasPassword", "hasTotp", "id", "lastUsedAt", "name", "tags", "threadGrants", "totpType", "updatedAt", "url", "username"]);
 
   const crossSite = await rawRequest(port, {
     method: "POST",

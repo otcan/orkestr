@@ -122,6 +122,7 @@ export function applyItemInput(meta = {}, payload = {}, input = {}) {
   if (!clean(nextMeta.name)) throw vaultError("vault_name_required");
   nextMeta.hasPassword = Boolean(next.password);
   nextMeta.hasTotp = Boolean(next.totp);
+  nextMeta.totpType = next.totp ? (next.totp.type === "hotp" ? "hotp" : "totp") : null;
   return { meta: nextMeta, payload: next };
 }
 
@@ -148,6 +149,7 @@ export function itemMeta(record = {}) {
     tags: Array.isArray(record.tags) ? record.tags : [],
     hasPassword: record.hasPassword === true,
     hasTotp: record.hasTotp === true,
+    totpType: record.hasTotp === true ? (record.totpType === "hotp" ? "hotp" : "totp") : null,
     createdAt: record.createdAt || null,
     updatedAt: record.updatedAt || null,
     lastUsedAt: record.lastUsedAt || null,

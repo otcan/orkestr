@@ -60,6 +60,14 @@ export class VaultController {
     return ownerTotpCode(vaultOwner(request), id);
   }
 
+  // Next counter-based (HOTP) code: advances the counter, so POST only.
+  @Post("items/:id/totp")
+  @HttpCode(200)
+  @Header("X-Orkestr-Secure-Input", SECURE_RESPONSE_HEADER)
+  async nextCode(@Req() request: any, @Param("id") id: string) {
+    return ownerTotpCode(vaultOwner(request, { mutating: true }), id, process.env, { advance: true });
+  }
+
   @Post("items/:id/totp-secret")
   @HttpCode(200)
   @Header("X-Orkestr-Secure-Input", SECURE_RESPONSE_HEADER)

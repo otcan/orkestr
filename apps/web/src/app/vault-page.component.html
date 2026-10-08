@@ -53,7 +53,9 @@
             </small>
           </div>
           <div class="vault-row-actions">
-            @if (item.hasTotp) {
+            @if (item.hasTotp && item.totpType === "hotp") {
+              <button class="secondary vault-small" type="button" (click)="nextHotp(item)" [disabled]="busyId === item.id" title="Counter-based code: each one can be used once">Get code</button>
+            } @else if (item.hasTotp) {
               @let live = totp.code(item.id);
               @if (live) {
                 <button class="vault-code" type="button" (click)="copyCode(item)" [attr.aria-label]="'Copy code for ' + item.name" title="Copy code">
