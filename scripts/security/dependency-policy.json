@@ -48,16 +48,5 @@
       "rationale": "Browser download provisioner; CI forbids launching browsers and needs no downloaded Chrome. Runtime browsers are separately managed. Script stays disabled."
     }
   ],
-  "exceptions": [
-    {
-      "package": "http-cache-semantics",
-      "version": "4.2.0",
-      "advisoryId": "GHSA-ch52-4w7c-c8xp",
-      "approvedBy": "admin",
-      "reviewRef": "ORK-529",
-      "approvedAt": "2026-10-02T23:16:29Z",
-      "expiresAt": "2026-10-09T23:16:29Z",
-      "rationale": "Owner-approved 7-day exception: no patched release exists. Currently reached only through dev build tooling (@angular/cli > pacote > npm-registry-fetch > make-fetch-happen), but this exception is not scoped to dev usage. Remove when a fix ships or before expiry."
-    }
-  ]
+  "exceptions": []
 }
