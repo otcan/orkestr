@@ -59,16 +59,16 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     title: "Outreach Review",
     filtersJson: {
       people: [{
-        id: "betul",
-        name: "Betul Y.",
-        profileUrl: "https://example.test/in/betul",
-        messageHistory: [{ id: "m1", from: "assistant", text: "Hello Betul" }],
+        id: "jordan",
+        name: "Jordan Y.",
+        profileUrl: "https://example.test/in/jordan",
+        messageHistory: [{ id: "m1", from: "assistant", text: "Hello Jordan" }],
       }],
     },
   }, { principal: principal, env: process.env });
   const second = await createAppShare("main", "outreach-review", {
     shareToken: "share-two",
-    filtersJson: { people: [{ id: "hilal", name: "Hilal O." }] },
+    filtersJson: { people: [{ id: "morgan", name: "Morgan O." }] },
   }, { principal, env: process.env });
   const third = await createAppShare("main", "demo-review", {
     shareToken: "share-three",
@@ -160,25 +160,25 @@ test("shared app URL creates scoped pairing and limits the approved session", as
 
     const data = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one`, { headers: { cookie: sessionCookie } }));
     assert.equal(data.app.appType, "people-message-labeling");
-    assert.equal(data.data.people[0].id, "betul");
+    assert.equal(data.data.people[0].id, "jordan");
     assert.equal(data.data.people[0].currentClassification, "not_evaluated");
 
     const dataWithStaleCookieFirst = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one`, {
       headers: { cookie: `orkestr_session=stale-token; ${sessionCookie}` },
     }));
-    assert.equal(dataWithStaleCookieFirst.data.people[0].id, "betul");
+    assert.equal(dataWithStaleCookieFirst.data.people[0].id, "jordan");
 
     const dataWithAppCookieFirst = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one`, {
       headers: { cookie: `${adminCookie.split(";")[0]}; ${sessionCookie}` },
     }));
-    assert.equal(dataWithAppCookieFirst.data.people[0].id, "betul");
+    assert.equal(dataWithAppCookieFirst.data.people[0].id, "jordan");
 
     const update = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one/actions/setClassification`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: sessionCookie },
-      body: JSON.stringify({ personId: "betul", classification: "to_contact" }),
+      body: JSON.stringify({ personId: "jordan", classification: "to_contact" }),
     }));
-    assert.equal(update.personId, "betul");
+    assert.equal(update.personId, "jordan");
     assert.equal(update.classification, "to_contact");
     assert.equal(update.data.people[0].currentClassification, "to_contact");
 
@@ -188,9 +188,9 @@ test("shared app URL creates scoped pairing and limits the approved session", as
     const noteUpdate = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one/actions/setNote`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: sessionCookie },
-      body: JSON.stringify({ personId: "betul", note: "Follow up next week." }),
+      body: JSON.stringify({ personId: "jordan", note: "Follow up next week." }),
     }));
-    assert.equal(noteUpdate.personId, "betul");
+    assert.equal(noteUpdate.personId, "jordan");
     assert.equal(noteUpdate.reviewNote, "Follow up next week.");
 
     const afterNote = await readJson(await fetch(`${baseUrl}/api/shared-apps/i/main/a/outreach-review/s/share-one`, { headers: { cookie: sessionCookie } }));

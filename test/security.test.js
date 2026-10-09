@@ -929,8 +929,8 @@ test("tenant CLI setup status uses instance connector scope", async () => {
     process.env.ORKESTR_HOME = home;
     process.env.ORKESTR_AUTH_REQUIRED = "1";
     process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
-    process.env.ORKESTR_TENANT_VM_ID = "firat-jobs-vm";
-    process.env.ORKESTR_ADMIN_USER_ID = "firat";
+    process.env.ORKESTR_TENANT_VM_ID = "casey-jobs-vm";
+    process.env.ORKESTR_ADMIN_USER_ID = "casey";
     process.env.ORKESTR_CLI_AUTH_TOKEN = "cli-secret";
     process.env.ORKESTR_OVERLAY_DIR = overlayDir;
 
@@ -954,7 +954,7 @@ test("tenant CLI setup status uses instance connector scope", async () => {
       state: "stale-global-oauth-state",
       provider: "google_workspace",
     }), "utf8");
-    const firatPaths = userDataPaths("firat", process.env);
+    const caseyPaths = userDataPaths("casey", process.env);
     await fs.mkdir(path.join(home, "secrets"), { recursive: true });
     await fs.writeFile(path.join(home, "secrets", "gmail-token.json"), JSON.stringify({
       provider: "google_workspace",
@@ -1014,7 +1014,7 @@ test("tenant CLI setup status uses instance connector scope", async () => {
     const globalOauthState = JSON.parse(await fs.readFile(path.join(home, "oauth", "gmail-state.json"), "utf8"));
 
     assert.match(oauth.authorizeUrl, /^https:\/\/accounts\.google\.com\//);
-    await assert.rejects(fs.stat(path.join(firatPaths.oauth, "gmail-state.json")));
+    await assert.rejects(fs.stat(path.join(caseyPaths.oauth, "gmail-state.json")));
     assert.equal(globalOauthState.userId, "");
     assert.notEqual(globalOauthState.state, "stale-global-oauth-state");
 
@@ -1056,7 +1056,7 @@ test("shared broker authorization accepts matching encrypted proxy assertions", 
   const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
   const broker = __brokerInstanceRegistryTestInternals.createX25519Identity();
   const channelId = "broker-channel-one";
-  const instanceId = "instance-firat";
+  const instanceId = "instance-casey";
   await fs.writeFile(path.join(home, "secrets", "broker-client-identity.json"), JSON.stringify({
     schemaVersion: 1,
     keyId: "client-key",
@@ -1113,7 +1113,7 @@ test("shared broker authorization accepts matching encrypted proxy assertions", 
   const allowedUser = await authorizeHttpRequest({
     method: "GET",
     url: "/api/threads",
-    headers: { "x-orkestr-broker-auth": headerFor({ userId: "firat", role: "user" }) },
+    headers: { "x-orkestr-broker-auth": headerFor({ userId: "casey", role: "user" }) },
     socket: { remoteAddress: "10.43.0.10" },
   }, env);
   const wrongPath = await authorizeHttpRequest({
@@ -1130,9 +1130,9 @@ test("shared broker authorization accepts matching encrypted proxy assertions", 
   assert.equal(allowed.principal.userId, "admin");
   assert.equal(allowedUser.ok, true);
   assert.equal(allowedUser.machineAuth, "broker_proxy");
-  assert.equal(allowedUser.principal.userId, "firat");
+  assert.equal(allowedUser.principal.userId, "casey");
   assert.equal(allowedUser.principal.role, "user");
-  assert.equal(allowedUser.machineAuthContext.userId, "firat");
+  assert.equal(allowedUser.machineAuthContext.userId, "casey");
   assert.equal(wrongPath.ok, false);
   assert.equal(wrongPath.error, "broker_proxy_auth_path_mismatch");
 });
@@ -1151,7 +1151,7 @@ test("broker proxy setup status is treated as paired for tenant WebUI", async ()
   const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
   const broker = __brokerInstanceRegistryTestInternals.createX25519Identity();
   const channelId = "broker-channel-setup-status";
-  const instanceId = "instance-firat";
+  const instanceId = "instance-casey";
   await fs.writeFile(path.join(home, "secrets", "broker-client-identity.json"), JSON.stringify({
     schemaVersion: 1,
     keyId: "client-key",
@@ -1171,7 +1171,7 @@ test("broker proxy setup status is treated as paired for tenant WebUI", async ()
   process.env.ORKESTR_SHARED_AUTHORIZATION = "1";
   process.env.ORKESTR_BROKER_INSTANCE_ID = instanceId;
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
-  process.env.ORKESTR_ADMIN_USER_ID = "firat";
+  process.env.ORKESTR_ADMIN_USER_ID = "casey";
   const headerFor = (patch = {}) => {
     const now = Date.now();
     return Buffer.from(JSON.stringify({
@@ -1192,8 +1192,8 @@ test("broker proxy setup status is treated as paired for tenant WebUI", async ()
     }), "utf8").toString("base64url");
   };
   const header = headerFor();
-  const userHeader = headerFor({ userId: "firat", role: "user", displayName: "Fırat" });
-  const userMeHeader = headerFor({ userId: "firat", role: "user", displayName: "Fırat", path: "/api/users/me" });
+  const userHeader = headerFor({ userId: "casey", role: "user", displayName: "Casey" });
+  const userMeHeader = headerFor({ userId: "casey", role: "user", displayName: "Casey", path: "/api/users/me" });
 
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
@@ -1218,9 +1218,9 @@ test("broker proxy setup status is treated as paired for tenant WebUI", async ()
     assert.notEqual(proxiedUser.redacted, true);
     assert.equal(proxiedUser.security.paired, true);
     assert.equal(proxiedUser.security.remoteReady, true);
-    assert.equal(proxiedMe.user.id, "firat");
+    assert.equal(proxiedMe.user.id, "casey");
     assert.equal(proxiedMe.user.role, "user");
-    assert.equal(proxiedMe.user.displayName, "Fırat");
+    assert.equal(proxiedMe.user.displayName, "Casey");
     assert.equal(proxiedMe.user.limits.maxThreads, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -1239,11 +1239,11 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
 
-  await createUser({ id: "firat", role: "user", displayName: "Fırat" }, process.env);
+  await createUser({ id: "casey", role: "user", displayName: "Casey" }, process.env);
   await createTenantVm({
-    id: "firat-jobs-vm",
-    ownerUserId: "firat",
-    labels: { brokerInstanceId: "instance-firat" },
+    id: "casey-jobs-vm",
+    ownerUserId: "casey",
+    labels: { brokerInstanceId: "instance-casey" },
   }, process.env);
 
   const server = await startServer({ port: 0, host: "127.0.0.1" });
@@ -1253,27 +1253,27 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        instanceId: "instance-firat",
-        requestedPath: "/i/instance-firat/app/connectors/gmail",
+        instanceId: "instance-casey",
+        requestedPath: "/i/instance-casey/app/connectors/gmail",
       }),
     });
     const body = await json(response);
 
     assert.equal(response.status, 200);
-    assert.equal(body.challenge.userId, "firat");
+    assert.equal(body.challenge.userId, "casey");
     assert.equal(body.challenge.role, "user");
-    assert.equal(body.challenge.instanceId, "instance-firat");
+    assert.equal(body.challenge.instanceId, "instance-casey");
     assert.equal(
       body.challenge.requestedPath,
-      "/i/instance-firat/app/connectors/gmail?mcp=tools%2Fcall&tool=orkestr_auth&service=gmail&provider=google_workspace&action=connect&instance_id=instance-firat",
+      "/i/instance-casey/app/connectors/gmail?mcp=tools%2Fcall&tool=orkestr_auth&service=gmail&provider=google_workspace&action=connect&instance_id=instance-casey",
     );
     assert.deepEqual(body.challenge.allowedActions, ["orkestr_auth.google.connect"]);
     assert.equal(body.challenge.authIntent.tool, "orkestr_auth");
     assert.equal(body.challenge.authIntent.provider, "google_workspace");
     assert.equal(body.challenge.authIntent.action, "connect");
-    assert.equal(body.challenge.authIntent.instanceId, "instance-firat");
-    assert.equal(body.challenge.authIntent.tenantVmId, "firat-jobs-vm");
-    assert.equal(body.challenge.authIntent.userId, "firat");
+    assert.equal(body.challenge.authIntent.instanceId, "instance-casey");
+    assert.equal(body.challenge.authIntent.tenantVmId, "casey-jobs-vm");
+    assert.equal(body.challenge.authIntent.userId, "casey");
     assert.equal(body.challenge.authIntent.restartCommand, "/connect google");
     assert.equal(body.challenge.authIntent.restartSurface, "whatsapp");
   } finally {
@@ -1293,11 +1293,11 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
 
-  await createUser({ id: "firat", role: "user", displayName: "Fırat" }, process.env);
+  await createUser({ id: "casey", role: "user", displayName: "Casey" }, process.env);
   await createTenantVm({
-    id: "firat-jobs-vm",
-    ownerUserId: "firat",
-    labels: { brokerInstanceId: "instance-firat" },
+    id: "casey-jobs-vm",
+    ownerUserId: "casey",
+    labels: { brokerInstanceId: "instance-casey" },
   }, process.env);
 
   const server = await startServer({ port: 0, host: "127.0.0.1" });
@@ -1307,27 +1307,27 @@ test("broker instance pairing challenge is scoped to the tenant VM owner", async
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        instanceId: "instance-firat",
-        requestedPath: "/i/instance-firat/app/connectors/gmail",
+        instanceId: "instance-casey",
+        requestedPath: "/i/instance-casey/app/connectors/gmail",
       }),
     });
     const body = await json(response);
 
     assert.equal(response.status, 200);
-    assert.equal(body.challenge.userId, "firat");
+    assert.equal(body.challenge.userId, "casey");
     assert.equal(body.challenge.role, "user");
-    assert.equal(body.challenge.instanceId, "instance-firat");
+    assert.equal(body.challenge.instanceId, "instance-casey");
     assert.equal(
       body.challenge.requestedPath,
-      "/i/instance-firat/app/connectors/gmail?mcp=tools%2Fcall&tool=orkestr_auth&service=gmail&provider=google_workspace&action=connect&instance_id=instance-firat",
+      "/i/instance-casey/app/connectors/gmail?mcp=tools%2Fcall&tool=orkestr_auth&service=gmail&provider=google_workspace&action=connect&instance_id=instance-casey",
     );
     assert.deepEqual(body.challenge.allowedActions, ["orkestr_auth.google.connect"]);
     assert.equal(body.challenge.authIntent.tool, "orkestr_auth");
     assert.equal(body.challenge.authIntent.provider, "google_workspace");
     assert.equal(body.challenge.authIntent.action, "connect");
-    assert.equal(body.challenge.authIntent.instanceId, "instance-firat");
-    assert.equal(body.challenge.authIntent.tenantVmId, "firat-jobs-vm");
-    assert.equal(body.challenge.authIntent.userId, "firat");
+    assert.equal(body.challenge.authIntent.instanceId, "instance-casey");
+    assert.equal(body.challenge.authIntent.tenantVmId, "casey-jobs-vm");
+    assert.equal(body.challenge.authIntent.userId, "casey");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);
@@ -1397,19 +1397,19 @@ test("broker instance connector challenge preserves trusted Google Workspace app
   process.env.ORKESTR_CONNECT_PUBLIC_URL = "https://connect.orkestr.de";
   process.env.ORKESTR_PUBLIC_AUTH_URL = "https://connect.orkestr.de/setup/pairing";
 
-  const instanceId = "instance-firat";
+  const instanceId = "instance-casey";
   const chatId = "120363400000000012@g.us";
-  await createUser({ id: "firat", role: "user", displayName: "Fırat" }, process.env);
+  await createUser({ id: "casey", role: "user", displayName: "Casey" }, process.env);
   await createTenantVm({
-    id: "firat-jobs-vm",
-    ownerUserId: "firat",
+    id: "casey-jobs-vm",
+    ownerUserId: "casey",
     labels: { brokerInstanceId: instanceId },
   }, process.env);
   const connect = await createGoogleWorkspaceConnectLink({
-    principal: userPrincipal({ id: "firat", role: "user" }),
+    principal: userPrincipal({ id: "casey", role: "user" }),
     thread: {
-      id: "firat-jobs",
-      name: "Fırat Jobs",
+      id: "casey-jobs",
+      name: "Casey Jobs",
       binding: {
         connector: "whatsapp",
         chatId,
@@ -1420,13 +1420,13 @@ test("broker instance connector challenge preserves trusted Google Workspace app
     chatId,
     accountId: "sender",
     brokerInstanceId: instanceId,
-    brokerTenantUserId: "firat",
-    brokerTenantThreadId: "firat-jobs",
-    brokerTenantThreadName: "Fırat Jobs",
+    brokerTenantUserId: "casey",
+    brokerTenantThreadId: "casey-jobs",
+    brokerTenantThreadName: "Casey Jobs",
     brokerTenantChatId: chatId,
     brokerTenantAccountId: "sender",
-    googleConnectionId: "google-firat",
-    alias: "firat",
+    googleConnectionId: "google-casey",
+    alias: "casey",
     useMode: "explicit_only",
     setAsThreadDefault: true,
     brokerServerRequest: true,
@@ -1447,18 +1447,18 @@ test("broker instance connector challenge preserves trusted Google Workspace app
     const body = await json(response);
 
     assert.equal(response.status, 200);
-    assert.equal(body.challenge.userId, "firat");
+    assert.equal(body.challenge.userId, "casey");
     assert.equal(body.challenge.instanceId, instanceId);
     assert.equal(body.challenge.requestedPath, `${connectorUrl.pathname}${connectorUrl.search}`);
     assert.equal(body.challenge.authIntent.connectId, connect.connectId);
     assert.equal(body.challenge.authIntent.chatId, chatId);
     assert.equal(body.challenge.authIntent.accountId, "sender");
-    assert.equal(body.challenge.authIntent.googleConnectionId, "google-firat");
-    assert.equal(body.challenge.authIntent.connectionAlias, "firat");
+    assert.equal(body.challenge.authIntent.googleConnectionId, "google-casey");
+    assert.equal(body.challenge.authIntent.connectionAlias, "casey");
     assert.equal(body.challenge.authIntent.connectionUseMode, "explicit_only");
     assert.equal(body.challenge.authIntent.setAsThreadDefault, "true");
-    assert.equal(body.challenge.authIntent.threadId, "firat-jobs");
-    assert.equal(body.challenge.authIntent.thread, "Fırat Jobs");
+    assert.equal(body.challenge.authIntent.threadId, "casey-jobs");
+    assert.equal(body.challenge.authIntent.thread, "Casey Jobs");
     assert.equal(body.challenge.authIntent.restartCommand, "/connect google");
     assert.equal(body.challenge.authIntent.restartSurface, "whatsapp");
     assert.deepEqual(body.challenge.allowedActions, [`orkestr_auth.google.connect:${connect.connectId}`]);
@@ -1473,8 +1473,8 @@ test("shared broker authorization tolerates stale cached registration channels",
   await fs.mkdir(path.join(home, "secrets"), { recursive: true });
   const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
   const broker = __brokerInstanceRegistryTestInternals.createX25519Identity();
-  const pinnedInstanceId = "instance-firat-public";
-  const cachedInstanceId = "instance-firat-reregistered";
+  const pinnedInstanceId = "instance-casey-public";
+  const cachedInstanceId = "instance-casey-reregistered";
   const assertionChannelId = "broker-channel-public";
   const cachedChannelId = "broker-channel-reregistered";
   await fs.writeFile(path.join(home, "secrets", "broker-client-identity.json"), JSON.stringify({

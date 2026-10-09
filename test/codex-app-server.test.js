@@ -328,12 +328,12 @@ test("Codex app-server turn params include prompt file inputs", () => {
   const thread = { codexThreadId: "codex-thread-1", cwd: "/tmp/orkestr-workspace" };
 
   assert.equal(
-    turnStartParams(thread, { text: "", promptFile: "/tmp/magie-daily.md" }).input[0].text,
-    "Run the prompt file: /tmp/magie-daily.md",
+    turnStartParams(thread, { text: "", promptFile: "/tmp/northwind-daily.md" }).input[0].text,
+    "Run the prompt file: /tmp/northwind-daily.md",
   );
   assert.equal(
-    turnStartParams(thread, { text: "Run daily checker", promptFile: "/tmp/magie-daily.md" }).input[0].text,
-    "Run daily checker\n\nPrompt file: /tmp/magie-daily.md",
+    turnStartParams(thread, { text: "Run daily checker", promptFile: "/tmp/northwind-daily.md" }).input[0].text,
+    "Run daily checker\n\nPrompt file: /tmp/northwind-daily.md",
   );
 });
 

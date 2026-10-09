@@ -21,18 +21,24 @@ function csv(value = "") {
     .filter(Boolean);
 }
 
+// Generic defaults only. Deployment-specific desktop/thread slugs come from
+// ORKESTR_ISOLATION_FORBIDDEN_NAMES or the private overlay file
+// (ORKESTR_ISOLATION_FORBIDDEN_NAMES_FILE, default
+// $ORKESTR_OVERLAY_DIR/isolation-forbidden-names.txt; one name per line, # comments).
 function defaultForbiddenNames() {
   return [
     "linkedin",
-    "firat-linkedin",
-    "kdp-auth",
-    "magie-meta",
-    "ppt",
-    "synbiobeta",
-    "synbiobeta-murat",
     "android-emulator",
-    "sosv-physical-ai",
   ];
+}
+
+async function overlayForbiddenNames(env = process.env) {
+  const overlayDir = clean(env.ORKESTR_OVERLAY_DIR);
+  const file = clean(env.ORKESTR_ISOLATION_FORBIDDEN_NAMES_FILE)
+    || (overlayDir ? path.join(overlayDir, "isolation-forbidden-names.txt") : "");
+  if (!file) return [];
+  const text = await fs.readFile(file, "utf8").catch(() => "");
+  return csv(text.replace(/#.*$/gm, ""));
 }
 
 function defaultForbiddenRoots() {
@@ -158,7 +164,7 @@ export async function auditIsolatedDemoInstance(env = process.env, options = {})
   const checks = [];
   const forbiddenNames = csv(env.ORKESTR_ISOLATION_FORBIDDEN_NAMES).length
     ? csv(env.ORKESTR_ISOLATION_FORBIDDEN_NAMES)
-    : defaultForbiddenNames();
+    : [...new Set([...defaultForbiddenNames(), ...await overlayForbiddenNames(env)])];
   const forbiddenRoots = csvCaseSensitive(env.ORKESTR_ISOLATION_FORBIDDEN_ROOTS).length
     ? csvCaseSensitive(env.ORKESTR_ISOLATION_FORBIDDEN_ROOTS)
     : defaultForbiddenRoots();

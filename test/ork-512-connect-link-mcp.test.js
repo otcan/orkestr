@@ -36,7 +36,7 @@ async function pairForConnectLink(port, connectId) {
 test("CLI connect link: anonymous start writes nothing, the link starts OAuth once, and concurrent reuse fails", async () => {
   const fixture = await startFixtureServer();
   try {
-    const link = await connectLink("firat");
+    const link = await connectLink("casey");
     const startPath = `/connect/google/start?connect=${encodeURIComponent(link.connectId)}`;
 
     const anonymous = await rawRequest(fixture.port, { pathname: startPath });
@@ -50,7 +50,7 @@ test("CLI connect link: anonymous start writes nothing, the link starts OAuth on
     const started = await rawRequest(fixture.port, { pathname: startPath, headers: { cookie } });
     assert.equal(started.status, 302, started.text);
     assert.match(started.headers.location, /^https:\/\/accounts\.google\.com\//);
-    const stateFile = path.join(userDataPaths("firat", process.env).oauth, "gmail-state.json");
+    const stateFile = path.join(userDataPaths("casey", process.env).oauth, "gmail-state.json");
     const saved = JSON.parse(await fs.readFile(stateFile, "utf8"));
     assert.equal(saved.connectId, link.connectId);
 
@@ -59,7 +59,7 @@ test("CLI connect link: anonymous start writes nothing, the link starts OAuth on
     assert.match(reused.text, /google_workspace_connect_link_used/);
     assert.equal(JSON.parse(await fs.readFile(stateFile, "utf8")).state, saved.state);
 
-    const second = await connectLink("firat");
+    const second = await connectLink("casey");
     const secondCookie = await pairForConnectLink(fixture.port, second.connectId);
     const secondPath = `/connect/google/start?connect=${encodeURIComponent(second.connectId)}`;
     const concurrent = await Promise.all(Array.from({ length: 4 }, () =>

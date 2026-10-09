@@ -182,7 +182,7 @@ test("workers report DONE and BLOCKED finals to their parent automatically", asy
   assert.equal((await ensureExistingWorkerWatches(env)).created, 1, "backfills the older worker only");
 
   await appendThreadMessage(worker.id, final("I'm standing by."), env);
-  await appendThreadMessage(worker.id, final("**DONE** MOTEKS-1 branch=x"), env);
+  await appendThreadMessage(worker.id, final("**DONE** ACME-1 branch=x"), env);
   await appendThreadMessage(existing.id, final("BLOCKED needs a token"), env);
   await runThreadWatchPump(env);
   const inputs = await watchInputs(env, parent.id);

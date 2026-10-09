@@ -421,19 +421,19 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
   await writeTenantBrokerClientRegistration(tenantHome, client, registration);
 
   const link = await createGoogleWorkspaceConnectLink({
-    principal: userPrincipal({ id: "firat" }),
+    principal: userPrincipal({ id: "casey" }),
     thread: {
-      id: "firat-jobs",
-      binding: { chatId: "firat-wa", responderAccountId: "de-wa" },
+      id: "casey-jobs",
+      binding: { chatId: "casey-wa", responderAccountId: "de-wa" },
     },
     brokerInstanceId: registration.instanceId,
-    brokerTenantVmId: "firat-jobs-vm",
-    brokerTenantUserId: "firat",
-    brokerTenantThreadId: "firat-jobs",
-    brokerTenantChatId: "firat-wa",
+    brokerTenantVmId: "casey-jobs-vm",
+    brokerTenantUserId: "casey",
+    brokerTenantThreadId: "casey-jobs",
+    brokerTenantChatId: "casey-wa",
     brokerTenantAccountId: "de-wa",
     account: "tenant-user@example.test",
-    alias: "firat-jobs",
+    alias: "casey-jobs",
     useMode: "explicit_only",
     setAsThreadDefault: true,
     capabilities: ["gmail_read"],
@@ -445,10 +445,10 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
   assert.equal(connectorTarget.searchParams.get("provider"), "google_workspace");
   assert.equal(connectorTarget.searchParams.get("action"), "connect");
   assert.equal(connectorTarget.searchParams.get("instance_id"), registration.instanceId);
-  assert.equal(connectorTarget.searchParams.get("user_id"), "firat");
-  assert.equal(connectorTarget.searchParams.get("thread"), "firat-jobs");
-  assert.equal(connectorTarget.searchParams.get("thread_id"), "firat-jobs");
-  assert.equal(connectorTarget.searchParams.get("alias"), "firat-jobs");
+  assert.equal(connectorTarget.searchParams.get("user_id"), "casey");
+  assert.equal(connectorTarget.searchParams.get("thread"), "casey-jobs");
+  assert.equal(connectorTarget.searchParams.get("thread_id"), "casey-jobs");
+  assert.equal(connectorTarget.searchParams.get("alias"), "casey-jobs");
   assert.equal(connectorTarget.searchParams.get("use_mode"), "explicit_only");
   assert.equal(connectorTarget.searchParams.get("set_as_thread_default"), "1");
   assert.equal(connectorTarget.searchParams.get("connect"), link.connectId);
@@ -459,10 +459,10 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
   const started = await startGoogleWorkspaceOAuth(env, { connectId: link.connectId });
   assert.equal(started.redirectUri, "https://app.orkestr.de/oauth/gmail/callback");
   assert.equal(new URL(started.authorizeUrl).searchParams.get("login_hint"), null);
-  const savedState = JSON.parse(await fs.readFile(path.join(userDataPaths("firat", env).oauth, "gmail-state.json"), "utf8"));
+  const savedState = JSON.parse(await fs.readFile(path.join(userDataPaths("casey", env).oauth, "gmail-state.json"), "utf8"));
   assert.equal(savedState.redirectUri, "https://app.orkestr.de/oauth/gmail/callback");
   assert.equal(savedState.account, "");
-  assert.equal(savedState.connectionAlias, "firat-jobs");
+  assert.equal(savedState.connectionAlias, "casey-jobs");
   assert.equal(savedState.connectionUseMode, "explicit_only");
   assert.equal(savedState.setAsThreadDefault, true);
   const calls = [];
@@ -488,11 +488,11 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
       }
       assert.equal(String(url), "https://tenant.example.test/api/broker/google-workspace/grants");
       const decrypted = await decryptBrokerClientPayload(JSON.parse(options.body), { ORKESTR_HOME: tenantHome });
-      assert.equal(decrypted.payload.userId, "firat");
-      assert.equal(decrypted.payload.threadId, "firat-jobs");
-      assert.equal(decrypted.payload.chatId, "firat-wa");
+      assert.equal(decrypted.payload.userId, "casey");
+      assert.equal(decrypted.payload.threadId, "casey-jobs");
+      assert.equal(decrypted.payload.chatId, "casey-wa");
       assert.equal(decrypted.payload.account, "tenant-user@example.test");
-      assert.equal(decrypted.payload.connectionAlias, "firat-jobs");
+      assert.equal(decrypted.payload.connectionAlias, "casey-jobs");
       assert.equal(decrypted.payload.connectionUseMode, "explicit_only");
       assert.equal(decrypted.payload.setAsThreadDefault, true);
       assert.equal(decrypted.payload.token.accessToken, brokeredAccessToken);
@@ -504,7 +504,7 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
   );
 
   assert.equal(savedState.brokerInstanceId, registration.instanceId);
-  assert.equal(savedState.brokerTenantVmId, "firat-jobs-vm");
+  assert.equal(savedState.brokerTenantVmId, "casey-jobs-vm");
   assert.equal(result.brokered, true);
   assert.equal(result.brokerInstanceId, registration.instanceId);
   assert.deepEqual(calls, [
@@ -512,15 +512,15 @@ test("brokered google workspace oauth provisions the Gmail grant to the tenant V
     "https://gmail.googleapis.com/gmail/v1/users/me/profile",
     "https://tenant.example.test/api/broker/google-workspace/grants",
   ]);
-  assert.deepEqual(await readGmailToken(env, { userId: "firat" }), {});
+  assert.deepEqual(await readGmailToken(env, { userId: "casey" }), {});
 });
 
 test("brokered google workspace callback target returns to the instance connector", () => {
   const href = googleWorkspaceBrokeredConnectorSetupHref({
     brokered: true,
-    brokerInstanceId: "instance-firat",
-    brokerTenantUserId: "firat",
-    brokerTenantThreadName: "firat-jobs",
+    brokerInstanceId: "instance-casey",
+    brokerTenantUserId: "casey",
+    brokerTenantThreadName: "casey-jobs",
     oauthAppId: "otcan-claw",
   }, {
     ORKESTR_CONNECT_PUBLIC_URL: "https://connect.crawlerai.de",
@@ -529,15 +529,15 @@ test("brokered google workspace callback target returns to the instance connecto
   const target = new URL(href);
 
   assert.equal(target.origin, "https://connect.orkestr.de");
-  assert.equal(target.pathname, "/i/instance-firat/app/connectors/gmail");
+  assert.equal(target.pathname, "/i/instance-casey/app/connectors/gmail");
   assert.equal(target.searchParams.get("mcp"), "tools/call");
   assert.equal(target.searchParams.get("tool"), "orkestr_auth");
   assert.equal(target.searchParams.get("service"), "gmail");
   assert.equal(target.searchParams.get("provider"), "google_workspace");
   assert.equal(target.searchParams.get("action"), "connect");
-  assert.equal(target.searchParams.get("instance_id"), "instance-firat");
-  assert.equal(target.searchParams.get("user_id"), "firat");
-  assert.equal(target.searchParams.get("thread"), "firat-jobs");
+  assert.equal(target.searchParams.get("instance_id"), "instance-casey");
+  assert.equal(target.searchParams.get("user_id"), "casey");
+  assert.equal(target.searchParams.get("thread"), "casey-jobs");
   assert.equal(target.searchParams.get("oauth_app"), "otcan-claw");
   assert.equal(target.searchParams.get("auto"), "0");
   assert.doesNotMatch(href, /crawlerai|app\.orkestr\.de|\/setup\/gmail/);
@@ -548,7 +548,7 @@ test("tenant google workspace connect link is created by the parent broker", asy
   const broker = __brokerInstanceRegistryTestInternals.createX25519Identity();
   const env = {
     ORKESTR_HOME: home,
-    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_TENANT_VM_ID: "casey-jobs-vm",
     ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
     ORKESTR_BROKER_REGISTRATION_TOKEN: "register-secret",
   };
@@ -561,8 +561,8 @@ test("tenant google workspace connect link is created by the parent broker", asy
       assert.equal(options.headers.authorization, "Bearer register-secret");
       return jsonResponse({
         ok: true,
-        instanceId: "instance-firat",
-        channelId: "channel-firat",
+        instanceId: "instance-casey",
+        channelId: "channel-casey",
         registeredAt: "2026-07-04T00:00:00.000Z",
         broker: {
           keyId: "broker-key",
@@ -570,7 +570,7 @@ test("tenant google workspace connect link is created by the parent broker", asy
         },
       });
     }
-    assert.equal(parsed.pathname, "/api/broker/instances/instance-firat/google-workspace/connect-link");
+    assert.equal(parsed.pathname, "/api/broker/instances/instance-casey/google-workspace/connect-link");
     assert.ok(JSON.parse(options.body).envelope);
     return jsonResponse({
       ok: true,
@@ -583,10 +583,10 @@ test("tenant google workspace connect link is created by the parent broker", asy
 
   try {
     const link = await createGoogleWorkspaceConnectLink({
-      principal: userPrincipal({ id: "firat" }),
+      principal: userPrincipal({ id: "casey" }),
       thread: {
-        id: "firat-jobs",
-        binding: { chatId: "firat-wa", responderAccountId: "de-wa" },
+        id: "casey-jobs",
+        binding: { chatId: "casey-wa", responderAccountId: "de-wa" },
       },
       brokerInstanceId: "stale-instance-from-agent-memory",
     }, env);
@@ -594,7 +594,7 @@ test("tenant google workspace connect link is created by the parent broker", asy
     assert.equal(link.connectId, "parent-connect-id");
     assert.equal(link.message, "parent broker connect message");
     assert.equal(calls.length, 2);
-    assert.equal(calls[1].url.pathname, "/api/broker/instances/instance-firat/google-workspace/connect-link");
+    assert.equal(calls[1].url.pathname, "/api/broker/instances/instance-casey/google-workspace/connect-link");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -792,7 +792,7 @@ test("calendar and drive helpers build scoped google workspace requests", async 
 test("google workspace connect html shows a fixed capability disclosure without scope controls", () => {
   const html = googleWorkspaceConnectHtml({
     connectId: "connect-1",
-    request: { account: "user@example.com", brokerInstanceId: "instance-firat", userId: "firat", threadName: "firat-jobs" },
+    request: { account: "user@example.com", brokerInstanceId: "instance-casey", userId: "casey", threadName: "casey-jobs" },
     allowedCapabilities: "all",
     selectedCapabilities: ["gmail_read", "gmail_send", "gmail_drafts", "drive_file"],
   });
@@ -801,9 +801,9 @@ test("google workspace connect html shows a fixed capability disclosure without 
   assert.match(html, /Continue to Google/);
   assert.match(html, /orkestr_auth/);
   assert.match(html, /google_workspace/);
-  assert.match(html, /instance-firat/);
-  assert.match(html, /firat/);
-  assert.match(html, /firat-jobs/);
+  assert.match(html, /instance-casey/);
+  assert.match(html, /casey/);
+  assert.match(html, /casey-jobs/);
   assert.doesNotMatch(html, /name="account"/);
   assert.doesNotMatch(html, /type="email"/);
   assert.match(html, /Requested Google access/);
@@ -853,11 +853,11 @@ test("google workspace connect html discloses every selected expanded capability
 test("google workspace preview html does not expose the OAuth start form", () => {
   const html = googleWorkspaceConnectHtml({
     connectId: "connect-1",
-    request: { account: "user@example.com", brokerInstanceId: "instance-firat", userId: "firat" },
+    request: { account: "user@example.com", brokerInstanceId: "instance-casey", userId: "casey" },
     previewOnly: true,
   });
   assert.match(html, /Open this link in a browser/);
   assert.match(html, /orkestr_auth/);
-  assert.match(html, /instance-firat/);
+  assert.match(html, /instance-casey/);
   assert.doesNotMatch(html, /action="\/connect\/google\/start"/);
 });

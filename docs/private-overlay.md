@@ -40,3 +40,15 @@ WhatsApp deployments that use more than one phone/account should keep the
 routed account configuration in private env or secret-manager state and keep
 skill-only account state outside `ORKESTR_WHATSAPP_ACCOUNT_IDS`. See
 [WhatsApp Account Operations](whatsapp-account-operations.md).
+
+Deployment-specific identifier lists also live in the overlay, never in this
+repo (one entry per line, `#` comments):
+
+- `oss-denylist.txt` (or `ORKESTR_OSS_PRIVATE_DENYLIST=<file>`): your own
+  desktop/thread slugs, people, client names, and hosts. `npm run
+  oss:boundary-check` fails on any match and reports only file, line, and entry
+  number. Prefix an entry with `re:` to use a regular expression.
+- `isolation-forbidden-names.txt` (or `ORKESTR_ISOLATION_FORBIDDEN_NAMES_FILE`):
+  parent desktop/thread names that `npm run audit:isolation` must not find in
+  an isolated demo instance. `ORKESTR_ISOLATION_FORBIDDEN_NAMES` (CSV) replaces
+  both the file and the generic defaults.

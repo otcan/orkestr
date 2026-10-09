@@ -169,8 +169,8 @@ test("task agent results fail closed when the recorded parent binding drifts", a
 test("task agent reconciliation completes a durable delivering_result retry after parent result append", async () => {
   const env = await testEnv();
   const parent = await createThread({
-    id: "aeef8faaa15877f7",
-    name: "otcanClaw Features",
+    id: "a1b2c3d4e5f60718",
+    name: "demoClaw Features",
     cwd: path.dirname(env.ORKESTR_HOME),
   }, env);
   const { taskAgent } = await createTaskAgent(parent.id, {
@@ -178,7 +178,7 @@ test("task agent reconciliation completes a durable delivering_result retry afte
     profile: "sre_engineer",
     task: "Validate ORK-404 state reconciliation.",
   }, env);
-  assert.equal(taskAgent.id, "task-aeef8faaa15877f7-sre_engineer-2c695ddb");
+  assert.equal(taskAgent.id, "task-a1b2c3d4e5f60718-sre_engineer-2c695ddb");
   const result = await appendThreadMessage(taskAgent.id, {
     id: "final-answer-live-shape",
     role: "assistant",

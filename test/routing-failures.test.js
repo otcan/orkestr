@@ -12,7 +12,7 @@ test("routing failures expose structured WhatsApp scope context without secrets"
     accountId: "responder",
     bindingId: "thread:features:whatsapp",
     instanceId: "vm-orkestr-de",
-    threadId: "aeef8faaa15877f7",
+    threadId: "a1b2c3d4e5f60718",
     chatId: "fixture-scope@g.us",
     principalKind: "instance",
     principalId: "orkestr-de",
@@ -26,7 +26,7 @@ test("routing failures expose structured WhatsApp scope context without secrets"
   assert.equal(failure.accountId, "responder");
   assert.equal(failure.bindingId, "thread:features:whatsapp");
   assert.equal(failure.instanceId, "vm-orkestr-de");
-  assert.equal(failure.threadId, "aeef8faaa15877f7");
+  assert.equal(failure.threadId, "a1b2c3d4e5f60718");
   assert.equal(failure.chatId, "fixture-scope@g.us");
   assert.equal(failure.principalKind, "instance");
   assert.equal(failure.principalId, "orkestr-de");

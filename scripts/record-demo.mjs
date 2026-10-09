@@ -441,12 +441,12 @@ export function renderDemoHtml({ tmuxText = terminalTranscriptText() } = {}) {
             <div class="phone-chat-head">
               <span class="phone-back">‹</span>
               <span class="phone-avatar">ORK</span>
-              <span><strong>otcanClaw-orkestr</strong><small>Orkestr, You</small></span>
+              <span><strong>demoClaw-orkestr</strong><small>Orkestr, You</small></span>
             </div>
             <div class="phone-body">
               <article class="phone-bubble">
                 <div class="phone-preview">orkestr/docs/assets/orkestr-three-screen-demo.png at main · otcan/orkestr<br />github.com</div>
-                <pre class="phone-message">otcanclaw: ${webProof}</pre>
+                <pre class="phone-message">democlaw: ${webProof}</pre>
               </article>
             </div>
             <div class="phone-composer"><span>+</span><span class="phone-input"></span><span>◉</span></div>

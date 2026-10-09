@@ -143,7 +143,7 @@ test("CLAUDE_AUTONOMY_MISSION_POLICY requires explicit current-conversation auth
   assert.match(permitted, /commit changes, locally only, to this worker's own stored branch/);
   assert.doesNotMatch(permitted, /\bpush\b/i);
   // Normal Orkestr-routed replies are explicitly not an external message --
-  // the Moteks incident's false "I cannot send WhatsApp" claim was wrong.
+  // the Acme incident's false "I cannot send WhatsApp" claim was wrong.
   assert.match(permitted, /Orkestr automatically routes these to the bound connector, which is not sending an external message and is always allowed/);
   // The pre-existing "Denied: merging, rebasing, or pushing main" substring
   // must still lead the Denied clause unchanged -- the release-role-switch

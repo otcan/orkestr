@@ -236,13 +236,13 @@ test("Claude release train prefers an explicit local API base", () => {
 test("Claude runtime can use a dedicated credential-blind GitHub SSH transport", () => {
   const runtime = claudeCodeRuntimeEnv({ credentialRoot: "/srv/orkestr/profiles/opaque" }, {}, {
     ORKESTR_CLAUDE_CODE_GITHUB_HTTPS_TO_SSH: "1",
-    ORKESTR_CLAUDE_CODE_GIT_SSH_COMMAND: "/usr/bin/ssh -F /home/openclaw/.ssh/config -o BatchMode=yes",
+    ORKESTR_CLAUDE_CODE_GIT_SSH_COMMAND: "/usr/bin/ssh -F /home/orkestr/.ssh/config -o BatchMode=yes",
   });
   assert.equal(runtime.GIT_CONFIG_COUNT, "2");
   assert.equal(runtime.GIT_CONFIG_KEY_0, "url.git@github.com:.insteadOf");
   assert.equal(runtime.GIT_CONFIG_VALUE_0, "https://github.com/");
   assert.equal(runtime.GIT_CONFIG_KEY_1, "core.sshCommand");
-  assert.equal(runtime.GIT_CONFIG_VALUE_1, "/usr/bin/ssh -F /home/openclaw/.ssh/config -o BatchMode=yes");
+  assert.equal(runtime.GIT_CONFIG_VALUE_1, "/usr/bin/ssh -F /home/orkestr/.ssh/config -o BatchMode=yes");
   assert.equal(runtime.GITHUB_TOKEN, undefined);
   assert.equal(runtime.GH_TOKEN, undefined);
 });
