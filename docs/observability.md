@@ -86,7 +86,17 @@ by default (`ORKESTR_PERF_LOG=0` turns it off):
   `ORKESTR_PERF_SAMPLE_INTERVAL_MS` (default 30000) with host load, CPU,
   memory, swap and disk, the busiest process names by CPU over the interval
   (names only, never command lines), and the Orkestr server's CPU, RSS/heap,
-  event-loop delay, in-flight requests and sqlite store sizes.
+  event-loop delay, in-flight requests and sqlite store sizes, plus `loops`:
+  run count, failures and wall time per background loop (`timer_loop`,
+  `runtime_sync`, `pane_progress`, `whatsapp_outbox`, `mailbox_delivery`,
+  `mailbox_relay`, `thread_watch`, `mcp_events`, `attachment_sweep`) since the
+  previous sample. Wall time includes awaited I/O and nested runs overlap
+  (`runtime_sync` also runs inside `timer_loop`), so treat it as an upper
+  bound when attributing server CPU.
+- `ORKESTR_HOME/observability/events-YYYY-MM-DD.jsonl`: a deploy marker on
+  every server start with the release id (from the release manifest, else the
+  short commit or package version), short commit and version. The first start
+  of a new release id counts as the deploy; later starts are restarts.
 
 Files are 0600 in a 0700 directory and are pruned after
 `ORKESTR_PERF_LOG_RETENTION_DAYS` (default 14, max 90). Writes are buffered
@@ -97,7 +107,15 @@ and appended every few seconds, off the request path.
 percentiles, routes by total time with p50/p95/max and 5xx counts, the
 slowest requests, host and server health, and findings such as
 `event_loop_blocked`, `cpu_saturated`, `swap_pressure`, `slow_route` and
-`failing_route`.
+`failing_route`. It also shows background loop wall time and "since deploy X"
+from the latest deploy marker.
+
+`--since <iso>` / `--until <iso>` pick an explicit range instead of the last
+`--window`. `--compare` adds a baseline and reports deltas for request count,
+5xx, latency p95/p99, server CPU, event-loop p99, the top routes and loop wall
+time: `prev` (the preceding window of the same length), a shift such as `1d`
+(same window yesterday), `deploy` (since the latest deploy vs the same length
+before it) or an ISO time (the window of the same length ending then).
 
 ## Self-Hosted Install Pattern
 

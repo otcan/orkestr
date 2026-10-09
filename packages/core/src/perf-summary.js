@@ -1,21 +1,18 @@
 // Summarizes the perf log (perf-log.js) for `orkestr doctor perf` and
 // GET /api/system/perf: per-route latency percentiles and error counts,
 // the slowest requests, host and server health over the window, and plain
-// findings that point at the likely cause of slowness.
+// findings that point at the likely cause of slowness, wall time per
+// background loop, the latest deploy and an optional baseline comparison.
 import fs from "node:fs";
 import readline from "node:readline";
 import { perfLogFile, perfRetentionDays } from "./perf-log.js";
+import { latestPerfDeploy } from "./perf-deploy-marker.js";
+import { perfDeltas, resolveCompareRanges, resolvePerfRange } from "./perf-compare.js";
 
-const MAX_WINDOW_MS = 7 * 86400000;
+export { parsePerfWindow } from "./perf-compare.js";
+
 const ROUTE_LIMIT = 15;
 const SLOWEST_LIMIT = 10;
-
-export function parsePerfWindow(value = "1h") {
-  const match = /^(\d+)\s*(m|h|d)$/i.exec(String(value || "").trim());
-  if (!match) return 3600000;
-  const unit = { m: 60000, h: 3600000, d: 86400000 }[match[2].toLowerCase()];
-  return Math.min(MAX_WINDOW_MS, Math.max(60000, Number(match[1]) * unit));
-}
 
 function percentile(sorted, fraction) {
   if (!sorted.length) return null;
@@ -56,7 +53,7 @@ async function* readEntries(kind, sinceMs, untilMs, env) {
   }
 }
 
-async function summarizeRequests(sinceMs, untilMs, env) {
+async function summarizeRequests(sinceMs, untilMs, env, routeLimit = ROUTE_LIMIT) {
   const routes = new Map();
   const all = [];
   const slowest = [];
@@ -86,7 +83,7 @@ async function summarizeRequests(sinceMs, untilMs, env) {
     errors,
     dropped,
     latency: stats(all),
-    routesByTotalTime: rows.sort((left, right) => right.totalMs - left.totalMs).slice(0, ROUTE_LIMIT),
+    routesByTotalTime: rows.sort((left, right) => right.totalMs - left.totalMs).slice(0, routeLimit),
     slowest: slowest.sort((left, right) => right.ms - left.ms).slice(0, SLOWEST_LIMIT),
   };
 }
@@ -94,6 +91,7 @@ async function summarizeRequests(sinceMs, untilMs, env) {
 async function summarizeHealth(sinceMs, untilMs, env) {
   const series = { load1: [], cpuPct: [], memAvailableMb: [], swapUsedMb: [], diskUsedPct: [], loopLagP99Ms: [], loopLagMaxMs: [], orkestrCpuPct: [], rssMb: [], inflight: [] };
   const processCpu = new Map();
+  const loops = new Map();
   let samples = 0;
   let last = null;
   for await (const entry of readEntries("health", sinceMs, untilMs, env)) {
@@ -107,6 +105,14 @@ async function summarizeHealth(sinceMs, untilMs, env) {
     series.orkestrCpuPct.push(server.cpuPct);
     series.rssMb.push(server.rssMb);
     series.inflight.push(server.inflight);
+    for (const [name, row] of Object.entries(server.loops || {})) {
+      const total = loops.get(name) || { loop: name, count: 0, totalMs: 0, maxMs: 0, failed: 0 };
+      total.count += Number(row?.count) || 0;
+      total.totalMs += Number(row?.ms) || 0;
+      total.maxMs = Math.max(total.maxMs, Number(row?.maxMs) || 0);
+      total.failed += Number(row?.failed) || 0;
+      loops.set(name, total);
+    }
     for (const row of host.top || []) {
       const total = processCpu.get(row.name) || { name: row.name, cpuSum: 0, samples: 0, maxCount: 0, maxRssMb: 0 };
       total.cpuSum += row.cpu || 0;
@@ -121,7 +127,11 @@ async function summarizeHealth(sinceMs, untilMs, env) {
     .map(({ cpuSum, ...row }) => ({ ...row, avgCpu: samples ? Math.round((cpuSum / samples) * 10) / 10 : 0 }))
     .sort((left, right) => right.avgCpu - left.avgCpu)
     .slice(0, 8);
-  return { samples, latest: last, ...summary, topProcesses };
+  const windowMs = Math.max(1, untilMs - sinceMs);
+  const loopRows = [...loops.values()]
+    .map((row) => ({ ...row, totalMs: Math.round(row.totalMs), avgMs: row.count ? Math.round((row.totalMs / row.count) * 10) / 10 : 0, wallPct: Math.round((row.totalMs / windowMs) * 1000) / 10 }))
+    .sort((left, right) => right.totalMs - left.totalMs);
+  return { samples, latest: last, ...summary, topProcesses, loops: loopRows };
 }
 
 // Plain-language hints, ordered by severity. Thresholds are deliberately
@@ -160,16 +170,38 @@ export function perfFindings({ requests, health }) {
   return findings;
 }
 
-export async function perfSummary(env = process.env, { window = "1h", now = Date.now() } = {}) {
-  const windowMs = parsePerfWindow(window);
-  const sinceMs = now - windowMs;
-  const [requests, health] = await Promise.all([summarizeRequests(sinceMs, now, env), summarizeHealth(sinceMs, now, env)]);
-  return {
+async function summarizeRange(env, range, routeLimit) {
+  const [requests, health] = await Promise.all([summarizeRequests(range.sinceMs, range.untilMs, env, routeLimit), summarizeHealth(range.sinceMs, range.untilMs, env)]);
+  return { requests, health };
+}
+
+const windowInfo = ({ sinceMs, untilMs }) => ({ since: new Date(sinceMs).toISOString(), until: new Date(untilMs).toISOString(), minutes: Math.round((untilMs - sinceMs) / 60000) });
+
+export async function perfDeployAt(env, untilMs) {
+  const markers = [];
+  for await (const entry of readEntries("events", untilMs - perfRetentionDays(env) * 86400000, untilMs, env)) markers.push(entry);
+  return latestPerfDeploy(markers.sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts)));
+}
+
+export async function perfSummary(env = process.env, { window = "1h", since = "", until = "", compare = "", now = Date.now() } = {}) {
+  let range = resolvePerfRange({ window, since, until, now });
+  const deploy = await perfDeployAt(env, range.untilMs);
+  const ranges = compare ? resolveCompareRanges(compare, range, deploy) : null;
+  if (ranges?.current) range = ranges.current;
+  const { requests, health } = await summarizeRange(env, range);
+  const result = {
     ok: true,
-    window: { since: new Date(sinceMs).toISOString(), until: new Date(now).toISOString(), minutes: Math.round(windowMs / 60000) },
+    window: windowInfo(range),
     retentionDays: perfRetentionDays(env),
+    deploy,
     requests,
     health,
     findings: perfFindings({ requests, health }),
   };
+  if (ranges?.error) result.compare = { spec: String(compare).slice(0, 40), error: ranges.error };
+  else if (ranges) {
+    const baseline = await summarizeRange(env, ranges.baseline, Infinity);
+    result.compare = { spec: String(compare).slice(0, 40), baseline: windowInfo(ranges.baseline), deltas: perfDeltas({ requests, health }, baseline) };
+  }
+  return result;
 }
