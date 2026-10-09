@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { chownToCodexRuntime } from "./codex-runtime-identity.js";
 import { issueVaultThreadToken, revokeVaultThreadTokens } from "./vault-thread-tokens.js";
 
 // Thread-bound vault tokens for Codex app-server turns (docs/vault.md).
@@ -38,22 +39,23 @@ function ttlMs(env) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TTL_MS;
 }
 
-// A root server hands the file to the ORKESTR_HOME owner, who runs the CLI
-// (same rule as secrets/cli-auth.json).
-async function chownToHomeOwner(target, home) {
-  if (typeof process.getuid !== "function" || process.getuid() !== 0) return;
-  const stat = await fs.stat(home).catch(() => null);
-  if (stat && stat.uid !== 0) await fs.chown(target, stat.uid, stat.gid).catch(() => {});
-}
-
-async function writeTokenFile(file, record, home) {
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await fs.chmod(path.dirname(file), 0o700).catch(() => {});
-  await chownToHomeOwner(path.dirname(file), home);
+// A root server hands the directory and files to the user the Codex runtime
+// runs as (codex-runtime-identity), keeping them 0700/0600; secrets/ itself
+// only needs a traversal grant for that user.
+async function writeTokenFile(file, record, env) {
+  const dir = path.dirname(file);
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  await fs.chmod(dir, 0o700).catch(() => {});
+  await chownToCodexRuntime(dir, env);
   const tmp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, `${JSON.stringify(record)}\n`, { mode: 0o600 });
-  await chownToHomeOwner(tmp, home);
-  await fs.rename(tmp, file);
+  try {
+    await fs.writeFile(tmp, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+    await chownToCodexRuntime(tmp, env);
+    await fs.rename(tmp, file);
+  } catch (error) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 async function readTokenFile(file) {
@@ -75,7 +77,12 @@ export async function issueCodexVaultTurnToken({ threadId, codexThreadId } = {},
   await revokeCodexVaultTurnToken({ threadId, codexThreadId }, env);
   const attemptId = `codex:${clean(codexThreadId)}:${Date.now().toString(36)}`;
   const token = await issueVaultThreadToken({ threadId, attemptId, ttlMs: ttlMs(env) }, env);
-  await writeTokenFile(file, { token, threadId: clean(threadId), attemptId }, homeOf(env));
+  try {
+    await writeTokenFile(file, { token, threadId: clean(threadId), attemptId }, env);
+  } catch (error) {
+    await revokeVaultThreadTokens({ threadId, attemptId }, env).catch(() => {});
+    throw error;
+  }
   return attemptId;
 }
 
@@ -84,7 +91,7 @@ export async function bindCodexVaultTurnToken({ codexThreadId, attemptId, turnId
   const file = codexVaultTokenFile(codexThreadId, homeOf(env));
   const current = file ? await readTokenFile(file) : {};
   if (!current.token || current.attemptId !== attemptId || !clean(turnId)) return;
-  await writeTokenFile(file, { ...current, turnId: clean(turnId) }, homeOf(env));
+  await writeTokenFile(file, { ...current, turnId: clean(turnId) }, env);
 }
 
 /**
