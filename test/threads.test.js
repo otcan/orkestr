@@ -456,6 +456,26 @@ test("threads can be deleted with their workers and stored messages", async () =
   assert.deepEqual(workerMessages, []);
 });
 
+test("thread deletion removes only empty Orkestr-created workspace directories", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delete-workspace-"));
+  const env = { ORKESTR_HOME: home };
+  const workspaces = path.join(home, "workspaces");
+  for (const id of ["ws-empty", "ws-agents", "ws-user", "ws-shared"]) await createThread({ id, name: id }, env);
+  await createThread({ id: "ws-keeper", name: "ws-keeper", cwd: "ws-shared" }, env);
+  await fs.mkdir(path.join(workspaces, "ws-empty"), { recursive: true });
+  await fs.mkdir(path.join(workspaces, "ws-agents"), { recursive: true });
+  await fs.writeFile(path.join(workspaces, "ws-agents", "AGENTS.md"), "<!-- orkestr-runtime-agents-md:v2 -->\n");
+  await fs.mkdir(path.join(workspaces, "ws-user"), { recursive: true });
+  await fs.writeFile(path.join(workspaces, "ws-user", "AGENTS.md"), "user notes\n");
+  await fs.mkdir(path.join(workspaces, "ws-shared"), { recursive: true });
+
+  for (const id of ["ws-empty", "ws-agents", "ws-user", "ws-shared"]) await deleteThread(id, {}, env);
+
+  const left = (await fs.readdir(workspaces)).sort();
+  assert.deepEqual(left, ["ws-shared", "ws-user"]);
+  assert.equal(await fs.readFile(path.join(workspaces, "ws-user", "AGENTS.md"), "utf8"), "user notes\n");
+});
+
 test("thread retirement is metadata-only and summary lifecycle filters hide retired threads by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-retire-"));
   const priorHome = process.env.ORKESTR_HOME;

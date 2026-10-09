@@ -73,7 +73,9 @@ for owners they can access, as with the secure-input APIs.
   written to disk before the value is rendered. Concurrent reveals yield
   exactly one value.
 - **Expiry**: expired links are treated as used; their ciphertext is purged
-  on access and by the sweep on every create/list. Used/expired/revoked
+  on access, by the sweep on every create/list, and by the server's
+  maintenance loop (every `ORKESTR_INBOUND_UPLOAD_CLEANUP_INTERVAL_MS`,
+  default 5 minutes) even when nobody touches the link. Used/expired/revoked
   metadata is kept for 24 hours, then dropped.
 - **Encryption**: share values use the secure-input AES-256-GCM key
   (`ORKESTR_SECURE_INPUT_KEY`, `ORKESTR_SECRET_KEY`, or

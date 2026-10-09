@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson, writeSecretJson } from "../../storage/src/store.js";
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
@@ -113,6 +114,26 @@ export async function mutateSecretLinks(env, operation) {
     const result = await operation(links, { expired: swept.expired, now });
     await writeSecretJson(filePath, { schemaVersion: 1, links, updatedAt: new Date().toISOString() });
     return { result, expired: swept.expired };
+  });
+}
+
+/**
+ * Periodic maintenance: applies the expiry sweep without waiting for the next
+ * link access. Never creates the store, and only rewrites it when something
+ * expired or aged out.
+ */
+export async function sweepSecretLinkStore(env = process.env) {
+  const filePath = storePath(env);
+  const exists = await fs.stat(filePath).then(() => true, () => false);
+  if (!exists) return { expired: [], removed: 0 };
+  return withStorageFileLock(filePath, async () => {
+    const before = await readState(env);
+    const swept = sweep(before, Date.now());
+    const removed = before.length - swept.links.length;
+    if (swept.expired.length || removed) {
+      await writeSecretJson(filePath, { schemaVersion: 1, links: swept.links, updatedAt: new Date().toISOString() });
+    }
+    return { expired: swept.expired, removed };
   });
 }
 

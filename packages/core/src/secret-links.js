@@ -20,6 +20,7 @@ import {
   secretLinkActive,
   secretLinkError,
   secretLinkTokenHash,
+  sweepSecretLinkStore,
 } from "./secret-links-store.js";
 import { appendThreadSignal } from "./thread-signals.js";
 import { getThreadForPrincipal } from "./threads.js";
@@ -148,6 +149,14 @@ export async function listSecretLinks(options = {}, principal = {}, env = proces
     .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt))));
   await auditExpired(expired, env);
   return { ok: true, links: result };
+}
+
+// Server maintenance loop entry point: expire links (dropping ciphertext) on a
+// timer instead of only on the next link access.
+export async function sweepExpiredSecretLinks(env = process.env) {
+  const { expired, removed } = await sweepSecretLinkStore(env);
+  await auditExpired(expired, env);
+  return { expired: expired.length, removed };
 }
 
 export async function revokeSecretLink(id = "", principal = {}, env = process.env) {
