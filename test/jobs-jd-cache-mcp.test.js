@@ -117,27 +117,27 @@ test("jobs JD cache MCP exposes read/search only to granted slices", async () =>
     ],
   });
   const grant = await createJobsJdCacheAccessGrant({
-    id: "firat-jobs-vm",
-    tenantVmId: "firat-jobs-vm",
-    ownerUserId: "firat",
-    displayName: "Firat Jobs slice",
+    id: "casey-jobs-vm",
+    tenantVmId: "casey-jobs-vm",
+    ownerUserId: "casey",
+    displayName: "Casey Jobs slice",
     scopes: ["jd:read", "jd:search"],
     sources: ["freelance_de"],
     maxResults: 5,
-  }, env, { token: "firat-test-token" });
+  }, env, { token: "casey-test-token" });
   const accessFile = await fs.readFile(dataPaths(env).jobsJdCacheAccess, "utf8");
 
-  assert.equal(accessFile.includes("firat-test-token"), false);
+  assert.equal(accessFile.includes("casey-test-token"), false);
   assert.equal(grant.grant.tokenConfigured, true);
 
   const unauth = await authorizeHttpRequest(authRequest(), env);
   assert.equal(unauth.ok, false);
   assert.equal(unauth.error, "jobs_jd_cache_token_required");
 
-  const auth = await authorizeHttpRequest(authRequest("firat-test-token"), env);
+  const auth = await authorizeHttpRequest(authRequest("casey-test-token"), env);
   assert.equal(auth.ok, true);
   assert.equal(auth.machineAuth, "jobs_jd_cache");
-  assert.equal(auth.machineAuthContext.grant.tenantVmId, "firat-jobs-vm");
+  assert.equal(auth.machineAuthContext.grant.tenantVmId, "casey-jobs-vm");
 
   const tools = await handleJobsJdCacheMcpRequest({
     jsonrpc: "2.0",
@@ -201,12 +201,12 @@ test("jobs JD cache MCP includes sanitized freelance.de SQLite cache rows", asyn
   };
   await writeJson(dataPaths(env).jobsQueue, { schemaVersion: 1, candidates: [] });
   const grant = await createJobsJdCacheAccessGrant({
-    id: "firat-jobs-vm",
-    tenantVmId: "firat-jobs-vm",
-    ownerUserId: "firat",
+    id: "casey-jobs-vm",
+    tenantVmId: "casey-jobs-vm",
+    ownerUserId: "casey",
     scopes: ["jd:read", "jd:search"],
     sources: ["freelance_de"],
-  }, env, { token: "firat-test-token" });
+  }, env, { token: "casey-test-token" });
 
   const sources = await listJobSources({}, grant.grant, env);
   assert.deepEqual(sources.sources, [{ source: "freelance_de", count: 1 }]);
@@ -284,12 +284,12 @@ test("jobs JD cache MCP includes neutral 9am Gmail signal records without fit ev
   };
   await writeJson(dataPaths(env).jobsQueue, { schemaVersion: 1, candidates: [] });
   const grant = await createJobsJdCacheAccessGrant({
-    id: "firat-jobs-vm",
-    tenantVmId: "firat-jobs-vm",
-    ownerUserId: "firat",
+    id: "casey-jobs-vm",
+    tenantVmId: "casey-jobs-vm",
+    ownerUserId: "casey",
     scopes: ["jd:read", "jd:search"],
     sources: ["9am"],
-  }, env, { token: "firat-test-token" });
+  }, env, { token: "casey-test-token" });
 
   const sources = await listJobSources({}, grant.grant, env);
   assert.deepEqual(sources.sources, [{ source: "9am", count: 1 }]);

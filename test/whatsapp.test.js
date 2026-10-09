@@ -2718,9 +2718,9 @@ test("local whatsapp approval commands prefer parent security approval target ov
   };
   await createTenantVm({
     id: "tenant-managed-approval-wa",
-    ownerUserId: "firat",
+    ownerUserId: "casey",
     endpoint: { baseUrl: "https://tenant.example.test" },
-    connectors: { whatsappChatName: "Firat Jobs", whatsappAccountId: "sender" },
+    connectors: { whatsappChatName: "Casey Jobs", whatsappAccountId: "sender" },
   }, env);
   await configureTenantWhatsAppRoute("tenant-managed-approval-wa", {
     chatId,
@@ -2749,7 +2749,7 @@ test("local whatsapp approval commands prefer parent security approval target ov
       return response({ ok: true }, true, 200);
     }
     calls.push({ url: String(url), options, body: JSON.parse(options.body) });
-    return response({ ok: true, threadId: "firat-jobs", messageId: "msg-approval" }, true, 202);
+    return response({ ok: true, threadId: "casey-jobs", messageId: "msg-approval" }, true, 202);
   });
   const normal = await forwardLocalWhatsAppInbound({
     eventId: "event-managed-normal-forward",
@@ -2760,7 +2760,7 @@ test("local whatsapp approval commands prefer parent security approval target ov
   }, env, async (url, options) => {
     if (String(url).includes("/api/health")) return response({ ok: true }, true, 200);
     calls.push({ url: String(url), options, body: JSON.parse(options.body) });
-    return response({ ok: true, threadId: "firat-jobs", messageId: "msg-normal" }, true, 202);
+    return response({ ok: true, threadId: "casey-jobs", messageId: "msg-normal" }, true, 202);
   });
 
   assert.equal(forwarded.forwarded, true);
@@ -2784,9 +2784,9 @@ test("local whatsapp approval commands do not forward to tenant route when paren
   const env = { ORKESTR_HOME: home };
   await createTenantVm({
     id: "tenant-managed-approval-wa-no-parent",
-    ownerUserId: "firat",
+    ownerUserId: "casey",
     endpoint: { baseUrl: "https://tenant.example.test" },
-    connectors: { whatsappChatName: "Firat Jobs", whatsappAccountId: "sender" },
+    connectors: { whatsappChatName: "Casey Jobs", whatsappAccountId: "sender" },
   }, env);
   await configureTenantWhatsAppRoute("tenant-managed-approval-wa-no-parent", {
     chatId,
@@ -2811,7 +2811,7 @@ test("local whatsapp approval commands do not forward to tenant route when paren
     text: "hi",
   }, env, async (url, options = {}) => {
     if (String(url).includes("/api/health")) return response({ ok: true }, true, 200);
-    return response({ ok: true, threadId: "firat-jobs", messageId: "msg-normal" }, true, 202);
+    return response({ ok: true, threadId: "casey-jobs", messageId: "msg-normal" }, true, 202);
   });
 
   assert.equal(approval, null);
@@ -6834,9 +6834,9 @@ test("local whatsapp recent recovery scans managed tenant route chats", async ()
   };
   await createTenantVm({
     id: "tenant-recovery-wa",
-    ownerUserId: "firat",
+    ownerUserId: "casey",
     endpoint: { baseUrl: "https://tenant-recovery.example.test" },
-    connectors: { whatsappChatName: "Firat Jobs", whatsappAccountId: "sender" },
+    connectors: { whatsappChatName: "Casey Jobs", whatsappAccountId: "sender" },
   }, env);
   await configureTenantWhatsAppRoute("tenant-recovery-wa", {
     chatId,
@@ -6877,7 +6877,7 @@ test("local whatsapp recent recovery scans managed tenant route chats", async ()
       return response({ error: "whatsapp_chat_id_required" }, false, 400);
     }
     calls.push({ url: String(url), options, body });
-    return response({ ok: true, threadId: "firat-jobs", messageId: "tenant-message" }, true, 202);
+    return response({ ok: true, threadId: "casey-jobs", messageId: "tenant-message" }, true, 202);
   };
 
   try {
@@ -8945,7 +8945,7 @@ test("local whatsapp chat creation preserves an uncertain Web comms failure with
 
     await assert.rejects(
       () => createLocalWhatsAppChat({
-        name: "otcanClaw-watcher",
+        name: "demoClaw-watcher",
         responderAccountId: "responder",
         participantIds: ["owner@c.us"],
         env,
@@ -8960,7 +8960,7 @@ test("local whatsapp chat creation preserves an uncertain Web comms failure with
     );
 
     assert.deepEqual(calls, [
-      ["createGroup", "otcanClaw-watcher", ["owner@c.us"], { announce: false }],
+      ["createGroup", "demoClaw-watcher", ["owner@c.us"], { announce: false }],
     ]);
     const events = await listEvents(env);
     assert.equal(events.some((event) => event.type === "whatsapp_local_chat_create_runtime_recovery_start"), false);
@@ -9587,11 +9587,11 @@ test("whatsapp approval command accepts parent auth intent chat for tenant conne
   const env = externalBridgeEnv(home);
   const instanceId = "82f83473-4fce-4c63-ae22-08d3cd0c148a";
   const chatId = "120363400000000012@g.us";
-  const connectId = "connect-firat-google";
+  const connectId = "connect-casey-google";
   const created = await createPairingChallenge({
     env,
     instanceId,
-    userId: "firat",
+    userId: "casey",
     role: "user",
     requestedPath: `/connect/google?connect=${connectId}`,
     allowedActions: [`orkestr_auth.google.connect:${connectId}`],
@@ -9603,8 +9603,8 @@ test("whatsapp approval command accepts parent auth intent chat for tenant conne
       action: "connect",
       connectId,
       instanceId,
-      userId: "firat",
-      threadId: "firat-jobs",
+      userId: "casey",
+      threadId: "casey-jobs",
       chatId,
       accountId: "sender",
       source: "whatsapp",
@@ -9633,11 +9633,11 @@ test("whatsapp approval command rejects parent auth intent from wrong account", 
   const env = externalBridgeEnv(home);
   const instanceId = "82f83473-4fce-4c63-ae22-08d3cd0c148a";
   const chatId = "120363400000000012@g.us";
-  const connectId = "connect-firat-google-wrong-account";
+  const connectId = "connect-casey-google-wrong-account";
   const created = await createPairingChallenge({
     env,
     instanceId,
-    userId: "firat",
+    userId: "casey",
     role: "user",
     requestedPath: `/connect/google?connect=${connectId}`,
     allowedActions: [`orkestr_auth.google.connect:${connectId}`],
@@ -9649,8 +9649,8 @@ test("whatsapp approval command rejects parent auth intent from wrong account", 
       action: "connect",
       connectId,
       instanceId,
-      userId: "firat",
-      threadId: "firat-jobs",
+      userId: "casey",
+      threadId: "casey-jobs",
       chatId,
       accountId: "sender",
       source: "whatsapp",
@@ -11754,7 +11754,7 @@ test("local whatsapp bridge skips group system messages before routing", async (
       from: "wa-system-group@g.us",
       author: "wa-owner@lid",
       fromMe: false,
-      body: "otcanClaw-CampaignManager",
+      body: "demoClaw-CampaignManager",
       type: "gp2",
       timestamp: 1_780_000_000,
     }, env);
@@ -11852,13 +11852,13 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
     routingFailure: {
       code: "target_codex_not_configured",
       userFacingCategory: "codex",
-      appUrl: "https://connect.example.test/i/firat-jobs-vm/app",
-      setupUrl: "https://connect.example.test/i/firat-jobs-vm/setup",
+      appUrl: "https://connect.example.test/i/casey-jobs-vm/app",
+      setupUrl: "https://connect.example.test/i/casey-jobs-vm/setup",
     },
   }));
   const tenantPairing = inboundRoutingFailureNoticeText(new Error("browser_pairing_required"), {
     env: {
-      ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+      ORKESTR_TENANT_VM_ID: "casey-jobs-vm",
       ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
       ORKESTR_PUBLIC_SITE_URL: "http://0.0.0.0:21050",
     },
@@ -11882,10 +11882,10 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   assert.match(pairing, /needs browser pairing approval/i);
   assert.doesNotMatch(pairing, /browser_pairing_required/);
   assert.match(pairing, /https:\/\/orkestr\.example\.test\//);
-  assert.match(tenantCodex, /https:\/\/connect\.example\.test\/i\/firat-jobs-vm\/app/);
+  assert.match(tenantCodex, /https:\/\/connect\.example\.test\/i\/casey-jobs-vm\/app/);
   assert.doesNotMatch(tenantCodex, /\/setup/);
   assert.doesNotMatch(tenantCodex, /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
-  assert.match(tenantPairing, /https:\/\/connect\.example\.test\/i\/firat-jobs-vm\/app/);
+  assert.match(tenantPairing, /https:\/\/connect\.example\.test\/i\/casey-jobs-vm\/app/);
   assert.doesNotMatch(tenantPairing, /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
 });
 
@@ -14485,7 +14485,7 @@ for (const phase of ["final_answer", "commentary"]) for (const partial of [false
       "",
       "| Name | Status | Notes |",
       "| --- | --- | --- |",
-      "| Magie | Ready | **Daily** 09:00 |",
+      "| Northwind | Ready | **Daily** 09:00 |",
       "| KDP | Waiting | needs auth |",
       "",
       "Done.",
@@ -14515,12 +14515,12 @@ for (const phase of ["final_answer", "commentary"]) for (const partial of [false
   assert.equal(calls[0].body.to, "chat-table");
   assert.equal(calls[0].body.paths.length, 1);
   assert.match(stripDebugFooter(calls[0].body.text), /Table \(CSV: orkestr-table-.+\.csv\)/);
-  assert.match(calls[0].body.text, /Name: Magie; Status: Ready; Notes: Daily 09:00/);
+  assert.match(calls[0].body.text, /Name: Northwind; Status: Ready; Notes: Daily 09:00/);
   assert.match(calls[0].body.text, /Name: KDP; Status: Waiting; Notes: needs auth/);
   const csv = await fs.readFile(calls[0].body.paths[0], "utf8");
   assert.equal(csv, [
     "Name,Status,Notes",
-    "Magie,Ready,Daily 09:00",
+    "Northwind,Ready,Daily 09:00",
     "KDP,Waiting,needs auth",
     "",
   ].join("\n"));
@@ -14639,16 +14639,16 @@ test("whatsapp tenant relay sends local report links as inline bridge media inst
   const env = await externalBridgeEnvWithAllowingSanitizer(home, {
     WHATSAPP_BRIDGE_MODE: "relay",
     WHATSAPP_BRIDGE_URL: "http://wa.local",
-    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_TENANT_VM_ID: "casey-jobs-vm",
   });
-  const workspace = path.join(home, "workspace", "firat-jobs");
+  const workspace = path.join(home, "workspace", "casey-jobs");
   await fs.mkdir(workspace, { recursive: true });
   const reportPath = path.join(workspace, "job-search-report.md");
   await fs.writeFile(reportPath, "report payload", "utf8");
   await createThread({
     id: "thread-wa-tenant-relay-attachment",
-    ownerUserId: "firat",
-    name: "Firat Jobs",
+    ownerUserId: "casey",
+    name: "Casey Jobs",
     cwd: workspace,
     workspace,
   }, env);
@@ -14978,7 +14978,7 @@ test("whatsapp table attachment detection ignores fenced code blocks", async () 
     "```",
     "| Name | Status |",
     "| --- | --- |",
-    "| Magie | Ready |",
+    "| Northwind | Ready |",
     "```",
   ].join("\n"), { env: { ORKESTR_HOME: home }, messageId: "code-table" });
 

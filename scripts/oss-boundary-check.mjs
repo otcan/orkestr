@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadDenylist, scanDenylist } from "./security/oss-private-denylist.mjs";
 import { scanText } from "./security/oss-secret-patterns.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -134,25 +135,33 @@ async function assertNoPrivateArtifacts() {
 }
 
 // Secret scan covers every text file, including test fixtures. Findings
-// report file, line and pattern name only, never the matched value.
+// report file, line and pattern name only, never the matched value. The
+// optional private denylist (see oss-private-denylist.mjs) runs on the same files.
 async function assertNoSecrets() {
+  const denylist = await loadDenylist(process.env, { repoRoot });
   const skipDirs = new Set([...generatedDirs].filter((dir) => dir !== "test"));
   const files = await walk(".", { skipDirs, extensions: null });
   const hits = [];
+  const denied = [];
   for (const file of files) {
     const data = await fs.readFile(path.join(repoRoot, file)).catch(() => null);
     if (!data || data.length > 2 * 1024 * 1024 || data.includes(0)) continue;
-    for (const { line, name } of scanText(data.toString("utf8"))) hits.push(`${file}:${line}: ${name}`);
+    const text = data.toString("utf8");
+    for (const { line, name } of scanText(text)) hits.push(`${file}:${line}: ${name}`);
+    for (const { line, entry } of scanDenylist(text, denylist.entries)) denied.push(`${file}:${line}: private denylist entry #${entry}`);
   }
   if (hits.length) throw new Error(`OSS boundary secret scan failed:\n${hits.join("\n")}`);
+  if (denied.length) throw new Error(`OSS boundary private denylist scan failed:\n${denied.join("\n")}`);
+  return denylist.entries.length;
 }
 
 async function main() {
   await assertRequiredFiles();
   await assertRequiredText();
   const scanned = await assertNoPrivateArtifacts();
-  await assertNoSecrets();
-  console.log(`OSS boundary check passed (${scanned} files scanned)`);
+  const denylistEntries = await assertNoSecrets();
+  const denylistNote = denylistEntries ? `, ${denylistEntries} private denylist entries` : "";
+  console.log(`OSS boundary check passed (${scanned} files scanned${denylistNote})`);
 }
 
 await main().catch((error) => {

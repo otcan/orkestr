@@ -25,33 +25,33 @@ test("VM mailbox relay retains history in the target instance and deduplicates r
   };
   const tenantEnv = {
     ORKESTR_HOME: await home("tenant"),
-    ORKESTR_ADMIN_USER_ID: "firat",
-    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_ADMIN_USER_ID: "casey",
+    ORKESTR_TENANT_VM_ID: "casey-jobs-vm",
     ORKESTR_MAILBOX_ACCESS_MODE: "enforce",
     ORKESTR_MAILBOX_RELAY_TOKEN: token,
   };
-  const thread = await createThread({ id: "firat-jobs", name: "Fırat Jobs", ownerUserId: "firat" }, tenantEnv);
+  const thread = await createThread({ id: "casey-jobs", name: "Casey Jobs", ownerUserId: "casey" }, tenantEnv);
   await createTenantVm({
-    id: "firat-jobs-vm",
-    ownerUserId: "firat",
+    id: "casey-jobs-vm",
+    ownerUserId: "casey",
     status: "running",
     capabilities: ["mailboxes"],
-    endpoint: { baseUrl: "https://firat.example.test" },
+    endpoint: { baseUrl: "https://casey.example.test" },
     bootstrap: { firstThreadId: thread.id },
   }, centralEnv);
   const mailbox = await createMailbox({
-    id: "mbx-firat-forwarding",
-    ownerUserId: "firat",
+    id: "mbx-casey-forwarding",
+    ownerUserId: "casey",
     purpose: "forwarding",
-    address: "firat-forwarding@mail.example.test",
+    address: "casey-forwarding@mail.example.test",
     status: "active",
     targetType: "vm",
-    tenantVmId: "firat-jobs-vm",
+    tenantVmId: "casey-jobs-vm",
   }, centralEnv);
   const longBody = `Confirmation 246810\n${"historical mailbox content ".repeat(40)}`;
   const queued = await ingestMailboxMessage({
     recipient: mailbox.address,
-    headers: { messageId: "<firat-forwarding@example.test>", from: "sender@example.test", subject: "Forwarding confirmation" },
+    headers: { messageId: "<casey-forwarding@example.test>", from: "sender@example.test", subject: "Forwarding confirmation" },
     envelope: { rcptTo: mailbox.address, mailFrom: "sender@example.test" },
     body: { text: longBody },
   }, centralEnv);
@@ -77,7 +77,7 @@ test("VM mailbox relay retains history in the target instance and deduplicates r
   const inbox = await listMailboxInboxMessages({
     mailbox: mirrored,
     threadId: thread.id,
-    principal: userPrincipal({ id: "firat" }),
+    principal: userPrincipal({ id: "casey" }),
   }, tenantEnv);
   assert.equal(inbox.messages.length, 1);
   assert.match(inbox.messages[0].body, /Confirmation 246810/);

@@ -66,7 +66,7 @@ ui_env_file="${ui_env_file:-$env_file}"
 if [ -z "$run_user" ]; then
   run_user="$(systemctl show -p User --value "$main_unit" 2>/dev/null || true)"
 fi
-run_user="${run_user:-openclaw}"
+run_user="${run_user:-orkestr}"
 id "$run_user" >/dev/null 2>&1 || { echo "Runtime user not found: $run_user" >&2; exit 1; }
 [ -f "$current_link/scripts/orkestr-mailbox-postfix.mjs" ] || {
   echo "Mailbox Postfix adapter is missing from $current_link; deploy the matching Orkestr release first." >&2

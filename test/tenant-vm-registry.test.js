@@ -348,7 +348,7 @@ test("tenant VM desktop-share proxy rewrites share and desktop URLs through the 
   try {
     const authIntentChallenge = await createPairingChallenge({
       env: process.env,
-      instanceId: "instance-firat",
+      instanceId: "instance-casey",
       userId: "alice",
       role: "user",
       allowedActions: ["orkestr_auth.google.connect:connect-1"],
@@ -357,7 +357,7 @@ test("tenant VM desktop-share proxy rewrites share and desktop URLs through the 
         service: "gmail",
         provider: "google_workspace",
         action: "connect",
-        instanceId: "instance-firat",
+        instanceId: "instance-casey",
       },
     });
     await approvePairingChallenge(authIntentChallenge.challengeId, { env: process.env, approvedBy: "node:test" });
@@ -370,7 +370,7 @@ test("tenant VM desktop-share proxy rewrites share and desktop URLs through the 
     const authIntentShareHtml = await authIntentSharePage.text();
     assert.equal(authIntentSharePage.status, 200);
     assert.match(authIntentShareHtml, /Orkestr Desktop Access/);
-    const authIntentBrokerSharePage = await fetch(`${baseUrl}/i/instance-firat/app/desktop-share/tvm/alice-tenant/d-abc123/share-1?key=secret`, {
+    const authIntentBrokerSharePage = await fetch(`${baseUrl}/i/instance-casey/app/desktop-share/tvm/alice-tenant/d-abc123/share-1?key=secret`, {
       headers: { cookie: authIntentCookie },
     });
     const authIntentBrokerShareHtml = await authIntentBrokerSharePage.text();
@@ -392,7 +392,7 @@ test("tenant VM desktop-share proxy rewrites share and desktop URLs through the 
     );
     const prefixedShareCalls = await desktopShareApiCallsFromHtml(
       authIntentShareHtml,
-      "/i/instance-firat/app/desktop-share/tvm/alice-tenant/d-abc123/share-1",
+      "/i/instance-casey/app/desktop-share/tvm/alice-tenant/d-abc123/share-1",
     );
     assert.equal(
       prefixedShareCalls[0],

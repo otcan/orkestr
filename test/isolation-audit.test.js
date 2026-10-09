@@ -139,10 +139,13 @@ test("isolated demo audit fails when parent desktop/thread names leak into state
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-isolation-audit-fail-"));
   await fs.mkdir(home, { recursive: true });
   await fs.writeFile(path.join(home, "threads.json"), JSON.stringify([
-    { id: "bad", name: "synbiobeta leaked parent thread" },
+    { id: "bad", name: "parent-desk-alpha leaked parent thread" },
   ]));
+  const overlayDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-isolation-audit-overlay-"));
+  await fs.writeFile(path.join(overlayDir, "isolation-forbidden-names.txt"), "# private slugs\nparent-desk-alpha\nparent-desk-beta\n");
   const env = {
     ORKESTR_HOME: home,
+    ORKESTR_OVERLAY_DIR: overlayDir,
     ORKESTR_BROKER_INSTANCE_STORE: "json",
     ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: "0",
     ORKESTR_BROWSER_VISIBLE_SLUGS: "__none__",
@@ -153,5 +156,24 @@ test("isolated demo audit fails when parent desktop/thread names leak into state
 
   assert.equal(result.ok, false);
   assert.equal(leakCheck.ok, false);
-  assert.deepEqual(leakCheck.forbiddenMatches, ["synbiobeta"]);
+  assert.deepEqual(leakCheck.forbiddenMatches, ["parent-desk-alpha"]);
+});
+
+test("isolated demo audit env forbidden names replace overlay and defaults", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-isolation-audit-env-"));
+  await fs.writeFile(path.join(home, "threads.json"), JSON.stringify([
+    { id: "bad", name: "parent-desk-gamma linkedin thread" },
+  ]));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROKER_INSTANCE_STORE: "json",
+    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: "0",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "__none__",
+    ORKESTR_ISOLATION_FORBIDDEN_NAMES: "Parent-Desk-Gamma",
+  };
+
+  const result = await auditIsolatedDemoInstance(env);
+  const leakCheck = result.checks.find((check) => check.name === "state:no-forbidden-parent-names");
+
+  assert.deepEqual(leakCheck.forbiddenMatches, ["parent-desk-gamma"]);
 });

@@ -1342,7 +1342,7 @@ test("broker proxy payloads use the freshest registration for the route endpoint
     body: {
       encryptionPublicKey: oldClient.publicKey,
       endpointBaseUrl,
-      displayName: "Fırat Jobs VM",
+      displayName: "Casey Jobs VM",
     },
   });
   const currentRegistration = await registerBrokerInstance({
@@ -1351,7 +1351,7 @@ test("broker proxy payloads use the freshest registration for the route endpoint
     body: {
       encryptionPublicKey: currentClient.publicKey,
       endpointBaseUrl,
-      displayName: "firat-jobs-vm",
+      displayName: "casey-jobs-vm",
     },
   });
   await fs.mkdir(path.join(tenantHome, "secrets"), { recursive: true });

@@ -121,18 +121,18 @@ test("multiple Google accounts are stored independently and selected determinist
     alias: "workspace",
     useMode: "explicit_only",
   });
-  const saim = await saveGoogleWorkspaceConnectionToken(token("saim@example.com"), env, {
-    alias: "saim",
+  const robin = await saveGoogleWorkspaceConnectionToken(token("robin@example.com"), env, {
+    alias: "robin",
     useMode: "explicit_only",
-    threadId: "saim-linkedin",
+    threadId: "robin-linkedin",
     setAsThreadDefault: true,
   });
 
   const generic = await listGoogleWorkspaceConnections(env);
   assert.deepEqual(generic.connections.map((connection) => connection.alias), ["owner"]);
 
-  const thread = await listGoogleWorkspaceConnections(env, { threadId: "saim-linkedin" });
-  assert.deepEqual(thread.connections.map((connection) => connection.alias).sort(), ["owner", "saim"]);
+  const thread = await listGoogleWorkspaceConnections(env, { threadId: "robin-linkedin" });
+  assert.deepEqual(thread.connections.map((connection) => connection.alias).sort(), ["owner", "robin"]);
 
   const all = await listGoogleWorkspaceConnections(env, { includeExplicit: true });
   assert.equal(all.connections.length, 3);
@@ -147,8 +147,8 @@ test("multiple Google accounts are stored independently and selected determinist
   assert.equal(explicitSelection.token.accessToken, "access-workspace-owner@example.test");
   assert.equal(explicitSelection.selectionSource, "explicit");
 
-  const threadSelection = await resolveGoogleWorkspaceConnection({ threadId: "saim-linkedin" }, env);
-  assert.equal(threadSelection.connection.connectionId, saim.connection.connectionId);
+  const threadSelection = await resolveGoogleWorkspaceConnection({ threadId: "robin-linkedin" }, env);
+  assert.equal(threadSelection.connection.connectionId, robin.connection.connectionId);
   assert.equal(threadSelection.selectionSource, "thread_default");
 });
 

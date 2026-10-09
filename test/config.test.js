@@ -87,10 +87,10 @@ test("runtime settings include configured managed desktop catalog", async () => 
     ORKESTR_DESKTOP_CATALOG_JSON: JSON.stringify([
       {
         slug: "desktop",
-        label: "Firat Jobs StepStone",
-        purpose: "Logged-in browser for Firat job applications.",
+        label: "Casey Jobs StepStone",
+        purpose: "Logged-in browser for Casey job applications.",
         cdpUrl: "http://127.0.0.1:9222",
-        workspacePath: "/opt/orkestr/workspace/firat-jobs",
+        workspacePath: "/opt/orkestr/workspace/casey-jobs",
         display: ":117",
         debugPort: 19317,
         vncPort: 15917,
@@ -103,9 +103,9 @@ test("runtime settings include configured managed desktop catalog", async () => 
 
   assert.equal(settings.desktops.items.length, 1);
   assert.equal(settings.desktops.items[0].slug, "desktop");
-  assert.equal(settings.desktops.items[0].label, "Firat Jobs StepStone");
+  assert.equal(settings.desktops.items[0].label, "Casey Jobs StepStone");
   assert.equal(settings.desktops.items[0].cdpUrl, "http://127.0.0.1:9222/");
-  assert.equal(settings.desktops.items[0].workspacePath, "/opt/orkestr/workspace/firat-jobs");
+  assert.equal(settings.desktops.items[0].workspacePath, "/opt/orkestr/workspace/casey-jobs");
   assert.equal(settings.desktops.items[0].displayNumber, 117);
   assert.equal(settings.desktops.items[0].debugPort, 19317);
   assert.equal(settings.desktops.items[0].vncPort, 15917);

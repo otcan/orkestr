@@ -184,20 +184,20 @@ test("whereAmI still resolves a finished task agent when it is the only path own
 
 test("whereAmI exposes public tenant setup URL without wildcard bind API base", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-public-url-"));
-  const workspace = path.join(home, "users", "firat", "workspaces", "jobs");
+  const workspace = path.join(home, "users", "casey", "workspaces", "jobs");
   await fs.mkdir(workspace, { recursive: true });
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_HOST: "0.0.0.0",
     ORKESTR_PORT: "21050",
-    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
-    ORKESTR_BROKER_INSTANCE_ID: "broker-firat-001",
+    ORKESTR_TENANT_VM_ID: "casey-jobs-vm",
+    ORKESTR_BROKER_INSTANCE_ID: "broker-casey-001",
     ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
   };
   await createThread({
-    id: "firat-jobs",
-    ownerUserId: "firat",
-    name: "Firat Jobs",
+    id: "casey-jobs",
+    ownerUserId: "casey",
+    name: "Casey Jobs",
     cwd: workspace,
     workspace,
   }, env);
@@ -205,36 +205,36 @@ test("whereAmI exposes public tenant setup URL without wildcard bind API base", 
   const payload = await whereAmI({ cwd: workspace }, env);
 
   assert.equal(payload.apiBase, "http://127.0.0.1:21050");
-  assert.equal(payload.publicUrls.setupUrl, "https://connect.example.test/i/broker-firat-001/setup");
-  assert.equal(payload.publicUrls.appUrl, "https://connect.example.test/i/broker-firat-001/app");
+  assert.equal(payload.publicUrls.setupUrl, "https://connect.example.test/i/broker-casey-001/setup");
+  assert.equal(payload.publicUrls.appUrl, "https://connect.example.test/i/broker-casey-001/app");
   assert.equal(payload.publicUrls.connectBaseUrl, "https://connect.example.test");
   assert.doesNotMatch(JSON.stringify(payload.publicUrls), /0\.0\.0\.0|127\.0\.0\.1|localhost|10\./);
 });
 
 test("whereAmI redacts configured managed desktop control endpoints", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-desktop-catalog-"));
-  const workspace = path.join(home, "users", "firat", "workspaces", "firat-jobs");
+  const workspace = path.join(home, "users", "casey", "workspaces", "casey-jobs");
   await fs.mkdir(workspace, { recursive: true });
   const env = {
     ORKESTR_HOME: home,
-    ORKESTR_ADMIN_USER_ID: "firat",
+    ORKESTR_ADMIN_USER_ID: "casey",
     ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
     ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
     ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop",
     ORKESTR_DESKTOP_CATALOG_JSON: JSON.stringify([
       {
         slug: "desktop",
-        label: "Firat Jobs StepStone",
-        purpose: "Logged-in browser for Firat job applications.",
+        label: "Casey Jobs StepStone",
+        purpose: "Logged-in browser for Casey job applications.",
         cdpUrl: "http://127.0.0.1:9222",
-        workspacePath: "/opt/orkestr/workspace/firat-jobs",
+        workspacePath: "/opt/orkestr/workspace/casey-jobs",
       },
     ]),
   };
   await createThread({
-    id: "firat-jobs",
-    ownerUserId: "firat",
-    name: "Firat Jobs",
+    id: "casey-jobs",
+    ownerUserId: "casey",
+    name: "Casey Jobs",
     cwd: workspace,
     workspace,
   }, env);
@@ -244,35 +244,35 @@ test("whereAmI redacts configured managed desktop control endpoints", async () =
 
   assert.equal(payload.ok, true);
   assert.equal(payload.desktops.defaults.default, "desktop");
-  assert.equal(payload.desktops.known[0].label, "Firat Jobs StepStone");
-  assert.equal(desktop.label, "Firat Jobs StepStone");
+  assert.equal(payload.desktops.known[0].label, "Casey Jobs StepStone");
+  assert.equal(desktop.label, "Casey Jobs StepStone");
   assert.equal(desktop.endpointRedacted, true);
   assert.equal(JSON.stringify(desktop).includes("127.0.0.1"), false);
-  assert.equal(desktop.workspacePath, "/opt/orkestr/workspace/firat-jobs");
+  assert.equal(desktop.workspacePath, "/opt/orkestr/workspace/casey-jobs");
   assert.ok(desktop.availableActions.includes("observe"));
 });
 
 test("whereAmI includes enabled custom skills for an administrator-owned tenant runtime", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-admin-skills-home-"));
-  const workspace = path.join(home, "workspaces", "firat-jobs");
+  const workspace = path.join(home, "workspaces", "casey-jobs");
   await fs.mkdir(workspace, { recursive: true });
-  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "firat" };
-  const admin = userPrincipal(await upsertUser({ id: "firat", role: "admin", displayName: "Firat" }, env));
-  await createUserSkillForPrincipal("firat", {
+  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "casey" };
+  const admin = userPrincipal(await upsertUser({ id: "casey", role: "admin", displayName: "Casey" }, env));
+  await createUserSkillForPrincipal("casey", {
     id: "captcha",
     name: "CAPTCHA",
     enabled: true,
     metadata: { tenantScoped: true, apiKey: "must-not-leak" },
   }, admin, env);
-  await createUserSkillForPrincipal("firat", {
+  await createUserSkillForPrincipal("casey", {
     id: "disabled-custom",
     name: "Disabled Custom",
     enabled: false,
   }, admin, env);
   await createThread({
-    id: "firat-jobs",
-    ownerUserId: "firat",
-    name: "Firat Jobs",
+    id: "casey-jobs",
+    ownerUserId: "casey",
+    name: "Casey Jobs",
     cwd: workspace,
     workspace,
   }, env);
@@ -517,7 +517,7 @@ test("GET /api/whereiam resolves thread context from cwd query", async () => {
 
 test("POST /api/sanitizer/check runs server-owned sanitizer for resolved thread owner", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-api-home-"));
-  const workspace = path.join(home, "users", "firat", "workspaces", "jobs");
+  const workspace = path.join(home, "users", "casey", "workspaces", "jobs");
   const payloadLog = path.join(home, "sanitizer-payload.json");
   const sanitizerScript = path.join(home, "sanitizer.mjs");
   await fs.mkdir(workspace, { recursive: true });
@@ -554,11 +554,11 @@ test("POST /api/sanitizer/check runs server-owned sanitizer for resolved thread 
   delete process.env.ORKESTR_LLM_SANITIZER_PROVIDER;
   process.env.ORKESTR_LLM_SANITIZER_COMMAND_JSON = JSON.stringify([process.execPath, sanitizerScript]);
   process.env.ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS = "1";
-  await upsertUser({ id: "firat", role: "user", displayName: "Firat" }, process.env);
+  await upsertUser({ id: "casey", role: "user", displayName: "Casey" }, process.env);
   await createThread({
-    id: "firat-jobs",
-    ownerUserId: "firat",
-    name: "Firat Jobs",
+    id: "casey-jobs",
+    ownerUserId: "casey",
+    name: "Casey Jobs",
     cwd: workspace,
     workspace,
     securityProfile: "private-user",
@@ -567,7 +567,7 @@ test("POST /api/sanitizer/check runs server-owned sanitizer for resolved thread 
   const { port } = server.address();
 
   try {
-    const challenge = await createPairingChallenge({ env: process.env, userId: "firat", role: "user" });
+    const challenge = await createPairingChallenge({ env: process.env, userId: "casey", role: "user" });
     await approvePairingChallenge(challenge.challengeId, { env: process.env });
     const paired = await pairBrowser({ challengeId: challenge.challengeId, env: process.env });
     const cookie = sessionCookieHeader(paired.token, process.env);
@@ -587,14 +587,14 @@ test("POST /api/sanitizer/check runs server-owned sanitizer for resolved thread 
     assert.equal(response.status, 200);
     assert.equal(payload.ok, true);
     assert.equal(payload.allow, true);
-    assert.equal(payload.thread.id, "firat-jobs");
-    assert.equal(payload.thread.ownerUserId, "firat");
+    assert.equal(payload.thread.id, "casey-jobs");
+    assert.equal(payload.thread.ownerUserId, "casey");
     assert.equal(sanitizerPayload.action, "external.submit");
-    assert.equal(sanitizerPayload.actor.userId, "firat");
+    assert.equal(sanitizerPayload.actor.userId, "casey");
     assert.equal(sanitizerPayload.actor.role, "user");
-    assert.equal(sanitizerPayload.principal.userId, "firat");
+    assert.equal(sanitizerPayload.principal.userId, "casey");
     assert.equal(sanitizerPayload.principal.role, "user");
-    assert.equal(sanitizerPayload.resource.ownerUserId, "firat");
+    assert.equal(sanitizerPayload.resource.ownerUserId, "casey");
     assert.equal(sanitizerPayload.input.url, "https://www.stepstone.de/job/123");
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -607,7 +607,7 @@ test("POST /api/sanitizer/check runs server-owned sanitizer for resolved thread 
 
 test("POST /api/sanitizer/check resolves active tenant app-server thread when cwd is not the workspace", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-tenant-active-home-"));
-  const workspace = path.join(home, "workspace", "firat-jobs");
+  const workspace = path.join(home, "workspace", "casey-jobs");
   const unrelatedCwd = path.join(home, "current");
   const payloadLog = path.join(home, "sanitizer-payload.json");
   const sanitizerScript = path.join(home, "sanitizer.mjs");
@@ -641,46 +641,46 @@ test("POST /api/sanitizer/check resolves active tenant app-server thread when cw
     ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS: process.env.ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS,
   };
   process.env.ORKESTR_HOME = home;
-  process.env.ORKESTR_ADMIN_USER_ID = "firat";
+  process.env.ORKESTR_ADMIN_USER_ID = "casey";
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   delete process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED;
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
   process.env.ORKESTR_STARTUP_RECOVERY = "0";
   process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
-  process.env.ORKESTR_TENANT_VM_ID = "firat-jobs-vm";
+  process.env.ORKESTR_TENANT_VM_ID = "casey-jobs-vm";
   process.env.ORKESTR_TENANT_BOUNDARY = "tenant-vm";
   delete process.env.ORKESTR_LLM_SANITIZER_URL;
   delete process.env.ORKESTR_LLM_SANITIZER_PROVIDER;
   process.env.ORKESTR_LLM_SANITIZER_COMMAND_JSON = JSON.stringify([process.execPath, sanitizerScript]);
   process.env.ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS = "1";
-  await upsertUser({ id: "firat", role: "user", displayName: "Firat" }, process.env);
+  await upsertUser({ id: "casey", role: "user", displayName: "Casey" }, process.env);
   await createThread({
     id: "orkestr-watcher",
-    ownerUserId: "firat",
+    ownerUserId: "casey",
     name: "Watcher",
   }, process.env);
   await createThread({
-    id: "firat-jobs",
-    ownerUserId: "firat",
-    name: "Firat Jobs",
+    id: "casey-jobs",
+    ownerUserId: "casey",
+    name: "Casey Jobs",
     cwd: workspace,
     workspace,
     state: "working",
     runtimeKind: "codex-app-server",
-    codexThreadId: "codex-firat-jobs",
-    codexSessionId: "codex-firat-jobs",
+    codexThreadId: "codex-casey-jobs",
+    codexSessionId: "codex-casey-jobs",
     executor: {
       id: "codex",
       type: "codex",
       transport: "app-server",
-      codexThreadId: "codex-firat-jobs",
-      codexSessionId: "codex-firat-jobs",
+      codexThreadId: "codex-casey-jobs",
+      codexSessionId: "codex-casey-jobs",
       metadata: { runtimeKind: "codex-app-server", transport: "app-server" },
     },
     runtime: {
       runtimeKind: "codex-app-server",
       state: "working",
-      codexThreadId: "codex-firat-jobs",
+      codexThreadId: "codex-casey-jobs",
       activeTurnId: "turn-1",
     },
   }, process.env);
@@ -688,7 +688,7 @@ test("POST /api/sanitizer/check resolves active tenant app-server thread when cw
   const { port } = server.address();
 
   try {
-    const challenge = await createPairingChallenge({ env: process.env, userId: "firat", role: "user" });
+    const challenge = await createPairingChallenge({ env: process.env, userId: "casey", role: "user" });
     await approvePairingChallenge(challenge.challengeId, { env: process.env });
     const paired = await pairBrowser({ challengeId: challenge.challengeId, env: process.env });
     const cookie = sessionCookieHeader(paired.token, process.env);
@@ -708,12 +708,12 @@ test("POST /api/sanitizer/check resolves active tenant app-server thread when cw
     assert.equal(response.status, 200);
     assert.equal(payload.ok, true);
     assert.equal(payload.allow, true);
-    assert.equal(payload.thread.id, "firat-jobs");
-    assert.equal(payload.thread.ownerUserId, "firat");
-    assert.equal(sanitizerPayload.resource.id, "firat-jobs");
-    assert.equal(sanitizerPayload.actor.userId, "firat");
+    assert.equal(payload.thread.id, "casey-jobs");
+    assert.equal(payload.thread.ownerUserId, "casey");
+    assert.equal(sanitizerPayload.resource.id, "casey-jobs");
+    assert.equal(sanitizerPayload.actor.userId, "casey");
     assert.equal(sanitizerPayload.actor.role, "user");
-    assert.equal(sanitizerPayload.principal.userId, "firat");
+    assert.equal(sanitizerPayload.principal.userId, "casey");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     for (const [name, value] of Object.entries(priorEnv)) {

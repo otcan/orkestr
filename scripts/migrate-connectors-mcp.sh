@@ -17,6 +17,9 @@ Options:
   --gateway-service NAME     Gateway service. Defaults to orkestr-connectors-mcp.
   --worker-service NAME      Worker template. Defaults to orkestr-wa-worker.
   --help                     Show this help.
+
+Set ORKESTR_CONNECTORS_EXTRA_ENV_FILES (space-separated paths) to add
+deployment-specific EnvironmentFile entries to the gateway and worker units.
 EOF
 }
 
@@ -187,8 +190,9 @@ set_env_value "$ui_env" ORKESTR_WHATSAPP_AUTOSTART "0"
 set_env_value "$ui_env" WHATSAPP_LOCAL_AUTOSTART "0"
 
 shared_env_directives=""
+# shellcheck disable=SC2086
 for candidate in \
-  /opt/openclaw.env \
+  ${ORKESTR_CONNECTORS_EXTRA_ENV_FILES:-} \
   /etc/orkestr/broker-registration.env \
   "$data_home/secrets/whatsapp-inbound.env"; do
   if [ -f "$candidate" ]; then

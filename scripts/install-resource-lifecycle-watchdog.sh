@@ -24,6 +24,8 @@ install -m 0755 "$repo_dir/scripts/resource-lifecycle-watchdog.mjs" "$script_pat
 if [ ! -e "$config_file" ]; then
   {
     printf 'ORKESTR_HOME=%q\n' "$orkestr_home"
+    # Deployment-specific desktop slugs belong in the private overlay; pass them in at install time.
+    printf 'ORKESTR_RESOURCE_LIFECYCLE_TRANSIENT_DESKTOPS=%q\n' "${ORKESTR_RESOURCE_LIFECYCLE_TRANSIENT_DESKTOPS:-android-emulator,wa-windows,wa-voice}"
     cat <<'EOF'
 ORKESTR_RESOURCE_LIFECYCLE_STATE_DIR=/var/lib/orkestr-resource-lifecycle
 ORKESTR_RESOURCE_LIFECYCLE_ENFORCE=1
@@ -39,7 +41,6 @@ ORKESTR_RESOURCE_LIFECYCLE_BROWSER_RESTART_MIN_INTERVAL=6h
 ORKESTR_RESOURCE_LIFECYCLE_MAX_DESKTOP_ACTIONS_PER_RUN=1
 ORKESTR_RESOURCE_LIFECYCLE_DESKTOP_STOP_ENABLED=1
 ORKESTR_RESOURCE_LIFECYCLE_DESKTOP_IDLE_STOP=30m
-ORKESTR_RESOURCE_LIFECYCLE_TRANSIENT_DESKTOPS=android-emulator,wa-windows,ppt,synbiobeta,synbiobeta-murat,sosv-physical-ai,wa-voice,jobseeker-can
 ORKESTR_RESOURCE_LIFECYCLE_DESKTOP_VMS=android-emulator,wa-windows
 ORKESTR_RESOURCE_LIFECYCLE_INSTANCE_STOP_ENABLED=0
 ORKESTR_RESOURCE_LIFECYCLE_ORPHAN_CLEANUP_ENABLED=1

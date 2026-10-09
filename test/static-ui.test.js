@@ -379,25 +379,25 @@ test("google workspace brokered connect links require instance and owner scoped 
   process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "sender";
 
   const connect = await createGoogleWorkspaceConnectLink({
-    principal: userPrincipal({ id: "firat", displayName: "Firat" }),
+    principal: userPrincipal({ id: "casey", displayName: "Casey" }),
     thread: {
-      id: "firat-thread",
-      binding: { chatId: "firat-chat", outboundAccountId: "sender" },
+      id: "casey-thread",
+      binding: { chatId: "casey-chat", outboundAccountId: "sender" },
     },
-    brokerInstanceId: "instance-firat",
-    brokerTenantVmId: "firat-jobs-vm",
-    brokerTenantUserId: "firat",
-    brokerTenantThreadId: "firat-thread",
-    brokerTenantChatId: "firat-chat",
+    brokerInstanceId: "instance-casey",
+    brokerTenantVmId: "casey-jobs-vm",
+    brokerTenantUserId: "casey",
+    brokerTenantThreadId: "casey-thread",
+    brokerTenantChatId: "casey-chat",
     brokerTenantAccountId: "sender",
     brokerServerRequest: true,
   }, process.env);
   const connectorUrl = new URL(connect.link);
   assert.equal(connectorUrl.origin, "https://connect.orkestr.de");
-  assert.equal(connectorUrl.pathname, "/i/instance-firat/app/connectors/gmail");
+  assert.equal(connectorUrl.pathname, "/i/instance-casey/app/connectors/gmail");
   const connectUrl = new URL(connect.connectLink);
   assert.equal(connectUrl.origin, "https://connect.orkestr.de");
-  assert.equal(connectUrl.pathname, "/i/instance-firat/app/connectors/gmail");
+  assert.equal(connectUrl.pathname, "/i/instance-casey/app/connectors/gmail");
   assert.equal(connectUrl.searchParams.get("connect"), connect.connectId);
   const connectPath = `/connect/google?connect=${encodeURIComponent(connect.connectId)}`;
   const startPath = `/connect/google/start?connect=${encodeURIComponent(connect.connectId)}&capability=gmail_read`;
@@ -416,8 +416,8 @@ test("google workspace brokered connect links require instance and owner scoped 
 
     const challengeStatus = await fetch(`http://127.0.0.1:${port}/api/setup/security/challenges/${challengeId}`);
     const challengePayload = await challengeStatus.json();
-    assert.equal(challengePayload.challenge.instanceId, "instance-firat");
-    assert.equal(challengePayload.challenge.userId, "firat");
+    assert.equal(challengePayload.challenge.instanceId, "instance-casey");
+    assert.equal(challengePayload.challenge.userId, "casey");
     assert.equal(challengePayload.challenge.role, "user");
     assert.equal(challengePayload.challenge.requestedPath, connectPath);
     assert.deepEqual(challengePayload.challenge.allowedActions, [`orkestr_auth.google.connect:${connect.connectId}`]);
@@ -427,10 +427,10 @@ test("google workspace brokered connect links require instance and owner scoped 
     assert.equal(challengePayload.challenge.authIntent.provider, "google_workspace");
     assert.equal(challengePayload.challenge.authIntent.action, "connect");
     assert.equal(challengePayload.challenge.authIntent.connectId, connect.connectId);
-    assert.equal(challengePayload.challenge.authIntent.instanceId, "instance-firat");
-    assert.equal(challengePayload.challenge.authIntent.tenantVmId, "firat-jobs-vm");
-    assert.equal(challengePayload.challenge.authIntent.userId, "firat");
-    assert.equal(challengePayload.challenge.authIntent.thread, "firat-thread");
+    assert.equal(challengePayload.challenge.authIntent.instanceId, "instance-casey");
+    assert.equal(challengePayload.challenge.authIntent.tenantVmId, "casey-jobs-vm");
+    assert.equal(challengePayload.challenge.authIntent.userId, "casey");
+    assert.equal(challengePayload.challenge.authIntent.thread, "casey-thread");
     assert.equal(challengePayload.challenge.authIntent.restartCommand, "/connect google");
     assert.equal(challengePayload.challenge.authIntent.restartSurface, "whatsapp");
 
@@ -469,7 +469,7 @@ test("google workspace brokered connect links require instance and owner scoped 
 
     const otherChallenge = await createPairingChallenge({
       env: process.env,
-      instanceId: "instance-firat",
+      instanceId: "instance-casey",
       userId: "mallory",
       role: "user",
       allowedActions: [`orkestr_auth.google.connect:${connect.connectId}`],
@@ -486,8 +486,8 @@ test("google workspace brokered connect links require instance and owner scoped 
     const currentChallenges = await listPairingChallenges({ env: process.env, includeExpired: true });
     const currentConnectChallenge = currentChallenges.challenges.find((challenge) =>
       challenge.status === "pending" &&
-      challenge.instanceId === "instance-firat" &&
-      challenge.userId === "firat" &&
+      challenge.instanceId === "instance-casey" &&
+      challenge.userId === "casey" &&
       challenge.authIntent?.connectId === connect.connectId &&
       challenge.requestedPath === connectPath
     );
@@ -680,7 +680,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     }
     if (request.url === "/api/users/me") {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ok: true, user: { id: "firat", role: "user" } }));
+      response.end(JSON.stringify({ ok: true, user: { id: "casey", role: "user" } }));
       return;
     }
     if (request.method === "GET" && String(request.url || "").startsWith("/api/connectors/gmail/oauth/start")) {
@@ -690,12 +690,12 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     }
     if (request.method === "GET" && String(request.url || "").startsWith("/api/connectors/gmail/accounts")) {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ok: true, connections: [{ connectionId: "google-saim", email: "saim@example.com" }] }));
+      response.end(JSON.stringify({ ok: true, connections: [{ connectionId: "google-robin", email: "robin@example.com" }] }));
       return;
     }
-    if (["PATCH", "DELETE"].includes(String(request.method || "")) && request.url === "/api/connectors/gmail/accounts/google-saim") {
+    if (["PATCH", "DELETE"].includes(String(request.method || "")) && request.url === "/api/connectors/gmail/accounts/google-robin") {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ok: true, connection: { connectionId: "google-saim" } }));
+      response.end(JSON.stringify({ ok: true, connection: { connectionId: "google-robin" } }));
       return;
     }
     if (request.method === "DELETE" && request.url === "/api/connectors/gmail/auth") {
@@ -725,32 +725,32 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     },
   });
   await createTenantVm({
-    id: "firat-jobs-vm",
-    ownerUserId: "firat",
+    id: "casey-jobs-vm",
+    ownerUserId: "casey",
     labels: { brokerInstanceId: brokerRegistration.instanceId },
   }, process.env);
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   try {
     const brokeredConnect = await createGoogleWorkspaceConnectLink({
-      principal: userPrincipal({ id: "firat", displayName: "Firat" }),
+      principal: userPrincipal({ id: "casey", displayName: "Casey" }),
       thread: {
-        id: "firat-thread",
-        name: "Firat Jobs",
-        binding: { chatId: "firat-chat", outboundAccountId: "sender" },
+        id: "casey-thread",
+        name: "Casey Jobs",
+        binding: { chatId: "casey-chat", outboundAccountId: "sender" },
       },
       brokerInstanceId: brokerRegistration.instanceId,
-      brokerTenantUserId: "firat",
-      brokerTenantThreadId: "firat-thread",
-      brokerTenantThreadName: "Firat Jobs",
-      brokerTenantChatId: "firat-chat",
+      brokerTenantUserId: "casey",
+      brokerTenantThreadId: "casey-thread",
+      brokerTenantThreadName: "Casey Jobs",
+      brokerTenantChatId: "casey-chat",
       brokerTenantAccountId: "sender",
       brokerServerRequest: true,
     }, process.env);
     const brokeredConnectUrl = new URL(brokeredConnect.connectLink);
     assert.equal(brokeredConnectUrl.pathname, `/i/${brokerRegistration.instanceId}/app/connectors/gmail`);
     assert.equal(brokeredConnectUrl.searchParams.get("connect"), brokeredConnect.connectId);
-    assert.equal(brokeredConnectUrl.searchParams.get("thread_id"), "firat-thread");
+    assert.equal(brokeredConnectUrl.searchParams.get("thread_id"), "casey-thread");
     const rawBrokeredConnectUrl = new URL(`/connect/google?connect=${encodeURIComponent(brokeredConnect.connectId)}`, "https://connect.orkestr.de");
     const topLevelBrokeredConnect = await fetch(
       `http://127.0.0.1:${port}${rawBrokeredConnectUrl.pathname}${rawBrokeredConnectUrl.search}`,
@@ -760,7 +760,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const unpaired = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/`, { redirect: "manual" });
     const unpairedLegacyGmailSetup = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/setup/gmail`, { redirect: "manual" });
     const unpairedLegacyGoogleConnect = await fetch(
-      `http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/connect/google?connect=legacy-connect-id&user_id=firat&thread=Firat%20Jobs`,
+      `http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/connect/google?connect=legacy-connect-id&user_id=casey&thread=Casey%20Jobs`,
       { redirect: "manual" },
     );
     const unpairedApi = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/threads`, { redirect: "manual" });
@@ -792,7 +792,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const staleSameChallenge = await createPairingChallenge({
       env: process.env,
       instanceId: brokerRegistration.instanceId,
-      userId: "firat",
+      userId: "casey",
       role: "user",
       requestedPath: `/i/${brokerRegistration.instanceId}/app/connectors/gmail`,
       allowedActions: ["orkestr_auth.google.connect:old-connect"],
@@ -804,7 +804,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
         action: "connect",
         connectId: "old-connect",
         instanceId: brokerRegistration.instanceId,
-        userId: "firat",
+        userId: "casey",
       },
     });
     await approvePairingChallenge(staleSameChallenge.challengeId, { approvedBy: "node:test", env: process.env });
@@ -829,7 +829,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const freshConnectChallenge = await createPairingChallenge({
       env: process.env,
       instanceId: brokerRegistration.instanceId,
-      userId: "firat",
+      userId: "casey",
       role: "user",
       requestedPath: `/i/${brokerRegistration.instanceId}/app/connectors/gmail`,
       allowedActions: [`orkestr_auth.google.connect:${brokeredConnect.connectId}`],
@@ -841,10 +841,10 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
         action: "connect",
         connectId: brokeredConnect.connectId,
         instanceId: brokerRegistration.instanceId,
-        tenantVmId: "firat-jobs-vm",
-        userId: "firat",
-        thread: "Firat Jobs",
-        threadId: "firat-thread",
+        tenantVmId: "casey-jobs-vm",
+        userId: "casey",
+        thread: "Casey Jobs",
+        threadId: "casey-thread",
       },
     });
     await approvePairingChallenge(freshConnectChallenge.challengeId, { approvedBy: "node:test", env: process.env });
@@ -878,7 +878,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const authIntentChallenge = await createPairingChallenge({
       env: process.env,
       instanceId: brokerRegistration.instanceId,
-      userId: "firat",
+      userId: "casey",
       role: "user",
       requestedPath: `/i/${brokerRegistration.instanceId}/app/connectors/gmail`,
       allowedActions: ["orkestr_auth.google.connect"],
@@ -889,13 +889,13 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
         provider: "google_workspace",
         action: "connect",
         instanceId: brokerRegistration.instanceId,
-        userId: "firat",
+        userId: "casey",
         account: "old-hint@example.com",
-        googleConnectionId: "google-saim",
-        connectionAlias: "saim",
+        googleConnectionId: "google-robin",
+        connectionAlias: "robin",
         connectionUseMode: "explicit_only",
         setAsThreadDefault: "true",
-        threadId: "saim-linkedin",
+        threadId: "robin-linkedin",
       },
     });
     await approvePairingChallenge(authIntentChallenge.challengeId, { approvedBy: "node:test", env: process.env });
@@ -918,17 +918,17 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     const intentUserPayload = await intentUserResponse.json();
     const intentStartResponse = await brokerOAuthStart(authIntentCookie);
     const intentStartPayload = await intentStartResponse.json();
-    const intentAccountsResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/accounts?threadId=saim-linkedin`, { headers: { cookie: authIntentCookie } });
-    const intentAccountUpdateResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/accounts/google-saim`, {
+    const intentAccountsResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/accounts?threadId=robin-linkedin`, { headers: { cookie: authIntentCookie } });
+    const intentAccountUpdateResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/accounts/google-robin`, {
       method: "PATCH",
       headers: { cookie: authIntentCookie, "content-type": "application/json" },
       body: JSON.stringify({ useMode: "explicit_only" }),
     });
-    const intentAccountDeleteResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/accounts/google-saim`, {
+    const intentAccountDeleteResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/accounts/google-robin`, {
       method: "DELETE",
       headers: { cookie: authIntentCookie },
     });
-    const intentSavedState = JSON.parse(await fs.readFile(path.join(userDataPaths("firat", process.env).oauth, "gmail-state.json"), "utf8"));
+    const intentSavedState = JSON.parse(await fs.readFile(path.join(userDataPaths("casey", process.env).oauth, "gmail-state.json"), "utf8"));
     const intentDisconnectResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/connectors/gmail/auth`, { method: "DELETE", headers: { cookie: authIntentCookie } });
     const intentDisconnectPayload = await intentDisconnectResponse.json();
     const intentThreadsResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/app/api/threads`, { headers: { cookie: authIntentCookie }, redirect: "manual" });
@@ -941,8 +941,8 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       const brokeredRedirect = new URL(topLevelBrokeredConnect.headers.get("location") || "", "http://localhost");
       assert.equal(brokeredRedirect.pathname, `/i/${brokerRegistration.instanceId}/app/connectors/gmail`);
       assert.equal(brokeredRedirect.searchParams.get("connect"), brokeredConnect.connectId);
-      assert.equal(brokeredRedirect.searchParams.get("user_id"), "firat");
-      assert.equal(brokeredRedirect.searchParams.get("thread"), "Firat Jobs");
+      assert.equal(brokeredRedirect.searchParams.get("user_id"), "casey");
+      assert.equal(brokeredRedirect.searchParams.get("thread"), "Casey Jobs");
     }
     assert.equal(noSlash.status, 302);
     assert.equal(noSlash.headers.get("location"), `/i/${brokerRegistration.instanceId}/app/`);
@@ -959,8 +959,8 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
       assert.equal(legacyRedirect.searchParams.get("provider"), "google_workspace");
       assert.equal(legacyRedirect.searchParams.get("action"), "connect");
       assert.equal(legacyRedirect.searchParams.get("instance_id"), brokerRegistration.instanceId);
-      assert.equal(legacyRedirect.searchParams.get("user_id"), "firat");
-      assert.equal(legacyRedirect.searchParams.get("thread"), "Firat Jobs");
+      assert.equal(legacyRedirect.searchParams.get("user_id"), "casey");
+      assert.equal(legacyRedirect.searchParams.get("thread"), "Casey Jobs");
       assert.equal(legacyRedirect.searchParams.get("connect"), "legacy-connect-id");
       assert.equal(legacyRedirect.searchParams.get("auto"), "0");
     }
@@ -1000,7 +1000,7 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.equal(intentSetupResponse.status, 200);
     assert.equal(intentSetupPayload.connectors[0].state, "connected");
     assert.equal(intentUserResponse.status, 200);
-    assert.equal(intentUserPayload.user.id, "firat");
+    assert.equal(intentUserPayload.user.id, "casey");
     assert.equal(intentStartResponse.status, 200);
     assert.equal(intentAccountsResponse.status, 200);
     assert.equal(intentAccountUpdateResponse.status, 200);
@@ -1016,12 +1016,12 @@ test("broker instance app path pairs on broker and proxies the VM WebUI", async 
     assert.doesNotMatch(intentStartPayload.state, /^tenant:/);
     assert.equal(intentSavedState.state, intentStartPayload.state);
     assert.equal(intentSavedState.tenantVmId, "");
-    assert.equal(intentSavedState.brokerTenantVmId, "firat-jobs-vm");
-    assert.equal(intentSavedState.googleConnectionId, "google-saim");
-    assert.equal(intentSavedState.connectionAlias, "saim");
+    assert.equal(intentSavedState.brokerTenantVmId, "casey-jobs-vm");
+    assert.equal(intentSavedState.googleConnectionId, "google-robin");
+    assert.equal(intentSavedState.connectionAlias, "robin");
     assert.equal(intentSavedState.connectionUseMode, "explicit_only");
     assert.equal(intentSavedState.setAsThreadDefault, true);
-    assert.equal(intentSavedState.threadId, "saim-linkedin");
+    assert.equal(intentSavedState.threadId, "robin-linkedin");
     assert.equal(intentScopes.includes("https://www.googleapis.com/auth/gmail.readonly"), false);
     assert.equal(intentScopes.includes("https://www.googleapis.com/auth/gmail.modify"), false);
     assert.ok(intentScopes.includes("https://www.googleapis.com/auth/gmail.send"));

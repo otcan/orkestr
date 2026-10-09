@@ -165,35 +165,35 @@ test("tenant VM provisioning derives central setup URLs from broker instance id"
     GMAIL_OAUTH_CLIENT_SECRET: "must-not-copy",
   };
   const tenantVm = await createTenantVm({
-    id: "firat-jobs-vm",
-    ownerUserId: "firat",
-    kubevirt: { namespace: "tenant-firat", vmName: "firat-jobs-vm" },
-    labels: { brokerInstanceId: "broker-firat-001" },
+    id: "casey-jobs-vm",
+    ownerUserId: "casey",
+    kubevirt: { namespace: "tenant-casey", vmName: "casey-jobs-vm" },
+    labels: { brokerInstanceId: "broker-casey-001" },
   }, env);
 
   const plan = buildTenantVmProvisioningPlan(tenantVm, {}, env);
   const manifest = JSON.parse(plan.manifest);
-  const cloudInitSecret = manifest.items.find((item) => item.kind === "Secret" && item.metadata.name === "firat-jobs-vm-cloudinit");
+  const cloudInitSecret = manifest.items.find((item) => item.kind === "Secret" && item.metadata.name === "casey-jobs-vm-cloudinit");
   const envFile = Buffer.from(
     cloudInitSecret.stringData.userdata.match(/path: \/etc\/orkestr\/orkestr\.env[\s\S]*?content: ([A-Za-z0-9+/=]+)/)[1],
     "base64",
   ).toString("utf8");
 
   assert.equal(plan.runtimeEnv.ORKESTR_HOST, "0.0.0.0");
-  assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_URL, "https://connect.example.test/i/broker-firat-001/app");
-  assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_HTTPS_URL, "https://connect.example.test/i/broker-firat-001/app");
+  assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_URL, "https://connect.example.test/i/broker-casey-001/app");
+  assert.equal(plan.runtimeEnv.ORKESTR_PUBLIC_HTTPS_URL, "https://connect.example.test/i/broker-casey-001/app");
   assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_BASE_URL, "https://connect.example.test");
-  assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, "https://connect.example.test/i/broker-firat-001/setup");
+  assert.equal(plan.runtimeEnv.ORKESTR_CONNECT_PUBLIC_SETUP_URL, "https://connect.example.test/i/broker-casey-001/setup");
   assert.equal(plan.runtimeEnv.ORKESTR_PAIRING_URL, "https://connect.example.test/setup/pairing");
-  assert.equal(plan.runtimeEnv.ORKESTR_BROKER_INSTANCE_ID, "broker-firat-001");
-  assert.equal(plan.runtimeEnv.ORKESTR_INSTANCE_ID, "broker-firat-001");
+  assert.equal(plan.runtimeEnv.ORKESTR_BROKER_INSTANCE_ID, "broker-casey-001");
+  assert.equal(plan.runtimeEnv.ORKESTR_INSTANCE_ID, "broker-casey-001");
   assert.equal(plan.runtimeEnv.ORKESTR_JOBS_FIT_AGENT_COMMAND_JSON, "[\"node\",\"/opt/orkestr/current/scripts/jobs-fit-agent-codex.mjs\"]");
   assert.equal(plan.runtimeEnv.GMAIL_OAUTH_REDIRECT_URI, "https://ops-health.example.test/google-marketing/oauth/callback");
   assert.equal(Object.hasOwn(plan.runtimeEnv, "GMAIL_OAUTH_CLIENT_SECRET"), false);
-  assert.match(envFile, /^ORKESTR_PUBLIC_URL='https:\/\/connect\.example\.test\/i\/broker-firat-001\/app'$/m);
-  assert.match(envFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/broker-firat-001\/setup'$/m);
-  assert.match(envFile, /^ORKESTR_BROKER_INSTANCE_ID='broker-firat-001'$/m);
-  assert.match(envFile, /^ORKESTR_INSTANCE_ID='broker-firat-001'$/m);
+  assert.match(envFile, /^ORKESTR_PUBLIC_URL='https:\/\/connect\.example\.test\/i\/broker-casey-001\/app'$/m);
+  assert.match(envFile, /^ORKESTR_CONNECT_PUBLIC_SETUP_URL='https:\/\/connect\.example\.test\/i\/broker-casey-001\/setup'$/m);
+  assert.match(envFile, /^ORKESTR_BROKER_INSTANCE_ID='broker-casey-001'$/m);
+  assert.match(envFile, /^ORKESTR_INSTANCE_ID='broker-casey-001'$/m);
   assert.match(envFile, /^ORKESTR_JOBS_FIT_AGENT_COMMAND_JSON='\["node","\/opt\/orkestr\/current\/scripts\/jobs-fit-agent-codex\.mjs"\]'$/m);
   assert.match(envFile, /^GMAIL_OAUTH_REDIRECT_URI='https:\/\/ops-health\.example\.test\/google-marketing\/oauth\/callback'$/m);
   assert.equal(envFile.includes("must-not-copy"), false);

@@ -187,24 +187,24 @@ test("Gmail timers block before prompt execution and dedupe reconnect notices", 
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-timer-auth-block-"));
   const env = { ORKESTR_HOME: home, ORKESTR_TIMER_AUTH_NOTICE_COOLDOWN_MS: "86400000" };
   await createThread({
-    id: "firat-jobs",
-    name: "Firat Jobs",
-    ownerUserId: "firat",
-    binding: { connector: "whatsapp", chatId: "firat-chat", outboundAccountId: "orkestr" },
+    id: "casey-jobs",
+    name: "Casey Jobs",
+    ownerUserId: "casey",
+    binding: { connector: "whatsapp", chatId: "casey-chat", outboundAccountId: "orkestr" },
   }, env);
   await createTimer({
-    label: "Firat jobs morning",
-    ownerUserId: "firat",
-    threadId: "firat-jobs",
+    label: "Casey jobs morning",
+    ownerUserId: "casey",
+    threadId: "casey-jobs",
     prompt: "Run Gmail jobs prompt",
     requiredConnector: "gmail",
     cadence: "interval",
     every: "1h",
   }, env);
   await createTimer({
-    label: "Firat jobs noon",
-    ownerUserId: "firat",
-    threadId: "firat-jobs",
+    label: "Casey jobs noon",
+    ownerUserId: "casey",
+    threadId: "casey-jobs",
     prompt: "Run Gmail jobs prompt again",
     requiredConnector: "gmail",
     cadence: "interval",
@@ -224,13 +224,13 @@ test("Gmail timers block before prompt execution and dedupe reconnect notices", 
         ok: true,
         state: "reauth_required",
         connected: false,
-        account: "firat@example.com",
+        account: "casey@example.com",
         reason: "gmail_reauthorization_required",
       };
     },
   });
   const after = await listTimers(env);
-  const messages = await listThreadMessages("firat-jobs", env);
+  const messages = await listThreadMessages("casey-jobs", env);
   const doctor = await doctorTimers(env, now);
 
   assert.equal(due.length, 0);
@@ -239,7 +239,7 @@ test("Gmail timers block before prompt execution and dedupe reconnect notices", 
   assert.equal(messages[0].role, "assistant");
   assert.equal(messages[0].source, "timer_connector_health");
   assert.equal(messages[0].phase, "signal");
-  assert.match(messages[0].text, /Gmail access for firat@example.com needs to be reconnected/);
+  assert.match(messages[0].text, /Gmail access for casey@example.com needs to be reconnected/);
   assert.equal(after.every((timer) => timer.lastError === "gmail_reauth_required"), true);
   assert.equal(after.every((timer) => timer.blockedReason === "blocked_auth"), true);
   assert.equal(after.every((timer) => timer.blockedConnector === "gmail"), true);
@@ -252,7 +252,7 @@ test("Gmail timers block before prompt execution and dedupe reconnect notices", 
       throw new Error("blocked timer should not be retried before nextRunAt");
     },
   });
-  assert.equal((await listThreadMessages("firat-jobs", env)).length, 1);
+  assert.equal((await listThreadMessages("casey-jobs", env)).length, 1);
 });
 
 test("thread timer prompts default to editable files in the thread workspace", async () => {

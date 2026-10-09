@@ -562,7 +562,7 @@ test("unauthenticated shared app approval stays on the shared route", async (t) 
   await createAppShare("main", "outreach-review", {
     shareToken: "share-one",
     title: "Outreach Review",
-    filtersJson: { people: [{ id: "betul", name: "Betul Y." }] },
+    filtersJson: { people: [{ id: "jordan", name: "Jordan Y." }] },
   }, { principal, env: process.env });
   const requestedPath = "/i/main/a/outreach-review/s/share-one";
 
@@ -624,7 +624,7 @@ test("unauthenticated shared app approval stays on the shared route", async (t) 
     const approveCode = command.split(/\s+/).at(-1) || "";
     assert.match(approveCode, /^[A-Z0-9]{4,8}$/);
     await approvePairingChallenge(approveCode, { env: process.env });
-    await page.waitForFunction(() => document.body.innerText.includes("Betul Y."), { timeout: 20_000 });
+    await page.waitForFunction(() => document.body.innerText.includes("Jordan Y."), { timeout: 20_000 });
     const bodyAfterApproval = await page.$eval("body", (node) => node.innerText);
     const challenges = await listPairingChallenges({ env: process.env, includeExpired: true });
     const routeChallenges = challenges.challenges.filter((challenge) =>
@@ -666,7 +666,7 @@ test("shared app page does not connect the normal thread summary stream", async 
   const created = await createAppShare("main", "outreach-review", {
     shareToken: "share-one",
     title: "Outreach Review",
-    filtersJson: { people: [{ id: "betul", name: "Betul Y." }] },
+    filtersJson: { people: [{ id: "jordan", name: "Jordan Y." }] },
   }, { principal, env: process.env });
   const requestedPath = "/i/main/a/outreach-review/s/share-one";
   const challenge = await createPairingChallenge({

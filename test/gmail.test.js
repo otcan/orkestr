@@ -80,14 +80,14 @@ test("gmail oauth start builds an authorize URL and saves state", async () => {
 test("gmail oauth start clears stale user-scoped oauth errors", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-clear-error-"));
   const env = { ORKESTR_HOME: home };
-  const principal = userPrincipal({ id: "firat", displayName: "Firat" });
+  const principal = userPrincipal({ id: "casey", displayName: "Casey" });
   await writeConnectorConfig("gmail", {
     clientId: "client-id",
     clientSecret: "client-secret",
     redirectUri: "http://localhost:19812/oauth/gmail/callback",
   }, env);
 
-  const paths = userDataPaths("firat", env);
+  const paths = userDataPaths("casey", env);
   const errorPath = path.join(paths.secrets, "gmail-error.json");
   await fs.mkdir(paths.secrets, { recursive: true });
   await fs.writeFile(errorPath, JSON.stringify({ message: "Malformed auth code.", updatedAt: new Date().toISOString() }));
@@ -305,9 +305,9 @@ test("brokered gmail oauth uses app callback instead of connector auth host", as
 
   const started = await startGmailOAuth(env, {
     account: "person@example.com",
-    brokerInstanceId: "instance-firat",
-    brokerTenantVmId: "firat-jobs-vm",
-    brokerTenantUserId: "firat",
+    brokerInstanceId: "instance-casey",
+    brokerTenantVmId: "casey-jobs-vm",
+    brokerTenantUserId: "casey",
   });
   const savedState = JSON.parse(await fs.readFile(path.join(home, "oauth", "gmail-state.json"), "utf8"));
   const url = new URL(started.authorizeUrl);
@@ -749,20 +749,20 @@ test("brokered gmail grants refresh through the parent broker without local OAut
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-broker-refresh-"));
   const env = {
     ORKESTR_HOME: home,
-    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_TENANT_VM_ID: "casey-jobs-vm",
     ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
   };
   await writeBrokerClientRegistration(home, {
-    instanceId: "instance-firat",
-    channelId: "channel-firat",
+    instanceId: "instance-casey",
+    channelId: "channel-casey",
     brokerBaseUrl: "https://broker.example.test",
   });
   await saveBrokeredGmailGrant({
-    userId: "firat",
-    account: "firat@example.com",
+    userId: "casey",
+    account: "casey@example.com",
     provider: "google_workspace",
     oauthAppId: "otcan-claw",
-    brokerInstanceId: "instance-firat",
+    brokerInstanceId: "instance-casey",
     requestedCapabilities: ["gmail_read"],
     requestedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
     token: {
@@ -774,9 +774,9 @@ test("brokered gmail grants refresh through the parent broker without local OAut
   }, env);
 
   const refreshed = await refreshGmailAccessToken(env, async (url, options = {}) => {
-    assert.equal(String(url), "https://broker.example.test/api/broker/instances/instance-firat/google-workspace/refresh-token");
+    assert.equal(String(url), "https://broker.example.test/api/broker/instances/instance-casey/google-workspace/refresh-token");
     const body = JSON.parse(options.body);
-    assert.equal(body.channelId, "channel-firat");
+    assert.equal(body.channelId, "channel-casey");
     assert.ok(body.envelope);
     return jsonResponse({
       ok: true,
@@ -786,28 +786,28 @@ test("brokered gmail grants refresh through the parent broker without local OAut
         scope: "https://www.googleapis.com/auth/gmail.readonly",
       },
     });
-  }, { userId: "firat" });
-  const stored = await readGmailToken(env, { userId: "firat" });
-  const capabilities = await userScopedCapabilityHints({ userId: "firat" }, env);
+  }, { userId: "casey" });
+  const stored = await readGmailToken(env, { userId: "casey" });
+  const capabilities = await userScopedCapabilityHints({ userId: "casey" }, env);
 
   assert.equal(refreshed.accessToken, "access-new");
   assert.equal(refreshed.refreshToken, "refresh-owned-by-tenant");
   assert.equal(stored.accessToken, "access-new");
-  assert.equal(stored.account, "firat@example.com");
+  assert.equal(stored.account, "casey@example.com");
   assert.equal(stored.brokered, true);
   assert.equal(stored.oauthAppId, "otcan-claw");
-  assert.equal(stored.brokerInstanceId, "instance-firat");
+  assert.equal(stored.brokerInstanceId, "instance-casey");
   assert.deepEqual(capabilities.connectorAuth.gmail.capabilities, ["gmail_read"]);
 });
 
 test("brokered gmail grants preserve main and thread-scoped explicit account selection", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-broker-multi-account-"));
-  const env = { ORKESTR_HOME: home, ORKESTR_TENANT_VM_ID: "saim-linkedin-vm" };
+  const env = { ORKESTR_HOME: home, ORKESTR_TENANT_VM_ID: "robin-linkedin-vm" };
   const grant = (account, accessToken) => ({
-    userId: "saim",
+    userId: "robin",
     account,
     provider: "google_workspace",
-    brokerInstanceId: "instance-saim",
+    brokerInstanceId: "instance-robin",
     requestedCapabilities: ["gmail_read", "calendar_read"],
     requestedScopes: [
       "https://www.googleapis.com/auth/gmail.readonly",
@@ -828,22 +828,22 @@ test("brokered gmail grants preserve main and thread-scoped explicit account sel
     alias: "owner",
     setAsMain: true,
   }, env);
-  const saim = await saveBrokeredGmailGrant({
-    ...grant("saim@example.com", "saim-access"),
-    connectionAlias: "saim",
+  const robin = await saveBrokeredGmailGrant({
+    ...grant("robin@example.com", "robin-access"),
+    connectionAlias: "robin",
     connectionUseMode: "explicit_only",
-    threadId: "saim-linkedin",
+    threadId: "robin-linkedin",
     setAsThreadDefault: true,
   }, env);
 
-  const defaultSelection = await resolveGoogleWorkspaceConnection({}, env, { userId: "saim" });
-  const threadSelection = await resolveGoogleWorkspaceConnection({ threadId: "saim-linkedin" }, env, { userId: "saim" });
-  const generic = await listGoogleWorkspaceConnections(env, { userId: "saim" });
+  const defaultSelection = await resolveGoogleWorkspaceConnection({}, env, { userId: "robin" });
+  const threadSelection = await resolveGoogleWorkspaceConnection({ threadId: "robin-linkedin" }, env, { userId: "robin" });
+  const generic = await listGoogleWorkspaceConnections(env, { userId: "robin" });
 
   assert.equal(defaultSelection.connection.connectionId, main.googleConnectionId);
   assert.equal(defaultSelection.token.accessToken, "main-access");
-  assert.equal(threadSelection.connection.connectionId, saim.googleConnectionId);
-  assert.equal(threadSelection.token.accessToken, "saim-access");
+  assert.equal(threadSelection.connection.connectionId, robin.googleConnectionId);
+  assert.equal(threadSelection.token.accessToken, "robin-access");
   assert.equal(threadSelection.selectionSource, "thread_default");
   assert.deepEqual(generic.connections.map((connection) => connection.email), ["owner@example.com"]);
 });
@@ -852,13 +852,13 @@ test("tenant gmail status uses instance connector scope for any principal", asyn
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-tenant-instance-scope-"));
   const env = {
     ORKESTR_HOME: home,
-    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
-    ORKESTR_ADMIN_USER_ID: "firat",
+    ORKESTR_TENANT_VM_ID: "casey-jobs-vm",
+    ORKESTR_ADMIN_USER_ID: "casey",
   };
   await saveBrokeredGmailGrant({
-    account: "firat@example.com",
+    account: "casey@example.com",
     provider: "google_workspace",
-    brokerInstanceId: "instance-firat",
+    brokerInstanceId: "instance-casey",
     requestedCapabilities: ["gmail_read", "gmail_actions", "gmail_send"],
     requestedScopes: [
       "https://www.googleapis.com/auth/gmail.readonly",
@@ -876,23 +876,23 @@ test("tenant gmail status uses instance connector scope for any principal", asyn
       ],
     },
   }, env);
-  const userTokenPath = path.join(userDataPaths("firat", env).secrets, "gmail-token.json");
+  const userTokenPath = path.join(userDataPaths("casey", env).secrets, "gmail-token.json");
 
   assert.equal((await readGmailToken(env)).accessToken, "legacy-global-access");
   await assert.rejects(fs.stat(userTokenPath));
 
-  const status = await connectorAuthStatus("gmail", env, { principal: userPrincipal({ id: "firat" }) });
-  const sameInstanceToken = await readGmailToken(env, { userId: "firat" });
+  const status = await connectorAuthStatus("gmail", env, { principal: userPrincipal({ id: "casey" }) });
+  const sameInstanceToken = await readGmailToken(env, { userId: "casey" });
 
   assert.equal(status.state, "connected");
-  assert.equal(status.account, "firat@example.com");
+  assert.equal(status.account, "casey@example.com");
   assert.equal(sameInstanceToken.accessToken, "legacy-global-access");
   await assert.rejects(fs.stat(userTokenPath));
 
   const revokeCalls = [];
   const disconnected = await disconnectConnectorAuth(
     { provider: "gmail" },
-    userPrincipal({ id: "firat" }),
+    userPrincipal({ id: "casey" }),
     env,
     {
       fetchImpl: async (url, options) => {
@@ -905,7 +905,7 @@ test("tenant gmail status uses instance connector scope for any principal", asyn
   assert.deepEqual(revokeCalls, [{ url: "https://oauth2.googleapis.com/revoke", token: "legacy-global-refresh" }]);
   assert.equal(disconnected.revocation.state, "revoked");
   assert.equal((await readGmailToken(env)).accessToken, undefined);
-  assert.equal((await readGmailToken(env, { userId: "firat" })).accessToken, undefined);
+  assert.equal((await readGmailToken(env, { userId: "casey" })).accessToken, undefined);
   await assert.rejects(fs.stat(userTokenPath));
 });
 
@@ -913,19 +913,19 @@ test("gmail status does not treat base Google identity scopes as Gmail access", 
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-base-scopes-"));
   const env = {
     ORKESTR_HOME: home,
-    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_TENANT_VM_ID: "casey-jobs-vm",
     ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
   };
   await writeBrokerClientRegistration(home, {
-    instanceId: "instance-firat",
-    channelId: "channel-firat",
+    instanceId: "instance-casey",
+    channelId: "channel-casey",
     brokerBaseUrl: "https://broker.example.test",
   });
   await saveBrokeredGmailGrant({
-    userId: "firat",
-    account: "firat@example.com",
+    userId: "casey",
+    account: "casey@example.com",
     provider: "google_workspace",
-    brokerInstanceId: "instance-firat",
+    brokerInstanceId: "instance-casey",
     requestedCapabilities: ["gmail_read"],
     requestedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
     token: {
@@ -940,8 +940,8 @@ test("gmail status does not treat base Google identity scopes as Gmail access", 
     },
   }, env);
 
-  const status = await connectorAuthStatus("gmail", env, { userId: "firat" });
-  const capabilities = await userScopedCapabilityHints({ userId: "firat" }, env);
+  const status = await connectorAuthStatus("gmail", env, { userId: "casey" });
+  const capabilities = await userScopedCapabilityHints({ userId: "casey" }, env);
 
   assert.equal(status.state, "partial");
   assert.equal(status.connected, false);
@@ -960,18 +960,18 @@ test("gmail connector status refreshes expired brokered tokens before account lo
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-broker-profile-refresh-"));
   const env = {
     ORKESTR_HOME: home,
-    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_TENANT_VM_ID: "casey-jobs-vm",
     ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
   };
   await writeBrokerClientRegistration(home, {
-    instanceId: "instance-firat",
-    channelId: "channel-firat",
+    instanceId: "instance-casey",
+    channelId: "channel-casey",
     brokerBaseUrl: "https://broker.example.test",
   });
   await saveBrokeredGmailGrant({
-    userId: "firat",
+    userId: "casey",
     provider: "google_workspace",
-    brokerInstanceId: "instance-firat",
+    brokerInstanceId: "instance-casey",
     requestedCapabilities: ["gmail_read"],
     requestedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
     token: {
@@ -985,10 +985,10 @@ test("gmail connector status refreshes expired brokered tokens before account lo
   const calls = [];
 
   const status = await connectorAuthStatus("gmail", env, {
-    userId: "firat",
+    userId: "casey",
     fetchImpl: async (url, options = {}) => {
       calls.push(String(url));
-      if (String(url) === "https://broker.example.test/api/broker/instances/instance-firat/google-workspace/refresh-token") {
+      if (String(url) === "https://broker.example.test/api/broker/instances/instance-casey/google-workspace/refresh-token") {
         return jsonResponse({
           ok: true,
           token: {
@@ -1000,17 +1000,17 @@ test("gmail connector status refreshes expired brokered tokens before account lo
       }
       if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile") {
         assert.equal(options.headers.authorization, `Bearer ${refreshedAccessToken}`);
-        return jsonResponse({ emailAddress: "Firat@Example.COM" });
+        return jsonResponse({ emailAddress: "Casey@Example.COM" });
       }
       throw new Error(`unexpected_url:${url}`);
     },
   });
-  const stored = await readGmailToken(env, { userId: "firat" });
+  const stored = await readGmailToken(env, { userId: "casey" });
 
-  assert.equal(status.account, "firat@example.com");
-  assert.equal(stored.account, "firat@example.com");
+  assert.equal(status.account, "casey@example.com");
+  assert.equal(stored.account, "casey@example.com");
   assert.deepEqual(calls, [
-    "https://broker.example.test/api/broker/instances/instance-firat/google-workspace/refresh-token",
+    "https://broker.example.test/api/broker/instances/instance-casey/google-workspace/refresh-token",
     "https://gmail.googleapis.com/gmail/v1/users/me/profile",
   ]);
 });
@@ -1114,7 +1114,7 @@ test("gmail API authentication failures force one refresh and retry", async () =
     access_token: "access-stale",
     refresh_token: "refresh-valid",
     expires_in: 3600,
-  }), { account: "firat@example.com" });
+  }), { account: "casey@example.com" });
   const calls = [];
 
   const result = await listGmailMessages({ maxResults: 1 }, env, async (url, options = {}) => {
@@ -1142,18 +1142,18 @@ test("revoked brokered Gmail refreshes become reauth_required without repeated r
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-broker-revoked-"));
   const env = {
     ORKESTR_HOME: home,
-    ORKESTR_TENANT_VM_ID: "firat-jobs-vm",
+    ORKESTR_TENANT_VM_ID: "casey-jobs-vm",
     ORKESTR_BROKER_BASE_URL: "https://broker.example.test",
   };
   await writeBrokerClientRegistration(home, {
-    instanceId: "instance-firat",
-    channelId: "channel-firat",
+    instanceId: "instance-casey",
+    channelId: "channel-casey",
     brokerBaseUrl: "https://broker.example.test",
   });
   await saveBrokeredGmailGrant({
-    account: "firat@example.com",
+    account: "casey@example.com",
     provider: "google_workspace",
-    brokerInstanceId: "instance-firat",
+    brokerInstanceId: "instance-casey",
     requestedCapabilities: ["gmail_read"],
     requestedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
     token: {
@@ -1186,7 +1186,7 @@ test("revoked brokered Gmail refreshes become reauth_required without repeated r
   assert.equal(calls.length, 2);
   assert.equal(status.state, "reauth_required");
   assert.equal(status.connected, false);
-  assert.equal(status.account, "firat@example.com");
+  assert.equal(status.account, "casey@example.com");
   assert.equal(status.reason, "gmail_reauthorization_required");
   assert.equal(status.nextAction, "reconnect");
   assert.equal(status.retryable, false);
@@ -1204,7 +1204,7 @@ test("a second Gmail API 401 after refresh stops after one retry", async () => {
     access_token: "access-stale",
     refresh_token: "refresh-valid",
     expires_in: 3600,
-  }), { account: "firat@example.com" });
+  }), { account: "casey@example.com" });
   let calls = 0;
 
   await assert.rejects(() => listGmailMessages({ maxResults: 1 }, env, async (url) => {
@@ -1233,7 +1233,7 @@ test("temporary Gmail provider failures are degraded rather than revoked", async
     access_token: "access-valid",
     refresh_token: "refresh-valid",
     expires_in: 3600,
-  }), { account: "firat@example.com" });
+  }), { account: "casey@example.com" });
 
   await assert.rejects(
     () => listGmailMessages({ maxResults: 1 }, env, async () => jsonResponse({ error: { message: "Backend unavailable" } }, false, 503)),
@@ -1243,7 +1243,7 @@ test("temporary Gmail provider failures are degraded rather than revoked", async
 
   assert.equal(status.state, "degraded");
   assert.equal(status.connected, false);
-  assert.equal(status.account, "firat@example.com");
+  assert.equal(status.account, "casey@example.com");
   assert.equal(status.reason, "gmail_provider_unavailable");
   assert.equal(status.retryable, true);
   assert.equal(status.nextAction, "retry");

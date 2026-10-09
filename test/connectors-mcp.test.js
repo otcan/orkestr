@@ -78,7 +78,7 @@ function fakeWorker({ healthHandler = null, sendHandler = null } = {}) {
       }));
       return;
     }
-    if (req.url === "/accounts/sender/chats/firat-jobs%40g.us/recover") {
+    if (req.url === "/accounts/sender/chats/casey-jobs%40g.us/recover") {
       res.end(JSON.stringify({ ok: true, exact: true, requested: body.eventIds?.length || 0, routed: [] }));
       return;
     }
@@ -121,10 +121,10 @@ async function fixture({ scoped = false, workerOptions = {}, envOverrides = {}, 
         token,
         scopes: ["connectors:read", "connectors:send", "connectors:manage"],
         principalKind: "tenant_vm",
-        ownerUserId: "firat",
-        instanceId: "vm-firat",
+        ownerUserId: "casey",
+        instanceId: "vm-casey",
         accountId: "sender",
-        allowedChatIds: ["firat-jobs@g.us"],
+        allowedChatIds: ["casey-jobs@g.us"],
       },
     }) : "",
     ORKESTR_CONNECTORS_MCP_BEARER_TOKEN: token,
@@ -259,11 +259,11 @@ test("connector MCP stages authenticated worker media before durable routing", a
       mimetype: "text/plain",
       kind: "document",
       sourceEventId: "wa-media-stage-1",
-      chatId: "firat-jobs@g.us",
+      chatId: "casey-jobs@g.us",
       accountId: "sender",
     }]));
     form.append("eventId", "wa-media-stage-1");
-    form.append("chatId", "firat-jobs@g.us");
+    form.append("chatId", "casey-jobs@g.us");
     form.append("accountId", "sender");
     const response = await fetch(`${item.gatewayUrl}/api/connectors/whatsapp/inbound-media`, {
       method: "POST",
@@ -382,8 +382,8 @@ test("connector MCP still challenges scoped non-operator conversation creation",
       service: "whatsapp",
       action: "create",
       account_id: "sender",
-      instance_id: "vm-firat",
-      user_id: "firat",
+      instance_id: "vm-casey",
+      user_id: "casey",
       name: "Scoped project",
     }, item.env);
 
@@ -435,10 +435,10 @@ test("connector MCP challenges scoped non-operator conversation administration",
       service: "whatsapp",
       action: "promote_admins",
       account_id: "sender",
-      instance_id: "vm-firat",
-      user_id: "firat",
-      conversation_id: "firat-jobs@g.us",
-      participant_ids: ["firat@c.us"],
+      instance_id: "vm-casey",
+      user_id: "casey",
+      conversation_id: "casey-jobs@g.us",
+      participant_ids: ["casey@c.us"],
     }, item.env);
 
     assert.equal(pending.status, "approval_required");
@@ -452,8 +452,8 @@ test("connector MCP challenges scoped non-operator conversation administration",
 test("connector MCP keeps WhatsApp transport account scope separate from Google account selection", () => {
   const auth = {
     scopes: ["connectors:*"],
-    ownerUserId: "firat",
-    instanceId: "vm-firat",
+    ownerUserId: "casey",
+    instanceId: "vm-casey",
     accountId: "sender",
     accountService: "whatsapp",
   };
@@ -461,8 +461,8 @@ test("connector MCP keeps WhatsApp transport account scope separate from Google 
     service: "gmail",
     action: "status",
     account_id: "google-connection-1",
-    instance_id: "vm-firat",
-    user_id: "firat",
+    instance_id: "vm-casey",
+    user_id: "casey",
   });
 
   assert.equal(gmail.accountId, "google-connection-1");
@@ -470,8 +470,8 @@ test("connector MCP keeps WhatsApp transport account scope separate from Google 
     service: "whatsapp",
     action: "status",
     account_id: "different-whatsapp-account",
-    instance_id: "vm-firat",
-    user_id: "firat",
+    instance_id: "vm-casey",
+    user_id: "casey",
   }), /connector_mcp_account_scope_denied/);
 });
 
@@ -479,46 +479,46 @@ test("generic connector MCP handlers reject resource-bound tokens without an ind
   const item = await fixture({ scoped: true });
   try {
     const principal = adminPrincipal("admin");
-    const thread = await createThread({ id: "resource-token-mcp", name: "Resource token MCP", ownerUserId: "firat" }, item.env);
-    const registered = await registerThreadResource({ resourceType: "oxrm", resourceId: "crm-mcp", ownerUserId: "firat", status: "active" }, { principal }, item.env);
+    const thread = await createThread({ id: "resource-token-mcp", name: "Resource token MCP", ownerUserId: "casey" }, item.env);
+    const registered = await registerThreadResource({ resourceType: "oxrm", resourceId: "crm-mcp", ownerUserId: "casey", status: "active" }, { principal }, item.env);
     await setThreadResourceGrants(thread.id, "oxrm", [{ resourceId: "crm-mcp", permissions: ["read"] }], { principal }, item.env);
     item.env.ORKESTR_OXRM_ACCESS_MODE = "enforce";
     const issued = await issueConnectorMcpResourceToken({
       resourceType: "oxrm", resourceId: registered.resource.id, resourceAction: "read", threadId: thread.id,
-      principal, scopes: ["connectors:read"], instanceId: "vm-firat", accountId: "sender", accountService: "whatsapp",
+      principal, scopes: ["connectors:read"], instanceId: "vm-casey", accountId: "sender", accountService: "whatsapp",
       service: "whatsapp", connectorMcpTool: "orkestr_auth", connectorMcpAction: "status",
     }, item.env);
     item.env.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN = issued.token;
     const missingTarget = await callConnectorsMcpTool("orkestr_auth", {
-      service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-casey", user_id: "casey", thread_id: thread.id,
     }, item.env);
     assert.match(JSON.stringify(missingTarget), /connector_mcp_resource_dispatch_target_unbound/);
     const result = await callConnectorsMcpTool("orkestr_auth", {
-      service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-casey", user_id: "casey", thread_id: thread.id,
       resource_type: "oxrm", resource_id: registered.resource.id, resource_action: "read",
     }, item.env);
 
     assert.match(JSON.stringify(result), /connector_mcp_resource_dispatch_target_unbound/);
     assert.equal((await readThreadResourcePolicy(item.env)).resourceSessions.length, 1);
     const gmailBypass = await callConnectorsMcpTool("orkestr_auth", {
-      service: "gmail", action: "status", account_id: "gmail-account", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      service: "gmail", action: "status", account_id: "gmail-account", instance_id: "vm-casey", user_id: "casey", thread_id: thread.id,
       resource_type: "oxrm", resource_id: registered.resource.id, resource_action: "read",
     }, item.env);
     assert.match(JSON.stringify(gmailBypass), /connector_mcp_resource_dispatch_target_unbound/);
     assert.equal(Object.hasOwn(gmailBypass, "data"), false, "generic auth must not return aggregate Gmail status for a resource bearer");
     assert.equal((await readThreadResourcePolicy(item.env)).resourceSessions.length, 1);
     const crossResource = await callConnectorsMcpTool("orkestr_auth", {
-      service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-casey", user_id: "casey", thread_id: thread.id,
       resource_type: "oxrm", resource_id: "other-resource", resource_action: "read",
     }, item.env);
     assert.match(JSON.stringify(crossResource), /connector_mcp_resource_dispatch_target_unbound/);
     const crossThread = await callConnectorsMcpTool("orkestr_auth", {
-      service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: "other-thread",
+      service: "whatsapp", action: "status", account_id: "sender", instance_id: "vm-casey", user_id: "casey", thread_id: "other-thread",
       resource_type: "oxrm", resource_id: registered.resource.id, resource_action: "read",
     }, item.env);
     assert.match(JSON.stringify(crossThread), /connector_mcp_thread_scope_denied/);
     const wrongDispatch = await callConnectorsMcpTool("orkestr_conversation", {
-      service: "whatsapp", action: "list", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      service: "whatsapp", action: "list", account_id: "sender", instance_id: "vm-casey", user_id: "casey", thread_id: thread.id,
       resource_type: "oxrm", resource_id: registered.resource.id, resource_action: "read",
     }, item.env);
     assert.match(JSON.stringify(wrongDispatch), /connector_mcp_resource_dispatch_target_unbound/);
@@ -531,38 +531,38 @@ test("connector MCP routing cannot follow target threads, bindings, or operation
   const item = await fixture({ scoped: true });
   try {
     const principal = adminPrincipal("admin");
-    const thread = await createThread({ id: "routing-scope-thread", name: "Routing scope", ownerUserId: "firat" }, item.env);
+    const thread = await createThread({ id: "routing-scope-thread", name: "Routing scope", ownerUserId: "casey" }, item.env);
     const other = await createThread({
-      id: "routing-other-thread", name: "Routing other", ownerUserId: "firat",
-      binding: { connector: "whatsapp", chatId: "firat-jobs@g.us", accountId: "sender" },
+      id: "routing-other-thread", name: "Routing other", ownerUserId: "casey",
+      binding: { connector: "whatsapp", chatId: "casey-jobs@g.us", accountId: "sender" },
     }, item.env);
     const setRoutingToken = (action) => {
       const token = `scoped-routing-${action}`;
       item.env.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN = token;
       item.env.ORKESTR_CONNECTORS_MCP_TOKENS_JSON = JSON.stringify({ tenant: {
-        token, scopes: ["connectors:read", "connectors:manage"], principalKind: "tenant_vm", ownerUserId: "firat", instanceId: "vm-firat", accountId: "sender", allowedChatIds: ["firat-jobs@g.us"],
+        token, scopes: ["connectors:read", "connectors:manage"], principalKind: "tenant_vm", ownerUserId: "casey", instanceId: "vm-casey", accountId: "sender", allowedChatIds: ["casey-jobs@g.us"],
         threadId: thread.id, rootThreadId: thread.id,
       } });
     };
     setRoutingToken("bind");
     const crossTarget = await callConnectorsMcpTool("orkestr_routing", {
-      service: "whatsapp", action: "bind", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
-      conversation_id: "firat-jobs@g.us", target_thread_id: other.id,
+      service: "whatsapp", action: "bind", account_id: "sender", instance_id: "vm-casey", user_id: "casey", thread_id: thread.id,
+      conversation_id: "casey-jobs@g.us", target_thread_id: other.id,
     }, item.env);
     assert.match(JSON.stringify(crossTarget), /connector_mcp_target_thread_scope_denied/);
     setRoutingToken("unbind");
     const crossBinding = await callConnectorsMcpTool("orkestr_routing", {
-      service: "whatsapp", action: "unbind", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      service: "whatsapp", action: "unbind", account_id: "sender", instance_id: "vm-casey", user_id: "casey", thread_id: thread.id,
       binding_id: `thread:${other.id}:whatsapp`,
     }, item.env);
     assert.match(JSON.stringify(crossBinding), /connector_mcp_binding_scope_denied/);
     const job = await ensureConnectorOutboxJob({
-      connector: "whatsapp", tenantId: "vm-firat", ownerUserId: "firat", accountId: "sender", chatId: "firat-jobs@g.us", threadId: other.id,
+      connector: "whatsapp", tenantId: "vm-casey", ownerUserId: "casey", accountId: "sender", chatId: "casey-jobs@g.us", threadId: other.id,
       sourceMessageId: "routing-cross-operation", sourceRevision: "1", deliveryType: "mcp_send_text", idempotencyKey: "routing-cross-operation", payload: { text: "ignored" },
     }, item.env);
     setRoutingToken("retry");
     const crossOperation = await callConnectorsMcpTool("orkestr_routing", {
-      service: "whatsapp", action: "retry", account_id: "sender", instance_id: "vm-firat", user_id: "firat", thread_id: thread.id,
+      service: "whatsapp", action: "retry", account_id: "sender", instance_id: "vm-casey", user_id: "casey", thread_id: thread.id,
       operation_ref: job.job.id,
     }, item.env);
     assert.match(JSON.stringify(crossOperation), /connector_mcp_operation_scope_denied/);
@@ -575,18 +575,18 @@ test("connector MCP records scoped runtime progress and durable checkpoints", as
   const item = await fixture({ scoped: true });
   try {
     await createThread({
-      id: "firat-runtime-thread",
-      name: "Firat runtime",
-      ownerUserId: "firat",
+      id: "casey-runtime-thread",
+      name: "Casey runtime",
+      ownerUserId: "casey",
       executorId: "codex",
       executor: { type: "codex", codexThreadId: "runtime-generation-1" },
       runtime: { runtimeGeneration: "runtime-generation-1", activeTurnId: "turn-1" },
     }, item.env);
     const context = {
       service: "runtime",
-      instance_id: "vm-firat",
-      user_id: "firat",
-      thread_id: "firat-runtime-thread",
+      instance_id: "vm-casey",
+      user_id: "casey",
+      thread_id: "casey-runtime-thread",
       execution_id: "execution-1",
       runtime_generation: "runtime-generation-1",
       turn_id: "turn-1",
@@ -608,10 +608,10 @@ test("connector MCP records scoped runtime progress and durable checkpoints", as
       checkpoint_id: "checkpoint-1",
       checkpoint_json: JSON.stringify({ nextPage: 2, seenIds: ["a"] }),
     }, item.env);
-    const thread = await getThread("firat-runtime-thread", item.env);
+    const thread = await getThread("casey-runtime-thread", item.env);
 
     assert.equal(progress.status, "ok");
-    assert.equal(progress.scope.thread_id, "firat-runtime-thread");
+    assert.equal(progress.scope.thread_id, "casey-runtime-thread");
     assert.deepEqual(progress.data.liveness.counters, { current: 1, total: 3 });
     assert.equal(checkpoint.status, "ok");
     assert.equal(thread.runtime.checkpoint.checkpointId, "checkpoint-1");
@@ -627,9 +627,9 @@ test("connector MCP messaging uses the durable idempotency ledger", async () => 
     service: "whatsapp",
     action: "send_text",
     account_id: "sender",
-    instance_id: "vm-firat",
-    user_id: "firat",
-    conversation_id: "firat-jobs@g.us",
+    instance_id: "vm-casey",
+    user_id: "casey",
+    conversation_id: "casey-jobs@g.us",
     text: "Status check",
     idempotency_key: "turn-123:reply-1",
   };
@@ -701,7 +701,7 @@ test("connector MCP terminalizes partial WhatsApp delivery and does not retry it
           error: "whatsapp_partial_delivery",
           partialDelivery: {
             accountId: "sender",
-            chatId: "firat-jobs@g.us",
+            chatId: "casey-jobs@g.us",
             sent: [{ id: "wa-text-1", kind: "text" }],
             failedKind: "attachment",
             failureCode: "media_failed",
@@ -714,7 +714,7 @@ test("connector MCP terminalizes partial WhatsApp delivery and does not retry it
     service: "whatsapp",
     action: "send_text",
     account_id: "sender",
-    conversation_id: "firat-jobs@g.us",
+    conversation_id: "casey-jobs@g.us",
     text: "Cover text",
     idempotency_key: "partial-send-1",
   };
@@ -742,18 +742,18 @@ test("connector MCP typing is transient and scoped to the existing conversation"
       service: "whatsapp",
       action: "set_typing",
       account_id: "sender",
-      instance_id: "vm-firat",
-      user_id: "firat",
-      conversation_id: "firat-jobs@g.us",
+      instance_id: "vm-casey",
+      user_id: "casey",
+      conversation_id: "casey-jobs@g.us",
       typing_state: "composing",
     }, item.env);
     const paused = await callConnectorsMcpTool("orkestr_messaging", {
       service: "whatsapp",
       action: "set_typing",
       account_id: "sender",
-      instance_id: "vm-firat",
-      user_id: "firat",
-      conversation_id: "firat-jobs@g.us",
+      instance_id: "vm-casey",
+      user_id: "casey",
+      conversation_id: "casey-jobs@g.us",
       typing_state: "paused",
     }, item.env);
 
@@ -776,13 +776,13 @@ test("connector MCP conversation recovery passes exact scoped event ids to the w
       service: "whatsapp",
       action: "recover",
       account_id: "sender",
-      instance_id: "vm-firat",
-      user_id: "firat",
-      conversation_id: "firat-jobs@g.us",
+      instance_id: "vm-casey",
+      user_id: "casey",
+      conversation_id: "casey-jobs@g.us",
       event_ids: ["3EB0A781A2AE024E4B6FE4"],
       mark_seen: false,
     }, item.env);
-    const call = item.worker.calls.find((entry) => entry.url === "/accounts/sender/chats/firat-jobs%40g.us/recover");
+    const call = item.worker.calls.find((entry) => entry.url === "/accounts/sender/chats/casey-jobs%40g.us/recover");
 
     assert.equal(recovered.status, "ok", JSON.stringify(recovered));
     assert.equal(recovered.data.exact, true);
@@ -1080,13 +1080,13 @@ test("connector MCP uploads staged media into the resolved tenant before inbound
     ...process.env,
     ORKESTR_HOME: home,
   };
-  const chatId = "firat-jobs-media@g.us";
+  const chatId = "casey-jobs-media@g.us";
   await createTenantVm({
-    id: "firat-jobs-media-vm",
-    ownerUserId: "firat",
-    endpoint: { baseUrl: "https://firat-media.example.test" },
+    id: "casey-jobs-media-vm",
+    ownerUserId: "casey",
+    endpoint: { baseUrl: "https://casey-media.example.test" },
   }, env);
-  const configured = await configureTenantWhatsAppRoute("firat-jobs-media-vm", {
+  const configured = await configureTenantWhatsAppRoute("casey-jobs-media-vm", {
     chatId,
     accountId: "sender",
     routeMode: "direct",
@@ -1104,7 +1104,7 @@ test("connector MCP uploads staged media into the resolved tenant before inbound
       eventId: "wa-tenant-media-1",
       accountId: "sender",
       chatId,
-      from: "firat@lid",
+      from: "casey@lid",
       text: "please save the attachment",
       attachments: [{
         path: stagedPath,
@@ -1143,13 +1143,13 @@ test("connector MCP uploads staged media into the resolved tenant before inbound
       }
       const body = JSON.parse(options.body);
       calls.push({ target, authorization: options.headers.authorization, body });
-      return { ok: true, status: 202, json: async () => ({ ok: true, threadId: "firat-jobs", messageId: "message-1" }) };
+      return { ok: true, status: 202, json: async () => ({ ok: true, threadId: "casey-jobs", messageId: "message-1" }) };
     });
 
     assert.equal(result.ok, true);
     assert.deepEqual(calls.map((call) => call.target), [
-      "https://firat-media.example.test/api/connectors/whatsapp/inbound-media",
-      "https://firat-media.example.test/api/connectors/whatsapp/inbound",
+      "https://casey-media.example.test/api/connectors/whatsapp/inbound-media",
+      "https://casey-media.example.test/api/connectors/whatsapp/inbound",
     ]);
     assert.equal(calls[0].authorization, `Bearer ${configured.route.token}`);
     assert.equal(calls[0].text, "candidate cv");
@@ -1172,13 +1172,13 @@ test("connector MCP delivers recovered attachments as one deterministic inbox re
   const base = {
     eventId: "wa-media-revision-1",
     accountId: "sender",
-    chatId: "firat-jobs@g.us",
+    chatId: "casey-jobs@g.us",
     text: "Candidate CV",
   };
   const calls = [];
   const fetchImpl = async (_url, options = {}) => {
     calls.push(JSON.parse(options.body));
-    return { ok: true, status: 202, json: async () => ({ ok: true, threadId: "firat-jobs", messageId: `message-${calls.length}` }) };
+    return { ok: true, status: 202, json: async () => ({ ok: true, threadId: "casey-jobs", messageId: `message-${calls.length}` }) };
   };
 
   try {
@@ -1261,7 +1261,7 @@ test("connector MCP revisions an already delivered event when media was only sta
 
 test("connector MCP keeps parent-owned approvals out of tenant routes and exposes the acknowledgement", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connectors-parent-approval-"));
-  const chatId = "firat-jobs@g.us";
+  const chatId = "casey-jobs@g.us";
   const env = {
     ...process.env,
     ORKESTR_HOME: home,
@@ -1269,12 +1269,12 @@ test("connector MCP keeps parent-owned approvals out of tenant routes and expose
     ORKESTR_CONNECTORS_MCP_INBOUND_TARGET_TOKEN: "parent-token",
   };
   await createTenantVm({
-    id: "firat-jobs-vm",
-    ownerUserId: "firat",
-    endpoint: { baseUrl: "http://firat-jobs.test" },
-    connectors: { whatsappChatName: "Firat Jobs", whatsappAccountId: "sender" },
+    id: "casey-jobs-vm",
+    ownerUserId: "casey",
+    endpoint: { baseUrl: "http://casey-jobs.test" },
+    connectors: { whatsappChatName: "Casey Jobs", whatsappAccountId: "sender" },
   }, env);
-  await configureTenantWhatsAppRoute("firat-jobs-vm", {
+  await configureTenantWhatsAppRoute("casey-jobs-vm", {
     chatId,
     accountId: "sender",
     routeMode: "direct",
@@ -1282,9 +1282,9 @@ test("connector MCP keeps parent-owned approvals out of tenant routes and expose
   }, env);
   const created = await createPairingChallenge({
     env,
-    instanceId: "firat-broker-instance",
-    userId: "firat",
-    authIntent: { chatId, accountId: "sender", tenantVmId: "firat-jobs-vm" },
+    instanceId: "casey-broker-instance",
+    userId: "casey",
+    authIntent: { chatId, accountId: "sender", tenantVmId: "casey-jobs-vm" },
     request: { headers: { "user-agent": "node-test" }, socket: { remoteAddress: "127.0.0.1" } },
   });
   const calls = [];
@@ -1334,7 +1334,7 @@ test("connector MCP keeps parent-owned approvals out of tenant routes and expose
     assert.equal(parentApproval.approvedSecurityChallenge, true);
     assert.equal(replayedApproval.duplicate, true);
     assert.equal(replayedApproval.approvedSecurityChallenge, true);
-    assert.equal(calls[1].url, "http://firat-jobs.test/api/connectors/whatsapp/inbound");
+    assert.equal(calls[1].url, "http://casey-jobs.test/api/connectors/whatsapp/inbound");
     assert.equal(tenantApproval.result.routeMode, "direct");
     assert.equal(tenantApproval.skipped, "security_approval_challenge_not_found");
   } finally {

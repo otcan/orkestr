@@ -289,7 +289,7 @@ test("WhatsApp worker stages inbound media at the connector MCP gateway before f
 
   const forwarded = await forwardLocalWhatsAppInbound({
     eventId: "worker-sink-media-1",
-    chatId: "firat-jobs@g.us",
+    chatId: "casey-jobs@g.us",
     accountId: "sender",
     text: "save the attachment",
     attachments: [{ path: attachmentPath, filename: "candidate.txt", mimetype: "text/plain", kind: "document" }],
@@ -445,7 +445,7 @@ test("local WhatsApp bridge forwards an attachment recovered after a text-only s
   const env = { ORKESTR_HOME: home };
   await createTenantVm({
     id: "attachment-recovery-tenant",
-    ownerUserId: "firat",
+    ownerUserId: "casey",
     endpoint: { baseUrl: "https://attachment-recovery.example.test" },
   }, env);
   await configureTenantWhatsAppRoute("attachment-recovery-tenant", {
@@ -456,7 +456,7 @@ test("local WhatsApp bridge forwards an attachment recovered after a text-only s
   const fetchImpl = async (url, options = {}) => {
     calls.push({ url: String(url), body: options.body ? JSON.parse(options.body) : null });
     if (String(url).endsWith("/api/health")) return response({ ok: true }, true, 200);
-    return response({ ok: true, threadId: "firat-jobs", messageId: `tenant-message-${calls.length}` }, true, 202);
+    return response({ ok: true, threadId: "casey-jobs", messageId: `tenant-message-${calls.length}` }, true, 202);
   };
   const source = {
     eventId: "false_wa-group-attachment-recovery@g.us_msg-1",

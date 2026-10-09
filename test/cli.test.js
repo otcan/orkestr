@@ -458,7 +458,7 @@ test("CLI sanitizer check posts a server-owned sanitizer request", async () => {
     "--url",
     "https://www.stepstone.de/job/123",
     "--cwd",
-    "/workspace/firat-jobs",
+    "/workspace/casey-jobs",
     "--json",
   ], {
     stdout,
@@ -468,7 +468,7 @@ test("CLI sanitizer check posts a server-owned sanitizer request", async () => {
         ok: true,
         allow: true,
         decision: { allow: true, reason: "server-owned-allowed", unavailable: false },
-        thread: { id: "firat-jobs", ownerUserId: "firat" },
+        thread: { id: "casey-jobs", ownerUserId: "casey" },
       },
     }, seen),
   });
@@ -477,7 +477,7 @@ test("CLI sanitizer check posts a server-owned sanitizer request", async () => {
   assert.equal(seen[0].body.action, "external.submit");
   assert.equal(seen[0].body.text, "Submit the current user's StepStone application.");
   assert.equal(seen[0].body.url, "https://www.stepstone.de/job/123");
-  assert.equal(seen[0].body.cwd, "/workspace/firat-jobs");
+  assert.equal(seen[0].body.cwd, "/workspace/casey-jobs");
   assert.match(stdout.text(), /"allow": true/);
 });
 
@@ -495,7 +495,7 @@ test("CLI sanitizer check forwards thread id from runtime env", async () => {
     "Submit the current user's StepStone application.",
     "--json",
   ], {
-    env: { ORKESTR_THREAD_ID: "firat-jobs" },
+    env: { ORKESTR_THREAD_ID: "casey-jobs" },
     stdout,
     stderr: capture(),
     fetchImpl: fakeFetch({
@@ -503,13 +503,13 @@ test("CLI sanitizer check forwards thread id from runtime env", async () => {
         ok: true,
         allow: true,
         decision: { allow: true, reason: "server-owned-allowed", unavailable: false },
-        thread: { id: "firat-jobs", ownerUserId: "firat" },
+        thread: { id: "casey-jobs", ownerUserId: "casey" },
       },
     }, seen),
   });
 
   assert.equal(code, 0);
-  assert.equal(seen[0].body.threadId, "firat-jobs");
+  assert.equal(seen[0].body.threadId, "casey-jobs");
   assert.match(stdout.text(), /"allow": true/);
 });
 
@@ -532,7 +532,7 @@ test("CLI sanitizer check returns 2 when the server sanitizer is unavailable", a
         ok: false,
         allow: false,
         decision: { allow: false, reason: "llm_sanitizer_http_401", unavailable: true },
-        thread: { id: "firat-jobs", ownerUserId: "firat" },
+        thread: { id: "casey-jobs", ownerUserId: "casey" },
       },
     }),
   });
@@ -1027,7 +1027,7 @@ test("CLI jira draft emits task candidates from thread history without creating 
       "GET /api/threads/thread-1/history": {
         thread: {
           id: "thread-1",
-          name: "otcanClaw-orkestr",
+          name: "demoClaw-orkestr",
           binding: { chatId: "chat-one@g.us" },
         },
         messages: [
@@ -1450,9 +1450,9 @@ test("CLI runs Gmail jobs poll through the server API", async () => {
     "jobs",
     "run",
     "--owner-user-id",
-    "firat",
+    "casey",
     "--target-thread",
-    "firat-jobs",
+    "casey-jobs",
     "--max-results",
     "5",
     "--gmail-source",
@@ -1476,8 +1476,8 @@ test("CLI runs Gmail jobs poll through the server API", async () => {
 
   assert.equal(code, 0);
   assert.deepEqual(seen[0].body, {
-    ownerUserId: "firat",
-    targetThreadId: "firat-jobs",
+    ownerUserId: "casey",
+    targetThreadId: "casey-jobs",
     gmailSource: "oauth",
     maxResults: 5,
     signalMode: "record_only",
@@ -2018,7 +2018,7 @@ test("CLI doctors WhatsApp accounts through the lifecycle API", async () => {
 test("CLI runs invariant WhatsApp/router doctor with repair options", async () => {
   const stdout = capture();
   const seen = [];
-  const code = await runCli(["doctor", "whatsapp", "--thread", "otcanClaw-features", "--repair", "--stale-ms", "45000", "--json"], {
+  const code = await runCli(["doctor", "whatsapp", "--thread", "demoClaw-features", "--repair", "--stale-ms", "45000", "--json"], {
     stdout,
     stderr: capture(),
     fetchImpl: fakeFetch({
@@ -2026,7 +2026,7 @@ test("CLI runs invariant WhatsApp/router doctor with repair options", async () =
         ok: false,
         status: "broken",
         summary: "1 router/WhatsApp invariant error detected.",
-        checks: [{ code: "queue_notice_without_runtime_delivery", severity: "error", threadId: "otcanClaw-features" }],
+        checks: [{ code: "queue_notice_without_runtime_delivery", severity: "error", threadId: "demoClaw-features" }],
         repairs: [],
       },
     }, seen),
@@ -2034,7 +2034,7 @@ test("CLI runs invariant WhatsApp/router doctor with repair options", async () =
 
   assert.equal(code, 1);
   assert.equal(seen[0].key, "GET /api/router-traces/doctor/whatsapp");
-  assert.equal(seen[0].search, "?thread=otcanClaw-features&repair=1&staleMs=45000");
+  assert.equal(seen[0].search, "?thread=demoClaw-features&repair=1&staleMs=45000");
   assert.equal(JSON.parse(stdout.text()).checks[0].code, "queue_notice_without_runtime_delivery");
 });
 
@@ -2461,7 +2461,7 @@ test("CLI applies configured WhatsApp chat-name and reply prefixes", async () =>
     const seen = [];
     const code = await runCli([
       "create",
-      "easylab",
+      "labco",
       "--wa-participant",
       "wa-contact-alice@c.us",
       "--json",
@@ -2469,19 +2469,19 @@ test("CLI applies configured WhatsApp chat-name and reply prefixes", async () =>
       stdout,
       stderr: capture(),
       fetchImpl: fakeFetch({
-        "POST /api/threads": { thread: { id: "thread-easylab", name: "acme-easylab", state: "sleeping" } },
+        "POST /api/threads": { thread: { id: "thread-labco", name: "acme-labco", state: "sleeping" } },
         "POST /api/connectors/whatsapp/thread-groups": {
           ok: true,
-          chat: { id: "wa-group-one@g.us", name: "acme-easylab", generated: true },
-          thread: { id: "thread-easylab", name: "acme-easylab", state: "ready" },
-          binding: { displayName: "acme-easylab", chatId: "wa-group-one@g.us" },
+          chat: { id: "wa-group-one@g.us", name: "acme-labco", generated: true },
+          thread: { id: "thread-labco", name: "acme-labco", state: "ready" },
+          binding: { displayName: "acme-labco", chatId: "wa-group-one@g.us" },
         },
       }, seen),
     });
 
     assert.equal(code, 0);
-    assert.deepEqual(seen[0].body, { name: "acme-easylab" });
-    assert.equal(seen[1].body.name, "acme-easylab");
+    assert.deepEqual(seen[0].body, { name: "acme-labco" });
+    assert.equal(seen[1].body.name, "acme-labco");
     assert.equal(seen[1].body.replyPrefix, "agent:");
   } finally {
     if (previousNamePrefix === undefined) delete process.env.ORKESTR_WHATSAPP_CHAT_NAME_PREFIX;
