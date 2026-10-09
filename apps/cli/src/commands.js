@@ -216,6 +216,13 @@ async function releaseInstancesCommand(argv, ctx) {
   return 0;
 }
 
+// Vault items granted to a thread are a separate store; agents that only look
+// here conclude a credential the owner assigned is missing.
+const SECRET_LIST_VAULT_HINT = Object.freeze({
+  hint: "Vault items (logins, tokens, authenticator codes) the owner granted to this thread are not listed here; run `orkestr vault list`.",
+  command: "orkestr vault list",
+});
+
 async function secretCommand(argv, ctx) {
   const subcommand = argv[0]?.startsWith("--") ? "list" : argv[0] || "list";
   const rest = subcommand === "list" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
@@ -226,8 +233,11 @@ async function secretCommand(argv, ctx) {
   if (subcommand === "list" || subcommand === "ls") {
     const params = secretParams(rest);
     const payload = await requestJson(`/api/secure-input/secrets${params.size ? `?${params.toString()}` : ""}`, ctx);
-    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-    else ctx.stdout.write(formatSecretTable(payload.secrets || []));
+    if (json) ctx.stdout.write(`${JSON.stringify({ ...payload, vault: SECRET_LIST_VAULT_HINT }, null, 2)}\n`);
+    else {
+      ctx.stdout.write(formatSecretTable(payload.secrets || []));
+      ctx.stderr.write(`${SECRET_LIST_VAULT_HINT.hint}\n`);
+    }
     return 0;
   }
   if (subcommand === "set" || subcommand === "put") {

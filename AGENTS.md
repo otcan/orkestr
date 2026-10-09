@@ -69,6 +69,10 @@ of relying on static thread or workspace text in this file.
   env vars). Never print passwords into chat, WhatsApp or thread messages.
   Authenticator codes (`orkestr vault totp <item> --wait 120`) need the owner's
   approval for every code. See `docs/vault.md`.
+- Credentials the owner assigned to a thread (logins, tokens, authenticator
+  codes) live in the per-user Vault, not in `orkestr secret list` or env vars.
+  Run `orkestr vault list` and prefer `orkestr vault exec <item> -- <command>`
+  so values only reach the child process; see `docs/vault.md`.
 - Use connector status APIs for Gmail and WhatsApp. Do not read Gmail tokens,
   WhatsApp session state, browser profiles, or files under `ORKESTR_HOME/secrets`
   directly.

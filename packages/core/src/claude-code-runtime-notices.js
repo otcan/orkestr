@@ -25,6 +25,7 @@ export const CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE = [
   "For large jobs (for example implement, test, and release), finish one coherent phase, report it, and let the user's next message continue the job instead of doing everything in one turn.",
   "Always end with a final answer stating what is done, what is partial (with branch and worktree paths), and what is next.",
   "To send a file to the user, link it with a descriptive label, e.g. [signed agreement](/absolute/path.pdf), or as file:///absolute/path; links labelled with just the file name or path, and bare paths, stay text only.",
+  "Credentials the owner assigned to this thread (passwords, tokens, authenticator codes) live in the Orkestr Vault, not in `orkestr secret list` or environment variables: run `orkestr vault list`, then prefer `orkestr vault exec <item> -- <command>` (values arrive only as $VAULT_USERNAME / $VAULT_PASSWORD in the child process) or `orkestr vault totp <item>`; never print the values.",
   "To be woken when another Orkestr thread finishes a turn, run `orkestr watch <thread>` (next final once; --continuous to keep watching; --payload none for a notification only); workers already report their DONE/BLOCKED finals to the parent automatically.",
 ].join(" ");
 

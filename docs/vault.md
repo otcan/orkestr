@@ -76,6 +76,14 @@ authenticator codes behind approvals.
 
 ## Agent usage
 
+Vault items are a separate store from `orkestr secret` (secure-input secrets):
+an item the owner granted to a thread never shows up in `orkestr secret list`
+or in environment variables. To keep agents from concluding a credential is
+missing, `orkestr secret list` points to `orkestr vault list` (on stderr, or as
+a `vault` key in `--json` output), headless Claude Code turns carry a standing
+runtime notice about the Vault, and `orkestr whereiam --json` reports
+`capabilities.vault`.
+
 Prefer `exec`: the values go into the child process environment only.
 
 ```sh

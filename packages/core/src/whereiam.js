@@ -480,6 +480,7 @@ async function capabilityHints(thread = null, options = {}, env = process.env) {
     timers: true,
     virtualBrowsers: true,
     desktopLeases: true,
+    vault: { cli: "orkestr vault list", exec: "orkestr vault exec <item> -- <command>", docs: "docs/vault.md" },
     whatsapp: true,
     gmail: true,
     outlook: true,
