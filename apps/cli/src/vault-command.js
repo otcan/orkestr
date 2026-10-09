@@ -1,4 +1,5 @@
-import { requestJson } from "./api-client.js";
+import { readCodexVaultTurnToken } from "../../../packages/core/src/vault-codex-turn-tokens.js";
+import { effectiveCliEnv, requestJson } from "./api-client.js";
 
 // `orkestr vault list|exec|get|totp` (docs/vault.md). Agent-side access to
 // vault items granted to the calling thread. `exec` is the preferred way to
@@ -41,14 +42,19 @@ function assertNoSecretArgv(argv) {
   }
 }
 
-/** Per-turn thread token injected by Orkestr; the server derives the thread from it. */
-function threadToken(ctx) {
-  return String(ctx.env?.ORKESTR_VAULT_THREAD_TOKEN || "").trim();
+/**
+ * Per-turn thread token: injected into the environment (Claude Code turns) or
+ * read from the calling Codex thread's 0600 token file (CODEX_THREAD_ID).
+ */
+async function threadToken(ctx) {
+  const injected = String(ctx.env?.ORKESTR_VAULT_THREAD_TOKEN || "").trim();
+  if (injected) return injected;
+  const env = ctx.env || process.env;
+  return readCodexVaultTurnToken(env, String(effectiveCliEnv(env).ORKESTR_HOME || "").trim());
 }
 
 /** Request context that sends the thread token header (never argv or URL). */
-function vaultCtx(ctx) {
-  const token = threadToken(ctx);
+function vaultCtx(ctx, token) {
   return token ? { ...ctx, headers: { "x-orkestr-thread-token": token } } : ctx;
 }
 
@@ -56,8 +62,8 @@ function vaultCtx(ctx) {
  * Thread of the calling agent: "" when a thread token is present (the server
  * derives it), else ORKESTR_THREAD_ID or whereiam by cwd (legacy mode only).
  */
-export async function resolveVaultThreadId(argv, ctx) {
-  if (threadToken(ctx)) return "";
+export async function resolveVaultThreadId(argv, ctx, token = "") {
+  if (token) return "";
   const fromEnv = ["ORKESTR_THREAD_ID", "ORKESTR_CURRENT_THREAD_ID", "ORKESTR_RUNTIME_THREAD_ID"]
     .map((key) => String(ctx.env?.[key] || "").trim())
     .find(Boolean);
@@ -140,8 +146,9 @@ export async function vaultCommand(argv = [], ctx) {
     ctx.stderr.write(`${VAULT_USAGE}\n`);
     return subcommand ? 2 : 0;
   }
-  const threadId = await resolveVaultThreadId(separator >= 0 ? rest.slice(0, separator) : rest, ctx);
-  ctx = vaultCtx(ctx);
+  const token = await threadToken(ctx);
+  const threadId = await resolveVaultThreadId(separator >= 0 ? rest.slice(0, separator) : rest, ctx, token);
+  ctx = vaultCtx(ctx, token);
   if (subcommand === "list" || subcommand === "ls") {
     const payload = await requestJson(`/api/vault/agent/items?${new URLSearchParams(threadId ? { threadId } : {}).toString()}`, ctx);
     ctx.stdout.write(json ? `${JSON.stringify(payload, null, 2)}\n` : formatItems(payload?.items || []));

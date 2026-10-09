@@ -1,3 +1,4 @@
+import { appendEvent } from "../../storage/src/store.js";
 import { consumeDurableRateLimit, positiveIntegerEnv } from "./durable-rate-limit.js";
 import { resourceOwnerUserId } from "./policy.js";
 import { getThread } from "./threads.js";
@@ -95,6 +96,12 @@ export async function resolveAgentThread(threadRef = "", env = process.env) {
   return { threadId: thread.id, threadName: clean(thread.name) || thread.id, ownerUserId: resourceOwnerUserId(thread, env) };
 }
 
+// Audits a rejected agent request (never the token value) and returns the error.
+async function rejectThreadToken(code, statusCode, reason, fields, env) {
+  await appendEvent({ type: "vault_thread_token_rejected", reason, principalKind: "agent", ...fields }, env).catch(() => {});
+  return vaultError(code, statusCode);
+}
+
 /**
  * Thread id for an agent request: derived from the thread token. A supplied
  * thread id must match it; without a token only legacy mode accepts one.
@@ -102,15 +109,17 @@ export async function resolveAgentThread(threadRef = "", env = process.env) {
 export async function agentThreadIdFromRequest(request = {}, suppliedThreadId = "", env = process.env) {
   const header = request?.headers?.[VAULT_THREAD_TOKEN_HEADER];
   const token = clean(Array.isArray(header) ? header[0] : header);
-  const supplied = clean(suppliedThreadId);
+  const supplied = clean(suppliedThreadId).slice(0, 200);
   if (token) {
     const threadId = await threadIdForVaultToken(token, env);
-    if (!threadId) throw vaultError("vault_thread_token_invalid", 401);
-    if (supplied && supplied !== threadId) throw vaultError("vault_thread_token_mismatch", 403);
+    if (!threadId) throw await rejectThreadToken("vault_thread_token_invalid", 401, "invalid", { suppliedThreadId: supplied }, env);
+    if (supplied && supplied !== threadId) {
+      throw await rejectThreadToken("vault_thread_token_mismatch", 403, "mismatch", { threadId, suppliedThreadId: supplied }, env);
+    }
     return threadId;
   }
   if (vaultLegacyThreadIdAllowed(env)) return supplied;
-  throw vaultError("vault_thread_token_required", 401);
+  throw await rejectThreadToken("vault_thread_token_required", 401, "missing", { suppliedThreadId: supplied }, env);
 }
 
 /** Thread ids that may be granted: the owner's own threads only. */
