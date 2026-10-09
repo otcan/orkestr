@@ -147,6 +147,45 @@ orkestr vault totp "Example Mail" --wait 120               # waits for the owner
 Never print passwords into chat, WhatsApp or thread messages. Secret values are
 never accepted as command-line arguments.
 
+## Asking for a password once
+
+When a thread needs a password that is not in the Vault yet, it asks the owner
+through a one-time link instead of chat:
+
+```sh
+orkestr vault request "Example Bank" --once --ttl 15m --username-too --label "Monthly report login"
+# prints https://<app>/s/<token>; send that link (not a password) to the owner
+orkestr vault exec "Example Bank" -- ./scripts/login.sh   # after the owner submitted
+```
+
+- The link reuses the one-time secret link pages (`docs/secret-links.md`):
+  owner sign-in required, GET never consumes, POST is same-origin only, the
+  link works once and expires after `--ttl` (default 15 minutes, 1 minute to
+  24 hours). `--username-too` adds a username field.
+- The owner's submission is stored as an encrypted Vault item named after the
+  request and granted **only** to the requesting thread (the thread of the
+  thread token; `--thread` must match it). The thread gets a record-only note
+  with the item id, never the value.
+- Without `--once` the item is a normal saved item. With `--once` it is a
+  **single-use item**.
+- Pending requests show on the Vault page, where the owner can revoke them;
+  `orkestr secret links list` also shows them (kind `vault`).
+
+### Single-use items
+
+A single-use item releases its username/password to an agent **at most once**
+and only until it expires (for requests: `--ttl` counted from the submission;
+owner-created items: `POST /items` with `{ "singleUse": true, "ttl": "15m" }`).
+The release (`orkestr vault exec`/`get`) and the wipe happen in one locked
+write, so concurrent reads yield exactly one value; later reads get
+`410 vault_item_used`. Expired items are wiped on the next vault access and
+return `410 vault_item_expired`. Wiping destroys the ciphertext; the metadata
+stays with status `used` or `expired` for audit. Single-use items hold no
+authenticator codes. Use `exec` so the one release reaches your command.
+
+Events (no values): `vault_single_use_consumed`, `vault_single_use_expired`,
+and `vault_item_created` with `source: "vault_request"`.
+
 ## Authenticator approvals
 
 `orkestr vault totp <item>` creates a pending approval (`vap_...`, valid for
@@ -186,8 +225,10 @@ All routes are under `/api/vault` and use JSON.
 | POST | `/import` | See Imports |
 | GET | `/approvals` | Pending and recent approvals |
 | POST | `/approvals/:id/approve`, `/approvals/:id/deny` | |
+| GET | `/requests` | Request-into-vault links (metadata only) |
+| POST | `/requests/:id/revoke` | |
 | GET | `/status` | `{ itemCount, totpCount, keySource, keyFilePresent, pendingApprovals }` |
 
-Agent routes (`/api/vault/agent/items`, `/credentials`, `/totp`) are for the CLI
+Agent routes (`/api/vault/agent/items`, `/credentials`, `/totp`, `/requests`) are for the CLI
 only and need the `X-Orkestr-Thread-Token` header (see "How agents are
 identified").

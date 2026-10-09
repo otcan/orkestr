@@ -138,3 +138,19 @@ test("vault totp waits for approval and prints exactly the issued code", async (
   assert.equal(denied.code, 1);
   assert.match(denied.stderr, /vault_totp_denied/);
 });
+
+test("vault request sends only metadata and prints the one-time link", async () => {
+  const TOKEN = "ovt_synthetic-request-thread-token";
+  const url = "http://127.0.0.1:19812/s/synthetic-link-token";
+  const handler = (key) => (key === "POST /api/vault/agent/requests"
+    ? [201, { ok: true, url, request: { id: "sl_1", status: "active", expiresAt: "2026-01-01T00:15:00.000Z" } }]
+    : null);
+  const result = await run(["vault", "request", "Example Bank", "--once", "--ttl", "10m", "--username-too", "--label", "Report login"], handler, { env: { ORKESTR_VAULT_THREAD_TOKEN: TOKEN } });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout.trim(), url);
+  assert.deepEqual(result.seen[0].body, { threadId: "", name: "Example Bank", ttl: "10m", label: "Report login", once: true, usernameToo: true });
+  assert.equal(result.seen[0].headers["x-orkestr-thread-token"], TOKEN);
+  const refused = await run(["vault", "request", "Example Bank", "--password", "x"], handler, { env: { ORKESTR_VAULT_THREAD_TOKEN: TOKEN } });
+  assert.notEqual(refused.code, 0);
+  assert.equal(refused.seen.length, 0);
+});

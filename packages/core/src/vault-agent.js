@@ -9,6 +9,7 @@ import {
   vaultError,
 } from "./vault-access.js";
 import { issueCodeInStore } from "./vault-service.js";
+import { singleUseMeta, singleUseSpent, singleUseStatus, wipeSingleUse } from "./vault-single-use.js";
 import { findItem, mutateVault, nowIso, openRecord, randomId, readVault } from "./vault-store.js";
 
 // Agent (thread) access and owner TOTP approvals.
@@ -38,6 +39,7 @@ function agentItemView(record = {}) {
     tags: Array.isArray(record.tags) ? record.tags : [],
     hasPassword: record.hasPassword === true,
     hasTotp: record.hasTotp === true,
+    ...singleUseMeta(record),
   };
 }
 
@@ -50,6 +52,9 @@ export function findGrantedItem(store, itemRef = "", threadId = "") {
   if (byId) return byId;
   const lowered = ref.toLowerCase();
   const matches = granted.filter((item) => clean(item.name).toLowerCase() === lowered || clean(item.domain) === lowered);
+  // Spent single-use items stay listed for audit but never shadow a live one.
+  const live = matches.filter((item) => !singleUseSpent(item));
+  if (live.length) matches.splice(0, matches.length, ...live);
   if (matches.length > 1) throw vaultError("vault_item_ambiguous", 409);
   if (!matches.length) throw vaultError("vault_item_not_found", 404);
   return matches[0];
@@ -79,13 +84,17 @@ export async function agentReadSecret(threadRef, itemRef, fields = ["username", 
     const record = findItem(store, item.id);
     if (!itemGrantedToThread(record, thread.threadId)) throw vaultError("vault_item_not_found", 404);
     record.lastUsedAt = nowIso();
-    return openRecord(owner, record, env);
+    const opened = await openRecord(owner, record, env);
+    // Single-use: released once, then the ciphertext is destroyed in this same locked write.
+    if (singleUseStatus(record) === "active") store.items[store.items.indexOf(record)] = wipeSingleUse(record, "used", Date.now(), { usedByThreadId: thread.threadId });
+    return { ...opened, singleUse: record.singleUse === true };
   }, env);
   const result = { itemId: item.id };
   for (const field of requested) {
     result[field] = String(payload[field] || "");
     await event("vault_secret_read", owner, { itemId: item.id, threadId: thread.threadId, field, principalKind: "agent" }, env);
   }
+  if (payload.singleUse) await event("vault_single_use_consumed", owner, { itemId: item.id, threadId: thread.threadId }, env);
   return result;
 }
 
@@ -123,7 +132,7 @@ export async function agentRequestTotp(threadRef, itemRef, options = {}, env = p
   const thread = await resolveAgentThread(threadRef, env);
   const owner = thread.ownerUserId;
   const item = findGrantedItem(await readVault(owner, env), itemRef, thread.threadId);
-  if (!item.hasTotp) throw vaultError("vault_totp_not_configured", 404);
+  if (!item.hasTotp || item.singleUse === true) throw vaultError("vault_totp_not_configured", 404);
   const approvalId = clean(options?.approvalId);
   const outcome = await mutateVault(owner, async (store) => {
     const nowMs = Date.now();

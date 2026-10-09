@@ -9,6 +9,8 @@
     </div>
   }
 
+  <ork-vault-requests-panel></ork-vault-requests-panel>
+
   <header class="vault-header">
     <div class="vault-title">
       <h3>Vault</h3>
@@ -50,6 +52,7 @@
             <small>
               @if (item.domain) {<span>{{ item.domain }}</span>}
               @if (item.username) {<span class="vault-muted">{{ item.username }}</span>}
+              @if (item.singleUse) {<span class="vault-muted">single-use · {{ item.singleUseStatus === "active" ? "until " + item.singleUseExpiresAt : item.singleUseStatus }}</span>}
             </small>
           </div>
           <div class="vault-row-actions">

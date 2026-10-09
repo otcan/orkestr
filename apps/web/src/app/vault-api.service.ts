@@ -20,6 +20,9 @@ export interface VaultItem {
   createdAt?: string;
   updatedAt?: string;
   lastUsedAt?: string | null;
+  singleUse?: boolean;
+  singleUseStatus?: "active" | "used" | "expired";
+  singleUseExpiresAt?: string | null;
 }
 
 export interface VaultItemInput {
