@@ -148,6 +148,8 @@ jobs:
         run: |
           find apps packages scripts examples -path '*/node_modules/*' -prune -o \( -name '*.js' -o -name '*.mjs' \) -print |
             while read -r file; do node --check "$file"; done
+      - name: OSS boundary and fixture secret check
+        run: node scripts/oss-boundary-check.mjs
 
   build:
     needs: dependency-policy

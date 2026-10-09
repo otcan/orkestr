@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { scanText } from "./security/oss-secret-patterns.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -72,11 +73,6 @@ const scanExtensions = new Set([
 ]);
 
 const forbiddenPatterns = [
-  { name: "OpenAI live key", pattern: /\bsk-(?:proj-|live-)?[A-Za-z0-9_-]{20,}\b/ },
-  { name: "Google OAuth live secret", pattern: /\bGOCSPX-[A-Za-z0-9_-]{10,}\b/ },
-  { name: "Slack token", pattern: /\bxox[baprs]-[A-Za-z0-9-]{12,}\b/ },
-  { name: "Google API key", pattern: /\bAIza[0-9A-Za-z_-]{30,}\b/ },
-  { name: "numeric WhatsApp id", pattern: /\b\d{10,}@(c\.us|g\.us|lid)\b/i },
   { name: "operator Orkestr home", pattern: /\/home\/[^/\s"']+\/\.orkestr-production\b/ },
   { name: "browser profile store", pattern: /\/(Default|Profile [0-9]+)\/(Cookies|Login Data|Local State)\b/ },
 ];
@@ -105,17 +101,17 @@ async function assertRequiredText() {
   if (failures.length) throw new Error(`OSS boundary text check failed:\n${failures.join("\n")}`);
 }
 
-async function walk(dir = ".") {
+async function walk(dir = ".", { skipDirs = generatedDirs, extensions = scanExtensions } = {}) {
   const entries = await fs.readdir(path.join(repoRoot, dir), { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
     const relPath = path.join(dir, entry.name).replaceAll(path.sep, "/").replace(/^\.\//, "");
-    if (generatedDirs.has(entry.name) || [...generatedDirs].some((skip) => relPath === skip || relPath.startsWith(`${skip}/`))) continue;
+    if (skipDirs.has(entry.name) || [...skipDirs].some((skip) => relPath === skip || relPath.startsWith(`${skip}/`))) continue;
     if (entry.isDirectory()) {
-      files.push(...await walk(relPath));
+      files.push(...await walk(relPath, { skipDirs, extensions }));
       continue;
     }
-    if (scanExtensions.has(path.extname(entry.name))) files.push(relPath);
+    if (entry.isFile() && (!extensions || extensions.has(path.extname(entry.name)))) files.push(relPath);
   }
   return files;
 }
@@ -137,10 +133,25 @@ async function assertNoPrivateArtifacts() {
   return files.length;
 }
 
+// Secret scan covers every text file, including test fixtures. Findings
+// report file, line and pattern name only, never the matched value.
+async function assertNoSecrets() {
+  const skipDirs = new Set([...generatedDirs].filter((dir) => dir !== "test"));
+  const files = await walk(".", { skipDirs, extensions: null });
+  const hits = [];
+  for (const file of files) {
+    const data = await fs.readFile(path.join(repoRoot, file)).catch(() => null);
+    if (!data || data.length > 2 * 1024 * 1024 || data.includes(0)) continue;
+    for (const { line, name } of scanText(data.toString("utf8"))) hits.push(`${file}:${line}: ${name}`);
+  }
+  if (hits.length) throw new Error(`OSS boundary secret scan failed:\n${hits.join("\n")}`);
+}
+
 async function main() {
   await assertRequiredFiles();
   await assertRequiredText();
   const scanned = await assertNoPrivateArtifacts();
+  await assertNoSecrets();
   console.log(`OSS boundary check passed (${scanned} files scanned)`);
 }
 

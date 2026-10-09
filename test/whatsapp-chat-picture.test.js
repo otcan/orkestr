@@ -11,7 +11,7 @@ test("local whatsapp group picture fallback uses WAWebWid for LID-era groups", a
   await fs.writeFile(picturePath, "test-fixture", "utf8");
   const calls = [];
   const priorWindow = globalThis.window;
-  const chatWid = { _serialized: "120363429022300057@g.us", wid: true };
+  const chatWid = { _serialized: "120363000000000001@g.us", wid: true };
   const client = {
     async getChatById() {
       return {
@@ -76,7 +76,7 @@ test("local whatsapp group picture fallback uses WAWebWid for LID-era groups", a
   const result = await setLocalWhatsAppGroupPictureFromFile({
     client,
     MessageMedia,
-    chatId: "120363429022300057@g.us",
+    chatId: "120363000000000001@g.us",
     picturePath,
     accountId: "sender",
     env: { ...process.env, ORKESTR_HOME: home },

@@ -79,4 +79,8 @@ and `/api/version` verification expectations.
   public docs or demos.
 - Public docs should lead with the simplified OSS flow before mentioning
   optional or managed/private features.
-- `npm run oss:boundary-check` must pass before release.
+- `npm run oss:boundary-check` must pass before release. It also scans every
+  text file, including `test/` fixtures, for private keys, GitHub/OpenAI/AWS
+  tokens, bearer strings, and real-looking numeric WhatsApp ids. Use obviously
+  fake values (`sk-test-...`, `15550001111@c.us`); mark a reviewed fake line with
+  `oss-secret-scan: allow-fake` only when the heuristics cannot tell.
