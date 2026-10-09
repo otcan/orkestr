@@ -7281,23 +7281,26 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   return { delivered, skipped: skipped.items(), skippedSummary: skipped.summary(), failed };
 }
 
-export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetch) {
+export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetch, { fresh = false } = {}) {
   // Control replies have no canonical assistant message and must not depend on
   // the conversation mirror's idle cache or cursor.
   await deliverWhatsAppSettingsReplies(env, options => sendWhatsAppText({ ...options, env, fetchImpl }));
   const minIntervalMs = whatsappDeliveryMinIntervalMs(env, fetchImpl);
-  if (minIntervalMs > 0 && whatsappDeliveryRunCache && Date.now() - whatsappDeliveryRunCache.updatedAt <= minIntervalMs) {
+  // fresh: the caller just appended a message and needs a sweep that sees it,
+  // so cached results and in-flight sweeps that predate the write are skipped.
+  if (!fresh && minIntervalMs > 0 && whatsappDeliveryRunCache && Date.now() - whatsappDeliveryRunCache.updatedAt <= minIntervalMs) {
     return whatsappDeliveryRunCache.result;
   }
   const throttleMs = whatsappDeliveryIdleThrottleMs(env, fetchImpl);
-  if (throttleMs > 0 && whatsappDeliveryIdleCache) {
+  if (!fresh && throttleMs > 0 && whatsappDeliveryIdleCache) {
     const now = Date.now();
     if (now - whatsappDeliveryIdleCache.updatedAt <= throttleMs) {
       const signature = await whatsappDeliveryIdleSignature(env).catch(() => "");
       if (signature && signature === whatsappDeliveryIdleCache.signature) return whatsappDeliveryIdleCache.result;
     }
   }
-  const result = await whatsappOutboundMirrorWorker.run(() => deliverWhatsAppRepliesOnce(env, fetchImpl));
+  const deliverOnce = () => deliverWhatsAppRepliesOnce(env, fetchImpl);
+  const result = await (fresh ? whatsappOutboundMirrorWorker.runFresh(deliverOnce) : whatsappOutboundMirrorWorker.run(deliverOnce));
   if (throttleMs > 0 && cacheableWhatsAppDeliveryResult(result)) {
     const signature = await whatsappDeliveryIdleSignature(env).catch(() => "");
     whatsappDeliveryIdleCache = signature ? { signature, result, updatedAt: Date.now() } : null;
