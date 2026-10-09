@@ -98,10 +98,12 @@ export async function recordCodexRuntimeAuthInvalidSignal({ thread = {}, progres
   return payload;
 }
 
-export async function recordCodexRuntimeAuthFailureSignal({ thread = {}, error = "", turnId = "" } = {}, env = process.env) {
+export async function recordCodexRuntimeAuthFailureSignal({ thread = {}, error = "", turnId = "", messageId = "" } = {}, env = process.env) {
   const errorText = redactCodexSecrets(clean(error));
   const reason = codexTurnAuthFailureReason(errorText);
   if (!reason) return null;
+  const { recordCodexAuthFailedTurn } = await import("./codex-auth-alert.js");
+  await recordCodexAuthFailedTurn({ thread, turnId, messageId, reason }, env).catch(() => null);
   const detectedAt = nowIso();
   const payload = {
     state: "broken",
