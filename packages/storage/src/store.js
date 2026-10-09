@@ -294,7 +294,13 @@ async function writeJsonAtomic(filePath, value) {
     path.dirname(filePath),
     `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
   );
-  await fs.writeFile(tmp, payload, { mode: 0o600 });
-  await fs.rename(tmp, filePath);
+  try {
+    await fs.writeFile(tmp, payload, { mode: 0o600 });
+    await fs.rename(tmp, filePath);
+  } catch (error) {
+    // Do not leave partial temp files behind (e.g. on ENOSPC).
+    await fs.rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
+  }
   await fs.chmod(filePath, 0o600).catch(() => undefined);
 }
