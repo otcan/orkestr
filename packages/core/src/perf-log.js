@@ -7,7 +7,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { appHome } from "../../storage/src/paths.js";
-import { routeTemplateFromUrl } from "./observability.js";
+import { redactedRouteTemplate } from "./route-template.js";
+
+// Kept as the perf-log name; /metrics labels use the same redaction.
+export const perfRouteTemplate = redactedRouteTemplate;
 
 const DEFAULT_RETENTION_DAYS = 14;
 const FLUSH_INTERVAL_MS = 5000;
@@ -101,34 +104,6 @@ export async function prunePerfLogs(env = process.env, at = new Date()) {
   }
 }
 
-// Route templates from observability.js, plus a stricter allowlist pass for
-// the durable log: only segments shaped like static route words survive
-// (lowercase letters, dots, hyphens, or a short word with a version digit, as
-// every controller path uses). Anything else (tokens, user ids, phone numbers,
-// chat ids, file names) becomes :id, and the segment after /users/ is always
-// :userId unless it is a fixed sub-route.
-const STATIC_SEGMENT = /^(?:\.?[a-z][a-z.-]{0,39}|[a-z]{1,12}[0-9]{1,2})$/;
-const ID_PARENTS = new Map([
-  ["users", ["me", "credit-usage"]],
-  ["chats", []],
-  ["desktop-share", []],
-]);
-
-function perfSegment(segment, previous) {
-  if (segment.startsWith(":")) return segment;
-  const fixed = ID_PARENTS.get(previous);
-  if (fixed && !fixed.includes(segment)) return previous === "users" ? ":userId" : ":id";
-  return STATIC_SEGMENT.test(segment) ? segment : ":id";
-}
-
-export function perfRouteTemplate(rawUrl = "") {
-  const route = routeTemplateFromUrl(rawUrl)
-    .split("/")
-    .map((segment, index, parts) => (index === 0 ? segment : perfSegment(segment, parts[index - 1])))
-    .join("/");
-  return route.length > 160 ? `${route.slice(0, 157)}...` : route;
-}
-
 function authKind(request) {
   if (request.orkestrMachineAuth) return "machine";
   if (request.orkestrDesktopShare) return "share";
@@ -151,7 +126,7 @@ export function createPerfRequestLogMiddleware(writer, { tracker = createInfligh
       writer.append("requests", {
         ts: startedAt.toISOString(),
         method: String(request.method || "GET").toUpperCase().slice(0, 10),
-        route: perfRouteTemplate(request.originalUrl || request.url || "/"),
+        route: redactedRouteTemplate(request.originalUrl || request.url || "/"),
         status: aborted ? 0 : response.statusCode,
         ms: Math.round((performance.now() - started) * 10) / 10,
         bytes: Number(response.getHeader("content-length") || 0) || 0,

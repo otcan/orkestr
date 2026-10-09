@@ -85,9 +85,20 @@ test("vault API: owner endpoints, agent endpoints and approval flow", async (t) 
   assert.equal(reveal.headers["x-orkestr-secure-input"], "noMirror,noCapture,noCodexContext,noScreenshot");
   assert.equal((await request(port, "POST", `/api/vault/items/${itemId}/reveal`, { cookie: admin })).status, 404);
 
-  const code = await request(port, "GET", `/api/vault/items/${itemId}/totp`, { cookie: alice });
-  assert.equal(code.status, 200);
+  // Issuing a code is rate limited and stamps lastUsedAt: POST with the
+  // same-origin check only; a cross-site POST or a plain GET changes nothing.
+  assert.equal((await request(port, "GET", `/api/vault/items/${itemId}/totp`, { cookie: alice })).status, 404);
+  const crossSiteCode = await rawRequest(port, {
+    method: "POST",
+    pathname: `/api/vault/items/${itemId}/totp`,
+    headers: { cookie: alice, origin: "https://attacker.example.net", "content-type": "application/json" },
+    body: {},
+  });
+  assert.equal(crossSiteCode.status, 403);
+  const code = await request(port, "POST", `/api/vault/items/${itemId}/totp`, { cookie: alice, body: {} });
+  assert.equal(code.status, 200, code.text);
   assert.match(code.json.code, /^\d{6}$/);
+  assert.equal(code.headers["x-orkestr-secure-input"], "noMirror,noCapture,noCodexContext,noScreenshot");
   const secret = await request(port, "POST", `/api/vault/items/${itemId}/totp-secret`, { cookie: alice });
   assert.match(secret.json.otpauthUri, /secret=JBSWY3DPEHPK3PXP/);
 

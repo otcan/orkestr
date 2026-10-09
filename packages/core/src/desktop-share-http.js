@@ -1,3 +1,5 @@
+import { cookieHeaderValue } from "./cookie-header.js";
+
 const shareCookieName = "orkestr_desktop_share";
 
 function publicHttpsBase(env = process.env) {
@@ -57,15 +59,7 @@ export function desktopShareCookieHeader(value, env = process.env, maxAgeMs = nu
   ].filter(Boolean).join("; ");
 }
 
-function cookieValue(header, name = shareCookieName) {
-  for (const part of String(header || "").split(";")) {
-    const [key, ...rest] = part.trim().split("=");
-    if (key === name) return decodeURIComponent(rest.join("=") || "");
-  }
-  return "";
-}
-
 export function parseDesktopShareCookie(header) {
-  const [shareId, token] = cookieValue(header).split(":");
+  const [shareId, token] = cookieHeaderValue(header, shareCookieName).split(":");
   return { shareId: String(shareId || "").trim(), token: String(token || "").trim() };
 }

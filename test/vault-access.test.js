@@ -193,7 +193,7 @@ test("HOTP codes advance only on explicit requests, never on the automatic read"
   const alice = owner("alice");
   const { item } = await createVaultItem(alice, { name: "Counter", totpUri: `otpauth://hotp/Example:alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=0` });
   assert.equal(item.totpType, "hotp");
-  // The page's automatic refresh (GET) must never use up a counter code.
+  // The page's automatic refresh (POST without advance) must never use up a counter code.
   await assert.rejects(() => ownerTotpCode(alice, item.id), { statusCode: 409 });
   await assert.rejects(() => ownerTotpCode(alice, item.id), { statusCode: 409 });
   const advance = { advance: true };

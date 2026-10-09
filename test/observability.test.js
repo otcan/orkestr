@@ -15,6 +15,8 @@ import {
   recordWhatsAppDeliveryMetrics,
   renderOpenMetrics,
   resetObservabilityForTests,
+  recordHttpRequest,
+  redactedRouteTemplate,
   routeTemplateFromUrl,
 } from "../packages/core/src/observability.js";
 import {
@@ -161,4 +163,19 @@ test("observability records loop, delivery, task-agent, and watcher counters", (
   assert.match(metrics, /orkestr_mailbox_thread_delivery_transitions_total\{state="dead-letter"\} 1/);
   assert.match(metrics, /orkestr_thread_resource_break_glass_total\{resource_type="oxrm",outcome="allowed"\} 1/);
   assert.equal(metrics.includes("resource-private-id"), false);
+});
+
+test("metrics route labels use the strict redaction from the perf log", () => {
+  resetObservabilityForTests();
+  recordHttpRequest({ method: "GET", route: "/api/users/alice/skills?token=secret", statusCode: 200 });
+  recordHttpRequest({ method: "GET", route: "/api/whatsapp/chats/+15550100123", statusCode: 200 });
+  recordHttpRequest({ method: "GET", route: "/files/quarterly-report-2026-final.pdf", statusCode: 404 });
+  recordHttpRequest({ method: "GET", route: "/api/threads/thread-123/messages", statusCode: 200 });
+  const metrics = renderOpenMetrics();
+  assert.match(metrics, /route="\/api\/users\/:userId\/skills"/);
+  assert.match(metrics, /route="\/api\/whatsapp\/chats\/:id"/);
+  assert.match(metrics, /route="\/files\/:id"/);
+  assert.match(metrics, /route="\/api\/threads\/:threadId\/messages"/);
+  for (const leaked of ["alice", "15550100123", "quarterly", "secret"]) assert.equal(metrics.includes(leaked), false, leaked);
+  assert.equal(redactedRouteTemplate(redactedRouteTemplate("/api/users/alice/skills")), "/api/users/:userId/skills");
 });
