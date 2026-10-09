@@ -19,7 +19,11 @@ import {
   withPostgresTransaction,
 } from "./connector-outbox-postgres.js";
 
-export const terminalStates = new Set(["delivered", "skipped", "skipped_policy", "suppressed", "dead_letter", "cancelled", "delivery_uncertain", "partial_delivery"]);
+export const terminalStates = new Set(["delivered", "skipped", "skipped_policy", "suppressed", "dead_letter", "cancelled", "delivery_uncertain", "partial_delivery", "archived"]);
+// Operator-archived jobs are kept as evidence: retention never prunes them and
+// archiving keeps their updatedAt, so they do not displace recent rows.
+export const archivedState = "archived";
+export const retentionPrunableStates = new Set([...terminalStates].filter((state) => state !== archivedState));
 export const deliveryUncertainReplayConfirmation = "I_UNDERSTAND_THIS_MAY_DUPLICATE_A_MESSAGE";
 const operatorActions = new Set(["retry", "suppress", "mark_delivered", "mark-delivered", "replay", "dead_letter", "dead-letter"]);
 const dbCache = new Map();
@@ -81,7 +85,7 @@ export function connectorOutboxPostgresMode(env = process.env) {
 function statusRank(value) {
   const status = clean(value || "pending").toLowerCase();
   if (status === "delivered") return 6;
-  if (status === "dead_letter" || status === "suppressed" || status === "skipped" || status === "skipped_policy" || status === "cancelled" || status === "delivery_uncertain" || status === "partial_delivery") return 5;
+  if (status === "dead_letter" || status === "suppressed" || status === "skipped" || status === "skipped_policy" || status === "cancelled" || status === "delivery_uncertain" || status === "partial_delivery" || status === "archived") return 5;
   if (status === "claimed" || status === "sent_to_broker") return 4;
   if (status === "failed_retryable") return 3;
   if (status === "pending") return 2;
@@ -303,12 +307,12 @@ function replaceConnectorOutboxRows(db, jobs = [], env = process.env) {
 }
 
 function terminalStateSqlPlaceholders() {
-  return [...terminalStates].map(() => "?").join(", ");
+  return [...retentionPrunableStates].map(() => "?").join(", ");
 }
 
 function pruneConnectorOutboxRows(db, env = process.env) {
   const limit = connectorOutboxRetentionLimit(env);
-  const states = [...terminalStates];
+  const states = [...retentionPrunableStates];
   const rows = db.prepare(`
     select id from orkestr_connector_outbox
     where state in (${terminalStateSqlPlaceholders()})
@@ -465,8 +469,9 @@ export function mergeConnectorOutboxJobs(existing = [], next = [], env = process
 
 export function pruneConnectorOutboxJobs(jobs = [], env = process.env) {
   const sorted = [...(jobs || [])].sort((left, right) => dateMs(left.createdAt) - dateMs(right.createdAt));
-  const active = sorted.filter((job) => !connectorOutboxTerminalState(job.state));
-  const terminal = sorted.filter((job) => connectorOutboxTerminalState(job.state));
+  const prunable = (job) => retentionPrunableStates.has(clean(job.state || "pending").toLowerCase());
+  const active = sorted.filter((job) => !prunable(job));
+  const terminal = sorted.filter(prunable);
   const retainedTerminal = terminal
     .sort((left, right) =>
       dateMs(left.updatedAt || left.terminalAt || left.createdAt) - dateMs(right.updatedAt || right.terminalAt || right.createdAt)
@@ -924,6 +929,10 @@ async function releaseConnectorOutboxClaimLocked(jobIdOrKey, { reason }, env) {
   return released;
 }
 
+function markedUpdatedAt(state, patch = {}) {
+  return state === archivedState && clean(patch.updatedAt) ? clean(patch.updatedAt) : nowIso();
+}
+
 export async function markConnectorOutboxJob(jobIdOrKey = "", patch = {}, env = process.env, approvedUncertainVersion = null) {
   return withConnectorOutboxMutation(env, () => markConnectorOutboxJobLocked(jobIdOrKey, patch, env, approvedUncertainVersion));
 }
@@ -945,7 +954,7 @@ async function markConnectorOutboxJobLocked(jobIdOrKey, patch, env, approvedUnce
         claimedAt: connectorOutboxTerminalState(state) ? "" : patch.claimedAt ?? current.claimedAt,
         claimExpiresAt: connectorOutboxTerminalState(state) ? "" : patch.claimExpiresAt ?? current.claimExpiresAt,
         terminalAt: connectorOutboxTerminalState(state) ? clean(patch.terminalAt) || nowIso() : clean(patch.terminalAt),
-        updatedAt: nowIso(),
+        updatedAt: markedUpdatedAt(state, patch),
       }, env);
       await upsertConnectorOutboxJobRowPostgres(client, next);
       await pruneConnectorOutboxRowsPostgres(client, env);
@@ -985,7 +994,7 @@ async function markConnectorOutboxJobLocked(jobIdOrKey, patch, env, approvedUnce
         claimedAt: connectorOutboxTerminalState(state) ? "" : patch.claimedAt ?? current.claimedAt,
         claimExpiresAt: connectorOutboxTerminalState(state) ? "" : patch.claimExpiresAt ?? current.claimExpiresAt,
         terminalAt: connectorOutboxTerminalState(state) ? clean(patch.terminalAt) || nowIso() : clean(patch.terminalAt),
-        updatedAt: nowIso(),
+        updatedAt: markedUpdatedAt(state, patch),
       }, env);
       upsertConnectorOutboxJobRow(db, updated);
       pruneConnectorOutboxRows(db, env);
@@ -1024,7 +1033,7 @@ async function markConnectorOutboxJobLocked(jobIdOrKey, patch, env, approvedUnce
     claimedAt: connectorOutboxTerminalState(state) ? "" : patch.claimedAt ?? store.jobs[index].claimedAt,
     claimExpiresAt: connectorOutboxTerminalState(state) ? "" : patch.claimExpiresAt ?? store.jobs[index].claimExpiresAt,
     terminalAt: connectorOutboxTerminalState(state) ? clean(patch.terminalAt) || nowIso() : clean(patch.terminalAt),
-    updatedAt: nowIso(),
+    updatedAt: markedUpdatedAt(state, patch),
   }, env);
   store.jobs.splice(index, 1, updated);
   await writeConnectorOutbox(store, env);

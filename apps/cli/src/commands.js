@@ -31,6 +31,7 @@ import { interruptCommand, sendNowCommand } from "./interrupt-command.js";
 import { jiraCommand } from "./jira-command.js";
 import { doctorVoiceCommand } from "./doctor-voice-command.js";
 import { doctorPerfCommand } from "./doctor-perf-command.js";
+import { doctorWhatsAppStaleOutboxCommand } from "./doctor-whatsapp-outbox-command.js";
 import { secretLinksCommand } from "./secret-links-command.js";
 import { vaultCommand } from "./vault-command.js";
 import { mailboxesCommand } from "./mailbox-command.js";
@@ -667,6 +668,7 @@ async function doctorCommand(argv, ctx) {
 }
 
 async function doctorWhatsAppRouterCommand(argv, ctx) {
+  if (argv.includes("--archive-stale-outbox")) return doctorWhatsAppStaleOutboxCommand(argv, ctx);
   const json = argv.includes("--json");
   const params = new URLSearchParams();
   const thread = flagValue(argv, "--thread") || flagValue(argv, "--thread-id") || "";
@@ -2241,6 +2243,7 @@ function writeUsage(stream) {
   orkestr logs [--service orkestr] [--lines 100] [--no-follow]
   orkestr doctor [system|timers|resources|whatsapp|router] [--repair [--repair-historical]] [--watch] [--json]
   orkestr doctor perf [--window 1h|6h|1d] [--json]
+  orkestr doctor whatsapp --archive-stale-outbox [--older-than 7d] [--limit 2000] [--apply] [--json]
 
 Common thread commands:
   orkestr list [--json] [--api http://127.0.0.1:19812]
