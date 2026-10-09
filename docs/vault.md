@@ -92,8 +92,12 @@ events or thread messages.
 **Codex app-server threads.** Codex threads share one app-server process, so
 their token cannot go into a per-thread environment. Instead Orkestr writes
 each Codex turn's token to `<ORKESTR_HOME>/secrets/vault-turn-tokens/<sha256
-of the Codex thread id>.json` (directory 0700, file 0600, owned by the
-`ORKESTR_HOME` owner) right before `turn/start`. Codex exports
+of the Codex thread id>.json` (directory 0700, file 0600) right before
+`turn/start`. A root server hands the directory and files to the user the
+Codex runtime runs as: `ORKESTR_CODEX_RUNTIME_USER` if set, else `User=` of
+the external app-server unit (`ORKESTR_CODEX_APP_SERVER_SERVICE_NAME`), else
+`ORKESTR_RUN_USER`. `secrets/` itself only needs a traversal (`--x`) grant for
+that user. If the handover fails, the turn runs without a token. Codex exports
 `CODEX_THREAD_ID` to the commands it runs; `orkestr vault` uses it to read its
 own turn's file. Starting a new turn revokes the previous token, and
 `turn/completed` revokes the token and deletes the file. Tokens of a turn whose
