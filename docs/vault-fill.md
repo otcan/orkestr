@@ -49,9 +49,12 @@ Failures return `{ "status": "failed", "reason": "..." }` (also
 - **Owner** (WebUI, item menu "Fill into desktop"): needs a sign-in within
   the last 15 minutes, like reveal, and counts against the owner reveal limit.
   No lease is needed, so the owner can help a thread that is stuck on a login.
-- **Single-use items** (`singleUse: true`) are used up by their first fill;
-  later fills return `410 vault_item_used`. The check and the claim happen in
-  the same vault write (`packages/core/src/vault-item-use.js`).
+- **Single-use items** ([vault.md](vault.md#single-use-items)) are used up by
+  their first *completed* fill; later fills and `exec` return
+  `410 vault_item_used`. A fill refused by the focus check or that fails to
+  type consumes nothing. The item is reserved while typing (concurrent uses
+  get `409 vault_item_in_use`) and wiped once the fill completes
+  (`packages/core/src/vault-item-use.js`).
 - **Audit:** each fill records a `vault_fill` event with item, thread (agents),
   desktop, field, submit and outcome, never the value.
 

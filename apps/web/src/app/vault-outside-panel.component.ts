@@ -13,8 +13,8 @@ const outsideKinds = new Set(["e2e", "e2e-request"]);
   styleUrl: "./vault-dialog.css",
   template: `
 @if (links.length) {
-  <section class="vault-outside" aria-label="Shared links">
-    <h4>Shared with and requested from others</h4>
+  <section class="vault-outside" aria-label="Links with people outside Orkestr">
+    <h4>Links with people outside Orkestr</h4>
     @if (error) {<p class="vault-form-error" role="alert">{{ error }}</p>}
     <ul class="vault-thread-list">
       @for (link of links; track link.id) {

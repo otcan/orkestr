@@ -146,9 +146,19 @@ orkestr vault share "Example Mail" --ttl 1d --views 1      # end-to-end encrypte
 orkestr vault receive "Example Portal" --once              # public link to receive a password
 ```
 
-To log in on a managed browser desktop without seeing the value, use
-`orkestr vault fill <item> --desktop <slug>` (see [vault-fill.md](vault-fill.md)).
-Sharing with people outside Orkestr is described in `docs/vault-sharing.md`.
+Beyond `exec`, credentials can move without anyone reading them in chat:
+
+| Goal | Command | Details |
+| --- | --- | --- |
+| Log in on a managed browser desktop without seeing the value | `orkestr vault fill <item> --desktop <slug>` | [vault-fill.md](vault-fill.md) |
+| Ask the owner for a password that is not in the Vault yet | `orkestr vault request <name> [--once]` | [below](#asking-for-a-password-once) |
+| Share an item with someone outside Orkestr (end-to-end encrypted) | `orkestr vault share <item>` | [vault-sharing.md](vault-sharing.md) |
+| Receive a password from someone outside Orkestr | `orkestr vault receive <name> [--once]` | [vault-sharing.md](vault-sharing.md) |
+
+`--once` on `request` and `receive` stores a [single-use item](#single-use-items);
+a desktop fill counts as its one release. On the Vault page, "Requests from
+threads" lists pending `request` links and "Links with people outside Orkestr"
+lists `share`/`receive` links; both can be revoked there.
 
 Never print passwords into chat, WhatsApp or thread messages. Secret values are
 never accepted as command-line arguments.
@@ -181,16 +191,20 @@ orkestr vault exec "Example Bank" -- ./scripts/login.sh   # after the owner subm
 
 A single-use item releases its username/password to an agent **at most once**
 and only until it expires (for requests: `--ttl` counted from the submission;
-owner-created items: `POST /items` with `{ "singleUse": true, "ttl": "15m" }`).
+for `receive --once`: one day after it was received; owner-created items:
+`POST /items` with `{ "singleUse": true, "ttl": "15m" }`).
 The release (`orkestr vault exec`/`get`) and the wipe happen in one locked
-write, so concurrent reads yield exactly one value; later reads get
+write, so concurrent reads yield exactly one value. A desktop fill is the
+release only when it completes: a fill refused by the focus check or that
+fails to type consumes nothing, and while a fill is typing the item answers
+`409 vault_item_in_use`. Later reads and fills get
 `410 vault_item_used`. Expired items are wiped on the next vault access and
 return `410 vault_item_expired`. Wiping destroys the ciphertext; the metadata
 stays with status `used` or `expired` for audit. Single-use items hold no
 authenticator codes. Use `exec` so the one release reaches your command.
 
 Events (no values): `vault_single_use_consumed`, `vault_single_use_expired`,
-and `vault_item_created` with `source: "vault_request"`.
+and `vault_item_created` with `source: "vault_request"` or `"vault_receive"`.
 
 ## Authenticator approvals
 

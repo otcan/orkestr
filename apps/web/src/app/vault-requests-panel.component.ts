@@ -26,6 +26,9 @@ function apiBase(): string {
 @Component({
   selector: "ork-vault-requests-panel",
   template: `
+    @if (requests.length) {
+      <h4>Requests from threads</h4>
+    }
     @for (request of requests; track request.id) {
       <div class="vault-approval" role="status">
         <p>Thread <strong>{{ request.threadId }}</strong> requested <strong>{{ request.name }}</strong>

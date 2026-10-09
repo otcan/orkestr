@@ -11,7 +11,7 @@ import { userPrincipal } from "../packages/core/src/principal.js";
 import { createThread } from "../packages/core/src/threads.js";
 import { agentFillDesktop, fillPlan, ownerFillDesktop } from "../packages/core/src/vault-fill.js";
 import { createVaultItem, setVaultGrants } from "../packages/core/src/vault-service.js";
-import { mutateVault } from "../packages/core/src/vault-store.js";
+import { readVault } from "../packages/core/src/vault-store.js";
 
 // Synthetic users, threads, desktops and values only. browserctl, xdotool and
 // Chrome DevTools are fakes; the fake typist records its own /proc-visible
@@ -235,18 +235,26 @@ test("a failing typist reports failed without details", async () => {
 });
 
 test("single-use items are used up by their first fill", async () => {
-  const single = await createVaultItem(owner("alice"), { name: "One Time", password: PASSWORD });
+  const single = await createVaultItem(owner("alice"), { name: "One Time", password: PASSWORD, singleUse: true });
   await setVaultGrants(owner("alice"), single.item.id, ["alice-thread"]);
-  await mutateVault("alice", (store) => { store.items.find((item) => item.id === single.item.id).singleUse = true; });
   assert.deepEqual(await agentFillDesktop("alice-thread", "One Time", { desktop: "example-desk" }), { status: "filled" });
   await assert.rejects(agentFillDesktop("alice-thread", "One Time", { desktop: "example-desk" }), { code: "vault_item_used" });
-  const refused = await createVaultItem(owner("alice"), { name: "One Time Refused", password: PASSWORD });
+  const used = (await readVault("alice")).items.find((item) => item.id === single.item.id);
+  assert.equal(used.singleUseStatus, "used");
+  assert.equal(used.usedVia, "desktop_fill");
+  assert.equal(used.secret, undefined);
+  const refused = await createVaultItem(owner("alice"), { name: "One Time Refused", password: PASSWORD, singleUse: true });
   await setVaultGrants(owner("alice"), refused.item.id, ["alice-thread"]);
-  await mutateVault("alice", (store) => { store.items.find((item) => item.id === refused.item.id).singleUse = true; });
   focusMode = "omnibox";
   assert.equal((await agentFillDesktop("alice-thread", "One Time Refused", { desktop: "example-desk" })).reason, "focus_not_password_field");
   focusMode = "password";
-  assert.deepEqual(await agentFillDesktop("alice-thread", "One Time Refused", { desktop: "example-desk" }), { status: "filled" }, "a refused fill does not use up the item");
+  process.env.ORKESTR_DESKTOP_KEYSTROKE_COMMAND = "/bin/false";
+  try {
+    assert.equal((await agentFillDesktop("alice-thread", "One Time Refused", { desktop: "example-desk" })).reason, "typing_failed");
+  } finally {
+    process.env.ORKESTR_DESKTOP_KEYSTROKE_COMMAND = typist;
+  }
+  assert.deepEqual(await agentFillDesktop("alice-thread", "One Time Refused", { desktop: "example-desk" }), { status: "filled" }, "a refused or failed fill does not use up the item");
   assert.equal((await typed()).length, 2);
 });
 

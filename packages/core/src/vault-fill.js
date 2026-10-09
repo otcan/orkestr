@@ -13,7 +13,7 @@ import {
   vaultError,
 } from "./vault-access.js";
 import { findGrantedItem } from "./vault-agent.js";
-import { claimItemUse } from "./vault-item-use.js";
+import { claimItemUse, finishItemUse } from "./vault-item-use.js";
 import { findItem, mutateVault, openRecord, readVault } from "./vault-store.js";
 
 // Fills a vault credential into the focused field of a managed desktop
@@ -90,19 +90,23 @@ async function runPlan(plan, { display, cdpUrl, allowUnverifiedFocus }, env) {
 }
 
 async function fillFromVault({ owner, itemId, threadId = "", desktop, allowUnverifiedFocus = false, desktopSlug, field, submit, principalKind }, env) {
-  // Refuse before the vault is opened (and a single-use item is claimed).
+  // Refuse before the vault is opened (and a single-use item is reserved).
   const firstExpect = field === "both" ? "login-username" : field;
   let reason = await focusCheck(desktop.cdpUrl, firstExpect, allowUnverifiedFocus);
   if (!reason) {
-    const plan = await mutateVault(owner, async (store) => {
+    const { plan, claim } = await mutateVault(owner, async (store) => {
       const record = findItem(store, itemId);
       if (threadId && !itemGrantedToThread(record, threadId)) throw vaultError("vault_item_not_found", 404);
       const prepared = fillPlan(await openRecord(owner, record, env), field, submit);
-      claimItemUse(record, "desktop_fill");
-      return prepared;
+      return { plan: prepared, claim: claimItemUse(owner, record) };
     }, env);
-    reason = await runPlan(plan, { ...desktop, allowUnverifiedFocus }, env);
-    plan.length = 0;
+    try {
+      reason = await runPlan(plan, { ...desktop, allowUnverifiedFocus }, env);
+    } finally {
+      plan.length = 0;
+      // Single-use: only a completed fill is the release; a refusal consumes nothing.
+      await finishItemUse(claim, !reason, { usedVia: "desktop_fill", ...(threadId ? { usedByThreadId: threadId } : {}) }, env);
+    }
   }
   const ok = !reason;
   await appendEvent({

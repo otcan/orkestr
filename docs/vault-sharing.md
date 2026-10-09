@@ -75,7 +75,7 @@ has the password. When they submit it, a Vault item named after the request
 is created in the link owner's vault. From the CLI, the item is granted to the
 calling thread, which also gets a record-only note naming the item id (never
 the value). `--once` makes it a single-use item (one release to a thread,
-valid 24 hours), using the single-use item fields of the Vault.
+valid 24 hours; see [vault.md](vault.md#single-use-items)).
 
 - Each link gets its own RSA-OAEP-3072 key pair. The private key is sealed
   under the vault key (AES-256-GCM, bound to the owner and link) and kept in

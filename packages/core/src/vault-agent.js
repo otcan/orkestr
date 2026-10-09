@@ -9,6 +9,7 @@ import {
   vaultError,
 } from "./vault-access.js";
 import { issueCodeInStore } from "./vault-service.js";
+import { assertItemNotInUse } from "./vault-item-use.js";
 import { singleUseMeta, singleUseSpent, singleUseStatus, wipeSingleUse } from "./vault-single-use.js";
 import { findItem, mutateVault, nowIso, openRecord, randomId, readVault } from "./vault-store.js";
 
@@ -83,6 +84,7 @@ export async function agentReadSecret(threadRef, itemRef, fields = ["username", 
   const payload = await mutateVault(owner, async (store) => {
     const record = findItem(store, item.id);
     if (!itemGrantedToThread(record, thread.threadId)) throw vaultError("vault_item_not_found", 404);
+    assertItemNotInUse(owner, record);
     record.lastUsedAt = nowIso();
     const opened = await openRecord(owner, record, env);
     // Single-use: released once, then the ciphertext is destroyed in this same locked write.

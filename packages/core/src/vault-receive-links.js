@@ -13,6 +13,7 @@ import { appendThreadSignal } from "./thread-signals.js";
 import { normalizeUserId } from "./users.js";
 import { assertGrantableThreads, vaultError } from "./vault-access.js";
 import { openItemPayload, sealItemPayload } from "./vault-crypto.js";
+import { markSingleUse } from "./vault-single-use.js";
 import { VAULT_LIMITS, applyItemInput, mutateVault, newItemMeta, nowIso, sealRecord } from "./vault-store.js";
 
 // Receive links (docs/vault-sharing.md): a person outside Orkestr submits a
@@ -27,6 +28,7 @@ const kind = "e2e-request";
 const maxWrappedKeyBytes = 512;
 const maxCiphertextBytes = 24 * 1024;
 const b64url = /^[A-Za-z0-9_-]+$/;
+const receivedSingleUseTtlMs = 24 * 60 * 60 * 1000;
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -98,8 +100,8 @@ async function decryptSubmission(link, envelope, env) {
   }
 }
 
-// Single-use fields match the Vault single-use item format (vault-single-use
-// on the single-use branch); on builds without it the item is a saved item.
+// `once` links store a single-use item (vault-single-use): one release to a
+// thread, valid for a day after it was received.
 async function storeReceivedItem(link, values, env) {
   const owner = normalizeUserId(link.ownerUserId);
   const grants = link.threadId ? await assertGrantableThreads(owner, [link.threadId], env) : [];
@@ -108,7 +110,7 @@ async function storeReceivedItem(link, values, env) {
     const applied = applyItemInput(newItemMeta(), {}, { name: link.name, ...values });
     const now = Date.now();
     let meta = { ...applied.meta, threadGrants: grants.map((threadId) => ({ threadId, grantedAt: nowIso(now), grantedBy: owner })) };
-    if (link.once) meta = { ...meta, singleUse: true, singleUseStatus: "active", singleUseExpiresAt: nowIso(now + 24 * 60 * 60 * 1000) };
+    if (link.once) meta = markSingleUse(meta, receivedSingleUseTtlMs, now);
     const sealed = await sealRecord(owner, meta, applied.payload, env);
     store.items.push(sealed);
     return sealed;
