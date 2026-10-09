@@ -538,11 +538,12 @@ function apiSessionDeliveryConfirmationMs(env = process.env): number {
 
 async function deliverWhatsAppRepliesForApiSession(env = process.env): Promise<any> {
   const timeoutMs = apiSessionDeliveryTimeoutMs(env);
-  if (!timeoutMs) return deliverWhatsAppReplies(env);
+  const deliver = () => deliverWhatsAppReplies(env, undefined, { fresh: true });
+  if (!timeoutMs) return deliver();
   let timeout: NodeJS.Timeout | null = null;
   try {
     return await Promise.race([
-      deliverWhatsAppReplies(env),
+      deliver(),
       new Promise((_, reject) => {
         timeout = setTimeout(() => reject(new Error(`whatsapp_delivery_timeout:${timeoutMs}`)), timeoutMs);
       }),
