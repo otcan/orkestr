@@ -43,14 +43,19 @@ export function cachedSqliteState(db, kind, read) {
   return state;
 }
 
-// Mutable state for a write transaction (call after `begin immediate`). A
-// current cache entry is cloned (about half the cost of re-parsing); on a
-// miss the tables are read directly, since the write will invalidate anyway.
+// State for a write transaction (call after `begin immediate`): a mutable
+// clone plus the frozen baseline it was cloned from, which the writer diffs
+// against to persist only changed rows. Inside the transaction the tables
+// cannot move, so a fresh read is cached as the current full state.
 export function mutableSqliteState(db, read) {
   const entry = slot(db);
-  const hit = entry.states.get("full");
-  if (hit && hit.key === currentKey(db, entry)) return structuredClone(hit.state);
-  return read(db);
+  const key = currentKey(db, entry);
+  let hit = entry.states.get("full");
+  if (hit?.key !== key) {
+    hit = { key, state: deepFreeze(read(db)) };
+    entry.states.set("full", hit);
+  }
+  return { state: structuredClone(hit.state), baseline: hit.state };
 }
 
 // Every write on this connection must call this before committing and after

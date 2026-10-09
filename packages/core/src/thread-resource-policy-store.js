@@ -3,6 +3,7 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 import { migrateLegacyDesktopGrants } from "./thread-resource-policy-sqlite-migration.js";
 import { readThreadResourceAccessSqliteState, readThreadResourcePolicySqliteState as readState } from "./thread-resource-policy-sqlite-state.js";
 import { cachedSqliteState, invalidateSqliteStateCache, mutableSqliteState } from "./thread-resource-policy-sqlite-cache.js";
+import { writeSqliteState } from "./thread-resource-policy-sqlite-write.js";
 import { assertTestStoragePath } from "../../storage/src/test-storage-isolation.js";
 import {
   clearThreadResourcePolicyPostgresCache,
@@ -360,73 +361,11 @@ function ensureColumn(db, table, column, definition) {
   if (!columns.includes(column)) db.exec(`alter table ${table} add column ${column} ${definition}`);
 }
 
-function setMeta(db, key, value) {
-  db.prepare("insert into orkestr_thread_resource_meta(key, value) values (?, ?) on conflict(key) do update set value = excluded.value").run(key, String(value));
-}
-
-function replaceState(db, state = {}, auditOutboxUpserts = []) {
-  db.exec("delete from orkestr_thread_resource_sessions; delete from orkestr_mailbox_contexts; delete from orkestr_mailbox_route_work; delete from orkestr_mailbox_sources; delete from orkestr_mailbox_routes; delete from orkestr_mailbox_thread_pump_leases; delete from orkestr_mailbox_thread_deliveries; delete from orkestr_mailbox_thread_listeners; delete from orkestr_thread_resource_grants; delete from orkestr_thread_resources; delete from orkestr_thread_resource_policy; delete from orkestr_thread_resource_ceilings; delete from orkestr_thread_resource_mutations;");
-  const resource = db.prepare("insert into orkestr_thread_resources(resource_type, resource_id, native_id, resource_key, owner_user_id, boundary_id, generation, status, backend, created_at, updated_at, retired_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-  for (const item of state.resources || []) resource.run(item.resourceType, item.id, item.nativeId || item.resourceKey, item.resourceKey, item.ownerUserId, item.boundaryId, item.generation, item.status || (item.retiredAt ? "retired" : "active"), item.backend || "", item.createdAt, item.updatedAt, item.retiredAt || null);
-  const policy = db.prepare("insert into orkestr_thread_resource_policy(thread_id, resource_type, revision, explicit_empty, inheritance_mode, parent_snapshot_revision, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)");
-  for (const item of state.policies || []) policy.run(item.threadId, item.resourceType, item.revision, item.explicitEmpty ? 1 : 0, item.inheritanceMode || "explicit", item.parentSnapshotRevision || 0, item.createdAt, item.updatedAt);
-  const grant = db.prepare("insert into orkestr_thread_resource_grants(id, thread_id, resource_type, resource_id, resource_key, owner_user_id, boundary_id, permissions_json, revision, source, created_at, updated_at, expires_at, revoked_at, revoked_by, reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-  for (const item of state.grants || []) grant.run(item.id, item.threadId, item.resourceType, item.resourceId, item.resourceKey, item.ownerUserId, item.boundaryId, JSON.stringify(item.permissions || []), item.revision, item.source || "", item.createdAt, item.updatedAt, item.expiresAt || null, item.revokedAt || null, item.revokedBy || null, item.reason || null);
-  const ceiling = db.prepare("insert into orkestr_thread_resource_ceilings(thread_id, resource_type, resource_id, permissions_json, parent_thread_id, created_at) values (?, ?, ?, ?, ?, ?)");
-  for (const item of state.ceilings || []) ceiling.run(item.threadId, item.resourceType, item.resourceId, JSON.stringify(item.permissions || []), item.parentThreadId, item.createdAt);
-  const mutation = db.prepare("insert into orkestr_thread_resource_mutations(action, idempotency_key, result_json, policy_revision, created_at) values (?, ?, ?, ?, ?)");
-  for (const item of (state.mutations || []).slice(-1000)) mutation.run(item.action, item.idempotencyKey, JSON.stringify(item.result || {}), item.policyRevision || 0, item.createdAt);
-  const listener = db.prepare("insert into orkestr_mailbox_thread_listeners(id, resource_type, resource_id, thread_id, filter_key, filter_json, idempotency_key, generation, status, grant_revision, policy_revision, resource_generation, created_at, updated_at, revoked_at, revoked_by, reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-  for (const item of state.mailboxListeners || []) listener.run(item.id, item.resourceType, item.resourceId, item.threadId, item.filterKey, JSON.stringify(item.filter || {}), item.idempotencyKey || "", item.generation, item.status, item.grantRevision || 0, item.policyRevision || 0, item.resourceGeneration || 1, item.createdAt, item.updatedAt, item.revokedAt || null, item.revokedBy || null, item.reason || null);
-  const delivery = db.prepare("insert into orkestr_mailbox_thread_deliveries(id, dedupe_key, resource_type, resource_id, mailbox_id, listener_id, listener_generation, thread_id, state, epoch, attempt_count, max_attempts, next_attempt_at, claim_token, claim_expires_at, grant_revision, policy_revision, resource_generation, message_key, payload_json, reason, created_at, updated_at, delivered_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-  for (const item of state.mailboxDeliveries || []) delivery.run(item.id, item.dedupeKey, item.resourceType, item.resourceId, item.mailboxId, item.listenerId || null, item.listenerGeneration || 0, item.threadId || null, item.state, item.epoch || 1, item.attemptCount || 0, item.maxAttempts || 1, item.nextAttemptAt || null, item.claimToken || null, item.claimExpiresAt || null, item.grantRevision || 0, item.policyRevision || 0, item.resourceGeneration || 1, item.messageKey, JSON.stringify(item.payload || {}), item.reason || null, item.createdAt, item.updatedAt, item.deliveredAt || null);
-  const pumpLease = db.prepare("insert into orkestr_mailbox_thread_pump_leases(name, token, expires_at, updated_at) values (?, ?, ?, ?)");
-  for (const item of state.mailboxPumpLeases || []) pumpLease.run(item.name, item.token, item.expiresAt, item.updatedAt);
-  const route = db.prepare("insert into orkestr_mailbox_routes(id, resource_id, status, data_json) values (?, ?, ?, ?)");
-  for (const item of state.mailboxRoutes || []) route.run(item.id, item.resourceId, item.status, JSON.stringify(item));
-  const source = db.prepare("insert into orkestr_mailbox_sources(id, dedupe_key, resource_id, data_json) values (?, ?, ?, ?)");
-  for (const item of state.mailboxSources || []) source.run(item.id, item.dedupeKey, item.resourceId, JSON.stringify(item));
-  const routeWork = db.prepare("insert into orkestr_mailbox_route_work(id, dedupe_key, route_id, state, data_json) values (?, ?, ?, ?, ?)");
-  for (const item of state.mailboxRouteWork || []) routeWork.run(item.id, item.dedupeKey, item.routeId, item.state, JSON.stringify(item));
-  const mailboxContext = db.prepare("insert into orkestr_mailbox_contexts(id, work_id, thread_id, status, data_json) values (?, ?, ?, ?, ?)");
-  for (const item of state.mailboxContexts || []) mailboxContext.run(item.id, item.workId, item.threadId, item.status, JSON.stringify(item));
-  const resourceSession = db.prepare("insert into orkestr_thread_resource_sessions(id, jti_hash, token_id_hash, bearer_hash, audience, scopes_json, principal_kind, principal_id, owner_user_id, instance_id, account_id, account_service, connector_service, connector_account_id, connector_conversation_id, connector_binding_id, connector_target_thread_id, connector_operation_ref, resource_type, resource_id, actions_json, connector_tool, connector_action, thread_id, grant_thread_id, root_thread_id, boundary_id, policy_revision, grant_revision, resource_generation, state, epoch, issued_at, expires_at, last_used_at, created_at, updated_at, invalidated_at, invalidation_reason) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-  for (const item of state.resourceSessions || []) {
-    resourceSession.run(item.id, item.jtiHash, item.tokenIdHash, item.bearerHash || "", item.audience || "", JSON.stringify(item.scopes || []),
-      item.principalKind || "external_instance", item.principalId || "", item.ownerUserId || "", item.instanceId || "", item.accountId || "", item.accountService || "",
-      item.connectorService || "", item.connectorAccountId || "", item.connectorConversationId || "", item.connectorBindingId || "", item.connectorTargetThreadId || "", item.connectorOperationRef || "",
-      item.resourceType, item.resourceId, JSON.stringify(item.actions || []), item.connectorTool || "", item.connectorAction || "", item.threadId, item.grantThreadId || item.threadId, item.rootThreadId, item.boundaryId,
-      item.policyRevision || 0, item.grantRevision || 0, item.resourceGeneration || 1,
-      item.state || "active", item.epoch || 1, item.issuedAt, item.expiresAt, item.lastUsedAt || null,
-      item.createdAt, item.updatedAt, item.invalidatedAt || null, item.invalidationReason || null);
-  }
-  // Audit history is append-preserving. Policy state can be rebuilt wholesale,
-  // but audit rows are only inserted or explicitly state-transitioned here.
-  const auditOutbox = db.prepare(`
-    insert into orkestr_thread_resource_audit_outbox(
-      id, action, resource_type, resource_id, thread_id, permission, boundary_id, owner_user_id, change_ref,
-      outcome, actor_user_id, reason, expires_at, policy_revision, state, claim_token, claim_expires_at, delivered_at, created_at
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    on conflict(id) do update set
-      state = excluded.state,
-      claim_token = excluded.claim_token,
-      claim_expires_at = excluded.claim_expires_at,
-      delivered_at = excluded.delivered_at
-  `);
-  for (const item of auditOutboxUpserts || []) {
-    auditOutbox.run(item.id, item.action, item.resourceType || "", item.resourceId || "", item.threadId || "", item.permission || "", item.boundaryId || "", item.ownerUserId || "", item.changeRef || "",
-      item.outcome, item.actorUserId, item.reason || null, item.expiresAt || null, item.policyRevision || 0, item.state || "pending", item.claimToken || null,
-      item.claimExpiresAt || null, item.deliveredAt || null, item.createdAt);
-  }
-  setMeta(db, "revision", Number(state.revision || 0));
-  setMeta(db, "updated_at", state.updatedAt || new Date().toISOString());
-}
-
 // Invalidate before the commit becomes visible, so no read on this
 // connection can be served a pre-write snapshot (e.g. a revoked grant).
-function commitOutcome(db, outcome) {
+function commitOutcome(db, outcome, baseline) {
   if (outcome?.state && outcome.persist !== false) {
-    replaceState(db, outcome.state, outcome.auditOutboxUpserts);
+    writeSqliteState(db, outcome.state, baseline, outcome.auditOutboxUpserts);
     invalidateSqliteStateCache(db);
   }
   db.exec("commit");
@@ -440,10 +379,10 @@ export async function withThreadResourcePolicyTransaction(operation, env = proce
   const run = previous.catch(() => undefined).then(() => {
     db.exec("begin immediate");
     try {
-      const state = mutableSqliteState(db, readState);
+      const { state, baseline } = mutableSqliteState(db, readState);
       const outcome = operation(state);
       if (outcome && typeof outcome.then === "function") throw new Error("thread_resource_policy_transaction_async_operation_forbidden");
-      commitOutcome(db, outcome);
+      commitOutcome(db, outcome, baseline);
       return outcome;
     } catch (error) {
       db.exec("rollback");
@@ -466,9 +405,9 @@ export async function withThreadResourcePolicyDeliveryFence(operation, env = pro
   const run = previous.catch(() => undefined).then(async () => {
     db.exec("begin immediate");
     try {
-      const state = mutableSqliteState(db, readState);
+      const { state, baseline } = mutableSqliteState(db, readState);
       const outcome = await operation(state);
-      commitOutcome(db, outcome);
+      commitOutcome(db, outcome, baseline);
       return outcome;
     } catch (error) {
       db.exec("rollback");
