@@ -282,6 +282,7 @@ test("whereAmI includes enabled custom skills for an administrator-owned tenant 
   assert.equal(payload.capabilities.skillRegistry.source, "admin-defaults+user-skill-registry");
   assert.ok(payload.capabilities.enabledSkills.includes("captcha"));
   assert.ok(payload.capabilities.disabledSkills.includes("disabled-custom"));
+  assert.equal(payload.capabilities.vault.cli, "orkestr vault list");
   assert.equal(payload.capabilities.skills.find((skill) => skill.id === "captcha")?.enabled, true);
   assert.equal(payload.capabilities.skills.find((skill) => skill.id === "disabled-custom")?.enabled, false);
   assert.doesNotMatch(JSON.stringify(payload.capabilities.skills), /must-not-leak/);
