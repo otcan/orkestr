@@ -30,6 +30,7 @@ import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTi
 import { interruptCommand, sendNowCommand } from "./interrupt-command.js";
 import { jiraCommand } from "./jira-command.js";
 import { doctorVoiceCommand } from "./doctor-voice-command.js";
+import { doctorCodexCommand, retryFailedThreadsCommand } from "./codex-auth-command.js";
 import { doctorPerfCommand } from "./doctor-perf-command.js";
 import { doctorWhatsAppStaleOutboxCommand } from "./doctor-whatsapp-outbox-command.js";
 import { secretLinksCommand } from "./secret-links-command.js";
@@ -93,6 +94,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "release-train") return await releaseTrainCommand(args, ctx, { updateScriptPath, systemdRunEnvArgs, requestJson, ...ctx.releaseTrainDeps });
     if (command === "logs") return await serviceCommand(["logs", ...args], ctx);
     if (command === "thread") return await threadCommand(args, ctx);
+    if (command === "threads" && args[0] === "retry-failed") return await retryFailedThreadsCommand(args.slice(1), ctx);
     if (command === "create") return await createCommand(args, ctx);
     if (command === "worker") return await workerCommand(args, ctx);
     if (command === "task-agent" || command === "task_agent") return await taskAgentCommand(args, ctx);
@@ -664,7 +666,8 @@ async function doctorCommand(argv, ctx) {
   if (subject === "router") return doctorRouterCommand(argv.slice(1), ctx);
   if (subject === "voice" || subject === "transcription") return doctorVoiceCommand(argv, ctx);
   if (subject === "perf" || subject === "performance") return doctorPerfCommand(argv, ctx);
-  throw new Error("Usage: orkestr doctor [system|timers|resources|whatsapp|router|voice|perf] [--repair [--repair-historical]] [--json]");
+  if (subject === "codex") return doctorCodexCommand(argv, ctx);
+  throw new Error("Usage: orkestr doctor [system|timers|resources|whatsapp|router|voice|perf|codex] [--repair [--repair-historical]] [--json]");
 }
 
 async function doctorWhatsAppRouterCommand(argv, ctx) {
@@ -2242,6 +2245,8 @@ function writeUsage(stream) {
   orkestr rollback [--to release-id]
   orkestr logs [--service orkestr] [--lines 100] [--no-follow]
   orkestr doctor [system|timers|resources|whatsapp|router] [--repair [--repair-historical]] [--watch] [--json]
+  orkestr doctor codex [--json]
+  orkestr threads retry-failed [--since 2h] [--dry-run]
   orkestr doctor perf [--window 1h|6h|1d] [--json]
   orkestr doctor whatsapp --archive-stale-outbox [--older-than 7d] [--limit 2000] [--apply] [--json]
 

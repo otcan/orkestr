@@ -897,7 +897,7 @@ export class CodexAppServerClient {
             await recordMailboxRouteWorkRuntime({ threadId: thread.id, messageId: parent.id, codexTurnId: turnId, state: terminalState, reason: errorText || status }, this.env).catch(() => {});
           }
           if (status === "failed") {
-            await recordCodexRuntimeAuthFailureSignal({ thread, error: errorText, turnId }, this.env).catch(() => {});
+            await recordCodexRuntimeAuthFailureSignal({ thread, error: errorText, turnId, messageId: parent?.id }, this.env).catch(() => {});
           } else if (status === "completed") {
             await resolveCodexAuthAfterSuccessfulTurn(thread, this.env).catch(() => null);
           }
