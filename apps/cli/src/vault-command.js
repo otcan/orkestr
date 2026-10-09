@@ -41,8 +41,23 @@ function assertNoSecretArgv(argv) {
   }
 }
 
-/** Thread of the calling agent: ORKESTR_THREAD_ID, else whereiam by cwd. */
+/** Per-turn thread token injected by Orkestr; the server derives the thread from it. */
+function threadToken(ctx) {
+  return String(ctx.env?.ORKESTR_VAULT_THREAD_TOKEN || "").trim();
+}
+
+/** Request context that sends the thread token header (never argv or URL). */
+function vaultCtx(ctx) {
+  const token = threadToken(ctx);
+  return token ? { ...ctx, headers: { "x-orkestr-thread-token": token } } : ctx;
+}
+
+/**
+ * Thread of the calling agent: "" when a thread token is present (the server
+ * derives it), else ORKESTR_THREAD_ID or whereiam by cwd (legacy mode only).
+ */
 export async function resolveVaultThreadId(argv, ctx) {
+  if (threadToken(ctx)) return "";
   const fromEnv = ["ORKESTR_THREAD_ID", "ORKESTR_CURRENT_THREAD_ID", "ORKESTR_RUNTIME_THREAD_ID"]
     .map((key) => String(ctx.env?.[key] || "").trim())
     .find(Boolean);
@@ -51,7 +66,7 @@ export async function resolveVaultThreadId(argv, ctx) {
   const params = new URLSearchParams({ cwd });
   const where = await requestJson(`/api/whereiam?${params.toString()}`, ctx).catch(() => null);
   const threadId = String(where?.thread?.id || "").trim();
-  if (!threadId) throw new Error("vault_thread_unresolved: run from an Orkestr thread workspace or set ORKESTR_THREAD_ID");
+  if (!threadId) throw new Error("vault_thread_unresolved: run inside a managed Orkestr runtime turn (ORKESTR_VAULT_THREAD_TOKEN)");
   return threadId;
 }
 
@@ -77,6 +92,7 @@ async function execCommand(argv, threadId, ctx) {
   if (!item || !command.length) throw new Error(VAULT_USAGE);
   const payload = await credentials(threadId, item, ["username", "password"], ctx);
   const env = { ...(ctx.env || process.env), VAULT_USERNAME: String(payload?.username || ""), VAULT_PASSWORD: String(payload?.password || "") };
+  delete env.ORKESTR_VAULT_THREAD_TOKEN;
   return new Promise((resolve) => {
     const child = ctx.spawnImpl(command[0], command.slice(1), { stdio: "inherit", env });
     child.on("error", () => {
@@ -125,8 +141,9 @@ export async function vaultCommand(argv = [], ctx) {
     return subcommand ? 2 : 0;
   }
   const threadId = await resolveVaultThreadId(separator >= 0 ? rest.slice(0, separator) : rest, ctx);
+  ctx = vaultCtx(ctx);
   if (subcommand === "list" || subcommand === "ls") {
-    const payload = await requestJson(`/api/vault/agent/items?${new URLSearchParams({ threadId }).toString()}`, ctx);
+    const payload = await requestJson(`/api/vault/agent/items?${new URLSearchParams(threadId ? { threadId } : {}).toString()}`, ctx);
     ctx.stdout.write(json ? `${JSON.stringify(payload, null, 2)}\n` : formatItems(payload?.items || []));
     return 0;
   }

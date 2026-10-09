@@ -46,7 +46,7 @@ values entering chat or model context.
 | Owner (their own signed-in browser session) | List, create, update, delete, import, grant/revoke threads, read codes, approve/deny code requests |
 | Owner, signed in within the last 15 minutes | Additionally reveal passwords/notes and export TOTP secrets |
 | Admin | Only counts for other users (`GET /api/vault/status?userId=`); never their contents |
-| Agent (local CLI credential acting for a thread) | List metadata of items granted to its thread; read username/password of granted items (automatic, audited); request authenticator codes (owner approval per code) |
+| Agent (local CLI credential plus the thread token of its runtime turn) | List metadata of items granted to its thread; read username/password of granted items (automatic, audited); request authenticator codes (owner approval per code) |
 
 Anonymous requests, machine credentials, shared-app and auth-intent sessions
 cannot use the owner API. A reveal without a recent sign-in returns
@@ -65,14 +65,40 @@ Audit events (no values): `vault_item_created`, `vault_item_updated`,
 
 ### How agents are identified
 
-The CLI resolves the calling thread from `ORKESTR_THREAD_ID` (or
-`ORKESTR_CURRENT_THREAD_ID` / `ORKESTR_RUNTIME_THREAD_ID`), otherwise through
-`orkestr whereiam` using the current directory. The server only accepts agent
-requests carrying the local CLI machine credential and only returns items that
-the thread's owner granted to that thread. The CLI credential is instance-wide,
-so thread identity is cooperative: any local process holding the CLI token can
-name any thread. Grant credentials only to threads you trust, and keep
-authenticator codes behind approvals.
+Agents are identified by a **thread token**, not by a thread id they name.
+For every managed runtime turn Orkestr issues a fresh random token
+(`ovt_...`), bound to that thread and turn, and injects it into the runtime
+environment as `ORKESTR_VAULT_THREAD_TOKEN`. The server stores only its
+SHA-256 hash (`<ORKESTR_HOME>/secrets/vault-thread-tokens.json`, mode 0600).
+The token expires with the turn timeout (plus 5 minutes) and is revoked when
+the turn ends, so a thread that was already running picks up a token on its
+next turn without a restart.
+
+`orkestr vault` sends the token in the `X-Orkestr-Thread-Token` header (never
+in the URL, argv or the `exec` child environment). The agent routes require
+both the local CLI machine credential and a live token, derive the thread from
+the token and reject:
+
+- a missing token: `401 vault_thread_token_required`;
+- an unknown, expired or revoked token: `401 vault_thread_token_invalid`;
+- a `threadId` that differs from the token's thread: `403 vault_thread_token_mismatch`.
+
+So a process holding the shared CLI credential can no longer pick another
+thread's grants by naming it. Tokens never appear in logs, the perf log,
+events or thread messages.
+
+Limits: the token lives in the runtime's process environment, so it does not
+isolate processes running as the same OS user that can read each other's
+environment. Turns of runtimes that do not receive a token yet (for example
+Codex app-server threads) cannot use agent vault access in the default mode.
+
+**Legacy mode (operator opt-in, for rollout only):** setting
+`ORKESTR_VAULT_ALLOW_LEGACY_THREAD_ID=1` on the server additionally accepts
+requests without a token that name a thread (`ORKESTR_THREAD_ID` or
+`orkestr whereiam` by cwd, as before). In that mode thread identity is
+cooperative again: any local process holding the CLI credential can name any
+thread. A token, when sent, is always enforced. Owners always keep full access
+to their own vault through the signed-in WebUI.
 
 ## Agent usage
 
@@ -138,4 +164,5 @@ All routes are under `/api/vault` and use JSON.
 | GET | `/status` | `{ itemCount, totpCount, keySource, keyFilePresent, pendingApprovals }` |
 
 Agent routes (`/api/vault/agent/items`, `/credentials`, `/totp`) are for the CLI
-only.
+only and need the `X-Orkestr-Thread-Token` header (see "How agents are
+identified").

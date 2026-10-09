@@ -25,6 +25,7 @@ export async function requestJson(path, options = {}) {
     baseUrl = defaultApiBase(options.env),
     body,
     fetchImpl = globalThis.fetch,
+    headers: extraHeaders = null,
     method = body === undefined ? "GET" : "POST",
     timeoutMs = 0,
   } = options;
@@ -42,7 +43,7 @@ export async function requestJson(path, options = {}) {
   try {
     response = await fetchImpl(`${String(baseUrl).replace(/\/+$/g, "")}${path}`, {
       method,
-      headers: await requestHeaders({ body, env: options.env }),
+      headers: { ...(await requestHeaders({ body, env: options.env })), ...(extraHeaders || {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
       ...(controller ? { signal: controller.signal } : {}),
     });

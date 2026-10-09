@@ -18,7 +18,7 @@ function fakeFetch(handler, seen) {
     const parsed = new URL(target);
     const body = options.body ? JSON.parse(options.body) : null;
     const key = `${String(options.method || "GET").toUpperCase()} ${parsed.pathname}`;
-    seen.push({ key, query: Object.fromEntries(parsed.searchParams), body });
+    seen.push({ key, query: Object.fromEntries(parsed.searchParams), body, headers: options.headers || {} });
     const [status, payload] = handler(key, body, parsed) || [404, { error: `missing route: ${key}` }];
     return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
   };
@@ -49,6 +49,34 @@ test("vault list resolves the thread from ORKESTR_THREAD_ID or whereiam", async 
   const unresolved = await run(["vault", "list"], (key) => (key === "GET /api/whereiam" ? [200, { thread: null }] : null));
   assert.equal(unresolved.code, 1);
   assert.match(unresolved.stderr, /vault_thread_unresolved/);
+});
+
+test("vault sends the thread token as a header and never names a thread", async () => {
+  const TOKEN = "ovt_synthetic-cli-thread-token";
+  let spawned = null;
+  const spawnImpl = (command, args, options) => {
+    spawned = options;
+    const child = new EventEmitter();
+    setImmediate(() => child.emit("exit", 0, null));
+    return child;
+  };
+  const handler = (key) => {
+    if (key === "GET /api/vault/agent/items") return [200, { threadId: "t-1", items: [] }];
+    if (key === "POST /api/vault/agent/credentials") return [200, { username: "u", password: PASSWORD }];
+    return null;
+  };
+  const env = { ORKESTR_VAULT_THREAD_TOKEN: TOKEN, ORKESTR_THREAD_ID: "t-other" };
+  const list = await run(["vault", "list"], handler, { env });
+  assert.equal(list.code, 0, list.stderr);
+  assert.deepEqual(list.seen.map((entry) => entry.key), ["GET /api/vault/agent/items"], "no whereiam lookup");
+  assert.deepEqual(list.seen[0].query, {});
+  assert.equal(list.seen[0].headers["x-orkestr-thread-token"], TOKEN);
+  const exec = await run(["vault", "exec", "Example", "--", "tool"], handler, { env, spawnImpl });
+  assert.equal(exec.code, 0, exec.stderr);
+  assert.equal(exec.seen[0].body.threadId, "");
+  assert.equal(exec.seen[0].headers["x-orkestr-thread-token"], TOKEN);
+  assert.equal(spawned.env.ORKESTR_VAULT_THREAD_TOKEN, undefined, "token is not passed to the child");
+  assert.equal(`${list.stdout}${list.stderr}${exec.stdout}${exec.stderr}`.includes(TOKEN), false);
 });
 
 test("vault exec injects credentials into the child env without printing them", async () => {
