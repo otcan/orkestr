@@ -8,7 +8,7 @@ import {
   mergeConnectorOutboxJobs,
   nowIso,
   rowToConnectorOutboxJob,
-  terminalStates,
+  retentionPrunableStates,
 } from "./connector-outbox.js";
 
 const pgPoolCache = new Map();
@@ -197,12 +197,12 @@ export async function replaceConnectorOutboxRowsPostgres(pool, jobs = [], env = 
 }
 
 function terminalStatePgPlaceholders(offset = 0) {
-  return pgPlaceholders(terminalStates.size, offset);
+  return pgPlaceholders(retentionPrunableStates.size, offset);
 }
 
 export async function pruneConnectorOutboxRowsPostgres(client, env = process.env) {
   const limit = connectorOutboxRetentionLimit(env);
-  const states = [...terminalStates];
+  const states = [...retentionPrunableStates];
   const rows = await client.query(`
     select id from orkestr_connector_outbox
     where state in (${terminalStatePgPlaceholders()})

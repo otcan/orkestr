@@ -39,7 +39,7 @@ export function protectWhatsAppOutboxUpdate(current, patch, approvedVersion = nu
   const protectedJob = whatsappOutboxQuarantine(current) || current;
   if (hasWhatsAppPartialDelivery(protectedJob)) return protectedJob;
   if (clean(protectedJob.state) !== "delivery_uncertain" &&
-      !(protectedJob.metadata?.deliveryUncertain && ["dead_letter", "suppressed", "cancelled"].includes(clean(protectedJob.state)))) return null;
+      !(protectedJob.metadata?.deliveryUncertain && ["dead_letter", "suppressed", "cancelled", "archived"].includes(clean(protectedJob.state)))) return null;
   // Only the explicitly approved operator action may reopen this exact version.
   // Persisted override metadata is audit evidence, never reusable authority.
   return approvedVersion && approvedVersion === current.updatedAt ? null : protectedJob;

@@ -288,6 +288,14 @@ test("whatsapp outbox diagnostics require an admin principal", async () => {
     const actionPayload = await actionResponse.json();
     assert.equal(actionResponse.status, 403);
     assert.equal(actionPayload.error, "connector_admin_required");
+
+    const archiveResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/outbox-maintenance/archive-stale`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ apply: true }),
+    });
+    assert.equal(archiveResponse.status, 403);
+    assert.equal((await archiveResponse.json()).error, "connector_admin_required");
   } finally {
     await server.close();
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
