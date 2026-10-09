@@ -2,6 +2,7 @@ import { consumeDurableRateLimit, positiveIntegerEnv } from "./durable-rate-limi
 import { resourceOwnerUserId } from "./policy.js";
 import { getThread } from "./threads.js";
 import { normalizeUserId } from "./users.js";
+import { threadIdForVaultToken, vaultLegacyThreadIdAllowed, VAULT_THREAD_TOKEN_HEADER } from "./vault-thread-tokens.js";
 
 // Access rules for the vault.
 //
@@ -10,9 +11,11 @@ import { normalizeUserId } from "./users.js";
 // sees their own vault; there is no user id parameter, so admins cannot read
 // other users' vault contents.
 //
-// Agent: the CLI machine credential acting for a thread. The thread id comes
-// from the CLI (ORKESTR_THREAD_ID or whereiam cwd resolution) and only selects
-// which grants apply; the vault owner is always the thread's owner.
+// Agent: the CLI machine credential acting for a thread. The thread comes from
+// the per-turn thread token (X-Orkestr-Thread-Token, see vault-thread-tokens)
+// and only selects which grants apply; the vault owner is always the thread's
+// owner. A caller-named thread id is accepted only in the documented legacy
+// mode (ORKESTR_VAULT_ALLOW_LEGACY_THREAD_ID=1).
 
 const HOUR_MS = 60 * 60 * 1000;
 const RECENT_AUTH_MAX_MS = 15 * 60 * 1000;
@@ -90,6 +93,24 @@ export async function resolveAgentThread(threadRef = "", env = process.env) {
   const thread = await getThread(id, env).catch(() => null);
   if (!thread?.id || thread.id !== id) throw vaultError("vault_agent_thread_unknown", 403);
   return { threadId: thread.id, threadName: clean(thread.name) || thread.id, ownerUserId: resourceOwnerUserId(thread, env) };
+}
+
+/**
+ * Thread id for an agent request: derived from the thread token. A supplied
+ * thread id must match it; without a token only legacy mode accepts one.
+ */
+export async function agentThreadIdFromRequest(request = {}, suppliedThreadId = "", env = process.env) {
+  const header = request?.headers?.[VAULT_THREAD_TOKEN_HEADER];
+  const token = clean(Array.isArray(header) ? header[0] : header);
+  const supplied = clean(suppliedThreadId);
+  if (token) {
+    const threadId = await threadIdForVaultToken(token, env);
+    if (!threadId) throw vaultError("vault_thread_token_invalid", 401);
+    if (supplied && supplied !== threadId) throw vaultError("vault_thread_token_mismatch", 403);
+    return threadId;
+  }
+  if (vaultLegacyThreadIdAllowed(env)) return supplied;
+  throw vaultError("vault_thread_token_required", 401);
 }
 
 /** Thread ids that may be granted: the owner's own threads only. */

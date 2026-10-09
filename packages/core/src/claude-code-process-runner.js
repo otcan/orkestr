@@ -25,6 +25,7 @@ import {
 } from "./claude-code-detached-turn.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { appHome } from "../../storage/src/paths.js";
+import { issueVaultThreadToken, revokeVaultThreadTokens, VAULT_THREAD_TOKEN_ENV } from "./vault-thread-tokens.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -55,6 +56,22 @@ function supervise({ thread, attemptId, spawnProcess, command = "", args = [], c
   });
 }
 
+// Each turn gets its own thread-bound vault token, valid for at most the turn
+// timeout and revoked when the turn settles. Failing to issue one only
+// disables vault use for the turn.
+async function attachVaultThreadToken(childEnv, thread, attemptId, env) {
+  const ttlMs = claudeCodeTimeoutMs(env) + 5 * 60_000;
+  const token = await issueVaultThreadToken({ threadId: thread?.id, attemptId, ttlMs }, env).catch(() => "");
+  if (token) childEnv[VAULT_THREAD_TOKEN_ENV] = token;
+}
+
+// Revocation runs alongside turn settlement so it never delays the turn.
+function revokeTurnVaultTokens(promise, thread, attemptId, env) {
+  const revoke = () => { revokeVaultThreadTokens({ threadId: thread?.id, attemptId }, env).catch(() => {}); };
+  promise.then(revoke, revoke);
+  return promise;
+}
+
 export async function runClaudeCodeProcess({
   thread,
   profile,
@@ -83,6 +100,7 @@ export async function runClaudeCodeProcess({
   await fs.mkdir(path.dirname(statusCapture.capturePath), { recursive: true, mode: 0o700 });
   await fs.rm(statusCapture.capturePath, { force: true });
   childEnv.ORKESTR_CLAUDE_STATUS_CAPTURE_PATH = statusCapture.capturePath;
+  await attachVaultThreadToken(childEnv, thread, attemptId, env);
   const args = claudeCodeArgs(thread, { sessionId, priorTurnFailed, backgroundTaskRetry, standingMission, statusCaptureCommand: statusCapture.command }, env);
   const detached = claudeCodeDetachedTurnsEnabled(env);
   if (detached) {
@@ -130,7 +148,7 @@ export async function runClaudeCodeProcess({
   const submission = detached
     ? Promise.resolve().then(() => onPromptSubmitted?.()).catch(() => {})
     : null;
-  return consumeSupervisedTurn({
+  return revokeTurnVaultTokens(consumeSupervisedTurn({
     supervisor,
     thread,
     attemptId,
@@ -146,7 +164,7 @@ export async function runClaudeCodeProcess({
         await onPromptSubmitted?.();
       })
       .catch((error) => supervisor.terminate(publicClaudeCodeFailure(error))),
-  });
+  }), thread, attemptId, env);
 }
 
 // Reattach to a detached turn left running (or finished) by a previous server
@@ -163,7 +181,7 @@ export function attachClaudeCodeProcess({ thread, record, onEvent = null, onHear
   });
   const startedAt = Date.parse(record.startedAt || "") || Date.now();
   const totalTimeoutMs = Number(record.timeoutMs) > 0 ? Number(record.timeoutMs) : claudeCodeTimeoutMs(env);
-  const promise = consumeSupervisedTurn({
+  const promise = revokeTurnVaultTokens(consumeSupervisedTurn({
     supervisor,
     thread,
     attemptId,
@@ -174,7 +192,7 @@ export function attachClaudeCodeProcess({ thread, record, onEvent = null, onHear
     activeTurns,
     env,
     submit: () => Promise.resolve(),
-  });
+  }), thread, attemptId, env);
   return { supervisor, promise };
 }
 

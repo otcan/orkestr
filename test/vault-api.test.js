@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { createThread } from "../packages/core/src/threads.js";
+import { issueVaultThreadToken, revokeVaultThreadTokens } from "../packages/core/src/vault-thread-tokens.js";
 import { jsonPost, pairedCookie, rawRequest, startFixtureServer } from "./support/connector-security-fixture.js";
 
 // Boots an isolated server. Synthetic users, values and hosts only.
@@ -11,13 +12,22 @@ const CLI_TOKEN = "synthetic-cli-token-for-vault-api-tests";
 const PASSWORD = "synthetic-api-password-93b2";
 const TOTP_SECRET = "JBSWY3DPEHPK3PXP";
 
-function request(port, method, pathname, { cookie, bearer, body, origin = true } = {}) {
+function request(port, method, pathname, { cookie, bearer, threadToken, body, origin = true } = {}) {
   const headers = {};
+  if (threadToken) headers["x-orkestr-thread-token"] = threadToken;
   if (cookie) headers.cookie = cookie;
   if (bearer) headers.authorization = `Bearer ${bearer}`;
   if (origin) headers.origin = `http://127.0.0.1:${port}`;
   if (body !== undefined) headers["content-type"] = "application/json";
   return rawRequest(port, { method, pathname, headers, body: body === undefined ? "" : body });
+}
+
+async function treeIncludes(root, value) {
+  for (const entry of await fs.readdir(root, { withFileTypes: true }).catch(() => [])) {
+    const full = path.join(root, entry.name);
+    if (entry.isDirectory() ? await treeIncludes(full, value) : (await fs.readFile(full, "utf8").catch(() => "")).includes(value)) return true;
+  }
+  return false;
 }
 
 test("vault API: owner endpoints, agent endpoints and approval flow", async (t) => {
@@ -97,20 +107,35 @@ test("vault API: owner endpoints, agent endpoints and approval flow", async (t) 
   });
   assert.equal(bigImport.status, 200, bigImport.text.slice(0, 200));
 
-  // Agent endpoints: CLI credential only, granted items only.
-  const agentQuery = "/api/vault/agent/items?threadId=vault-api-thread";
-  assert.equal((await request(port, "GET", agentQuery, { cookie: alice })).status, 403);
-  assert.deepEqual((await request(port, "GET", agentQuery, { bearer: CLI_TOKEN })).json.items, []);
-  const denied = await request(port, "POST", "/api/vault/agent/credentials", { bearer: CLI_TOKEN, body: { threadId: "vault-api-thread", item: itemId } });
+  // Agent endpoints: CLI credential plus a thread token, granted items only.
+  await createThread({ id: "vault-api-other", name: "Other worker", ownerUserId: "alice" }, process.env);
+  const token = await issueVaultThreadToken({ threadId: "vault-api-thread", attemptId: "api-turn" }, process.env);
+  const otherToken = await issueVaultThreadToken({ threadId: "vault-api-other" }, process.env);
+  const agent = { bearer: CLI_TOKEN, threadToken: token };
+  const agentQuery = "/api/vault/agent/items";
+  assert.equal((await request(port, "GET", agentQuery, { cookie: alice, threadToken: token })).status, 403);
+  const noToken = await request(port, "GET", `${agentQuery}?threadId=vault-api-thread`, { bearer: CLI_TOKEN });
+  assert.equal(noToken.status, 401);
+  assert.equal(noToken.json.error, "vault_thread_token_required");
+  assert.deepEqual((await request(port, "GET", agentQuery, agent)).json.items, []);
+  const denied = await request(port, "POST", "/api/vault/agent/credentials", { ...agent, body: { item: itemId } });
   assert.equal(denied.status, 404);
   const grant = await request(port, "PUT", `/api/vault/items/${itemId}/grants`, { cookie: alice, body: { threadIds: ["vault-api-thread"] } });
   assert.equal(grant.status, 200, grant.text);
   assert.deepEqual(grant.json.item.threadGrants, [{ threadId: "vault-api-thread" }]);
-  const creds = await request(port, "POST", "/api/vault/agent/credentials", { bearer: CLI_TOKEN, body: { threadId: "vault-api-thread", item: itemId } });
+  const named = await request(port, "POST", "/api/vault/agent/credentials", { bearer: CLI_TOKEN, body: { threadId: "vault-api-thread", item: itemId } });
+  assert.equal(named.status, 401, "a caller-named thread id is not enough");
+  const crossThread = await request(port, "POST", "/api/vault/agent/credentials", { bearer: CLI_TOKEN, threadToken: otherToken, body: { threadId: "vault-api-thread", item: itemId } });
+  assert.equal(crossThread.status, 403);
+  assert.equal(crossThread.json.error, "vault_thread_token_mismatch");
+  assert.equal((await request(port, "POST", "/api/vault/agent/credentials", { bearer: CLI_TOKEN, threadToken: otherToken, body: { item: itemId } })).status, 404);
+  const tokenWithoutCli = await request(port, "POST", "/api/vault/agent/credentials", { threadToken: token, body: { item: itemId } });
+  assert.notEqual(tokenWithoutCli.status, 200, "the thread token alone is not a credential");
+  const creds = await request(port, "POST", "/api/vault/agent/credentials", { ...agent, body: { item: itemId } });
   assert.equal(creds.status, 200, creds.text);
   assert.equal(creds.json.password, PASSWORD);
 
-  const pending = await request(port, "POST", "/api/vault/agent/totp", { bearer: CLI_TOKEN, body: { threadId: "vault-api-thread", item: itemId } });
+  const pending = await request(port, "POST", "/api/vault/agent/totp", { ...agent, body: { item: itemId } });
   assert.equal(pending.json.status, "pending");
   const approvals = await request(port, "GET", "/api/vault/approvals", { cookie: alice });
   assert.equal(approvals.json.approvals[0].id, pending.json.approval.id);
@@ -119,13 +144,18 @@ test("vault API: owner endpoints, agent endpoints and approval flow", async (t) 
   const approve = await request(port, "POST", `/api/vault/approvals/${pending.json.approval.id}/approve`, { cookie: alice });
   assert.equal(approve.status, 200, approve.text);
   assert.equal(approve.json.approval.status, "approved");
-  const issued = await request(port, "POST", "/api/vault/agent/totp", { bearer: CLI_TOKEN, body: { threadId: "vault-api-thread", item: itemId, approvalId: pending.json.approval.id } });
+  const issued = await request(port, "POST", "/api/vault/agent/totp", { ...agent, body: { item: itemId, approvalId: pending.json.approval.id } });
   assert.equal(issued.json.status, "issued");
   assert.match(issued.json.code, /^\d{6}$/);
-  const second = await request(port, "POST", "/api/vault/agent/totp", { bearer: CLI_TOKEN, body: { threadId: "vault-api-thread", item: itemId } });
+  const second = await request(port, "POST", "/api/vault/agent/totp", { ...agent, body: { item: itemId } });
   assert.equal(second.json.status, "pending");
   const deny = await request(port, "POST", `/api/vault/approvals/${second.json.approval.id}/deny`, { cookie: alice });
   assert.equal(deny.json.approval.status, "denied");
+
+  await revokeVaultThreadTokens({ threadId: "vault-api-thread", attemptId: "api-turn" }, process.env);
+  const revoked = await request(port, "POST", "/api/vault/agent/credentials", { ...agent, body: { item: itemId } });
+  assert.equal(revoked.status, 401);
+  assert.equal(revoked.json.error, "vault_thread_token_invalid");
 
   assert.deepEqual((await request(port, "DELETE", `/api/vault/items/${itemId}`, { cookie: alice })).json, { ok: true });
 
@@ -133,5 +163,9 @@ test("vault API: owner endpoints, agent endpoints and approval flow", async (t) 
   assert.match(events, /vault_secret_read/);
   for (const value of [PASSWORD, "import-synthetic-pw", TOTP_SECRET, issued.json.code && `"code":"${issued.json.code}"`]) {
     assert.equal(events.includes(value), false, "no vault values in events");
+  }
+  for (const value of [token, otherToken]) {
+    assert.equal(events.includes(value), false, "no thread tokens in events");
+    assert.equal(await treeIncludes(path.join(server.home, "observability"), value), false, "no thread tokens in the perf log");
   }
 });
