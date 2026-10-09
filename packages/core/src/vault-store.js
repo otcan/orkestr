@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { ensureDataDirs, userDataPaths } from "../../storage/src/paths.js";
-import { readJson, writeSecretJson } from "../../storage/src/store.js";
+import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { normalizeUserId } from "./users.js";
 import { openItemPayload, sealItemPayload } from "./vault-crypto.js";
+import { needsSingleUseSweep, singleUseMeta, singleUseStatus, sweepSingleUseItems } from "./vault-single-use.js";
 import { normalizeTotpConfig } from "./vault-totp.js";
 
 // Per-user vault file (users/<id>/secrets/vault.json). Only metadata is in
@@ -56,7 +57,10 @@ function storeDefaults(raw = {}) {
 }
 
 export async function readVault(ownerUserId, env = process.env) {
-  return storeDefaults(await readJson(await vaultFilePath(ownerUserId, env), {}));
+  const store = storeDefaults(await readJson(await vaultFilePath(ownerUserId, env), {}));
+  // Spent single-use items still holding ciphertext are wiped before reading.
+  if (store.items.some((item) => needsSingleUseSweep(item))) return mutateVault(ownerUserId, (current) => current, env);
+  return store;
 }
 
 /** Runs `mutate(store)` under the vault file lock and persists the result. */
@@ -64,11 +68,15 @@ export async function mutateVault(ownerUserId, mutate, env = process.env) {
   const filePath = await vaultFilePath(ownerUserId, env);
   return withStorageFileLock(filePath, async () => {
     const store = storeDefaults(await readJson(filePath, {}));
+    const wiped = sweepSingleUseItems(store);
     const result = await mutate(store);
     const cutoff = Date.now() - APPROVAL_RETENTION_MS;
     store.approvals = store.approvals.filter((approval) => Date.parse(approval.createdAt) > cutoff);
     store.updatedAt = nowIso();
     await writeSecretJson(filePath, store);
+    for (const itemId of wiped) {
+      await appendEvent({ type: "vault_single_use_expired", ownerUserId: normalizeUserId(ownerUserId), itemId }, env).catch(() => {});
+    }
     return result;
   });
 }
@@ -137,6 +145,8 @@ export async function sealRecord(ownerUserId, meta, payload, env = process.env) 
 }
 
 export async function openRecord(ownerUserId, record, env = process.env) {
+  const spent = singleUseStatus(record);
+  if (spent && (spent !== "active" || !record?.secret)) throw vaultError(`vault_item_${spent === "active" ? "used" : spent}`, 410);
   return openItemPayload(record?.secret, normalizeUserId(ownerUserId), record?.id, env);
 }
 
@@ -154,6 +164,7 @@ export function itemMeta(record = {}) {
     updatedAt: record.updatedAt || null,
     lastUsedAt: record.lastUsedAt || null,
     threadGrants: (Array.isArray(record.threadGrants) ? record.threadGrants : []).map((grant) => ({ threadId: clean(grant.threadId) })),
+    ...singleUseMeta(record),
   };
 }
 

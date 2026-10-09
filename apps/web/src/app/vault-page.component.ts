@@ -5,6 +5,7 @@ import { VaultApiService, VaultApproval, VaultItem, VaultItemInput, VaultStatus 
 import { VaultGrantsDialogComponent } from "./vault-grants-dialog.component";
 import { VaultImportDialogComponent } from "./vault-import-dialog.component";
 import { VaultItemFormComponent } from "./vault-item-form.component";
+import { VaultRequestsPanelComponent } from "./vault-requests-panel.component";
 import { copySecret, isVaultReauthRequired, vaultErrorMessage, vaultReauthUrl, vaultSecretTtlMs } from "./vault-secrets";
 import { VaultTotpTracker, formatTotpCode } from "./vault-totp-tracker";
 import { VaultVisibleDirective } from "./vault-visible.directive";
@@ -21,7 +22,7 @@ interface RevealedSecret {
 
 @Component({
   selector: "ork-vault-page",
-  imports: [VaultGrantsDialogComponent, VaultImportDialogComponent, VaultItemFormComponent, VaultVisibleDirective],
+  imports: [VaultGrantsDialogComponent, VaultImportDialogComponent, VaultItemFormComponent, VaultRequestsPanelComponent, VaultVisibleDirective],
   templateUrl: "./vault-page.component.html",
   styleUrl: "./vault-page.component.css",
 })

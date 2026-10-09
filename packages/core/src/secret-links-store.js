@@ -125,7 +125,7 @@ export function findSecretLinkByToken(links = [], token = "") {
 export function publicSecretLink(link = {}) {
   return {
     id: clean(link.id),
-    kind: link.kind === "request" ? "request" : "share",
+    kind: link.kind === "request" || link.kind === "vault" ? link.kind : "share",
     status: secretLinkActive(link) ? "active" : clean(link.status) === "active" ? "expired" : clean(link.status),
     ownerUserId: normalizeUserId(link.ownerUserId),
     name: clean(link.name) || null,
