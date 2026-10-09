@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { publicAuthStatus } from "../packages/core/src/auth-config.js";
 import { publicUrlConfig, publicUrlIdentityDiagnostics } from "../packages/core/src/public-url-config.js";
 import { sessionCookieHeader } from "../packages/core/src/security.js";
 import { getSetupStatus, publicSetupStatus } from "../packages/core/src/setup.js";
+
+const tempHome = (prefix) => fs.mkdtemp(path.join(os.tmpdir(), prefix));
 
 test("auth status describes Keycloak email-first policy and supports an explicit phone factor", async () => {
   const auth = publicAuthStatus({
@@ -233,7 +238,7 @@ test("pairing session cookie is host-only for temporary Cloudflare hosts", () =>
 test("setup status exposes public auth policy without secrets", async () => {
   const status = await getSetupStatus({
     env: {
-      ORKESTR_HOME: "/tmp/orkestr-auth-test",
+      ORKESTR_HOME: await tempHome("orkestr-auth-test-"),
       ORKESTR_AUTH_PROVIDER: "keycloak",
       ORKESTR_KEYCLOAK_URL: "https://keycloak.example.test",
       ORKESTR_KEYCLOAK_REALM: "orkestr",
@@ -252,7 +257,7 @@ test("setup status exposes public auth policy without secrets", async () => {
 test("redacted setup status keeps public app and auth URLs for pairing", async () => {
   const status = await getSetupStatus({
     env: {
-      ORKESTR_HOME: "/tmp/orkestr-auth-url-test",
+      ORKESTR_HOME: await tempHome("orkestr-auth-url-test-"),
       ORKESTR_PRIMARY_DOMAIN: "orkestr.example.test",
       ORKESTR_APP_HOST: "app.orkestr.example.test",
       ORKESTR_AUTH_HOST: "auth.orkestr.example.test",
@@ -275,7 +280,7 @@ test("redacted setup status keeps public app and auth URLs for pairing", async (
 test("public app URL alone enables remote auth protection", async () => {
   const status = await getSetupStatus({
     env: {
-      ORKESTR_HOME: "/tmp/orkestr-auth-public-app-test",
+      ORKESTR_HOME: await tempHome("orkestr-auth-public-app-test-"),
       ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.example.test",
     },
   });

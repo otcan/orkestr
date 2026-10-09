@@ -436,6 +436,12 @@ the source of truth for deciding which gates are required.
 When changing the UI, run `npm run web:build` and commit the updated `dist/web`
 bundle.
 
+The web build is deterministic for a given source tree and `package-lock.json`.
+`web:build` warns when `node_modules` drifts from the lockfile; run `npm ci`
+before building, otherwise a different minifier version rewrites
+`dist/web/browser/main.js` even without UI changes. If `dist/web` shows a diff
+you did not cause, revert it with `git checkout -- dist/web`.
+
 ### Connector Outbox Storage
 
 The connector outbox uses SQLite by default when `node:sqlite` is available.

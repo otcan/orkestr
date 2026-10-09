@@ -6,6 +6,7 @@ import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { resetThreadInputDeliveryTimersForTest, runtimeStatus, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { createThread } from "../packages/core/src/threads.js";
+import { installFakePs } from "./helpers/fake-process-list.mjs";
 
 async function createFakeTmux(home) {
   const bin = path.join(home, "bin");
@@ -76,6 +77,7 @@ esac
     "utf8",
   );
   await fs.chmod(tmuxPath, 0o755);
+  await installFakePs(bin);
   return { bin, log, state };
 }
 

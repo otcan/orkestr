@@ -21,6 +21,7 @@ import { createThreadWorker, detectThreadGitState, listThreadWorkers, refreshThr
 import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, enqueueThreadInputForPrincipal, getThread, listThreadMessages, listThreads, restoreThread, retireThread, threadIsRetired, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 import { readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
+import { installFakePs } from "./helpers/fake-process-list.mjs";
 
 const execFileAsync = promisify(execFile);
 const priorThreadTestEnv = {
@@ -197,6 +198,7 @@ esac
     "utf8",
   );
   await fs.chmod(tmuxPath, 0o755);
+  await installFakePs(bin);
   return { bin, log, state };
 }
 
