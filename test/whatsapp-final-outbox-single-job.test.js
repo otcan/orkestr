@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appendThreadMessage, createThread, getThreadMessage } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, getThread, getThreadMessage } from "../packages/core/src/threads.js";
 import { reconcileCodexFinalProjection } from "../packages/core/src/codex-final-projection.js";
 import "../packages/core/src/runtime-leases.js";
 import { claimConnectorOutboxJob, ensureConnectorOutboxJob, markConnectorOutboxJob, readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
@@ -42,7 +42,7 @@ function fakeBridge() {
 
 // The inbound message arrived on account-a while the binding replies from
 // account-b: the projection and the scanner used to key the final differently.
-async function boundFinal(t) {
+async function boundFinal(t, finalExtra = {}) {
   const env = await fixture(t);
   await ensureDataDirs(env);
   await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.invalid" }, env);
@@ -55,7 +55,7 @@ async function boundFinal(t) {
     codexThreadId: generation, codexTurnId: "turn-a", timestamp: new Date(Date.now() - 60_000).toISOString() }, env);
   const final = await appendThreadMessage(thread.id, answer({ source: "codex-app-server", eventId: "native-event",
     parentMessageId: inbound.id, connector: "whatsapp", chatId: "chat-a", accountId: "account-a",
-    timestamp: new Date(Date.now() - 55_000).toISOString() }), env);
+    timestamp: new Date(Date.now() - 55_000).toISOString(), ...finalExtra }), env);
   return { env, thread, final };
 }
 
@@ -96,6 +96,32 @@ test("scanner first, then a late projection at a bumped revision: no orphan and 
   const jobs = await finalJobs(env);
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].state, "delivered");
+});
+
+test("a NO_REPLY final creates no outbox job and still settles the turn's final delivery", async t => {
+  const { env, thread, final } = await boundFinal(t, { text: "NO_REPLY" });
+  const result = await reconcileCodexFinalProjection({ thread, message: final, runtimeGeneration: generation, env });
+  assert.equal(result.noReply, true);
+  assert.equal(result.outboxJob, null);
+  assert.equal((await finalJobs(env)).length, 0);
+  const delivery = (await getThread(thread.id, env)).runtime?.finalDelivery;
+  assert.equal(delivery?.messageId, final.id);
+  assert.equal(delivery?.status, "delivered", "the pending acknowledgement must not linger for a silent final");
+  const bridge = fakeBridge();
+  await deliverWhatsAppReplies(env, bridge.transport);
+  assert.equal(bridge.sends.length, 0);
+  assert.equal((await finalJobs(env)).length, 0);
+});
+
+test("a normal final still leaves its delivery pending until the scanner sends it", async t => {
+  const { env, thread, final } = await boundFinal(t);
+  const result = await reconcileCodexFinalProjection({ thread, message: final, runtimeGeneration: generation, env });
+  assert.ok(result.outboxJob?.id);
+  assert.equal((await getThread(thread.id, env)).runtime?.finalDelivery?.status, "pending");
+  const bridge = fakeBridge();
+  await deliverWhatsAppReplies(env, bridge.transport);
+  assert.equal(bridge.sends.length, 1);
+  assert.equal((await getThread(thread.id, env)).runtime?.finalDelivery?.status, "delivered");
 });
 
 const job = (extra = {}) => {

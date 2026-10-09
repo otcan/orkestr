@@ -3,7 +3,8 @@ import { ensureConnectorOutboxJobThroughAdapter } from "./connector-outbox-adapt
 import { resourceOwnerUserId } from "./policy.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import { currentCodexGenerationMatches } from "./codex-generation.js";
-import { markRuntimeFinalDeliveryPending } from "./runtime-final-delivery.js";
+import { acknowledgeRuntimeFinalDelivery, markRuntimeFinalDeliveryPending } from "./runtime-final-delivery.js";
+import { isNoReplyAssistantMessage } from "./no-reply.js";
 import { getThread, getThreadMessage, updateThreadMessage } from "./threads.js";
 import { runtimeOutputMetadata } from "../../shared/src/runtime-output-identity.js";
 
@@ -118,6 +119,25 @@ export async function reconcileCodexFinalProjection({
       source,
     }, env);
     return { message, reconciled: false, rejected: true, reason: postPendingGeneration.reason };
+  }
+
+  // NO_REPLY is intentionally silent: the scanner never sends it, so an outbox
+  // job would only sit pending. Settle the turn's delivery contract instead.
+  if (isNoReplyAssistantMessage(message)) {
+    const acknowledged = await acknowledgeRuntimeFinalDelivery(currentThread.id, {
+      messageId: message.id,
+      turnId: message.codexTurnId || message.executorTurnId || null,
+    }, env).catch((error) => ({ ok: false, reason: error?.message || "final_delivery_ack_failed" }));
+    await appendEvent({
+      type: "codex_final_projection_no_reply",
+      threadId: currentThread.id,
+      messageId: message.id,
+      runtimeGeneration: generation || null,
+      turnId: clean(message.codexTurnId || message.executorTurnId) || null,
+      acknowledged: acknowledged?.acknowledged === true,
+      source,
+    }, env).catch(() => {});
+    return { message, reconciled: true, noReply: true, outboxJob: null, outboxCreated: false };
   }
 
   const ownerUserId = resourceOwnerUserId(currentThread, env);
