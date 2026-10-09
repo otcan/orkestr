@@ -47,16 +47,16 @@ function lookupLimit() {
   };
 }
 
-async function throttled(request: any) {
+export async function throttled(request: any) {
   const peek = await peekDurableRateLimit({ ...lookupLimit(), key: requestSourceKey(request) });
   return !peek.ok;
 }
 
-async function recordFailedLookup(request: any) {
+export async function recordFailedLookup(request: any) {
   await consumeDurableRateLimit({ ...lookupLimit(), key: requestSourceKey(request) }).catch(() => null);
 }
 
-function postAllowed(request: any) {
+export function postAllowed(request: any) {
   const expected = [effectiveRequestOrigin(request), new URL(secretLinkPublicBase()).origin];
   return sameOriginFormPost(request, expected);
 }

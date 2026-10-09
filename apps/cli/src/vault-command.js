@@ -1,5 +1,6 @@
 import { readCodexVaultTurnToken } from "../../../packages/core/src/vault-codex-turn-tokens.js";
 import { effectiveCliEnv, requestJson } from "./api-client.js";
+import { VAULT_SHARE_USAGE, vaultShareCommand } from "./vault-share-command.js";
 
 // `orkestr vault list|exec|get|totp` (docs/vault.md). Agent-side access to
 // vault items granted to the calling thread. `exec` is the preferred way to
@@ -12,9 +13,10 @@ export const VAULT_USAGE = [
   "  orkestr vault exec <item> -- <command> [args...]   (injects VAULT_USERNAME / VAULT_PASSWORD)",
   "  orkestr vault get <item> --field username|password   (prefer exec; prints the value)",
   "  orkestr vault totp <item> [--wait seconds] [--json]  (needs owner approval per code)",
+  VAULT_SHARE_USAGE,
 ].join("\n");
 
-const valueFlags = new Set(["--field", "--wait", "--cwd"]);
+const valueFlags = new Set(["--field", "--wait", "--cwd", "--ttl", "--views", "--label"]);
 
 function flag(argv, name) {
   const index = argv.indexOf(name);
@@ -142,7 +144,7 @@ export async function vaultCommand(argv = [], ctx) {
   const separator = rest.indexOf("--");
   assertNoSecretArgv(separator >= 0 ? rest.slice(0, separator) : rest);
   const json = (separator >= 0 ? rest.slice(0, separator) : rest).includes("--json");
-  if (!["list", "ls", "exec", "get", "totp"].includes(subcommand)) {
+  if (!["list", "ls", "exec", "get", "totp", "share"].includes(subcommand)) {
     ctx.stderr.write(`${VAULT_USAGE}\n`);
     return subcommand ? 2 : 0;
   }
@@ -156,6 +158,7 @@ export async function vaultCommand(argv = [], ctx) {
   }
   if (subcommand === "exec") return execCommand(rest, threadId, ctx);
   if (subcommand === "totp") return totpCommand(rest, threadId, ctx, json);
+  if (subcommand === "share") return vaultShareCommand(positionals(rest)[0] || "", rest, threadId, ctx, credentials);
   const item = positionals(rest)[0] || "";
   const field = flag(rest, "--field");
   if (!item || !["username", "password"].includes(field)) throw new Error(VAULT_USAGE);

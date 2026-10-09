@@ -125,7 +125,7 @@ export function findSecretLinkByToken(links = [], token = "") {
 export function publicSecretLink(link = {}) {
   return {
     id: clean(link.id),
-    kind: link.kind === "request" ? "request" : "share",
+    kind: ["request", "e2e"].includes(link.kind) ? link.kind : "share",
     status: secretLinkActive(link) ? "active" : clean(link.status) === "active" ? "expired" : clean(link.status),
     ownerUserId: normalizeUserId(link.ownerUserId),
     name: clean(link.name) || null,
@@ -136,5 +136,11 @@ export function publicSecretLink(link = {}) {
     createdAt: clean(link.createdAt) || null,
     expiresAt: clean(link.expiresAt) || null,
     endedAt: clean(link.endedAt) || null,
+    ...(link.kind === "e2e" ? {
+      maxViews: Number(link.maxViews) || 1,
+      views: Number(link.views) || 0,
+      passphrase: link.passphrase === true,
+      openedAt: clean(link.openedAt) || null,
+    } : {}),
   };
 }

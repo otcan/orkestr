@@ -142,7 +142,10 @@ orkestr vault list
 orkestr vault exec "Example Mail" -- ./scripts/login.sh   # uses $VAULT_USERNAME / $VAULT_PASSWORD
 orkestr vault get "Example Mail" --field username          # prints the value; avoid for passwords
 orkestr vault totp "Example Mail" --wait 120               # waits for the owner's approval
+orkestr vault share "Example Mail" --ttl 1d --views 1      # end-to-end encrypted public link
 ```
+
+Sharing with people outside Orkestr is described in `docs/vault-sharing.md`.
 
 Never print passwords into chat, WhatsApp or thread messages. Secret values are
 never accepted as command-line arguments.
