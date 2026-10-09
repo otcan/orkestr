@@ -27,6 +27,7 @@
     <div class="vault-header-actions">
       <button type="button" (click)="openAdd()">+ Add</button>
       <button class="secondary" type="button" (click)="importOpen = true">Import</button>
+      <button class="secondary" type="button" (click)="openOutside(null)">Request from someone…</button>
     </div>
   </header>
 
@@ -96,6 +97,9 @@
                   @if (item.hasPassword || item.username) {
                     <button class="secondary" type="button" (click)="openFill(item)">Fill into desktop</button>
                   }
+                  @if (item.hasPassword) {
+                    <button class="secondary" type="button" (click)="openOutside(item)">Share…</button>
+                  }
                   <button class="secondary" type="button" (click)="openGrants(item)">Assign to threads ({{ grantCount(item) }})</button>
                   @if (item.hasTotp) {
                     <button class="secondary" type="button" (click)="exportSecret(item)" [disabled]="busyId === item.id">Export authenticator secret</button>
@@ -139,6 +143,8 @@
     </div>
   }
 
+  <ork-vault-outside-panel></ork-vault-outside-panel>
+
   @if (editing) {
     <ork-vault-item-form [item]="editingItem()" [busy]="formBusy" [error]="formError"
       (save)="saveItem($event)" (cancel)="editing = null"></ork-vault-item-form>
@@ -153,5 +159,9 @@
   @if (fillItem) {
     <ork-vault-fill-dialog [item]="fillItem" (filled)="fillDone($event)"
       (reauth)="fillItem = null; reauthNeeded = true" (close)="fillItem = null"></ork-vault-fill-dialog>
+  }
+  @if (outside) {
+    <ork-vault-outside-dialog [item]="outside.item" (created)="outsidePanel?.load()"
+      (reauth)="outsideReauth()" (close)="outside = null; outsidePanel?.load()"></ork-vault-outside-dialog>
   }
 </section>

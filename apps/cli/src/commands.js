@@ -72,7 +72,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "whereiam" || command === "whereami") return await whereiamCommand(args, ctx);
     if (command === "settings") return await settingsCommand(args, ctx);
     if (command === "secret" || command === "secrets") return await secretCommand(args, ctx);
-    if (command === "vault") return await vaultCommand(args, ctx);
+    if (command === "vault") return await vaultCommand(args, { readPassphrase: () => readHiddenSecretFromTty(ctx, "Passphrase: "), ...ctx });
     if (command === "doctor") return await doctorCommand(args, ctx);
     if (command === "sanitizer" || command === "sanitize") return await sanitizerCommand(args, ctx);
     if (command === "api-session" || command === "api") return await apiSessionCommand(args, ctx);
@@ -299,9 +299,9 @@ async function secretValueFromInput(argv = [], ctx = {}) {
   return readHiddenSecretFromTty(ctx);
 }
 
-async function readHiddenSecretFromTty(ctx = {}) {
+async function readHiddenSecretFromTty(ctx = {}, prompt = "Secret value: ") {
   if (!ctx.stdin?.isTTY) throw new Error("secret_value_required: pass --stdin or run from an interactive TTY");
-  ctx.stderr.write("Secret value: ");
+  ctx.stderr.write(prompt);
   await setTtyEcho(ctx, false);
   try {
     return await readLine(ctx.stdin);
