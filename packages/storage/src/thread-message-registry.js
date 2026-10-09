@@ -180,6 +180,14 @@ export async function listThreadMessageRows(threadId, env = process.env) {
   `).all(threadId)).map((row) => row.message);
 }
 
+// Migrated sqlite handle for read-only helpers; null when the JSON store is active.
+export async function threadMessageStoreDatabase(threadId, env = process.env) {
+  const db = await openDatabase(env);
+  if (!db) return null;
+  await ensureMigrated(db, threadId, env);
+  return db;
+}
+
 export async function threadMessageStoreEnabled(env = process.env) {
   return Boolean(await openDatabase(env));
 }

@@ -17,6 +17,7 @@ import { inboundAttachmentUploadPolicy } from "../../../../../packages/core/src/
 import { hydrateEncryptedPublishedAttachmentPaths, validateEncryptedPublishedAttachment } from "../../../../../packages/core/src/encrypted-attachment-publication.js";
 import { reissueEncryptedThreadAttachment } from "../../../../../packages/core/src/encrypted-attachment-reissue.js";
 import { publicEncryptedAttachment } from "../../../../../packages/core/src/encrypted-attachment-projection.js";
+import { storedThreadMessagePage } from "./thread-message-store-page.js";
 import { ThreadActionSanitizerService } from "./thread-application.services.js";
 import { scheduleNativeCodexHistorySync, syncNativeCodexHistory, threadHistoryPayload, threadMessagePage } from "./thread-message-page.js";
 
@@ -48,7 +49,8 @@ export class ThreadMessagesController {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     scheduleNativeCodexHistorySync(thread);
-    return threadMessagePage(thread, await listThreadMessages(thread.id), query, null);
+    return await storedThreadMessagePage(thread, query, null) ||
+      threadMessagePage(thread, await listThreadMessages(thread.id), query, null);
   }
 
   @Patch(":threadId/messages/:messageId/whatsapp-inbound-revision")
