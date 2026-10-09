@@ -2,6 +2,7 @@ import { Component, Input, OnDestroy, OnInit, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import type { ThreadSummary } from "./api.service";
 import { VaultApiService, VaultApproval, VaultItem, VaultItemInput, VaultStatus } from "./vault-api.service";
+import { VaultFillDialogComponent } from "./vault-fill-dialog.component";
 import { VaultGrantsDialogComponent } from "./vault-grants-dialog.component";
 import { VaultImportDialogComponent } from "./vault-import-dialog.component";
 import { VaultItemFormComponent } from "./vault-item-form.component";
@@ -21,7 +22,7 @@ interface RevealedSecret {
 
 @Component({
   selector: "ork-vault-page",
-  imports: [VaultGrantsDialogComponent, VaultImportDialogComponent, VaultItemFormComponent, VaultVisibleDirective],
+  imports: [VaultFillDialogComponent, VaultGrantsDialogComponent, VaultImportDialogComponent, VaultItemFormComponent, VaultVisibleDirective],
   templateUrl: "./vault-page.component.html",
   styleUrl: "./vault-page.component.css",
 })
@@ -47,6 +48,7 @@ export class VaultPageComponent implements OnInit, OnDestroy {
   formError = "";
   importOpen = false;
   grantsItem: VaultItem | null = null;
+  fillItem: VaultItem | null = null;
   readonly visibleIds = new Set<string>();
   readonly totp = new VaultTotpTracker((id) => firstValueFrom(this.api.totp(id)));
   readonly formatCode = formatTotpCode;
@@ -319,6 +321,16 @@ export class VaultPageComponent implements OnInit, OnDestroy {
   openGrants(item: VaultItem): void {
     this.menuId = "";
     this.grantsItem = item;
+  }
+
+  openFill(item: VaultItem): void {
+    this.menuId = "";
+    this.fillItem = item;
+  }
+
+  fillDone(desktop: string): void {
+    this.fillItem = null;
+    this.flash(`Filled into ${desktop}.`);
   }
 
   grantsSaved(item: VaultItem): void {

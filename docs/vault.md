@@ -144,6 +144,9 @@ orkestr vault get "Example Mail" --field username          # prints the value; a
 orkestr vault totp "Example Mail" --wait 120               # waits for the owner's approval
 ```
 
+To log in on a managed browser desktop without seeing the value, use
+`orkestr vault fill <item> --desktop <slug>` (see [vault-fill.md](vault-fill.md)).
+
 Never print passwords into chat, WhatsApp or thread messages. Secret values are
 never accepted as command-line arguments.
 
