@@ -13,7 +13,7 @@ import {
 } from "../../../../../packages/core/src/runtime-codex-adapter.js";
 import { codexThreadId } from "../../thread-summary.js";
 
-function messageCursor(message: any, index: number): number {
+export function messageCursor(message: any, index: number): number {
   return Number(message?.cursor || 0) || index + 1;
 }
 
@@ -23,15 +23,19 @@ function normalizedMessageTimestamp(message: any): string {
     canonicalTimestamp(message?.updatedAt);
 }
 
-function messageTimestampMs(message: any): number {
+export function messageTimestampMs(message: any): number {
   return timestampMs(normalizedMessageTimestamp(message));
+}
+
+export function compareChronological(left: { ms: number; cursor: number }, right: { ms: number; cursor: number }) {
+  return left.ms !== right.ms ? left.ms - right.ms : left.cursor - right.cursor;
 }
 
 export function chronologicalMessages(messages: any[] = []) {
   // Parse each timestamp once; parsing inside the comparator dominated long threads.
   return messages
     .map((message, index) => ({ message, ms: messageTimestampMs(message), cursor: messageCursor(message, index) }))
-    .sort((left, right) => (left.ms !== right.ms ? left.ms - right.ms : left.cursor - right.cursor))
+    .sort(compareChronological)
     .map(({ message }) => message);
 }
 
@@ -67,26 +71,26 @@ function isNeedInputMessage(message: any): boolean {
   return role === "assistant" && needInputPhases.has(phase) && !!String(message?.text || "").trim();
 }
 
-function latestPendingQuestion(messages: any[] = []) {
-  let userRepliedAfterQuestion = false;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
+function* newestFirst(messages: any[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) yield messages[index];
+}
+
+// Walks visible messages newest first; every message here already carries its cursor.
+// A user reply newer than any question answers it, so the walk can stop there.
+export function latestPendingQuestion(newestFirstMessages: Iterable<any>) {
+  for (const message of newestFirstMessages) {
     const text = String(message?.text || "").trim();
     if (!text) continue;
     const role = String(message?.role || message?.kind || "").trim().toLowerCase();
-    if (role === "user") {
-      userRepliedAfterQuestion = true;
-      continue;
-    }
+    if (role === "user") return null;
     if (!isNeedInputMessage(message)) continue;
-    if (userRepliedAfterQuestion) return null;
     const timestamp = message?.timestamp || message?.createdAt || null;
     const eventId = String(message?.eventId || message?.id || "").trim() || null;
     return {
       text,
       eventId,
       messageId: message?.id || null,
-      cursor: messageCursor(message, index),
+      cursor: Number(message?.cursor || 0),
       timestamp,
       phase: message?.phase || null,
     };
@@ -170,27 +174,46 @@ function dedupeDisplayMessages(messages: any[] = []) {
   return deduped;
 }
 
-export function threadMessagePage(thread: any, rawMessages: any[] = [], query: Record<string, unknown> = {}, status: any = null) {
+export function threadMessagePageQuery(query: Record<string, unknown> = {}) {
   const since = Math.max(0, Number.parseInt(String(query.since || "0"), 10) || 0);
   const before = Math.max(0, Number.parseInt(String(query.before || "0"), 10) || 0);
   const requestedLimit = Math.max(0, Number.parseInt(String(query.limit || "0"), 10) || 0);
   const limit = requestedLimit ? Math.min(requestedLimit, 100) : 100;
+  const includes = (message: any) => !!String(message?.text || "").trim() &&
+    !(since > 0 && message.cursor <= since) && !(before > 0 && message.cursor >= before);
+  return { since, before, limit, includes };
+}
+
+export function threadMessagePage(thread: any, rawMessages: any[] = [], query: Record<string, unknown> = {}, status: any = null) {
+  const pageQuery = threadMessagePageQuery(query);
   const orderedMessages = visibleThreadMessages(chronologicalMessages(rawMessages.map((message, index) => ({
     ...message, cursor: messageCursor(message, index),
   }))));
-  const pendingQuestion = latestPendingQuestion(orderedMessages);
   // Select the page before bridging so only the returned messages are decorated.
   const pageIndexes: number[] = [];
   orderedMessages.forEach((message, index) => {
-    if (!String(message?.text || "").trim()) return;
-    const cursor = messageCursor(message, index);
-    if (since > 0 && cursor <= since) return;
-    if (before > 0 && cursor >= before) return;
-    pageIndexes.push(index);
+    if (pageQuery.includes(message)) pageIndexes.push(index);
   });
-  const messages = dedupeDisplayMessages(pageIndexes.slice(-limit).map((index) => bridgeMessage(thread, orderedMessages[index], index)));
   const allCursors = rawMessages.map((message, index) => messageCursor(message, index));
-  const cursor = Math.max(0, ...allCursors);
+  return threadMessagePagePayload(thread, pageQuery, status, {
+    page: pageIndexes.slice(-pageQuery.limit).map((index) => ({ message: orderedMessages[index], index })),
+    pendingQuestion: latestPendingQuestion(newestFirst(orderedMessages)),
+    cursor: Math.max(0, ...allCursors),
+    minCursor: Math.min(...allCursors),
+    supersededMessageIds: rawMessages.filter(message => message.supersededBy).map(message => message.id),
+  });
+}
+
+export function threadMessagePagePayload(thread: any, pageQuery: any, status: any, selected: {
+  page: Array<{ message: any; index: number }>;
+  pendingQuestion: any;
+  cursor: number;
+  minCursor: number;
+  supersededMessageIds: unknown[];
+}) {
+  const { since, before, limit } = pageQuery;
+  const { pendingQuestion, cursor } = selected;
+  const messages = dedupeDisplayMessages(selected.page.map(({ message, index }) => bridgeMessage(thread, message, index)));
   const oldestCursor = messages.length ? Number(messages[0]?.cursor || 0) : null;
   return {
     thread,
@@ -201,12 +224,12 @@ export function threadMessagePage(thread: any, rawMessages: any[] = [], query: R
     before,
     limit,
     count: messages.length,
-    supersededMessageIds: rawMessages.filter(message => message.supersededBy).map(message => message.id),
+    supersededMessageIds: selected.supersededMessageIds,
     messages,
     cursor,
     currentCursor: cursor,
     oldestCursor,
-    hasMoreBefore: oldestCursor !== null && rawMessages.some((message, index) => messageCursor(message, index) < oldestCursor),
+    hasMoreBefore: oldestCursor !== null && selected.minCursor < oldestCursor,
     state: status?.state || thread.state || "sleeping",
     source: "orkestr-oss",
     staleWorking: (status as any)?.staleWorking ?? false,
