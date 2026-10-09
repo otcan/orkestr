@@ -86,9 +86,16 @@ function sameTurnOutput(a, b) {
 
 // Compatibility with retained pre-upgrade jobs. No body-only or parent-only
 // match. Conflicting runtime evidence always defeats an event alias match.
+// A source message has exactly one final delivery: the final projection and the
+// delivery scanner may resolve a different account alias or message revision
+// for it, which must converge on one job instead of forking an orphan.
+const messageScopedKeys = new Set(["accountId", "sourceRevision"]);
+
 export function logicalOutputMatchReason(a, b) {
   if (!outputFenceApplies(b)) return "";
+  const sameMessage = Boolean(clean(a.sourceMessageId)) && clean(a.sourceMessageId) === clean(b.sourceMessageId);
   for (const key of ["tenantId", "ownerUserId", "connector", "accountId", "chatId", "threadId", "sourceRevision", "deliveryType"]) {
+    if (sameMessage && messageScopedKeys.has(key)) continue;
     if (clean(a[key]) !== clean(b[key])) return "";
   }
   for (const key of ["runtimeGeneration", "runtimeTurnId", "runtimeItemId"]) {
