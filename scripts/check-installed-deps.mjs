@@ -28,18 +28,25 @@ export function findInstalledDependencyDrift(root = process.cwd()) {
   return drift;
 }
 
-export function formatDependencyDrift(drift = [], limit = 8) {
+export function formatDependencyDrift(drift = [], limit = 8, level = "warning") {
   const shown = drift.slice(0, limit).map((item) => `  ${item.name}: installed ${item.installed}, lockfile ${item.locked}`);
   const more = drift.length > limit ? [`  ...and ${drift.length - limit} more`] : [];
   return [
-    `warning: node_modules differs from package-lock.json for ${drift.length} package(s):`,
+    `${level}: node_modules differs from package-lock.json for ${drift.length} package(s):`,
     ...shown,
     ...more,
     "Build output (dist/web) will not match the committed bundle. Run `npm ci` to rebuild deterministically.",
   ].join("\n");
 }
 
+// Local builds only warn; CI passes --strict so a drifted install fails the job.
+export function checkInstalledDependencies({ argv = process.argv.slice(2), root = process.cwd(), log = console } = {}) {
+  const strict = argv.includes("--strict");
+  const drift = findInstalledDependencyDrift(root);
+  if (drift.length) log[strict ? "error" : "warn"](formatDependencyDrift(drift, 8, strict ? "error" : "warning"));
+  return strict && drift.length ? 1 : 0;
+}
+
 if (isMainModule(import.meta.url)) {
-  const drift = findInstalledDependencyDrift();
-  if (drift.length) console.warn(formatDependencyDrift(drift));
+  process.exitCode = checkInstalledDependencies();
 }
