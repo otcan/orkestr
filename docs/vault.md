@@ -61,7 +61,9 @@ Override with `ORKESTR_VAULT_AGENT_READ_LIMIT`, `ORKESTR_VAULT_AGENT_TOTP_LIMIT`
 Audit events (no values): `vault_item_created`, `vault_item_updated`,
 `vault_item_deleted`, `vault_imported`, `vault_grant_changed`,
 `vault_secret_read`, `vault_totp_requested`, `vault_totp_approved`,
-`vault_totp_denied`, `vault_totp_issued`, `vault_reveal`.
+`vault_totp_denied`, `vault_totp_issued`, `vault_reveal`,
+`vault_thread_token_rejected` (reason `missing`, `invalid` or `mismatch`;
+never the token).
 
 ### How agents are identified
 
@@ -87,10 +89,24 @@ So a process holding the shared CLI credential can no longer pick another
 thread's grants by naming it. Tokens never appear in logs, the perf log,
 events or thread messages.
 
-Limits: the token lives in the runtime's process environment, so it does not
-isolate processes running as the same OS user that can read each other's
-environment. Turns of runtimes that do not receive a token yet (for example
-Codex app-server threads) cannot use agent vault access in the default mode.
+**Codex app-server threads.** Codex threads share one app-server process, so
+their token cannot go into a per-thread environment. Instead Orkestr writes
+each Codex turn's token to `<ORKESTR_HOME>/secrets/vault-turn-tokens/<sha256
+of the Codex thread id>.json` (directory 0700, file 0600, owned by the
+`ORKESTR_HOME` owner) right before `turn/start`. Codex exports
+`CODEX_THREAD_ID` to the commands it runs; `orkestr vault` uses it to read its
+own turn's file. Starting a new turn revokes the previous token, and
+`turn/completed` revokes the token and deletes the file. Tokens of a turn whose
+completion is never observed expire after `ORKESTR_VAULT_CODEX_TOKEN_TTL_MS`
+(default 6 hours). Codex sub-agents run under their own Codex thread id and
+therefore get no token.
+
+Limits: the token lives in the runtime's process environment or a 0600 file,
+so it does not isolate processes running as the same OS user that can read
+each other's environment or files. It does stop agents from picking another
+thread's grants just by naming its id, and a token is useless once its turn
+ends. Turns of runtimes that receive no token cannot use agent vault access in
+the default mode.
 
 **Legacy mode (operator opt-in, for rollout only):** setting
 `ORKESTR_VAULT_ALLOW_LEGACY_THREAD_ID=1` on the server additionally accepts
@@ -99,6 +115,15 @@ requests without a token that name a thread (`ORKESTR_THREAD_ID` or
 cooperative again: any local process holding the CLI credential can name any
 thread. A token, when sent, is always enforced. Owners always keep full access
 to their own vault through the signed-in WebUI.
+
+Removing legacy mode: Claude Code and Codex app-server turns now both receive
+tokens. Operators should (1) leave the flag unset, or unset it, and watch for
+`vault_thread_token_rejected` events with reason `missing`; (2) treat any such
+event as a runtime that still lacks token support and fix that runtime rather
+than re-enabling the flag; (3) once a release has run without `missing`
+rejections from managed threads, the flag, the `ORKESTR_THREAD_ID`/whereiam
+fallback in `orkestr vault` and the `threadId` request parameter can be
+deleted.
 
 ## Agent usage
 

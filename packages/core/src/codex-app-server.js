@@ -83,6 +83,7 @@ import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
 import { injectRuntimeFault, runtimeNowMs, runtimeStopPhaseFor } from "./runtime-fault-injection.js";
 import { recordRuntimeControlMetric } from "./observability.js";
 import { recordCodexInputDelivery, recordCodexUserInputRequest } from "./codex-input-observability.js";
+import { bindCodexVaultTurnToken, issueCodexVaultTurnToken, revokeCodexVaultTurnToken } from "./vault-codex-turn-tokens.js";
 
 const appServerDeliveryTimers = new Map();
 const appServerHistorySyncTimes = new Map();
@@ -1306,8 +1307,16 @@ async function recordInputAcknowledgement(thread, pending, id, turnId, env) {
 async function startCodexAppServerTurn({ client, thread, id, pending, env, runtimeEnv = env, observedVia = "codex_app_server_turn_start" }) {
   Object.assign(pending, await claimExecutorHandoffForMessage(thread, pending, "codex", env));
   await recordInputSubmission(client, thread, pending, id, "start", "", env);
-  const result = await client.request("turn/start", turnStartParams(thread, pending, runtimeEnv));
+  const vaultAttemptId = await issueCodexVaultTurnToken({ threadId: thread.id, codexThreadId: id }, env).catch(() => "");
+  let result;
+  try {
+    result = await client.request("turn/start", turnStartParams(thread, pending, runtimeEnv));
+  } catch (error) {
+    await revokeCodexVaultTurnToken({ threadId: thread.id, codexThreadId: id }, env).catch(() => {});
+    throw error;
+  }
   const turnId = clean(result?.turn?.id || result?.turnId);
+  if (vaultAttemptId) await bindCodexVaultTurnToken({ codexThreadId: id, attemptId: vaultAttemptId, turnId }, env).catch(() => {});
   await recordInputAcknowledgement(thread, pending, id, turnId, env);
   await injectRuntimeFault("runtime_acceptance", {
     operation: "turn_start",

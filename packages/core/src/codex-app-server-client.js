@@ -58,6 +58,7 @@ import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-livene
 import { runtimeFinalDeliveryPending } from "./runtime-final-delivery.js";
 import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
 import { currentCodexGenerationMatches } from "./codex-generation.js";
+import { revokeCodexVaultTurnToken } from "./vault-codex-turn-tokens.js";
 import { canonicalTimestamp } from "./timestamp-normalization.js";
 import { recordCodexUserInputRequest } from "./codex-input-observability.js";
 import {
@@ -792,6 +793,7 @@ export class CodexAppServerClient {
         }
         const state = this.threadStates.get(threadId) || {};
         this.threadStates.set(threadId, { ...state, activeTurnId: "", activeTurnObservedAt: null, status: { type: status === "failed" ? "systemError" : "idle" }, statusObservedAt: nowIso() });
+        await revokeCodexVaultTurnToken({ codexThreadId: threadId, turnId }, this.env).catch(() => {});
         for (const [requestKey, request] of this.pendingRequests.entries()) {
           if (request?.codexThreadId === threadId && (!turnId || !request.turnId || request.turnId === turnId)) this.pendingRequests.delete(requestKey);
         }

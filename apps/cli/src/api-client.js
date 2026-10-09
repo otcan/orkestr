@@ -156,7 +156,7 @@ const envFileKeys = new Set([
   "PORT",
 ]);
 
-function effectiveCliEnv(env = process.env) {
+export function effectiveCliEnv(env = process.env) {
   const fileEnv = readCliEnvFile(env);
   const merged = { ...fileEnv };
   for (const [key, value] of Object.entries(env || {})) {
