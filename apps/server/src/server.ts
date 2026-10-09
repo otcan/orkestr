@@ -35,6 +35,7 @@ import {
   whatsAppDeliveryFollowUpDelayMs,
 } from "../../../packages/connectors/src/whatsapp-sync-signal.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
+import { cleanupStaleStateFiles } from "../../../packages/storage/src/state-file-cleanup.js";
 import {
   recoverInboundAttachmentStartupOrphans,
   sweepInboundAttachmentQuarantine,
@@ -629,6 +630,14 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   const runRuntimeSync = createRuntimeWhatsAppSyncRunner(serverEnv);
   // Every unawaited background run is tracked so close() can wait for it.
   const background = createBackgroundTasks();
+  background.track(cleanupStaleStateFiles(serverEnv)).catch((error) => {
+    reportServerError(serverEnv, {
+      source: "server.stateFileCleanup",
+      code: "state_file_cleanup_failed",
+      message: error?.message || String(error),
+      error,
+    });
+  });
 
   const timer = setInterval(() => {
     background.track(runTimerLoop(serverEnv, runRuntimeSync)).catch((error) => {
