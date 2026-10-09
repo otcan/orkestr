@@ -69,16 +69,8 @@ export function lifecycleConfig(env = process.env) {
     maxDesktopActionsPerRun: numberValue(env.ORKESTR_RESOURCE_LIFECYCLE_MAX_DESKTOP_ACTIONS_PER_RUN, 1, { min: 1, max: 20 }),
     desktopIdleStopEnabled: env.ORKESTR_RESOURCE_LIFECYCLE_DESKTOP_STOP_ENABLED !== "0",
     desktopIdleStopMs: parseDurationMs(env.ORKESTR_RESOURCE_LIFECYCLE_DESKTOP_IDLE_STOP, 30 * 60_000),
-    transientDesktopSlugs: new Set(csv(env.ORKESTR_RESOURCE_LIFECYCLE_TRANSIENT_DESKTOPS || [
-      "android-emulator",
-      "wa-windows",
-      "ppt",
-      "synbiobeta",
-      "synbiobeta-murat",
-      "sosv-physical-ai",
-      "wa-voice",
-      "jobseeker-can",
-    ].join(","))),
+        // Deployment-specific desktop slugs come from the private config file.
+    transientDesktopSlugs: new Set(csv(env.ORKESTR_RESOURCE_LIFECYCLE_TRANSIENT_DESKTOPS || "")),
     desktopVmSlugs: new Set(csv(env.ORKESTR_RESOURCE_LIFECYCLE_DESKTOP_VMS || "android-emulator,wa-windows")),
     fullInstanceStopEnabled: truthy(env.ORKESTR_RESOURCE_LIFECYCLE_INSTANCE_STOP_ENABLED),
     orphanCleanupEnabled: env.ORKESTR_RESOURCE_LIFECYCLE_ORPHAN_CLEANUP_ENABLED !== "0",
