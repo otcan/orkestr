@@ -116,8 +116,6 @@ export async function createApp(): Promise<INestApplication> {
   // entry POST can resolve the submitted name/reference in the live server.
   // One-time secret request links accept up to 16 KiB values (URL-encoded).
   app.use("/s", secretLinkFormBodyParser());
-  // Vault imports carry up to 2 MB of CSV/otpauth text (JSON-escaped).
-  app.use("/api/vault/import", vaultImportJsonBodyParser());
   app.useBodyParser("urlencoded", { extended: false, limit: "8kb" });
   // Mobile proofs bind the exact JSON payload before authentication. Scope the
   // early parser to the direct mobile API so broker/canonical proxy requests
@@ -239,6 +237,10 @@ export async function createApp(): Promise<INestApplication> {
         .send(JSON.stringify({ ok: false, error: message }));
     }
   });
+  // Vault imports carry up to 2 MB of CSV/otpauth text (JSON-escaped). Parsed
+  // only after authentication so anonymous clients cannot make the server
+  // buffer and parse multi-megabyte bodies.
+  app.use("/api/vault/import", vaultImportJsonBodyParser());
   app.useGlobalFilters(new JsonErrorFilter(({ exception, statusCode, message, request }) => {
     reportServerError(process.env, {
       source: "server.http.exception",
