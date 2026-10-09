@@ -30,6 +30,7 @@ import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTi
 import { interruptCommand, sendNowCommand } from "./interrupt-command.js";
 import { jiraCommand } from "./jira-command.js";
 import { doctorVoiceCommand } from "./doctor-voice-command.js";
+import { doctorPerfCommand } from "./doctor-perf-command.js";
 import { secretLinksCommand } from "./secret-links-command.js";
 import { vaultCommand } from "./vault-command.js";
 import { mailboxesCommand } from "./mailbox-command.js";
@@ -651,7 +652,8 @@ async function doctorCommand(argv, ctx) {
   if (subject === "whatsapp" || subject === "wa") return doctorWhatsAppRouterCommand(argv.slice(1), ctx);
   if (subject === "router") return doctorRouterCommand(argv.slice(1), ctx);
   if (subject === "voice" || subject === "transcription") return doctorVoiceCommand(argv, ctx);
-  throw new Error("Usage: orkestr doctor [system|timers|resources|whatsapp|router|voice] [--repair [--repair-historical]] [--json]");
+  if (subject === "perf" || subject === "performance") return doctorPerfCommand(argv, ctx);
+  throw new Error("Usage: orkestr doctor [system|timers|resources|whatsapp|router|voice|perf] [--repair [--repair-historical]] [--json]");
 }
 
 async function doctorWhatsAppRouterCommand(argv, ctx) {
@@ -2228,6 +2230,7 @@ function writeUsage(stream) {
   orkestr rollback [--to release-id]
   orkestr logs [--service orkestr] [--lines 100] [--no-follow]
   orkestr doctor [system|timers|resources|whatsapp|router] [--repair [--repair-historical]] [--watch] [--json]
+  orkestr doctor perf [--window 1h|6h|1d] [--json]
 
 Common thread commands:
   orkestr list [--json] [--api http://127.0.0.1:19812]

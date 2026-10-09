@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { NestFactory } from "@nestjs/core";
+import { perfRequestLogMiddleware, startPerfHealthSampling, stopPerfRecording } from "../../../packages/core/src/perf-recorder.js";
 import type { INestApplication } from "@nestjs/common";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { loadOverlayExecutorAdapters, recoverInterruptedExecutions } from "../../../packages/core/src/executors.js";
@@ -128,6 +129,7 @@ export async function createApp(): Promise<INestApplication> {
     next();
   });
   app.use(createObservabilityMiddleware(process.env));
+  app.use(perfRequestLogMiddleware(process.env));
   app.use((request, response, next) => {
     const route = String((request as any)?.originalUrl || (request as any)?.url || "").split("?")[0];
     if (route !== "/metrics" && route !== "/api/metrics") return next();
@@ -623,6 +625,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     });
   });
   const app = await createApp();
+  startPerfHealthSampling(serverEnv);
   const runRuntimeSync = createRuntimeWhatsAppSyncRunner(serverEnv);
   // Every unawaited background run is tracked so close() can wait for it.
   const background = createBackgroundTasks();
@@ -811,6 +814,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     if (!drained.drained) {
       reportServerError(serverEnv, { source: "server.close", code: "background_tasks_not_drained", message: `${drained.pending} background task(s) still running at shutdown` });
     }
+    await stopPerfRecording().catch(() => {});
   });
 }
 

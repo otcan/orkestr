@@ -17,6 +17,7 @@ import { SystemModule } from "./modules/system/system.module.js";
 import { SecureInputModule } from "./modules/secure-input/secure-input.module.js";
 import { SecretLinksModule } from "./modules/secret-links/secret-links.module.js";
 import { VoiceTranscriptionModule } from "./modules/voice-transcription/voice-transcription.module.js";
+import { PerfModule } from "./modules/perf/perf.module.js";
 import { SharedAppsModule } from "./modules/shared-apps/shared-apps.module.js";
 import { PublicAppsModule } from "./modules/public-apps/public-apps.module.js";
 import { KeycloakOidcModule } from "./modules/keycloak-oidc/keycloak-oidc.module.js";
@@ -49,6 +50,7 @@ import { VaultModule } from "./modules/vault/vault.module.js";
     SecureInputModule,
     SecretLinksModule,
     VoiceTranscriptionModule,
+    PerfModule,
     SharedAppsModule,
     PublicAppsModule,
     KeycloakOidcModule,

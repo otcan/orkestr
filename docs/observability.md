@@ -71,6 +71,34 @@ ORKESTR_STRUCTURED_ACCESS_LOGS=1
 The log entry includes request id, method, scrubbed route, status code,
 duration, response size, and timestamp.
 
+## Perf Log and `orkestr doctor perf`
+
+The server keeps a durable performance record on the box it runs on, enabled
+by default (`ORKESTR_PERF_LOG=0` turns it off):
+
+- `ORKESTR_HOME/observability/requests-YYYY-MM-DD.jsonl`: one line per HTTP
+  request with time, method, normalized route template, status (0 when the
+  client aborted), duration, response bytes, auth kind (`user`, `machine`,
+  `share`, `anonymous`, `none`) and the in-flight request count. Query strings,
+  bodies, headers, tokens, user ids and long or token-like path segments are
+  never written.
+- `ORKESTR_HOME/observability/health-YYYY-MM-DD.jsonl`: a sample every
+  `ORKESTR_PERF_SAMPLE_INTERVAL_MS` (default 30000) with host load, CPU,
+  memory, swap and disk, the busiest process names by CPU over the interval
+  (names only, never command lines), and the Orkestr server's CPU, RSS/heap,
+  event-loop delay, in-flight requests and sqlite store sizes.
+
+Files are 0600 in a 0700 directory and are pruned after
+`ORKESTR_PERF_LOG_RETENTION_DAYS` (default 14, max 90). Writes are buffered
+and appended every few seconds, off the request path.
+
+`orkestr doctor perf [--window 15m|1h|6h|1d] [--json]` (admin API
+`GET /api/system/perf?window=1h`) summarizes the window: overall latency
+percentiles, routes by total time with p50/p95/max and 5xx counts, the
+slowest requests, host and server health, and findings such as
+`event_loop_blocked`, `cpu_saturated`, `swap_pressure`, `slow_route` and
+`failing_route`.
+
 ## Self-Hosted Install Pattern
 
 A minimal single-box stack is:
