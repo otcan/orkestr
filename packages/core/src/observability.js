@@ -5,8 +5,10 @@ import {
   evaluateRuntimeControlReleaseGate,
   recordRuntimeControlMetric,
 } from "./runtime-control-observability.js";
+import { redactedRouteTemplate, routeTemplateFromUrl } from "./route-template.js";
 
 export { evaluateRuntimeControlReleaseGate, recordRuntimeControlMetric };
+export { redactedRouteTemplate, routeTemplateFromUrl };
 
 const httpDurationBuckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30];
 const httpResponseSizeBuckets = [100, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000, 5000000];
@@ -103,57 +105,11 @@ export function requestIdFromHeaders(headers = {}) {
   return clean(headers["x-request-id"] || headers["x-correlation-id"]) || randomUUID();
 }
 
-export function routeTemplateFromUrl(rawUrl = "") {
-  const pathname = clean(String(rawUrl || "").split("?")[0]) || "/";
-  if (pathname === "/") return "/";
-  const parts = pathname.split("/").filter(Boolean);
-  const normalized = [];
-  for (let index = 0; index < parts.length; index += 1) {
-    const previous = lower(parts[index - 1]);
-    const current = safeRouteSegment(parts[index]);
-    if (previous === "threads") normalized.push(":threadId");
-    else if (previous === "task-agents") normalized.push(":taskAgentId");
-    else if (previous === "tenant-vms") normalized.push(":tenantVmId");
-    else if (previous === "tenant-slices") normalized.push(":tenantSliceId");
-    else if (previous === "browser-sessions") normalized.push(":desktopSlug");
-    else if (previous === "browsers") normalized.push(":desktopSlug");
-    else if (previous === "desktops" && current !== "leases") normalized.push(":desktopSlug");
-    else if (previous === "desktop") normalized.push(":desktopSlug");
-    else if (previous === "desktop-shares") normalized.push(":shareId");
-    else if (previous === "router-traces") normalized.push(":routerTraceId");
-    else if (previous === "accounts") normalized.push(":accountId");
-    else if (previous === "attachments") normalized.push(":attachmentId");
-    else if (previous === "leases") normalized.push(":leaseId");
-    else if (previous === "i" || previous === "a" || previous === "s") normalized.push(":id");
-    else if (looksDynamicSegment(current)) normalized.push(":id");
-    else normalized.push(current);
-  }
-  return `/${normalized.join("/")}`;
-}
-
-function safeRouteSegment(segment = "") {
-  try {
-    return decodeURIComponent(clean(segment));
-  } catch {
-    return clean(segment);
-  }
-}
-
-function looksDynamicSegment(segment = "") {
-  const value = clean(segment);
-  if (!value) return false;
-  if (value.includes("@")) return true;
-  if (/^[0-9a-f]{12,}$/i.test(value)) return true;
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) return true;
-  if (/^(att|co|desk|task|turn|msg|msgx|exec|lease)[-_][a-z0-9_-]+$/i.test(value)) return true;
-  return value.length > 40 && /[0-9]/.test(value);
-}
-
 export function recordHttpRequest({ method = "GET", route = "/", statusCode = 200, durationMs = 0, responseBytes = 0 } = {}) {
   const status = Number(statusCode) || 0;
   const labels = {
     method: clean(method).toUpperCase() || "GET",
-    route: routeTemplateFromUrl(route),
+    route: redactedRouteTemplate(route),
     status_class: statusClass(status),
   };
   incrementCounter("orkestr_http_requests_total", labels);
@@ -266,7 +222,7 @@ export function createObservabilityMiddleware(env = process.env) {
     request.orkestrRequestId = requestId;
     response.setHeader("x-request-id", requestId);
     response.once("finish", () => {
-      const route = routeTemplateFromUrl(request.originalUrl || request.url || "/");
+      const route = redactedRouteTemplate(request.originalUrl || request.url || "/");
       const bytes = Number(response.getHeader("content-length") || 0) || 0;
       recordHttpRequest({
         method: request.method,

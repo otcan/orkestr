@@ -9,6 +9,7 @@ import { googleWorkspaceBrokeredConnectorSetupPath } from "../../../packages/con
 import { brokerGoogleWorkspaceOAuthPath, handleBrokerGoogleWorkspaceOAuth } from "./broker-google-workspace-oauth.js";
 import { encryptBrokerInstanceProxyPayload, resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
 import { clearSessionCookieHeaders, instanceAppSessionCookiePath, securityCookieName, securitySessionForToken } from "../../../packages/core/src/security.js";
+import { cookieHeaderValues } from "../../../packages/core/src/cookie-header.js";
 import { listTenantVms } from "../../../packages/core/src/tenant-vm-registry.js";
 import { getUser } from "../../../packages/core/src/users.js";
 import { instanceSetupReturnPath } from "./instance-connect-setup.js";
@@ -395,12 +396,7 @@ async function proxyBrokerAppHttp(request: any, response: any): Promise<void> {
 }
 
 function cookieValues(header: string, name: string): string[] {
-  const values: string[] = [];
-  for (const part of String(header || "").split(";")) {
-    const [key, ...rest] = part.trim().split("=");
-    if (key === name) values.push(decodeURIComponent(rest.join("=") || ""));
-  }
-  return values.filter(Boolean);
+  return cookieHeaderValues(header, name);
 }
 
 function sessionCreatedAtMs(session: any): number {

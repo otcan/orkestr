@@ -155,7 +155,7 @@ All routes are under `/api/vault` and use JSON.
 | PATCH | `/items/:id` | Any subset; `password: ""` clears; `totpUri: ""` clears TOTP |
 | DELETE | `/items/:id` | |
 | POST | `/items/:id/reveal` | `{ password, notes }`, recent sign-in required |
-| GET | `/items/:id/totp` | `{ code, expiresInSeconds, period, digits }` |
+| POST | `/items/:id/totp` | `{ code, expiresInSeconds, period, digits }`; HOTP items need `{ advance: true }` |
 | POST | `/items/:id/totp-secret` | `{ otpauthUri }`, recent sign-in required |
 | PUT | `/items/:id/grants` | `{ threadIds: [...] }`, the owner's own threads only |
 | POST | `/import` | See Imports |

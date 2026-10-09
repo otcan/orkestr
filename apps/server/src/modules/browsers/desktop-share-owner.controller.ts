@@ -1,5 +1,6 @@
 import { Controller, HttpCode, Param, Post, Query, Req } from "@nestjs/common";
 import { approveDesktopShareAsOwner } from "../../../../../packages/core/src/desktop-share-owner-approval.js";
+import { parseDesktopShareCookie } from "../../../../../packages/core/src/desktop-share-http.js";
 import { desktopShareSubdomainFromHost } from "../../../../../packages/core/src/desktop-shares.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { sameOriginFormPost } from "../../browser-page-security.js";
@@ -29,9 +30,7 @@ export class DesktopShareOwnerController {
   }
 }
 
-function desktopShareBrowserToken(request: any): string {
-  const raw = String(request?.headers?.cookie || "");
-  const pair = raw.split(";").map((part) => part.trim()).find((part) => part.startsWith("orkestr_desktop_share="));
-  const value = pair ? decodeURIComponent(pair.split("=").slice(1).join("=") || "") : "";
-  return String(value.split(":")[1] || "").trim();
+// A malformed cookie reads as an empty token (parseDesktopShareCookie never throws).
+export function desktopShareBrowserToken(request: any): string {
+  return parseDesktopShareCookie(request?.headers?.cookie).token;
 }

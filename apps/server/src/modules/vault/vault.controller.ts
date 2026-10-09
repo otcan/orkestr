@@ -54,18 +54,13 @@ export class VaultController {
     return revealVaultItem(vaultOwner(request, { mutating: true }), id);
   }
 
-  @Get("items/:id/totp")
-  @Header("X-Orkestr-Secure-Input", SECURE_RESPONSE_HEADER)
-  async totp(@Req() request: any, @Param("id") id: string) {
-    return ownerTotpCode(vaultOwner(request), id);
-  }
-
-  // Next counter-based (HOTP) code: advances the counter, so POST only.
+  // Issuing a code is rate limited and records lastUsedAt, so POST only (same-origin
+  // checked). Counter-based (HOTP) codes advance only with `{ "advance": true }`.
   @Post("items/:id/totp")
   @HttpCode(200)
   @Header("X-Orkestr-Secure-Input", SECURE_RESPONSE_HEADER)
-  async nextCode(@Req() request: any, @Param("id") id: string) {
-    return ownerTotpCode(vaultOwner(request, { mutating: true }), id, process.env, { advance: true });
+  async totp(@Req() request: any, @Param("id") id: string, @Body() body: JsonBody = {}) {
+    return ownerTotpCode(vaultOwner(request, { mutating: true }), id, process.env, { advance: body?.advance === true });
   }
 
   @Post("items/:id/totp-secret")

@@ -107,12 +107,12 @@ export class VaultApiService {
   }
 
   totp(id: string): Observable<VaultTotpCode> {
-    return this.http.get<VaultTotpCode>(this.item(id, "/totp"));
+    return this.http.post<VaultTotpCode>(this.item(id, "/totp"), {});
   }
 
   // Counter-based (HOTP) codes are used up when issued: explicit POST only.
   nextHotp(id: string): Observable<VaultTotpCode> {
-    return this.http.post<VaultTotpCode>(this.item(id, "/totp"), {});
+    return this.http.post<VaultTotpCode>(this.item(id, "/totp"), { advance: true });
   }
 
   totpSecret(id: string): Observable<{ otpauthUri: string }> {

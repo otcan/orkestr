@@ -10,6 +10,7 @@ import { dataPaths } from "../../storage/src/paths.js";
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { explicitCanonicalAppBase } from "./canonical-app-links.js";
 import { safePublicFetch } from "./safe-public-fetch.js";
+import { decodeComponentOrEmpty } from "./cookie-header.js";
 
 const CODE_TTL_MS = 5 * 60 * 1000;
 const ACCESS_TTL_MS = 60 * 60 * 1000;
@@ -302,7 +303,7 @@ function clientCredentials(body = {}, authorization = "") {
   const basic = /^Basic\s+(.+)$/i.exec(clean(authorization));
   if (basic) {
     const [id, ...rest] = Buffer.from(basic[1], "base64").toString("utf8").split(":");
-    return { clientId: decodeURIComponent(id || ""), secret: decodeURIComponent(rest.join(":")) };
+    return { clientId: decodeComponentOrEmpty(id), secret: decodeComponentOrEmpty(rest.join(":")) };
   }
   return { clientId: clean(body.client_id), secret: clean(body.client_secret), assertion: clean(body.client_assertion) };
 }

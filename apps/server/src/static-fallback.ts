@@ -5,6 +5,7 @@ import path from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
 import { securityCookieName, verifySecurityToken } from "../../../packages/core/src/security.js";
+import { cookieHeaderValue } from "../../../packages/core/src/cookie-header.js";
 import { resolveSharedAppShare } from "../../../packages/core/src/shared-apps.js";
 import { instanceSetupPairingRedirectPath, normalizeInstanceId } from "./instance-connect-setup.js";
 import { maybeHandleInstanceEntry } from "./instance-entry.js";
@@ -213,12 +214,7 @@ async function requestHasSecuritySession(request: any, env = process.env) {
 }
 
 function cookieValue(header: string, name: string) {
-  const raw = String(header || "");
-  for (const part of raw.split(";")) {
-    const [key, ...rest] = part.trim().split("=");
-    if (key === name) return decodeURIComponent(rest.join("=") || "");
-  }
-  return "";
+  return cookieHeaderValue(header, name);
 }
 
 function requestHostHeader(request: any) {

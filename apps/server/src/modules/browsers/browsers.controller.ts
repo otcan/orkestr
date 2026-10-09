@@ -32,6 +32,7 @@ import {
 } from "../../../../../packages/core/src/desktop-shares.js";
 import { assertDesktopActionSanitized } from "../../../../../packages/core/src/desktop-action-sanitizer.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
+import { parseDesktopShareCookie } from "../../../../../packages/core/src/desktop-share-http.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../../../packages/core/src/policy.js";
 import { getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
 import {
@@ -383,10 +384,7 @@ export class BrowsersController {
   }
 
   private desktopShareBrowserToken(request: any): string {
-    const raw = String(request?.headers?.cookie || "");
-    const pair = raw.split(";").map((part) => part.trim()).find((part) => part.startsWith("orkestr_desktop_share="));
-    const value = pair ? decodeURIComponent(pair.split("=").slice(1).join("=") || "") : "";
-    return String(value.split(":")[1] || "").trim();
+    return parseDesktopShareCookie(request?.headers?.cookie).token;
   }
 
   private async desktopShareFailure(error: any, response: any, shareId: string, key: string, subdomain: string) {

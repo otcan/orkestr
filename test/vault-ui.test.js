@@ -96,6 +96,7 @@ test("vault API service uses the agreed endpoints", async () => {
   api.deleteItem("item-1");
   api.reveal("item-1");
   api.totp("item-1");
+  api.nextHotp("item-1");
   api.totpSecret("item-1");
   api.importItems("auto", "csv");
   api.setGrants("item-1", ["thread-a"]);
@@ -109,7 +110,8 @@ test("vault API service uses the agreed endpoints", async () => {
     "PATCH /api/vault/items/item%2F1",
     "DELETE /api/vault/items/item-1",
     "POST /api/vault/items/item-1/reveal",
-    "GET /api/vault/items/item-1/totp",
+    "POST /api/vault/items/item-1/totp",
+    "POST /api/vault/items/item-1/totp",
     "POST /api/vault/items/item-1/totp-secret",
     "POST /api/vault/import",
     "PUT /api/vault/items/item-1/grants",
@@ -119,8 +121,10 @@ test("vault API service uses the agreed endpoints", async () => {
     "GET /api/vault/status",
   ]);
   assert.deepEqual(plain(calls[2][2]), { password: "" });
-  assert.deepEqual(plain(calls[7][2]), { format: "auto", content: "csv" });
-  assert.deepEqual(plain(calls[8][2]), { threadIds: ["thread-a"] });
+  assert.deepEqual(plain(calls[5][2]), {});
+  assert.deepEqual(plain(calls[6][2]), { advance: true });
+  assert.deepEqual(plain(calls[8][2]), { format: "auto", content: "csv" });
+  assert.deepEqual(plain(calls[9][2]), { threadIds: ["thread-a"] });
 });
 
 async function vaultPage(api, context = {}) {

@@ -13,6 +13,7 @@ import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
 import { readJobsJdCacheAccessRecords } from "./jobs-jd-cache-mcp.js";
 import { readWhatsAppScopedTokenRecords } from "./whatsapp-scoped-tokens.js";
 import { reviewerBrowserSessionActive, reviewerBrowserSessionFields } from "./reviewer-browser-session.js";
+import { cookieHeaderValues } from "./cookie-header.js";
 
 const execFileAsync = promisify(execFile);
 const cookieName = "orkestr_session";
@@ -474,13 +475,7 @@ function isLocalRequest(request) {
 }
 
 function cookieValues(header, name = cookieName) {
-  const raw = String(header || "");
-  const values = [];
-  for (const part of raw.split(";")) {
-    const [key, ...rest] = part.trim().split("=");
-    if (key === name) values.push(decodeURIComponent(rest.join("=") || ""));
-  }
-  return values.filter(Boolean);
+  return cookieHeaderValues(header, name);
 }
 
 function cookieValue(header, name = cookieName) {
