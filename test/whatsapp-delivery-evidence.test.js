@@ -7,11 +7,11 @@ import { publicWhatsAppPartialDelivery, whatsappFailureEvidence, whatsappOperato
 import { setLocalWhatsAppRuntimeForTest, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage } from "../packages/connectors/src/whatsapp-local-bridge.js";
 
 test("operator media diagnostic is bounded, redacted and excluded from public evidence", () => {
-  const error = Error("ProviderFault media pipeline: Bearer secret-token /private/fixture.txt https://provider.invalid/private?token=hidden 120363424540095970@g.us sensitive-cover filename.txt " + "x".repeat(600));
+  const error = Error("ProviderFault media pipeline: Bearer secret-token /private/fixture.txt https://provider.invalid/private?token=hidden 120363000000000002@g.us sensitive-cover filename.txt " + "x".repeat(600));
   const diagnostic = whatsappOperatorFailureDiagnostic(error, "send_media", ["sensitive-cover", "filename.txt"]);
   assert.equal(diagnostic.failureFingerprint, whatsappFailureEvidence(error, "send_media").failureFingerprint);
   assert.match(diagnostic.diagnostic, /ProviderFault media pipeline/);
-  for (const value of ["secret-token", "/private", "provider.invalid", "hidden", "120363424540095970", "sensitive-cover", "filename.txt", "x".repeat(32)]) assert.equal(diagnostic.diagnostic.includes(value), false);
+  for (const value of ["secret-token", "/private", "provider.invalid", "hidden", "120363000000000002", "sensitive-cover", "filename.txt", "x".repeat(32)]) assert.equal(diagnostic.diagnostic.includes(value), false);
   assert.ok(diagnostic.diagnostic.length <= 512);
   assert.equal(publicWhatsAppPartialDelivery(diagnostic).diagnostic, undefined);
 });
