@@ -87,6 +87,15 @@ test("vault API: owner endpoints, agent endpoints and approval flow", async (t) 
   });
   assert.equal(imported.status, 200, imported.text);
   assert.deepEqual(imported.json, { imported: 1, skipped: 0, withTotp: 0, reasons: [] });
+  // The large import body is parsed only after authentication: an anonymous
+  // malformed body is rejected by auth (401), not by the JSON parser (400).
+  const anonymousImport = await request(port, "POST", "/api/vault/import", { body: `{"content":"${"x".repeat(200_000)}"` });
+  assert.equal(anonymousImport.status, 401, anonymousImport.text);
+  const bigImport = await request(port, "POST", "/api/vault/import", {
+    cookie: alice,
+    body: { format: "auto", content: `name,url,username,password,note\nbig,https://big.example.com,alice,import-synthetic-pw,${"n".repeat(300_000)}\n` },
+  });
+  assert.equal(bigImport.status, 200, bigImport.text.slice(0, 200));
 
   // Agent endpoints: CLI credential only, granted items only.
   const agentQuery = "/api/vault/agent/items?threadId=vault-api-thread";

@@ -101,13 +101,30 @@ export async function prunePerfLogs(env = process.env, at = new Date()) {
   }
 }
 
-// Route templates from observability.js, plus a stricter pass for the durable
-// log: long or token-like segments become :id so file names, tokens and other
-// free-form values never reach disk.
+// Route templates from observability.js, plus a stricter allowlist pass for
+// the durable log: only segments shaped like static route words survive
+// (lowercase letters, dots, hyphens, or a short word with a version digit, as
+// every controller path uses). Anything else (tokens, user ids, phone numbers,
+// chat ids, file names) becomes :id, and the segment after /users/ is always
+// :userId unless it is a fixed sub-route.
+const STATIC_SEGMENT = /^(?:\.?[a-z][a-z.-]{0,39}|[a-z]{1,12}[0-9]{1,2})$/;
+const ID_PARENTS = new Map([
+  ["users", ["me", "credit-usage"]],
+  ["chats", []],
+  ["desktop-share", []],
+]);
+
+function perfSegment(segment, previous) {
+  if (segment.startsWith(":")) return segment;
+  const fixed = ID_PARENTS.get(previous);
+  if (fixed && !fixed.includes(segment)) return previous === "users" ? ":userId" : ":id";
+  return STATIC_SEGMENT.test(segment) ? segment : ":id";
+}
+
 export function perfRouteTemplate(rawUrl = "") {
   const route = routeTemplateFromUrl(rawUrl)
     .split("/")
-    .map((segment) => (segment.length > 32 || (/[0-9]/.test(segment) && /[a-z]/i.test(segment) && segment.length > 16) ? ":id" : segment))
+    .map((segment, index, parts) => (index === 0 ? segment : perfSegment(segment, parts[index - 1])))
     .join("/");
   return route.length > 160 ? `${route.slice(0, 157)}...` : route;
 }

@@ -33,6 +33,14 @@ test("perf route templates drop ids, tokens, file names and query strings", () =
   assert.equal(perfRouteTemplate("/files/quarterly-report-2026-final-version-for-board.pdf"), "/files/:id");
   assert.equal(perfRouteTemplate("/api/vault/items/a1b2c3d4e5f6a7b8c9d0"), "/api/vault/items/:id");
   assert.equal(perfRouteTemplate("/api/vault/items"), "/api/vault/items");
+  assert.equal(perfRouteTemplate("/api/users/alice/skills"), "/api/users/:userId/skills");
+  assert.equal(perfRouteTemplate("/api/users/me/skills"), "/api/users/me/skills");
+  assert.equal(perfRouteTemplate("/api/whatsapp/chats/+15550100123"), "/api/whatsapp/chats/:id");
+  assert.equal(perfRouteTemplate("/desktop-share/abcdefghijklmnop"), "/desktop-share/:id");
+  assert.equal(perfRouteTemplate("/s/shortlettertoken"), "/s/:id");
+  assert.equal(perfRouteTemplate("/api/apps/demo/share/kXzQpRtLmNbVcXzAs"), "/api/apps/demo/share/:id");
+  assert.equal(perfRouteTemplate("/api/desktop-shares/d-1/approve-as-owner"), "/api/desktop-shares/:shareId/approve-as-owner");
+  assert.equal(perfRouteTemplate("/.well-known/oauth2/v1/health"), "/.well-known/oauth2/v1/health");
 });
 
 test("request log middleware records route, status, timing and auth kind only", async (t) => {
