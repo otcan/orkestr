@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { migrateLegacyDesktopGrants } from "./thread-resource-policy-sqlite-migration.js";
 import { readThreadResourceAccessSqliteState, readThreadResourcePolicySqliteState as readState } from "./thread-resource-policy-sqlite-state.js";
+import { cachedSqliteState, invalidateSqliteStateCache, mutableSqliteState } from "./thread-resource-policy-sqlite-cache.js";
 import { assertTestStoragePath } from "../../storage/src/test-storage-isolation.js";
 import {
   clearThreadResourcePolicyPostgresCache,
@@ -421,6 +422,16 @@ function replaceState(db, state = {}, auditOutboxUpserts = []) {
   setMeta(db, "updated_at", state.updatedAt || new Date().toISOString());
 }
 
+// Invalidate before the commit becomes visible, so no read on this
+// connection can be served a pre-write snapshot (e.g. a revoked grant).
+function commitOutcome(db, outcome) {
+  if (outcome?.state && outcome.persist !== false) {
+    replaceState(db, outcome.state, outcome.auditOutboxUpserts);
+    invalidateSqliteStateCache(db);
+  }
+  db.exec("commit");
+}
+
 export async function withThreadResourcePolicyTransaction(operation, env = process.env) {
   const mode = threadResourcePolicyStoreMode(env);
   if (mode === "postgres" || mode === "postgresql") return withThreadResourcePolicyPostgresTransaction(operation, env);
@@ -429,14 +440,14 @@ export async function withThreadResourcePolicyTransaction(operation, env = proce
   const run = previous.catch(() => undefined).then(() => {
     db.exec("begin immediate");
     try {
-      const state = readState(db);
+      const state = mutableSqliteState(db, readState);
       const outcome = operation(state);
       if (outcome && typeof outcome.then === "function") throw new Error("thread_resource_policy_transaction_async_operation_forbidden");
-      if (outcome?.state && outcome.persist !== false) replaceState(db, outcome.state, outcome.auditOutboxUpserts);
-      db.exec("commit");
+      commitOutcome(db, outcome);
       return outcome;
     } catch (error) {
       db.exec("rollback");
+      invalidateSqliteStateCache(db);
       throw error;
     }
   });
@@ -455,13 +466,13 @@ export async function withThreadResourcePolicyDeliveryFence(operation, env = pro
   const run = previous.catch(() => undefined).then(async () => {
     db.exec("begin immediate");
     try {
-      const state = readState(db);
+      const state = mutableSqliteState(db, readState);
       const outcome = await operation(state);
-      if (outcome?.state && outcome.persist !== false) replaceState(db, outcome.state, outcome.auditOutboxUpserts);
-      db.exec("commit");
+      commitOutcome(db, outcome);
       return outcome;
     } catch (error) {
       db.exec("rollback");
+      invalidateSqliteStateCache(db);
       throw error;
     }
   });
@@ -472,13 +483,12 @@ export async function withThreadResourcePolicyDeliveryFence(operation, env = pro
 export async function readThreadResourcePolicyState(env = process.env) {
   const mode = threadResourcePolicyStoreMode(env);
   if (mode === "postgres" || mode === "postgresql") return readThreadResourcePolicyPostgresState(env);
-  const db = await openThreadResourcePolicyDatabase(env);
-  return readState(db);
+  return cachedSqliteState(await openThreadResourcePolicyDatabase(env), "full", readState);
 }
 
 // The subset an access decision needs; see readThreadResourceAccessSqliteState.
 export async function readThreadResourceAccessState(env = process.env) {
   const mode = threadResourcePolicyStoreMode(env);
   if (mode === "postgres" || mode === "postgresql") return readThreadResourcePolicyPostgresState(env);
-  return readThreadResourceAccessSqliteState(await openThreadResourcePolicyDatabase(env));
+  return cachedSqliteState(await openThreadResourcePolicyDatabase(env), "access", readThreadResourceAccessSqliteState);
 }
