@@ -7,6 +7,13 @@ import { isVaultReauthRequired, vaultErrorMessage } from "./vault-secrets";
 // Owner-triggered fill: the server types the credential into the focused
 // field of a managed desktop. The value never reaches this page.
 
+function fillFailureMessage(reason = ""): string {
+  if (reason === "focus_not_password_field") return "Nothing was typed: click into the password field on the desktop first.";
+  if (reason === "focus_not_username_field") return "Nothing was typed: click into the username field on the desktop first.";
+  if (reason === "focus_unverifiable") return "Nothing was typed: Orkestr could not check which field has focus on this desktop.";
+  return "The desktop did not accept the keystrokes.";
+}
+
 @Component({
   selector: "ork-vault-fill-dialog",
   templateUrl: "./vault-fill-dialog.component.html",
@@ -52,7 +59,7 @@ export class VaultFillDialogComponent implements OnInit {
     try {
       const result = await firstValueFrom(this.api.fill(this.item.id, { desktop: this.desktop, field: this.field, submit: this.submitAfter }));
       if (result?.status === "filled") this.filled.emit(this.desktop);
-      else this.error = "The desktop did not accept the keystrokes.";
+      else this.error = fillFailureMessage(result?.reason);
     } catch (error) {
       if (isVaultReauthRequired(error)) this.reauth.emit();
       else this.error = vaultErrorMessage(error, "Could not fill into the desktop.");

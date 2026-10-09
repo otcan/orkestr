@@ -121,8 +121,8 @@ export class VaultApiService {
     return this.http.post<{ otpauthUri: string }>(this.item(id, "/totp-secret"), {});
   }
 
-  fill(id: string, body: { desktop: string; field: VaultFillField; submit: boolean }): Observable<{ status: "filled" | "failed" }> {
-    return this.http.post<{ status: "filled" | "failed" }>(this.item(id, "/fill"), body);
+  fill(id: string, body: { desktop: string; field: VaultFillField; submit: boolean }): Observable<{ status: "filled" | "failed"; reason?: string }> {
+    return this.http.post<{ status: "filled" | "failed"; reason?: string }>(this.item(id, "/fill"), body);
   }
 
   importItems(format: VaultImportFormat, content: string): Observable<VaultImportResult> {

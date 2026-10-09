@@ -1,7 +1,7 @@
 <div class="modal-backdrop" (click)="close.emit()">
   <form class="worker-dialog vault-dialog" (click)="$event.stopPropagation()" (submit)="$event.preventDefault(); submit()">
     <h3>Fill {{ item.name }} into a desktop</h3>
-    <p class="vault-dialog-text">Click into the login field on the desktop first. Orkestr types into whatever field has focus; the value is not shown here or copied to the clipboard.</p>
+    <p class="vault-dialog-text">Click into the login field on the desktop first. Orkestr checks that a password (or username) field has focus before typing; the value is not shown here or copied to the clipboard.</p>
     @if (loading) {
       <p class="vault-dialog-text">Loading desktops…</p>
     } @else if (desktops.length) {

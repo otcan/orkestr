@@ -3,7 +3,8 @@ import { requestJson } from "./api-client.js";
 // `orkestr vault fill <item> --desktop <slug> [--field username|password|both] [--submit]`
 // Types a granted credential into the focused field of a managed desktop the
 // calling thread holds the lease on. The value never reaches this process;
-// the server reports only "filled" or "failed".
+// the server reports only "filled" or "failed" with a value-free reason
+// (e.g. focus_not_password_field when the focus is not a password input).
 
 export const VAULT_FILL_USAGE = "  orkestr vault fill <item> --desktop <slug> [--field username|password|both] [--submit] [--json]";
 
@@ -35,6 +36,8 @@ export async function vaultFillCommand(argv, threadId, ctx, json, usage) {
     body: { threadId, item, desktop, field, submit: argv.includes("--submit") },
   });
   const status = payload?.status === "filled" ? "filled" : "failed";
-  ctx.stdout.write(json ? `${JSON.stringify({ status })}\n` : `${status}\n`);
+  const reason = status === "failed" ? String(payload?.reason || "").replace(/[^a-z_]/g, "").slice(0, 60) : "";
+  const result = reason ? { status, reason } : { status };
+  ctx.stdout.write(json ? `${JSON.stringify(result)}\n` : `${status}${reason ? ` (${reason})` : ""}\n`);
   return status === "filled" ? 0 : 1;
 }

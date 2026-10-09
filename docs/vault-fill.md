@@ -3,7 +3,8 @@
 `orkestr vault fill` types a vault credential into the field that currently
 has keyboard focus on a managed browser desktop. The agent never sees the
 value: the server reads it from the vault and hands it straight to the
-desktop's keystroke process. The response is only `filled` or `failed`.
+desktop's keystroke process. The response is only `filled` or `failed` with a
+value-free reason.
 
 ```sh
 orkestr vault fill "Example Login" --desktop example-desk                  # password
@@ -13,6 +14,28 @@ orkestr vault fill "Example Login" --desktop example-desk --field both --submit
 
 `--field both` types the username, presses Tab, then types the password.
 `--submit` presses Enter afterwards. Exit code 0 means `filled`.
+
+## Focus check
+
+Before each value is typed, Orkestr asks the desktop's Chrome through
+DevTools which element has focus. This is read-only: one `Runtime.evaluate`
+of `document.hasFocus()` / `document.activeElement` per open tab, no input,
+no navigation, no field values. Exactly one tab must have focus, and:
+
+| Typing | Focused element must be | Otherwise |
+| --- | --- | --- |
+| password | a writable `input type=password` | `focus_not_password_field` |
+| username | a writable `input type=text` or `type=email` | `focus_not_username_field` |
+| both | first a username input whose form has a password input; after Tab, a password input | as above |
+
+Focus in the address bar, a search box, another browser window or an iframe
+does not pass, so nothing is typed. If DevTools is unreachable (the desktop
+has no `cdp_url`), the fill fails with `focus_unverifiable`. Only the owner
+can override that case with `"allowUnverifiedFocus": true` on
+`POST /api/vault/items/:id/fill`; a focus that is known to be wrong is always
+refused. Refused fills type nothing and do not use up a single-use item.
+Failures return `{ "status": "failed", "reason": "..." }` (also
+`typing_failed`) and are audited with the reason.
 
 ## Rules
 
@@ -43,15 +66,16 @@ and the **clipboard is never used**. Key presses (Tab, Enter) are separate
 overrides the `xdotool` binary (tests use a fake).
 
 HTTP: `POST /api/vault/agent/fill {item, desktop, field?, submit?}` (agent) and
-`POST /api/vault/items/:id/fill {desktop, field?, submit?}` (owner).
+`POST /api/vault/items/:id/fill {desktop, field?, submit?, allowUnverifiedFocus?}`
+(owner).
 
 ## Limits
 
-- **Focused-field targeting only.** Orkestr does not check which element has
-  focus. If the focus is in the address bar, a search box or a visible text
-  field, the value is typed there and is visible on screen, including to an
-  agent that can take screenshots of the desktop. Click into the right field
-  first.
+- **Focused-field targeting.** Values go to the focused field, so click into
+  it first. The focus check stops the address bar, search boxes and text
+  areas, but cannot tell a real login form from a page that only imitates
+  one, and the focus can change in the short gap between check and typing.
+- Login forms inside iframes are refused (the focused element is the iframe).
 - Only desktops started by the local `browserctl` with an X display are
   supported; remote browser providers return `vault_fill_desktop_unsupported`.
 - The keyboard layout of the desktop must match the characters of the value;

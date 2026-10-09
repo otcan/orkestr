@@ -12,13 +12,13 @@ function capture() {
   return { write(value) { text += String(value); }, text: () => text };
 }
 
-async function run(argv, status = "filled") {
+async function run(argv, payload = { status: "filled" }) {
   const stdout = capture();
   const stderr = capture();
   const seen = [];
   const fetchImpl = async (target, options = {}) => {
     seen.push({ url: String(target), method: options.method, headers: options.headers || {}, body: options.body ? JSON.parse(options.body) : null });
-    return new Response(JSON.stringify({ status }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
   };
   const code = await runCli(argv, { env, stdout, stderr, fetchImpl, cwd: "/tmp/example-workspace" });
   return { code, stdout: stdout.text(), stderr: stderr.text(), seen };
@@ -36,9 +36,11 @@ test("vault fill posts item and desktop with the thread token and prints only th
 });
 
 test("vault fill reports failures and rejects bad usage and value flags", async () => {
-  const failed = await run(["vault", "fill", "Example Login", "--desktop=example-desk", "--json"], "failed");
+  const failed = await run(["vault", "fill", "Example Login", "--desktop=example-desk", "--json"], { status: "failed", reason: "focus_not_password_field" });
   assert.equal(failed.code, 1);
-  assert.equal(failed.stdout, "{\"status\":\"failed\"}\n");
+  assert.equal(failed.stdout, "{\"status\":\"failed\",\"reason\":\"focus_not_password_field\"}\n");
+  const plain = await run(["vault", "fill", "Example Login", "--desktop", "example-desk"], { status: "failed", reason: "focus_unverifiable" });
+  assert.equal(plain.stdout, "failed (focus_unverifiable)\n");
   assert.equal(failed.seen[0].body.field, "password");
   const missingDesktop = await run(["vault", "fill", "Example Login"]);
   assert.notEqual(missingDesktop.code, 0);

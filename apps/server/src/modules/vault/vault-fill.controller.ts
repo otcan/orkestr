@@ -4,7 +4,7 @@ import { agentFillDesktop, ownerFillDesktop } from "../../../../../packages/core
 import { vaultAgent, vaultOwner } from "./vault-request.js";
 
 // Fill a vault credential into the focused field of a managed desktop
-// (docs/vault.md). Responses are `{ status: "filled" | "failed" }` only.
+// (docs/vault-fill.md). Responses are `{ status: "filled" | "failed", reason? }`.
 
 type JsonBody = Record<string, unknown>;
 
@@ -28,6 +28,7 @@ export class VaultFillController {
   @Post("items/:id/fill")
   @HttpCode(200)
   async ownerFill(@Req() request: any, @Param("id") id: string, @Body() body: JsonBody = {}) {
-    return ownerFillDesktop(vaultOwner(request, { mutating: true }), id, fillInput(body));
+    const input = { ...fillInput(body), allowUnverifiedFocus: body?.allowUnverifiedFocus === true };
+    return ownerFillDesktop(vaultOwner(request, { mutating: true }), id, input);
   }
 }
