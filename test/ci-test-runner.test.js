@@ -153,3 +153,9 @@ test("CI test runner scrubs production connector and public URL env", () => {
   assert.equal(env.ORKESTR_WHATSAPP_BRIDGE_TOKEN, undefined);
   assert.equal(env.ORKESTR_WHATSAPP_INBOUND_TOKEN, undefined);
 });
+
+test("CI test runner accepts --shard i/n", () => {
+  assert.deepEqual(parseCiTestRunnerArgs(["--shard", "3/4"], { CI_NODE_INDEX: "0" }).shard, { index: 2, total: 4, displayIndex: 3 });
+  assert.throws(() => parseCiTestRunnerArgs(["--shard", "3"], {}), /expected i\/n/);
+  assert.throws(() => parseCiTestRunnerArgs(["--shard", "5/4"], {}), /Invalid test shard index/);
+});

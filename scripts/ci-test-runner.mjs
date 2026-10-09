@@ -1,4 +1,5 @@
-import { publishFailedTests } from "./ci-test-failure-report.mjs";
+import { failedTests, publishFailedTests } from "./ci-test-failure-report.mjs";
+import { flakyReport, loadFlakyManifest, planFlakyRetry, publishFlakyReport } from "./ci-test-flaky.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -219,12 +220,16 @@ export function selectShardFiles(files = [], shard = { index: 0, total: 1 }) {
 export function parseCiTestRunnerArgs(argv = process.argv.slice(2), env = process.env) {
   const ciNodeIndex = clean(env.CI_NODE_INDEX);
   const explicitShardIndex = clean(env.ORKESTR_TEST_SHARD_INDEX);
+  // `--shard i/n` (one-based) is shorthand for --shard-index i --shard-total n.
+  const shardFlag = flagValue(argv, "--shard");
+  const shardPair = /^(\d+)\/(\d+)$/u.exec(shardFlag);
+  if (shardFlag && !shardPair) throw new Error(`Invalid --shard value ${shardFlag}; expected i/n`);
   const shard = normalizeShard({
-    index: flagValue(argv, "--shard-index", clean(explicitShardIndex || ciNodeIndex || "1")),
-    total: flagValue(argv, "--shard-total", clean(env.ORKESTR_TEST_SHARD_TOTAL || env.CI_NODE_TOTAL || "1")),
-    zeroBased: hasFlag(argv, "--shard-zero-based") ||
+    index: shardPair?.[1] || flagValue(argv, "--shard-index", clean(explicitShardIndex || ciNodeIndex || "1")),
+    total: shardPair?.[2] || flagValue(argv, "--shard-total", clean(env.ORKESTR_TEST_SHARD_TOTAL || env.CI_NODE_TOTAL || "1")),
+    zeroBased: !shardPair && (hasFlag(argv, "--shard-zero-based") ||
       truthy(env.ORKESTR_TEST_SHARD_ZERO_BASED) ||
-      (!explicitShardIndex && Boolean(ciNodeIndex)),
+      (!explicitShardIndex && Boolean(ciNodeIndex))),
   });
   return {
     plan: hasFlag(argv, "--plan"),
@@ -240,6 +245,8 @@ export function parseCiTestRunnerArgs(argv = process.argv.slice(2), env = proces
     progress: truthy(env.ORKESTR_TEST_PROGRESS),
     progressEvery: positiveInteger(clean(env.ORKESTR_TEST_PROGRESS_EVERY || "10"), 10),
     heartbeatMs: nonNegativeInteger(env.ORKESTR_TEST_PROGRESS_HEARTBEAT_MS, 60_000),
+    flakyRetry: env.ORKESTR_TEST_FLAKY_RETRY !== "0",
+    reportEnv: { GITHUB_ACTIONS: env.GITHUB_ACTIONS, GITHUB_STEP_SUMMARY: env.GITHUB_STEP_SUMMARY },
     shard,
   };
 }
@@ -320,22 +327,42 @@ export async function runCiTests(options = parseCiTestRunnerArgs(), logger = con
     return { ok: true, code: 0 };
   }
 
-  const childEnv = buildCiTestEnv(process.env);
-  // When the runner itself runs under node --test, an inherited context would
-  // switch the nested runner to the internal child protocol instead of TAP.
-  delete childEnv.NODE_TEST_CONTEXT;
-  const result = await runTestChild({
-    args: testArgs,
+  // Validate the flaky manifest before running so a malformed entry fails fast.
+  const flakyManifest = options.flakyRetry === false ? [] : loadFlakyManifest(options.root);
+  const runFiles = (selected) => {
+    const childEnv = buildCiTestEnv(process.env);
+    // When the runner itself runs under node --test, an inherited context would
+    // switch the nested runner to the internal child protocol instead of TAP.
+    delete childEnv.NODE_TEST_CONTEXT;
+    return runChild(options, logger, childEnv, buildNodeTestArgs(options, selected), selected.length);
+  };
+  let result = await runFiles(files);
+  if (result.exitCode !== 0 && !result.timedOut) {
+    const retried = planFlakyRetry(failedTests(result.output.split(/\r?\n/), options.root), flakyManifest);
+    if (retried.length) {
+      logger.log(`Only files marked flaky failed; retrying once: ${retried.join(", ")}`);
+      result = await runFiles(retried);
+      publishFlakyReport(flakyReport({ retried, passed: result.exitCode === 0 && !result.timedOut, manifest: flakyManifest }), { env: options.reportEnv || {}, log: logger });
+    }
+  }
+  return reportResult(result, options, logger);
+}
+
+function runChild(options, logger, env, args, totalFiles) {
+  return runTestChild({
+    args,
     cwd: options.root,
-    env: childEnv,
-    totalFiles: files.length,
+    env,
+    totalFiles,
     watchdogMs: options.watchdogMs ?? defaultWatchdogMs,
     stdioGraceMs: options.stdioGraceMs ?? 5_000,
     progressEvery: options.progress ? positiveInteger(options.progressEvery, 10) : 0,
     heartbeatMs: options.progress ? nonNegativeInteger(options.heartbeatMs, 60_000) : 0,
     log: (line) => logger.log(line),
   });
+}
 
+function reportResult(result, options, logger) {
   if (result.timedOut) {
     reportWatchdog(result, options, logger);
     return { ok: false, code: 124, timedOut: true };
