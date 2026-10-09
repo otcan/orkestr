@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { createPasswdResolver, gitOwnerAllowlist } from "../packages/core/src/git-owner-exec.js";
 import { createThread } from "../packages/core/src/threads.js";
-import { detectThreadGitState, syncSafeThreadWorkersWithParents } from "../packages/core/src/thread-workers.js";
+import { createThreadWorker, detectThreadGitState, syncSafeThreadWorkersWithParents } from "../packages/core/src/thread-workers.js";
 import { pushWorkerOwnBranch } from "../packages/core/src/worker-branch-push.js";
 
 const exec = promisify(execFile);
@@ -105,4 +105,18 @@ test("root pushes an allowlisted owner's worker branch as that owner", { skip },
   assert.equal((await fs.lstat(path.join(remote, "refs", "heads", "worker"))).uid, owner.uid);
   assert.equal((await fs.lstat(path.join(repo, ".git", "config"))).uid, owner.uid);
   assert.equal((await fs.lstat(path.join(repo, ".git", "refs", "remotes", "origin", "worker"))).uid, owner.uid);
+});
+
+test("root creates a worker from an allowlisted owner's checkout as that owner", { skip }, async t => {
+  const { root, repo, env } = await ownerFixture(t);
+  const parent = await createThread({ id: "example-parent", cwd: repo }, env);
+  const worktreePath = path.join(root, "worktrees", "example-parent", "new-worker");
+  const result = await createThreadWorker(parent.id, { id: "example-worker", worktreePath, autoRun: false }, { ...env, HOME: "/nonexistent" });
+  assert.equal(result.worker.worktreePath || result.worker.cwd, worktreePath);
+  for (const entry of [worktreePath, path.dirname(worktreePath), path.join(root, "worktrees")]) {
+    assert.equal((await fs.stat(entry)).uid, owner.uid, entry);
+  }
+  const refs = await fs.readdir(path.join(repo, ".git", "refs", "heads"));
+  assert.ok(refs.length >= 2);
+  for (const ref of refs) assert.equal((await fs.stat(path.join(repo, ".git", "refs", "heads", ref))).uid, owner.uid);
 });

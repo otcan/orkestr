@@ -179,6 +179,17 @@ async function pathExists(filePath) {
   return Boolean(await fs.stat(filePath).catch(() => null));
 }
 
+// Creates missing parent directories and hands any newly created ones to the
+// Git owner so `git worktree add` (run as that owner) can write into them.
+async function ensureOwnedDirectory(directory, owner = {}) {
+  const created = await fs.mkdir(directory, { recursive: true });
+  if (!created || !Number.isInteger(owner.uid)) return;
+  for (let current = directory; current.startsWith(created); current = path.dirname(current)) {
+    await fs.chown(current, owner.uid, owner.gid);
+    if (current === created) break;
+  }
+}
+
 async function worktreePathFor(parent, workerId, env = process.env) {
   const paths = await ensureDataDirs(env);
   const root = path.resolve(env.ORKESTR_WORKTREE_ROOT || path.join(paths.home, "worktrees"));
@@ -902,7 +913,14 @@ export async function listThreadWorkers(parentThreadId, env = process.env) {
     .sort((a, b) => Number(a.workerIndex || 0) - Number(b.workerIndex || 0) || String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
 }
 
+// Runs inside a git-owner scope: when the server runs as root and the parent
+// checkout belongs to an allowlisted user, Git runs as that user (root Git
+// refuses such checkouts as "dubious ownership").
 export async function createThreadWorker(parentThreadId, input = {}, env = process.env) {
+  return withGitOwnerScope(env, () => createThreadWorkerScoped(parentThreadId, input, env));
+}
+
+async function createThreadWorkerScoped(parentThreadId, input, env) {
   const parent = await getThread(parentThreadId, env);
   if (!parent) throw httpError("thread_not_found", 404);
   const task = nonEmptyString(input.task || input.prompt || input.message);
@@ -918,11 +936,11 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
   const baseBranch = nonEmptyString(input.baseBranch) || await currentBranch(repoPath);
   const remoteUrl = await repoRemoteUrl(repoPath);
   const sourceDirty = await worktreeDirty(repoPath);
-  await fs.mkdir(path.dirname(worktreePath), { recursive: true });
+  await ensureOwnedDirectory(path.dirname(worktreePath), await scopedGitExecOptions(repoPath));
 
   let worktreeCreated = false;
   try {
-    await git(repoPath, ["worktree", "add", "-b", branchName, worktreePath, baseCommit]);
+    await runOwnerAwareGit(repoPath, ["worktree", "add", "-b", branchName, worktreePath, baseCommit], env);
     worktreeCreated = true;
     const remoteBranch = nonEmptyString(input.remoteBranch || input.gitRemoteBranch || input.upstreamBranch) || await remoteTrackingBranch(worktreePath, branchName);
     const remoteExists = await refExists(worktreePath, remoteBranch);
