@@ -10,6 +10,7 @@ import {
   listThreadMessages,
   updateThreadMessage,
 } from "../packages/core/src/threads.js";
+import { installFakePs } from "./helpers/fake-process-list.mjs";
 
 process.env.ORKESTR_CODEX_AUTH_PREFLIGHT ||= "0";
 
@@ -82,6 +83,7 @@ esac
     "utf8",
   );
   await fs.chmod(tmuxPath, 0o755);
+  await installFakePs(bin);
   return { bin, log, state };
 }
 

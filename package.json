@@ -30,7 +30,7 @@
     "release:canonical-urls": "node scripts/canonical-url-release-gate.mjs",
     "e2e:whatsapp-real": "node scripts/real-wa-e2e.mjs",
     "e2e:whatsapp-demo-onboarding": "node scripts/real-wa-demo-onboarding.mjs",
-    "web:build": "ng build web && npm run launcher:build",
+    "web:build": "node scripts/check-installed-deps.mjs && ng build web && npm run launcher:build",
     "launcher:build": "node scripts/build-launcher.mjs",
     "launcher:verify-static": "node scripts/verify-static-launcher.mjs",
     "smoke": "node scripts/smoke.mjs",
