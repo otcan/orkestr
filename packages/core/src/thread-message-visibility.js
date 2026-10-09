@@ -64,10 +64,33 @@ export function runtimeInterruptedSuperseded(message = {}, messages = []) {
   );
 }
 
+// Turn id -> ids of terminal assistant messages that supersede a
+// runtime_interrupted notice for that turn. Built once so filtering a long
+// thread stays linear instead of rescanning every message per notice.
+function supersedingTerminalIdsByTurn(messages = []) {
+  const byTurn = new Map();
+  for (const candidate of messages) {
+    const turnId = messageTurnId(candidate || {});
+    if (!turnId || !terminalAssistantMessage(candidate) || runtimeInterruptedMessage(candidate)) continue;
+    if (!byTurn.has(turnId)) byTurn.set(turnId, new Set());
+    byTurn.get(turnId).add(candidate?.id);
+  }
+  return byTurn;
+}
+
 export function visibleThreadMessages(messages = []) {
+  let supersedingIds = null;
+  const superseded = (message) => {
+    if (!runtimeInterruptedMessage(message)) return false;
+    const turnId = messageTurnId(message);
+    if (!turnId) return false;
+    supersedingIds ||= supersedingTerminalIdsByTurn(messages);
+    const ids = supersedingIds.get(turnId);
+    return Boolean(ids && (ids.size > 1 || !ids.has(message.id)));
+  };
   return messages.filter((message) =>
     !isNoReplyAssistantMessage(message) &&
     clean(message?.visibility).toLowerCase() !== "internal" &&
-    !runtimeInterruptedSuperseded(message, messages)
+    !superseded(message)
   );
 }

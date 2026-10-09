@@ -12,22 +12,13 @@ import {
   attachmentEncryptionPolicy,
 } from "./attachment-encryption-registry.js";
 import { classifyThreadAttachmentPath } from "./thread-attachments.js";
+import { cachedFileDigest, fileDigest } from "./file-digest-cache.js";
 
 const payloadMagic = "ORKESTR-ATTACHMENT-PAYLOAD/1";
 const ageHeader = Buffer.from("age-encryption.org/v1\n", "utf8");
 
 function clean(value = "") {
   return String(value || "").trim();
-}
-
-async function fileDigest(filePath) {
-  const digest = createHash("sha256");
-  let size = 0;
-  for await (const chunk of createReadStream(filePath)) {
-    size += chunk.length;
-    digest.update(chunk);
-  }
-  return { size, checksum: digest.digest("hex") };
 }
 
 function safeThreadId(value) {
@@ -141,7 +132,7 @@ export async function validateEncryptedPublishedAttachment(attachment = {}, { th
   if (stat.size <= ageHeader.length || !header.equals(ageHeader)) {
     return { ok: false, reason: "ciphertext_format_invalid" };
   }
-  const ciphertext = await fileDigest(filePath);
+  const ciphertext = await cachedFileDigest(filePath);
   if (clean(attachment.checksum) !== ciphertext.checksum) return { ok: false, reason: "ciphertext_checksum_mismatch" };
   return { ok: true, filePath, size: stat.size, checksum: ciphertext.checksum };
 }
@@ -168,7 +159,7 @@ export async function validateEncryptedWhatsAppDeliverySource(attachment = {}, {
   if (Number(source.size || 0) !== stat.size) {
     return { ok: false, reason: "whatsapp_source_size_mismatch" };
   }
-  const digest = await fileDigest(realPath);
+  const digest = await cachedFileDigest(realPath);
   if (!clean(source.checksum) || clean(source.checksum) !== digest.checksum) {
     return { ok: false, reason: "whatsapp_source_checksum_mismatch" };
   }

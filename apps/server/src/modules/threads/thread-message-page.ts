@@ -28,15 +28,10 @@ function messageTimestampMs(message: any): number {
 }
 
 export function chronologicalMessages(messages: any[] = []) {
+  // Parse each timestamp once; parsing inside the comparator dominated long threads.
   return messages
-    .map((message, index) => ({ message, index }))
-    .sort((left, right) => {
-      const leftMs = messageTimestampMs(left.message);
-      const rightMs = messageTimestampMs(right.message);
-      if (leftMs && rightMs && leftMs !== rightMs) return leftMs - rightMs;
-      if (leftMs !== rightMs) return leftMs - rightMs;
-      return messageCursor(left.message, left.index) - messageCursor(right.message, right.index);
-    })
+    .map((message, index) => ({ message, ms: messageTimestampMs(message), cursor: messageCursor(message, index) }))
+    .sort((left, right) => (left.ms !== right.ms ? left.ms - right.ms : left.cursor - right.cursor))
     .map(({ message }) => message);
 }
 
@@ -184,10 +179,16 @@ export function threadMessagePage(thread: any, rawMessages: any[] = [], query: R
     ...message, cursor: messageCursor(message, index),
   }))));
   const pendingQuestion = latestPendingQuestion(orderedMessages);
-  let messages = orderedMessages.map((message, index) => bridgeMessage(thread, message, index)).filter((message) => message.text);
-  if (since > 0) messages = messages.filter((message) => Number(message.cursor || 0) > since);
-  if (before > 0) messages = messages.filter((message) => Number(message.cursor || 0) < before);
-  messages = dedupeDisplayMessages(messages.slice(-limit));
+  // Select the page before bridging so only the returned messages are decorated.
+  const pageIndexes: number[] = [];
+  orderedMessages.forEach((message, index) => {
+    if (!String(message?.text || "").trim()) return;
+    const cursor = messageCursor(message, index);
+    if (since > 0 && cursor <= since) return;
+    if (before > 0 && cursor >= before) return;
+    pageIndexes.push(index);
+  });
+  const messages = dedupeDisplayMessages(pageIndexes.slice(-limit).map((index) => bridgeMessage(thread, orderedMessages[index], index)));
   const allCursors = rawMessages.map((message, index) => messageCursor(message, index));
   const cursor = Math.max(0, ...allCursors);
   const oldestCursor = messages.length ? Number(messages[0]?.cursor || 0) : null;
