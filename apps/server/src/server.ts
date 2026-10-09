@@ -83,6 +83,7 @@ import {
 import { recordServerShutdown } from "./server-lifecycle.js";
 import { trackUpgradedSockets } from "./http-server-lifecycle.js";
 import { mobileJsonBodyParser } from "./mobile-json-body.js";
+import { sweepExpiredSecretLinks } from "../../../packages/core/src/secret-links.js";
 import { secretLinkFormBodyParser } from "./modules/secret-links/secret-link-pages.js";
 import { vaultImportJsonBodyParser } from "./modules/vault/vault-import-body.js";
 
@@ -681,6 +682,9 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
         message: error?.message || String(error),
         error,
       });
+    });
+    background.track(sweepExpiredSecretLinks(serverEnv)).catch((error) => {
+      reportServerError(serverEnv, { source: "server.secretLinkSweep", code: "secret_link_sweep_failed", message: error?.message || String(error), error });
     });
   }, inboundAttachmentCleanupIntervalMs(serverEnv));
   inboundAttachmentCleanupPoll.unref?.();

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
@@ -7,6 +8,7 @@ import {
   createSecretRequestLink,
   createSecretShareLink,
   revealSecretShareLink,
+  sweepExpiredSecretLinks,
 } from "../packages/core/src/secret-links.js";
 import { parseSecretLinkTtl } from "../packages/core/src/secret-links-store.js";
 import { resolveSecureSecretReference, setSecureSecret } from "../packages/core/src/secure-secrets.js";
@@ -184,6 +186,29 @@ test("expired links are treated as used and their ciphertext is purged", async (
   assert.equal(after.links[0].status, "expired");
   assert.equal("encryptedValue" in after.links[0], false);
   assert.match(await fs.readFile(path.join(server.home, "events.jsonl"), "utf8"), /secret_link_expired/);
+});
+
+test("maintenance sweep expires links without waiting for the next access", async (t) => {
+  const server = await fixture(t);
+  const emptyHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-secret-link-sweep-"));
+  assert.deepEqual(await sweepExpiredSecretLinks({ ORKESTR_HOME: emptyHome }), { expired: 0, removed: 0 });
+  await assert.rejects(fs.stat(path.join(emptyHome, "secrets", "secret-links.json")), /ENOENT/);
+
+  await createSecretShareLink({ value: "synthetic-sweep-value", ownerUserId: "alice", ttl: "1m" }, admin);
+  await createSecretShareLink({ value: "synthetic-live-value", ownerUserId: "alice", ttl: "1h" }, admin);
+  const storePath = path.join(server.home, "secrets", "secret-links.json");
+  const store = JSON.parse(await fs.readFile(storePath, "utf8"));
+  store.links[0].expiresAt = new Date(Date.now() - 1000).toISOString();
+  await fs.writeFile(storePath, JSON.stringify(store));
+
+  assert.deepEqual(await sweepExpiredSecretLinks(process.env), { expired: 1, removed: 0 });
+  const after = JSON.parse(await fs.readFile(storePath, "utf8"));
+  assert.equal(after.links[0].status, "expired");
+  assert.equal("encryptedValue" in after.links[0], false);
+  assert.equal(after.links[1].status, "active");
+  assert.equal("encryptedValue" in after.links[1], true);
+  assert.match(await fs.readFile(path.join(server.home, "events.jsonl"), "utf8"), /secret_link_expired/);
+  assert.deepEqual(await sweepExpiredSecretLinks(process.env), { expired: 0, removed: 0 });
 });
 
 test("request link stores the submitted value as a user secret and notes the thread without the value", async (t) => {

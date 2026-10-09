@@ -33,6 +33,7 @@ import {
   parseThreadPublicRef,
 } from "./canonical-public-references.js";
 import { withCanonicalPublicReferenceLock } from "./canonical-public-reference-lock.js";
+import { removeEmptyThreadWorkspaces } from "./thread-workspace-cleanup.js";
 import { injectRuntimeFault } from "./runtime-fault-injection.js";
 import { recordRegistryWriteRejectionMetric, recordWatcherAlertMetric } from "./observability.js";
 import { sanitizeStandingMissionText } from "./claude-standing-mission.js";
@@ -663,6 +664,7 @@ async function deleteThreadLocked(threadId, options = {}, env = process.env) {
     await fs.rm(path.join(paths.home, "uploads", safeThreadId(deletedId)), { recursive: true, force: true }).catch(() => {});
     await appendEvent({ type: "thread_deleted", threadId: deletedId, parentThreadId: target.id === deletedId ? null : target.id }, env);
   }
+  await removeEmptyThreadWorkspaces([...deletedIds], next, env).catch(() => []);
   return {
     ok: true,
     deletedThreads: [...deletedIds],
