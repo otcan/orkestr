@@ -1,6 +1,7 @@
 // Process-wide perf recording for the server: one log writer and in-flight
 // counter shared by the request middleware and the health sampler.
 // ORKESTR_PERF_LOG=0 turns both off.
+import { perfDeployMarker } from "./perf-deploy-marker.js";
 import { createHealthSampler } from "./perf-health-sampler.js";
 import { createInflightTracker, createPerfLogWriter, createPerfRequestLogMiddleware, perfLogEnabled } from "./perf-log.js";
 
@@ -26,6 +27,7 @@ export function startPerfHealthSampling(env = process.env) {
   if (active.sampler) return;
   active.sampler = createHealthSampler(env, { writer: active.writer, inflight: active.tracker.current });
   active.sampler.start();
+  void perfDeployMarker(env).then((marker) => active.writer.append("events", marker)).catch(() => {});
 }
 
 export async function stopPerfRecording() {

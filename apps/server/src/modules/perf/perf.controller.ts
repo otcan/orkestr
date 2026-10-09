@@ -9,8 +9,14 @@ import { httpError } from "../../common/http.js";
 @Controller("api/system")
 export class PerfController {
   @Get("perf")
-  async perf(@Req() request: any, @Query("window") window?: string) {
+  async perf(
+    @Req() request: any,
+    @Query("window") window?: string,
+    @Query("since") since?: string,
+    @Query("until") until?: string,
+    @Query("compare") compare?: string,
+  ) {
     if (!isAdminPrincipal(requestPrincipal(request))) throw httpError("forbidden", 403);
-    return perfSummary(process.env, { window: window || "1h" });
+    return perfSummary(process.env, { window: window || "1h", since, until, compare });
   }
 }

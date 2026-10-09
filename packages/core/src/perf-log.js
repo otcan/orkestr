@@ -1,5 +1,6 @@
 // Durable performance log: one JSONL line per HTTP request and one per health
-// sample, in daily files under ORKESTR_HOME/observability. Entries carry only
+// sample (plus deploy markers in `events`), in daily files under
+// ORKESTR_HOME/observability. Request entries carry only
 // the normalized route template, status, timings, sizes and the auth kind —
 // never query strings, bodies, headers, tokens, user ids or chat ids. Writes
 // are buffered and appended off the request path; old days are pruned.
@@ -15,7 +16,7 @@ export const perfRouteTemplate = redactedRouteTemplate;
 const DEFAULT_RETENTION_DAYS = 14;
 const FLUSH_INTERVAL_MS = 5000;
 const MAX_BUFFERED = 2000;
-const FILE_PATTERN = /^(requests|health)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
+const FILE_PATTERN = /^(requests|health|events)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 
 export function perfLogEnabled(env = process.env) {
   return String(env.ORKESTR_PERF_LOG ?? "1") !== "0";
@@ -35,7 +36,7 @@ export function perfLogFile(kind, at = new Date(), env = process.env) {
 }
 
 export function createPerfLogWriter(env = process.env, { now = () => new Date() } = {}) {
-  const buffers = { requests: [], health: [] };
+  const buffers = { requests: [], health: [], events: [] };
   let flushing = null;
   let timer = null;
   let lastPrunedDay = "";

@@ -1,13 +1,15 @@
 // Periodic health sample of this box and the Orkestr server process, appended
 // to the perf log (perf-log.js). Host: load, CPU, memory, swap, disk and the
 // busiest process names (by CPU since the previous sample). Orkestr:
-// event-loop delay, CPU, heap/RSS, in-flight requests and sqlite store sizes.
+// event-loop delay, CPU, heap/RSS, in-flight requests, sqlite store sizes and
+// wall time per background loop since the previous sample.
 // Process names only — never command lines, arguments or environment.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { appHome } from "../../storage/src/paths.js";
+import { takeBackgroundLoopTotals } from "./perf-loop-timing.js";
 
 const DEFAULT_INTERVAL_MS = 30000;
 const TOP_PROCESSES = 8;
@@ -92,7 +94,7 @@ async function sqliteSizes(home) {
   return sizes;
 }
 
-export function createHealthSampler(env = process.env, { writer, inflight = () => 0, procRoot = "/proc", now = () => new Date() } = {}) {
+export function createHealthSampler(env = process.env, { writer, inflight = () => 0, procRoot = "/proc", now = () => new Date(), loops = takeBackgroundLoopTotals } = {}) {
   const loopDelay = monitorEventLoopDelay({ resolution: 20 });
   loopDelay.enable();
   let previousCpu = null;
@@ -144,6 +146,7 @@ export function createHealthSampler(env = process.env, { writer, inflight = () =
         loopLagMaxMs: round(loopDelay.max / 1e6),
         inflight: inflight(),
         sqliteMb: await sqliteSizes(home),
+        loops: loops(),
       },
     };
     loopDelay.reset();

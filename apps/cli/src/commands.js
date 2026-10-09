@@ -2242,7 +2242,7 @@ function writeUsage(stream) {
   orkestr rollback [--to release-id]
   orkestr logs [--service orkestr] [--lines 100] [--no-follow]
   orkestr doctor [system|timers|resources|whatsapp|router] [--repair [--repair-historical]] [--watch] [--json]
-  orkestr doctor perf [--window 1h|6h|1d] [--json]
+  orkestr doctor perf [--window 1h|6h|1d] [--since <iso>] [--until <iso>] [--compare prev|1d|deploy|<iso>] [--json]
   orkestr doctor whatsapp --archive-stale-outbox [--older-than 7d] [--limit 2000] [--apply] [--json]
 
 Common thread commands:

@@ -25,6 +25,7 @@ import {
 } from "../../../packages/connectors/src/whatsapp-outbox-recovery.js";
 import { appendEvent } from "../../../packages/storage/src/store.js";
 import { reportServerError, reportWhatsAppDeliveryAnomalies } from "./watcher-reporting.js";
+import { timeBackgroundRun } from "../../../packages/core/src/perf-loop-timing.js";
 import {
   recordServerStartup,
   recoveryCauseForStartup,
@@ -355,7 +356,7 @@ export function createWhatsAppDeliveryScheduler(env = process.env) {
     }
     running = true;
     const startedAt = Date.now();
-    deliverWhatsAppReplies(env)
+    timeBackgroundRun("whatsapp_outbox", () => deliverWhatsAppReplies(env))
       .then((result) => {
         recordWhatsAppDeliveryMetrics({ source: "delivery_scheduler", result, durationMs: Date.now() - startedAt });
         return result;
