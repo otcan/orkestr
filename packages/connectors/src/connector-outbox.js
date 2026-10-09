@@ -684,7 +684,7 @@ async function ensureConnectorOutboxJobLocked(input, env) {
     const nextJob = await withPostgresTransaction(pg, async (client) => {
       // SELECT FOR UPDATE cannot lock a first insertion that does not exist.
       if (fenced) await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
-        JSON.stringify([job.tenantId, job.ownerUserId, job.connector, job.accountId, job.chatId, job.threadId, job.sourceRevision, job.deliveryType]),
+        JSON.stringify([job.tenantId, job.ownerUserId, job.connector, job.chatId, job.threadId, job.deliveryType]),
       ]);
       const existing = await getConnectorOutboxJobRowPostgres(client, job.idempotencyKey, env, { forUpdate: true }) ||
         await retainedLogicalOutputJob(job, env, client);
@@ -771,13 +771,14 @@ async function ensureConnectorOutboxJobLocked(input, env) {
 async function retainedLogicalOutputJob(job, env, client = null, rows = null) {
   if (!outputFenceApplies(job)) return null;
   if (!rows && client) {
-    const where = connectorOutboxWherePostgres({ ...job, state: "" });
+    // Same-message aliases may carry another account or revision.
+    const where = connectorOutboxWherePostgres({ ...job, accountId: "", state: "" });
     rows = (await client.query(`select data from orkestr_connector_outbox ${where.sql} for update`, where.values))
       .rows.map(row => rowToConnectorOutboxJob(row, env));
   }
   // Delivered/uncertain/partial states must remain visible as replay fences.
   if (!rows) rows = (await listConnectorOutboxJobs({ connector: job.connector, tenantId: job.tenantId,
-    ownerUserId: job.ownerUserId, accountId: job.accountId, chatId: job.chatId, threadId: job.threadId,
+    ownerUserId: job.ownerUserId, chatId: job.chatId, threadId: job.threadId,
     deliveryType: job.deliveryType }, env)).jobs;
   const matches = rows.filter(row => sameLogicalOutput(row, job));
   const existing = matches.sort((a, b) => statusRank(b.state) - statusRank(a.state) || a.id.localeCompare(b.id))[0];

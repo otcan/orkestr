@@ -25,6 +25,13 @@ function whatsappFinal(message = {}) {
   return clean(message.connector).toLowerCase() === "whatsapp" && Boolean(clean(message.chatId));
 }
 
+// Same precedence as the WhatsApp delivery scanner, so both resolve one job.
+function finalDeliveryAccountId(thread = {}, message = {}) {
+  const binding = thread.binding || {};
+  return clean(binding.replyAccountId || binding.bridgeAccountId || binding.responderConnectorAccountId ||
+    binding.responderAccountId || binding.outboundAccountId || message.accountId);
+}
+
 function signalReservationKey(threadId, messageId, env = process.env) {
   return `${clean(env.ORKESTR_HOME) || "default"}:${clean(threadId)}:${clean(messageId)}`;
 }
@@ -119,7 +126,7 @@ export async function reconcileCodexFinalProjection({
     tenantId: ownerUserId,
     ownerUserId,
     connector: "whatsapp",
-    accountId: clean(message.accountId || currentThread.binding?.responderAccountId || currentThread.binding?.outboundAccountId),
+    accountId: finalDeliveryAccountId(currentThread, message),
     chatId: message.chatId,
     threadId: currentThread.id,
     sourceEventId: clean(message.eventId || message.sourceEventId || message.id),

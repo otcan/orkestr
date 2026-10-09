@@ -98,10 +98,11 @@ test("distinct turns, tenants, destinations and explicit revisions remain indepe
   const env = await fixture(t);
   const first = await ensureConnectorOutboxJob(output("first"), env);
   await markConnectorOutboxJob(first.job.id, { state: "delivered" }, env);
-  for (const patch of [{ tenantId: "tenant-b", ownerUserId: "tenant-b" }, { ownerUserId: "owner-b" },
+  for (const [index, patch] of [{ tenantId: "tenant-b", ownerUserId: "tenant-b" }, { ownerUserId: "owner-b" },
     { accountId: "account-b" }, { chatId: "chat-b" }, { threadId: "thread-b" }, { sourceRevision: "2" },
-    ...["runtimeGeneration", "runtimeTurnId", "runtimeItemId"].map(key => ({ metadata: { ...output().metadata, [key]: "different" } }))]) {
-    const next = await ensureConnectorOutboxJob(output("different-local", patch), env);
+    ...["runtimeGeneration", "runtimeTurnId", "runtimeItemId"].map(key => ({ metadata: { ...output().metadata, [key]: "different" } }))].entries()) {
+    // One local message has one final delivery, so each variant is its own message.
+    const next = await ensureConnectorOutboxJob(output(`different-local-${index}`, patch), env);
     assert.notEqual(next.job.id, first.job.id); assert.equal(next.created, true);
   }
 });
