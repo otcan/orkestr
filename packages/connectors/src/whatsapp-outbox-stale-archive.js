@@ -66,7 +66,7 @@ export function classifyStaleWhatsAppOutbox({ jobs = [], outboundDeliveries = []
   return { eligible, scanned: jobs.length, skipped, byState, byAge };
 }
 
-function archivePatch(job, fromState, { now, operator, reason, olderThan }) {
+function archivePatch(job, fromState, { now, operator, reason, olderThan, metadataKey = "staleArchive", details = {} }) {
   const uncertain = fromState === "delivery_uncertain" || job.metadata?.deliveryUncertain === true;
   return {
     state: archivedState,
@@ -80,9 +80,25 @@ function archivePatch(job, fromState, { now, operator, reason, olderThan }) {
       ...(job.metadata || {}),
       // Reopening a possibly-sent job still needs the explicit uncertain override.
       ...(uncertain ? { deliveryUncertain: true } : {}),
-      staleArchive: { archivedAt: now, archivedBy: operator, fromState, olderThan, reason },
+      [metadataKey]: { archivedAt: now, archivedBy: operator, fromState, ...(olderThan ? { olderThan } : {}), reason, ...details },
     },
   };
+}
+
+// Archives each selected { job, state } unless it moved since it was listed.
+export async function archiveOutboxSelection(selected = [], patchOptions = {}, env = process.env) {
+  let archived = 0;
+  for (const { job, state, details } of selected) {
+    // Lock per job so live deliveries interleave with a long archive run.
+    archived += await withConnectorOutboxMutation(env, async () => {
+      const current = await getConnectorOutboxJob(job.id, env);
+      // Skip anything that moved since it was listed (claimed, delivered, retried).
+      if (!current || clean(current.state).toLowerCase() !== state || current.updatedAt !== job.updatedAt) return 0;
+      await markConnectorOutboxJob(job.id, archivePatch(current, state, { ...patchOptions, ...(details ? { details } : {}) }), env);
+      return 1;
+    });
+  }
+  return archived;
 }
 
 export async function archiveStaleWhatsAppOutbox(options = {}, env = process.env) {
@@ -108,17 +124,7 @@ export async function archiveStaleWhatsAppOutbox(options = {}, env = process.env
   const selected = result.eligible.sort((a, b) => a.lastActivityAt.localeCompare(b.lastActivityAt)).slice(0, limit);
   let archived = 0;
   if (apply) {
-    const now = new Date(nowMs).toISOString();
-    for (const { job, state } of selected) {
-      // Lock per job so live deliveries interleave with a long archive run.
-      archived += await withConnectorOutboxMutation(env, async () => {
-        const current = await getConnectorOutboxJob(job.id, env);
-        // Skip anything that moved since it was listed (claimed, delivered, retried).
-        if (!current || clean(current.state).toLowerCase() !== state || current.updatedAt !== job.updatedAt) return 0;
-        await markConnectorOutboxJob(job.id, archivePatch(current, state, { now, operator, reason, olderThan }), env);
-        return 1;
-      });
-    }
+    archived = await archiveOutboxSelection(selected, { now: new Date(nowMs).toISOString(), operator, reason, olderThan }, env);
     await appendEvent({ type: "connector_outbox_stale_archived", connector: "whatsapp", olderThan, archived, byState: result.byState, operator }, env).catch(() => {});
   }
   const terminal = await listConnectorOutboxJobs({ connector: "whatsapp", state: [...retentionPrunableStates].join(" "), limit: 1 }, env);

@@ -85,12 +85,12 @@ import {
   claimConnectorOutboxJob,
   connectorOutboxStoreFingerprint,
   connectorOutboxTerminalState,
-  connectorOutboxRetryBackoffMs,
   ensureConnectorOutboxJob,
   listConnectorOutboxJobs,
   markConnectorOutboxJob,
   releaseConnectorOutboxClaim,
 } from "./connector-outbox.js";
+import { connectorOutboxRetryDelayMs, maybeSweepExhaustedWhatsAppOutbox } from "./connector-outbox-retry-policy.js";
 import {
   acquireOutboundDeliveryClaim,
   deliveryTextKey,
@@ -3787,7 +3787,7 @@ async function sendClaimedWhatsAppText({
         ? "delivery_uncertain"
         : "failed_retryable";
     const now = new Date().toISOString();
-    const retryBackoffMs = terminalFailure || uncertainDelivery ? 0 : connectorOutboxRetryBackoffMs(env);
+    const retryBackoffMs = terminalFailure || uncertainDelivery ? 0 : connectorOutboxRetryDelayMs(outboxClaim.job.attemptCount, env);
     const retryAt = retryBackoffMs > 0 ? new Date(Date.now() + retryBackoffMs).toISOString() : "";
     if (intent?.intentId) {
       const previousAttempts = Number(intent.attempts || 0) || 0;
@@ -7278,6 +7278,10 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
     state.outboundIntents = outboundIntents;
     await writeWhatsAppState(state, env);
   }
+  // After the scan, so jobs the scanner still revisits are handled in-band first.
+  await maybeSweepExhaustedWhatsAppOutbox({ ...state, outboundDeliveries, outboundIntents }, env, dataPaths(env).home).catch((error) =>
+    appendEvent({ type: "connector_outbox_retry_budget_sweep_failed", error: error.message || String(error) }, env).catch(() => null)
+  );
   return { delivered, skipped: skipped.items(), skippedSummary: skipped.summary(), failed };
 }
 
