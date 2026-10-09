@@ -1,6 +1,5 @@
 import path from "node:path";
 import fs from "node:fs/promises";
-import { listBrowserSessions } from "../../browsers/src/browsers.js";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { getApiSessionBinding } from "./api-session-bindings.js";
 import { publicPrincipal } from "./principal.js";
@@ -20,8 +19,8 @@ import { desktopAccessPolicySummary, filterDesktopSessionsForThread } from "./de
 import { agentReleaseRolePolicy, threadAgentReleaseRole } from "./agent-release-role.js";
 import { isTerminalTaskAgentThread } from "./task-agent-state.js";
 import { listThreadWatches } from "./thread-watches.js";
+import { cachedWhereamiDesktopInventory } from "./whereiam-desktop-cache.js";
 
-const desktopInventoryLiveCache = new Map();
 // Larger than any gap between path-candidate scores, so a finished task agent
 // that shares a worktree only wins when no other thread claims that path.
 const terminalTaskAgentPathPenalty = 200;
@@ -32,53 +31,6 @@ function nowIso() {
 
 function clean(value) {
   return String(value || "").trim();
-}
-
-function positiveDurationMs(value, fallback, min = 0) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(min, parsed);
-}
-
-function desktopInventoryCacheTtlMs(env = process.env) {
-  return positiveDurationMs(env.ORKESTR_DESKTOP_INVENTORY_CACHE_MS || env.ORKESTR_BROWSER_SESSIONS_CACHE_MS, 15_000, 0);
-}
-
-function desktopInventoryCacheKey(principal = null, env = process.env, options = {}) {
-  return JSON.stringify({
-    home: clean(env.ORKESTR_HOME),
-    mode: clean(env.ORKESTR_BROWSER_DESKTOP_MODE),
-    browserctlPath: clean(env.ORKESTR_BROWSERCTL_PATH || env.ORKESTR_BROWSERCTL),
-    userId: clean(principal?.userId),
-    role: clean(principal?.role),
-    threadId: clean(options?.threadId),
-    policyRevision: Number(options?.desktopPolicyRevision || 0) || 0,
-  });
-}
-
-async function cachedBrowserSessions(env = process.env, options = {}) {
-  const ttlMs = desktopInventoryCacheTtlMs(env);
-  if (ttlMs <= 0) return listBrowserSessions(env, options);
-  const key = desktopInventoryCacheKey(options.principal, env, options);
-  const cached = desktopInventoryLiveCache.get(key);
-  const now = Date.now();
-  if (cached?.payload && cached.expiresAt > now) return cached.payload;
-  if (cached?.inFlight) return cached.inFlight;
-  const inFlight = listBrowserSessions(env, options)
-    .then((payload) => {
-      desktopInventoryLiveCache.set(key, { payload, expiresAt: Date.now() + ttlMs, inFlight: null });
-      return payload;
-    })
-    .catch((error) => {
-      desktopInventoryLiveCache.delete(key);
-      throw error;
-    });
-  desktopInventoryLiveCache.set(key, {
-    payload: cached?.payload || null,
-    expiresAt: cached?.expiresAt || 0,
-    inFlight,
-  });
-  return inFlight;
 }
 
 function publicThreadName(thread = {}) {
@@ -426,7 +378,7 @@ async function desktopInventoryContext(principal = null, settings = {}, env = pr
   let error = "";
   let message = "";
   try {
-    payload = await cachedBrowserSessions(env, { principal, threadId, desktopPolicyRevision: access.revision, publicProjection: true });
+    payload = await cachedWhereamiDesktopInventory(env, { principal, threadId, desktopPolicyRevision: access.revision, publicProjection: true });
     live = (payload?.sessions || []).map(publicDesktopRecord).filter((desktop) => desktop.slug);
   } catch (caught) {
     error = clean(caught?.message || caught || "desktop_inventory_failed");
@@ -436,6 +388,8 @@ async function desktopInventoryContext(principal = null, settings = {}, env = pr
   return {
     ok: payload ? payload.ok !== false : known.length > 0,
     liveOk: Boolean(payload && payload.ok !== false),
+    liveStale: payload?.stale === true,
+    livePending: payload?.pending === true,
     source: clean(payload?.source) || (known.length ? "runtime-settings" : "browser"),
     error: clean(payload?.error) || error,
     message: clean(payload?.message) || message,
@@ -510,18 +464,20 @@ function apiBase(env = process.env) {
 
 export async function whereAmI(input = {}, env = process.env) {
   const paths = await ensureDataDirs(env);
-  const settings = await readRuntimeSettings(env);
   const rawCwd = clean(input.cwd) || process.cwd();
-  const cwd = await realOrResolved(rawCwd);
   const requestedApiSessionId = clean(input.apiSessionId || input.sessionId || input.codexApiSessionId);
-  const apiSessionBinding = requestedApiSessionId ? await getApiSessionBinding(requestedApiSessionId, env).catch(() => null) : null;
+  const principal = input.principal || null;
+  const [settings, cwd, apiSessionBinding, threads, leases] = await Promise.all([
+    readRuntimeSettings(env),
+    realOrResolved(rawCwd),
+    requestedApiSessionId ? getApiSessionBinding(requestedApiSessionId, env).catch(() => null) : null,
+    principal ? listThreadsForPrincipal(principal, env) : listThreads(env),
+    listRuntimeLeases(env),
+  ]);
   const requestedThreadId = clean(input.threadId || input.orkestrThreadId || apiSessionBinding?.threadId);
   const requestedThreadFromApiSession = Boolean(!clean(input.threadId || input.orkestrThreadId) && apiSessionBinding?.threadId);
   const requestedSessionName = clean(input.sessionName);
   const requestedPaneId = clean(input.paneId || input.tmuxPaneId);
-  const principal = input.principal || null;
-  const threads = principal ? await listThreadsForPrincipal(principal, env) : await listThreads(env);
-  const leases = await listRuntimeLeases(env);
   const activeLeases = leases.filter((lease) => !lease.endedAt);
   const leaseByThreadId = new Map(activeLeases.map((lease) => [lease.threadId, lease]));
 
@@ -549,17 +505,16 @@ export async function whereAmI(input = {}, env = process.env) {
   }
 
   if (!match && cwd) {
-    const scored = [];
-    for (const thread of threads) {
+    const pending = threads.flatMap((thread) => {
       const lease = leaseByThreadId.get(thread.id) || null;
-      for (const candidate of threadPathCandidates(thread, lease)) {
-        const candidatePath = await realOrResolved(candidate.path);
-        const pathMatch = scorePathMatch({ ...candidate, path: candidatePath }, cwd);
-        if (!pathMatch) continue;
+      return threadPathCandidates(thread, lease).map(async (candidate) => {
+        const pathMatch = scorePathMatch({ ...candidate, path: await realOrResolved(candidate.path) }, cwd);
+        if (!pathMatch) return null;
         const penalty = isTerminalTaskAgentThread(thread) ? terminalTaskAgentPathPenalty : 0;
-        scored.push({ thread, lease, match: pathMatch, score: pathMatch.score - penalty });
-      }
-    }
+        return { thread, lease, match: pathMatch, score: pathMatch.score - penalty };
+      });
+    });
+    const scored = (await Promise.all(pending)).filter(Boolean);
     scored.sort((left, right) => right.score - left.score);
     if (scored[0]) {
       match = scored[0];
@@ -567,16 +522,22 @@ export async function whereAmI(input = {}, env = process.env) {
     }
   }
 
-  let thread = match?.thread || null;
+  const matchedThread = match?.thread || null;
   const lease = match?.lease || null;
-  const status = thread ? await runtimeStatus(thread.id, env).catch(() => null) : null;
-  thread = await syncLiveCodexMode(thread, status, env);
   const principalIsUser = principal && String(principal.role || "").toLowerCase() !== "admin";
-  const owner = normalizeUserId(thread?.ownerUserId || (principalIsUser ? principal.userId : "") || env.ORKESTR_ADMIN_USER_ID || adminUserId);
+  const owner = normalizeUserId(matchedThread?.ownerUserId || (principalIsUser ? principal.userId : "") || env.ORKESTR_ADMIN_USER_ID || adminUserId);
+  // Independent probes (runtime pane, desktop inventory, skills, watches) run
+  // concurrently; none of them reads fields that syncLiveCodexMode rewrites.
+  const [status, desktops, capabilities, watches] = await Promise.all([
+    matchedThread ? runtimeStatus(matchedThread.id, env).catch(() => null) : null,
+    desktopInventoryContext(principal, settings, env, matchedThread?.id || ""),
+    capabilityHints(matchedThread || { ownerUserId: owner }, { ownerUserId: owner }, env),
+    matchedThread ? threadWatchSummary(matchedThread.id, env) : [],
+  ]);
+  const thread = await syncLiveCodexMode(matchedThread, status, env);
   const scoped = Boolean(principal && !isAdminPrincipal(principal));
   const sanitizerRequired = scoped;
   const containedPolicy = threadUsesContainedUserPolicy(thread || { ownerUserId: owner }, env);
-  const desktops = await desktopInventoryContext(principal, settings, env, thread?.id || "");
   return {
     ok: Boolean(thread),
     matched: Boolean(thread),
@@ -616,7 +577,7 @@ export async function whereAmI(input = {}, env = process.env) {
     runtime: publicRuntime(lease, status),
     desktops,
     settings,
-    capabilities: await capabilityHints(thread || { ownerUserId: owner }, { ownerUserId: owner }, env),
+    capabilities,
     // Derived only from the matched thread's persisted agentReleaseRole field
     // (defaults to the safe "worker" policy when no thread is matched at all).
     releaseRolePolicy: agentReleaseRolePolicy(thread || {}),
@@ -630,7 +591,7 @@ export async function whereAmI(input = {}, env = process.env) {
           lastSeenAt: thread && apiSessionBinding?.threadId === thread.id ? clean(apiSessionBinding.lastSeenAt) || null : null,
         }
       : null,
-    watches: thread ? await threadWatchSummary(thread.id, env) : [],
+    watches,
     commands: commandHints(),
     generatedAt: nowIso(),
   };
