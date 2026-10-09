@@ -43,9 +43,12 @@ export function secretLinkPublicBase(env = process.env) {
   return configured || `http://127.0.0.1:${clean(env.ORKESTR_PORT || env.PORT) || "19812"}`;
 }
 
-// End-to-end "e2e" links (vault-share-links.js) open without login under /s/e/.
+// Public end-to-end links open without login: shares (vault-share-links.js)
+// under /s/e/, receive requests (vault-receive-links.js) under /s/r/.
+const publicPrefixes = { e2e: "e/", "e2e-request": "r/" };
+
 export function secretLinkUrl(token, env = process.env, kind = "") {
-  return `${secretLinkPublicBase(env)}/s/${kind === "e2e" ? "e/" : ""}${token}`;
+  return `${secretLinkPublicBase(env)}/s/${publicPrefixes[kind] || ""}${token}`;
 }
 
 export async function audit(type, link, env) {

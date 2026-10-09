@@ -59,3 +59,13 @@ test("vault share --passphrase-prompt derives the key from a hidden passphrase",
   assert.throws(() => decryptVaultShare(body.envelope, key));
   assert.equal(decryptVaultShare(body.envelope, key, "example passphrase"), PASSWORD);
 });
+
+test("vault receive creates a receive link for the calling thread", async () => {
+  const result = await run(["vault", "receive", "Example Portal", "--once", "--ttl", "1d", "--label", "For the portal"]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /^https:\/\/orkestr\.example\.com\/s\/e\//);
+  const create = result.seen.find((call) => call.key === "POST /api/secret-links/e2e-request");
+  assert.deepEqual(JSON.parse(create.raw), { name: "Example Portal", once: true, ttl: "1d", label: "For the portal" });
+  assert.equal(create.headers["x-orkestr-thread-token"], "synthetic-thread-token");
+  assert.equal(result.seen.some((call) => call.key === "POST /api/vault/agent/credentials"), false);
+});

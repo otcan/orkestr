@@ -1,8 +1,17 @@
 # Vault sharing with people outside Orkestr
 
-`orkestr vault share` gives someone without an Orkestr account a password from
-the Vault through a normal web browser. The secret is end-to-end encrypted:
-the Orkestr server stores and serves only ciphertext and never holds the key.
+People without an Orkestr account can get a password from the Vault, or send
+one into it, through a normal web browser:
+
+- **Share** (`orkestr vault share`, or **Share…** on a Vault item): end-to-end
+  encrypted; the server stores and serves only ciphertext and never holds the
+  key.
+- **Receive** (`orkestr vault receive`, or **Request from someone…** on the
+  Vault page): the outsider's browser encrypts to a per-link public key and
+  the submission becomes a Vault item of the link owner.
+
+The Vault page lists active and recent shares and requests with their status
+(views, first opened, received) and a **Revoke** button.
 
 ```sh
 orkestr vault share "Example Mail" [--ttl 1d] [--views 1] [--passphrase-prompt] [--label text] [--json]
@@ -22,6 +31,10 @@ characters). The AES key then becomes
 `HMAC-SHA256(fragmentKey, PBKDF2-SHA256(passphrase, salt, 600000))`, so neither
 the link nor the passphrase alone opens the secret. Tell the passphrase to the
 recipient through a different channel.
+
+On the Vault page, **Share…** reveals the password through the normal
+recent-sign-in reveal API, encrypts it in the browser with the same format,
+posts only the envelope, and shows the link (with the key) once.
 
 ## Recipient page
 
@@ -51,10 +64,29 @@ localhost).
 - When the CLI sends the per-turn thread token, the link belongs to that
   thread's owner, like the vault item.
 
-## Not yet available
+## Receiving
 
-- "Share…" from the Vault web page (browser-side re-encryption after the
-  recent-sign-in reveal).
-- Receiving a password from an outsider into the Vault ("Request from
-  someone…" / `orkestr vault receive`).
-- A list of active shares with revoke on the Vault page.
+```sh
+orkestr vault receive "Example Portal" [--once] [--ttl 1d] [--label text] [--json]
+```
+
+The command prints `<public app url>/s/r/<token>`. Send it to the person who
+has the password. When they submit it, a Vault item named after the request
+is created in the link owner's vault. From the CLI, the item is granted to the
+calling thread, which also gets a record-only note naming the item id (never
+the value). `--once` makes it a single-use item (one release to a thread,
+valid 24 hours), using the single-use item fields of the Vault.
+
+- Each link gets its own RSA-OAEP-3072 key pair. The private key is sealed
+  under the vault key (AES-256-GCM, bound to the owner and link) and kept in
+  the link record's ciphertext slot, so it is deleted when the link is used,
+  revoked or expires. It is never stored or returned in clear.
+- The public page `/s/r/<token>` needs no login. The browser encrypts
+  `{ username, password }` with a fresh AES-256-GCM key, wraps that key with
+  RSA-OAEP-SHA256, and posts only the envelope to `/s/r/<token>/submit`
+  (same-origin only). The server decrypts it in memory and seals it as the
+  Vault item in the same step.
+- One accepted submission per link, enforced under the link store lock.
+  Envelopes that do not decrypt leave the link usable but count against the
+  per-client lookup throttle. Values are limited to 16 KiB.
+- Same headers, CSP and 404 behaviour as share pages.

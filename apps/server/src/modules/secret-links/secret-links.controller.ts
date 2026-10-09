@@ -7,6 +7,7 @@ import {
   revokeSecretLink,
 } from "../../../../../packages/core/src/secret-links.js";
 import { agentThreadIdFromRequest } from "../../../../../packages/core/src/vault-access.js";
+import { createVaultReceiveLink } from "../../../../../packages/core/src/vault-receive-links.js";
 import { createVaultShareLink } from "../../../../../packages/core/src/vault-share-links.js";
 
 // Authenticated API used by `orkestr secret share|request|links`. Responses
@@ -59,6 +60,16 @@ export class SecretLinksController {
     // belongs to that thread's owner, like the vault item it came from.
     if (request.headers?.["x-orkestr-thread-token"]) input.threadId = await agentThreadIdFromRequest(request, input.threadId);
     return createVaultShareLink({ ...input, envelope: body.envelope, views: body.views, name: clean(body.name) }, requestPrincipal(request));
+  }
+
+  // Receive link for a person outside Orkestr; the submission becomes a Vault
+  // item of the link owner (granted to the thread when created from one).
+  @Post("e2e-request")
+  @HttpCode(201)
+  async e2eRequest(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    const input = linkInput(body);
+    if (request.headers?.["x-orkestr-thread-token"]) input.threadId = await agentThreadIdFromRequest(request, input.threadId);
+    return createVaultReceiveLink({ ...input, name: clean(body.name), once: body.once === true }, requestPrincipal(request));
   }
 
   @Post(":id/revoke")
