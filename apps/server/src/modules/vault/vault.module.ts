@@ -1,7 +1,8 @@
 import { Module } from "@nestjs/common";
 import { VaultAgentController } from "./vault-agent.controller.js";
+import { VaultFillController } from "./vault-fill.controller.js";
 import { VaultController } from "./vault.controller.js";
 import { VaultRequestsController } from "./vault-requests.controller.js";
 
-@Module({ controllers: [VaultAgentController, VaultController, VaultRequestsController] })
+@Module({ controllers: [VaultAgentController, VaultFillController, VaultController, VaultRequestsController] })
 export class VaultModule {}

@@ -76,7 +76,7 @@ async function pageTarget(cdpUrl) {
   throw error;
 }
 
-class CdpClient {
+export class CdpClient {
   constructor(wsUrl) {
     this.wsUrl = wsUrl;
     this.nextId = 1;
