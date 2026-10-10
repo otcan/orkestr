@@ -75,6 +75,12 @@ function boundedObject(value, maxBytes = 16_384) {
   return JSON.parse(serialized);
 }
 
+// Write only the fields this module owns onto the latest runtime, under the
+// thread store lock, so concurrent lifecycle updates are not overwritten.
+function mergeRuntimeFields(threadId, fields, env) {
+  return updateThread(threadId, (latest) => ({ runtime: { ...(latest.runtime || {}), ...fields } }), env);
+}
+
 export async function recordRuntimeLiveness(threadId, input = {}, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) return { ok: false, recorded: false, reason: "thread_not_found" };
@@ -134,12 +140,9 @@ export async function recordRuntimeLiveness(threadId, input = {}, env = process.
     completionStatus: sameExecution ? current.completionStatus : undefined,
     updatedAt: at,
   };
-  const updated = await updateThread(thread.id, {
-    runtime: {
-      ...runtime,
-      runtimeGeneration: generation || runtime.runtimeGeneration || null,
-      liveness,
-    },
+  const updated = await mergeRuntimeFields(thread.id, {
+    runtimeGeneration: generation || runtime.runtimeGeneration || null,
+    liveness,
   }, env);
   await appendEvent({
     type: "runtime_liveness_recorded",
@@ -177,7 +180,7 @@ export async function recordRuntimeLivenessProbeFailure(threadId, input = {}, en
     lastProbeFailureReason: clean(input.reason || "runtime_probe_failed").slice(0, 500),
     updatedAt: at,
   };
-  const updated = await updateThread(thread.id, { runtime: { ...runtime, liveness } }, env);
+  const updated = await mergeRuntimeFields(thread.id, { liveness }, env);
   await appendEvent({
     type: "runtime_liveness_probe_failed",
     threadId: thread.id,
@@ -218,12 +221,7 @@ export async function saveRuntimeCheckpoint(threadId, input = {}, env = process.
     runtimeGeneration: checkpoint.runtimeGeneration,
     turnId: checkpoint.turnId,
   }, env);
-  const updated = await updateThread(thread.id, {
-    runtime: {
-      ...(thread.runtime || {}),
-      checkpoint,
-    },
-  }, env);
+  const updated = await mergeRuntimeFields(thread.id, { checkpoint }, env);
   recordRuntimeControlMetric({ signal: "checkpoint_resume", outcome: "accepted" });
   await appendEvent({
     type: "runtime_checkpoint_saved",
@@ -259,7 +257,7 @@ export async function completeRuntimeLiveness(threadId, input = {}, env = proces
     consecutiveProbeFailures: 0,
     updatedAt: at,
   };
-  const updated = await updateThread(thread.id, { runtime: { ...runtime, liveness } }, env);
+  const updated = await mergeRuntimeFields(thread.id, { liveness }, env);
   await appendEvent({
     type: "runtime_liveness_completed",
     threadId: thread.id,

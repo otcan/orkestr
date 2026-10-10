@@ -1355,9 +1355,12 @@ async function startCodexAppServerTurn({ client, thread, id, pending, env, runti
   }
   if (turnId && !terminalResult && !alreadyCompleted) {
     client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: turnId, activeTurnObservedAt: nowIso(), status: { type: "active", activeFlags: ["running"] }, statusObservedAt: nowIso() });
-    await updateThread(thread.id, {
-      state: "working",
-      runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", activeTurnId: turnId, state: "working" },
+    // Merge onto the current record: lifecycle notifications for this turn
+    // (turn/started, approval, completion) may already have been persisted.
+    await updateThread(thread.id, (current) => {
+      const runtime = current.runtime || {};
+      if ([runtime.activeTurnId, runtime.lastTurnId, runtime.pendingRequest?.turnId].map(clean).includes(turnId)) return null;
+      return { state: "working", runtime: { ...runtime, runtimeKind: "codex-app-server", activeTurnId: turnId, state: "working" } };
     }, env).catch(() => {});
     await appendTurnLifecycleEvent("started", {
       threadId: thread.id,
