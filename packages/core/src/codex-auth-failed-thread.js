@@ -3,7 +3,7 @@
 // queued inputs stay pending until Codex auth is repaired.
 import path from "node:path";
 import { appendEvent } from "../../storage/src/store.js";
-import { activeCodexRuntimeAuthInvalid, markCodexAuthHealthRepaired } from "./codex-auth-health.js";
+import { activeCodexRuntimeAuthInvalid, markCodexAuthHealthRepaired, readCodexAuthHealth } from "./codex-auth-health.js";
 import { redactCodexSecrets } from "./codex-auth-failure.js";
 import { claimCodexAuthProbe, codexHomeForThread } from "./codex-auth-probe.js";
 import { clean, nowIso } from "./codex-app-server-common.js";
@@ -172,8 +172,11 @@ export async function reconcileRejectedAuthProbeAfterDelivery(threadId, messageI
 // on its existing Codex session (no reset).
 export async function resolveCodexAuthAfterSuccessfulTurn(thread = {}, env = process.env) {
   const fault = await activeCodexAuthFaultForThread(thread, env);
+  // A fault superseded by a newer login (auth.json mtime) is not "active" but
+  // still reads as broken; a successful turn repairs it as well.
+  const stale = !fault && clean((await readCodexAuthHealth(env).catch(() => null))?.state) === "broken";
+  if (fault || stale) await markCodexAuthHealthRepaired({ threadId: thread.id }, env).catch(() => {});
   if (!fault && !threadInFailedAuth(thread)) return { released: [] };
-  if (fault) await markCodexAuthHealthRepaired({ threadId: thread.id }, env).catch(() => {});
   const codexHome = codexHomeForThread(thread, env);
   const threads = await listThreads(env).catch(() => []);
   const released = [];
