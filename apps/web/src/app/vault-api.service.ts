@@ -20,6 +20,9 @@ export interface VaultItem {
   createdAt?: string;
   updatedAt?: string;
   lastUsedAt?: string | null;
+  singleUse?: boolean;
+  singleUseStatus?: "active" | "used" | "expired";
+  singleUseExpiresAt?: string | null;
 }
 
 export interface VaultItemInput {
@@ -44,6 +47,8 @@ export interface VaultTotpCode {
   period: number;
   digits: number;
 }
+
+export type VaultFillField = "username" | "password" | "both";
 
 export type VaultImportFormat = "auto" | "bitwarden" | "1password" | "chrome" | "otpauth";
 
@@ -117,6 +122,10 @@ export class VaultApiService {
 
   totpSecret(id: string): Observable<{ otpauthUri: string }> {
     return this.http.post<{ otpauthUri: string }>(this.item(id, "/totp-secret"), {});
+  }
+
+  fill(id: string, body: { desktop: string; field: VaultFillField; submit: boolean }): Observable<{ status: "filled" | "failed"; reason?: string }> {
+    return this.http.post<{ status: "filled" | "failed"; reason?: string }>(this.item(id, "/fill"), body);
   }
 
   importItems(format: VaultImportFormat, content: string): Observable<VaultImportResult> {

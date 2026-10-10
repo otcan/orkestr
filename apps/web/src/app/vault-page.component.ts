@@ -1,10 +1,14 @@
-import { Component, Input, OnDestroy, OnInit, inject } from "@angular/core";
+import { Component, Input, OnDestroy, OnInit, ViewChild, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import type { ThreadSummary } from "./api.service";
 import { VaultApiService, VaultApproval, VaultItem, VaultItemInput, VaultStatus } from "./vault-api.service";
+import { VaultFillDialogComponent } from "./vault-fill-dialog.component";
 import { VaultGrantsDialogComponent } from "./vault-grants-dialog.component";
 import { VaultImportDialogComponent } from "./vault-import-dialog.component";
 import { VaultItemFormComponent } from "./vault-item-form.component";
+import { VaultRequestsPanelComponent } from "./vault-requests-panel.component";
+import { VaultOutsideDialogComponent } from "./vault-outside-dialog.component";
+import { VaultOutsidePanelComponent } from "./vault-outside-panel.component";
 import { copySecret, isVaultReauthRequired, vaultErrorMessage, vaultReauthUrl, vaultSecretTtlMs } from "./vault-secrets";
 import { VaultTotpTracker, formatTotpCode } from "./vault-totp-tracker";
 import { VaultVisibleDirective } from "./vault-visible.directive";
@@ -21,7 +25,7 @@ interface RevealedSecret {
 
 @Component({
   selector: "ork-vault-page",
-  imports: [VaultGrantsDialogComponent, VaultImportDialogComponent, VaultItemFormComponent, VaultVisibleDirective],
+  imports: [VaultFillDialogComponent, VaultGrantsDialogComponent, VaultImportDialogComponent, VaultItemFormComponent, VaultOutsideDialogComponent, VaultOutsidePanelComponent, VaultRequestsPanelComponent, VaultVisibleDirective],
   templateUrl: "./vault-page.component.html",
   styleUrl: "./vault-page.component.css",
 })
@@ -47,6 +51,10 @@ export class VaultPageComponent implements OnInit, OnDestroy {
   formError = "";
   importOpen = false;
   grantsItem: VaultItem | null = null;
+  fillItem: VaultItem | null = null;
+  // Share with / request from people outside Orkestr (docs/vault-sharing.md).
+  outside: { item: VaultItem | null } | null = null;
+  @ViewChild(VaultOutsidePanelComponent) outsidePanel?: VaultOutsidePanelComponent;
   readonly visibleIds = new Set<string>();
   readonly totp = new VaultTotpTracker((id) => firstValueFrom(this.api.totp(id)));
   readonly formatCode = formatTotpCode;
@@ -321,10 +329,30 @@ export class VaultPageComponent implements OnInit, OnDestroy {
     this.grantsItem = item;
   }
 
+  openFill(item: VaultItem): void {
+    this.menuId = "";
+    this.fillItem = item;
+  }
+
+  fillDone(desktop: string): void {
+    this.fillItem = null;
+    this.flash(`Filled into ${desktop}.`);
+  }
+
   grantsSaved(item: VaultItem): void {
     this.upsert(item);
     this.grantsItem = null;
     this.flash("Thread access updated.");
+  }
+
+  openOutside(item: VaultItem | null): void {
+    this.menuId = "";
+    this.outside = { item };
+  }
+
+  outsideReauth(): void {
+    this.outside = null;
+    this.reauthNeeded = true;
   }
 
   importDone(): void {

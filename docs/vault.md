@@ -146,10 +146,69 @@ orkestr vault list
 orkestr vault exec "Example Mail" -- ./scripts/login.sh   # uses $VAULT_USERNAME / $VAULT_PASSWORD
 orkestr vault get "Example Mail" --field username          # prints the value; avoid for passwords
 orkestr vault totp "Example Mail" --wait 120               # waits for the owner's approval
+orkestr vault share "Example Mail" --ttl 1d --views 1      # end-to-end encrypted public link
+orkestr vault receive "Example Portal" --once              # public link to receive a password
 ```
+
+Beyond `exec`, credentials can move without anyone reading them in chat:
+
+| Goal | Command | Details |
+| --- | --- | --- |
+| Log in on a managed browser desktop without seeing the value | `orkestr vault fill <item> --desktop <slug>` | [vault-fill.md](vault-fill.md) |
+| Ask the owner for a password that is not in the Vault yet | `orkestr vault request <name> [--once]` | [below](#asking-for-a-password-once) |
+| Share an item with someone outside Orkestr (end-to-end encrypted) | `orkestr vault share <item>` | [vault-sharing.md](vault-sharing.md) |
+| Receive a password from someone outside Orkestr | `orkestr vault receive <name> [--once]` | [vault-sharing.md](vault-sharing.md) |
+
+`--once` on `request` and `receive` stores a [single-use item](#single-use-items);
+a desktop fill counts as its one release. On the Vault page, "Requests from
+threads" lists pending `request` links and "Links with people outside Orkestr"
+lists `share`/`receive` links; both can be revoked there.
 
 Never print passwords into chat, WhatsApp or thread messages. Secret values are
 never accepted as command-line arguments.
+
+## Asking for a password once
+
+When a thread needs a password that is not in the Vault yet, it asks the owner
+through a one-time link instead of chat:
+
+```sh
+orkestr vault request "Example Bank" --once --ttl 15m --username-too --label "Monthly report login"
+# prints https://<app>/s/<token>; send that link (not a password) to the owner
+orkestr vault exec "Example Bank" -- ./scripts/login.sh   # after the owner submitted
+```
+
+- The link reuses the one-time secret link pages (`docs/secret-links.md`):
+  owner sign-in required, GET never consumes, POST is same-origin only, the
+  link works once and expires after `--ttl` (default 15 minutes, 1 minute to
+  24 hours). `--username-too` adds a username field.
+- The owner's submission is stored as an encrypted Vault item named after the
+  request and granted **only** to the requesting thread (the thread of the
+  thread token; `--thread` must match it). The thread gets a record-only note
+  with the item id, never the value.
+- Without `--once` the item is a normal saved item. With `--once` it is a
+  **single-use item**.
+- Pending requests show on the Vault page, where the owner can revoke them;
+  `orkestr secret links list` also shows them (kind `vault`).
+
+### Single-use items
+
+A single-use item releases its username/password to an agent **at most once**
+and only until it expires (for requests: `--ttl` counted from the submission;
+for `receive --once`: one day after it was received; owner-created items:
+`POST /items` with `{ "singleUse": true, "ttl": "15m" }`).
+The release (`orkestr vault exec`/`get`) and the wipe happen in one locked
+write, so concurrent reads yield exactly one value. A desktop fill is the
+release only when it completes: a fill refused by the focus check or that
+fails to type consumes nothing, and while a fill is typing the item answers
+`409 vault_item_in_use`. Later reads and fills get
+`410 vault_item_used`. Expired items are wiped on the next vault access and
+return `410 vault_item_expired`. Wiping destroys the ciphertext; the metadata
+stays with status `used` or `expired` for audit. Single-use items hold no
+authenticator codes. Use `exec` so the one release reaches your command.
+
+Events (no values): `vault_single_use_consumed`, `vault_single_use_expired`,
+and `vault_item_created` with `source: "vault_request"` or `"vault_receive"`.
 
 ## Authenticator approvals
 
@@ -190,8 +249,10 @@ All routes are under `/api/vault` and use JSON.
 | POST | `/import` | See Imports |
 | GET | `/approvals` | Pending and recent approvals |
 | POST | `/approvals/:id/approve`, `/approvals/:id/deny` | |
+| GET | `/requests` | Request-into-vault links (metadata only) |
+| POST | `/requests/:id/revoke` | |
 | GET | `/status` | `{ itemCount, totpCount, keySource, keyFilePresent, pendingApprovals }` |
 
-Agent routes (`/api/vault/agent/items`, `/credentials`, `/totp`) are for the CLI
+Agent routes (`/api/vault/agent/items`, `/credentials`, `/totp`, `/requests`) are for the CLI
 only and need the `X-Orkestr-Thread-Token` header (see "How agents are
 identified").

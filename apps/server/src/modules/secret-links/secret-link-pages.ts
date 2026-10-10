@@ -18,7 +18,7 @@ export function secretLinkFormBodyParser() {
   };
 }
 
-export function sendSecretLinkPage(response: any, status: number, title: string, body: string, options: { script?: string; location?: string } = {}) {
+export function sendSecretLinkPage(response: any, status: number, title: string, body: string, options: { script?: string; location?: string; connect?: boolean } = {}) {
   const nonce = crypto.randomBytes(16).toString("base64");
   const script = options.script ? `<script nonce="${nonce}">${options.script}</script>` : "";
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -34,7 +34,7 @@ export function sendSecretLinkPage(response: any, status: number, title: string,
     .header("x-content-type-options", "nosniff")
     .header("x-robots-tag", "noindex, nofollow")
     .header("x-orkestr-secure-input", "noMirror,noCapture,noCodexContext,noScreenshot")
-    .header("content-security-policy", `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`);
+    .header("content-security-policy", `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';${options.connect ? " connect-src 'self';" : ""} form-action 'self'; base-uri 'none'; frame-ancestors 'none'`);
   if (options.location) response.header("location", options.location);
   return response.type("text/html; charset=utf-8").send(html);
 }

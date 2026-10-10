@@ -23,6 +23,7 @@ import {
   readVault,
   sealRecord,
 } from "./vault-store.js";
+import { singleUseFromBody, singleUseSpent } from "./vault-single-use.js";
 import { currentCode, normalizeTotpConfig } from "./vault-totp.js";
 
 // Owner-facing vault operations. Every function takes the owner principal
@@ -64,7 +65,7 @@ async function event(type, ownerUserId, fields = {}, env = process.env) {
 }
 
 async function ownerItemView(ownerUserId, record, env) {
-  const payload = await openRecord(ownerUserId, record, env);
+  const payload = record.secret && !singleUseSpent(record) ? await openRecord(ownerUserId, record, env) : {};
   return { ...itemMeta(record), username: String(payload.username || "") };
 }
 
@@ -83,7 +84,7 @@ export async function createVaultItem(principal, body = {}, env = process.env) {
   const record = await mutateVault(owner, async (store) => {
     if (store.items.length >= VAULT_LIMITS.maxItems) throw vaultError("vault_full", 409);
     const { meta, payload } = applyItemInput(newItemMeta(), {}, input);
-    const sealed = await sealRecord(owner, meta, payload, env);
+    const sealed = await sealRecord(owner, singleUseFromBody(meta, payload, body), payload, env);
     store.items.push(sealed);
     return sealed;
   }, env);

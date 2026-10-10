@@ -9,6 +9,8 @@
     </div>
   }
 
+  <ork-vault-requests-panel></ork-vault-requests-panel>
+
   <header class="vault-header">
     <div class="vault-title">
       <h3>Vault</h3>
@@ -25,6 +27,7 @@
     <div class="vault-header-actions">
       <button type="button" (click)="openAdd()">+ Add</button>
       <button class="secondary" type="button" (click)="importOpen = true">Import</button>
+      <button class="secondary" type="button" (click)="openOutside(null)">Request from someone…</button>
     </div>
   </header>
 
@@ -50,6 +53,7 @@
             <small>
               @if (item.domain) {<span>{{ item.domain }}</span>}
               @if (item.username) {<span class="vault-muted">{{ item.username }}</span>}
+              @if (item.singleUse) {<span class="vault-muted">single-use · {{ item.singleUseStatus === "active" ? "until " + item.singleUseExpiresAt : item.singleUseStatus }}</span>}
             </small>
           </div>
           <div class="vault-row-actions">
@@ -89,6 +93,12 @@
                   <button class="secondary" type="button" (click)="openEdit(item)">Edit</button>
                   @if (item.hasPassword) {
                     <button class="secondary" type="button" (click)="showPassword(item)" [disabled]="busyId === item.id">Show password</button>
+                  }
+                  @if (item.hasPassword || item.username) {
+                    <button class="secondary" type="button" (click)="openFill(item)">Fill into desktop</button>
+                  }
+                  @if (item.hasPassword) {
+                    <button class="secondary" type="button" (click)="openOutside(item)">Share…</button>
                   }
                   <button class="secondary" type="button" (click)="openGrants(item)">Assign to threads ({{ grantCount(item) }})</button>
                   @if (item.hasTotp) {
@@ -133,6 +143,8 @@
     </div>
   }
 
+  <ork-vault-outside-panel></ork-vault-outside-panel>
+
   @if (editing) {
     <ork-vault-item-form [item]="editingItem()" [busy]="formBusy" [error]="formError"
       (save)="saveItem($event)" (cancel)="editing = null"></ork-vault-item-form>
@@ -143,5 +155,13 @@
   @if (grantsItem) {
     <ork-vault-grants-dialog [item]="grantsItem" [threads]="threads"
       (saved)="grantsSaved($event)" (close)="grantsItem = null"></ork-vault-grants-dialog>
+  }
+  @if (fillItem) {
+    <ork-vault-fill-dialog [item]="fillItem" (filled)="fillDone($event)"
+      (reauth)="fillItem = null; reauthNeeded = true" (close)="fillItem = null"></ork-vault-fill-dialog>
+  }
+  @if (outside) {
+    <ork-vault-outside-dialog [item]="outside.item" (created)="outsidePanel?.load()"
+      (reauth)="outsideReauth()" (close)="outside = null; outsidePanel?.load()"></ork-vault-outside-dialog>
   }
 </section>

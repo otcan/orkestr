@@ -44,11 +44,15 @@ export function secretLinkPublicBase(env = process.env) {
   return configured || `http://127.0.0.1:${clean(env.ORKESTR_PORT || env.PORT) || "19812"}`;
 }
 
-export function secretLinkUrl(token, env = process.env) {
-  return `${secretLinkPublicBase(env)}/s/${token}`;
+// Public end-to-end links open without login: shares (vault-share-links.js)
+// under /s/e/, receive requests (vault-receive-links.js) under /s/r/.
+const publicPrefixes = { e2e: "e/", "e2e-request": "r/" };
+
+export function secretLinkUrl(token, env = process.env, kind = "") {
+  return `${secretLinkPublicBase(env)}/s/${publicPrefixes[kind] || ""}${token}`;
 }
 
-async function audit(type, link, env) {
+export async function audit(type, link, env) {
   await appendEvent({
     type,
     linkId: clean(link.id),
@@ -59,7 +63,7 @@ async function audit(type, link, env) {
   }, env).catch(() => {});
 }
 
-async function auditExpired(expired = [], env) {
+export async function auditExpired(expired = [], env) {
   for (const link of expired) await audit("secret_link_expired", link, env);
 }
 
@@ -88,7 +92,7 @@ async function shareValueFromReference(reference, ownerUserId, principal, env) {
   return { value: resolved.value, name: target.name, handle: clean(resolved.secret?.handle || target.handle) };
 }
 
-async function createLink(kind, base, extra, env) {
+export async function createLink(kind, base, extra, env) {
   const token = newSecretLinkToken();
   const now = Date.now();
   const link = {
@@ -105,10 +109,10 @@ async function createLink(kind, base, extra, env) {
   const { expired } = await mutateSecretLinks(env, (links) => { links.push(link); });
   await auditExpired(expired, env);
   await audit("secret_link_created", link, env);
-  return { ok: true, link: publicSecretLink(link), url: secretLinkUrl(token, env) };
+  return { ok: true, link: publicSecretLink(link), url: secretLinkUrl(token, env, kind) };
 }
 
-async function linkBase(input, principal, env) {
+export async function linkBase(input, principal, env) {
   const ttlMs = parseSecretLinkTtl(input.ttl);
   const owner = await resolveOwner(input, principal, env);
   return {
