@@ -5,6 +5,7 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { appendAgentMessage, listAgentMessages, updateAgentMessage } from "./messages.js";
 import { readOverlay } from "./overlay.js";
+import { simulatedExecutorAdapter } from "./simulated-provider.js";
 import {
   appendThreadMessage,
   assertThreadOperational,
@@ -326,3 +327,5 @@ registerExecutorAdapter({
     throw error;
   },
 });
+
+registerExecutorAdapter(simulatedExecutorAdapter);
