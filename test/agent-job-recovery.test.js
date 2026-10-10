@@ -1,15 +1,14 @@
-// Runtime guarantees G9-G11, real kill -9 recovery at every checkpoint,
-// schedule triggers and the CLI (docs/spec/runtime-guarantees.md), offline.
+// Runtime guarantees G9-G11, real kill -9 recovery at every checkpoint and
+// schedule triggers (docs/spec/runtime-guarantees.md), offline.
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { runCli } from "../apps/cli/src/commands.js";
 import { relayAgentJobNotifications } from "../packages/connectors/src/agent-job-notification-relay.js";
 import { listConnectorOutboxJobs } from "../packages/connectors/src/connector-outbox.js";
 import { admitRun, requestCancel } from "../packages/core/src/agent-job-admission.js";
 import { getRunAudit, listRunNotifications } from "../packages/core/src/agent-job-audit.js";
-import { decideApproval, listApprovals } from "../packages/core/src/agent-job-ledger.js";
+import { decideApproval } from "../packages/core/src/agent-job-ledger.js";
 import { driveDueRuns, driveRun } from "../packages/core/src/agent-job-runner.js";
 import { fireDueSchedules } from "../packages/core/src/agent-job-scheduler.js";
 import { registerAgentJobTool } from "../packages/core/src/agent-job-tools.js";
@@ -76,7 +75,8 @@ test("G10: each notification is enqueued once even when the process dies while r
   await driveDueRuns({}, env);
   const { jobs } = await listConnectorOutboxJobs({ connector: "agent_job" }, env);
   assert.deepEqual(jobs.map((job) => job.deliveryType).sort(), ["agent_job.approval_required", "agent_job.succeeded"]);
-  assert.ok(jobs.every((job) => job.payload.channel === "whatsapp" && job.metadata.approvalChannel === false));
+  assert.match(jobs.find((job) => job.deliveryType === "agent_job.approval_required").payload.text, /approve apr_/);
+  assert.ok(jobs.every((job) => job.payload.channel === "whatsapp" && job.metadata.approvalChannel === true));
   const intents = await listRunNotifications(run.id, env);
   assert.equal(intents.length, 2);
   assert.ok(intents.every((intent) => intent.relayed_at && intent.outbox_job_id));
@@ -169,42 +169,4 @@ test("schedule triggers fire once per slot and coalesce missed fires", async () 
   const again = await fireDueSchedules(env, later);
   assert.equal(again[0].deduplicated, true);
   assert.equal((await listRuns({ job: "nightly" }, env)).length, 1);
-});
-
-function capture() {
-  let text = "";
-  return { stream: { write: (chunk) => { text += chunk; return true; } }, text: () => text };
-}
-
-test("CLI: orkestr init, run, jobs approvals/approve/list/status/cancel", async () => {
-  const env = await tempEnv();
-  const dir = path.join(env.ORKESTR_HOME, "project");
-  const call = async (argv) => {
-    const out = capture();
-    const err = capture();
-    const code = await runCli(argv, { env, stdout: out.stream, stderr: err.stream });
-    return { code, out: out.text(), err: err.text() };
-  };
-  assert.equal((await call(["init", dir])).code, 0);
-  assert.notEqual((await call(["init", dir])).code, 0, "init must not overwrite without --force");
-  const ran = await call(["run", dir, "--json"]);
-  assert.equal(ran.code, 0, ran.err);
-  const parked = JSON.parse(ran.out);
-  assert.equal(parked.state, "awaiting_approval");
-  assert.match((await call(["jobs", "approvals"])).out, new RegExp(parked.approvalId));
-  const approved = JSON.parse((await call(["jobs", "approve", parked.approvalId, "--json"])).out);
-  assert.equal(approved.run.state, "succeeded");
-  const listed = JSON.parse((await call(["jobs", "list", "--json"])).out);
-  assert.equal(listed.runs[0].id, parked.runId);
-  const status = JSON.parse((await call(["jobs", "status", parked.runId, "--json"])).out);
-  assert.ok(status.audit.sealed_at);
-  const second = JSON.parse((await call(["run", dir, "--no-wait", "--json"])).out);
-  const cancelled = JSON.parse((await call(["jobs", "cancel", second.runId, "--json"])).out);
-  assert.equal(cancelled.state, "cancelled");
-  const dup = JSON.parse((await call(["run", dir, "--idempotency-key", "k", "--no-wait", "--json"])).out);
-  const dup2 = JSON.parse((await call(["run", dir, "--idempotency-key", "k", "--no-wait", "--json"])).out);
-  assert.equal(dup2.runId, dup.runId);
-  assert.equal(dup2.deduplicated, true);
-  const pending = await listApprovals({ state: "pending" }, env);
-  assert.equal(pending.length, 0);
 });

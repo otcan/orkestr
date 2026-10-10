@@ -10,6 +10,7 @@
 //   { output }. Codex and Claude Code go through the existing executor
 //   registry; their own tools are not visible to the runner (see the gaps in
 //   docs/spec/agent-job-runner.md).
+import { agentJobTestProvidersAllowed } from "./agent-job-spec.js";
 import { getExecutorAdapter, loadOverlayExecutorAdapters } from "./executors.js";
 
 const adapters = new Map();
@@ -24,8 +25,11 @@ export function registerAgentJobAdapter(adapter) {
   };
 }
 
-export function getAgentJobAdapter(id) {
-  return adapters.get(String(id || "")) || null;
+export function getAgentJobAdapter(id, env = process.env) {
+  const adapter = adapters.get(String(id || "")) || null;
+  // The simulated adapter is a test fixture: never resolvable outside node --test.
+  if (adapter?.testOnly && !agentJobTestProvidersAllowed(env)) return null;
+  return adapter;
 }
 
 export function providerError(message, { retryable = true, kind = "provider" } = {}) {
@@ -48,13 +52,13 @@ export function classifyAdapterError(error) {
   return { kind: "task", retryable: false, message: text };
 }
 
-// ---- simulated: deterministic scripted steps, no network, no credentials ----
+// ---- simulated: test fixture only (conformance/CI), never a user provider ----
 
 function defaultScript(input) {
   const prompt = String(input.prompt || "").trim().split("\n")[0].slice(0, 200);
   return [
     { say: `Simulated provider received: ${prompt}` },
-    { output: { summary: "Simulated run completed. Configure a real provider in agent.provider to do real work." } },
+    { output: { summary: "Simulated run completed." } },
   ];
 }
 
@@ -65,6 +69,7 @@ function scriptFor(input) {
 
 export const simulatedJobAdapter = Object.freeze({
   id: "simulated",
+  testOnly: true,
   capabilities: Object.freeze({
     toolLoop: "orkestr",
     resume: "transcript",
@@ -130,6 +135,8 @@ function nativeExecutorAdapter(id, executorIds) {
         input.prompt,
         input.resumeSummary ? `\n\nResume context:\n${input.resumeSummary}` : "",
         Object.keys(input.inputs || {}).length ? `\n\nInputs:\n${JSON.stringify(input.inputs, null, 2)}` : "",
+        // e.g. the triggering WhatsApp message and its quoted/reply context.
+        input.triggerEvent ? `\n\nTrigger event:\n${JSON.stringify(input.triggerEvent, null, 2)}` : "",
       ].join("");
       const thread = { id: `agent-job-${ctx.runId}`, name: `agent job ${ctx.job}`, executor: { id: executor.id, model: input.model || undefined } };
       const message = { id: `${ctx.runId}-a${ctx.attempt}`, role: "user", source: "agent-job", text, state: "running" };

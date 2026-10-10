@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { admitRun, registerJobFiles, syncJobDirectories } from "../packages/core/src/agent-job-admission.js";
 import { registerAgentJobAdapter } from "../packages/core/src/agent-job-adapters.js";
+import { setAgentJobProviderProbe } from "../packages/core/src/agent-job-providers.js";
 import { getRunAudit } from "../packages/core/src/agent-job-audit.js";
 import { decideApproval, listApprovals, listRunEffects } from "../packages/core/src/agent-job-ledger.js";
 import { driveRun } from "../packages/core/src/agent-job-runner.js";
@@ -57,6 +58,7 @@ function changingArgsAdapter() {
 test("G7: an approval does not apply when the args change; the matching one is consumed once", async () => {
   const env = await tempEnv();
   const restore = registerAgentJobAdapter(changingArgsAdapter());
+  const restoreProbe = setAgentJobProviderProbe("claude-code", async () => ({ connected: true }));
   try {
     const { run } = await admitRun({ spec: makeSpec({ provider: "claude-code" }), type: "api", dedupeKey: "evt" }, env);
     const first = await driveRun(run.id, {}, env);
@@ -77,6 +79,7 @@ test("G7: an approval does not apply when the args change; the matching one is c
     assert.equal((await pullRequests(env))[0].merges, 1);
   } finally {
     restore();
+    restoreProbe();
   }
 });
 

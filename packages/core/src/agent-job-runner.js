@@ -9,6 +9,7 @@ import { classifyAdapterError, getAgentJobAdapter } from "./agent-job-adapters.j
 import { finalizeRunSync, recordNotificationsSync } from "./agent-job-audit.js";
 import { LeaseLost, ensureUnknownEffectApprovals, executeToolCall, reconcileDispatchedEffects } from "./agent-job-effects.js";
 import { faultsFrom, injectFault } from "./agent-job-faults.js";
+import { agentJobProviderStatus } from "./agent-job-providers.js";
 import { expireApprovalSync, failEffectSync, listEffectsSync, pendingApprovalForRunSync, redactValue } from "./agent-job-ledger.js";
 import { validateOutput } from "./agent-job-output.js";
 import {
@@ -203,7 +204,10 @@ async function driveLeased(rc, options) {
 
     let outcome;
     try {
-      const adapter = getAgentJobAdapter(providerRef.provider);
+      // Never start an attempt on a provider that is not connected.
+      const status = await agentJobProviderStatus(providerRef.provider, rc.env);
+      if (!status.connected) throw Object.assign(new Error(`provider_not_connected:${providerRef.provider}:${status.reason}`), { kind: "provider", retryable: false });
+      const adapter = getAgentJobAdapter(providerRef.provider, rc.env);
       if (!adapter) throw Object.assign(new Error(`provider_not_available:${providerRef.provider}`), { kind: "provider", retryable: false });
       outcome = await runAttempt(rc, adapter, providerRef);
     } catch (error) {

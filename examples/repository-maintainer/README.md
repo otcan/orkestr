@@ -1,9 +1,10 @@
 # Example A: repository maintainer
 
 An Agent Job that reads a repository, pushes a fix branch, opens one pull
-request and merges it after a human approval. It runs offline: the
-`simulated` provider replays a script, `repo.*` tools act on a local git
-repository and `github.*` tools act on Orkestr's local fake code host.
+request and merges it after a human approval. It runs on your connected Codex
+login (Claude Code as fallback); `repo.*` tools act on a local git repository
+and `github.*` tools act on Orkestr's local fake code host. The offline test
+(`test/agent-job-example-a.test.js`) swaps in the simulated test fixture.
 
 ```sh
 cd examples/repository-maintainer

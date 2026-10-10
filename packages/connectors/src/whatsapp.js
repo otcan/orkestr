@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { dispatchWhatsAppJobTriggers } from "./whatsapp-job-triggers.js";
 import { runtimeOutputMetadata } from "../../shared/src/runtime-output-identity.js";
 import fs from "node:fs/promises";
 import { publicWhatsAppPartialDelivery } from "./whatsapp-delivery-evidence.js";
@@ -4320,6 +4321,10 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     phase: "received",
   }, env).catch(() => {});
 
+  // Agent Job triggers see every routed message; their own group/sender
+  // allowlist decides, and failures never block thread routing.
+  await dispatchWhatsAppJobTriggers({ ...input, eventId }, env).catch((error) =>
+    appendEvent({ type: "agent_job_whatsapp_trigger_failed", eventId, chatId: initialChatId, error: error?.message || String(error) }, env).catch(() => {}));
   let state = await readWhatsAppState(env);
   let threadRoute = await routeThread(input, config, env);
   const securityApproval = await maybeApprovePairingChallengeFromWhatsApp({

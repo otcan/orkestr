@@ -47,12 +47,30 @@ orientation and safety rules for agents.
   Consider moving them to the private overlay docs, leaving a one-line pointer
   in AGENTS.md.
 
-## Open questions for the owner
+## Owner decisions (decided 2026-10-10)
 
-1. Are WhatsApp and email *notification and approval channels* only, or do
-   they remain first-class trigger sources in v0? The spec currently allows
-   them as notification channels only.
-2. Should `codex` stay the default provider in `orkestr init`, or should the
-   default be `simulated` until a provider is connected?
-3. Is opt-in usage pinging (needed for the "10 developers" metric)
-   acceptable, or should measurement rely only on issues and conversations?
+The three open questions are decided. Recorded in
+[agent-job.md](../spec/agent-job.md#9-owner-decisions-2026-10-10).
+
+1. **Triggers.** ~~Are WhatsApp and email notification and approval channels
+   only, or first-class trigger sources?~~ **Decided:** v0 jobs are triggered
+   from the WebUI, the terminal (CLI/TUI), the API, webhooks, schedules **and
+   WhatsApp group messages**. A WhatsApp trigger only accepts messages from a
+   configured group and from an allowlist of sender identities in that group;
+   the triggering message and its quoted/reply context are always part of the
+   job's input. DMs and unknown senders are never accepted and the rejection
+   is audited. It reuses the existing WhatsApp bindings and inbound router.
+   There is **no email trigger** (point your own webhook at Orkestr instead).
+   WhatsApp and email remain notification and approval channels.
+2. **Default provider.** ~~Should `codex` stay the default in `orkestr init`,
+   or `simulated` until a provider is connected?~~ **Decided:** no simulated
+   provider for jobs. A job must use a real connected provider (`codex`,
+   `claude-code`, later `openai-compatible`). `orkestr init` and `orkestr run`
+   refuse with "connect Codex or Claude first: ..." when none is connected,
+   and the server neither admits nor starts runs on a provider that is not
+   connected. The simulated adapter stays a test fixture (conformance/CI) and
+   is not selectable in job specs outside tests. `orkestr demo` is left as is
+   (not routed through user jobs) pending a separate keep/remove decision.
+3. **Telemetry.** ~~Is opt-in usage pinging acceptable?~~ **Decided:** no
+   usage telemetry or pings of any kind. Adoption is measured only through
+   issues and conversations.

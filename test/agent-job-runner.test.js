@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { admitRun } from "../packages/core/src/agent-job-admission.js";
 import { registerAgentJobAdapter, simulatedJobAdapter } from "../packages/core/src/agent-job-adapters.js";
+import { setAgentJobProviderProbe } from "../packages/core/src/agent-job-providers.js";
 import { handleAgentJobTrigger } from "../packages/core/src/agent-job-http.js";
 import { decideApproval, listApprovals, listRunEffects } from "../packages/core/src/agent-job-ledger.js";
 import { driveRun } from "../packages/core/src/agent-job-runner.js";
@@ -184,6 +185,7 @@ test("G5: retryable provider errors stop at max_attempts; task errors do not ret
 test("G5: a provider error falls back to the next provider; backoff parks the run", async () => {
   const env = await tempEnv();
   const restore = registerAgentJobAdapter({ ...simulatedJobAdapter, id: "codex" });
+  const restoreProbe = setAgentJobProviderProbe("codex", async () => ({ connected: true }));
   try {
     const script = [{ fail: { kind: "provider", message: "unavailable" }, on_providers: ["simulated"], on_attempts: [1, 2, 3] }, { output: { summary: "ok" } }];
     const { run } = await admitRun({ spec: makeSpec({ script, fallback: [{ provider: "codex" }] }), type: "api", dedupeKey: "evt" }, env);
@@ -192,6 +194,7 @@ test("G5: a provider error falls back to the next provider; backoff parks the ru
     assert.deepEqual((await attempts(run.id, env)).map((a) => a.provider), ["simulated", "codex"]);
   } finally {
     restore();
+    restoreProbe();
   }
   const slow = makeSpec({ name: "slow-job", script: [{ fail: "unavailable" }, { output: {} }], runtime: { retry: { initial_delay: "1h", max_delay: "1h" } } });
   const { run } = await admitRun({ spec: slow, type: "api", dedupeKey: "evt" }, env);
@@ -200,4 +203,21 @@ test("G5: a provider error falls back to the next provider; backoff parks the ru
   assert.ok(parked.nextAttemptAt > Date.now() + 3_000_000);
   assert.equal((await driveRun(run.id, {}, env)).state, "retrying");
   assert.equal((await attempts(run.id, env)).length, 1);
+});
+
+test("jobs are neither admitted nor started on a provider that is not connected", async () => {
+  const env = await tempEnv();
+  await assert.rejects(admitRun({ spec: makeSpec({ provider: "codex" }), type: "api", dedupeKey: "evt" }, env), (error) => {
+    assert.equal(error.code, "provider_not_connected");
+    assert.match(error.message, /connect Codex or Claude first/);
+    return true;
+  });
+  // A fallback that is not connected is skipped like any provider error.
+  const script = [{ fail: { kind: "provider", message: "unavailable" } }, { output: {} }];
+  const { run } = await admitRun({ spec: makeSpec({ script, fallback: [{ provider: "claude-code" }] }), type: "api", dedupeKey: "evt" }, env);
+  const result = await driveRun(run.id, { waitForBackoff: true }, env);
+  assert.equal(result.state, "failed");
+  const tried = await attempts(run.id, env);
+  assert.deepEqual(tried.map((a) => a.provider), ["simulated", "claude-code"]);
+  assert.match(tried[1].error, /provider_not_connected/);
 });

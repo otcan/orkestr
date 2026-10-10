@@ -9,6 +9,7 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 import { normalizeAgentJobSpec } from "./agent-job-spec.js";
 import { loadAgentJobYaml } from "./agent-job-spec-yaml.js";
 import { finalizeRunSync } from "./agent-job-audit.js";
+import { agentJobProviderStatus, providerNotConnectedError } from "./agent-job-providers.js";
 import {
   RUN_ACTIVE_STATES,
   appendCheckpointSync,
@@ -135,6 +136,9 @@ export async function admitRun({ job = "", spec = null, type = "api", name = "",
   }
   const jobName = pinned.metadata.name;
   const { trigger, triggerName, dedupeKey: key } = resolveTrigger(pinned, { type, name, index, dedupeKey, body });
+  // Owner decision: never admit a run whose provider is not connected.
+  const status = await agentJobProviderStatus(pinned.agent.provider, env);
+  if (!status.connected) throw providerNotConnectedError(pinned.agent.provider, status.reason);
   const runKey = runKeyFor(jobName, triggerName, key);
   const db = await openAgentJobDb(env);
   return tx(db, () => {

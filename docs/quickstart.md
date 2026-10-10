@@ -11,25 +11,22 @@ npm ci
 node apps/cli/bin/orkestr-oss.js demo --yes   # or: orkestr demo --yes
 ```
 
-`orkestr demo` runs the Agent Job in
-[`examples/jobs/simulated-demo.yaml`](../examples/jobs/simulated-demo.yaml) on
-the real Agent Job runner with the built-in `simulated` provider, inside a
-throwaway `ORKESTR_HOME` under your temp directory:
+`orkestr demo` runs one durable Agent Job end to end with the built-in
+`simulated` provider, inside a throwaway `ORKESTR_HOME` under your temp
+directory:
 
-1. **Trigger**: an API event admits one run of the `simulated-demo` job.
+1. **Trigger**: an API event queues the `repository-maintainer-demo` job.
 2. **Tool call**: the agent opens a pull request against a local fake code
-   host. The call is authorized (default deny) and written to the effect
-   ledger as `intended` before the external call.
+   host. The effect is recorded in the effect ledger under an idempotency key.
 3. **Crash**: the worker process is killed with `SIGKILL` right after the pull
-   request was opened, before the effect was recorded as `committed`.
-4. **Recovery**: a new process finds the dead lease holder, marks the attempt
-   `interrupted` and reconciles the effect against the fake code host. It finds
+   request was opened, before the result was recorded.
+4. **Recovery**: a new process recovers the interrupted execution, resumes the
+   job and reconciles the pending effect against the fake code host. It finds
    the existing pull request and does **not** open a second one.
-5. **Approval**: merging is an `approval_required` action. The run parks in
-   `awaiting_approval` until the approval (bound to the exact effect and its
-   arguments) is granted. `--yes` auto-approves; otherwise you are prompted.
-6. **Succeeded**: the run finishes, its audit record is sealed and the demo
-   prints the journal and a list of guarantee checks.
+5. **Approval**: merging is an `approval_required` action. The job pauses until
+   it is approved (`--yes` auto-approves; otherwise you are prompted).
+6. **Completed**: the job records its final answer and the demo prints the
+   audit trail and a list of guarantee checks.
 
 The command exits non-zero if any guarantee is violated (for example a duplicate
 pull request or a merge without approval).
@@ -45,21 +42,34 @@ The same demo runs in CI without network access
 (`test/simulated-provider.test.js`), so contributors can run the full test
 suite without credentials.
 
-## Your own job
+### What the demo uses
+
+- `packages/core/src/simulated-provider.js`: deterministic provider registered
+  as executor `simulated`. It has no tool loop of its own, so Orkestr runs its
+  tool calls.
+- `packages/core/src/effect-ledger.js`: generic durable ledger for external side
+  effects (`intended -> committed | failed | unknown`, with an approval
+  sub-state). After a crash, a dispatched `intended` effect must be reconciled
+  with the external system before it may run again; without a reconcile hook
+  it becomes `unknown` and is never repeated automatically.
+- The existing executor layer (`packages/core/src/executors.js`), thread
+  messages, execution records and the event log for the audit trail.
+
+## Your first Agent Job
+
+Agent Jobs run on a real, connected provider (Codex or Claude); the simulated
+provider above is a demo and test fixture only. Once `codex login` or
+`claude auth login` works on this host:
 
 ```bash
-orkestr init my-jobs          # writes my-jobs/jobs/hello-maintainer.yaml (simulated provider)
-orkestr run my-jobs           # runs it; parks at the approval
-orkestr jobs approvals
-orkestr jobs approve <approval-id>
+orkestr init my-jobs          # writes my-jobs/jobs/hello-job.yaml for your provider
+orkestr run my-jobs
 orkestr jobs list
 orkestr jobs status <run-id>
 ```
 
-See [the runner doc](spec/agent-job-runner.md) for triggers (API, webhook,
-schedule), recovery and the guarantee tests, and
-[`examples/repository-maintainer`](../examples/repository-maintainer) for a job
-that works on a local git repository.
+Triggers (API, webhook, schedule, WhatsApp group messages), approvals and
+recovery are described in [the runner doc](spec/agent-job-runner.md).
 
 ## Next steps
 

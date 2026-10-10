@@ -1,8 +1,7 @@
 # Example A: repository maintainer (docs/spec/agent-job.md). All values are fake.
-# Runs offline: `repo.*` tools act on the local git repository at
-# inputs.repository_path, and `github.*` tools act on Orkestr's local fake code
-# host (inputs.code_host: fake). The simulated provider replays the script; set
-# agent.provider to codex or claude-code to let a real agent decide the steps.
+# `repo.*` tools act on the local git repository at inputs.repository_path, and
+# `github.*` tools act on Orkestr's local fake code host (inputs.code_host: fake)
+# until a real GitHub connector exists. Needs a connected Codex or Claude login.
 apiVersion: orkestr/v0
 kind: AgentJob
 metadata:
@@ -15,7 +14,9 @@ triggers:
     secret_ref: vault://example-webhook-secret
     event_id: /delivery_id
 agent:
-  provider: simulated
+  provider: codex
+  fallback:
+    - provider: claude-code
 task:
   prompt: |
     Read the triggering issue for the repository at inputs.repository_path. Prepare
@@ -23,17 +24,6 @@ task:
   inputs:
     repository_path: ../repo        # relative to this file
     code_host: fake
-    simulated_script:
-      - say: Reading the repository.
-      - tool: repo.read
-        args: { file: README.md }
-      - tool: repo.branch.push
-        args: { branch: orkestr/issue-7, file: FIX.md, content: "Fixed issue 7.\n", message: "fix: issue 7" }
-      - tool: github.pull_request.create
-        args: { repository: example-org/example-repo, head: orkestr/issue-7, title: "fix: issue 7" }
-      - tool: github.pull_request.merge
-        args: { repository: example-org/example-repo, head: orkestr/issue-7 }
-      - output: { summary: Opened and merged one pull request for issue 7. }
 permissions:
   tools:
     allow: [repo.read, repo.branch.push, github.pull_request.create]

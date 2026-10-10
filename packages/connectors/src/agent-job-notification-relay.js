@@ -18,8 +18,10 @@ export async function relayAgentJobNotifications({ faults = [], limit = 100 } = 
       sourceMessageId: intent.key,
       idempotencyKey: intent.key,
       payload: intent.payload,
-      // Owner default: notification channels never carry approval decisions.
-      metadata: { channel: intent.channel, target: intent.target, approvalChannel: false },
+      // WhatsApp approvals come back as "approve <id>" replies in the job's
+      // configured group (whatsapp-job-triggers.js); email approvals are not
+      // implemented yet.
+      metadata: { channel: intent.channel, target: intent.target, approvalChannel: intent.channel === "whatsapp" },
     }, env);
     injectFault(faults, "notify", {});
     const outboxJobId = ensured?.job?.id || ensured?.id || null;

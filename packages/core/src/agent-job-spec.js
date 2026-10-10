@@ -4,8 +4,10 @@
 
 export const AGENT_JOB_API_VERSION = "orkestr/v0";
 export const AGENT_JOB_KIND = "AgentJob";
-export const AGENT_JOB_PROVIDERS = Object.freeze(["simulated", "codex", "claude-code", "openai-compatible"]);
-export const AGENT_JOB_TRIGGER_TYPES = Object.freeze(["schedule", "webhook", "api"]);
+// `simulated` is a test fixture (conformance/CI) and only valid under node --test.
+export const AGENT_JOB_PROVIDERS = Object.freeze(["codex", "claude-code", "openai-compatible"]);
+export const AGENT_JOB_TEST_PROVIDERS = Object.freeze(["simulated"]);
+export const AGENT_JOB_TRIGGER_TYPES = Object.freeze(["schedule", "webhook", "api", "whatsapp"]);
 export const AGENT_JOB_SCHEDULE_CADENCES = Object.freeze(["interval", "daily", "weekly"]);
 export const AGENT_JOB_CONCURRENCY = Object.freeze(["forbid", "queue", "replace"]);
 export const AGENT_JOB_BACKOFF = Object.freeze(["fixed", "exponential"]);
@@ -26,6 +28,10 @@ const SECRET_REF_RE = /^vault:\/\/[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
 const CLOCK_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DURATION_RE = /^(\d+)(ms|s|m|h|d)$/;
 const JSON_POINTER_RE = /^(\/[^/]*)+$/;
+// A WhatsApp group chat id (…@g.us) or an existing binding ref (binding:<id>).
+const WHATSAPP_GROUP_RE = /^([0-9A-Za-z._-]{1,128}@g\.us|binding:[A-Za-z0-9._:-]{1,128})$/;
+// Phone numbers in E.164 or WhatsApp participant ids (…@s.whatsapp.net, …@lid).
+const WHATSAPP_SENDER_RE = /^(\+[1-9]\d{6,14}|[0-9]{6,32}@(s\.whatsapp\.net|c\.us|lid))$/;
 const DURATION_UNITS = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
 const MAX_PROMPT_CHARS = 32_000;
 const MAX_ATTEMPTS_LIMIT = 20;
@@ -41,6 +47,11 @@ export class AgentJobSpecError extends Error {
   }
 }
 
+// Test-only providers are accepted only inside node --test (NODE_TEST_CONTEXT).
+export function agentJobTestProvidersAllowed(env = process.env) {
+  return Boolean(String(env?.NODE_TEST_CONTEXT || process.env.NODE_TEST_CONTEXT || "").trim());
+}
+
 export function parseDurationMs(value) {
   if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
   const match = typeof value === "string" ? value.trim().match(DURATION_RE) : null;
@@ -52,10 +63,11 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function createContext() {
+function createContext(options = {}) {
   const errors = [];
   return {
     errors,
+    providers: options.allowTestProviders ? [...AGENT_JOB_PROVIDERS, ...AGENT_JOB_TEST_PROVIDERS] : AGENT_JOB_PROVIDERS,
     fail(path, code, message) {
       errors.push({ path, code, message });
     },
@@ -185,6 +197,16 @@ function normalizeTrigger(ctx, raw, path) {
     checkKeys(ctx, raw, path, ["type"]);
     return { type };
   }
+  if (type === "whatsapp") {
+    checkKeys(ctx, raw, path, ["type", "group", "senders", "match"]);
+    const senders = stringListAt(ctx, raw.senders, `${path}.senders`, { pattern: WHATSAPP_SENDER_RE });
+    if (!Array.isArray(raw.senders) || !raw.senders.length) ctx.fail(`${path}.senders`, "required", "list at least one allowed sender");
+    const match = stringAt(ctx, raw.match, `${path}.match`, { required: false, max: 200 }) || null;
+    if (match) {
+      try { new RegExp(match, "i"); } catch { ctx.fail(`${path}.match`, "invalid_format", "not a valid regular expression"); }
+    }
+    return { type, group: stringAt(ctx, raw.group, `${path}.group`, { pattern: WHATSAPP_GROUP_RE, max: 160 }), senders, match };
+  }
   return null;
 }
 
@@ -208,7 +230,12 @@ function normalizeTriggers(ctx, value) {
 function normalizeProviderRef(ctx, raw, path, { checked = false } = {}) {
   const ref = objectAt(ctx, raw, path, checked ? Object.keys(raw) : ["provider", "model", "base_url"]);
   if (!ref) return null;
-  const provider = stringAt(ctx, ref.provider, `${path}.provider`, { oneOf: AGENT_JOB_PROVIDERS });
+  if (ref.provider === "simulated" && !ctx.providers.includes("simulated")) {
+    ctx.fail(`${path}.provider`, "test_only_provider", "simulated is a test fixture; use a connected provider (codex or claude-code)");
+  }
+  const provider = ref.provider === "simulated" && !ctx.providers.includes("simulated")
+    ? undefined
+    : stringAt(ctx, ref.provider, `${path}.provider`, { oneOf: ctx.providers });
   const out = { provider, model: stringAt(ctx, ref.model, `${path}.model`, { required: false, max: 128 }) || null };
   if (provider === "openai-compatible") {
     if (!out.model) ctx.fail(`${path}.model`, "required", "openai-compatible providers need a model");
@@ -339,8 +366,8 @@ function normalizeNotifications(ctx, value) {
     .filter(Boolean);
 }
 
-export function validateAgentJobSpec(input) {
-  const ctx = createContext();
+export function validateAgentJobSpec(input, { allowTestProviders = agentJobTestProvidersAllowed() } = {}) {
+  const ctx = createContext({ allowTestProviders });
   if (!isPlainObject(input)) {
     ctx.fail("$", "invalid_type", "expected a job object");
     return { ok: false, errors: ctx.errors, spec: null };
@@ -363,8 +390,8 @@ export function validateAgentJobSpec(input) {
   return { ok: true, errors: [], spec };
 }
 
-export function normalizeAgentJobSpec(input) {
-  const result = validateAgentJobSpec(input);
+export function normalizeAgentJobSpec(input, options = {}) {
+  const result = validateAgentJobSpec(input, options);
   if (!result.ok) throw new AgentJobSpecError(result.errors);
   return result.spec;
 }

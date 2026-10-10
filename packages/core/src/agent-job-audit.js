@@ -104,7 +104,9 @@ function notificationKey(runId, event, channel, target) {
 }
 
 function notificationText(run, event, detail = {}) {
-  const extra = detail.approvalId ? ` approval=${detail.approvalId} tool=${detail.tool}` : detail.attempt ? ` attempt=${detail.attempt}` : "";
+  const extra = detail.approvalId
+    ? ` approval=${detail.approvalId} tool=${detail.tool}. Approve with \`orkestr jobs approve ${detail.approvalId}\` or reply "approve ${detail.approvalId}" / "deny ${detail.approvalId}" in the job's WhatsApp group`
+    : detail.attempt ? ` attempt=${detail.attempt}` : "";
   return `Agent job ${run.job} run ${run.id}: ${event}${run.reason && event === "failed" ? ` (${run.reason})` : ""}${extra}`;
 }
 

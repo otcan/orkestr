@@ -97,6 +97,9 @@ create index if not exists agent_job_approvals_run on approvals(run_id);
 create table if not exists notifications (
   key text primary key, run_id text not null, event text not null, channel text not null, target text not null,
   payload_json text not null, outbox_job_id text, created_at text not null, relayed_at text);
+create table if not exists trigger_audit (
+  id integer primary key autoincrement, job text, trigger_type text not null, outcome text not null, reason text,
+  source_ref text, sender text, chat_id text, run_id text, at text not null);
 create table if not exists schedule_state (job text not null, trigger_index integer not null, next_fire_at integer not null,
   primary key (job, trigger_index));
 `;
@@ -338,6 +341,23 @@ export function listCheckpointsSync(db, runId, kinds = null) {
   return rows
     .filter((row) => !kinds || kinds.includes(row.kind))
     .map((row) => ({ seq: Number(row.seq), attempt: row.attempt ?? null, kind: row.kind, data: parse(row.data_json, {}), at: row.at }));
+}
+
+// Audit of trigger events that did not (or did) become runs: rejected
+// WhatsApp senders and DMs, provider-not-connected refusals, schedule skips.
+// Never stores message text.
+export async function recordTriggerAudit({ job = null, type, outcome, reason = null, sourceRef = null, sender = null, chatId = null, runId = null }, env = process.env) {
+  const db = await openAgentJobDb(env);
+  db.prepare(`insert into trigger_audit (job, trigger_type, outcome, reason, source_ref, sender, chat_id, run_id, at)
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(job, type, outcome, reason, sourceRef, sender, chatId, runId, nowIso());
+}
+
+export async function listTriggerAudit({ type = "", limit = 100 } = {}, env = process.env) {
+  const db = await openAgentJobDb(env);
+  const rows = type
+    ? db.prepare("select * from trigger_audit where trigger_type = ? order by id desc limit ?").all(type, limit)
+    : db.prepare("select * from trigger_audit order by id desc limit ?").all(limit);
+  return rows.map((row) => ({ job: row.job, type: row.trigger_type, outcome: row.outcome, reason: row.reason, sourceRef: row.source_ref, sender: row.sender, chatId: row.chat_id, runId: row.run_id, at: row.at }));
 }
 
 export async function listCheckpoints(runId, env = process.env) {

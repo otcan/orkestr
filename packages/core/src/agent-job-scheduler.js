@@ -6,7 +6,7 @@
 // down is coalesced into one run on the next tick.
 import { admitRun, syncJobDirectories } from "./agent-job-admission.js";
 import { driveRun } from "./agent-job-runner.js";
-import { RUN_ACTIVE_STATES, getRunSync, listRegisteredJobs, getRegisteredJob, nowIso, nowMs, openAgentJobDb, tx } from "./agent-job-store.js";
+import { RUN_ACTIVE_STATES, getRunSync, listRegisteredJobs, getRegisteredJob, nowIso, nowMs, openAgentJobDb, recordTriggerAudit, tx } from "./agent-job-store.js";
 import { pendingApprovalForRunSync } from "./agent-job-ledger.js";
 import { nextRunAt } from "./timers.js";
 
@@ -42,9 +42,15 @@ export async function fireDueSchedules(env = process.env, now = new Date()) {
       }
       if (Number(row.next_fire_at) > now.getTime()) continue;
       const slot = nowIso(Number(row.next_fire_at));
-      const admitted = await admitRun({ job: name, type: "schedule", index, dedupeKey: `slot:${slot}` }, env);
+      let admitted = null;
+      try {
+        admitted = await admitRun({ job: name, type: "schedule", index, dedupeKey: `slot:${slot}` }, env);
+      } catch (error) {
+        // e.g. provider_not_connected: skip this slot, audit it, keep ticking.
+        await recordTriggerAudit({ job: name, type: "schedule", outcome: "rejected", reason: error?.code || "admit_failed", sourceRef: slot }, env);
+      }
       tx(db, () => db.prepare("update schedule_state set next_fire_at = ? where job = ? and trigger_index = ?").run(scheduleNextFireMs(triggers[index], now), name, index));
-      fired.push({ job: name, index, slot, runId: admitted.run.id, deduplicated: admitted.deduplicated });
+      if (admitted) fired.push({ job: name, index, slot, runId: admitted.run.id, deduplicated: admitted.deduplicated });
     }
   }
   return fired;

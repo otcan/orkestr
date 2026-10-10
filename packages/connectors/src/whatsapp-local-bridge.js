@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { whatsappQuotedContext } from "./whatsapp-quoted-context.js";
 import path from "node:path";
 import { publicWhatsAppPartialDelivery, whatsappFailureEvidence, whatsappOperatorFailureDiagnostic } from "./whatsapp-delivery-evidence.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
@@ -4374,6 +4375,7 @@ export async function handleInboundMessage(accountId, message, env = process.env
   }
   const routeAccountId = String(options.routeAccountId || accountId || "").trim();
   const routedText = routedTextSource || attachmentSummaryText(attachments);
+  const quoted = await whatsappQuotedContext(message);
   const inbound = {
     eventId,
     chatId,
@@ -4382,6 +4384,7 @@ export async function handleInboundMessage(accountId, message, env = process.env
     fromMe: routeFromMe,
     text: routedText,
     attachments,
+    ...(quoted ? { quoted } : {}),
     ...(transformedMediaEchoChecked ? { transformedMediaEchoChecked } : {}),
     timestamp: message.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : nowIso(),
   };

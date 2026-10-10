@@ -187,3 +187,24 @@ test("YAML parsing rejects anchors, aliases, custom tags and duplicate keys", as
   await assert.rejects(parseAgentJobYaml(`${base}kind: AgentJob\n`), /yaml_syntax/);
   await assert.rejects(loadAgentJobYaml(`${base}metadata: { name: a }\n`), /triggers required/);
 });
+
+test("whatsapp triggers need a group, an allowlist of senders and a valid pattern", () => {
+  const ok = minimalJob({ triggers: [{ type: "whatsapp", group: "120363000000000001@g.us", senders: ["+15550100001", "15550100002@s.whatsapp.net"], match: "^/fix" }] });
+  const result = validateAgentJobSpec(ok);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.spec.triggers[0], { type: "whatsapp", group: "120363000000000001@g.us", senders: ["+15550100001", "15550100002@s.whatsapp.net"], match: "^/fix" });
+  assert.equal(validateAgentJobSpec(minimalJob({ triggers: [{ type: "whatsapp", group: "binding:example-binding", senders: ["+15550100001"] }] })).ok, true);
+  assert.deepEqual(errorCodes(minimalJob({ triggers: [{ type: "whatsapp", group: "15550100001@c.us", senders: ["+15550100001"] }] })), ["triggers[0].group:invalid_format"]);
+  assert.deepEqual(errorCodes(minimalJob({ triggers: [{ type: "whatsapp", group: "120363000000000001@g.us" }] })), ["triggers[0].senders:required"]);
+  assert.deepEqual(errorCodes(minimalJob({ triggers: [{ type: "whatsapp", group: "120363000000000001@g.us", senders: ["everyone"] }] })), ["triggers[0].senders[0]:invalid_format"]);
+  assert.deepEqual(errorCodes(minimalJob({ triggers: [{ type: "whatsapp", group: "120363000000000001@g.us", senders: ["+15550100001"], match: "(" }] })), ["triggers[0].match:invalid_format"]);
+  assert.deepEqual(errorCodes(minimalJob({ triggers: [{ type: "email" }] })), ["triggers[0].type:invalid_value"]);
+});
+
+test("the simulated provider is a test fixture and rejected outside tests", () => {
+  const job = minimalJob();
+  assert.equal(validateAgentJobSpec(job).ok, true, "allowed under node --test");
+  const outside = validateAgentJobSpec(job, { allowTestProviders: false });
+  assert.deepEqual(outside.errors.map((e) => `${e.path}:${e.code}`), ["agent.provider:test_only_provider"]);
+  assert.equal(validateAgentJobSpec(minimalJob({ agent: { provider: "codex" } }), { allowTestProviders: false }).ok, true);
+});

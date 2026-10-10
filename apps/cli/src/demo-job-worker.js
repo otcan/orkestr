@@ -1,5 +1,5 @@
 // One process lifetime of the `orkestr demo` job. Spawned by demo-command.js
-// with an isolated ORKESTR_HOME; the injected fault may SIGKILL it.
+// with an isolated ORKESTR_HOME; the simulated provider may SIGKILL it.
 import { runDemoJobAttempt } from "../../../packages/core/src/simulated-demo-job.js";
 
 const options = JSON.parse(process.argv[2] || "{}");

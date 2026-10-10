@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { decideApproval, listApprovals } from "../../../packages/core/src/agent-job-ledger.js";
-import { closeAgentJobDbs } from "../../../packages/core/src/agent-job-store.js";
-import { demoJobReport, demoRun, loadDemoJob } from "../../../packages/core/src/simulated-demo-job.js";
+import { decideEffectApproval, listEffects } from "../../../packages/core/src/effect-ledger.js";
+import { demoJob, demoJobReport } from "../../../packages/core/src/simulated-demo-job.js";
+import { closeThreadRegistryCache } from "../../../packages/storage/src/thread-registry.js";
 
 const workerPath = fileURLToPath(new URL("./demo-job-worker.js", import.meta.url));
 
@@ -50,33 +50,44 @@ function runAttempt(env, options) {
   });
 }
 
-async function askApproval(approval, ctx) {
+async function askApproval(effect, ctx) {
   const input = ctx.stdin;
   if (!input?.isTTY) return false;
   const rl = readline.createInterface({ input, output: ctx.stdout });
   try {
-    const answer = await new Promise((resolve) => rl.question(`  Approve ${approval.tool} ${JSON.stringify(approval.args)}? [y/N] `, resolve));
+    const answer = await new Promise((resolve) => rl.question(`  Approve ${effect.kind} ${JSON.stringify(effect.payload)}? [y/N] `, resolve));
     return /^y(es)?$/i.test(String(answer).trim());
   } finally {
     rl.close();
   }
 }
 
-// Answer the run's pending approvals (the run is parked, not running).
-async function answerApprovals(env, options, ctx, say) {
-  const run = await demoRun(env);
-  const pending = run ? await listApprovals({ runId: run.id, state: "pending" }, env) : [];
-  for (const approval of pending) {
-    say(`approval requested: ${approval.tool} (${approval.approvalId})`);
-    const approved = options.yes || await askApproval(approval, ctx);
-    await decideApproval(approval.approvalId, { decision: approved ? "approved" : "denied", by: options.yes ? "demo:--yes" : "demo:operator" }, env);
-    say(approved ? "approved" : "denied (run with --yes to auto-approve in non-interactive shells)");
-  }
-  return pending.length;
+// Watch the ledger while the job runs and answer approval requests.
+function startApprovalWatcher(env, options, ctx, say) {
+  let stopped = false;
+  const handled = new Set();
+  const done = (async () => {
+    while (!stopped) {
+      const pending = await listEffects({ jobId: demoJob.id, approvalState: "pending" }, env).catch(() => []);
+      for (const effect of pending) {
+        if (handled.has(effect.key)) continue;
+        handled.add(effect.key);
+        say(`approval requested: ${effect.kind} (${effect.key})`);
+        const approved = options.yes || await askApproval(effect, ctx);
+        await decideEffectApproval(effect.key, {
+          decision: approved ? "approved" : "denied",
+          decidedBy: options.yes ? "demo:--yes" : "demo:operator",
+        }, env);
+        say(approved ? "approved" : "denied (run with --yes to auto-approve in non-interactive shells)");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  })();
+  return async () => { stopped = true; await done; };
 }
 
 function formatAuditEvent(event) {
-  const detail = [event.tool, event.decision, event.state, event.outcome, event.reason, event.crashPoint]
+  const detail = [event.step, event.tool, event.effectStatus, event.effectKind, event.state, event.crashPoint, event.error]
     .filter(Boolean).join(" ");
   const attempt = event.attempt ? ` attempt=${event.attempt}` : "";
   return `  ${String(event.ts || "").slice(11, 23)}  ${event.type}${attempt}${detail ? `  ${detail}` : ""}`;
@@ -94,25 +105,25 @@ export async function demoCommand(args, ctx) {
   const attempts = [];
   let report = null;
   try {
-    const job = await loadDemoJob();
     say(`isolated ORKESTR_HOME ${home} (no credentials, no network)`);
-    say(`job ${job.metadata.name}: trigger=api provider=${job.agent.provider} maxAttempts=${job.runtime.maxAttempts}`);
-    // Each worker is one process lifetime. Process deaths and approval waits
-    // are bounded so a broken run cannot loop forever.
-    for (let index = 0; index < job.runtime.maxAttempts + 4; index += 1) {
-      say(`process ${index + 1}: running`);
-      const attempt = await runAttempt(env, { crash: options.crash });
-      attempts.push(attempt);
-      if (attempt.signal || attempt.code !== 0) {
-        say(`process ${index + 1}: died (${attempt.signal || `exit ${attempt.code}`})${attempt.stderr ? `: ${attempt.stderr}` : ""}`);
-        if (!attempt.signal) break;
-        say("recovering from durable state");
-        continue;
+    say(`job ${demoJob.id}: trigger=${demoJob.trigger.type} provider=${demoJob.agent.provider} maxAttempts=${demoJob.runtime.maxAttempts}`);
+    const stopWatcher = startApprovalWatcher(env, options, ctx, say);
+    try {
+      for (let index = 0; index < demoJob.runtime.maxAttempts; index += 1) {
+        say(`attempt ${index + 1}: running`);
+        const attempt = await runAttempt(env, { crash: options.crash });
+        attempts.push(attempt);
+        if (attempt.signal || attempt.code !== 0) {
+          say(`attempt ${index + 1}: process died (${attempt.signal || `exit ${attempt.code}`})${attempt.stderr ? `: ${attempt.stderr}` : ""}`);
+          if (attempt.code !== 0 && !attempt.signal) break;
+          say("recovering from durable state");
+          continue;
+        }
+        say(`attempt ${index + 1}: ${attempt.result?.state || "unknown"} - ${attempt.result?.result?.output || ""}`.trim());
+        break;
       }
-      const state = attempt.result?.state || "unknown";
-      say(`process ${index + 1}: run ${state}${attempt.result?.reason ? ` (${attempt.result.reason})` : ""}`);
-      if (state !== "awaiting_approval") break;
-      if (!(await answerApprovals(env, options, ctx, say))) break;
+    } finally {
+      await stopWatcher();
     }
     report = await demoJobReport(env);
     if (!options.crash) {
@@ -120,7 +131,7 @@ export async function demoCommand(args, ctx) {
       report.ok = report.checks.every((check) => check.ok);
     }
   } finally {
-    await closeAgentJobDbs().catch(() => {});
+    await closeThreadRegistryCache(env).catch(() => {});
     if (!options.keep) await fs.rm(home, { recursive: true, force: true }).catch(() => {});
   }
 
@@ -131,7 +142,7 @@ export async function demoCommand(args, ctx) {
     for (const event of report.audit) ctx.stdout.write(`${formatAuditEvent(event)}\n`);
     ctx.stdout.write("\nGuarantees:\n");
     for (const check of report.checks) ctx.stdout.write(`  ${check.ok ? "ok  " : "FAIL"}  ${check.name}\n`);
-    const denied = report.approvals?.some((approval) => approval.state === "denied");
+    const denied = report.effects.some((effect) => effect.outcome === "denied");
     ctx.stdout.write(report.ok
       ? `\nDemo passed: ${options.crash ? "the job survived a crash without duplicating its pull request" : "the job completed"}.\n`
       : `\nDemo FAILED: ${denied ? "the approval was denied, so the job did not complete" : "a durability guarantee was violated"}.\n`);

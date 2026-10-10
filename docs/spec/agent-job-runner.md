@@ -1,9 +1,12 @@
 # Agent Job runner (v0)
 
-Status: implemented for the `simulated` provider; `codex` and `claude-code`
-run through the existing executor registry with the gaps listed below. Spec:
-[agent-job.md](agent-job.md). Guarantees:
-[runtime-guarantees.md](runtime-guarantees.md).
+Status: the runtime (store, recovery, ledger, approvals, triggers, CLI) is
+implemented and proven with the `simulated` **test fixture**. Real jobs must
+use a connected `codex` or `claude-code` provider (owner decision 2026-10-10,
+[agent-job.md §9](agent-job.md#9-owner-decisions-2026-10-10)); those run
+through the existing executor registry with the gaps listed below. Orkestr
+sends no usage telemetry or pings. Spec: [agent-job.md](agent-job.md).
+Guarantees: [runtime-guarantees.md](runtime-guarantees.md).
 
 ## Modules
 
@@ -15,12 +18,14 @@ run through the existing executor registry with the gaps listed below. Spec:
 | `agent-job-effects.js` | Authorizes every tool call (`agentJobToolDecision`), runs side effects through the ledger, reconciles after crashes and applies approval binding. |
 | `agent-job-ledger.js` | Effect rows (`intended` → `committed` \| `failed` \| `unknown`) and approvals. |
 | `agent-job-tools.js` | Tool registry (`effect`, `logicalKey`, `reconcile`, `perform`) and the offline tools: `demo.*`, `repo.*` (local git) and `github.*` (fake code host only, opt-in with `inputs.code_host: fake`). |
-| `agent-job-adapters.js` | Provider adapters: `simulated` (scripted, Orkestr tool loop, transcript resume) and `codex` / `claude-code` (one native turn through `executors.js`). |
+| `agent-job-adapters.js` | Provider adapters: `codex` / `claude-code` (one native turn through `executors.js`, trigger event included in the prompt) and the `simulated` test fixture (scripted, Orkestr tool loop, transcript resume; resolvable only under `node --test`). |
+| `agent-job-providers.js` | Provider connectivity gate. Runs are not admitted, and attempts not started, on a provider that is not connected. Probes (`codex login status`, `claude auth status --json`, cached 60 s) live in `packages/connectors/src/agent-job-provider-probes.js`; with no probe a provider counts as not connected. |
+| `packages/connectors/src/whatsapp-job-triggers.js` | WhatsApp group-message triggers and `approve`/`deny` replies, called from the existing inbound router (`routeWhatsAppInbound`). |
 | `agent-job-audit.js` | Sealed audit record per terminal run and notification intents, written in the same transaction as the state change they announce. |
 | `packages/connectors/src/agent-job-notification-relay.js` | Moves notification intents into the connector outbox (same idempotency key). Called by the server scheduler and the CLI after driving. |
 | `agent-job-scheduler.js` | Server background driver: resume on start, schedule triggers, periodic sweep. |
 | `agent-job-http.js`, `agent-job-trigger-auth.js` | `POST /api/jobs/<job>/trigger` and its machine-token auth. |
-| `agent-job-faults.js` | Fault injection at named points (tests and `orkestr demo`). |
+| `agent-job-faults.js` | Fault injection at named points (tests). |
 
 `effect-ledger.js` (used by the thread-level `simulated` executor) uses the
 same effect state names.
@@ -69,8 +74,11 @@ matches and a new one is requested. Pending approvals expire after
 `approval_expired`. For an `unknown` effect, *approve* means "perform it once
 more" and *deny* means "skip it" (the agent gets `skipped`).
 
-Owner default: WhatsApp and email are **notification** channels only.
-Decisions come from `orkestr jobs approve|deny` (or the API/UI later).
+Decisions come from `orkestr jobs approve|deny`, or from a WhatsApp reply
+`approve <approval-id>` / `deny <approval-id>` posted in the job's configured
+group by an allowlisted sender of that job's `whatsapp` trigger (anything
+else is rejected and audited). Email approvals and a UI button are
+follow-ups.
 
 ## Triggers
 
@@ -79,10 +87,27 @@ Decisions come from `orkestr jobs approve|deny` (or the API/UI later).
 * **Webhook**: `POST /api/jobs/<job>/trigger?hook=<name>`. The dedupe key comes
   from the trigger's `event_id` JSON pointer, else from the body hash.
   Redeliveries return the first run with HTTP 200, new runs return 202.
+* **WhatsApp**: the inbound router (`routeWhatsAppInbound`) offers every
+  message to `dispatchWhatsAppJobTriggers()` before thread routing; failures
+  there never block thread routing. A run is admitted only for a message in
+  the trigger's `group` (chat id, or `binding:<id>` resolved through the
+  existing binding registry), from a sender on `senders` (compared as
+  canonical participant ids, so `+15550100001` matches
+  `15550100001@c.us`), matching `match`. The message id is the dedupe key.
+  The trigger event (`text`, `sender`, `messageId`, `chatId`, `quoted`) is
+  stored with the run and passed to the agent. The local bridge now records
+  quoted/reply context (`whatsapp-quoted-context.js`). DMs from allowlisted
+  people, unknown senders in the group and provider-not-connected refusals
+  are written to the `trigger_audit` table without message text; own
+  (`fromMe`) messages are ignored so Orkestr's own replies cannot trigger
+  jobs. There is no email trigger.
+* **WebUI**: uses the API trigger; a WebUI button is a follow-up.
 * **Schedule**: each schedule trigger keeps a `next_fire_at` slot computed
   with the timer cadence code (`nextRunAt` in `timers.js`). The slot time is
   the dedupe key, so a slot fires once even across processes, and missed
-  slots while the server was down are coalesced into one run.
+  slots while the server was down are coalesced into one run. A slot whose
+  admission is refused (for example the provider is not connected) is
+  skipped and audited.
 
 Auth: the trigger endpoint accepts a bearer token from
 `ORKESTR_AGENT_JOB_TRIGGER_TOKEN(S)` (machine auth `agent_job_trigger`) or a
@@ -107,11 +132,15 @@ to thread executions only.
 orkestr init [dir] [--force]
 orkestr run <job.yaml|dir> [--job name] [--idempotency-key key] [--no-wait] [--json]
 orkestr jobs list|status|approvals|approve|deny|cancel ...
-orkestr demo [--yes] [--no-crash] [--keep] [--json]
 ```
 
-These commands use the local store directly and need no running server. The
-legacy `orkestr jobs run|poll` (job alerts) is unchanged.
+These commands use the local store directly and need no running server.
+`orkestr init` writes `jobs/hello-job.yaml` for the first connected provider
+(the second becomes the fallback) and, like `orkestr run`, refuses with
+"connect Codex or Claude first: ..." when none is connected. The legacy
+`orkestr jobs run|poll` (job alerts) is unchanged. `orkestr demo` is left as
+it was (the thread-level simulated executor, not user jobs) pending a
+keep/remove decision.
 
 ## Guarantee tests
 
@@ -129,22 +158,35 @@ legacy `orkestr jobs run|poll` (job alerts) is unchanged.
 | G10 | `test/agent-job-recovery.test.js` (crash after parking, and between outbox enqueue and marking the intent relayed, for `approval_required` and `succeeded`) |
 | G11 | `test/agent-job-recovery.test.js` (cancel during a tool call, during backoff, and of a run leased elsewhere) |
 
+Owner-decision tests: `test/agent-job-whatsapp-trigger.test.js` (group,
+allowlist, DM/unknown/own rejections, match, message-id dedupe, quoted
+context, WhatsApp approvals, the router hook), `test/agent-job-cli.test.js`
+and `test/agent-job-runner.test.js` (no admission or attempt without a
+connected provider), `test/agent-job-spec.test.js` (whatsapp trigger and
+test-only `simulated`).
+
 ## Gaps and follow-ups
 
-* **Native providers.** `codex` and `claude-code` call the executor registry
-  (`getExecutorAdapter`). The built-in `codex` executor is still a
-  placeholder that fails with `codex_executor_not_configured`, which the
-  runner treats as a non-retryable provider error (so fallback applies). Real
-  Codex app-server and Claude Code thread runtimes still need a job-attempt
-  adapter that does not require a thread record.
+* **Native providers (most important).** `codex` and `claude-code` call the
+  executor registry (`getExecutorAdapter`). The built-in `codex` executor is
+  still a placeholder that fails with `codex_executor_not_configured` (a
+  non-retryable provider error, so fallback applies) and there is no
+  built-in `claude-code` executor, so on a stock install a connected
+  provider is admitted but its attempt fails until a job-attempt adapter for
+  the Codex app-server / Claude Code runtimes exists (one that does not need a
+  thread record). Overlay executors registered under those ids work today.
+* **WhatsApp triggers.** `fromMe` messages are ignored, so the owner cannot
+  trigger a job from the account Orkestr itself sends with; sender LIDs must
+  be listed as `…@lid` until the alias store is consulted; the broker
+  forwarding path passes `quoted` only if the broker includes it.
 * **G6 for native tool loops.** Native adapters run their own tools; only
   Orkestr tools pass `agentJobToolDecision`. The pre-call permission hook from
   the adapter interface is not wired yet (`permissionHook: "sandbox_only"`).
 * **Notification delivery.** Notifications are enqueued once in the connector
   outbox (`connector: agent_job`, payload with channel and target) by the
-  relay. A
-  dispatcher that delivers them over thread/WhatsApp/email/webhook is a
-  follow-up; existing WhatsApp pumps do not touch these rows.
+  relay. A dispatcher that delivers them over thread/WhatsApp/email/webhook
+  is a follow-up; existing WhatsApp pumps do not touch these rows. Email
+  approvals are a follow-up.
 * **Webhook HMAC.** Webhook triggers use bearer tokens; HMAC signatures with
   the trigger's `secret_ref` and the `/hooks/<name>` path from the spec are a
   follow-up. Secret resolution (`permissions.secrets`, `ctx.resolveSecret`) is
