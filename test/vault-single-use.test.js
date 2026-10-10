@@ -142,6 +142,6 @@ test("saved request items persist; pending requests can be revoked by their owne
   assert.equal((await submitVaultRequestLink(token, { password: "synthetic-late" }, { userId: "alice" })).state, "ended");
 
   const saved = await createVaultRequestLink("su-other", { name: "Saved Portal" });
-  await submitVaultRequestLink(saved.url.split("/").pop(), { password: "synthetic-saved-6a0c" }, { userId: "alice" });
-  for (let index = 0; index < 2; index += 1) assert.equal((await agentReadSecret("su-other", "Saved Portal")).password, "synthetic-saved-6a0c");
+  await submitVaultRequestLink(saved.url.split("/").pop(), { password: "synthetic-saved-password" }, { userId: "alice" });
+  for (let index = 0; index < 2; index += 1) assert.equal((await agentReadSecret("su-other", "Saved Portal")).password, "synthetic-saved-password");
 });
