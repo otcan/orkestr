@@ -8,6 +8,8 @@ import { appendEvent } from "../../storage/src/store.js";
 import { updateLlmAccountProfileState } from "./llm-account-profiles.js";
 import { resolveClaudeCodeRuntimeProfile } from "./claude-code-rate-limit.js";
 import { getThreadMessage, updateThread, updateThreadMessage } from "./threads.js";
+import { turnOutcomeFields } from "./runtime-input-result.js";
+import { classifyClaudeCodeFailureCode } from "./runtime-turn-error-class.js";
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { setClaudeCodeSession } from "./claude-code-sessions.js";
 import { claudeCodeOutputEventId, appendClaudeCodeFinal, existingClaudeCodeOutput } from "./claude-code-router-trace.js";
@@ -79,6 +81,7 @@ export async function finalizeClaudeCodeTurnResult({ thread, message, coalesced 
     observedVia: "claude_code_stream_json",
     executorTurnId: attemptId,
     error: null,
+    ...turnOutcomeFields({ turnId: attemptId, status: "completed" }),
   }, env);
   await settleClaudeCodeCoalescedInputs(thread, message, coalesced, "completed", attemptId, env);
   const updated = await updateThreadRuntime(thread.id, {
@@ -91,6 +94,7 @@ export async function finalizeClaudeCodeTurnResult({ thread, message, coalesced 
       lastTurnId: attemptId,
       lastTurnStatus: "completed",
       lastTurnError: null,
+      lastTurnErrorClass: null,
     },
   }, env, { turnGeneration });
   await appendTurnLifecycleEvent("completed", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "completed", source: "claude-code" }, env).catch(() => {});
@@ -103,8 +107,15 @@ export async function finalizeClaudeCodeTurnResult({ thread, message, coalesced 
 // Persists a failed turn and returns the public error the caller should throw.
 export async function finalizeClaudeCodeTurnFailure({ thread, message, coalesced = [], attemptId, profile, error, workspace = null, turnGeneration = runtimeTurnGeneration(thread), env = process.env }) {
   const failureCode = publicClaudeCodeFailure(error);
+  const errorClass = classifyClaudeCodeFailureCode(failureCode);
   const failureTelemetry = error?.telemetry || null;
-  await updateThreadMessage(thread.id, message.id, { state: "failed", deliveryState: "failed", error: failureCode }, env).catch(() => {});
+  await updateThreadMessage(thread.id, message.id, {
+    state: "failed",
+    deliveryState: "failed",
+    error: failureCode,
+    executorTurnId: attemptId,
+    ...turnOutcomeFields({ turnId: attemptId, status: "failed", error: errorClass }),
+  }, env).catch(() => {});
   await settleClaudeCodeCoalescedInputs(thread, message, coalesced, "failed", attemptId, env, failureCode);
   const updated = await updateThreadRuntime(thread.id, {
     state: "failed",
@@ -113,20 +124,21 @@ export async function finalizeClaudeCodeTurnFailure({ thread, message, coalesced
     ...(failureTelemetry?.tokenUsage ? { claudeTokenUsage: failureTelemetry.tokenUsage } : {}),
     ...(failureTelemetry?.rateLimits ? { claudeRateLimits: failureTelemetry.rateLimits, claudeRateLimitsObservedAt: nowIso() } : {}),
     ...(failureTelemetry?.contextWindow ? { claudeContextWindow: failureTelemetry.contextWindow } : {}),
-    runtime: { runtimeKind: "claude-code", state: "failed", activeTurnId: null, lastTurnId: attemptId, lastTurnStatus: "failed", lastTurnError: failureCode, lastTurnTermination: claudeCodeTerminationReason(error) || null },
+    runtime: { runtimeKind: "claude-code", state: "failed", activeTurnId: null, lastTurnId: attemptId, lastTurnStatus: "failed", lastTurnError: failureCode, lastTurnErrorClass: errorClass, lastTurnTermination: claudeCodeTerminationReason(error) || null },
   }, env, { turnGeneration }).catch(() => thread);
   if (profile?.id && failureCode === "claude_code_rate_limited") {
     await updateLlmAccountProfileState(thread.ownerUserId, profile.id, "rate_limited", { failureCode, credentialRevision: profile.credentialRevision || 0 }, env).catch(() => {});
   } else if (profile?.id && failureCode === "claude_code_auth_required") {
     await updateLlmAccountProfileState(thread.ownerUserId, profile.id, "login_required", { failureCode, credentialRevision: profile.credentialRevision || 0 }, env).catch(() => {});
   }
-  await appendTurnLifecycleEvent("failed", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "failed", source: "claude-code", error: failureCode }, env).catch(() => {});
+  await appendTurnLifecycleEvent("failed", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "failed", source: "claude-code", error: failureCode, errorClass: errorClass.class, errorCode: errorClass.code, retryable: errorClass.retryable }, env).catch(() => {});
   await appendEvent({ type: "claude_code_turn_failed", threadId: thread.id, profileId: profile?.id, turnId: attemptId, failureCode }, env);
   await appendClaudeCodeKillNotice({ thread, parent: message, attemptId, error, workspace, env });
   await cleanupDetachedClaudeCodeTurns(thread.id, env);
   scheduleClaudeCodeDelivery(thread.id, env, 0);
   const publicError = new Error(failureCode);
   publicError.code = failureCode;
+  publicError.errorClass = errorClass;
   publicError.thread = updated;
   return publicError;
 }
