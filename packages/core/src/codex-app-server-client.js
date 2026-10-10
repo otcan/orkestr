@@ -52,6 +52,7 @@ import { requestUserInputAnswers } from "./codex-app-server-user-input.js";
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import { codexTurnAuthFailureReason, recordCodexRuntimeAuthFailureSignal } from "./codex-auth-health.js";
+import { codexTurnErrorClass, codexTurnOutcomeStatus, recordCodexTurnOutcome } from "./codex-app-server-turn-outcome.js";
 import { redactCodexSecrets } from "./codex-auth-failure.js";
 import { failedAuthRuntimeFields, requeueFailedAuthProbeInput, resolveCodexAuthAfterSuccessfulTurn } from "./codex-auth-failed-thread.js";
 import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
@@ -797,6 +798,7 @@ export class CodexAppServerClient {
       const status = clean(turn.status || "completed");
       const errorText = redactCodexSecrets(publicError(turn.error));
       const authFailureReason = status === "failed" ? codexTurnAuthFailureReason(errorText) : "";
+      const errorClass = codexTurnErrorClass(status, errorText, authFailureReason);
       let authFailure = null;
       const remoteCompactionFailure = status === "failed"
         ? classifyCodexRemoteCompactionFailure(turn.error || errorText, {
@@ -856,6 +858,7 @@ export class CodexAppServerClient {
                   lastTurnId: turnId || null,
                   lastTurnStatus: status,
                   lastTurnError: status === "failed" ? errorText || null : null,
+                  lastTurnErrorClass: errorClass,
                   lastTurnFailure: remoteCompactionFailure,
                   pendingRequest: null,
                   codexStatus: { type: taskStatus === "failed" ? "systemError" : "idle" },
@@ -893,6 +896,7 @@ export class CodexAppServerClient {
               lastTurnId: turnId || null,
               lastTurnStatus: status,
               lastTurnError: status === "failed" ? errorText || null : null,
+              lastTurnErrorClass: errorClass,
               lastTurnFailure: remoteCompactionFailure,
               pendingRequest: null,
               codexStatus: { type: status === "failed" ? "systemError" : "idle" },
@@ -901,6 +905,14 @@ export class CodexAppServerClient {
               updatedAt: nowIso(),
             },
           }, this.env, { turnGeneration: this.turnGeneration(threadId, turnId) }).catch(() => {});
+          const parent = this.turnParent(threadId, turnId);
+          await recordCodexTurnOutcome({
+            threadId: thread.id,
+            turnId,
+            parentId: parent?.id,
+            status: codexTurnOutcomeStatus(status, { interrupted: codexTurnConversationInterrupted(turn) }),
+            error: errorClass,
+          }, this.env).catch(() => []);
           if (authFailure) {
             await requeueFailedAuthProbeInput(thread, previousAuthFailure, turnId, this.env);
             await appendEvent({
@@ -912,7 +924,6 @@ export class CodexAppServerClient {
               runtimeReset: false,
             }, this.env).catch(() => {});
           }
-          const parent = this.turnParent(threadId, turnId);
           if (mailboxTurnRestricted(parent)) {
             const { recordMailboxRouteWorkRuntime } = await import("./mailbox-routes.js");
             const terminalState = status === "completed" ? "completed" : "failed";
@@ -935,6 +946,7 @@ export class CodexAppServerClient {
             state: codexTurnConversationInterrupted(turn) ? "interrupted" : status === "failed" ? "failed" : "completed",
             source: "codex-app-server",
             reason: remoteCompactionFailure?.classification || errorText,
+            ...(errorClass ? { errorClass: errorClass.class, errorCode: errorClass.code, retryable: errorClass.retryable } : {}),
           }, this.env).catch(() => {});
           await applyPendingExecutorSwitchAfterTurn(thread.id, this.env);
           if (status === "completed" && runtimeFinalDeliveryPending(thread, turnId)) {
@@ -1202,6 +1214,7 @@ export class CodexAppServerClient {
           lastTurnId: turnId || null,
           lastTurnStatus: "completed",
           lastTurnError: null,
+          lastTurnErrorClass: null,
           pendingRequest: null,
           codexStatus: { type: "idle" },
           state: "ready",

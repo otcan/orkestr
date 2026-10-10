@@ -28,7 +28,7 @@ export const CAPABILITIES = Object.freeze({
   },
   "input.idempotent": {
     required: false,
-    description: "Re-delivering the same input id runs the provider at most once.",
+    description: "Re-delivering the same input id runs the provider at most once and returns the original turn's outcome.",
   },
   "tools.approval": {
     required: false,

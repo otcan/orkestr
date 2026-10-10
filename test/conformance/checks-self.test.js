@@ -33,6 +33,18 @@ test("idempotency check fails an adapter that re-runs duplicate inputs", async (
   await assert.rejects(check("idempotent-redelivery").run(adapter, session), /duplicate/);
 });
 
+test("idempotency check fails an adapter that only flags duplicates without the original outcome", async (t) => {
+  const adapter = await brokenAdapter(t, (target) => {
+    const run = target.runTurn.bind(target);
+    target.runTurn = async (session, input, options) => {
+      const result = await run(session, input, options);
+      return result.duplicate ? { ...result, output: null } : result;
+    };
+  });
+  const session = await adapter.startSession({ sessionKey: "dup-outcome" });
+  await assert.rejects(check("idempotent-redelivery").run(adapter, session), /original final output/);
+});
+
 test("tool-permission check fails an adapter that ignores deny", async (t) => {
   const adapter = await brokenAdapter(t, (target) => {
     const execute = target.execute.bind(target);

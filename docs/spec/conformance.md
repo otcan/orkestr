@@ -87,6 +87,7 @@ The bundled fakes read a `[scenario:<name>]` marker appended to the prompt.
   error: { class: "auth" | "transient" | "permanent", code } | null,
   providerSessionId: "…",        // required for session.resume
   duplicate: false,              // true when inputId was already handled
+  finalMessageId: "msg-…",       // optional: persisted final message of the turn
   tool: { requested, decision: "approve" | "deny", executed }, // tool scenario only
 }
 ```
@@ -103,7 +104,7 @@ receives `{ tool, input }` and resolves to `"approve"` or `"deny"`.
 | `turn.streaming` | no | `streaming-progress` | a `progress` event precedes the `final` event |
 | `turn.cancel` | no | `cancellation` | active turn settles `cancelled`, no `final` event, session still usable |
 | `session.resume` | no | `restart-resume` | after `restart()` the same `providerSessionId` is resumed and used |
-| `input.idempotent` | no | `idempotent-redelivery` | same `inputId` twice → `duplicate: true`, same turn id, one provider turn |
+| `input.idempotent` | no | `idempotent-redelivery` | same `inputId` twice → `duplicate: true`, same turn id, status, output and final message id, one provider turn |
 | `tools.approval` | no | `tool-permission-deny`, `tool-permission-approve` | hook called once; deny blocks, approve runs the tool |
 | `errors.auth` | no | `error-auth` | `status: failed`, `error.class: auth` |
 | `errors.transient` | no | `error-transient` | `error.class: transient` |
@@ -126,8 +127,8 @@ misclassifies errors) and asserts the matching check fails.
 | tool-permission-deny | pass | pass | skip (gap) |
 | tool-permission-approve | pass | pass | skip (gap) |
 | error-auth | pass | pass | pass |
-| error-transient | pass | skip (gap) | pass (class mapped in harness) |
-| error-permanent | pass | skip (gap) | pass (class mapped in harness) |
+| error-transient | pass | pass | pass |
+| error-permanent | pass | pass | pass |
 
 The Codex and Claude Code harnesses drive the real Orkestr adapters
 (`packages/core/src/codex-app-server*.js`,
@@ -140,11 +141,17 @@ inline fakes in `test/codex-app-server.test.js` and
 
 These were found while writing the harnesses. Fixed items are marked.
 
-1. **Codex: no transient vs permanent error class.** Non-auth turn failures
-   persist only raw error text (`thread.state = "failed"`,
-   `runtime.lastTurnError`). Only auth failures are classified
-   (`failed_auth` + `runtime.authFailure`). A retry policy cannot tell a 429 or
-   stream disconnect from a malformed request.
+1. **Codex: no transient vs permanent error class.** Fixed. Failed turns are
+   classified by `packages/core/src/runtime-turn-error-class.js` into `auth`,
+   `rate_limit` (429, quota, usage limit), `transient` (network, transport,
+   5xx, overload, timeouts) or `permanent` (invalid request, context too long,
+   unknown), each with `code`, `retryable`, `retryAfterMs` and `hint`. The
+   class is stored as `runtime.lastTurnErrorClass`, on the input message's
+   `turnOutcome.error`, and on the `turn_failed` lifecycle event
+   (`errorClass`, `errorCode`, `retryable`). Stale-turn recovery and the
+   acceptance-uncertain delivery retry use the classifier instead of their own
+   string matches. The conformance contract has three classes, so the
+   harnesses report `rate_limit` as `transient`.
 2. **Codex: stale runtime snapshot written after `turn/start`.** Fixed.
    Runtime writers now merge only the fields they own onto the latest record
    under the thread store lock (`updateThreadRuntime` in
@@ -161,15 +168,17 @@ These were found while writing the harnesses. Fixed items are marked.
    `createClaudeCodeProgressReporter` is enabled only for WhatsApp-origin
    inputs. The harness poses the `progress` scenario as a WhatsApp input with
    fake ids. API, timer and job callers get no progress stream.
-5. **Claude Code: error class lives in the harness.** The adapter throws
-   low-cardinality codes (`claude_code_auth_required`,
-   `claude_code_rate_limited`, `claude_code_failed`, …). The code-to-class
-   mapping is in `claude-code-harness.js`, not in the adapter.
-6. **Both: no result lookup by input id.** Idempotency comes from the thread
-   layer (`clientMessageId` dedupe in `appendThreadMessage`). A re-delivered
-   input returns the original queued message, but there is no API that returns
-   the original turn's structured result for that input id. Durable jobs will
-   need one to reconcile after a crash.
+5. **Claude Code: error class lives in the harness.** Fixed. The adapter maps
+   its failure codes with `classifyClaudeCodeFailureCode` and stores the class
+   on the runtime, the input message and the lifecycle event, like Codex.
+6. **Both: no result lookup by input id.** Fixed. When a turn settles, both
+   adapters persist `turnOutcome` (`turnId`, `status`, `error`, `settledAt`) on
+   every input message the turn consumed. `lookupThreadInputResult(threadId,
+   inputId)` in `packages/core/src/runtime-input-result.js` resolves a client
+   input id (or Orkestr message id) to `{ turnId, status, settled,
+   finalMessageId, output, error }`. An outcome recorded for an earlier attempt
+   is ignored once the input is requeued or resubmitted under a new turn. The
+   harnesses answer duplicate inputs through this lookup.
 7. **Both: no common adapter interface yet.** The harnesses translate the
    contract onto adapter-specific functions (`startCodexAppServerThread`,
    `sendClaudeCodeInput`, …). Progress is read back from persisted thread

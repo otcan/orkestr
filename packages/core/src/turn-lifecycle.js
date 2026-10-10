@@ -89,6 +89,11 @@ export function turnLifecycleEvent(type = "", payload = {}) {
     state: lower(payload.state || type),
     source: clean(payload.source),
     reason: clean(payload.reason) || null,
+    ...(clean(payload.errorClass) ? {
+      errorClass: clean(payload.errorClass),
+      errorCode: clean(payload.errorCode) || null,
+      retryable: payload.retryable === true,
+    } : {}),
   };
 }
 

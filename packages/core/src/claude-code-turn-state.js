@@ -1,4 +1,5 @@
 import { updateThreadMessage } from "./threads.js";
+import { turnOutcomeFields } from "./runtime-input-result.js";
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 import { updateThreadRuntime } from "./runtime-record-update.js";
 
@@ -13,6 +14,8 @@ export async function completeInterruptedClaudeCodeTurn(thread, message, attempt
     deliveredAt: nowIso(),
     observedVia: "claude_code_interrupted",
     error: null,
+    executorTurnId: attemptId,
+    ...turnOutcomeFields({ turnId: attemptId, status: "cancelled" }),
   }, env);
   const updated = await updateThreadRuntime(thread.id, {
     state: "ready",
