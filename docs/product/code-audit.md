@@ -17,7 +17,7 @@ thread coupling inside the Codex and Claude runtimes, and the size of
 
 | Exists | What it does |
 | --- | --- |
-| `core/executors.js` | Executor registry (`registerExecutorAdapter`, overlay-loaded adapters, `runNextThreadMessage`). Built-ins: `noop`, plus a `codex` placeholder that throws `codex_executor_not_configured`. |
+| `core/executors.js` | Executor registry (`registerExecutorAdapter`, overlay-loaded adapters, `runNextThreadMessage`). Built-ins: `noop`, plus a thread-level `codex` placeholder that throws `codex_executor_not_configured`. Agent Jobs do not use it: `codex` and `claude-code` job attempts run on the built-in native executors (`core/agent-job-codex.js` on its own Codex app-server, `core/agent-job-claude-code.js`) behind one interface (`core/agent-job-native-interface.js`). |
 | `core/runtime-codex-adapter.js` | Façade over the Codex app-server: start/resume/interrupt/compact/status. |
 | `core/codex-app-server*.js` | JSON-RPC client (`thread/start`, `turn/start`, `turn/steer`, `turn/interrupt`, `thread/resume`), live state, approvals, user input. |
 | `core/runtime-claude-code-adapter.js`, `core/claude-code-*.js` | Claude Code CLI (`stream-json`) process runner, supervised process, reattach, orphan recovery, interrupt/resume, rate-limit deferral. |
@@ -106,7 +106,9 @@ thread coupling inside the Codex and Claude runtimes, and the size of
     the first piece.
   * Approvals are connector-specific, with no generic queue bound to
     `effect_key`/`args_hash`.
-  * Codex native approval requests go to a human prompt, not to policy.
+  * Codex native approval requests in *threads* go to a human prompt, not to
+    policy. In Agent Jobs they go to `ctx.authorizeTool` (`codex.command`,
+    `codex.file_change`, ...), like Claude Code's `PreToolUse` hook.
 
 ## P1 Observability and audit
 
