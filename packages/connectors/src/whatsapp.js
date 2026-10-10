@@ -68,6 +68,7 @@ import { syncWhatsAppTypingTargets } from "./whatsapp-typing.js";
 import { routerUpdateWhatsAppDeliveryTarget } from "./whatsapp-router-updates.js";
 import { attachmentDeliveryKey } from "./whatsapp-table-attachments.js";
 import { assertRequiredSnapshotsPresent, requiredOutboundSnapshots, validateOutboundSnapshots } from "../../core/src/outbound-attachment-snapshots.js";
+import { deliveredTextStillCoversCurrent, deliveryTypeCarriesSourceAttachments, sourceTextUnchangedSinceDelivery, whatsappSourceTextHash } from "./whatsapp-mutation-notice-policy.js";
 import { assertReplyAttachmentStagingReady } from "../../core/src/outbound-attachment-staging.js";
 import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText, stripWhatsAppDebugFooter } from "./whatsapp-formatting.js";
 import {
@@ -2989,9 +2990,11 @@ function whatsappMutationNoticeTarget({ message = {}, parent = null, thread = nu
   const deleted = Boolean(pickString(message.deletedAt));
   if (!deleted && (!deliveredRevision || sourceRevision <= deliveredRevision)) return null;
   if (!deleted) {
+    const unchanged = sourceTextUnchangedSinceDelivery(deliveredSource, message);
+    if (unchanged === true) return null;
     const deliveredText = comparableWhatsAppVisibleText(deliveredWhatsAppPayloadText(deliveredSource, connectorOutboxJobs));
     const currentText = comparableWhatsAppVisibleText(message.text);
-    if (deliveredText && currentText && deliveredText === currentText) return null;
+    if (unchanged === null && deliveredTextStillCoversCurrent(deliveredText, currentText)) return null;
   }
   const chatId = pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
   if (!chatId) return null;
@@ -3175,7 +3178,8 @@ async function sendClaimedWhatsAppText({
   const turnId = pickString(intent?.turnId) || (routerTraceId ? turnIdFor({ routerTraceId }) : "");
   const ownerUserId = resourceOwnerUserId(thread || {}, env);
   const bodyKey = whatsappOutboundBodyKey({ chatId, text, attachments });
-  const requiredAttachmentSnapshots = requiredOutboundSnapshots(message?.attachments);
+  const carriesSourceAttachments = deliveryTypeCarriesSourceAttachments(deliveryType);
+  const requiredAttachmentSnapshots = carriesSourceAttachments ? requiredOutboundSnapshots(message?.attachments) : [];
   const canonicalFinalIdempotencyKey = deliveryType === "final" && routerTraceId && bodyKey
     ? [ownerUserId, "whatsapp", accountId, chatId, threadId || "", `trace:${routerTraceId}`, `payload:${bodyKey}`, "final"].join("|")
     : "";
@@ -3638,7 +3642,7 @@ async function sendClaimedWhatsAppText({
     assertReplyAttachmentStagingReady(message);
     const claimedSnapshotObligations = [
       ...requiredAttachmentSnapshots,
-      ...(outboxClaim.job.payload?.requiredAttachmentSnapshots || []),
+      ...(carriesSourceAttachments ? outboxClaim.job.payload?.requiredAttachmentSnapshots || [] : []),
     ];
     await validateOutboundSnapshots(claimedSnapshotObligations, env);
     assertRequiredSnapshotsPresent(claimedSnapshotObligations, attachments);
@@ -3679,6 +3683,7 @@ async function sendClaimedWhatsAppText({
       messageId,
       ...(sourceMessageId ? { sourceMessageId } : {}),
       sourceRevision: messageSourceRevision(message),
+      ...(message && typeof message.text === "string" ? { sourceTextHash: whatsappSourceTextHash(message.text) } : {}),
       ...(parentMessageId ? { parentMessageId } : {}),
       ...(routerTraceId ? { routerTraceId } : {}),
       ...(turnId ? { turnId } : {}),

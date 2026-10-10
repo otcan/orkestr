@@ -140,6 +140,11 @@ Recurring-failure guards:
   `ORKESTR_GMAIL_NOTIFICATION_BLOCKED_RECHECK_MS` (default 30 min) instead of
   failing every interval. The first successful run emits
   `gmail_notification_unblocked`.
+- WhatsApp edit/delete correction notices are text-only and no longer
+  inherit the edited reply's staged-attachment obligations (which failed every
+  such notice with `outbound_attachment_snapshot_not_sendable`). Deliveries
+  record a hash of the source text, so an attachment-only edit (for example
+  publishing an encrypted copy) no longer counts as a text correction.
 
 ## Self-Hosted Install Pattern
 
