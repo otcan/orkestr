@@ -13,8 +13,9 @@ import { tempEnv } from "./fixtures/agent-job-fixtures.js";
 // Registered before the CLI installs its real probes, so no Codex/Claude CLI
 // is ever spawned here.
 const connected = { codex: false, "claude-code": false };
-setAgentJobProviderProbe("codex", async () => ({ connected: connected.codex, reason: connected.codex ? "logged_in" : "not_logged_in" }));
 setAgentJobProviderProbe("claude-code", async () => ({ connected: connected["claude-code"], reason: "test" }));
+let codexExecutor = true;
+setAgentJobProviderProbe("codex", async () => ({ connected: connected.codex, runnable: codexExecutor, reason: codexExecutor ? "logged_in" : "job_executor_unavailable" }));
 
 function capture() {
   let text = "";
@@ -111,4 +112,24 @@ test("orkestr run and jobs approvals/approve/list/status/cancel", async () => {
   assert.equal(dup2.runId, dup.runId);
   assert.equal(dup2.deduplicated, true);
   assert.equal((await listApprovals({ state: "pending" }, env)).length, 0);
+});
+
+test("init with a logged-in provider but no job executor writes the job and run explains why it refuses", async () => {
+  const env = await tempEnv();
+  const call = cli(env);
+  const dir = path.join(env.ORKESTR_HOME, "project");
+  connected.codex = true;
+  connected["claude-code"] = false;
+  codexExecutor = false;
+  try {
+    const init = await call(["init", dir]);
+    assert.equal(init.code, 0, init.err);
+    assert.match(init.out, /no job executor for it yet/);
+    const run = await call(["run", dir]);
+    assert.notEqual(run.code, 0);
+    assert.match(run.err, /logged in, but this Orkestr install has no job executor/);
+  } finally {
+    connected.codex = false;
+    codexExecutor = true;
+  }
 });

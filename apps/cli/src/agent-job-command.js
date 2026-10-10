@@ -10,7 +10,7 @@ import { driveRun } from "../../../packages/core/src/agent-job-runner.js";
 import { getRun, listAttemptsSync, listRuns, openAgentJobDb } from "../../../packages/core/src/agent-job-store.js";
 import { relayAgentJobNotifications } from "../../../packages/connectors/src/agent-job-notification-relay.js";
 import { installAgentJobProviderProbes } from "../../../packages/connectors/src/agent-job-provider-probes.js";
-import { connectProviderHint, connectedAgentJobProviders } from "../../../packages/core/src/agent-job-providers.js";
+import { agentJobProviderStatuses, connectProviderHint, executorUnavailableHint } from "../../../packages/core/src/agent-job-providers.js";
 
 // Hand notification intents to the connector outbox after local driving.
 async function drive(runId, options, env) {
@@ -93,7 +93,8 @@ export async function initCommand(args, ctx) {
   const { flags, positional } = parseFlags(args, { boolean: ["force"] });
   const env = ctx.env || process.env;
   installAgentJobProviderProbes();
-  const connected = await connectedAgentJobProviders(env);
+  const statuses = await agentJobProviderStatuses(env);
+  const connected = [...statuses.filter((s) => s.runnable), ...statuses.filter((s) => s.connected && !s.runnable)].map((s) => s.provider);
   if (!connected.length) throw new Error(connectProviderHint);
   const dir = path.resolve(positional[0] || ".");
   const file = path.join(dir, "jobs", "hello-job.yaml");
@@ -102,6 +103,7 @@ export async function initCommand(args, ctx) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, exampleJobYaml({ provider: connected[0], fallback: connected[1] || null }));
   ctx.stdout.write(`Wrote ${file} (provider: ${connected[0]})\nNext: orkestr run ${path.relative(process.cwd(), dir) || "."}\n`);
+  if (!statuses.some((s) => s.runnable)) ctx.stdout.write(`Note: ${executorUnavailableHint}. \`orkestr run\` will refuse until one is available.\n`);
   return 0;
 }
 
@@ -118,7 +120,10 @@ export async function runJobCommand(args, ctx) {
   try {
     admitted = await admitRun({ job: selected[0].name, type: "api", dedupeKey: flags["idempotency-key"] || "" }, env);
   } catch (error) {
-    if (error?.code === "provider_not_connected") throw new Error(`${connectProviderHint} (job ${selected[0].name} uses ${error.provider}, which is not connected: ${error.reason})`);
+    if (error?.code === "provider_not_connected") {
+      const hint = error.reason === "job_executor_unavailable" ? executorUnavailableHint : connectProviderHint;
+      throw new Error(`${hint} (job ${selected[0].name} uses ${error.provider}: ${error.reason})`);
+    }
     throw error;
   }
   const { run, deduplicated } = admitted;

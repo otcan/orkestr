@@ -23,30 +23,44 @@ export function setAgentJobProviderProbe(provider, probe, { ifAbsent = false } =
   };
 }
 
+// Status of one provider:
+//   connected - the user's login works (codex: login status + app-server;
+//               claude-code: `claude auth status`)
+//   runnable  - connected AND Orkestr has a job executor for it
+// Jobs are admitted and started only on runnable providers.
 export async function agentJobProviderStatus(provider, env = process.env) {
   const id = String(provider || "");
   if (id === "simulated") {
     return agentJobTestProvidersAllowed(env)
-      ? { provider: id, connected: true, reason: "test_fixture" }
-      : { provider: id, connected: false, reason: "test_only_provider" };
+      ? { provider: id, connected: true, runnable: true, reason: "test_fixture" }
+      : { provider: id, connected: false, runnable: false, reason: "test_only_provider" };
   }
   const probe = probes.get(id);
-  if (!probe) return { provider: id, connected: false, reason: "provider_not_connected" };
+  if (!probe) return { provider: id, connected: false, runnable: false, reason: "provider_not_connected" };
   try {
     const status = await probe(env);
-    return { provider: id, connected: status?.connected === true, reason: status?.reason || (status?.connected ? "connected" : "provider_not_connected") };
+    const connected = status?.connected === true;
+    const runnable = connected && status?.runnable !== false;
+    return { provider: id, connected, runnable, reason: status?.reason || (runnable ? "connected" : connected ? "job_executor_unavailable" : "provider_not_connected") };
   } catch (error) {
-    return { provider: id, connected: false, reason: String(error?.message || "probe_failed").slice(0, 200) };
+    return { provider: id, connected: false, runnable: false, reason: String(error?.message || "probe_failed").slice(0, 200) };
   }
+}
+
+export async function agentJobProviderStatuses(env = process.env, candidates = ["codex", "claude-code"]) {
+  return Promise.all(candidates.map((provider) => agentJobProviderStatus(provider, env)));
 }
 
 export async function connectedAgentJobProviders(env = process.env, candidates = ["codex", "claude-code"]) {
-  const statuses = await Promise.all(candidates.map((provider) => agentJobProviderStatus(provider, env)));
-  return statuses.filter((status) => status.connected).map((status) => status.provider);
+  return (await agentJobProviderStatuses(env, candidates)).filter((status) => status.connected).map((status) => status.provider);
 }
 
+export const executorUnavailableHint =
+  "the provider is logged in, but this Orkestr install has no job executor for it yet (the built-in codex executor is a placeholder; see docs/spec/agent-job-runner.md)";
+
 export function providerNotConnectedError(provider, reason = "provider_not_connected") {
-  return Object.assign(new Error(`provider_not_connected: ${provider} (${reason}); ${connectProviderHint}`), {
+  const hint = reason === "job_executor_unavailable" ? executorUnavailableHint : connectProviderHint;
+  return Object.assign(new Error(`provider_not_connected: ${provider} (${reason}); ${hint}`), {
     code: "provider_not_connected",
     statusCode: 409,
     provider,

@@ -206,7 +206,7 @@ async function driveLeased(rc, options) {
     try {
       // Never start an attempt on a provider that is not connected.
       const status = await agentJobProviderStatus(providerRef.provider, rc.env);
-      if (!status.connected) throw Object.assign(new Error(`provider_not_connected:${providerRef.provider}:${status.reason}`), { kind: "provider", retryable: false });
+      if (!status.runnable) throw Object.assign(new Error(`provider_not_connected:${providerRef.provider}:${status.reason}`), { kind: "provider", retryable: false });
       const adapter = getAgentJobAdapter(providerRef.provider, rc.env);
       if (!adapter) throw Object.assign(new Error(`provider_not_available:${providerRef.provider}`), { kind: "provider", retryable: false });
       outcome = await runAttempt(rc, adapter, providerRef);

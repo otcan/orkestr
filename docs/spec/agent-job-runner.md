@@ -8,6 +8,24 @@ through the existing executor registry with the gaps listed below. Orkestr
 sends no usage telemetry or pings. Spec: [agent-job.md](agent-job.md).
 Guarantees: [runtime-guarantees.md](runtime-guarantees.md).
 
+## What works today (2026-10-10)
+
+| Provider | Connected when | Runnable when | Stock install |
+| --- | --- | --- | --- |
+| `codex` | `codex login status` reports logged in **and** `codex app-server --help` works (the same checks as `orkestr doctor`) | a non-placeholder executor with id `codex` is registered (`agentJobExecutorFor`) | connected possible, **not runnable**: the built-in `codex` executor is a placeholder |
+| `claude-code` | `claude auth status --json` reports logged in | an executor with id `claude-code` or `claude` is registered | connected possible, **not runnable**: there is no built-in Claude job executor |
+| `openai-compatible` | no probe yet | no adapter yet | not runnable |
+| `simulated` | only under `node --test` | only under `node --test` | never selectable in user job specs |
+
+So on a stock install `orkestr init` writes a job when a login works (and
+warns that no job executor exists yet), while `orkestr run`, the trigger
+endpoint, schedules and WhatsApp triggers refuse and audit the refusal.
+Executors registered by an overlay (`ORKESTR_OVERLAY_DIR`) under those ids
+make the provider runnable today. `getExecutorAdapter()`'s fallback to the
+no-op executor never counts as an executor. The runtime itself (store,
+recovery, ledger, approvals, triggers, audit) is fully exercised by the
+tests with the simulated fixture.
+
 ## Modules
 
 | Module (`packages/core/src/`) | Role |
@@ -19,7 +37,7 @@ Guarantees: [runtime-guarantees.md](runtime-guarantees.md).
 | `agent-job-ledger.js` | Effect rows (`intended` → `committed` \| `failed` \| `unknown`) and approvals. |
 | `agent-job-tools.js` | Tool registry (`effect`, `logicalKey`, `reconcile`, `perform`) and the offline tools: `demo.*`, `repo.*` (local git) and `github.*` (fake code host only, opt-in with `inputs.code_host: fake`). |
 | `agent-job-adapters.js` | Provider adapters: `codex` / `claude-code` (one native turn through `executors.js`, trigger event included in the prompt) and the `simulated` test fixture (scripted, Orkestr tool loop, transcript resume; resolvable only under `node --test`). |
-| `agent-job-providers.js` | Provider connectivity gate. Runs are not admitted, and attempts not started, on a provider that is not connected. Probes (`codex login status`, `claude auth status --json`, cached 60 s) live in `packages/connectors/src/agent-job-provider-probes.js`; with no probe a provider counts as not connected. |
+| `agent-job-providers.js` | Honest provider gate. A provider is *connected* when the user's login works and *runnable* when Orkestr also has a real job executor for it. Runs are admitted, and attempts started, only on runnable providers; every admission refusal is written to `trigger_audit`. Probes live in `packages/connectors/src/agent-job-provider-probes.js` (cached 60 s); with no probe a provider counts as not connected. |
 | `packages/connectors/src/whatsapp-job-triggers.js` | WhatsApp group-message triggers and `approve`/`deny` replies, called from the existing inbound router (`routeWhatsAppInbound`). |
 | `agent-job-audit.js` | Sealed audit record per terminal run and notification intents, written in the same transaction as the state change they announce. |
 | `packages/connectors/src/agent-job-notification-relay.js` | Moves notification intents into the connector outbox (same idempotency key). Called by the server scheduler and the CLI after driving. |

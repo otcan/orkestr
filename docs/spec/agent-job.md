@@ -266,7 +266,8 @@ are decided:
 2. **Providers:** jobs run only on a real, connected provider. `orkestr init`
    and `orkestr run` refuse with "connect Codex or Claude first: ..." when no
    provider is connected, and runs are neither admitted nor started on a
-   provider that is not connected. `simulated` exists only as a test fixture
+   provider that is not connected *and* runnable (has a real job executor);
+   refusals are audited. See [what works today](agent-job-runner.md#what-works-today-2026-10-10). `simulated` exists only as a test fixture
    and is never selectable in user job specs. `orkestr demo` stays as an
    explicitly labelled simulation for newcomers (simulated AI, throwaway
    `ORKESTR_HOME`); it never creates or runs user jobs.

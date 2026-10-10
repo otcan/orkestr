@@ -47,7 +47,9 @@ export async function fireDueSchedules(env = process.env, now = new Date()) {
         admitted = await admitRun({ job: name, type: "schedule", index, dedupeKey: `slot:${slot}` }, env);
       } catch (error) {
         // e.g. provider_not_connected: skip this slot, audit it, keep ticking.
-        await recordTriggerAudit({ job: name, type: "schedule", outcome: "rejected", reason: error?.code || "admit_failed", sourceRef: slot }, env);
+        if (error?.code !== "provider_not_connected") {
+          await recordTriggerAudit({ job: name, type: "schedule", outcome: "rejected", reason: error?.code || "admit_failed", sourceRef: slot }, env);
+        }
       }
       tx(db, () => db.prepare("update schedule_state set next_fire_at = ? where job = ? and trigger_index = ?").run(scheduleNextFireMs(triggers[index], now), name, index));
       if (admitted) fired.push({ job: name, index, slot, runId: admitted.run.id, deduplicated: admitted.deduplicated });

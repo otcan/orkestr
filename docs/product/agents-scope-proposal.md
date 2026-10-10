@@ -68,7 +68,8 @@ The three open questions are decided. Recorded in
    `claude-code`, later `openai-compatible`). `orkestr init` and `orkestr run`
    refuse with "connect Codex or Claude first: ..." when none is connected,
    and the server neither admits nor starts runs on a provider that is not
-   connected. The simulated adapter stays a test fixture (conformance/CI) and
+   connected (detection is honest: a login without a real job executor does
+   not count; refusals are audited). The simulated adapter stays a test fixture (conformance/CI) and
    is not selectable in job specs outside tests.
    **`orkestr demo` is kept** (decided 2026-10-10) as an explicitly labelled
    simulation for newcomers that needs no account. It says it uses a

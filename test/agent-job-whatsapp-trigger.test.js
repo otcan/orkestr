@@ -86,12 +86,15 @@ test("a WhatsApp trigger for a provider that is not connected is rejected and au
   const result = await dispatchWhatsAppJobTriggers(message(), env);
   assert.deepEqual(result.rejected, [{ job: "wa-job", reason: "provider_not_connected" }]);
   assert.equal((await listRuns({}, env)).length, 0);
+  const audit = await listTriggerAudit({ type: "whatsapp" }, env);
+  assert.deepEqual(audit.map((entry) => entry.reason), ["provider_not_connected:provider_not_connected"], "audited exactly once");
 });
 
 test("the existing WhatsApp inbound router hands group messages to job triggers", async () => {
   const env = await setup();
   const { routeWhatsAppInbound } = await import("../packages/connectors/src/whatsapp.js");
-  await routeWhatsAppInbound(message({ eventId: "wamid-0030" }), env).catch(() => null);
+  // deferApiAgentAutoRun and an isolated home: nothing is ever sent to WhatsApp.
+  await routeWhatsAppInbound({ ...message({ eventId: "wamid-0030" }), deferApiAgentAutoRun: true }, env).catch(() => null);
   const runs = await listRuns({ job: "wa-job" }, env);
   assert.equal(runs.length, 1);
   assert.equal(runs[0].trigger.dedupeKey, "wamid-0030");

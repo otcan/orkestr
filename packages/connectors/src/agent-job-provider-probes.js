@@ -7,9 +7,28 @@ import { promisify } from "node:util";
 import { setAgentJobProviderProbe } from "../../core/src/agent-job-providers.js";
 import { claudeCodeStatusAuthenticated } from "../../core/src/claude-code-auth-status.js";
 import { claudeCodeCommand } from "../../core/src/claude-code-client.js";
+import { agentJobExecutorFor } from "../../core/src/agent-job-adapters.js";
+import { codexAppServerStatus } from "../../core/src/codex-app-server-client.js";
 import { codexLoginStatus } from "./codex.js";
 
 const execFileAsync = promisify(execFile);
+
+// connected = the login works; runnable = Orkestr also has a job executor.
+async function withExecutor(provider, status, env) {
+  if (!status.connected) return { ...status, runnable: false };
+  const executor = await agentJobExecutorFor(provider, env);
+  return executor ? { ...status, runnable: true } : { ...status, runnable: false, reason: "job_executor_unavailable" };
+}
+
+// Codex: the same checks as `orkestr doctor` (login status, then app-server).
+async function codexStatus(env) {
+  const home = env.HOME || os.homedir();
+  const login = await codexLoginStatus({ env, home, timeoutMs: 2500 });
+  if (!login.connected) return { connected: false, reason: login.reason };
+  const appServer = await codexAppServerStatus({ env, home });
+  if (!appServer.ok) return { connected: false, reason: "codex_app_server_unavailable" };
+  return withExecutor("codex", { connected: true, reason: "logged_in" }, env);
+}
 
 // Host Claude CLI login (`claude auth status --json`), the same login a
 // terminal user on this host would use.
@@ -50,9 +69,6 @@ let installed = false;
 export function installAgentJobProviderProbes() {
   if (installed) return;
   installed = true;
-  setAgentJobProviderProbe("codex", cached("codex", async (env) => {
-    const status = await codexLoginStatus({ env, home: env.HOME || os.homedir(), timeoutMs: 2500 });
-    return { connected: status.connected === true, reason: status.reason };
-  }), { ifAbsent: true });
-  setAgentJobProviderProbe("claude-code", cached("claude-code", claudeHostStatus), { ifAbsent: true });
+  setAgentJobProviderProbe("codex", cached("codex", codexStatus), { ifAbsent: true });
+  setAgentJobProviderProbe("claude-code", cached("claude-code", async (env) => withExecutor("claude-code", await claudeHostStatus(env), env)), { ifAbsent: true });
 }

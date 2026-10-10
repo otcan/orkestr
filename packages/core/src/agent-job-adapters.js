@@ -109,7 +109,21 @@ export const simulatedJobAdapter = Object.freeze({
 
 // ---- codex / claude-code: one native turn through the executor registry ----
 
-function nativeExecutorAdapter(id, executorIds) {
+const executorIdsByProvider = Object.freeze({ codex: ["codex"], "claude-code": ["claude-code", "claude"] });
+
+// The executor that can really run a job attempt for `provider`, or null.
+// getExecutorAdapter() falls back to the no-op executor and the built-in
+// `codex` executor is a placeholder; neither counts.
+export async function agentJobExecutorFor(provider, env = process.env) {
+  await loadOverlayExecutorAdapters(env);
+  for (const id of executorIdsByProvider[provider] || []) {
+    const executor = getExecutorAdapter(id);
+    if (executor && executor.id === id && !executor.placeholder) return executor;
+  }
+  return null;
+}
+
+function nativeExecutorAdapter(id) {
   return Object.freeze({
     id,
     capabilities: Object.freeze({
@@ -123,14 +137,12 @@ function nativeExecutorAdapter(id, executorIds) {
       usage: false,
     }),
     async probe(ctx) {
-      await loadOverlayExecutorAdapters(ctx.env);
-      const executor = executorIds.map((executorId) => getExecutorAdapter(executorId)).find(Boolean);
-      return executor ? { ok: true } : { ok: false, reason: "executor_not_found" };
+      const executor = await agentJobExecutorFor(id, ctx.env);
+      return executor ? { ok: true } : { ok: false, reason: "job_executor_unavailable" };
     },
     async run(ctx, input) {
-      await loadOverlayExecutorAdapters(ctx.env);
-      const executor = executorIds.map((executorId) => getExecutorAdapter(executorId)).find(Boolean);
-      if (!executor) throw providerError("executor_not_found", { retryable: false });
+      const executor = await agentJobExecutorFor(id, ctx.env);
+      if (!executor) throw providerError("job_executor_unavailable", { retryable: false });
       const text = [
         input.prompt,
         input.resumeSummary ? `\n\nResume context:\n${input.resumeSummary}` : "",
@@ -152,5 +164,5 @@ function nativeExecutorAdapter(id, executorIds) {
 }
 
 registerAgentJobAdapter(simulatedJobAdapter);
-registerAgentJobAdapter(nativeExecutorAdapter("codex", ["codex"]));
-registerAgentJobAdapter(nativeExecutorAdapter("claude-code", ["claude-code", "claude"]));
+registerAgentJobAdapter(nativeExecutorAdapter("codex"));
+registerAgentJobAdapter(nativeExecutorAdapter("claude-code"));

@@ -321,6 +321,8 @@ registerExecutorAdapter({
   id: "codex",
   label: "Codex CLI",
   description: "Generic Codex adapter placeholder. Normal Codex work uses the thread runtime.",
+  // Not a real runtime: Agent Jobs must not treat it as a usable provider.
+  placeholder: true,
   async run() {
     const error = new Error("codex_executor_not_configured");
     error.statusCode = 501;

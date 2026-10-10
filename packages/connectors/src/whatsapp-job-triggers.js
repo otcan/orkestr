@@ -144,7 +144,8 @@ export async function dispatchWhatsAppJobTriggers(input = {}, env = process.env)
       }
       admitted.push({ job: entry.job, runId: result.run.id, deduplicated: result.deduplicated });
     } catch (error) {
-      await audit(entry.job, "rejected", error?.code || "admit_failed");
+      // admitRun already audits provider refusals.
+      if (error?.code !== "provider_not_connected") await audit(entry.job, "rejected", error?.code || "admit_failed");
       rejected.push({ job: entry.job, reason: error?.code || "admit_failed" });
     }
   }

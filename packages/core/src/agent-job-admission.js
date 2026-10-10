@@ -16,6 +16,7 @@ import {
   getRegisteredJob,
   getRunSync,
   newId,
+  recordTriggerAudit,
   nowIso,
   openAgentJobDb,
   pinSpecSync,
@@ -138,7 +139,10 @@ export async function admitRun({ job = "", spec = null, type = "api", name = "",
   const { trigger, triggerName, dedupeKey: key } = resolveTrigger(pinned, { type, name, index, dedupeKey, body });
   // Owner decision: never admit a run whose provider is not connected.
   const status = await agentJobProviderStatus(pinned.agent.provider, env);
-  if (!status.connected) throw providerNotConnectedError(pinned.agent.provider, status.reason);
+  if (!status.runnable) {
+    await recordTriggerAudit({ job: jobName, type, outcome: "rejected", reason: `provider_not_connected:${status.reason}`, sourceRef: key }, env);
+    throw providerNotConnectedError(pinned.agent.provider, status.reason);
+  }
   const runKey = runKeyFor(jobName, triggerName, key);
   const db = await openAgentJobDb(env);
   return tx(db, () => {
