@@ -53,7 +53,7 @@ test("simulated provider pauses approval-required tools until approved", async (
   for (let i = 0; i < 200 && !merged; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 20));
     const decided = await decideEffectApproval("sim-approval:merge_pull_request:1", { decision: "approved", decidedBy: "test" }, env).catch(() => null);
-    merged = decided?.state === "approved";
+    merged = decided?.approval?.state === "approved";
   }
   assert.equal(merged, true);
   assert.equal((await running).state, "completed");
@@ -85,4 +85,35 @@ test("orkestr demo proves crash recovery offline and exits zero", async () => {
   assert.equal(report.attempts[0].signal, "SIGKILL");
   assert.ok(report.checks.every((check) => check.ok));
   assert.ok(report.audit.some((event) => event.type === "effect_reconciled"));
+  assert.equal(report.simulation, true);
+  assert.equal(report.provider, "simulated");
+  assert.match(report.notice, /simulated AI/);
+});
+
+test("orkestr demo is labelled as a simulation and never creates user Agent Jobs", async () => {
+  const userHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-demo-user-home-"));
+  const result = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(root, "apps/cli/bin/orkestr-oss.js"), "demo", "--yes", "--no-crash", "--keep"], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        TMPDIR: os.tmpdir(),
+        ORKESTR_HOME: userHome,
+        NODE_OPTIONS: `--import=${path.join(root, "test/fixtures/deny-network.mjs")} --disable-warning=ExperimentalWarning`,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.on("error", reject);
+    child.on("exit", (code) => resolve({ code, stdout }));
+  });
+  assert.equal(result.code, 0, result.stdout);
+  assert.match(result.stdout, /^SIMULATION - this demo uses a simulated AI/);
+  assert.match(result.stdout, /No real AI or account was used/);
+  const kept = result.stdout.match(/State kept in (\S+)/)?.[1];
+  assert.ok(kept);
+  assert.equal(await fs.stat(path.join(kept, "agent-jobs.sqlite")).catch(() => null), null, "the demo must not use the Agent Job store");
+  assert.deepEqual(await fs.readdir(userHome), [], "the demo must not touch the user's ORKESTR_HOME");
+  await fs.rm(kept, { recursive: true, force: true });
 });

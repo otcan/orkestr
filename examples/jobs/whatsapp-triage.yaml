@@ -1,0 +1,35 @@
+# Agent Job v0 example: triggered by WhatsApp group messages. All values are fake.
+# Only messages in the configured group, from an allowlisted sender, matching
+# `match` start a run; the message and its quoted/reply context are the run's
+# trigger event. DMs and unknown senders are rejected and audited.
+apiVersion: orkestr/v0
+kind: AgentJob
+metadata:
+  name: whatsapp-triage
+  description: Turn "/fix ..." messages in the team group into one fix attempt each.
+triggers:
+  - type: whatsapp
+    group: 120363000000000001@g.us
+    senders:
+      - "+15550100001"
+      - "+15550100002"
+    match: "^/fix\\b"
+agent:
+  provider: claude-code
+  fallback:
+    - provider: codex
+task:
+  prompt: |
+    The trigger event is a WhatsApp message (and the message it quotes). Work out
+    the requested fix in example-org/example-repo and reply with a short summary.
+permissions:
+  tools:
+    allow: [repo.read]
+runtime:
+  max_attempts: 2
+  timeout: 30m
+  concurrency: queue
+notifications:
+  - on: [succeeded, failed, approval_required]
+    channel: whatsapp
+    target: 120363000000000001@g.us

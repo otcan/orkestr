@@ -8,6 +8,9 @@ import { timeBackgroundRun, timedBackgroundLoop } from "../../../packages/core/s
 import type { INestApplication } from "@nestjs/common";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { loadOverlayExecutorAdapters, recoverInterruptedExecutions } from "../../../packages/core/src/executors.js";
+import { startAgentJobScheduler } from "../../../packages/core/src/agent-job-scheduler.js";
+import { relayAgentJobNotifications } from "../../../packages/connectors/src/agent-job-notification-relay.js";
+import { installAgentJobProviderProbes } from "../../../packages/connectors/src/agent-job-provider-probes.js";
 import {
   activateThreadInputDeliveryScheduler,
   closeThreadInputDeliveryScheduler,
@@ -734,6 +737,13 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   }, mailboxVmRelayPumpIntervalMs(serverEnv));
   mailboxVmRelayPoll.unref?.();
   const brokerClientHeartbeat = startBrokerClientHeartbeat(serverEnv);
+  // Agent Job runs resume on start instead of failing (runtime guarantee G1).
+  installAgentJobProviderProbes();
+  const agentJobScheduler = startAgentJobScheduler(serverEnv, {
+    track: (task) => background.track(task),
+    report: (detail: any) => reportServerError(serverEnv, detail),
+    relay: () => relayAgentJobNotifications({}, serverEnv),
+  });
   const scheduleWhatsAppDeliveryFollowUp = () => {
     clearWhatsAppDeliveryIdleCache();
     const timer = setTimeout(() => whatsappDeliveryScheduler.schedule(), whatsAppDeliveryFollowUpDelayMs(serverEnv));
@@ -821,6 +831,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     clearInterval(mcpEventPoll);
     clearInterval(mailboxVmRelayPoll);
     clearInterval(inboundAttachmentCleanupPoll);
+    agentJobScheduler.stop();
     whatsappDeliveryScheduler.close();
     stopCodexAppServerClients();
     await stopLocalWhatsAppBridge(serverEnv).catch(() => {});

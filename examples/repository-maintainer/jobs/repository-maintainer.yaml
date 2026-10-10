@@ -1,0 +1,38 @@
+# Example A: repository maintainer (docs/spec/agent-job.md). All values are fake.
+# `repo.*` tools act on the local git repository at inputs.repository_path, and
+# `github.*` tools act on Orkestr's local fake code host (inputs.code_host: fake)
+# until a real GitHub connector exists. Needs a connected Codex or Claude login.
+apiVersion: orkestr/v0
+kind: AgentJob
+metadata:
+  name: repository-maintainer-example
+  description: Fix a reported issue on a branch, open one pull request, merge after approval.
+triggers:
+  - type: api
+  - type: webhook
+    name: issue-opened
+    secret_ref: vault://example-webhook-secret
+    event_id: /delivery_id
+agent:
+  provider: codex
+  fallback:
+    - provider: claude-code
+task:
+  prompt: |
+    Read the triggering issue for the repository at inputs.repository_path. Prepare
+    a fix on a branch, open one pull request and merge it once approved.
+  inputs:
+    repository_path: ../repo        # relative to this file
+    code_host: fake
+permissions:
+  tools:
+    allow: [repo.read, repo.branch.push, github.pull_request.create]
+    approval_required: [github.pull_request.merge]
+    deny: [repo.branch.force_push]
+runtime:
+  max_attempts: 3
+  timeout: 10m
+  concurrency: queue
+  retry:
+    initial_delay: 1s
+    max_delay: 30s

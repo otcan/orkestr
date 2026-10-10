@@ -10,7 +10,17 @@ import { closeThreadRegistryCache } from "../../../packages/storage/src/thread-r
 
 const workerPath = fileURLToPath(new URL("./demo-job-worker.js", import.meta.url));
 
-export const demoUsage = "  orkestr demo [--yes] [--no-crash] [--keep] [--json]";
+export const demoUsage = "  orkestr demo [--yes] [--no-crash] [--keep] [--json]   (simulation with a simulated AI; no account needed)";
+
+// Owner decision (2026-10-10): `orkestr demo` is an explicitly labelled
+// simulation for newcomers. It runs in a throwaway ORKESTR_HOME on the
+// thread-level simulated executor and never creates or runs user Agent Jobs;
+// the simulated provider stays unselectable in user job specs.
+export const demoBanner = [
+  "SIMULATION - this demo uses a simulated AI, not a real model.",
+  "No account, credentials or network are used, and no real job is created.",
+  "Real Agent Jobs need a connected provider: `orkestr init` after `codex login` or `claude auth login`.",
+];
 
 function parseDemoArgs(args = []) {
   const options = { yes: false, crash: true, keep: false, json: false };
@@ -68,7 +78,7 @@ function startApprovalWatcher(env, options, ctx, say) {
   const handled = new Set();
   const done = (async () => {
     while (!stopped) {
-      const pending = await listEffects({ jobId: demoJob.id, state: "pending_approval" }, env).catch(() => []);
+      const pending = await listEffects({ jobId: demoJob.id, approvalState: "pending" }, env).catch(() => []);
       for (const effect of pending) {
         if (handled.has(effect.key)) continue;
         handled.add(effect.key);
@@ -105,6 +115,7 @@ export async function demoCommand(args, ctx) {
   const attempts = [];
   let report = null;
   try {
+    if (!options.json) ctx.stdout.write(`${demoBanner.join("\n")}\n\n`);
     say(`isolated ORKESTR_HOME ${home} (no credentials, no network)`);
     say(`job ${demoJob.id}: trigger=${demoJob.trigger.type} provider=${demoJob.agent.provider} maxAttempts=${demoJob.runtime.maxAttempts}`);
     const stopWatcher = startApprovalWatcher(env, options, ctx, say);
@@ -136,16 +147,16 @@ export async function demoCommand(args, ctx) {
   }
 
   if (options.json) {
-    ctx.stdout.write(`${JSON.stringify({ ok: report.ok, home: options.keep ? home : null, log: lines, attempts, ...report }, null, 2)}\n`);
+    ctx.stdout.write(`${JSON.stringify({ ok: report.ok, simulation: true, provider: "simulated", notice: demoBanner.join(" "), home: options.keep ? home : null, log: lines, attempts, ...report }, null, 2)}\n`);
   } else {
     ctx.stdout.write("\nAudit trail:\n");
     for (const event of report.audit) ctx.stdout.write(`${formatAuditEvent(event)}\n`);
     ctx.stdout.write("\nGuarantees:\n");
     for (const check of report.checks) ctx.stdout.write(`  ${check.ok ? "ok  " : "FAIL"}  ${check.name}\n`);
-    const denied = report.effects.some((effect) => effect.state === "denied");
+    const denied = report.effects.some((effect) => effect.outcome === "denied");
     ctx.stdout.write(report.ok
-      ? `\nDemo passed: ${options.crash ? "the job survived a crash without duplicating its pull request" : "the job completed"}.\n`
-      : `\nDemo FAILED: ${denied ? "the approval was denied, so the job did not complete" : "a durability guarantee was violated"}.\n`);
+      ? `\nSimulation passed: ${options.crash ? "the simulated job survived a crash without duplicating its pull request" : "the simulated job completed"}. No real AI or account was used.\n`
+      : `\nSimulation FAILED: ${denied ? "the approval was denied, so the job did not complete" : "a durability guarantee was violated"}.\n`);
     if (options.keep) ctx.stdout.write(`State kept in ${home}\n`);
   }
   return report.ok ? 0 : 1;

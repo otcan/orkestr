@@ -2,7 +2,8 @@
 
 ## Try it in one minute
 
-No API keys, no cloud account and no network access needed:
+A **simulation** for newcomers: it uses a simulated AI, so no API keys, no
+cloud account and no network access are needed, and no real job is created:
 
 ```bash
 git clone https://github.com/otcan/orkestr.git
@@ -48,11 +49,28 @@ suite without credentials.
   as executor `simulated`. It has no tool loop of its own, so Orkestr runs its
   tool calls.
 - `packages/core/src/effect-ledger.js`: generic durable ledger for external side
-  effects (`pending_approval -> approved -> started -> committed`). After a
-  crash, an effect left in `started` must be reconciled with the external
-  system before it may run again.
+  effects (`intended -> committed | failed | unknown`, with an approval
+  sub-state). After a crash, a dispatched `intended` effect must be reconciled
+  with the external system before it may run again; without a reconcile hook
+  it becomes `unknown` and is never repeated automatically.
 - The existing executor layer (`packages/core/src/executors.js`), thread
   messages, execution records and the event log for the audit trail.
+
+## Your first Agent Job
+
+Agent Jobs run on a real, connected provider (Codex or Claude); the simulated
+provider above is a demo and test fixture only. Once `codex login` or
+`claude auth login` works on this host:
+
+```bash
+orkestr init my-jobs          # writes my-jobs/jobs/hello-job.yaml for your provider
+orkestr run my-jobs
+orkestr jobs list
+orkestr jobs status <run-id>
+```
+
+Triggers (API, webhook, schedule, WhatsApp group messages), approvals and
+recovery are described in [the runner doc](spec/agent-job-runner.md).
 
 ## Next steps
 

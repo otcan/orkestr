@@ -2,8 +2,9 @@
 
 Status: draft v0. The validator is implemented in
 `packages/core/src/agent-job-spec.js`, with the YAML entry point in
-`agent-job-spec-yaml.js`. Execution is not implemented yet. Examples are in
-`examples/jobs/*.yaml`.
+`agent-job-spec-yaml.js`. The runner is described in
+[agent-job-runner.md](agent-job-runner.md), including where v0 differs from
+this document. Examples are in `examples/jobs/*.yaml`.
 
 An **Agent Job** is a declarative, durable unit of agent work. A **Run** is a
 single execution of a job, caused by one trigger event. A run has one or more
@@ -42,12 +43,13 @@ notifications: [...]            # optional
 | `schedule` | `cadence`: `interval` \| `daily` \| `weekly`; `every` (for interval, >= 1m); `time` `HH:MM` (for daily and weekly); `timezone` (default `UTC`) | Mirrors the existing timer cadences in `packages/core/src/timers.js`, so a schedule compiles to a timer. Cron syntax is out of scope for v0. |
 | `webhook` | `name` (unique per job), `secret_ref` (`vault://...`, required), `event_id` (JSON Pointer into the body, optional) | Served at `POST /api/jobs/<job>/hooks/<name>` with an HMAC signature. `event_id` gives the run's dedupe key; without it, the dedupe key is the hash of the body. |
 | `api` | none (at most one) | `POST /api/jobs/<job>/runs` and `orkestr run <job>`. The caller may pass an `Idempotency-Key`. |
+| `whatsapp` | `group` (a group chat id `…@g.us` or an existing binding ref `binding:<id>`), `senders` (required allowlist: E.164 numbers or WhatsApp participant ids), `match` (optional case-insensitive regex) | A message starts a run only when it was posted in `group` by an allowlisted sender and matches `match`. The WhatsApp message id is the dedupe key. The message and its quoted/reply context are the run's trigger event and are always passed to the agent. DMs, unknown senders and own (`fromMe`) messages are never accepted; rejections are audited without the message text. Uses the existing WhatsApp bindings and inbound router. |
 
 ### 1.2 `agent`
 
 | field | notes |
 | --- | --- |
-| `provider` | `simulated` \| `codex` \| `claude-code` \| `openai-compatible` |
+| `provider` | `codex` \| `claude-code` \| `openai-compatible`. The provider must be connected (§9). `simulated` is a test fixture, valid only under `node --test`. |
 | `model` | Optional. Required for `openai-compatible`. |
 | `base_url` | `http(s)://...`. Only valid for, and required by, `openai-compatible`. |
 | `fallback[]` | Up to 3 `{provider, model?, base_url?}` entries tried in order when an attempt fails with a *provider* error (auth, rate limit, unavailable). The list must not repeat an earlier provider/model pair. Task errors do not trigger fallback. |
@@ -232,8 +234,8 @@ it, and `--json` gives the raw stream.
   "trigger": { "type": "webhook", "name": "issue-opened", "dedupe_key": "example-delivery-1" },
   "state": "succeeded",
   "attempts": [
-    { "n": 1, "provider": "simulated", "state": "interrupted", "end_reason": "interrupted" },
-    { "n": 2, "provider": "simulated", "state": "completed", "resumed_from_seq": 7 }
+    { "n": 1, "provider": "codex", "state": "interrupted", "end_reason": "interrupted" },
+    { "n": 2, "provider": "codex", "state": "completed", "resumed_from_seq": 7 }
   ],
   "tool_decisions": [{ "seq": 4, "tool": "github.pull_request.create", "decision": "allow" }],
   "effects": [{ "effect_key": "...", "tool": "github.pull_request.create", "state": "committed",
@@ -251,3 +253,22 @@ Secrets and secret-bearing args are redacted at write time, not at read time.
 
 Cron expressions, DAGs or sub-jobs (use coordination later, P2), per-tool rate
 limits, multi-tenant job sharing, and a visual editor.
+
+## 9. Owner decisions (2026-10-10)
+
+The open questions from the [scope proposal](../product/agents-scope-proposal.md#owner-decisions-decided-2026-10-10)
+are decided:
+
+1. **Triggers in v0:** WebUI, terminal (CLI/TUI), API, webhook, schedule and
+   WhatsApp group messages (§1.1, `whatsapp`). There is no email trigger;
+   users who want email point their own webhook at Orkestr. WhatsApp and email
+   remain notification and approval channels.
+2. **Providers:** jobs run only on a real, connected provider. `orkestr init`
+   and `orkestr run` refuse with "connect Codex or Claude first: ..." when no
+   provider is connected, and runs are neither admitted nor started on a
+   provider that is not connected *and* runnable (has a real job executor);
+   refusals are audited. See [what works today](agent-job-runner.md#what-works-today-2026-10-10). `simulated` exists only as a test fixture
+   and is never selectable in user job specs. `orkestr demo` stays as an
+   explicitly labelled simulation for newcomers (simulated AI, throwaway
+   `ORKESTR_HOME`); it never creates or runs user jobs.
+3. **Telemetry:** Orkestr sends no usage telemetry or pings of any kind.

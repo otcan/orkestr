@@ -4,16 +4,19 @@ import path from "node:path";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 
-// Durable ledger for external side effects. Each effect is keyed by an
-// idempotency key and moves through:
-//   pending_approval -> approved | denied
-//   approved -> started -> committed
-// A crash between "started" and "committed" leaves the outcome unknown; the
-// next attempt must reconcile against the external system before it is allowed
-// to perform the effect again. This is what prevents duplicate side effects
-// (for example a second pull request) after a crash or interrupt.
+// Durable ledger for external side effects used by thread executors (the
+// `simulated` executor). Agent Job runs use the SQLite ledger in
+// agent-job-ledger.js with the same state names (docs/spec/agent-job.md §5):
+//   intended -> committed | failed | unknown
+// `intended` is written before the external call; `dispatchedAt` marks that
+// the call may have happened. A crash after dispatch leaves the outcome open:
+// the next attempt must reconcile against the external system before it may
+// perform the effect again, and without a reconcile hook the effect becomes
+// `unknown` and is never re-executed automatically. Approval is a sub-state
+// (`approval.state`: pending | approved | denied); a denial fails the effect.
 
-const terminalStates = new Set(["committed", "denied"]);
+export const EFFECT_STATES = Object.freeze(["intended", "committed", "failed", "unknown"]);
+const terminalStates = new Set(["committed"]);
 
 function clean(value = "") {
   return String(value ?? "").trim();
@@ -71,6 +74,7 @@ export async function listEffects(filter = {}, env = process.env) {
     if (!effect) continue;
     if (filter.jobId && effect.jobId !== filter.jobId) continue;
     if (filter.state && effect.state !== filter.state) continue;
+    if (filter.approvalState && effect.approval?.state !== filter.approvalState) continue;
     effects.push(effect);
   }
   return effects.sort((a, b) => clean(a.createdAt).localeCompare(clean(b.createdAt)));
@@ -90,13 +94,15 @@ async function audit(type, effect, extra, env) {
 export async function decideEffectApproval(key, { decision, decidedBy = "", reason = "" } = {}, env = process.env) {
   const effect = await getEffect(key, env);
   if (!effect) throw ledgerError("effect_not_found", { statusCode: 404 });
-  if (effect.state !== "pending_approval") return effect;
+  if (effect.approval?.state !== "pending") return effect;
   const approved = clean(decision).toLowerCase() === "approved";
   const next = await saveEffect({
     ...effect,
-    state: approved ? "approved" : "denied",
+    state: approved ? effect.state : "failed",
+    outcome: approved ? effect.outcome || null : "denied",
     approval: {
       ...(effect.approval || {}),
+      state: approved ? "approved" : "denied",
       decision: approved ? "approved" : "denied",
       decidedBy: clean(decidedBy) || null,
       reason: clean(reason) || null,
@@ -111,14 +117,14 @@ async function waitForApprovalDecision(key, { timeoutMs = 600_000, pollMs = 100 
   const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
   for (;;) {
     const effect = await getEffect(key, env);
-    if (effect?.state !== "pending_approval") return effect;
+    if (effect?.approval?.state !== "pending") return effect;
     if (Date.now() >= deadline) throw ledgerError("effect_approval_timeout", { effectKey: key });
     await new Promise((resolve) => setTimeout(resolve, Math.max(10, Number(pollMs) || 100)));
   }
 }
 
 async function commitEffect(effect, result, extra, env) {
-  const committed = await saveEffect({ ...effect, state: "committed", result: result ?? null, committedAt: nowIso(), ...extra }, env);
+  const committed = await saveEffect({ ...effect, state: "committed", outcome: "committed", result: result ?? null, committedAt: nowIso(), ...extra }, env);
   await audit(extra.reconciled ? "effect_reconciled" : "effect_committed", committed, {}, env);
   return committed;
 }
@@ -145,7 +151,7 @@ export async function runEffect(spec = {}, env = process.env) {
     await audit("effect_deduplicated", effect, { attempt: spec.attempt ?? null }, env);
     return { status: "deduplicated", effect, result: effect.result };
   }
-  if (effect?.state === "denied") throw ledgerError("effect_approval_denied", { effectKey: key, statusCode: 403 });
+  if (effect?.outcome === "denied") throw ledgerError("effect_approval_denied", { effectKey: key, statusCode: 403 });
 
   if (!effect) {
     const approvalRequired = clean(spec.approval).toLowerCase() === "required";
@@ -155,24 +161,25 @@ export async function runEffect(spec = {}, env = process.env) {
       jobId: clean(spec.jobId) || null,
       payload: spec.payload ?? null,
       payloadDigest: digest,
-      state: approvalRequired ? "pending_approval" : "approved",
-      approval: approvalRequired ? { required: true, requestedAt: nowIso() } : { required: false },
+      state: "intended",
+      approval: approvalRequired ? { required: true, state: "pending", requestedAt: nowIso() } : { required: false, state: "none" },
       attempts: [],
       createdAt: nowIso(),
     }, env);
-    await audit(approvalRequired ? "effect_approval_requested" : "effect_recorded", effect, {}, env);
+    await audit(approvalRequired ? "effect_approval_requested" : "effect_intended", effect, {}, env);
   }
 
-  if (effect.state === "pending_approval") {
+  if (effect.approval?.state === "pending") {
     if (typeof spec.onApprovalRequested === "function") await spec.onApprovalRequested(effect);
     effect = await waitForApprovalDecision(key, spec.waitForApproval, env);
-    if (effect?.state === "denied") throw ledgerError("effect_approval_denied", { effectKey: key, statusCode: 403 });
+    if (effect?.outcome === "denied") throw ledgerError("effect_approval_denied", { effectKey: key, statusCode: 403 });
   }
 
-  if (effect.state === "started") {
-    // A previous attempt crashed after starting the effect. Never repeat it
+  if ((effect.state === "intended" && effect.dispatchedAt) || effect.state === "unknown") {
+    // A previous attempt crashed after dispatching the effect. Never repeat it
     // blindly: ask the external system whether it already happened.
     if (typeof spec.reconcile !== "function") {
+      await saveEffect({ ...effect, state: "unknown", outcome: "unknown" }, env);
       throw ledgerError("effect_outcome_unknown", { effectKey: key });
     }
     const existing = await spec.reconcile(effect);
@@ -185,11 +192,11 @@ export async function runEffect(spec = {}, env = process.env) {
 
   effect = await saveEffect({
     ...effect,
-    state: "started",
-    startedAt: nowIso(),
-    attempts: [...(effect.attempts || []), { attempt: spec.attempt ?? null, startedAt: nowIso() }],
+    state: "intended",
+    dispatchedAt: nowIso(),
+    attempts: [...(effect.attempts || []), { attempt: spec.attempt ?? null, dispatchedAt: nowIso() }],
   }, env);
-  await audit("effect_started", effect, { attempt: spec.attempt ?? null }, env);
+  await audit("effect_dispatched", effect, { attempt: spec.attempt ?? null }, env);
   const result = await spec.perform({ idempotencyKey: key, effect });
   if (typeof spec.afterPerform === "function") await spec.afterPerform(result, effect);
   const committed = await commitEffect(effect, result, { reconciled: false }, env);

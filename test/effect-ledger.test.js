@@ -39,7 +39,8 @@ test("effect ledger reconciles a crash between perform and commit", async () => 
   const sink = fakeSink();
   const spec = { key: "job-2:open", kind: "pr.open", jobId: "job-2", payload: { title: "x" }, ...sink };
   await assert.rejects(runEffect({ ...spec, afterPerform: () => { throw new Error("crash"); } }, env), /crash/);
-  assert.equal((await getEffect(spec.key, env)).state, "started");
+  assert.equal((await getEffect(spec.key, env)).state, "intended");
+  assert.ok((await getEffect(spec.key, env)).dispatchedAt);
   const resumed = await runEffect(spec, env);
   assert.equal(resumed.status, "reconciled");
   assert.equal(resumed.effect.reconciled, true);
@@ -52,6 +53,7 @@ test("effect ledger re-performs when reconciliation finds nothing and refuses wi
   const spec = { key: "job-3:open", kind: "pr.open", payload: {}, perform: sink.perform };
   await assert.rejects(runEffect({ ...spec, perform: async () => { throw new Error("crash_before_effect"); } }, env));
   await assert.rejects(runEffect(spec, env), /effect_outcome_unknown/);
+  assert.equal((await getEffect(spec.key, env)).state, "unknown");
   const retried = await runEffect({ ...spec, reconcile: async () => null }, env);
   assert.equal(retried.status, "performed");
   assert.equal(sink.created.length, 1);
@@ -62,13 +64,16 @@ test("effect ledger waits for approval and honours denial", async () => {
   const sink = fakeSink();
   const spec = { key: "job-4:merge", kind: "pr.merge", jobId: "job-4", payload: { n: 1 }, approval: "required", waitForApproval: { timeoutMs: 5000, pollMs: 10 }, ...sink };
   const pending = runEffect(spec, env);
-  for (let i = 0; i < 100 && !(await listEffects({ state: "pending_approval" }, env)).length; i += 1) {
+  // Attach a handler now: the rejection can land before assert.rejects runs.
+  pending.catch(() => {});
+  for (let i = 0; i < 100 && !(await listEffects({ approvalState: "pending" }, env)).length; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.equal(sink.created.length, 0);
   await decideEffectApproval(spec.key, { decision: "denied", decidedBy: "test" }, env);
   await assert.rejects(pending, /effect_approval_denied/);
   await assert.rejects(runEffect(spec, env), /effect_approval_denied/);
+  assert.equal((await getEffect(spec.key, env)).state, "failed");
   assert.equal(sink.created.length, 0);
 });
 

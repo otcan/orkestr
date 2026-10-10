@@ -7,7 +7,8 @@ no credentials. They belong in `test/conformance/` (adapter-level) or
 is a *target*, not a claim. Marketing copy may only cite guarantees whose
 tests are green.
 
-Terminology is defined in [agent-job.md](agent-job.md).
+Terminology is defined in [agent-job.md](agent-job.md). The tests that cover
+each guarantee today are listed in [agent-job-runner.md](agent-job-runner.md#guarantee-tests).
 
 ## Guarantees
 
