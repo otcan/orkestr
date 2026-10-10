@@ -23,6 +23,7 @@ import {
 import { createClaudeCodeProgressReporter } from "./claude-code-progress.js";
 import { applyPendingExecutorSwitchAfterTurn } from "./executor-switch-hooks.js";
 import { findThreadMessage, getThread, listThreadMessages, listThreads } from "./threads.js";
+import { runtimeTurnGeneration } from "./runtime-record-update.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -104,15 +105,16 @@ export async function reattachDetachedClaudeCodeTurn(threadOrId, env = process.e
       forwardedOffset: Number(record.forwardedOffset) || 0,
     }, env).catch(() => {});
     const attemptId = clean(record.attemptId);
+    const turnGeneration = runtimeTurnGeneration(thread);
     const done = promise
       .then(async (result) => {
         await progress.flush();
         const current = await getThread(thread.id, env) || thread;
-        return await finalizeClaudeCodeTurnResult({ thread: current, message, coalesced, attemptId, profile, result, env });
+        return await finalizeClaudeCodeTurnResult({ thread: current, message, coalesced, attemptId, profile, result, turnGeneration, env });
       }, async (error) => {
         await progress.flush();
         const current = await getThread(thread.id, env) || thread;
-        const publicError = await finalizeClaudeCodeTurnFailure({ thread: current, message, coalesced, attemptId, profile, error, env });
+        const publicError = await finalizeClaudeCodeTurnFailure({ thread: current, message, coalesced, attemptId, profile, error, turnGeneration, env });
         return { failed: true, error: publicError.code, thread: publicError.thread };
       })
       .catch((error) => ({ failed: true, error: error?.message || String(error) }))

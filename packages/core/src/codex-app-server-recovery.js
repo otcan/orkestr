@@ -3,7 +3,7 @@ import path from "node:path";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { createThreadMessageRepository } from "../../storage/src/repositories.js";
-import { enqueueThreadInput, getThread, listThreadMessageCandidates, listThreadMessages, listThreads, updateThread } from "./threads.js";
+import { enqueueThreadInput, listThreadMessageCandidates, listThreadMessages, listThreads } from "./threads.js";
 import { getCodexAppServerClient } from "./codex-app-server-client.js";
 import {
   appendOrUpdateEventMessage,
@@ -46,6 +46,7 @@ import {
   remoteCompactionRecoveryAttempted,
 } from "./codex-remote-compaction-recovery.js";
 import { threadInFailedAuth } from "./codex-auth-failed-thread.js";
+import { runtimeTurnGeneration, updateThreadRuntime } from "./runtime-record-update.js";
 
 const recoveryScanCache = new Map();
 
@@ -299,10 +300,8 @@ function deliveredTurnWithTerminalFailure(thread = {}, turn = null) {
 
 async function persistStaleRecoveryRuntimePatch(threadId, runtimePatch = null, resetResult = null, env = process.env, extra = {}) {
   if (!threadId || !runtimePatch || typeof runtimePatch !== "object") return null;
-  const refreshed = resetResult?.thread || await getThread(threadId, env).catch(() => null);
-  const updated = await updateThread(threadId, {
+  const updated = await updateThreadRuntime(threadId, {
     runtime: {
-      ...(refreshed?.runtime || {}),
       ...runtimePatch,
       ...extra,
     },
@@ -698,9 +697,8 @@ async function steerStaleActiveTurn(thread = {}, clientState = {}, turn = null, 
   } catch (caught) {
     error = publicError(caught);
   }
-  await updateThread(thread.id, {
+  await updateThreadRuntime(thread.id, {
     runtime: {
-      ...(thread.runtime || {}),
       runtimeKind: "codex-app-server",
       activeTurnSteer: {
         turnId: plan.turnId,
@@ -947,9 +945,8 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     }, env).catch(() => []));
     const clearPatch = staleRecoveryClearPatch(thread, messages);
     if (clearPatch) {
-      const updated = await updateThread(thread.id, {
+      const updated = await updateThreadRuntime(thread.id, {
         runtime: {
-          ...(thread.runtime || {}),
           ...clearPatch,
         },
       }, env).catch(() => null);
@@ -1122,11 +1119,10 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
           autoSafeResetAttempted,
         })
       : null;
-    const recoveredThread = await updateThread(thread.id, {
+    const recoveredThread = await updateThreadRuntime(thread.id, {
       state: "ready",
       lastError: null,
       runtime: {
-        ...(thread.runtime || {}),
         runtimeKind: "codex-app-server",
         state: "ready",
         activeTurnId: null,
@@ -1136,7 +1132,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
         ...(recoveryRuntimePatch || {}),
         ...(remoteCompactionRecovery ? { remoteCompactionRecovery } : {}),
       },
-    }, env).catch(() => null);
+    }, env, { turnGeneration: runtimeTurnGeneration(thread) }).catch(() => null);
     if (recoveredThread) thread = recoveredThread;
     if (client) {
       client.threadStates.set(codexId, {

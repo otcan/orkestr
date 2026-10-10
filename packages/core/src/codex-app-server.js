@@ -495,19 +495,18 @@ async function updateDeliveryRecoveryState(thread, message, state, context = {},
     : ["waking", "resetting"].includes(state)
       ? "recovering"
       : context.runtimeState || currentThread.state;
-  const updatedThread = await updateThread(thread.id, {
+  const updatedThread = await updateThreadRuntime(thread.id, (latest, latestRuntime) => ({
     state: threadState,
     lastError: state === "operator_required" ? recovery.error || context.reason || "runtime_recovery_required" : null,
     runtime: {
-      ...(currentThread.runtime || {}),
       runtimeKind: "codex-app-server",
       state: runtimeState,
-      activeTurnId: state === "ready" && context.runtimeState === "ready" ? null : currentThread.runtime?.activeTurnId || null,
-      pendingRequest: state === "ready" && context.runtimeState !== "awaiting_approval" ? null : currentThread.runtime?.pendingRequest || null,
+      activeTurnId: state === "ready" && context.runtimeState === "ready" ? null : latestRuntime.activeTurnId || null,
+      pendingRequest: state === "ready" && context.runtimeState !== "awaiting_approval" ? null : latestRuntime.pendingRequest || null,
       deliveryRecovery: recovery,
       updatedAt: checkedAt,
     },
-  }, env).catch(() => currentThread);
+  }), env).catch(() => currentThread);
   let updatedMessage = currentMessage;
   if (currentMessage?.id) {
     const deliveryState = {
@@ -554,11 +553,10 @@ async function failedAuthForDeliveryRecovery(thread, message, error, reason, cod
   if (error instanceof Error) await recordCodexRuntimeAuthFailureSignal({ thread, error: errorText }, env).catch(() => {});
   const fields = failedAuthRuntimeFields({ reason, error: errorText });
   const current = await getThread(thread.id, env).catch(() => null) || thread;
-  const updatedThread = await updateThread(thread.id, {
+  const updatedThread = await updateThreadRuntime(thread.id, {
     state: fields.state,
     lastError: fields.authFailure.summary,
     runtime: {
-      ...(current.runtime || {}),
       runtimeKind: "codex-app-server",
       state: fields.state,
       authFailure: fields.authFailure,
@@ -939,6 +937,7 @@ export {
   getCodexAppServerClient,
   setCodexAppServerMessageHandler,
 } from "./codex-app-server-client.js";
+import { runtimeTurnGeneration, updateThreadRuntime } from "./runtime-record-update.js";
 export { recoverStaleCodexAppServerTurns } from "./codex-app-server-recovery.js";
 
 export function stopCodexAppServerClients() {
@@ -1166,9 +1165,9 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
   for (const [requestKey, request] of client.pendingRequests.entries()) {
     if (request?.threadId === thread.id || request?.codexThreadId === id) client.pendingRequests.delete(requestKey);
   }
-  await updateThread(thread.id, {
+  await updateThreadRuntime(thread.id, {
     state: "ready",
-    runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", activeTurnId: null, pendingRequest: null, state: "ready" },
+    runtime: { runtimeKind: "codex-app-server", activeTurnId: null, pendingRequest: null, state: "ready" },
   }, env).catch(() => {});
   await appendTurnLifecycleEvent("interrupted", {
     threadId: thread.id,
@@ -1232,11 +1231,10 @@ export async function stopCodexAppServerThread(thread, env = process.env) {
     if (request?.threadId === current.id || request?.codexThreadId === id) client.pendingRequests.delete(requestKey);
   }
   const refreshed = await getThread(current.id, env).catch(() => null) || current;
-  await updateThread(current.id, {
+  await updateThreadRuntime(current.id, {
     state: "ready",
     lastError: null,
     runtime: {
-      ...(refreshed.runtime || {}),
       runtimeKind: "codex-app-server",
       activeTurnId: null,
       pendingRequest: null,
@@ -1357,11 +1355,11 @@ async function startCodexAppServerTurn({ client, thread, id, pending, env, runti
     client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: turnId, activeTurnObservedAt: nowIso(), status: { type: "active", activeFlags: ["running"] }, statusObservedAt: nowIso() });
     // Merge onto the current record: lifecycle notifications for this turn
     // (turn/started, approval, completion) may already have been persisted.
-    await updateThread(thread.id, (current) => {
-      const runtime = current.runtime || {};
+    const started = await updateThreadRuntime(thread.id, (current, runtime) => {
       if ([runtime.activeTurnId, runtime.lastTurnId, runtime.pendingRequest?.turnId].map(clean).includes(turnId)) return null;
-      return { state: "working", runtime: { ...runtime, runtimeKind: "codex-app-server", activeTurnId: turnId, state: "working" } };
-    }, env).catch(() => {});
+      return { state: "working", runtime: { runtimeKind: "codex-app-server", activeTurnId: turnId, state: "working" } };
+    }, env).catch(() => null);
+    client.rememberTurnGeneration?.(id, turnId, started);
     await appendTurnLifecycleEvent("started", {
       threadId: thread.id,
       messageId: pending.id,
@@ -1494,17 +1492,16 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   const statusClearsActiveTurn = ["ready", "failed", "unloaded", "awaiting_approval"].includes(effectiveStatusState);
   if (statusClearsActiveTurn && (clean(clientState.activeTurnId) || persistedActiveTurnId)) {
     client.threadStates.set(id, { ...clientState, activeTurnId: "", activeTurnObservedAt: null, statusObservedAt: nowIso() });
-    await updateThread(thread.id, {
+    await updateThreadRuntime(thread.id, (latest, latestRuntime) => ({
       state: effectiveStatusState === "ready" ? "ready" : effectiveStatusState,
       runtime: {
-        ...(thread.runtime || {}),
         runtimeKind: "codex-app-server",
         state: effectiveStatusState === "ready" ? "ready" : effectiveStatusState,
         activeTurnId: null,
-        pendingRequest: effectiveStatusState === "awaiting_approval" ? thread.runtime?.pendingRequest || null : null,
-        codexStatus: clientState.status || thread.runtime?.codexStatus || null,
+        pendingRequest: effectiveStatusState === "awaiting_approval" ? latestRuntime.pendingRequest || null : null,
+        codexStatus: clientState.status || latestRuntime.codexStatus || null,
       },
-    }, env).catch(() => {});
+    }), env, { turnGeneration: runtimeTurnGeneration(thread) }).catch(() => {});
     await appendEvent({
       type: "codex_app_server_stale_active_turn_cleared_before_delivery",
       threadId: thread.id,
@@ -1637,9 +1634,9 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
     for (const [requestKey, request] of client.pendingRequests.entries()) {
       if (request?.threadId === thread.id || request?.codexThreadId === id) client.pendingRequests.delete(requestKey);
     }
-    await updateThread(thread.id, {
+    await updateThreadRuntime(thread.id, {
       state: "ready",
-      runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", activeTurnId: null, pendingRequest: null, state: "ready" },
+      runtime: { runtimeKind: "codex-app-server", activeTurnId: null, pendingRequest: null, state: "ready" },
     }, env).catch(() => {});
     activeTurnId = "";
     deliveryTurnId = "";
@@ -2254,18 +2251,17 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
   const statusState = hasClientState || rawStatusState !== "working" ? rawStatusState : "";
   const pendingRequest = livePendingRequest || (persistedPendingRequest && rawStatusState === "awaiting_approval" ? persistedPendingRequest : null);
   if (persistedPendingRequest && !pendingRequest && ["ready", "failed", "unloaded"].includes(rawStatusState)) {
-    await updateThread(thread.id, {
+    await updateThreadRuntime(thread.id, (latest, latestRuntime) => ({
       state: rawStatusState === "ready" ? "ready" : rawStatusState,
       runtime: {
-        ...(thread.runtime || {}),
         runtimeKind: "codex-app-server",
         state: rawStatusState === "ready" ? "ready" : rawStatusState,
         pendingRequest: null,
-        activeTurnId: rawStatusState === "ready" ? null : thread.runtime?.activeTurnId || null,
+        activeTurnId: rawStatusState === "ready" ? null : latestRuntime.activeTurnId || null,
         codexStatus: rawCodexStatus || null,
         updatedAt: nowIso(),
       },
-    }, env).catch(() => {});
+    }), env, { turnGeneration: runtimeTurnGeneration(thread) }).catch(() => {});
     await appendEvent({
       type: "codex_app_server_stale_pending_request_cleared",
       threadId: thread.id,
@@ -2304,10 +2300,9 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
     : rawCodexStatus;
   const clearedActiveTurnId = stateActiveTurnIdBeforeRead || clean(thread.runtime?.activeTurnId);
   if (clearedActiveTurnId && runtimeState !== "working" && !activeTurnId) {
-    await updateThread(thread.id, {
+    await updateThreadRuntime(thread.id, {
       state: runtimeState === "ready" ? "ready" : runtimeState,
       runtime: {
-        ...(thread.runtime || {}),
         runtimeKind: "codex-app-server",
         state: runtimeState === "ready" ? "ready" : runtimeState,
         activeTurnId: null,
@@ -2315,7 +2310,7 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
         codexStatus: codexStatus || null,
         updatedAt: nowIso(),
       },
-    }, env).catch(() => {});
+    }, env, { turnGeneration: runtimeTurnGeneration(thread) }).catch(() => {});
     await appendEvent({
       type: "codex_app_server_stale_active_turn_cleared_by_status",
       threadId: thread.id,
@@ -2582,11 +2577,10 @@ async function reconcileHydratedCodexTurnCompletion(thread, completedTurnId, env
     clean(currentThread?.runtime?.state).toLowerCase() === "working";
   if (activeTurnId && activeTurnId !== turnId) return false;
   if (!activeTurnId && !threadLooksWorking) return false;
-  await updateThread(currentThread.id, {
+  await updateThreadRuntime(currentThread.id, {
     state: "ready",
     lastError: null,
     runtime: {
-      ...(currentThread.runtime || {}),
       runtimeKind: "codex-app-server",
       activeTurnId: null,
       lastTurnId: turnId,
@@ -2596,7 +2590,7 @@ async function reconcileHydratedCodexTurnCompletion(thread, completedTurnId, env
       codexStatus: { type: "idle" },
       updatedAt: nowIso(),
     },
-  }, env).catch(() => {});
+  }, env, { turnGeneration: runtimeTurnGeneration(currentThread) }).catch(() => {});
   await appendTurnLifecycleEvent("completed", {
     threadId: currentThread.id,
     runtimeKind: "codex-app-server",

@@ -10,7 +10,6 @@ import {
   getThread,
   getThreadMessage,
   listThreadMessageCandidates,
-  updateThread,
   updateThreadMessage,
 } from "./threads.js";
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
@@ -49,6 +48,7 @@ import {
   resetClaudeCodeInterruptResumeForTest,
   settleClaudeCodeCoalescedInputs,
 } from "./claude-code-interrupt-resume.js";
+import { updateThreadRuntime } from "./runtime-record-update.js";
 
 export { assertClaudeCodeHostOwner, threadUsesClaudeCode } from "./claude-code-runtime-policy.js";
 export { setClaudeCodeDeliveryScheduler } from "./claude-code-active-turns.js";
@@ -74,7 +74,7 @@ export async function startClaudeCodeThread(thread, env = process.env) {
     throw error;
   }
   const profile = await profileForThread(thread, env, true);
-  const updated = await updateThread(thread.id, {
+  const updated = await updateThreadRuntime(thread.id, {
     state: "ready",
     runtimeKind: "claude-code",
     executorId: "claude-code",
@@ -91,7 +91,7 @@ export async function startClaudeCodeThread(thread, env = process.env) {
         accountProfileId: profile.id,
       },
     },
-    runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "ready", activeTurnId: null },
+    runtime: { runtimeKind: "claude-code", state: "ready", activeTurnId: null },
   }, env);
   await appendEvent({ type: "claude_code_thread_started", threadId: thread.id, ownerUserId: thread.ownerUserId, profileId: profile.id }, env);
   return { thread: updated, started: true };
@@ -151,11 +151,10 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
     attempt: deliveryAttempt,
     ownerProcess: attemptId,
   }, env);
-  thread = await updateThread(thread.id, {
+  thread = await updateThreadRuntime(thread.id, {
     state: "working",
     lastError: null,
     runtime: {
-      ...(thread.runtime || {}),
       runtimeKind: "claude-code",
       state: "working",
       activeTurnId: attemptId,
@@ -400,10 +399,10 @@ export async function resumeClaudeCodeThread(thread, env = process.env) {
   if (!threadUsesClaudeCode(thread)) return null;
   await profileForThread(thread, env, true);
   if (activeTurns.has(thread.id)) return { thread, resumed: false, reason: "turn_active" };
-  const updated = await updateThread(thread.id, {
+  const updated = await updateThreadRuntime(thread.id, {
     state: "ready",
     lastError: null,
-    runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "ready", activeTurnId: null },
+    runtime: { runtimeKind: "claude-code", state: "ready", activeTurnId: null },
   }, env);
   return { thread: updated, resumed: true };
 }
