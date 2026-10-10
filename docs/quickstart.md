@@ -2,7 +2,8 @@
 
 ## Try it in one minute
 
-No API keys, no cloud account and no network access needed:
+A **simulation** for newcomers: it uses a simulated AI, so no API keys, no
+cloud account and no network access are needed, and no real job is created:
 
 ```bash
 git clone https://github.com/otcan/orkestr.git

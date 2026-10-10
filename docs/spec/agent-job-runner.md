@@ -138,9 +138,11 @@ These commands use the local store directly and need no running server.
 `orkestr init` writes `jobs/hello-job.yaml` for the first connected provider
 (the second becomes the fallback) and, like `orkestr run`, refuses with
 "connect Codex or Claude first: ..." when none is connected. The legacy
-`orkestr jobs run|poll` (job alerts) is unchanged. `orkestr demo` is left as
-it was (the thread-level simulated executor, not user jobs) pending a
-keep/remove decision.
+`orkestr jobs run|poll` (job alerts) is unchanged. `orkestr demo` is kept as an
+explicitly labelled simulation for newcomers (owner decision 2026-10-10): it
+announces that it uses a simulated AI, runs the thread-level simulated
+executor in a throwaway `ORKESTR_HOME`, and never touches the Agent Job store
+or creates user jobs (`test/simulated-provider.test.js`).
 
 ## Guarantee tests
 

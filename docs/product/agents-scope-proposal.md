@@ -69,8 +69,11 @@ The three open questions are decided. Recorded in
    refuse with "connect Codex or Claude first: ..." when none is connected,
    and the server neither admits nor starts runs on a provider that is not
    connected. The simulated adapter stays a test fixture (conformance/CI) and
-   is not selectable in job specs outside tests. `orkestr demo` is left as is
-   (not routed through user jobs) pending a separate keep/remove decision.
+   is not selectable in job specs outside tests.
+   **`orkestr demo` is kept** (decided 2026-10-10) as an explicitly labelled
+   simulation for newcomers that needs no account. It says it uses a
+   simulated AI, runs in a throwaway home, and never creates or runs user
+   jobs.
 3. **Telemetry.** ~~Is opt-in usage pinging acceptable?~~ **Decided:** no
    usage telemetry or pings of any kind. Adoption is measured only through
    issues and conversations.
