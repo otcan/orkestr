@@ -883,7 +883,9 @@ test("local whatsapp typing clear failure never restarts the inbound transport",
     assert.ok(events.find((event) => event.type === "whatsapp_local_typing_clear_failed" && event.error === "r"));
     assert.ok(events.find((event) => event.type === "whatsapp_local_typing_runtime_recovery_deferred" && event.source === "typing_clear"));
     assert.equal(events.some((event) => event.type === "whatsapp_local_runtime_degraded" && event.source === "typing_clear"), false);
-    assert.equal(events.filter((event) => event.type === "whatsapp_local_typing_clear_retry_failed").length, 3);
+    // A bare `r` is deterministic: no futile retries, one suspension event.
+    assert.equal(events.filter((event) => event.type === "whatsapp_local_typing_clear_retry_failed").length, 0);
+    assert.equal(events.filter((event) => event.type === "whatsapp_local_typing_clear_suspended").length, 1);
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }

@@ -1,5 +1,6 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { runGmailPromptPush } from "../../connectors/src/gmail-prompt-push.js";
+import { gmailNotificationFailureOutcome, gmailNotificationOwnerAction } from "./gmail-notification-owner-action.js";
 import { normalizeConnectorPushDeliveryMode } from "./connector-push-delivery.js";
 import {
   createConnectorPromptPush,
@@ -299,6 +300,9 @@ export function publicGmailNotification(push = {}, env = process.env) {
     lastError: clean(push.lastError),
     lastErrorAt: clean(push.lastErrorAt),
     failureCount: Number(push.failureCount || 0) || 0,
+    status: !push.enabled ? "paused" : push.blockedReason ? "needs_owner_action" : "active",
+    blockedReason: clean(push.blockedReason),
+    ownerAction: clean(push.blockedReason) ? gmailNotificationOwnerAction(push.blockedReason)?.message || "" : "",
   };
 }
 
@@ -397,9 +401,9 @@ async function principalForNotificationOwner(push = {}, env = process.env) {
     });
 }
 
-async function scheduleAfterRun(push = {}, env = process.env, now = new Date(), patch = {}) {
+async function scheduleAfterRun(push = {}, env = process.env, now = new Date(), patch = {}, minDelayMs = 0) {
   const intervalMs = Number(push.schedule?.intervalMs || push.safety?.minIntervalMs || gmailNotificationMinIntervalMs(env)) || gmailNotificationMinIntervalMs(env);
-  const nextRunAt = push.enabled === true ? new Date(now.getTime() + intervalMs).toISOString() : "";
+  const nextRunAt = push.enabled === true ? new Date(now.getTime() + Math.max(intervalMs, minDelayMs)).toISOString() : "";
   return updateConnectorPromptPush(push.id, {
     ...patch,
     nextRunAt,
@@ -430,7 +434,11 @@ export async function runGmailNotificationNow(id, env = process.env, fetchImpl =
     const updated = await scheduleAfterRun(latest, env, now, {
       lastError: "",
       lastErrorAt: "",
+      blockedReason: "",
     });
+    if (clean(push.blockedReason)) {
+      await appendEvent({ ts: now.toISOString(), type: "gmail_notification_unblocked", notificationId: push.id, ownerUserId: push.ownerUserId, previousReason: clean(push.blockedReason) }, env).catch(() => {});
+    }
     await appendEvent({
       ts: now.toISOString(),
       type: "gmail_notification_run",
@@ -444,20 +452,9 @@ export async function runGmailNotificationNow(id, env = process.env, fetchImpl =
     }, env).catch(() => {});
     return { ok: true, notification: publicGmailNotification(updated, env), run: publicRunResult(result) };
   } catch (error) {
-    const failed = await scheduleAfterRun(push, env, now, {
-      lastError: clean(error?.message || error).slice(0, 500),
-      lastErrorAt: now.toISOString(),
-      failureCount: Number(push.failureCount || 0) + 1,
-    }).catch(() => push);
-    await appendEvent({
-      ts: now.toISOString(),
-      type: "gmail_notification_run_failed",
-      notificationId: push.id,
-      ownerUserId: push.ownerUserId,
-      targetType: push.targetType,
-      target: push.target,
-      error: clean(error?.message || error).slice(0, 500),
-    }, env).catch(() => {});
+    const outcome = gmailNotificationFailureOutcome(push, error, now, env);
+    const failed = await scheduleAfterRun(push, env, now, outcome.patch, outcome.minDelayMs).catch(() => push);
+    if (outcome.event) await appendEvent(outcome.event, env).catch(() => {});
     error.notification = publicGmailNotification(failed, env);
     throw error;
   }

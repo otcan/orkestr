@@ -40,6 +40,7 @@ import { browserBlobInboundMedia, browserStoreInboundMedia, requestInboundMediaR
 import { inboundMediaProcessingGate, markInboundMediaDelivered } from "./whatsapp-inbound-media-state.js";
 import { runDueInboundMediaRetries, settleInboundMediaDownloadFailure } from "./whatsapp-inbound-media-retry.js";
 import { confirmSentMessageById } from "./whatsapp-send-confirmation.js";
+import { resetTypingClearSuspension, suspendTypingClear, typingClearSuspended } from "./whatsapp-typing-clear-backoff.js";
 import {
   claimPendingOutboundAttachmentEcho,
   forgetPendingOutboundAttachmentEcho,
@@ -2811,6 +2812,26 @@ function clearTypingClearRetryTimers(key) {
   typingClearRetryTimers.delete(key);
 }
 
+// A bare `r` from WhatsApp Web fails the same way on every retry, so stop
+// retrying and suspend clears for the account (see whatsapp-typing-clear-backoff.js).
+// Returns true when the failure was handled that way.
+async function suspendTypingClearAfterFailure(accountId, chatId, error, env = process.env) {
+  if (!localWhatsAppBareRRuntimeError(error)) return false;
+  const suspension = suspendTypingClear(accountId, env);
+  if (!typingClearSuspended(accountId)) return false;
+  clearTypingClearRetryTimers(typingKey(accountId, chatId));
+  if (suspension) {
+    await appendEvent({
+      type: "whatsapp_local_typing_clear_suspended",
+      accountId,
+      reason: "whatsapp_web_bare_r",
+      suspendMs: suspension.durationMs,
+      failures: suspension.failures,
+    }, env).catch(() => {});
+  }
+  return true;
+}
+
 function clearAccountTypingStartPromises(accountId = "") {
   const prefix = `${String(accountId || "").trim()}:`;
   for (const key of [...typingStartPromises.keys()].filter((item) => item.startsWith(prefix))) {
@@ -2822,6 +2843,7 @@ function clearAccountTypingRuntimeState(accountId = "") {
   const normalized = String(accountId || "").trim();
   if (!normalized) return;
   clearAccountTypingStartPromises(normalized);
+  resetTypingClearSuspension(normalized);
   for (const key of [...typingClearRetryTimers.keys()].filter((item) => item.startsWith(`${normalized}:`))) {
     clearTypingClearRetryTimers(key);
   }
@@ -3255,13 +3277,19 @@ function scheduleTypingClearRetries({ accountId = "", chatId = "", env = process
       const remaining = (typingClearRetryTimers.get(key) || []).filter((item) => item !== timer);
       if (remaining.length) typingClearRetryTimers.set(key, remaining);
       else typingClearRetryTimers.delete(key);
-      if (typingSessions.has(key)) return;
+      if (typingSessions.has(key) || typingClearSuspended(selectedAccountId)) return;
       const runtime = runtimes.get(selectedAccountId);
       const state = accountStates.get(selectedAccountId);
       if (!runtime?.client || !state?.ready || state?.chatOpsReady === false || state?.runtimeUsable === false) return;
       sendChatTypingState(runtime, id, false, env)
-        .then(() => appendEvent({ type: "whatsapp_local_typing_clear_retry", accountId: selectedAccountId, chatId: id, delayMs }, env).catch(() => {}))
+        .then(() => {
+          clearTypingClearRetryTimers(key);
+          resetTypingClearSuspension(selectedAccountId);
+          return appendEvent({ type: "whatsapp_local_typing_clear_retry", accountId: selectedAccountId, chatId: id, delayMs }, env).catch(() => {});
+        })
         .catch(async (error) => {
+          if (typingClearSuspended(selectedAccountId)) return;
+          await suspendTypingClearAfterFailure(selectedAccountId, id, error, env);
           appendEvent({ type: "whatsapp_local_typing_clear_retry_failed", accountId: selectedAccountId, chatId: id, delayMs, error: error.message || String(error) }, env).catch(() => {});
           await handleRecoverableLocalWhatsAppRuntimeInvalidation(selectedAccountId, error, env, {
             source: "typing_clear_retry",
@@ -3370,19 +3398,24 @@ export async function stopLocalWhatsAppTyping({ chatId = "", accountId = "", env
   typingSessions.delete(key);
   const runtime = runtimes.get(selectedAccountId);
   const state = accountStates.get(selectedAccountId);
-  if (runtime?.client && state?.ready && state?.chatOpsReady !== false && state?.runtimeUsable !== false) {
+  const clearSuspended = typingClearSuspended(selectedAccountId);
+  if (clearSuspended) clearTypingClearRetryTimers(key);
+  if (!clearSuspended && runtime?.client && state?.ready && state?.chatOpsReady !== false && state?.runtimeUsable !== false) {
     let recoverableClearFailure = false;
-    await sendChatTypingState(runtime, id, false, env).catch(async (error) => {
+    await sendChatTypingState(runtime, id, false, env).then(() => {
+      resetTypingClearSuspension(selectedAccountId);
+    }, async (error) => {
+      if (await suspendTypingClearAfterFailure(selectedAccountId, id, error, env)) recoverableClearFailure = true;
       appendEvent({ type: "whatsapp_local_typing_clear_failed", accountId: selectedAccountId, chatId: id, error: error.message || String(error) }, env).catch(() => {});
-      recoverableClearFailure = await handleRecoverableLocalWhatsAppRuntimeInvalidation(selectedAccountId, error, env, {
+      if (await handleRecoverableLocalWhatsAppRuntimeInvalidation(selectedAccountId, error, env, {
         source: "typing_clear",
         reason: "typing_clear_runtime_error",
         allowBrowserStoreFallback: false,
-      });
+      })) recoverableClearFailure = true;
     });
     if (!recoverableClearFailure) scheduleTypingClearRetries({ accountId: selectedAccountId, chatId: id, env });
   }
-  if (session) await appendEvent({ type: "whatsapp_local_typing_stopped", accountId: selectedAccountId, chatId: id }, env).catch(() => {});
+  if (session) await appendEvent({ type: "whatsapp_local_typing_stopped", accountId: selectedAccountId, chatId: id, ...(clearSuspended ? { clearSkipped: "suspended" } : {}) }, env).catch(() => {});
   return { ok: true, active: false, accountId: selectedAccountId, chatId: id };
 }
 
@@ -3458,6 +3491,7 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   inboundForwardLedgerKeys.clear();
   typingStartPromises.clear();
   typingClearRetryTimers.clear();
+  resetTypingClearSuspension();
   localWhatsAppRuntimeRecoveryInFlight.clear();
   localWhatsAppUnreadRecoveryCursorByAccount.clear();
   for (const key of [...localWhatsAppScheduledRecoveryTimers.keys()]) clearScheduledLocalWhatsAppRecovery(key);

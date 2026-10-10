@@ -132,6 +132,7 @@ export function normalizeConnectorPromptPush(input = {}, env = process.env) {
     lastError: clean(input.lastError).slice(0, 500),
     lastErrorAt: clean(input.lastErrorAt),
     failureCount: Math.max(0, Math.floor(optionalNumber(input.failureCount, 0) || 0)),
+    blockedReason: clean(input.blockedReason).slice(0, 80),
     deliveredCount: Math.max(0, Math.floor(optionalNumber(input.deliveredCount, 0) || 0)),
     processedSourceItemIds: Array.isArray(input.processedSourceItemIds)
       ? [...new Set(input.processedSourceItemIds.map(clean).filter(Boolean))].slice(-500)

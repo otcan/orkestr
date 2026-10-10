@@ -117,6 +117,30 @@ time: `prev` (the preceding window of the same length), a shift such as `1d`
 (same window yesterday), `deploy` (since the latest deploy vs the same length
 before it) or an ISO time (the window of the same length ending then).
 
+`orkestr doctor events [--since 15m|1h|6h|1d|<iso>] [--json]` (admin API
+`GET /api/system/events/summary?since=1h`) reads the tail of
+`ORKESTR_HOME/events.jsonl` and reports event counts by type, per-hour rates
+and, for failing types (`*_failed`, `*_error`, `*_blocked`, ...), the top
+`error`/`reason`/`code` values. Only event types and short machine codes are
+shown; free-form error text collapses to its first snake_case code or
+`unclassified`, and chat ids, message ids and targets are never printed. The
+scan stops at `ORKESTR_EVENTS_SUMMARY_MAX_BYTES` (default 256 MiB) and says so.
+
+Recurring-failure guards:
+
+- A WhatsApp typing-indicator clear rejected by WhatsApp Web with its bare
+  `r` error is not retried; clears for that account are suspended for
+  `ORKESTR_WHATSAPP_TYPING_CLEAR_SUSPEND_MS` (default 10 min, `0` restores
+  per-stop retries) with one `whatsapp_local_typing_clear_suspended` event.
+  WhatsApp expires the typing indicator on its own once refreshes stop.
+- A Gmail notification rule whose Gmail connection needs the owner (revoked
+  token, missing OAuth client, missing/ambiguous account) emits one
+  `gmail_notification_blocked` event, shows `status: "needs_owner_action"`
+  with an `ownerAction` hint, and is re-checked every
+  `ORKESTR_GMAIL_NOTIFICATION_BLOCKED_RECHECK_MS` (default 30 min) instead of
+  failing every interval. The first successful run emits
+  `gmail_notification_unblocked`.
+
 ## Self-Hosted Install Pattern
 
 A minimal single-box stack is:

@@ -34,6 +34,7 @@ import { jiraCommand } from "./jira-command.js";
 import { doctorVoiceCommand } from "./doctor-voice-command.js";
 import { doctorCodexCommand, retryFailedThreadsCommand } from "./codex-auth-command.js";
 import { doctorPerfCommand } from "./doctor-perf-command.js";
+import { doctorEventsCommand } from "./doctor-events-command.js";
 import { doctorWhatsAppStaleOutboxCommand } from "./doctor-whatsapp-outbox-command.js";
 import { secretLinksCommand } from "./secret-links-command.js";
 import { vaultCommand } from "./vault-command.js";
@@ -672,7 +673,8 @@ async function doctorCommand(argv, ctx) {
   if (subject === "voice" || subject === "transcription") return doctorVoiceCommand(argv, ctx);
   if (subject === "perf" || subject === "performance") return doctorPerfCommand(argv, ctx);
   if (subject === "codex") return doctorCodexCommand(argv, ctx);
-  throw new Error("Usage: orkestr doctor [system|timers|resources|whatsapp|router|voice|perf|codex] [--repair [--repair-historical]] [--json]");
+  if (subject === "events" || subject === "event") return doctorEventsCommand(argv, ctx);
+  throw new Error("Usage: orkestr doctor [system|timers|resources|whatsapp|router|voice|perf|codex|events] [--repair [--repair-historical]] [--json]");
 }
 
 async function doctorWhatsAppRouterCommand(argv, ctx) {
@@ -2256,6 +2258,7 @@ ${agentJobUsage}
   orkestr doctor codex [--json]
   orkestr threads retry-failed [--since 2h] [--dry-run]
   orkestr doctor perf [--window 1h|6h|1d] [--since <iso>] [--until <iso>] [--compare prev|1d|deploy|<iso>] [--json]
+  orkestr doctor events [--since 1h|6h|1d|<iso>] [--json]
   orkestr doctor whatsapp --archive-stale-outbox [--older-than 7d] [--limit 2000] [--apply] [--json]
 
 Common thread commands:
