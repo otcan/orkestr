@@ -52,6 +52,9 @@ tests with the simulated fixture.
 | `packages/connectors/src/whatsapp-job-triggers.js` | WhatsApp group-message triggers and `approve`/`deny` replies, called from the existing inbound router (`routeWhatsAppInbound`). |
 | `agent-job-audit.js` | Sealed audit record per terminal run and notification intents, written in the same transaction as the state change they announce. |
 | `packages/connectors/src/agent-job-notification-relay.js` | Moves notification intents into the connector outbox (same idempotency key). Called by the server scheduler and the CLI after driving. |
+| `packages/connectors/src/agent-job-notification-dispatcher.js`, `agent-job-webhook-delivery.js` | Delivers `agent_job` outbox rows to thread, WhatsApp, email and outgoing webhooks, at most once per row (see [Notifications](#notifications)). Run by the server scheduler after each relay. |
+| `agent-job-hooks-http.js`, `agent-job-webhook-signature.js`, `agent-job-secrets.js` | Signed webhook trigger `POST /api/jobs/<job>/hooks/<name>`: HMAC-SHA256 with the trigger's `secret_ref`, resolved through the secure secret manager. |
+| `agent-job-timer-entries.js` | Schedule triggers as read-only rows in `GET /api/timers`. |
 | `agent-job-scheduler.js` | Server background driver: resume on start, schedule triggers, periodic sweep. |
 | `agent-job-http.js`, `agent-job-trigger-auth.js` | `POST /api/jobs/<job>/trigger` and its machine-token auth. |
 | `agent-job-faults.js` | Fault injection at named points (tests). |
@@ -196,9 +199,29 @@ follow-ups.
 
 * **API**: `orkestr run <job.yaml|dir>` (registers the job file, admits, drives)
   or `POST /api/jobs/<job>/trigger` with an optional `Idempotency-Key`.
-* **Webhook**: `POST /api/jobs/<job>/trigger?hook=<name>`. The dedupe key comes
-  from the trigger's `event_id` JSON pointer, else from the body hash.
-  Redeliveries return the first run with HTTP 200, new runs return 202.
+* **Webhook (signed)**: `POST /api/jobs/<job>/hooks/<name>` needs no session or
+  bearer token; it is authenticated only by an HMAC-SHA256 signature over the
+  raw request body, made with the trigger's `secret_ref` (`vault://<name>`,
+  resolved through the secure secret manager, user scope of the admin first,
+  then global; never logged or stored in the job store). Accepted headers:
+  * `X-Orkestr-Timestamp: <unix seconds>` + `X-Orkestr-Signature-256:
+    sha256=<hex>` over `<timestamp>.<raw body>`. The timestamp must be within
+    `ORKESTR_AGENT_JOB_WEBHOOK_TOLERANCE_S` (default 300 s).
+  * GitHub style `X-Hub-Signature-256: sha256=<hex>` over the raw body.
+    GitHub signs no timestamp; `ORKESTR_AGENT_JOB_WEBHOOK_REQUIRE_TIMESTAMP=1`
+    refuses it.
+
+  The comparison is constant time. The dedupe key comes only from the signed
+  body (the trigger's `event_id` JSON pointer, else the body hash); unsigned
+  headers such as `Idempotency-Key` or `X-GitHub-Delivery` are ignored, so a
+  replayed request can never start a second run. Redeliveries return the
+  first run with HTTP 200, new runs return 202. Every refusal (unknown job or
+  hook, missing secret, bad/stale/missing signature) returns the same 401
+  `agent_job_webhook_unauthorized` and is written to `trigger_audit` with a
+  reason code and no body. Only `application/json` bodies are accepted.
+* **Webhook (token)**: `POST /api/jobs/<job>/trigger?hook=<name>` with the
+  trigger bearer token or an admin session still works, with the same dedupe
+  rules plus an optional `Idempotency-Key`.
 * **WhatsApp**: the inbound router (`routeWhatsAppInbound`) offers every
   message to `dispatchWhatsAppJobTriggers()` before thread routing; failures
   there never block thread routing. A run is admitted only for a message in
@@ -219,7 +242,13 @@ follow-ups.
   the dedupe key, so a slot fires once even across processes, and missed
   slots while the server was down are coalesced into one run. A slot whose
   admission is refused (for example the provider is not connected) is
-  skipped and audited.
+  skipped and audited. Admins see every schedule trigger in `GET /api/timers`
+  (`orkestr timers list`, Ops "Global Timers") as a read-only row
+  (`id: agent-job:<job>:schedule-<n>`, `targetType: agent_job`,
+  `readOnly: true`, next fire time from the schedule slot). The rows are not
+  stored as timers and the timer runner never runs them; edit, pause, run and
+  delete return 409 `agent_job_schedule_read_only`. Change the job file
+  instead.
 
 Auth: the trigger endpoint accepts a bearer token from
 `ORKESTR_AGENT_JOB_TRIGGER_TOKEN(S)` (machine auth `agent_job_trigger`) or a
@@ -228,6 +257,35 @@ normal admin session / CLI token.
 Jobs are registered by `orkestr run`, and on every server sweep from
 `ORKESTR_HOME/agent-jobs/` (or `ORKESTR_AGENT_JOBS_DIR`) and
 `$ORKESTR_OVERLAY_DIR/jobs/`.
+
+## Notifications
+
+Notification intents are written with the state change (G10), relayed into
+the connector outbox as `connector: agent_job` rows keyed
+`H(run, event, channel, target)`, and delivered by
+`dispatchAgentJobNotifications()`. Only the holder of a row's outbox claim
+delivers it and terminal rows are never claimed again:
+
+| channel | target | delivery | after a crash mid-delivery |
+| --- | --- | --- | --- |
+| `thread` | thread id | `appendThreadMessage` as an assistant message (`source: agent_job`) with the row key as idempotency key | retried; the thread returns the first message |
+| `whatsapp` | chat id or `binding:<id>` | a `connector: whatsapp` outbox row (`<row key>:whatsapp`, `deliveryType: agent_job_notification`) through the existing claim → `sendWhatsAppText` → mark path | the expired claim is quarantined as `delivery_uncertain`; never resent |
+| `email` | address | the existing mail path (`sendEmail`) | a send fence is written first; a fenced row without an outcome becomes `delivery_uncertain` |
+| `webhook` | `https://` URL or `vault://` ref to one | `POST` JSON with `Idempotency-Key` / `X-Orkestr-Delivery` = row key, redirects not followed | retried with the same key so the receiver can drop it |
+
+WhatsApp `approval_required` messages always end with
+`Reply "approve <id>" or "deny <id>" in this group.`, the reply handled by
+`whatsapp-job-triggers.js`. Network errors, timeouts, HTTP 408/425/429/5xx,
+thread and email errors are retried with exponential backoff
+(`ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS`, capped by
+`ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MAX_MS`) up to
+`ORKESTR_AGENT_JOB_NOTIFY_MAX_ATTEMPTS` (default 8), then dead-lettered.
+Plain-http webhook targets, other 4xx, unknown threads and unresolved
+WhatsApp targets are dead-lettered at once; unconfigured mail is `skipped`.
+Errors hold reason codes only, never a resolved URL or secret. The server
+dispatches after every relay; `ORKESTR_AGENT_JOB_NOTIFY_DISPATCH=0` leaves
+rows queued. The CLI only relays, so notifications from `orkestr run` are
+delivered by the next server tick.
 
 ## Server
 
@@ -269,7 +327,7 @@ or creates user jobs (`test/simulated-provider.test.js`).
 | G7 | `test/agent-job-approvals.test.js` (args changed after approval, approve twice, concurrent decisions across processes, single use after a lost dispatch, expiry, denial) |
 | G8 | `test/agent-job-approvals.test.js` (job file edited mid-run) |
 | G9 | `test/agent-job-recovery.test.js` (sealed record contents, canary secret absent from the record and the database files) |
-| G10 | `test/agent-job-recovery.test.js` (crash after parking, and between outbox enqueue and marking the intent relayed, for `approval_required` and `succeeded`) |
+| G10 | `test/agent-job-recovery.test.js` (crash after parking, and between outbox enqueue and marking the intent relayed, for `approval_required` and `succeeded`); `test/agent-job-notification-dispatch.test.js` (each channel delivered once, crash after the WhatsApp send, after an email send, after a thread post, webhook retries with one idempotency key) |
 | G11 | `test/agent-job-recovery.test.js` (cancel during a tool call, during backoff, and of a run leased elsewhere) |
 
 Codex job executor: `test/agent-job-codex.test.js` (provider gate, default
@@ -310,18 +368,16 @@ test-only `simulated`).
   tool calls through `ctx.authorizeTool` (`permissionHook: "pre_call"`).
   Overlay executors still run their own tools
   (`permissionHook: "sandbox_only"`).
-* **Notification delivery.** Notifications are enqueued once in the connector
-  outbox (`connector: agent_job`, payload with channel and target) by the
-  relay. A dispatcher that delivers them over thread/WhatsApp/email/webhook
-  is a follow-up; existing WhatsApp pumps do not touch these rows. Email
-  approvals are a follow-up.
-* **Webhook HMAC.** Webhook triggers use bearer tokens; HMAC signatures with
-  the trigger's `secret_ref` and the `/hooks/<name>` path from the spec are a
-  follow-up. Secret resolution (`permissions.secrets`, `ctx.resolveSecret`) is
-  not implemented, so redaction covers secret-looking keys and values passed
-  in `secretValues`.
-* **Schedules in the timers UI.** Schedule triggers reuse timer cadence math
-  but do not create rows in the timers list.
+* **Notifications.** Email approvals (reply parsing) are a follow-up; the
+  email text names the CLI and WhatsApp commands. Outgoing webhooks are not
+  signed yet. `delivery_uncertain` rows need an operator decision; there is
+  no UI for them beyond the connector outbox views.
+* **Secrets.** Only webhook `secret_ref`s and `vault://` webhook targets are
+  resolved. `permissions.secrets` / `ctx.resolveSecret` for adapters are not
+  implemented, so redaction covers secret-looking keys and values passed in
+  `secretValues`.
+* **Webhook bodies.** Signed hooks accept JSON only; form-encoded GitHub
+  deliveries are refused.
 * **Real GitHub connector** for Example A, an `openai-compatible` adapter,
   `orkestr runs show`, a Run detail UI, per-attempt process isolation for
   native turns and run retention are not part of this change.
