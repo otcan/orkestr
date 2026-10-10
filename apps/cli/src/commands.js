@@ -26,6 +26,7 @@ import { rawAttachWatchText } from "../../../packages/core/src/raw-terminal-watc
 import { defaultApiBase, requestJson } from "./api-client.js";
 import { createCommand } from "./create-command.js";
 import { demoCommand, demoUsage } from "./demo-command.js";
+import { agentJobSubcommands, agentJobUsage, agentJobsCommand, initCommand, runJobCommand } from "./agent-job-command.js";
 import { desktopCommand } from "./desktop-command.js";
 import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
 import { interruptCommand, sendNowCommand } from "./interrupt-command.js";
@@ -70,6 +71,8 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "status") return await statusCommand(args, ctx);
     if (command === "version") return await versionCommand(args, ctx);
     if (command === "demo") return await demoCommand(args, ctx);
+    if (command === "init") return await initCommand(args, ctx);
+    if (command === "run") return await runJobCommand(args, ctx);
     if (command === "instance" && ["config", "status"].includes(args[0])) return await instanceConfigCommand(args, ctx);
     if (command === "instances" || command === "instance") return await releaseInstancesCommand(args, ctx);
     if (command === "whereiam" || command === "whereami") return await whereiamCommand(args, ctx);
@@ -744,10 +747,11 @@ async function timersCommand(argv, ctx) {
 }
 
 async function jobsCommand(argv, ctx) {
+  if (agentJobSubcommands.includes(argv[0])) return agentJobsCommand(argv[0], argv.slice(1), ctx);
   const subcommand = argv[0]?.startsWith("--") ? "run" : argv[0] || "run";
   const rest = subcommand === "run" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
   if (subcommand === "run" || subcommand === "poll") return runJobsCommand(rest, ctx);
-  throw new Error("Usage: orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--signal-mode record_only|notify_passively] [--json]");
+  throw new Error(`Usage: orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--signal-mode record_only|notify_passively] [--json]  (job alerts)\n${agentJobUsage}`);
 }
 
 async function whatsappCommand(argv, ctx) {
@@ -2240,6 +2244,7 @@ function writeUsage(stream) {
   orkestr status [--json]
   orkestr version [--json]
 ${demoUsage}
+${agentJobUsage}
   orkestr instances [--probe] [--json]
   orkestr instance config [get|status|patch] [--generation N] [--patch json] [--json]
   orkestr service [status|start|stop|restart|logs] [--service orkestr] [--lines 100] [--no-follow]

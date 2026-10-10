@@ -10,6 +10,16 @@ agent:
   provider: simulated
 task:
   prompt: Fix the failing test in the demo repository and open a pull request.
+  inputs:
+    simulated_script:
+      - say: Scanning example/repo for outdated dependencies.
+      - tool: demo.repo.read
+        args: { repository: example/repo }
+      - tool: demo.pull_request.create
+        args: { repository: example/repo, head: orkestr/simulated-demo, title: "chore: bump example-lib to 2.0.1" }
+      - tool: demo.pull_request.merge
+        args: { repository: example/repo, head: orkestr/simulated-demo }
+      - output: { summary: Opened and merged example/repo pull request orkestr/simulated-demo. }
 permissions:
   tools:
     allow: [demo.repo.*, demo.pull_request.create]

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { authorizeAgentJobTriggerRequest } from "./agent-job-trigger-auth.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
@@ -2216,6 +2217,14 @@ export async function authorizeHttpRequest(request, env = process.env) {
     machineAuthContext: vagentAuth.machineAuthContext,
   };
   if (vagentAuth) return { ...vagentAuth, status };
+  const agentJobTriggerAuth = authorizeAgentJobTriggerRequest(request, env);
+  if (agentJobTriggerAuth?.ok) return {
+    ok: true,
+    status,
+    principal: adminPrincipal(defaultAdminUser(env)),
+    machineAuth: agentJobTriggerAuth.machineAuth,
+    machineAuthContext: agentJobTriggerAuth.machineAuthContext,
+  };
   const cliAuth = await authorizeCliMachineRequest(request, env);
   if (cliAuth?.ok) return { ok: true, status, principal: cliAuth.principal, machineAuth: cliAuth.machineAuth };
   const mobileAuth = await authorizeMobileDeviceHttpRequest(request, env);

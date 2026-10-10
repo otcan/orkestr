@@ -53,7 +53,7 @@ test("simulated provider pauses approval-required tools until approved", async (
   for (let i = 0; i < 200 && !merged; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 20));
     const decided = await decideEffectApproval("sim-approval:merge_pull_request:1", { decision: "approved", decidedBy: "test" }, env).catch(() => null);
-    merged = decided?.state === "approved";
+    merged = decided?.approval?.state === "approved";
   }
   assert.equal(merged, true);
   assert.equal((await running).state, "completed");

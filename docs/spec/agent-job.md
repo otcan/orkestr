@@ -2,8 +2,9 @@
 
 Status: draft v0. The validator is implemented in
 `packages/core/src/agent-job-spec.js`, with the YAML entry point in
-`agent-job-spec-yaml.js`. Execution is not implemented yet. Examples are in
-`examples/jobs/*.yaml`.
+`agent-job-spec-yaml.js`. The runner is described in
+[agent-job-runner.md](agent-job-runner.md), including where v0 differs from
+this document. Examples are in `examples/jobs/*.yaml`.
 
 An **Agent Job** is a declarative, durable unit of agent work. A **Run** is a
 single execution of a job, caused by one trigger event. A run has one or more
