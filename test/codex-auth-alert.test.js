@@ -10,7 +10,9 @@ import {
   parseSinceMs,
   recordCodexAuthFailedTurn,
 } from "../packages/core/src/codex-auth-alert.js";
-import { recordCodexRuntimeAuthFailureSignal } from "../packages/core/src/codex-auth-health.js";
+import { readCodexAuthHealth, recordCodexRuntimeAuthFailureSignal } from "../packages/core/src/codex-auth-health.js";
+import { resolveCodexAuthAfterSuccessfulTurn } from "../packages/core/src/codex-auth-failed-thread.js";
+import { setCodexRuntimeIdentityHooksForTest } from "../packages/core/src/codex-runtime-identity.js";
 import { formatCodexAuthDoctor, retryFailedThreadsCommand } from "../apps/cli/src/codex-auth-command.js";
 
 async function tempEnv() {
@@ -72,7 +74,7 @@ test("failed turns resolve their input message and doctor reports state without 
   const doctor = await codexAuthDoctor(env, { codexLoginStatus: async () => ({ connected: false, reason: "not_logged_in" }) });
   assert.equal(doctor.ok, false);
   assert.equal(doctor.recentFailures, 2);
-  assert.equal(doctor.fix, codexAuthFixCommand(env));
+  assert.equal(doctor.fix, await codexAuthFixCommand(env));
   assert.match(formatCodexAuthDoctor(doctor), /BROKEN[\s\S]*fix: log in again/);
   assert.equal(parseSinceMs("30m"), 1_800_000);
 });
@@ -103,4 +105,62 @@ test("retry-failed re-sends failed inputs quoted, idempotently, and honors --dry
   assert.equal(posts[0].body.idempotencyKey, "codex-auth-retry:thread-a:msg-1");
   assert.match(out.text(), /skip thread-b turn turn-2: input is still queued/);
   assert.match(out.text(), /skip thread-c turn turn-3: input message not found/);
+});
+
+const revoked = "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.";
+
+test("fix command uses the Codex runtime user resolved from the app-server unit", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-identity-"));
+  const passwdFile = path.join(dir, "passwd");
+  await fs.writeFile(passwdFile, "root:x:0:0::/root:/bin/sh\ncodex-runner:x:1500:1500::/home/codex-runner:/bin/sh\n");
+  setCodexRuntimeIdentityHooksForTest({ getuid: () => 0, passwdFile, execFile: async () => ({ stdout: "codex-runner\n" }) });
+  try {
+    const env = { ORKESTR_CODEX_APP_SERVER_MODE: "external", ORKESTR_CODEX_APP_SERVER_SERVICE_NAME: "codex-app-server.service", ORKESTR_SERVICE_USER: "root" };
+    assert.equal(await codexAuthFixCommand(env), "sudo -u codex-runner -H bash -lc 'cd ~ && codex login --device-auth'");
+    assert.match(await codexAuthFixCommand({ ORKESTR_CODEX_RUNTIME_USER: "codex-runner" }), /sudo -u codex-runner /);
+  } finally {
+    setCodexRuntimeIdentityHooksForTest();
+  }
+  assert.match(await codexAuthFixCommand({ ORKESTR_SERVICE_USER: "orkestr-svc" }, { codexRuntimeOwner: async () => null }), /sudo -u orkestr-svc /);
+});
+
+test("doctor reports recovered when Codex was logged in again after the failure", async () => {
+  const env = { ...(await tempEnv()), ORKESTR_WATCHER_ALERTS: "0" };
+  await recordCodexRuntimeAuthFailureSignal({ thread: { id: "thread-a" }, error: revoked, turnId: "turn-1" }, env);
+  const health = await readCodexAuthHealth(env);
+  const codexHome = path.join(env.HOME, ".codex");
+  await fs.mkdir(codexHome, { recursive: true });
+  const authPath = path.join(codexHome, "auth.json");
+  await fs.writeFile(authPath, "{}");
+  const loginAt = new Date(Math.ceil((Date.parse(health.detectedAt) + 17 * 60_000) / 1000) * 1000);
+  await fs.utimes(authPath, loginAt, loginAt);
+  const doctor = await codexAuthDoctor(env, { codexLoginStatus: async () => ({ connected: true, authMode: "chatgpt", codexHome }) });
+  assert.equal(doctor.ok, true);
+  assert.equal(doctor.fix, null);
+  assert.equal(doctor.health.state, "recovered");
+  assert.equal(doctor.health.recoveredAt, loginAt.toISOString());
+  assert.match(formatCodexAuthDoctor(doctor), /Codex auth: OK[\s\S]*last failure at .*recovered at /);
+});
+
+test("a successful turn repairs a superseded auth fault and re-arms the owner alert", async () => {
+  const env = { ...(await tempEnv()), ORKESTR_WATCHER_ALERTS: "0" };
+  await recordCodexRuntimeAuthFailureSignal({ thread: { id: "thread-a" }, error: revoked, turnId: "turn-1" }, env);
+  const codexHome = path.join(env.HOME, ".codex");
+  await fs.mkdir(codexHome, { recursive: true });
+  const authPath = path.join(codexHome, "auth.json");
+  await fs.writeFile(authPath, "{}");
+  const later = new Date(Date.now() + 60_000);
+  await fs.utimes(authPath, later, later);
+  const turnsFile = path.join(env.ORKESTR_HOME, "codex-auth-failed-turns.json");
+  const store = JSON.parse(await fs.readFile(turnsFile, "utf8"));
+  await fs.writeFile(turnsFile, JSON.stringify({ ...store, alertedAt: new Date(Date.now() - 1000).toISOString() }));
+  await resolveCodexAuthAfterSuccessfulTurn({ id: "thread-b", state: "ready" }, { ...env, CODEX_HOME: codexHome });
+  const repaired = await readCodexAuthHealth(env);
+  assert.equal(repaired.state, "repaired");
+  const doctor = await codexAuthDoctor(env, { codexLoginStatus: async () => ({ connected: true, codexHome }) });
+  assert.equal(doctor.ok, true);
+  assert.equal(doctor.health.recoveredAt, repaired.repairedAt);
+  const alerts = [];
+  const result = await recordCodexAuthFailedTurn({ thread: { id: "thread-c" }, turnId: "turn-2" }, env, { recordWatcherAlert: async (input) => { alerts.push(input); return { ok: true }; } });
+  assert.equal(result.alerted, true, "a new incident after repair alerts despite the window");
 });

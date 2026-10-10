@@ -1,11 +1,13 @@
 // Owner-visible Codex auth failure handling: records turns rejected for Codex
 // auth, raises one watcher alert per window with the exact login fix, and
 // reports auth state for `orkestr doctor codex` without reading token files.
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { readCodexAuthHealth } from "./codex-auth-health.js";
+import { codexRuntimeOwner } from "./codex-runtime-identity.js";
 
 const maxFailedTurns = 200;
 
@@ -22,8 +24,11 @@ export function codexAuthAlertWindowMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(60_000, parsed) : 6 * 60 * 60 * 1000;
 }
 
-export function codexAuthFixCommand(env = process.env) {
-  let user = clean(env.ORKESTR_SERVICE_USER);
+// The login must run as the OS user the Codex runtime runs as; fall back to the
+// service/process user only when the runtime identity is unresolved.
+export async function codexAuthFixCommand(env = process.env, deps = {}) {
+  const owner = await (deps.codexRuntimeOwner || codexRuntimeOwner)(env).catch(() => null);
+  let user = clean(owner?.user) || clean(env.ORKESTR_SERVICE_USER);
   if (!user) {
     try { user = os.userInfo().username; } catch { user = "<service-user>"; }
   }
@@ -39,11 +44,11 @@ function threadLabel(turn) {
   return turn.threadName ? `${turn.threadName} (${turn.threadId})` : turn.threadId;
 }
 
-export function formatCodexAuthAlert(turns = [], env = process.env) {
+export function formatCodexAuthAlert(turns = [], fixCommand = "") {
   const threads = [...new Map(turns.map((turn) => [turn.threadId, turn])).values()];
   return [
     `Codex sign-in was rejected (${clean(turns.at(-1)?.reason) || "codex_auth_failed"}); Codex threads cannot run turns.`,
-    `Fix: log in again: ${codexAuthFixCommand(env)}`,
+    `Fix: log in again: ${fixCommand}`,
     `Failed threads: ${threads.map(threadLabel).join(", ") || "none recorded"}`,
     "After login, retry the failed inputs: orkestr threads retry-failed --since 2h [--dry-run]",
   ].join("\n");
@@ -69,15 +74,17 @@ export async function recordCodexAuthFailedTurn({ thread = {}, turnId = "", mess
   }
   const windowMs = codexAuthAlertWindowMs(env);
   const lastAlertMs = Date.parse(store.alertedAt || "");
+  // A repair after the last alert starts a new incident: alert again at once.
+  const repairedMs = Date.parse(clean((await readCodexAuthHealth(env))?.repairedAt));
   let alerted = false;
-  if (!Number.isFinite(lastAlertMs) || now.getTime() - lastAlertMs >= windowMs) {
+  if (!Number.isFinite(lastAlertMs) || now.getTime() - lastAlertMs >= windowMs || repairedMs > lastAlertMs) {
     const recent = store.turns.filter((turn) => now.getTime() - Date.parse(turn.at) <= windowMs);
     const recordAlert = deps.recordWatcherAlert || (await import("./watcher-alerts.js")).recordWatcherAlert;
     const result = await recordAlert({
       severity: "error",
       source: "codex_auth",
       code: "codex_auth_failed",
-      message: formatCodexAuthAlert(recent, env),
+      message: formatCodexAuthAlert(recent, await codexAuthFixCommand(env, deps)),
       mirrorToConnector: true,
     }, env).catch(() => null);
     alerted = Boolean(result?.ok);
@@ -122,14 +129,30 @@ export async function codexAuthDoctor(env = process.env, deps = {}) {
   const health = await readCodexAuthHealth(env);
   const { turns, alertedAt } = await readStore(env);
   const recent = turns.filter((turn) => Date.now() - Date.parse(turn.at) <= 24 * 60 * 60 * 1000);
-  const broken = clean(health?.state) === "broken";
+  let broken = clean(health?.state) === "broken";
+  let recoveredAt = clean(health?.repairedAt) || null;
+  if (broken && login.connected && login.codexHome) {
+    // A login after the failure (auth.json rewritten; mtime only, never contents) supersedes it.
+    const detectedMs = Date.parse(clean(health.detectedAt || health.updatedAt));
+    const authStat = await fs.stat(path.join(login.codexHome, "auth.json")).catch(() => null);
+    if (authStat && Number.isFinite(detectedMs) && authStat.mtimeMs > detectedMs + 10) {
+      broken = false;
+      recoveredAt = new Date(authStat.mtimeMs).toISOString();
+    }
+  }
   return {
     ok: Boolean(login.connected) && !broken,
     login: { connected: Boolean(login.connected), authMode: login.authMode || null, reason: login.reason || null, message: clean(login.message) },
-    health: health ? { state: health.state || null, reason: health.reason || null, detectedAt: health.detectedAt || null, threadId: health.threadId || null } : null,
+    health: health ? {
+      state: broken ? "broken" : recoveredAt ? "recovered" : health.state || null,
+      reason: health.reason || null,
+      lastFailureAt: health.detectedAt || null,
+      recoveredAt: broken ? null : recoveredAt,
+      threadId: health.threadId || null,
+    } : null,
     recentFailures: recent.length,
     failedThreads: [...new Set(recent.map((turn) => turn.threadId))],
     alertedAt,
-    fix: broken || !login.connected ? codexAuthFixCommand(env) : null,
+    fix: broken || !login.connected ? await codexAuthFixCommand(env, deps) : null,
   };
 }

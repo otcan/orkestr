@@ -19,7 +19,7 @@ export function formatCodexAuthDoctor(payload = {}) {
   const lines = [
     `Codex auth: ${payload.ok ? "OK" : "BROKEN"}`,
     `  login ${login.connected ? `connected${login.authMode ? ` (${login.authMode})` : ""}` : `not connected (${login.reason || "unknown"})`}`,
-    `  runtime health ${health.state || "unknown"}${health.reason ? ` (${health.reason} at ${health.detectedAt || "?"})` : ""}`,
+    `  runtime health ${health.state || "unknown"}${health.lastFailureAt ? ` · last failure at ${health.lastFailureAt} (${health.reason || "?"})` : ""}${health.recoveredAt ? `, recovered at ${health.recoveredAt}` : ""}`,
     `  auth-failed turns in last 24h: ${payload.recentFailures || 0}${payload.failedThreads?.length ? ` · threads ${payload.failedThreads.join(", ")}` : ""}`,
   ];
   if (payload.alertedAt) lines.push(`  owner alerted at ${payload.alertedAt}`);
