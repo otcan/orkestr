@@ -37,5 +37,6 @@ export async function leaveRawTerminalForExecutorSwitch(thread, env = process.en
   const sleep = sleepThread || (await import("./runtime-leases.js")).sleepThread;
   await sleep(thread.id, { reason: "executor_switch_leave_terminal", kill: true }, env).catch(() => null);
   const current = await getThread(thread.id, env) || thread;
-  return updateThread(current.id, rawTerminalExitPatch(current), env);
+  // Build the patch from the latest record under the store lock.
+  return updateThread(current.id, (latest) => rawTerminalExitPatch(latest), env);
 }

@@ -7,7 +7,8 @@ import { activeCodexRuntimeAuthInvalid, markCodexAuthHealthRepaired, readCodexAu
 import { redactCodexSecrets } from "./codex-auth-failure.js";
 import { claimCodexAuthProbe, codexHomeForThread } from "./codex-auth-probe.js";
 import { clean, nowIso } from "./codex-app-server-common.js";
-import { getThread, getThreadMessage, listThreads, updateThread, updateThreadMessage } from "./threads.js";
+import { getThread, getThreadMessage, listThreads, updateThreadMessage } from "./threads.js";
+import { updateThreadRuntime } from "./runtime-record-update.js";
 
 export const failedAuthState = "failed_auth";
 export const failedAuthDeliveryState = "awaiting_codex_auth";
@@ -49,16 +50,15 @@ export async function activeCodexAuthFaultForThread(thread = {}, env = process.e
 
 async function releaseFailedAuthThread(thread, env, resolution = "repaired") {
   const releasedAt = nowIso();
-  const updated = await updateThread(thread.id, {
+  const updated = await updateThreadRuntime(thread.id, (latest, latestRuntime) => ({
     state: "ready",
     lastError: null,
     runtime: {
-      ...(thread.runtime || {}),
       state: "ready",
-      authFailure: { ...(thread.runtime?.authFailure || {}), state: resolution, repairedAt: releasedAt, probeMessageId: null },
+      authFailure: { ...(latestRuntime.authFailure || {}), state: resolution, repairedAt: releasedAt, probeMessageId: null },
       updatedAt: releasedAt,
     },
-  }, env).catch(() => thread);
+  }), env).catch(() => thread);
   await appendEvent({
     type: "codex_auth_failed_thread_released",
     threadId: thread.id,
@@ -80,21 +80,20 @@ export async function holdInputWhileCodexAuthFailed(thread = {}, message = {}, e
   if (probe) {
     // Let exactly this input through as the auth probe; the thread stays parked
     // until the probe turn succeeds (see resolveCodexAuthAfterSuccessfulTurn).
-    const probed = await updateThread(thread.id, {
+    const probed = await updateThreadRuntime(thread.id, (latest, latestRuntime) => ({
       runtime: {
-        ...(thread.runtime || {}),
-        authFailure: { ...(thread.runtime?.authFailure || {}), state: "broken", lastProbeAt: probe.probeAt, probeMessageId: message.id },
+        authFailure: { ...(latestRuntime.authFailure || {}), state: "broken", lastProbeAt: probe.probeAt, probeMessageId: message.id },
         updatedAt: nowIso(),
       },
-    }, env).catch(() => thread) || thread;
+    }), env).catch(() => thread) || thread;
     return { held: false, thread: probed, probe: true };
   }
   const busy = ["working", "awaiting_approval"].includes(clean(thread.runtime?.state || thread.state));
   if (!busy && (clean(thread.state) !== failedAuthState || clean(thread.runtime?.state) !== failedAuthState)) {
     // Enqueueing new input may have moved the visible state; keep it parked.
-    thread = await updateThread(thread.id, {
+    thread = await updateThreadRuntime(thread.id, {
       state: failedAuthState,
-      runtime: { ...(thread.runtime || {}), state: failedAuthState, updatedAt: nowIso() },
+      runtime: { state: failedAuthState, updatedAt: nowIso() },
     }, env).catch(() => thread) || thread;
   }
   let held = message;
@@ -153,10 +152,9 @@ export async function reconcileRejectedAuthProbeAfterDelivery(threadId, messageI
   const authFailure = thread.runtime?.authFailure || {};
   const parked = clean(thread.state) === failedAuthState && clean(authFailure.state) === "broken" && clean(authFailure.turnId) === failedTurnId;
   if (!parked) {
-    await updateThread(threadId, {
+    await updateThreadRuntime(threadId, {
       state: failedAuthState,
       runtime: {
-        ...(thread.runtime || {}),
         state: failedAuthState,
         activeTurnId: null,
         authFailure: { ...authFailure, state: "broken", turnId: failedTurnId, detectedAt: nowIso(), probeMessageId: null },

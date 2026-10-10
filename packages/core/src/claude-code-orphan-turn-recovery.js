@@ -10,7 +10,6 @@ import {
   findThreadMessage,
   getThread,
   listThreads,
-  updateThread,
   updateThreadMessage,
 } from "./threads.js";
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
@@ -19,6 +18,7 @@ import { hasActiveClaudeCodeSupervisor } from "./runtime-claude-code-adapter.js"
 import { settleOrphanedClaudeCodeTurnInputs } from "./claude-code-interrupt-resume.js";
 import { reattachDetachedClaudeCodeTurn } from "./claude-code-turn-reattach.js";
 import { cleanupDetachedClaudeCodeTurns } from "./claude-code-turn-finalize.js";
+import { updateThreadRuntime } from "./runtime-record-update.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -88,17 +88,16 @@ export async function recoverOrphanedClaudeCodeTurn(threadOrId, env = process.en
       observedVia: "claude_code_orphan_turn_recovery",
       error: null,
     }, env).catch(() => []);
-    const updated = await updateThread(thread.id, {
+    const updated = await updateThreadRuntime(thread.id, (latest, runtime) => clean(runtime.activeTurnId) !== activeTurnId ? null : ({
       state: "ready",
       runtime: {
-        ...(thread.runtime || {}),
         state: "ready",
         activeTurnId: null,
         lastTurnId: activeTurnId,
         lastTurnStatus: "completed",
         lastTurnError: null,
       },
-    }, env);
+    }), env);
     await appendTurnLifecycleEvent("completed", {
       threadId: thread.id, runtimeKind: "claude-code", turnId: activeTurnId, state: "completed", source: "claude_code_orphan_recovery",
     }, env).catch(() => {});
@@ -117,18 +116,17 @@ export async function recoverOrphanedClaudeCodeTurn(threadOrId, env = process.en
     deliveryState: "failed",
     error: "claude_code_turn_interrupted",
   }, env).catch(() => []);
-  const updated = await updateThread(thread.id, {
+  const updated = await updateThreadRuntime(thread.id, (latest, runtime) => clean(runtime.activeTurnId) !== activeTurnId ? null : ({
     state: "failed",
     lastError: "claude_code_turn_interrupted",
     runtime: {
-      ...(thread.runtime || {}),
       state: "failed",
       activeTurnId: null,
       lastTurnId: activeTurnId,
       lastTurnStatus: "failed",
       lastTurnError: "claude_code_turn_interrupted",
     },
-  }, env);
+  }), env);
   await appendTurnLifecycleEvent("failed", {
     threadId: thread.id, runtimeKind: "claude-code", turnId: activeTurnId, state: "failed", source: "claude_code_orphan_recovery", error: "claude_code_turn_interrupted",
   }, env).catch(() => {});

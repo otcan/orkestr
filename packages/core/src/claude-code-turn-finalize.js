@@ -17,6 +17,7 @@ import { claudeCodeTelemetryPatch } from "./claude-code-telemetry.js";
 import { persistInterruptedClaudeCodeSession, settleClaudeCodeCoalescedInputs } from "./claude-code-interrupt-resume.js";
 import { scheduleClaudeCodeDelivery } from "./claude-code-active-turns.js";
 import { listDetachedTurnRecords, archiveDetachedTurn } from "./claude-code-detached-turn.js";
+import { runtimeTurnGeneration, updateThreadRuntime } from "./runtime-record-update.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -47,10 +48,12 @@ export async function cleanupDetachedClaudeCodeTurns(threadId, env = process.env
   }
 }
 
-export async function finalizeClaudeCodeTurnResult({ thread, message, coalesced = [], attemptId, profile, result, env = process.env }) {
+// `turnGeneration` defaults to the generation of the snapshot taken when the
+// turn started; a newer turn that began since then is never overwritten.
+export async function finalizeClaudeCodeTurnResult({ thread, message, coalesced = [], attemptId, profile, result, turnGeneration = runtimeTurnGeneration(thread), env = process.env }) {
   if (result.interrupted) {
     await persistInterruptedClaudeCodeSession(thread, result.sessionId, env);
-    const updated = await completeInterruptedClaudeCodeTurn(thread, message, attemptId, env);
+    const updated = await completeInterruptedClaudeCodeTurn(thread, message, attemptId, env, { turnGeneration });
     await settleClaudeCodeCoalescedInputs(thread, message, coalesced, "interrupted", attemptId, env);
     await cleanupDetachedClaudeCodeTurns(thread.id, env);
     scheduleClaudeCodeDelivery(thread.id, env, 0);
@@ -78,11 +81,10 @@ export async function finalizeClaudeCodeTurnResult({ thread, message, coalesced 
     error: null,
   }, env);
   await settleClaudeCodeCoalescedInputs(thread, message, coalesced, "completed", attemptId, env);
-  const updated = await updateThread(thread.id, {
+  const updated = await updateThreadRuntime(thread.id, {
     state: "ready",
     ...claudeCodeTelemetryPatch(result.telemetry),
     runtime: {
-      ...(thread.runtime || {}),
       runtimeKind: "claude-code",
       state: "ready",
       activeTurnId: null,
@@ -90,7 +92,7 @@ export async function finalizeClaudeCodeTurnResult({ thread, message, coalesced 
       lastTurnStatus: "completed",
       lastTurnError: null,
     },
-  }, env);
+  }, env, { turnGeneration });
   await appendTurnLifecycleEvent("completed", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "completed", source: "claude-code" }, env).catch(() => {});
   await appendEvent({ type: "claude_code_turn_completed", threadId: thread.id, profileId: profile?.id, turnId: attemptId }, env);
   await cleanupDetachedClaudeCodeTurns(thread.id, env);
@@ -99,20 +101,20 @@ export async function finalizeClaudeCodeTurnResult({ thread, message, coalesced 
 }
 
 // Persists a failed turn and returns the public error the caller should throw.
-export async function finalizeClaudeCodeTurnFailure({ thread, message, coalesced = [], attemptId, profile, error, workspace = null, env = process.env }) {
+export async function finalizeClaudeCodeTurnFailure({ thread, message, coalesced = [], attemptId, profile, error, workspace = null, turnGeneration = runtimeTurnGeneration(thread), env = process.env }) {
   const failureCode = publicClaudeCodeFailure(error);
   const failureTelemetry = error?.telemetry || null;
   await updateThreadMessage(thread.id, message.id, { state: "failed", deliveryState: "failed", error: failureCode }, env).catch(() => {});
   await settleClaudeCodeCoalescedInputs(thread, message, coalesced, "failed", attemptId, env, failureCode);
-  const updated = await updateThread(thread.id, {
+  const updated = await updateThreadRuntime(thread.id, {
     state: "failed",
     lastError: failureCode,
     ...(failureTelemetry?.model ? { claudeModelResolved: failureTelemetry.model } : {}),
     ...(failureTelemetry?.tokenUsage ? { claudeTokenUsage: failureTelemetry.tokenUsage } : {}),
     ...(failureTelemetry?.rateLimits ? { claudeRateLimits: failureTelemetry.rateLimits, claudeRateLimitsObservedAt: nowIso() } : {}),
     ...(failureTelemetry?.contextWindow ? { claudeContextWindow: failureTelemetry.contextWindow } : {}),
-    runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "failed", activeTurnId: null, lastTurnId: attemptId, lastTurnStatus: "failed", lastTurnError: failureCode, lastTurnTermination: claudeCodeTerminationReason(error) || null },
-  }, env).catch(() => thread);
+    runtime: { runtimeKind: "claude-code", state: "failed", activeTurnId: null, lastTurnId: attemptId, lastTurnStatus: "failed", lastTurnError: failureCode, lastTurnTermination: claudeCodeTerminationReason(error) || null },
+  }, env, { turnGeneration }).catch(() => thread);
   if (profile?.id && failureCode === "claude_code_rate_limited") {
     await updateLlmAccountProfileState(thread.ownerUserId, profile.id, "rate_limited", { failureCode, credentialRevision: profile.credentialRevision || 0 }, env).catch(() => {});
   } else if (profile?.id && failureCode === "claude_code_auth_required") {

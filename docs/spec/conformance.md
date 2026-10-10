@@ -138,24 +138,21 @@ inline fakes in `test/codex-app-server.test.js` and
 
 ## Known gaps
 
-These were found while writing the harnesses. None are fixed here.
+These were found while writing the harnesses. Fixed items are marked.
 
 1. **Codex: no transient vs permanent error class.** Non-auth turn failures
    persist only raw error text (`thread.state = "failed"`,
    `runtime.lastTurnError`). Only auth failures are classified
    (`failed_auth` + `runtime.authFailure`). A retry policy cannot tell a 429 or
    stream disconnect from a malformed request.
-2. **Codex: stale runtime snapshot written after `turn/start`.**
-   `sendCodexAppServerInput` writes `runtime: { ...thread.runtime, activeTurnId,
-   state: "working" }` from the snapshot it read before `turn/start`. Lifecycle
-   notifications that land after the short drain window but before that write
-   are overwritten: with fake provider latency of ~30ms
-   (`FAKE_CODEX_STEP_MS=30`) a failed auth turn left `thread.state =
-   "failed_auth"` but `runtime.state = "working"` with the old `activeTurnId`,
-   and an approval request flipped from `awaiting_approval` back to `working`.
-   The adapter has stale-active-turn cleanup on the next delivery, and the harness settles on
-   turn lifecycle events, so the checks pass. The persisted state is still wrong
-   in the meantime.
+2. **Codex: stale runtime snapshot written after `turn/start`.** Fixed.
+   Runtime writers now merge only the fields they own onto the latest record
+   under the thread store lock (`updateThreadRuntime` in
+   `packages/core/src/runtime-record-update.js`). Codex notifications for one
+   thread are handled in arrival order, and `runtime.turnGeneration` stops a
+   writer for an older turn from overwriting a newer one. Regression tests:
+   `test/codex-app-server-start-write-race.test.js` and
+   `test/runtime-write-ordering.test.js` (`FAKE_CODEX_STEP_MS=30`).
 3. **Claude Code: no tool-permission hook.** Claude Code runs its own tool loop
    under a fixed permission mode/MCP policy. Orkestr cannot approve or deny
    individual calls, so `approval_required` actions cannot be enforced for this
