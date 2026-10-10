@@ -527,16 +527,16 @@ export class CodexAppServerClient {
     if (message.method === "item/tool/requestUserInput") {
       recordCodexUserInputRequest({ path: "native", outcome: "pending" });
     }
-    await updateThread(thread.id, {
+    await updateThread(thread.id, (current) => ({
       state: "awaiting_approval",
       runtime: {
-        ...(thread.runtime || {}),
+        ...(current.runtime || {}),
         runtimeKind: "codex-app-server",
         state: "awaiting_approval",
         pendingRequest: request,
         codexStatus: { type: "active", activeFlags: ["waitingOnApproval"] },
       },
-    }, this.env).catch(() => {});
+    }), this.env).catch(() => {});
     await appendTurnLifecycleEvent("awaiting_approval", {
       threadId: thread.id,
       runtimeKind: "codex-app-server",
@@ -734,16 +734,16 @@ export class CodexAppServerClient {
             }, this.env).catch(() => {});
             return;
           }
-          await updateThread(thread.id, {
-            state: "working",
-            ...(thread.threadKind === "task-agent" ? { agentTaskStatus: "working" } : {}),
-            runtime: {
-              ...(thread.runtime || {}),
-              runtimeKind: "codex-app-server",
-              activeTurnId: turnId,
+          // Notifications are handled concurrently: merge under the store lock
+          // and never regress a turn that is already awaiting approval or done.
+          await updateThread(thread.id, (current) => {
+            const runtime = current.runtime || {};
+            if ([runtime.lastTurnId, runtime.pendingRequest?.turnId].map(clean).includes(turnId)) return null;
+            return {
               state: "working",
-              updatedAt: nowIso(),
-            },
+              ...(current.threadKind === "task-agent" ? { agentTaskStatus: "working" } : {}),
+              runtime: { ...runtime, runtimeKind: "codex-app-server", activeTurnId: turnId, state: "working", updatedAt: nowIso() },
+            };
           }, this.env).catch(() => {});
           const parent = this.turnParent(threadId, turnId);
           if (mailboxTurnRestricted(parent)) {

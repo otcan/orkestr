@@ -471,7 +471,9 @@ function unsetThreadPath(record, dottedPath) {
   delete cursor[parts[parts.length - 1]];
 }
 
-async function updateThreadLocked(threadId, patch = {}, env = process.env, options = {}) {
+// `patch` may be a function of the current record, evaluated under the store
+// lock, so callers can merge onto fresh state (return null to skip the write).
+async function updateThreadLocked(threadId, patchOrFn = {}, env = process.env, options = {}) {
   const id = normalizeThreadId(threadId);
   const threads = await listThreads(env);
   const expectedRevision = threadRecordSnapshotRevision(threads);
@@ -479,6 +481,11 @@ async function updateThreadLocked(threadId, patch = {}, env = process.env, optio
   let changed = false;
   const next = threads.map((thread) => {
     if (thread.id !== id && thread.name !== id && thread.bindingName !== id) return thread;
+    const patch = typeof patchOrFn === "function" ? patchOrFn(thread) : patchOrFn;
+    if (!patch) {
+      updated = thread;
+      return thread;
+    }
     assertPublicRefInvariant(thread.publicRef, Object.prototype.hasOwnProperty.call(patch, "publicRef") ? patch.publicRef : thread.publicRef, "thread");
     if (thread.publicRefAssignedAt && Object.prototype.hasOwnProperty.call(patch, "publicRefAssignedAt") && patch.publicRefAssignedAt !== thread.publicRefAssignedAt) {
       throw Object.assign(new Error("thread_public_ref_metadata_immutable"), { statusCode: 400 });
