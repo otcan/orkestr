@@ -170,6 +170,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
     parentMessage: freshMessage,
     attemptId,
     onPersisted: () => scheduleClaudeCodeDelivery(thread.id, env, 0),
+    onProgress: typeof options.onProgress === "function" ? options.onProgress : null,
   }, env);
   await progress.start();
   const workspace = createClaudeCodeWorkspaceTracker();

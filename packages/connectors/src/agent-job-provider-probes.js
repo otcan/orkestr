@@ -8,6 +8,7 @@ import { setAgentJobProviderProbe } from "../../core/src/agent-job-providers.js"
 import { claudeCodeStatusAuthenticated } from "../../core/src/claude-code-auth-status.js";
 import { claudeCodeCommand } from "../../core/src/claude-code-client.js";
 import { agentJobExecutorFor } from "../../core/src/agent-job-adapters.js";
+import "../../core/src/agent-job-claude-code.js";
 import { codexAppServerStatus } from "../../core/src/codex-app-server-client.js";
 import { codexLoginStatus } from "./codex.js";
 
@@ -35,7 +36,13 @@ async function codexStatus(env) {
 async function claudeHostStatus(env) {
   try {
     const { stdout = "" } = await execFileAsync(claudeCodeCommand(env), ["auth", "status", "--json"], {
-      env: { PATH: env.PATH || process.env.PATH || "", HOME: env.HOME || os.homedir(), DISABLE_AUTOUPDATER: "1" },
+      // The same login the Claude Code job executor uses (agent-job-claude-code.js).
+      env: {
+        PATH: env.PATH || process.env.PATH || "",
+        HOME: env.HOME || os.homedir(),
+        ...(env.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR } : {}),
+        DISABLE_AUTOUPDATER: "1",
+      },
       timeout: 5_000,
       maxBuffer: 256 * 1024,
     });

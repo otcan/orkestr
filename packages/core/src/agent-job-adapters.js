@@ -7,9 +7,9 @@
 //   runner passes back every completed step, so a new attempt continues after
 //   the last checkpointed step.
 // * toolLoop "native": `run(ctx, input)` runs one whole turn and returns
-//   { output }. Codex and Claude Code go through the existing executor
-//   registry; their own tools are not visible to the runner (see the gaps in
-//   docs/spec/agent-job-runner.md).
+//   { output } (or { park | expired | cancelled }); the runner drives it in
+//   agent-job-native-attempt.js. Adapters with permissionHook "pre_call"
+//   (Claude Code) ask ctx.authorizeTool before every provider tool call.
 import { agentJobTestProvidersAllowed } from "./agent-job-spec.js";
 import { getExecutorAdapter, loadOverlayExecutorAdapters } from "./executors.js";
 
@@ -107,20 +107,57 @@ export const simulatedJobAdapter = Object.freeze({
   },
 });
 
-// ---- codex / claude-code: one native turn through the executor registry ----
+// ---- codex / claude-code: native turns ----
+//
+// `claude-code` has a built-in job-attempt adapter (agent-job-claude-code.js,
+// registered on import by the runner and the provider probes). `codex` still
+// goes through the executor registry, where the built-in executor is a
+// placeholder. Executors registered by an overlay under the provider ids are
+// used for both and keep precedence.
 
 const executorIdsByProvider = Object.freeze({ codex: ["codex"], "claude-code": ["claude-code", "claude"] });
 
-// The executor that can really run a job attempt for `provider`, or null.
-// getExecutorAdapter() falls back to the no-op executor and the built-in
-// `codex` executor is a placeholder; neither counts.
-export async function agentJobExecutorFor(provider, env = process.env) {
+// A real executor registered in the executor registry (overlay) for
+// `provider`, or null. getExecutorAdapter() falls back to the no-op executor
+// and the built-in `codex` executor is a placeholder; neither counts.
+export async function overlayAgentJobExecutorFor(provider, env = process.env) {
   await loadOverlayExecutorAdapters(env);
   for (const id of executorIdsByProvider[provider] || []) {
     const executor = getExecutorAdapter(id);
     if (executor && executor.id === id && !executor.placeholder) return executor;
   }
   return null;
+}
+
+// The executor that can really run a job attempt for `provider`, or null: an
+// overlay executor, else a registered job-attempt adapter that declares
+// `jobExecutor` and is enabled.
+export async function agentJobExecutorFor(provider, env = process.env) {
+  const overlay = await overlayAgentJobExecutorFor(provider, env);
+  if (overlay) return overlay;
+  const adapter = adapters.get(String(provider || "")) || null;
+  if (adapter?.jobExecutor && !adapter.testOnly && adapter.enabled?.(env) !== false) return adapter;
+  return null;
+}
+
+// One turn through an executor-registry executor (no thread record).
+export async function runExecutorTurn(executor, ctx, input) {
+  const text = [
+    input.prompt,
+    input.resumeSummary ? `\n\nResume context:\n${input.resumeSummary}` : "",
+    Object.keys(input.inputs || {}).length ? `\n\nInputs:\n${JSON.stringify(input.inputs, null, 2)}` : "",
+    // e.g. the triggering WhatsApp message and its quoted/reply context.
+    input.triggerEvent ? `\n\nTrigger event:\n${JSON.stringify(input.triggerEvent, null, 2)}` : "",
+  ].join("");
+  const thread = { id: `agent-job-${ctx.runId}`, name: `agent job ${ctx.job}`, executor: { id: executor.id, model: input.model || undefined } };
+  const message = { id: `${ctx.runId}-a${ctx.attempt}`, role: "user", source: "agent-job", text, state: "running" };
+  try {
+    const result = await executor.run({ thread, threadId: thread.id, message, execution: { id: message.id }, env: ctx.env });
+    return { output: result?.output ?? result?.text ?? result ?? null };
+  } catch (error) {
+    const classified = classifyAdapterError(error);
+    throw Object.assign(new Error(classified.message), classified);
+  }
 }
 
 function nativeExecutorAdapter(id) {
@@ -141,28 +178,12 @@ function nativeExecutorAdapter(id) {
       return executor ? { ok: true } : { ok: false, reason: "job_executor_unavailable" };
     },
     async run(ctx, input) {
-      const executor = await agentJobExecutorFor(id, ctx.env);
+      const executor = await overlayAgentJobExecutorFor(id, ctx.env);
       if (!executor) throw providerError("job_executor_unavailable", { retryable: false });
-      const text = [
-        input.prompt,
-        input.resumeSummary ? `\n\nResume context:\n${input.resumeSummary}` : "",
-        Object.keys(input.inputs || {}).length ? `\n\nInputs:\n${JSON.stringify(input.inputs, null, 2)}` : "",
-        // e.g. the triggering WhatsApp message and its quoted/reply context.
-        input.triggerEvent ? `\n\nTrigger event:\n${JSON.stringify(input.triggerEvent, null, 2)}` : "",
-      ].join("");
-      const thread = { id: `agent-job-${ctx.runId}`, name: `agent job ${ctx.job}`, executor: { id: executor.id, model: input.model || undefined } };
-      const message = { id: `${ctx.runId}-a${ctx.attempt}`, role: "user", source: "agent-job", text, state: "running" };
-      try {
-        const result = await executor.run({ thread, threadId: thread.id, message, execution: { id: message.id }, env: ctx.env });
-        return { output: result?.output ?? result?.text ?? result ?? null };
-      } catch (error) {
-        const classified = classifyAdapterError(error);
-        throw Object.assign(new Error(classified.message), classified);
-      }
+      return runExecutorTurn(executor, ctx, input);
     },
   });
 }
 
 registerAgentJobAdapter(simulatedJobAdapter);
 registerAgentJobAdapter(nativeExecutorAdapter("codex"));
-registerAgentJobAdapter(nativeExecutorAdapter("claude-code"));

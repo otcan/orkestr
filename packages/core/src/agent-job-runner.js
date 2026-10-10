@@ -31,6 +31,8 @@ import {
   updateAttemptSync,
   updateRunSync,
 } from "./agent-job-store.js";
+import { runNativeAttempt } from "./agent-job-native-attempt.js";
+import "./agent-job-claude-code.js";
 import "./agent-job-tools.js";
 
 const defaultHolder = processHolderId();
@@ -120,10 +122,7 @@ async function runAttempt(rc, adapter, providerRef) {
   const ctx = { runId: rc.run.id, job: rc.run.job, attempt: rc.attempt, provider: providerRef.provider, env: rc.env };
   const deadline = nowMs() + rc.spec.runtime.timeoutMs;
   if (typeof adapter.run === "function" && adapter.capabilities?.toolLoop === "native") {
-    const effects = listEffectsSync(rc.db, rc.run.id).filter((effect) => effect.state === "committed");
-    if (effects.length) input.resumeSummary = effects.map((effect) => `${effect.tool}: ${effect.ref || "done"}`).join("\n");
-    const result = await withDeadline(adapter.run(ctx, input), deadline);
-    return { type: "final", output: result?.output ?? null };
+    return runNativeAttempt(rc, adapter, providerRef, input, deadline);
   }
   for (let steps = 0; steps < MAX_STEPS; steps += 1) {
     const run = getRunSync(rc.db, rc.run.id);

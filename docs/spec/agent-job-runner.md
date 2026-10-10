@@ -3,8 +3,9 @@
 Status: the runtime (store, recovery, ledger, approvals, triggers, CLI) is
 implemented and proven with the `simulated` **test fixture**. Real jobs must
 use a connected `codex` or `claude-code` provider (owner decision 2026-10-10,
-[agent-job.md §9](agent-job.md#9-owner-decisions-2026-10-10)); those run
-through the existing executor registry with the gaps listed below. Orkestr
+[agent-job.md §9](agent-job.md#9-owner-decisions-2026-10-10)). `claude-code`
+has a built-in job executor with a per-call permission hook; `codex` still
+needs an overlay executor (gaps below). Orkestr
 sends no usage telemetry or pings. Spec: [agent-job.md](agent-job.md).
 Guarantees: [runtime-guarantees.md](runtime-guarantees.md).
 
@@ -13,15 +14,16 @@ Guarantees: [runtime-guarantees.md](runtime-guarantees.md).
 | Provider | Connected when | Runnable when | Stock install |
 | --- | --- | --- | --- |
 | `codex` | `codex login status` reports logged in **and** `codex app-server --help` works (the same checks as `orkestr doctor`) | a non-placeholder executor with id `codex` is registered (`agentJobExecutorFor`) | connected possible, **not runnable**: the built-in `codex` executor is a placeholder |
-| `claude-code` | `claude auth status --json` reports logged in | an executor with id `claude-code` or `claude` is registered | connected possible, **not runnable**: there is no built-in Claude job executor |
+| `claude-code` | `claude auth status --json` reports logged in | the built-in Claude Code job executor (`agent-job-claude-code.js`) is registered and not switched off with `ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR=0`, or an overlay executor with id `claude-code` / `claude` is registered | **runnable** once logged in |
 | `openai-compatible` | no probe yet | no adapter yet | not runnable |
 | `simulated` | only under `node --test` | only under `node --test` | never selectable in user job specs |
 
-So on a stock install `orkestr init` writes a job when a login works (and
-warns that no job executor exists yet), while `orkestr run`, the trigger
-endpoint, schedules and WhatsApp triggers refuse and audit the refusal.
-Executors registered by an overlay (`ORKESTR_OVERLAY_DIR`) under those ids
-make the provider runnable today. `getExecutorAdapter()`'s fallback to the
+So on a stock install a logged-in Claude Code runs jobs; with only Codex
+logged in, `orkestr init` writes a job (and warns that no job executor exists
+yet), while `orkestr run`, the trigger endpoint, schedules and WhatsApp
+triggers refuse and audit the refusal. Executors registered by an overlay
+(`ORKESTR_OVERLAY_DIR`) under those ids make the provider runnable and take
+precedence over the built-in Claude Code executor. `getExecutorAdapter()`'s fallback to the
 no-op executor never counts as an executor. The runtime itself (store,
 recovery, ledger, approvals, triggers, audit) is fully exercised by the
 tests with the simulated fixture.
@@ -36,7 +38,10 @@ tests with the simulated fixture.
 | `agent-job-effects.js` | Authorizes every tool call (`agentJobToolDecision`), runs side effects through the ledger, reconciles after crashes and applies approval binding. |
 | `agent-job-ledger.js` | Effect rows (`intended` → `committed` \| `failed` \| `unknown`) and approvals. |
 | `agent-job-tools.js` | Tool registry (`effect`, `logicalKey`, `reconcile`, `perform`) and the offline tools: `demo.*`, `repo.*` (local git) and `github.*` (fake code host only, opt-in with `inputs.code_host: fake`). |
-| `agent-job-adapters.js` | Provider adapters: `codex` / `claude-code` (one native turn through `executors.js`, trigger event included in the prompt) and the `simulated` test fixture (scripted, Orkestr tool loop, transcript resume; resolvable only under `node --test`). |
+| `agent-job-adapters.js` | Adapter registry and the job-executor gate (`agentJobExecutorFor`), `codex` (one native turn through `executors.js`, trigger event included in the prompt) and the `simulated` test fixture (scripted, Orkestr tool loop, transcript resume; resolvable only under `node --test`). |
+| `agent-job-claude-code.js` | Claude Code job-attempt adapter, see [Claude Code jobs](#claude-code-jobs). |
+| `agent-job-native-attempt.js` | Runner side of native attempts: internal workspace, cancel/timeout/lease signal, progress into the run journal, session resume, per-call authorization (`authorizeNativeToolCall`). |
+| `agent-job-permission-broker.js`, `agent-job-claude-permission-hook.js` | Per-attempt Unix-socket permission broker and the Claude Code `PreToolUse` hook command that asks it (fails closed). |
 | `agent-job-providers.js` | Honest provider gate. A provider is *connected* when the user's login works and *runnable* when Orkestr also has a real job executor for it. Runs are admitted, and attempts started, only on runnable providers; every admission refusal is written to `trigger_audit`. Probes live in `packages/connectors/src/agent-job-provider-probes.js` (cached 60 s); with no probe a provider counts as not connected. |
 | `packages/connectors/src/whatsapp-job-triggers.js` | WhatsApp group-message triggers and `approve`/`deny` replies, called from the existing inbound router (`routeWhatsAppInbound`). |
 | `agent-job-audit.js` | Sealed audit record per terminal run and notification intents, written in the same transaction as the state change they announce. |
@@ -79,6 +84,45 @@ same effect state names.
 6. **Finish.** Output is checked against `output_schema` (type, required,
    properties, items, enum), the run becomes terminal and its audit record is
    sealed in the same transaction, together with the notification intents.
+
+## Claude Code jobs
+
+A `claude-code` attempt runs `claude -p --output-format stream-json` with the
+host Claude login (the one `claude auth status` reports), no thread record:
+
+* **Workspace.** The working directory is
+  `ORKESTR_HOME/agent-jobs/workspaces/<run-id>` (mode 0700), the same for
+  every attempt of the run. The child gets an allowlisted env (`PATH`, `HOME`,
+  locale, `TMPDIR`, TLS CA vars, `CLAUDE_CONFIG_DIR`), background tasks off,
+  no MCP servers (`--strict-mcp-config`) and no `ORKESTR_*` values besides the
+  broker address and token.
+* **Per-call permissions (G6).** `--settings` installs a `PreToolUse` hook for
+  every tool. The hook asks the attempt's broker, which applies the pinned
+  job policy: Claude tools are named `claude.<tool>` (`Bash` → `claude.bash`,
+  `Read` → `claude.read`), MCP tools `mcp.<server>.<tool>`, matched against
+  `permissions.tools` (default deny). `deny` and unlisted tools are blocked
+  and the model gets the reason. `approval_required` creates an approval bound
+  to `(tool, args)`, blocks the call, stops the process and parks the run;
+  after `approve` the next attempt resumes the session and the same call is
+  allowed once (G7), after `deny` it is blocked. A hook error, timeout or
+  missing broker blocks the call (exit 2). A `tool_result` for a call that
+  never passed the hook fails the attempt with
+  `claude_code_permission_hook_bypassed`.
+* **Progress.** Session start, assistant text, tool requests/results, tool
+  decisions and usage are written to the run journal (`session_started`,
+  `progress`, `tool_decision`, `usage` checkpoints; text redacted and capped).
+* **Cancel and timeout.** A cancel request, the attempt timeout or a lost
+  lease aborts the attempt; the process group gets SIGTERM, then SIGKILL.
+* **Resume.** The session id is checkpointed before any tool runs; the next
+  attempt (after an approval wait, a retry or a crash) runs `--resume` on it.
+* **Output.** With `output_schema` the final answer is parsed as JSON (bare or
+  in a fenced block), otherwise it is `{ text }`. Errors map to `provider`
+  (auth, CLI missing, rate limit, timeout; rate limit and timeout retry) or
+  `task`.
+
+Switch the executor off with `ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR=0`. Tests:
+`test/agent-job-claude-code.test.js` and the `claude-code-job` conformance
+suite, both against fake Claude CLIs that run the real hook.
 
 ## Approvals
 
@@ -187,21 +231,24 @@ test-only `simulated`).
 
 ## Gaps and follow-ups
 
-* **Native providers (most important).** `codex` and `claude-code` call the
-  executor registry (`getExecutorAdapter`). The built-in `codex` executor is
-  still a placeholder that fails with `codex_executor_not_configured` (a
-  non-retryable provider error, so fallback applies) and there is no
-  built-in `claude-code` executor, so on a stock install a connected
-  provider is admitted but its attempt fails until a job-attempt adapter for
-  the Codex app-server / Claude Code runtimes exists (one that does not need a
-  thread record). Overlay executors registered under those ids work today.
+* **Codex job executor (most important).** `codex` calls the executor
+  registry (`getExecutorAdapter`); the built-in `codex` executor is still a
+  placeholder, so Codex needs a job-attempt adapter for the app-server (one
+  that does not need a thread record, like the Claude Code one). Overlay
+  executors registered under that id work today.
+* **Claude Code executor follow-ups.** It uses the host Claude login, not the
+  Orkestr-managed Claude account profiles; a re-ask on invalid structured
+  output, secret injection (`ctx.resolveSecret`) and an OS sandbox for the
+  workspace (Bash can still reach the rest of the host when allowed) are not
+  implemented.
 * **WhatsApp triggers.** `fromMe` messages are ignored, so the owner cannot
   trigger a job from the account Orkestr itself sends with; sender LIDs must
   be listed as `…@lid` until the alias store is consulted; the broker
   forwarding path passes `quoted` only if the broker includes it.
-* **G6 for native tool loops.** Native adapters run their own tools; only
-  Orkestr tools pass `agentJobToolDecision`. The pre-call permission hook from
-  the adapter interface is not wired yet (`permissionHook: "sandbox_only"`).
+* **G6 for native tool loops.** Claude Code is gated per call
+  (`permissionHook: "pre_call"`). Overlay executors and `codex` run their own
+  tools; only Orkestr tools pass `agentJobToolDecision` there
+  (`permissionHook: "sandbox_only"`).
 * **Notification delivery.** Notifications are enqueued once in the connector
   outbox (`connector: agent_job`, payload with channel and target) by the
   relay. A dispatcher that delivers them over thread/WhatsApp/email/webhook

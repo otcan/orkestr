@@ -4,7 +4,12 @@
 //   [scenario:progress]        assistant text + tool_use event before the result
 //   [scenario:slow]            sleeps until the adapter interrupts the process
 //   [scenario:fault:<class>]   auth / transient / permanent failure shapes
+//   [scenario:tool]            one Bash tool_use; PreToolUse hooks from
+//                              --settings decide it like the real CLI (exit 2
+//                              or permissionDecision "deny" blocks); a call
+//                              that runs is appended to FAKE_CLAUDE_TOOLS
 // Every turn invocation is appended to FAKE_CLAUDE_CALLS.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 
 const args = process.argv.slice(2);
@@ -47,6 +52,20 @@ process.stdin.on("end", () => {
     write({ type: "result", session_id: session, model: "claude-fixture", result: `Reply: ${prompt.trim()}`, is_error: false, usage: { input_tokens: 10, output_tokens: 5 } });
   };
   if (scenario === "slow") return void setTimeout(finish, 30_000);
+  if (scenario === "tool") {
+    const input = { command: "echo conformance" };
+    write({ type: "assistant", session_id: session, message: { content: [{ type: "tool_use", id: "toolu_conformance", name: "Bash", input }] } });
+    const settings = args.includes("--settings") ? JSON.parse(args[args.indexOf("--settings") + 1]) : {};
+    let allowed = true;
+    for (const hook of (settings.hooks?.PreToolUse || []).flatMap((entry) => entry.hooks || [])) {
+      const run = spawnSync("/bin/sh", ["-c", hook.command], { input: JSON.stringify({ session_id: session, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: input, tool_use_id: "toolu_conformance" }), encoding: "utf8" });
+      let denied = run.status === 2;
+      try { denied ||= run.status === 0 && JSON.parse(run.stdout || "{}").hookSpecificOutput?.permissionDecision === "deny"; } catch {}
+      if (denied) allowed = false;
+    }
+    if (allowed && process.env.FAKE_CLAUDE_TOOLS) fs.appendFileSync(process.env.FAKE_CLAUDE_TOOLS, `${JSON.stringify(input)}\n`);
+    write({ type: "user", session_id: session, message: { content: [{ type: "tool_result", tool_use_id: "toolu_conformance", is_error: !allowed, content: allowed ? "conformance" : "blocked" }] } });
+  }
   if (scenario === "progress") {
     write({ type: "assistant", session_id: session, message: { content: [
       { type: "text", text: "Inspecting the workspace before answering." },
