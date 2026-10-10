@@ -2126,6 +2126,8 @@ function isAllowedBeforePairing(request) {
   if (method === "POST" && /^\/api\/mobile\/pairing\/[^/]+\/complete$/.test(url)) return true;
   if (method === "POST" && url === "/api/mobile/session/refresh") return true;
   if (method === "POST" && /^\/api\/connectors\/twilio\/voice\/[^/]+\/(?:incoming|gather)$/.test(url)) return true;
+  // Signed Agent Job webhooks authenticate by HMAC in agent-job-hooks-http.js.
+  if (method === "POST" && /^\/api\/jobs\/[a-z0-9-]{1,63}\/hooks\/[a-z0-9-]{1,63}$/.test(url)) return true;
   // The repair page and action stay reachable from the pairing-required email
   // link; the controller requires an administrator session or a signed
   // one-time repair intent before any runtime or mail side effect (ORK-513).

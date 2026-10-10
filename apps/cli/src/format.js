@@ -55,7 +55,7 @@ export function formatTimerTable(timers = []) {
   if (!timers.length) return "No Orkestr timers found.";
   const rows = timers.map((timer) => ({
     label: String(timer.label || timer.id || "timer"),
-    state: timer.enabled === false ? "disabled" : "enabled",
+    state: timer.readOnly ? "read-only" : timer.enabled === false ? "disabled" : "enabled",
     cadence: String(timer.cadence || "-"),
     next: compactTimestamp(timer.nextRunAt || ""),
     target: String(timer.target || timer.threadId || timer.agentId || "-"),

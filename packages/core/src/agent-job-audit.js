@@ -120,7 +120,11 @@ export function recordNotificationsSync(db, runId, spec, event, { eventId = even
   for (const rule of spec?.notifications || []) {
     if (!rule.on.includes(event) || !enabled.has(rule.channel)) continue;
     const key = notificationKey(runId, eventId, rule.channel, rule.target);
-    const payload = { runId, job: run.job, event, channel: rule.channel, target: rule.target, text: notificationText(run, event, detail) };
+    const payload = {
+      runId, job: run.job, event, channel: rule.channel, target: rule.target, text: notificationText(run, event, detail),
+      ...(detail.approvalId ? { approvalId: detail.approvalId, tool: detail.tool || null } : {}),
+      ...(run.reason && event === "failed" ? { reason: run.reason } : {}),
+    };
     const result = db.prepare(`insert or ignore into notifications (key, run_id, event, channel, target, payload_json, created_at)
       values (?, ?, ?, ?, ?, ?, ?)`).run(key, runId, eventId, rule.channel, rule.target, JSON.stringify(payload), nowIso());
     recorded += Number(result.changes);
