@@ -18,6 +18,7 @@
     "check": "find apps packages scripts examples -path '*/node_modules/*' -prune -o \\( -name '*.js' -o -name '*.mjs' \\) -print | while read -r file; do node --check \"$file\"; done && npm run build && npm run test:ci",
     "test": "node --import ./test/test-bootstrap.mjs --test",
     "test:ci": "node scripts/ci-test-runner.mjs",
+    "test:conformance": "ORKESTR_CONFORMANCE_REPORT=1 node --test --test-concurrency=1 'test/conformance/*.test.js'",
     "oss:boundary-check": "node scripts/oss-boundary-check.mjs",
     "security:dependencies": "node scripts/security/dependency-advisories.mjs",
     "security:lifecycle": "node scripts/security/dependency-lifecycle.mjs",
