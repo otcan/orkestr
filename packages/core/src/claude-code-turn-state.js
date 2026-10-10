@@ -1,11 +1,12 @@
-import { updateThread, updateThreadMessage } from "./threads.js";
+import { updateThreadMessage } from "./threads.js";
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
+import { updateThreadRuntime } from "./runtime-record-update.js";
 
 function nowIso() {
   return new Date().toISOString();
 }
 
-export async function completeInterruptedClaudeCodeTurn(thread, message, attemptId, env = process.env) {
+export async function completeInterruptedClaudeCodeTurn(thread, message, attemptId, env = process.env, guard = {}) {
   await updateThreadMessage(thread.id, message.id, {
     state: "completed",
     deliveryState: "delivered",
@@ -13,10 +14,10 @@ export async function completeInterruptedClaudeCodeTurn(thread, message, attempt
     observedVia: "claude_code_interrupted",
     error: null,
   }, env);
-  const updated = await updateThread(thread.id, {
+  const updated = await updateThreadRuntime(thread.id, {
     state: "ready",
-    runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "ready", activeTurnId: null, lastTurnId: attemptId, lastTurnStatus: "interrupted" },
-  }, env);
+    runtime: { runtimeKind: "claude-code", state: "ready", activeTurnId: null, lastTurnId: attemptId, lastTurnStatus: "interrupted" },
+  }, env, guard);
   await appendTurnLifecycleEvent("interrupted", {
     threadId: thread.id,
     runtimeKind: "claude-code",

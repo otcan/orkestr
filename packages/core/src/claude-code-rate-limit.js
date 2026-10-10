@@ -1,7 +1,8 @@
 import { claudeCodeLoginStatus } from "./claude-code-client.js";
 import { resolveLlmAccountProfile, updateLlmAccountProfileState } from "./llm-account-profiles.js";
 import { appendEvent } from "../../storage/src/store.js";
-import { updateThread, updateThreadMessage } from "./threads.js";
+import { updateThreadMessage } from "./threads.js";
+import { updateThreadRuntime } from "./runtime-record-update.js";
 
 const recoveryChecks = new Map();
 
@@ -116,20 +117,20 @@ export async function deferClaudeCodeRateLimitedInput(thread, message, error, sc
     deliveryNextAttemptAt: retryAt || null,
     error: null,
   }, env);
-  await updateThread(thread.id, {
+  await updateThreadRuntime(thread.id, {
     state: "failed",
     lastError: "claude_code_rate_limited",
-    runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "failed", activeTurnId: null },
+    runtime: { runtimeKind: "claude-code", state: "failed", activeTurnId: null },
   }, env).catch(() => {});
   if (retryAt) schedule?.(thread.id, env, Math.max(1_000, Date.parse(retryAt) - Date.now() + 1_000));
 }
 
 export async function recoverClaudeCodeThreadState(thread, profileState, env = process.env) {
   if (profileState !== "ready" || clean(thread.lastError) !== "claude_code_rate_limited") return { thread, recovered: false };
-  const updated = await updateThread(thread.id, {
+  const updated = await updateThreadRuntime(thread.id, {
     state: "ready",
     lastError: null,
-    runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "ready", activeTurnId: null },
+    runtime: { runtimeKind: "claude-code", state: "ready", activeTurnId: null },
   }, env).catch(() => thread);
   return { thread: updated, recovered: true };
 }

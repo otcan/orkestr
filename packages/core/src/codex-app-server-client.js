@@ -66,6 +66,8 @@ import {
   recordCodexRemoteCompactionRecovery,
 } from "./codex-remote-compaction-recovery.js";
 import { applyPendingExecutorSwitchAfterTurn } from "./executor-switch-hooks.js";
+import { createKeyedSerialQueue } from "./keyed-serial-queue.js";
+import { runtimeOf, runtimeTurnGeneration, updateThreadRuntime } from "./runtime-record-update.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -74,6 +76,11 @@ let messageHandler = null;
 function notifyMessageHandler({ thread, message }) {
   if (!messageHandler || !message) return;
   Promise.resolve(messageHandler({ thread, message })).catch(() => {});
+}
+
+function codexMessageThreadKey(message = {}) {
+  const params = message.params || {};
+  return clean(params.threadId || params.thread?.id || params.turn?.threadId);
 }
 
 function codexTurnConversationInterrupted(turn = {}) {
@@ -172,6 +179,10 @@ export class CodexAppServerClient {
     this.completedTurns = new Set();
     this.pendingRequests = new Map();
     this.pendingNotifications = new Set();
+    // Notifications and server requests for one Codex thread are handled
+    // strictly in arrival order; different threads stay concurrent.
+    this.threadQueue = createKeyedSerialQueue();
+    this.turnGenerations = new Map();
     this.started = false;
     this.startPromise = null;
     this.closed = false;
@@ -331,14 +342,14 @@ export class CodexAppServerClient {
       return;
     }
     if (message.method && Object.prototype.hasOwnProperty.call(message, "id")) {
-      void this.handleServerRequest(message);
+      this.trackNotification(message, () => this.handleServerRequest(message));
       return;
     }
     if (message.method) this.trackNotification(message);
   }
 
-  trackNotification(message) {
-    const pending = this.handleNotification(message).catch((error) => appendEvent({
+  trackNotification(message, handler = () => this.handleNotification(message)) {
+    const pending = this.threadQueue.run(codexMessageThreadKey(message), handler).catch((error) => appendEvent({
       type: "codex_app_server_notification_failed",
       method: message?.method || "",
       error: publicError(error),
@@ -382,6 +393,20 @@ export class CodexAppServerClient {
 
   turnParent(codexId, turnId) {
     return this.turnParents.get(this.turnParentKey(codexId, turnId)) || null;
+  }
+
+  // Remember the runtime turn generation under which a turn became active so
+  // its later completion can be fenced against a newer turn.
+  rememberTurnGeneration(codexId, turnId, thread) {
+    const key = this.turnParentKey(codexId, turnId);
+    if (!key || clean(runtimeOf(thread).activeTurnId) !== clean(turnId)) return;
+    this.turnGenerations.set(key, runtimeTurnGeneration(thread));
+    while (this.turnGenerations.size > 500) this.turnGenerations.delete(this.turnGenerations.keys().next().value);
+  }
+
+  turnGeneration(codexId, turnId) {
+    const value = this.turnGenerations.get(this.turnParentKey(codexId, turnId));
+    return Number.isSafeInteger(value) ? value : undefined;
   }
 
   async mailboxRestrictedTurnMessage(thread, codexId, turnId) {
@@ -527,16 +552,15 @@ export class CodexAppServerClient {
     if (message.method === "item/tool/requestUserInput") {
       recordCodexUserInputRequest({ path: "native", outcome: "pending" });
     }
-    await updateThread(thread.id, (current) => ({
+    await updateThreadRuntime(thread.id, {
       state: "awaiting_approval",
       runtime: {
-        ...(current.runtime || {}),
         runtimeKind: "codex-app-server",
         state: "awaiting_approval",
         pendingRequest: request,
         codexStatus: { type: "active", activeFlags: ["waitingOnApproval"] },
       },
-    }), this.env).catch(() => {});
+    }, this.env).catch(() => {});
     await appendTurnLifecycleEvent("awaiting_approval", {
       threadId: thread.id,
       runtimeKind: "codex-app-server",
@@ -604,22 +628,21 @@ export class CodexAppServerClient {
       if (!current) {
         const superseded = await threadForSupersededCodexGeneration(codexId, this.env);
         if (superseded) {
-          const runtime = superseded.runtime && typeof superseded.runtime === "object" ? superseded.runtime : {};
-          const diagnostics = runtime.codexGenerationDiagnostics && typeof runtime.codexGenerationDiagnostics === "object"
-            ? runtime.codexGenerationDiagnostics
-            : {};
-          const unmappedNotifications = Math.max(0, Number(diagnostics.unmappedNotifications || 0) || 0) + 1;
-          await updateThread(superseded.id, {
-            runtime: {
-              ...runtime,
-              codexGenerationDiagnostics: {
-                ...diagnostics,
-                unmappedNotifications,
-                lastUnmappedNotificationAt: new Date().toISOString(),
-                lastUnmappedNotificationGeneration: codexId,
-                lastUnmappedNotificationMethod: message.method,
+          await updateThreadRuntime(superseded.id, (latest, runtime) => {
+            const diagnostics = runtime.codexGenerationDiagnostics && typeof runtime.codexGenerationDiagnostics === "object"
+              ? runtime.codexGenerationDiagnostics
+              : {};
+            return {
+              runtime: {
+                codexGenerationDiagnostics: {
+                  ...diagnostics,
+                  unmappedNotifications: Math.max(0, Number(diagnostics.unmappedNotifications || 0) || 0) + 1,
+                  lastUnmappedNotificationAt: new Date().toISOString(),
+                  lastUnmappedNotificationGeneration: codexId,
+                  lastUnmappedNotificationMethod: message.method,
+                },
               },
-            },
+            };
           }, this.env).catch(() => {});
           await appendEvent({
             type: "codex_app_server_superseded_notification_rejected",
@@ -697,18 +720,17 @@ export class CodexAppServerClient {
       }
       const thread = await threadForCodexThreadId(codexId, this.env);
       if (thread && pendingRequest && rawStatusType === "active" && statusState !== "awaiting_approval") {
-        await updateThread(thread.id, {
+        await updateThreadRuntime(thread.id, (latest, runtime) => ({
           state: "awaiting_approval",
           runtime: {
-            ...(thread.runtime || {}),
             runtimeKind: "codex-app-server",
             state: "awaiting_approval",
-            activeTurnId: clean(pendingRequest.turnId || thread.runtime?.activeTurnId) || null,
+            activeTurnId: clean(pendingRequest.turnId || runtime.activeTurnId) || null,
             pendingRequest,
             codexStatus: approvalCodexStatus(params.status),
             updatedAt: nowIso(),
           },
-        }, this.env).catch(() => {});
+        }), this.env).catch(() => {});
       } else if (thread) {
         await markThreadFromCodexStatus(thread, params.status, this.env);
       }
@@ -734,17 +756,17 @@ export class CodexAppServerClient {
             }, this.env).catch(() => {});
             return;
           }
-          // Notifications are handled concurrently: merge under the store lock
-          // and never regress a turn that is already awaiting approval or done.
-          await updateThread(thread.id, (current) => {
-            const runtime = current.runtime || {};
+          // Merge under the store lock and never regress a turn that another
+          // writer already recorded as awaiting approval or done.
+          const started = await updateThreadRuntime(thread.id, (current, runtime) => {
             if ([runtime.lastTurnId, runtime.pendingRequest?.turnId].map(clean).includes(turnId)) return null;
             return {
               state: "working",
               ...(current.threadKind === "task-agent" ? { agentTaskStatus: "working" } : {}),
-              runtime: { ...runtime, runtimeKind: "codex-app-server", activeTurnId: turnId, state: "working", updatedAt: nowIso() },
+              runtime: { runtimeKind: "codex-app-server", activeTurnId: turnId, state: "working", updatedAt: nowIso() },
             };
-          }, this.env).catch(() => {});
+          }, this.env).catch(() => null);
+          this.rememberTurnGeneration(threadId, turnId, started);
           const parent = this.turnParent(threadId, turnId);
           if (mailboxTurnRestricted(parent)) {
             const { recordMailboxRouteWorkRuntime } = await import("./mailbox-routes.js");
@@ -825,11 +847,10 @@ export class CodexAppServerClient {
             const taskStatus = clean(thread.agentTaskStatus);
             if (taskStatus !== "cancelled") {
               const runtimeState = taskStatus === "failed" ? "failed" : "ready";
-              await updateThread(thread.id, {
+              await updateThreadRuntime(thread.id, (latest) => ({
                 state: runtimeState,
-                lastError: taskStatus === "failed" ? thread.lastError || errorText : null,
+                lastError: taskStatus === "failed" ? latest.lastError || errorText : null,
                 runtime: {
-                  ...(thread.runtime || {}),
                   runtimeKind: "codex-app-server",
                   activeTurnId: null,
                   lastTurnId: turnId || null,
@@ -841,7 +862,7 @@ export class CodexAppServerClient {
                   state: runtimeState,
                   updatedAt: nowIso(),
                 },
-              }, this.env).catch(() => {});
+              }), this.env, { turnGeneration: this.turnGeneration(threadId, turnId) }).catch(() => {});
             }
             await appendEvent({
               type: "task_agent_late_turn_completed_ignored",
@@ -861,11 +882,12 @@ export class CodexAppServerClient {
             await this.recoverCompletedTurnProjection(thread, threadId, turnId, turn).catch(() => null);
             thread = await threadForCodexThreadId(threadId, this.env) || thread;
           }
-          await updateThread(thread.id, {
+          // Fenced by turn generation: a completion for an older turn must not
+          // overwrite a newer turn that started meanwhile.
+          await updateThreadRuntime(thread.id, {
             state: status === "failed" ? failedState : "ready",
             lastError: status === "failed" ? errorText : null,
             runtime: {
-              ...(thread.runtime || {}),
               runtimeKind: "codex-app-server",
               activeTurnId: null,
               lastTurnId: turnId || null,
@@ -878,7 +900,7 @@ export class CodexAppServerClient {
               ...(authFailure ? { authFailure: authFailure.authFailure } : {}),
               updatedAt: nowIso(),
             },
-          }, this.env).catch(() => {});
+          }, this.env, { turnGeneration: this.turnGeneration(threadId, turnId) }).catch(() => {});
           if (authFailure) {
             await requeueFailedAuthProbeInput(thread, previousAuthFailure, turnId, this.env);
             await appendEvent({
@@ -1170,14 +1192,12 @@ export class CodexAppServerClient {
         error: publicError(error),
       }, this.env).catch(() => {}));
     }
-    const threadAfterProjection = await getThread(thread.id, this.env).catch(() => null) || thread;
-    await updateThread(thread.id, {
+    await updateThreadRuntime(thread.id, (latest, runtime) => ({
       state: "ready",
       lastError: null,
       ...(finalAnswer ? {
         runtime: {
-          ...(threadAfterProjection.runtime || {}),
-          runtimeKind: threadAfterProjection.runtime?.runtimeKind || "codex-app-server",
+          runtimeKind: runtime.runtimeKind || "codex-app-server",
           activeTurnId: null,
           lastTurnId: turnId || null,
           lastTurnStatus: "completed",
@@ -1188,7 +1208,7 @@ export class CodexAppServerClient {
           updatedAt: nowIso(),
         },
       } : {}),
-    }, this.env).catch(() => {});
+    }), this.env, { turnGeneration: this.turnGeneration(codexId, turnId) }).catch(() => {});
     return projectedMessage;
   }
 
@@ -1215,10 +1235,9 @@ export class CodexAppServerClient {
       this.respond(request.requestId, { decision });
     }
     this.pendingRequests.delete(String(request.requestId));
-    await updateThread(thread.id, {
+    await updateThreadRuntime(thread.id, {
       state: "working",
       runtime: {
-        ...(thread.runtime || {}),
         runtimeKind: "codex-app-server",
         pendingRequest: null,
         state: "working",

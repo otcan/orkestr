@@ -105,6 +105,7 @@ import { readCodexRolloutSessionMeta, validateCodexRolloutGeneration } from "./c
 import { replyDeliveryProjectionParent } from "./reply-delivery-intent.js";
 import { recordCodexPhantomQuestionSuppression, recordCodexUserInputRequest } from "./codex-input-observability.js";
 import { clearFailedAuthForOperatorWake } from "./codex-auth-failed-thread.js";
+import { updateThreadRuntime } from "./runtime-record-update.js";
 
 setConnectorOutboxJobAdapter(ensureConnectorOutboxJob);
 
@@ -1566,17 +1567,17 @@ export async function takeoverRawTerminalThread(threadId, options = {}, env = pr
   }
   const sessionName = rawTerminalSessionName(thread);
   const reason = String(options.reason || "raw_takeover").trim() || "raw_takeover";
-  const marked = await updateThread(thread.id, {
+  const marked = await updateThread(thread.id, (latest) => ({
     state: "waking",
-    ...rawTerminalModePatch(thread, {
+    ...rawTerminalModePatch(latest, {
       sessionName,
       runtime: {
-        ...(thread.runtime || {}),
+        ...(latest.runtime || {}),
         state: "waking",
         reason,
       },
     }),
-  }, env);
+  }), env);
   const result = await wakeThread(marked.id, { reason }, env);
   await appendEvent({
     type: "raw_terminal_takeover",
@@ -1699,10 +1700,10 @@ export async function resetThreadRuntime(threadId, options = {}, env = process.e
   if (threadUsesClaudeCode(thread)) {
     const interrupted = await interruptClaudeCodeThread(thread, env).catch(() => ({ interrupted: false }));
     await clearClaudeCodeSession(thread, env).catch(() => false);
-    const updated = await updateThread(thread.id, {
+    const updated = await updateThreadRuntime(thread.id, {
       state: "ready",
       lastError: null,
-      runtime: { ...(thread.runtime || {}), runtimeKind: "claude-code", state: "ready", activeTurnId: null, lastTurnStatus: "reset" },
+      runtime: { runtimeKind: "claude-code", state: "ready", activeTurnId: null, lastTurnStatus: "reset" },
     }, env);
     await appendEvent({
       type: "thread_runtime_reset",
@@ -1717,9 +1718,9 @@ export async function resetThreadRuntime(threadId, options = {}, env = process.e
   }
   if (threadUsesNativeCodexRuntime(thread, env)) {
     const interrupted = await interruptCodexRuntimeThread(thread, env).catch(() => ({ interrupted: false }));
-    const resumed = await resumeCodexRuntimeThread(thread, env).catch(async () => ({ thread: await updateThread(thread.id, {
+    const resumed = await resumeCodexRuntimeThread(thread, env).catch(async () => ({ thread: await updateThreadRuntime(thread.id, {
       state: "ready",
-      runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", state: "ready", activeTurnId: null, pendingRequest: null },
+      runtime: { runtimeKind: "codex-app-server", state: "ready", activeTurnId: null, pendingRequest: null },
     }, env), status: null }));
     await appendEvent({
       type: "thread_runtime_reset",
@@ -4260,11 +4261,10 @@ export function requestThreadWake(threadId, options = {}, env = process.env) {
       }
       const nativeCodexRuntime = current && threadUsesNativeCodexRuntime(current, wakeEnv);
       const claudeRuntime = current && threadUsesClaudeCode(current);
-      await updateThread(threadId, nativeCodexRuntime || claudeRuntime ? {
+      await updateThreadRuntime(threadId, nativeCodexRuntime || claudeRuntime ? {
         state: "failed",
         lastError: errorText,
         runtime: {
-          ...(current.runtime || {}),
           runtimeKind: claudeRuntime ? "claude-code" : "codex-app-server",
           state: "failed",
           lastError: errorText,
@@ -5100,9 +5100,8 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
       env,
     });
     if (!validation.accepted) {
-      await updateThread(currentThread.id, {
+      await updateThreadRuntime(currentThread.id, {
         runtime: {
-          ...(currentThread.runtime || {}),
           operatorRolloutValidation: {
             state: "rejected",
             reason: validation.reason,
@@ -5503,10 +5502,9 @@ export async function syncPaneProgressForActiveLeases(env = process.env) {
         previous.summary !== progress.summary ||
         previous.stateHint !== progress.stateHint;
       if (!changedProgress && Object.keys(codexPatch).length === 0) return false;
-      await updateThread(lease.threadId, {
+      await updateThreadRuntime(lease.threadId, {
         ...codexPatch,
         runtime: {
-          ...(thread.runtime || {}),
           ...activeLease,
           paneId,
           progress,

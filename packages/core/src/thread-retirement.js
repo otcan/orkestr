@@ -11,6 +11,7 @@ import {
   updateThread,
   updateThreadMessage,
 } from "./threads.js";
+import { updateThreadRuntime } from "./runtime-record-update.js";
 
 const clean = (value = "") => String(value || "").trim();
 const nowIso = () => new Date().toISOString();
@@ -237,7 +238,7 @@ export async function retireThread(threadId, options = {}, env = process.env) {
     cancelPendingThreadMessages(thread.id, env),
     disableThreadTimers(thread.id, env),
   ]);
-  const retired = await updateThread(thread.id, {
+  const retired = await updateThreadRuntime(thread.id, {
     lifecycleState: "retired",
     retired: true,
     state: "retired",
@@ -257,7 +258,6 @@ export async function retireThread(threadId, options = {}, env = process.env) {
     resourceGrants: [],
     binding: retiredBinding(thread.binding, timestamp),
     runtime: {
-      ...(thread.runtime || {}),
       state: "retired",
       activeTurnId: null,
       pendingRequest: null,
@@ -298,7 +298,7 @@ export async function restoreRetiredThread(threadId, options = {}, env = process
   if (clean(thread.state).toLowerCase() === "retiring") throw retirementError("thread_retirement_incomplete");
   if (!isThreadRetired(thread)) return { ok: true, thread, idempotent: true };
   const actorUserId = clean(options.actorUserId || "system");
-  const restored = await updateThread(thread.id, {
+  const restored = await updateThreadRuntime(thread.id, {
     lifecycleState: "active",
     retired: false,
     state: "sleeping",
@@ -310,7 +310,6 @@ export async function restoreRetiredThread(threadId, options = {}, env = process
     restoredBy: actorUserId,
     restoredByUserId: actorUserId,
     runtime: {
-      ...(thread.runtime || {}),
       state: "sleeping",
       activeTurnId: null,
       pendingRequest: null,
