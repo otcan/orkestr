@@ -4,7 +4,7 @@
 // that owns the Codex thread, so job turns never show up in the thread list,
 // are never projected into chat messages and are never mirrored to WhatsApp.
 // Job clients run in their own app-server process, separate from the one that
-// serves chat threads.
+// serves chat threads, even when chat threads use an external daemon.
 import os from "node:os";
 import { CodexAppServerClient } from "./codex-app-server-client.js";
 import { clean, clientKey } from "./codex-app-server-common.js";
@@ -50,7 +50,16 @@ export class CodexJobClient extends CodexAppServerClient {
   }
 }
 
-export async function getCodexJobClient({ env = process.env, home = os.homedir() } = {}) {
+// Jobs never share an external app-server daemon (ORKESTR_CODEX_APP_SERVER_MODE
+// / _SOCKET): a shared daemon delivers a resumed thread's events and approval
+// requests to whichever connection it routes them to, so the job attempt never
+// sees its turn complete. The job client always spawns its own stdio process.
+export function codexJobClientEnv(env = process.env) {
+  return { ...env, ORKESTR_CODEX_APP_SERVER_MODE: "stdio", ORKESTR_CODEX_APP_SERVER_SOCKET: "" };
+}
+
+export async function getCodexJobClient({ env: callerEnv = process.env, home = os.homedir() } = {}) {
+  const env = codexJobClientEnv(callerEnv);
   const key = clientKey(env, home);
   const existing = clients.get(key);
   if (existing && !existing.closed) return existing.start();

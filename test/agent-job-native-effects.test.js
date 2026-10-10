@@ -30,11 +30,16 @@ test.afterEach(() => stopCodexJobClients());
 
 const fileChangeScript = [{ fileChange: [{ path: "HELLO.txt", kind: "add" }] }, { final: { summary: "wrote HELLO.txt" } }];
 const fileChangeTools = { allow: [], approval_required: ["codex.file_change"] };
+// A turn whose events are lost fails fast instead of hanging the suite.
+const quick = { timeout: "15s", max_attempts: 1 };
 
+// The fake sends a stale-turn notification after thread/resume, as real Codex
+// does (FAKE_CODEX_STALE_USAGE_ON_RESUME), so the resumed turn must still be
+// recognized.
 test("an approved codex.file_change is consumed once, ledgered and journaled as an approved decision", async () => {
   useRealProviderProbes();
   const env = await codexJobEnv({ script: fileChangeScript });
-  const spec = makeSpec({ name: "codex-file-job", provider: "codex", tools: fileChangeTools });
+  const spec = makeSpec({ name: "codex-file-job", provider: "codex", tools: fileChangeTools, runtime: quick });
   const { run } = await admitRun({ spec, type: "api", dedupeKey: "evt-1" }, env);
   const parked = await driveRun(run.id, {}, env);
   assert.equal(parked.state, "awaiting_approval");
@@ -168,4 +173,29 @@ test("the Claude job profile dir is used by the provider probe and the executor"
   const { run } = await admitRun({ spec, type: "api", dedupeKey: "evt-1" }, jobEnv);
   assert.equal((await driveRun(run.id, {}, jobEnv)).state, "succeeded");
   assert.equal((await fake.calls())[0].configDir, profile);
+});
+
+test("job attempts never use the external chat app-server daemon: approve resumes on a dedicated process", async () => {
+  // A server configured for a shared daemon. The job must neither connect to
+  // it (live: the daemon routed the resumed turn's approval request and
+  // turn/completed elsewhere, so `jobs approve` hung) nor need it.
+  const env = await codexJobEnv({ script: fileChangeScript });
+  Object.assign(env, { ORKESTR_CODEX_APP_SERVER_MODE: "external", ORKESTR_CODEX_APP_SERVER_SOCKET: path.join(env.ORKESTR_HOME, "no-daemon.sock") });
+  const spec = makeSpec({ name: "codex-daemon-job", provider: "codex", tools: fileChangeTools, runtime: quick });
+  const { run } = await admitRun({ spec, type: "api", dedupeKey: "evt-1" }, env);
+  const restore = setAgentJobProviderProbe("codex", async () => ({ connected: true, runnable: true, reason: "logged_in" }));
+  try {
+    assert.equal((await driveRun(run.id, {}, env)).state, "awaiting_approval");
+    stopCodexJobClients(); // the CLI that parked the run has exited
+    const [pending] = await listApprovals({ runId: run.id, state: "pending" }, env);
+    await decideApproval(pending.approvalId, { decision: "approved", by: "test" }, env);
+    const done = await driveRun(run.id, {}, env);
+    assert.equal(done.state, "succeeded", JSON.stringify(done));
+  } finally {
+    restore();
+  }
+  const fake = await readFakeCodex(env);
+  assert.equal(fake.spawnCount, 2, "each process spawned its own stdio app-server");
+  assert.deepEqual(fake.fileChanges, [{ paths: ["HELLO.txt"], decision: "accept" }]);
+  assert.ok((await listApprovals({ runId: run.id }, env))[0].consumedAt);
 });

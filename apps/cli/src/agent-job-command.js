@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { admitRun, registerJobFiles, requestCancel } from "../../../packages/core/src/agent-job-admission.js";
 import { getRunAudit } from "../../../packages/core/src/agent-job-audit.js";
-import { decideApproval, listApprovals, listRunEffects } from "../../../packages/core/src/agent-job-ledger.js";
+import { decideApproval, getApproval, listApprovals, listRunEffects } from "../../../packages/core/src/agent-job-ledger.js";
 import { driveRun } from "../../../packages/core/src/agent-job-runner.js";
 import { getRun, listAttemptsSync, listRuns, openAgentJobDb } from "../../../packages/core/src/agent-job-store.js";
 import { stopCodexJobClients } from "../../../packages/core/src/codex-job-client.js";
@@ -211,7 +211,8 @@ async function decideCommand(decision, args, ctx) {
   }, ctx.env);
   const result = flags["no-drive"] ? null : await drive(approval.runId, { waitForBackoff: true }, ctx.env);
   if (flags.json) {
-    writeJson(ctx, { approval, run: result });
+    // Re-read: driving may have consumed the approval.
+    writeJson(ctx, { approval: result ? await getApproval(approval.approvalId, ctx.env) : approval, run: result });
     return 0;
   }
   ctx.stdout.write(`approval ${approval.approvalId}: ${approval.state}\n`);

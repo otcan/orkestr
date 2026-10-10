@@ -13,6 +13,10 @@
 //                              {wait} (stay active), {final}. Each thread keeps
 //                              its script position, so a resumed thread continues
 //                              after the last answered step.
+//   FAKE_CODEX_STALE_USAGE_ON_RESUME=1  like real Codex, a resumed thread
+//                              sends thread/tokenUsage/updated tagged with the
+//                              previous turn id; here just before the next
+//                              turn/start answer (the race seen live).
 // State persists in FAKE_CODEX_STATE so a respawned process (restart) sees the
 // same threads, but marks them notLoaded like a real app-server would.
 import fs from "node:fs";
@@ -80,7 +84,10 @@ function startTurn(id, params) {
   thread.turns.push(turn);
   thread.status = { type: "active", activeFlags: [] };
   thread.activeTurnId = turn.id;
+  const previous = thread.staleUsagePending ? thread.turns.at(-2) : null;
+  thread.staleUsagePending = false;
   writeState(state);
+  if (previous) send({ method: "thread/tokenUsage/updated", params: { threadId: thread.id, turnId: previous.id, tokenUsage: {} } });
   send({ id, result: { turn } });
   send({ method: "turn/started", params: { turn } });
   // Later lifecycle notifications arrive asynchronously, like a real provider.
@@ -211,6 +218,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       if (!thread) return send({ id, error: { code: -32000, message: `thread not found: ${params.threadId}` } });
       thread.loaded = true;
       thread.status = { type: "idle" };
+      thread.staleUsagePending = process.env.FAKE_CODEX_STALE_USAGE_ON_RESUME === "1";
       writeState(state);
       return send({ id, result: { thread } });
     }

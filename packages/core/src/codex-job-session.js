@@ -102,7 +102,7 @@ export class CodexJobSession {
         cwd: this.cwd,
         approvalPolicy: this.approvalPolicy,
       });
-      turn.id ||= clean(started?.turn?.id);
+      turn.id = clean(started?.turn?.id) || turn.id;
       if (signal?.aborted) void this.interrupt();
       const completed = await turn.settled;
       const status = ["interrupted", "cancelled", "canceled", "aborted"].includes(clean(completed.status)) ? "cancelled"
@@ -122,18 +122,24 @@ export class CodexJobSession {
     }
   }
 
-  ownsTurn(turnId) {
+  // The active turn if a message belongs to it. Until turn/start answers, only
+  // a turn/started notification may name the turn: right after thread/resume
+  // Codex sends notifications (thread/tokenUsage/updated) tagged with the
+  // previous turn's id, and adopting that id would drop every event of the
+  // real turn, including turn/completed.
+  ownsTurn(turnId, { adopt = false } = {}) {
     const turn = this.turn;
     if (!turn) return null;
     const id = clean(turnId);
     if (id && this.staleTurnIds?.has(id)) return null;
-    if (!turn.id && id) turn.id = id;
-    return !id || id === turn.id ? turn : null;
+    if (!turn.id && id && adopt) turn.id = id;
+    if (!id) return turn;
+    return id === turn.id ? turn : null;
   }
 
   async onNotification(message) {
     const params = message.params || {};
-    const turn = this.ownsTurn(params.turnId || params.turn?.id);
+    const turn = this.ownsTurn(params.turnId || params.turn?.id, { adopt: message.method === "turn/started" });
     if (!turn) return;
     if (message.method === "item/started" && params.item?.id) turn.items.set(params.item.id, params.item);
     if (message.method === "item/completed" && params.item) {

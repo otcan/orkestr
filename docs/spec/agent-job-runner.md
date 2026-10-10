@@ -123,7 +123,14 @@ the dispatcher with the approve/deny hint.
 
 ### Codex
 
-One attempt is one turn on a Codex app-server thread owned by the run.
+One attempt is one turn on a Codex app-server thread owned by the run. The
+job client always spawns its own `codex app-server` (stdio), also when chat
+threads use an external daemon (`ORKESTR_CODEX_APP_SERVER_MODE` /
+`_SOCKET`): a shared daemon routed a resumed thread's approval requests and
+`turn/completed` to another connection, and the attempt never finished. A
+turn's id comes only from the `turn/start` answer or `turn/started`; after
+`thread/resume` Codex sends notifications tagged with the previous turn's id,
+which must not be taken for the new turn.
 
 * **Workspace.** Codex runs in the run's workspace with sandbox
   `workspace-write` and approval policy `untrusted`. Repository jobs get a

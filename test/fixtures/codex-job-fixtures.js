@@ -26,6 +26,7 @@ export async function codexJobEnv({ script = [{ final: { summary: "done" } }], l
     FAKE_CODEX_STATE: path.join(env.ORKESTR_HOME, "fake-codex-state.json"),
     FAKE_CODEX_JOB_SCRIPT: JSON.stringify(script),
     FAKE_CODEX_STEP_MS: "5",
+    FAKE_CODEX_STALE_USAGE_ON_RESUME: "1",
     ...extra,
   };
 }
