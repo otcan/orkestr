@@ -2,8 +2,6 @@
 // missing Gmail connection, missing OAuth client config, ambiguous account). Retrying them every interval
 // cannot succeed, so the runner marks the rule blocked, reports it once and
 // re-checks on a slower cadence until the owner reconnects.
-import { classifyGmailConnectorError } from "../../connectors/src/gmail.js";
-
 const defaultBlockedRecheckMs = 30 * 60_000;
 
 const OWNER_ACTIONS = {
@@ -30,6 +28,17 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
+// Mirrors the terminal-auth rule of the Gmail connector's error classifier:
+// a 401 or an OAuth "token expired/revoked" answer needs a reconnect.
+function terminalGmailAuthError(error) {
+  if (!error || typeof error !== "object") return false;
+  const code = clean(error.providerCode || error.errorCode).toLowerCase();
+  const message = clean(error.message).toLowerCase();
+  return Number(error.providerStatus || error.httpStatus) === 401 ||
+    ["invalid_grant", "invalid_token", "unauthenticated", "token_expired", "token_revoked"].includes(code) ||
+    /token (?:has been |is )?(?:expired|revoked)|expired or revoked|invalid credentials/.test(message);
+}
+
 export function gmailNotificationBlockedRecheckMs(env = process.env) {
   const parsed = Number(env.ORKESTR_GMAIL_NOTIFICATION_BLOCKED_RECHECK_MS || defaultBlockedRecheckMs);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : defaultBlockedRecheckMs;
@@ -39,7 +48,7 @@ export function gmailNotificationBlockedRecheckMs(env = process.env) {
 export function gmailNotificationOwnerAction(error) {
   const raw = clean(error?.code || error?.message || error);
   let code = OWNER_ACTIONS[raw] ? raw : "";
-  if (!code && classifyGmailConnectorError(error || {}).state === "reauth_required") code = "gmail_reauthorization_required";
+  if (!code && terminalGmailAuthError(error)) code = "gmail_reauthorization_required";
   if (!code) return null;
   const action = OWNER_ACTIONS[code];
   return { code, action, message: OWNER_MESSAGES[action] };
