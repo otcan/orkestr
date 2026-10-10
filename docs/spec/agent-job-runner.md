@@ -108,7 +108,8 @@ the same outcome:
 | cancel | `ctx.signal` aborts with `cancelled`, `timeout` or `lease_lost`; cooperative executors (`codex`) get 10 s to interrupt the turn, kill-style ones (`claude-code`) 5 s |
 | progress | `ctx.emit(event)` with `workspace.ready`, `session.started`, `message.delta` / `message.completed`, `tool.requested` / `tool.completed`, `usage`, `output.repair`; the runner writes redacted, capped checkpoints (`workspace`, `session_started`, `progress`, `usage`, `output_repair`) |
 | tool permission hook | every provider-native call asks `ctx.authorizeTool({tool, args, callId})` → `allow`, `deny`, `pending`, `expired`, `cancelled` under `permissions.tools` (default deny); each decision is a `tool_decision` checkpoint |
-| approval pause | `pending` binds an approval to `(tool, args)`; the executor stops the turn and returns `{type: "park", approval}`; after `approve` the next attempt resumes the session and the same call is allowed once (G7), after `deny` it is refused. The runner parks the run through the same path as Orkestr tools, so the `approval_required` notification (with the `approve <id>` / `deny <id>` hint) is relayed and delivered by the [notification dispatcher](#notifications) |
+| approval pause | `pending` binds an approval to `(tool, args)`; the executor stops the turn and returns `{type: "park", approval}`; after `approve` the next attempt resumes the session and the same call is allowed once (G7), after `deny` it is refused. The resume prompt lists the approved, not yet executed calls and tells the agent to repeat exactly that call rather than reach the result through another tool; an approval the run never uses stays unconsumed and gets an `approval_unused` checkpoint when the run finishes. The runner parks the run through the same path as Orkestr tools, so the `approval_required` notification (with the `approve <id>` / `deny <id>` hint) is relayed and delivered by the [notification dispatcher](#notifications) |
+| native effects | a call allowed by consuming an approval gets a `tool_decision` checkpoint with decision `approved` and an effect ledger entry (`mode: "native"`, `effect_key` + `args_hash` of the approval) that is `intended` and dispatched when granted, `committed` / `failed` on the provider's `tool.completed` for that `callId` (`agent-job-native-effects.js`). A crash in between leaves it dispatched, so recovery marks it `unknown` and a person decides (G4). Calls allowed by policy without an approval are journaled as tool decisions only: they stay inside the sandbox and Orkestr cannot dedupe or reconcile what the provider does |
 | Orkestr tools | `ctx.executeTool(call)` runs a job tool through the decision and the effect ledger (`codex` exposes them as dynamic tools) |
 | output | `{type: "final", output}`; with `output_schema` the final answer is parsed as JSON (bare or fenced) |
 | error class | failures throw `nativeAttemptError(classification)` with the turn error classes of `runtime-turn-error-class.js`: `auth` → provider error, no retry (fallback applies); `rate_limit` / `transient` → retryable provider error; `permanent` → task error |
@@ -139,7 +140,8 @@ One attempt is one turn on a Codex app-server thread owned by the run.
   `item/permissions/requestApproval` → `codex.permissions`, MCP tool-call
   elicitations → `codex.mcp {server, message}`. `allow` accepts (not
   ledgered: it stays inside the sandbox), `deny` or unlisted declines,
-  `approval_required` interrupts the turn and parks the run. Other server
+  `approval_required` interrupts the turn and parks the run; once approved, the
+  granted call is a native effect in the ledger. Other server
   requests (user input, auth refresh) are refused: nobody watches a job turn.
 * **Cancel, timeout, resume.** The abort sends `turn/interrupt`. The next
   attempt (after a crash, restart, backoff or approval) resumes the Codex
@@ -151,12 +153,35 @@ One attempt is one turn on a Codex app-server thread owned by the run.
 
 ### Claude Code
 
-An attempt runs `claude -p --output-format stream-json` with the host Claude
-login (the one `claude auth status` reports), no thread record:
+An attempt runs `claude -p --output-format stream-json` (the binary of
+`ORKESTR_CLAUDE_CODE_BIN`, default `claude`) with the job Claude login, no
+thread record. The provider probe and the executor use the same config dir:
+`ORKESTR_AGENT_JOB_CLAUDE_CONFIG_DIR` if set, else `CLAUDE_CONFIG_DIR`, else
+the host default.
+
+**Claude Code login for jobs.** Servers whose Claude threads authenticate via
+Orkestr-managed runtime profiles have no host login, and jobs do not borrow a
+thread's profile. Give jobs a dedicated profile directory and log it in once,
+as the user the Orkestr server runs as:
+
+```sh
+install -d -m 700 /srv/orkestr/claude-job-profile        # example path
+CLAUDE_CONFIG_DIR=/srv/orkestr/claude-job-profile "${ORKESTR_CLAUDE_CODE_BIN:-claude}" auth login
+CLAUDE_CONFIG_DIR=/srv/orkestr/claude-job-profile "${ORKESTR_CLAUDE_CODE_BIN:-claude}" auth status --json   # loggedIn: true
+```
+
+Then set `ORKESTR_AGENT_JOB_CLAUDE_CONFIG_DIR=/srv/orkestr/claude-job-profile`
+in the server's environment (and in the shell that runs `orkestr run`) and
+restart the server. A wrapper given as `ORKESTR_CLAUDE_CODE_BIN` must keep a
+`CLAUDE_CONFIG_DIR` it is called with. Orkestr never reads or copies the
+credentials in that directory; it only runs `claude` with it. Until the
+profile is logged in, the provider reports `not_logged_in` and jobs on
+`claude-code` are refused.
+
 
 * **Workspace.** The run's workspace (mode 0700), the same for every attempt.
   The child gets an allowlisted env (`PATH`, `HOME`, locale, `TMPDIR`, TLS CA
-  vars, `CLAUDE_CONFIG_DIR`), background tasks off, no MCP servers
+  vars, `CLAUDE_CONFIG_DIR` as above), background tasks off, no MCP servers
   (`--strict-mcp-config`) and no `ORKESTR_*` values besides the broker address
   and token.
 * **Per-call permissions (G6).** `--settings` installs a `PreToolUse` hook for
@@ -307,6 +332,10 @@ orkestr jobs list|status|approvals|approve|deny|cancel ...
 ```
 
 These commands use the local store directly and need no running server.
+`orkestr run` and `orkestr jobs approve|deny` return as soon as the run is
+terminal or parked: a parked run prints its state `awaiting_approval` and the
+pending approval ids (`approvalIds` with `--json`), and the job Codex
+app-server the command started is stopped before it exits.
 `orkestr init` writes `jobs/hello-job.yaml` for the first connected provider
 (the second becomes the fallback) and, like `orkestr run`, refuses with
 "connect Codex or Claude first: ..." when none is connected. The legacy

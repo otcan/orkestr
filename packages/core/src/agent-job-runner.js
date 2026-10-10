@@ -11,7 +11,7 @@ import { LeaseLost, ensureUnknownEffectApprovals, executeToolCall, reconcileDisp
 import { faultsFrom, injectFault } from "./agent-job-faults.js";
 import { runNativeAttempt } from "./agent-job-native-attempt.js";
 import { agentJobProviderStatus } from "./agent-job-providers.js";
-import { expireApprovalSync, failEffectSync, listEffectsSync, pendingApprovalForRunSync, redactValue } from "./agent-job-ledger.js";
+import { expireApprovalSync, failEffectSync, listApprovalsSync, listEffectsSync, pendingApprovalForRunSync, redactValue } from "./agent-job-ledger.js";
 import { validateOutput } from "./agent-job-output.js";
 import {
   RUN_ACTIVE_STATES,
@@ -85,7 +85,14 @@ function interruptionPoint(db, runId, attempt) {
 }
 
 async function finalize(rc, fields) {
-  tx(rc.db, () => finalizeRunSync(rc.db, rc.run.id, fields, rc.secretValues, { spec: rc.spec, env: rc.env }));
+  tx(rc.db, () => {
+    // An approval the agent never used stays unconsumed (it was not executed);
+    // the journal says so, and the run-scoped effect key keeps it from being reused.
+    for (const approval of listApprovalsSync(rc.db, rc.run.id).filter((entry) => entry.state === "approved" && !entry.consumedAt)) {
+      appendCheckpointSync(rc.db, rc.run.id, rc.attempt, "approval_unused", { approvalId: approval.approvalId, tool: approval.tool });
+    }
+    finalizeRunSync(rc.db, rc.run.id, fields, rc.secretValues, { spec: rc.spec, env: rc.env });
+  });
   return snapshot(rc.db, rc.run.id);
 }
 

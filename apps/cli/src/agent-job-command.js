@@ -8,16 +8,25 @@ import { getRunAudit } from "../../../packages/core/src/agent-job-audit.js";
 import { decideApproval, listApprovals, listRunEffects } from "../../../packages/core/src/agent-job-ledger.js";
 import { driveRun } from "../../../packages/core/src/agent-job-runner.js";
 import { getRun, listAttemptsSync, listRuns, openAgentJobDb } from "../../../packages/core/src/agent-job-store.js";
+import { stopCodexJobClients } from "../../../packages/core/src/codex-job-client.js";
 import { relayAgentJobNotifications } from "../../../packages/connectors/src/agent-job-notification-relay.js";
 import { installAgentJobProviderProbes } from "../../../packages/connectors/src/agent-job-provider-probes.js";
 import { agentJobProviderStatuses, connectProviderHint, executorUnavailableHint } from "../../../packages/core/src/agent-job-providers.js";
 
-// Hand notification intents to the connector outbox after local driving.
+// Hand notification intents to the connector outbox after local driving. The
+// CLI returns once the run is terminal or parked, so the job app-server it
+// spawned is stopped here; otherwise its child process keeps the CLI alive.
 async function drive(runId, options, env) {
   installAgentJobProviderProbes();
-  const result = await driveRun(runId, options, env);
-  await relayAgentJobNotifications({}, env);
-  return result;
+  try {
+    const result = await driveRun(runId, options, env);
+    await relayAgentJobNotifications({}, env);
+    if (result.state !== "awaiting_approval") return result;
+    const pending = await listApprovals({ runId, state: "pending" }, env);
+    return { ...result, approvalIds: pending.map((approval) => approval.approvalId) };
+  } finally {
+    stopCodexJobClients();
+  }
 }
 
 export const agentJobUsage = [
@@ -80,8 +89,13 @@ function writeJson(ctx, value) {
   ctx.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
+function approvalIdsOf(result) {
+  return result.approvalIds?.length ? result.approvalIds : result.approvalId ? [result.approvalId] : [];
+}
+
 function describe(result) {
-  const extra = result.approvalId ? ` approval=${result.approvalId}` : result.reason ? ` reason=${result.reason}` : "";
+  const ids = approvalIdsOf(result);
+  const extra = ids.length ? ` approval=${ids.join(",")}` : result.reason ? ` reason=${result.reason}` : "";
   return `run ${result.runId}: ${result.state}${extra}`;
 }
 
@@ -133,7 +147,7 @@ export async function runJobCommand(args, ctx) {
   if (flags.json) writeJson(ctx, { ...result, job: run.job, deduplicated });
   else {
     ctx.stdout.write(`${describe(result)}${deduplicated ? " (deduplicated)" : ""}\n`);
-    if (result.approvalId) ctx.stdout.write(`Approve with: orkestr jobs approve ${result.approvalId}\n`);
+    for (const id of approvalIdsOf(result)) ctx.stdout.write(`Approve with: orkestr jobs approve ${id}\n`);
     if (result.state === "succeeded" && result.output) ctx.stdout.write(`output: ${JSON.stringify(result.output)}\n`);
   }
   return exitCodeFor(result.state);

@@ -8,6 +8,8 @@
 //   FAKE_CODEX_JOB_SCRIPT      (env, JSON array; prompts without a marker) a
 //                              scripted Agent Job: {say}, {tool, args} via
 //                              item/tool/call, {command} via a command approval,
+//                              {fileChange: [{path, kind}]} via a file change
+//                              approval (item/started, then item/completed),
 //                              {wait} (stay active), {final}. Each thread keeps
 //                              its script position, so a resumed thread continues
 //                              after the last answered step.
@@ -132,6 +134,11 @@ function continueScript(state, thread, turn) {
   if (step.command) {
     return send({ id: requestId, method: "item/commandExecution/requestApproval", params: { threadId: thread.id, turnId: turn.id, itemId: `cmd_${requestId}`, command: step.command, cwd: thread.cwd } });
   }
+  if (step.fileChange) {
+    const item = { type: "fileChange", id: `fc_${requestId}`, status: "inProgress", changes: step.fileChange.map((change) => ({ path: change.path, kind: { type: change.kind || "add" }, diff: "" })) };
+    send({ method: "item/started", params: { threadId: thread.id, turnId: turn.id, item } });
+    return send({ id: requestId, method: "item/fileChange/requestApproval", params: { threadId: thread.id, turnId: turn.id, itemId: item.id } });
+  }
   const tool = String(step.tool).replace(/\./g, "__");
   if (!step.force && !(thread.dynamicTools || []).includes(tool)) {
     // A model cannot call a tool it was not given.
@@ -151,6 +158,12 @@ function answerToolCall(message, pending) {
   // An answer for an interrupted turn is ignored: the step is retried later.
   if (!turn || turn.status !== "inProgress") return;
   if (pending.step.command) (state.commandDecisions ||= []).push({ command: pending.step.command, decision: message.result?.decision || "error" });
+  else if (pending.step.fileChange) {
+    const decision = message.result?.decision || "error";
+    (state.fileChanges ||= []).push({ paths: pending.step.fileChange.map((change) => change.path), decision });
+    const item = { type: "fileChange", id: `fc_${message.id}`, status: decision === "accept" ? "completed" : "declined", changes: [] };
+    send({ method: "item/completed", params: { threadId: thread.id, turnId: turn.id, item } });
+  }
   else (state.toolCalls ||= []).push({ tool: pending.step.tool, exposed: true, success: message.result?.success === true, text: message.result?.contentItems?.[0]?.text || message.error?.message || "" });
   thread.scriptStep = (thread.scriptStep || 0) + 1;
   writeState(state);

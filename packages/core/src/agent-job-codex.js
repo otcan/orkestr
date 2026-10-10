@@ -22,7 +22,7 @@
 // * Output: the final message is parsed as JSON and validated against
 //   `task.output_schema`; an invalid answer is re-asked once.
 import { validateOutput } from "./agent-job-output.js";
-import { nativeAttemptError, nativeExecutorEnabled, nativeTimeoutError } from "./agent-job-native-interface.js";
+import { approvedCallsText, nativeAttemptError, nativeExecutorEnabled, nativeTimeoutError } from "./agent-job-native-interface.js";
 import { getAgentJobTool, listAgentJobTools } from "./agent-job-tools.js";
 import { CodexJobSession, classifyCodexJobError } from "./codex-job-session.js";
 
@@ -74,6 +74,7 @@ function resumePrompt(input, resume) {
   return [
     `This Agent Job run is resuming in the same session (${resume.reason}). Continue the task from where it stopped.`,
     "Approvals decided since then apply now: retry an action that was paused for approval if it is still needed.",
+    approvedCallsText(input),
     input.resumeSummary ? `Completed actions (do not repeat):\n${input.resumeSummary}` : "",
     outputInstruction(input.outputSchema),
   ].filter(Boolean).join("\n\n");
@@ -117,7 +118,7 @@ const STOP_DECISIONS = Object.freeze({ pending: "park", expired: "expired", canc
 
 function progressEvent(event) {
   if (event.type === "message") return { type: "message.completed", text: event.text };
-  const done = event.status === "completed" || event.status === "failed";
+  const done = ["completed", "failed", "declined"].includes(event.status);
   return { type: done ? "tool.completed" : "tool.requested", tool: event.tool || event.itemType, callId: event.itemId, ok: event.status === "completed" };
 }
 

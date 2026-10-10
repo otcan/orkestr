@@ -20,7 +20,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { nativeAttemptError, nativeExecutorEnabled, nativeTimeoutError } from "./agent-job-native-interface.js";
+import { approvedCallsText, nativeAttemptError, nativeExecutorEnabled, nativeTimeoutError } from "./agent-job-native-interface.js";
 import { startPermissionBroker } from "./agent-job-permission-broker.js";
 import { claudeCodeCommand, claudeCodeEventSessionId, claudeCodeEventText, classifyClaudeCodeFailure } from "./claude-code-client.js";
 import { classifyClaudeCodeFailureCode, turnErrorClassification } from "./runtime-turn-error-class.js";
@@ -69,10 +69,22 @@ export function claudeJobArgs(input = {}) {
   return args;
 }
 
+export const AGENT_JOB_CLAUDE_CONFIG_ENV = "ORKESTR_AGENT_JOB_CLAUDE_CONFIG_DIR";
+
+// The Claude login jobs run on: a dedicated profile directory the operator
+// logs in once (docs/spec/agent-job-runner.md, "Claude Code login for jobs"),
+// else CLAUDE_CONFIG_DIR, else the host default. Used by the provider probe
+// and by the executor, so a job runs exactly where the probe saw a login.
+export function agentJobClaudeConfigDir(env = process.env) {
+  return clean(env[AGENT_JOB_CLAUDE_CONFIG_ENV]) || clean(env.CLAUDE_CONFIG_DIR);
+}
+
 function childEnv(env, broker) {
   const source = { ...process.env, ...env };
   const result = { HOME: clean(env.HOME) || os.homedir() };
   for (const key of INHERITED_ENV) if (source[key] !== undefined) result[key] = source[key];
+  const configDir = agentJobClaudeConfigDir(source);
+  if (configDir) result.CLAUDE_CONFIG_DIR = configDir;
   return {
     ...result,
     DISABLE_AUTOUPDATER: "1",
@@ -87,6 +99,7 @@ export function claudeJobPrompt(input = {}) {
     return [
       `Orkestr resumed this job (${clean(input.resumeReason) || "new attempt"}).`,
       "Continue the original task from where you stopped. If a tool call was blocked for approval, retry it only if it is still needed: Orkestr now applies the person's decision.",
+      input.approvedCalls ? `\n${approvedCallsText(input)}` : "",
       input.resumeSummary ? `\nAlready committed effects:\n${input.resumeSummary}` : "",
       input.outputSchema ? `\nEnd with only a JSON value matching this schema:\n${JSON.stringify(input.outputSchema)}` : "",
     ].join("\n").trim();

@@ -20,7 +20,9 @@ const write = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
 const flag = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : "");
 
 if (args[0] === "auth" && args[1] === "status") {
-  write({ loggedIn: true, authMethod: "claude.ai" });
+  // FAKE_CLAUDE_REQUIRE_CONFIG_DIR: logged in only inside that profile dir.
+  const required = process.env.FAKE_CLAUDE_REQUIRE_CONFIG_DIR;
+  write({ loggedIn: !required || process.env.CLAUDE_CONFIG_DIR === required, authMethod: "claude.ai" });
   process.exit(0);
 }
 
@@ -55,7 +57,7 @@ process.stdin.on("data", (chunk) => { prompt += chunk; });
 process.stdin.on("end", async () => {
   const resumed = flag("--resume");
   const session = resumed || `fake-claude-session-${process.pid}`;
-  fs.appendFileSync(callsFile, `${JSON.stringify({ resumed, prompt: prompt.trim(), cwd: process.cwd(), hooks: hooks.length, permissionMode: flag("--permission-mode"), strictMcp: args.includes("--strict-mcp-config"), home: process.env.HOME || "", leaked: Object.keys(process.env).filter((key) => key.startsWith("ORKESTR_") && !key.startsWith("ORKESTR_AGENT_JOB_PERMISSION_")) })}\n`);
+  fs.appendFileSync(callsFile, `${JSON.stringify({ resumed, prompt: prompt.trim(), cwd: process.cwd(), hooks: hooks.length, permissionMode: flag("--permission-mode"), strictMcp: args.includes("--strict-mcp-config"), home: process.env.HOME || "", configDir: process.env.CLAUDE_CONFIG_DIR || "", leaked: Object.keys(process.env).filter((key) => key.startsWith("ORKESTR_") && !key.startsWith("ORKESTR_AGENT_JOB_PERMISSION_")) })}\n`);
   write({ type: "system", subtype: "init", session_id: session });
   if (turn.fail === "auth") {
     write({ type: "result", session_id: session, is_error: true, result: "Failed to authenticate. API Error: 401" });

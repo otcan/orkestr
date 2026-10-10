@@ -8,6 +8,7 @@ import { setAgentJobProviderProbe } from "../../core/src/agent-job-providers.js"
 import { claudeCodeStatusAuthenticated } from "../../core/src/claude-code-auth-status.js";
 import { claudeCodeCommand } from "../../core/src/claude-code-client.js";
 import { agentJobExecutorFor } from "../../core/src/agent-job-adapters.js";
+import { agentJobClaudeConfigDir } from "../../core/src/agent-job-claude-code.js";
 import { codexAppServerStatus } from "../../core/src/codex-app-server-client.js";
 import { codexLoginStatus } from "./codex.js";
 
@@ -30,16 +31,17 @@ async function codexStatus(env) {
   return withExecutor("codex", { connected: true, reason: "logged_in" }, env);
 }
 
-// Host Claude CLI login (`claude auth status --json`), the same login a
-// terminal user on this host would use.
+// Claude CLI login (`claude auth status --json`) of the job profile
+// (ORKESTR_AGENT_JOB_CLAUDE_CONFIG_DIR), else CLAUDE_CONFIG_DIR or the host login.
 async function claudeHostStatus(env) {
+  const configDir = agentJobClaudeConfigDir(env);
   try {
     const { stdout = "" } = await execFileAsync(claudeCodeCommand(env), ["auth", "status", "--json"], {
       // The same login the Claude Code job executor uses (agent-job-claude-code.js).
       env: {
         PATH: env.PATH || process.env.PATH || "",
         HOME: env.HOME || os.homedir(),
-        ...(env.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR } : {}),
+        ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}),
         DISABLE_AUTOUPDATER: "1",
       },
       timeout: 5_000,

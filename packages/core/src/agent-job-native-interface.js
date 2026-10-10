@@ -96,3 +96,10 @@ export function nativeExecutorProblems(executor) {
   if (!nativeExecutorSwitch(executor?.id)) problems.push("env switch");
   return problems;
 }
+
+// Resume prompt line for input.approvedCalls (approved, not yet executed).
+export function approvedCallsText(input) {
+  return input.approvedCalls
+    ? `A person approved these exact calls. If the action is still needed, make the same call again with the same arguments; do not get the same result through a different tool:\n${input.approvedCalls}`
+    : "";
+}

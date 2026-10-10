@@ -13,9 +13,11 @@ import {
   effectKeyFor,
   expireApprovalSync,
   findApprovalSync,
+  listApprovalsSync,
   listEffectsSync,
   redactValue,
 } from "./agent-job-ledger.js";
+import { nativeEffectGrantedSync, settleNativeEffect } from "./agent-job-native-effects.js";
 import { nativeTimeoutError } from "./agent-job-native-interface.js";
 import { agentJobToolDecision } from "./agent-job-spec.js";
 import { appendCheckpointSync, getRunSync, holdsLeaseSync, listCheckpointsSync, nowMs, tx } from "./agent-job-store.js";
@@ -40,7 +42,8 @@ function resumeReason(db, runId) {
 /**
  * The tool-permission hook for provider-native calls (ctx.authorizeTool).
  * approval_required calls bind an approval to (tool, args) and consume it
- * once, as for Orkestr tools; native calls are not effect-ledgered.
+ * once, as for Orkestr tools. An approved call that is granted is recorded in
+ * the effect ledger (agent-job-native-effects.js); allowed calls are not.
  */
 export function authorizeNativeToolCall(rc, { tool, args = {}, callId = "" }) {
   return tx(rc.db, () => {
@@ -62,6 +65,7 @@ export function authorizeNativeToolCall(rc, { tool, args = {}, callId = "" }) {
       }
       if (approval.state === "approved" && consumeApprovalSync(rc.db, approval.approvalId)) {
         appendCheckpointSync(rc.db, rc.run.id, rc.attempt, "approval_consumed", { approvalId: approval.approvalId, effectKey, tool });
+        nativeEffectGrantedSync(rc, { tool, args: redactValue(plainArgs, rc.secretValues), argsHash, effectKey, callId, approvalId: approval.approvalId });
         return { decision: "allow" };
       }
       if (approval.state === "denied") return { decision: "deny", reason: `a person denied ${tool} with these arguments` };
@@ -85,6 +89,7 @@ function journal(rc, provider) {
   return (event = {}) => {
     seq += 1;
     const at = new Date().toISOString();
+    if (event.type === "tool.completed") settleNativeEffect(rc, event);
     if (event.type === "session.started") return write("session_started", { seq, at, provider, sessionRef: String(event.sessionRef || ""), resumed: event.resumed === true });
     if (event.type === "workspace.ready") return write("workspace", { path: String(event.path || ""), kind: String(event.kind || "directory") });
     if (event.type === "usage") return write("usage", { seq, at, inputTokens: Number(event.inputTokens || 0), outputTokens: Number(event.outputTokens || 0), costUsd: event.costUsd ?? null });
@@ -129,6 +134,10 @@ export function nativeAttemptContext(rc, providerRef, signal) {
 export async function runNativeAttempt(rc, adapter, providerRef, input, deadline) {
   const effects = listEffectsSync(rc.db, rc.run.id).filter((effect) => effect.state === "committed");
   if (effects.length) input.resumeSummary = effects.map((effect) => `${effect.tool}: ${effect.ref || "done"}`).join("\n");
+  // Approved but not yet executed: the resumed agent must retry exactly these
+  // calls, not reach the same result through another tool.
+  const approved = listApprovalsSync(rc.db, rc.run.id).filter((approval) => approval.state === "approved" && approval.reason === "approval_required" && !approval.consumedAt);
+  if (approved.length) input.approvedCalls = approved.map((approval) => `${approval.tool} ${JSON.stringify(approval.args)}`.slice(0, 2000)).join("\n");
   const controller = new AbortController();
   // A cooperative executor gets a grace period to interrupt its turn; one
   // that ignores the signal (executor-registry turns) is not awaited.
