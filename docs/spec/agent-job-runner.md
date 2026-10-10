@@ -108,7 +108,7 @@ the same outcome:
 | cancel | `ctx.signal` aborts with `cancelled`, `timeout` or `lease_lost`; cooperative executors (`codex`) get 10 s to interrupt the turn, kill-style ones (`claude-code`) 5 s |
 | progress | `ctx.emit(event)` with `workspace.ready`, `session.started`, `message.delta` / `message.completed`, `tool.requested` / `tool.completed`, `usage`, `output.repair`; the runner writes redacted, capped checkpoints (`workspace`, `session_started`, `progress`, `usage`, `output_repair`) |
 | tool permission hook | every provider-native call asks `ctx.authorizeTool({tool, args, callId})` → `allow`, `deny`, `pending`, `expired`, `cancelled` under `permissions.tools` (default deny); each decision is a `tool_decision` checkpoint |
-| approval pause | `pending` binds an approval to `(tool, args)`; the executor stops the turn and returns `{type: "park", approval}`; after `approve` the next attempt resumes the session and the same call is allowed once (G7), after `deny` it is refused |
+| approval pause | `pending` binds an approval to `(tool, args)`; the executor stops the turn and returns `{type: "park", approval}`; after `approve` the next attempt resumes the session and the same call is allowed once (G7), after `deny` it is refused. The runner parks the run through the same path as Orkestr tools, so the `approval_required` notification (with the `approve <id>` / `deny <id>` hint) is relayed and delivered by the [notification dispatcher](#notifications) |
 | Orkestr tools | `ctx.executeTool(call)` runs a job tool through the decision and the effect ledger (`codex` exposes them as dynamic tools) |
 | output | `{type: "final", output}`; with `output_schema` the final answer is parsed as JSON (bare or fenced) |
 | error class | failures throw `nativeAttemptError(classification)` with the turn error classes of `runtime-turn-error-class.js`: `auth` → provider error, no retry (fallback applies); `rate_limit` / `transient` → retryable provider error; `permanent` → task error |
@@ -116,7 +116,9 @@ the same outcome:
 
 `test/agent-job-native-interface.test.js` checks that both executors satisfy
 the interface and the gate and drives each with the same recording context
-(one turn, and the approval pause).
+(one turn, and the approval pause). `test/agent-job-native-notifications.test.js`
+checks that a native approval pause of either executor is delivered once by
+the dispatcher with the approve/deny hint.
 
 ### Codex
 
