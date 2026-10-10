@@ -25,6 +25,7 @@ import { closeThreadRegistryCache } from "../../../packages/storage/src/thread-r
 import { rawAttachWatchText } from "../../../packages/core/src/raw-terminal-watch.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
 import { createCommand } from "./create-command.js";
+import { demoCommand, demoUsage } from "./demo-command.js";
 import { desktopCommand } from "./desktop-command.js";
 import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
 import { interruptCommand, sendNowCommand } from "./interrupt-command.js";
@@ -67,6 +68,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "list") return await list(args, ctx);
     if (command === "status") return await statusCommand(args, ctx);
     if (command === "version") return await versionCommand(args, ctx);
+    if (command === "demo") return await demoCommand(args, ctx);
     if (command === "instance" && ["config", "status"].includes(args[0])) return await instanceConfigCommand(args, ctx);
     if (command === "instances" || command === "instance") return await releaseInstancesCommand(args, ctx);
     if (command === "whereiam" || command === "whereami") return await whereiamCommand(args, ctx);
@@ -2234,6 +2236,7 @@ function writeUsage(stream) {
   orkestr [serve] [--open] [--host 127.0.0.1] [--port 19812]
   orkestr status [--json]
   orkestr version [--json]
+${demoUsage}
   orkestr instances [--probe] [--json]
   orkestr instance config [get|status|patch] [--generation N] [--patch json] [--json]
   orkestr service [status|start|stop|restart|logs] [--service orkestr] [--lines 100] [--no-follow]

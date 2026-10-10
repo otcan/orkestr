@@ -14,6 +14,8 @@ The public repo provides:
 
 - a registry for executor adapters
 - a no-op executor used by tests and demos
+- a deterministic `simulated` provider that needs no credentials; it drives
+  `orkestr demo` (see [quickstart](quickstart.md#try-it-in-one-minute))
 - a `codex` adapter slot that intentionally fails when used through the generic executor API
 - persisted execution records
 - assistant output persistence as normal thread/agent history messages

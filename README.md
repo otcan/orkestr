@@ -102,6 +102,10 @@ Tailscale, Caddy/TLS, or a VPN.
 
 ## Quickstart
 
+No credentials yet? Run `orkestr demo --yes` to see a durable agent job survive
+a crash without duplicating its side effects. See
+[Try it in one minute](docs/quickstart.md#try-it-in-one-minute).
+
 ### Docker
 
 ```bash
