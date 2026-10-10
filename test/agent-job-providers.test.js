@@ -15,7 +15,9 @@ import { makeSpec, tempEnv } from "./fixtures/agent-job-fixtures.js";
 test("the codex placeholder and the no-op fallback never count as job executors", async () => {
   const env = await tempEnv();
   assert.equal(await agentJobExecutorFor("codex", env), null);
-  assert.equal(await agentJobExecutorFor("claude-code", env), null);
+  // claude-code has a built-in job executor (agent-job-claude-code.js), which
+  // the operator can switch off.
+  assert.equal(await agentJobExecutorFor("claude-code", { ...env, ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR: "0" }), null);
   assert.equal(await agentJobExecutorFor("simulated", env), null);
 });
 

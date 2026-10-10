@@ -91,15 +91,10 @@ export const claudeCodeConformance = {
       },
       async runTurn(session, input, { onEvent = () => {} } = {}) {
         const scenario = input.scenario || "echo";
-        // Progress is only projected for connector-originated turns, so the
-        // streaming scenario poses as a WhatsApp input with fake ids.
-        const origin = scenario === "progress"
-          ? { source: "whatsapp_inbound", connector: "whatsapp", accountId: "account-fixture", chatId: "chat-fixture" }
-          : { source: "conformance" };
         const queued = await enqueueThreadInput(session.threadId, {
           text: `${input.text} [scenario:${scenario}]`,
           clientMessageId: input.inputId,
-          ...origin,
+          source: "conformance",
         }, env);
         const thread = await getThread(session.threadId, env);
         if (queued.duplicate) {
@@ -117,7 +112,10 @@ export const claudeCodeConformance = {
         let failure = null;
         let interrupted = false;
         try {
-          const result = await sendClaudeCodeInput(thread, queued, env);
+          // Progress for a non-connector input arrives through onProgress.
+          const result = await sendClaudeCodeInput(thread, queued, env, {
+            onProgress: ({ text }) => onEvent({ type: "progress", text }),
+          });
           interrupted = result?.interrupted === true;
         } catch (error) {
           failure = error;

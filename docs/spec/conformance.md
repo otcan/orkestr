@@ -14,7 +14,8 @@ optional capabilities are reported as skipped together with the declared gap.
 ## Run it
 
 ```bash
-# All bundled harnesses (reference, Codex app-server, Claude Code) + self-tests
+# All bundled harnesses (reference, Codex app-server, Claude Code thread
+# runtime, Claude Code job executor) + self-tests
 npm run test:conformance
 
 # One adapter: point the runner at a harness module
@@ -116,26 +117,30 @@ misclassifies errors) and asserts the matching check fails.
 
 ## Current matrix
 
-| check | reference | codex-app-server | claude-code |
-| --- | --- | --- | --- |
-| start-turn | pass | pass | pass |
-| final-output | pass | pass | pass |
-| streaming-progress | pass | pass | pass (connector-origin input only, see gaps) |
-| cancellation | pass | pass | pass |
-| restart-resume | pass | pass | pass |
-| idempotent-redelivery | pass | pass | pass |
-| tool-permission-deny | pass | pass | skip (gap) |
-| tool-permission-approve | pass | pass | skip (gap) |
-| error-auth | pass | pass | pass |
-| error-transient | pass | pass | pass |
-| error-permanent | pass | pass | pass |
+| check | reference | codex-app-server | claude-code | claude-code-job |
+| --- | --- | --- | --- | --- |
+| start-turn | pass | pass | pass | pass |
+| final-output | pass | pass | pass | pass |
+| streaming-progress | pass | pass | pass | pass |
+| cancellation | pass | pass | pass | pass |
+| restart-resume | pass | pass | pass | pass |
+| idempotent-redelivery | pass | pass | pass | skip (by design: run admission dedupes) |
+| tool-permission-deny | pass | pass | skip (gap) | pass |
+| tool-permission-approve | pass | pass | skip (gap) | pass |
+| error-auth | pass | pass | pass | pass |
+| error-transient | pass | pass | pass | pass |
+| error-permanent | pass | pass | pass | pass |
 
 The Codex and Claude Code harnesses drive the real Orkestr adapters
 (`packages/core/src/codex-app-server*.js`,
 `packages/core/src/runtime-claude-code-adapter.js`) through the Orkestr thread
 layer against fake processes in `test/conformance/fakes/`, derived from the
 inline fakes in `test/codex-app-server.test.js` and
-`test/claude-code-runtime.test.js`.
+`test/claude-code-runtime.test.js`. The `claude-code-job` harness
+(`claude-code-job-harness.js`) drives the Agent Job executor
+`packages/core/src/agent-job-claude-code.js` directly against the same fake,
+whose `tool` scenario runs the `PreToolUse` hooks from `--settings` like the
+real CLI.
 
 ## Known gaps
 
@@ -160,14 +165,18 @@ These were found while writing the harnesses. Fixed items are marked.
    writer for an older turn from overwriting a newer one. Regression tests:
    `test/codex-app-server-start-write-race.test.js` and
    `test/runtime-write-ordering.test.js` (`FAKE_CODEX_STEP_MS=30`).
-3. **Claude Code: no tool-permission hook.** Claude Code runs its own tool loop
-   under a fixed permission mode/MCP policy. Orkestr cannot approve or deny
-   individual calls, so `approval_required` actions cannot be enforced for this
-   adapter yet.
+3. **Claude Code: no tool-permission hook.** Fixed for Agent Job attempts:
+   the job executor (`agent-job-claude-code.js`) installs a `PreToolUse` hook
+   that asks Orkestr before every call and enforces the job's allow /
+   approval_required / deny lists (see
+   [agent-job-runner.md](agent-job-runner.md#claude-code-jobs)). Interactive
+   Claude Code *threads* still run under a fixed permission mode/MCP policy.
 4. **Claude Code: progress is only projected for connector-originated turns.**
-   `createClaudeCodeProgressReporter` is enabled only for WhatsApp-origin
-   inputs. The harness poses the `progress` scenario as a WhatsApp input with
-   fake ids. API, timer and job callers get no progress stream.
+   Fixed. `createClaudeCodeProgressReporter` still persists commentary only for
+   WhatsApp-origin inputs, but `sendClaudeCodeInput(..., { onProgress })`
+   receives the same throttled, redacted progress for every origin; the
+   harness now uses a non-connector input. Job attempts write progress into
+   the run journal.
 5. **Claude Code: error class lives in the harness.** Fixed. The adapter maps
    its failure codes with `classifyClaudeCodeFailureCode` and stores the class
    on the runtime, the input message and the lifecycle event, like Codex.
