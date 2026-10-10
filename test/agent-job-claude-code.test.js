@@ -18,25 +18,9 @@ import { setAgentJobProviderProbe } from "../packages/core/src/agent-job-provide
 import { driveRun } from "../packages/core/src/agent-job-runner.js";
 import { normalizeAgentJobSpec } from "../packages/core/src/agent-job-spec.js";
 import { listAttemptsSync, listCheckpoints, openAgentJobDb } from "../packages/core/src/agent-job-store.js";
+import { agentJobWorkspacePath } from "../packages/core/src/agent-job-workspace.js";
 import { tempEnv } from "./fixtures/agent-job-fixtures.js";
-
-const fakePath = fileURLToPath(new URL("./fixtures/fake-claude-job.mjs", import.meta.url));
-
-async function fakeClaude(turns, extra = {}) {
-  const env = await tempEnv();
-  const dir = path.join(env.ORKESTR_HOME, "fake-claude");
-  await fs.mkdir(dir, { recursive: true });
-  const files = { plan: path.join(dir, "plan.json"), calls: path.join(dir, "calls.jsonl"), ran: path.join(dir, "ran.jsonl") };
-  await fs.writeFile(files.plan, JSON.stringify({ turns }));
-  const bin = path.join(dir, "claude");
-  await fs.writeFile(bin, `#!/bin/sh\nFAKE_CLAUDE_JOB_PLAN="${files.plan}" FAKE_CLAUDE_JOB_CALLS="${files.calls}" FAKE_CLAUDE_JOB_RAN="${files.ran}" exec "${process.execPath}" "${fakePath}" "$@"\n`, { mode: 0o755 });
-  const jsonl = async (file) => (await fs.readFile(file, "utf8").catch(() => "")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
-  return {
-    env: { ...env, ORKESTR_CLAUDE_CODE_BIN: bin, HOME: path.join(env.ORKESTR_HOME, "host-home"), PATH: process.env.PATH, ORKESTR_CANARY_SECRET: "must-not-leak", ...extra },
-    calls: () => jsonl(files.calls),
-    ran: () => jsonl(files.ran),
-  };
-}
+import { fakeClaude } from "./fixtures/claude-job-fixtures.js";
 
 function claudeSpec({ name = "claude-job", tools = { allow: ["claude.read"] }, runtime = {}, outputSchema } = {}) {
   return normalizeAgentJobSpec({
@@ -69,7 +53,7 @@ test("claude-code is runnable only through a registered job executor, which an e
   assert.equal(await agentJobExecutorFor("claude-code", env), claudeCodeJobAdapter);
   assert.equal(claudeCodeJobAdapter.capabilities.permissionHook, "pre_call");
   assert.equal(await agentJobExecutorFor("claude-code", { ...env, ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR: "0" }), null);
-  assert.equal(await agentJobExecutorFor("codex", env), null, "codex stays a placeholder");
+  assert.equal((await agentJobExecutorFor("codex", env))?.jobExecutor, "codex-app-server");
 });
 
 test("tool names map onto job policy names", () => {
@@ -89,7 +73,7 @@ test("a run executes in the internal workspace, journals progress and returns th
     assert.equal(result.state, "succeeded", JSON.stringify(result));
     assert.deepEqual(result.output, { summary: "ok" });
     const [call] = await fake.calls();
-    assert.equal(call.cwd, path.join(fake.env.ORKESTR_HOME, "agent-jobs", "workspaces", run.id));
+    assert.equal(call.cwd, agentJobWorkspacePath(fake.env.ORKESTR_HOME, run.job, run.id));
     assert.equal(call.hooks, 1);
     assert.equal(call.strictMcp, true);
     assert.equal(call.permissionMode, "default");

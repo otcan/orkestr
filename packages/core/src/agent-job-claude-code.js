@@ -1,7 +1,8 @@
-// Claude Code job-attempt adapter (docs/spec/adapter-interface.md §4).
+// Claude Code job executor (docs/spec/adapter-interface.md §4). Implements the
+// native executor interface (agent-job-native-interface.js).
 //
-// Runs one Agent Job attempt as `claude -p --output-format stream-json` in an
-// internal job workspace, without a thread record:
+// Runs one Agent Job attempt as `claude -p --output-format stream-json` in the
+// run's workspace (ctx.prepareWorkspace), without a thread record:
 // * every tool call passes a PreToolUse hook (agent-job-claude-permission-hook.js)
 //   that asks ctx.authorizeTool through a per-attempt broker, so the job's
 //   allow / approval_required / deny lists are enforced per call
@@ -10,7 +11,7 @@
 // * assistant text, tool calls and tool results are emitted as progress
 //   events (the runner writes them into the run journal);
 // * the session id is emitted before any tool runs, so a later attempt
-//   resumes the same session (`--resume`) after a crash or an approval wait;
+//   resumes ctx.resume.sessionRef (`--resume`) after a crash or an approval wait;
 // * ctx.signal (cancel, timeout, lost lease) kills the process group.
 //
 // It uses the host Claude login, the same one the provider probe checks.
@@ -19,9 +20,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { agentJobExecutorFor, overlayAgentJobExecutorFor, providerError, registerAgentJobAdapter, runExecutorTurn } from "./agent-job-adapters.js";
+import { nativeAttemptError, nativeExecutorEnabled, nativeTimeoutError } from "./agent-job-native-interface.js";
 import { startPermissionBroker } from "./agent-job-permission-broker.js";
 import { claudeCodeCommand, claudeCodeEventSessionId, claudeCodeEventText, classifyClaudeCodeFailure } from "./claude-code-client.js";
+import { classifyClaudeCodeFailureCode, turnErrorClassification } from "./runtime-turn-error-class.js";
 
 const HOOK_SCRIPT = fileURLToPath(new URL("./agent-job-claude-permission-hook.js", import.meta.url));
 const KILL_GRACE_MS = 2_000;
@@ -41,10 +43,6 @@ function clean(value) {
 
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", `'\\''`)}'`;
-}
-
-function disabled(env) {
-  return ["0", "false", "no", "off"].includes(clean(env.ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR).toLowerCase());
 }
 
 export function claudeJobSettings() {
@@ -115,14 +113,17 @@ export function claudeJobOutput(text, outputSchema) {
   return { text: value };
 }
 
-// Low-cardinality Claude failure code -> runner error class (kind/retryable)
-// and the provider-neutral class (auth | transient | permanent).
+// Low-cardinality Claude failure code -> turn error class
+// (runtime-turn-error-class.js) and the runner's kind/retryable. A killed
+// process is retried; a missing CLI is an install problem, so it is a provider
+// error (fallback applies) rather than a task error.
 export function claudeJobError(code, { sessionRef = "" } = {}) {
-  const retryable = ["claude_code_rate_limited", "claude_code_timeout", "claude_code_interrupted"].includes(code);
-  const auth = code === "claude_code_auth_required";
-  const kind = auth || code === "claude_code_cli_missing" || retryable ? "provider" : "task";
-  const errorClass = auth ? "auth" : retryable ? "transient" : "permanent";
-  return Object.assign(new Error(code), { code, kind, retryable, errorClass, sessionRef });
+  const classification = code === "claude_code_interrupted"
+    ? turnErrorClassification("transient", code)
+    : classifyClaudeCodeFailureCode(code);
+  const error = nativeAttemptError(classification, { message: code, sessionRef });
+  if (code === "claude_code_cli_missing" || code === "claude_code_permission_hook_bypassed") error.kind = "provider";
+  return error;
 }
 
 function contentBlocks(event) {
@@ -141,8 +142,11 @@ function killGroup(proc, signal) {
   }
 }
 
-async function runClaudeJobAttempt(ctx, input) {
-  await fs.mkdir(ctx.workspace, { recursive: true, mode: 0o700 });
+async function runClaudeJobAttempt(ctx, jobInput) {
+  const workspace = await ctx.prepareWorkspace(jobInput);
+  await fs.chmod(workspace.path, 0o700).catch(() => {});
+  ctx.emit({ type: "workspace.ready", path: workspace.path, kind: workspace.kind });
+  const input = { ...jobInput, resumeSessionRef: clean(ctx.resume?.sessionRef), resumeReason: clean(ctx.resume?.reason) };
   let stop = null; // { kind: "park"|"expired"|"cancelled"|"bypass"|"aborted", approval?, reason? }
   let proc = null;
   const toolsById = new Map();
@@ -181,7 +185,7 @@ async function runClaudeJobAttempt(ctx, input) {
   const onAbort = () => terminate({ kind: ctx.signal.reason === "cancelled" ? "cancelled" : "aborted", reason: String(ctx.signal.reason || "aborted") });
   try {
     proc = spawn(claudeCodeCommand(ctx.env), claudeJobArgs(input), {
-      cwd: ctx.workspace,
+      cwd: workspace.path,
       env: childEnv(ctx.env, broker),
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
@@ -202,7 +206,7 @@ async function runClaudeJobAttempt(ctx, input) {
       if (observed) sessionRef = observed;
       if (sessionRef && !sessionAnnounced) {
         sessionAnnounced = true;
-        ctx.emit({ type: "session.started", sessionRef });
+        ctx.emit({ type: "session.started", sessionRef, resumed: sessionRef === input.resumeSessionRef });
       }
       const type = clean(event.type).toLowerCase();
       if (type === "result") {
@@ -259,16 +263,20 @@ async function runClaudeJobAttempt(ctx, input) {
       throw claudeJobError(error?.code === "ENOENT" ? "claude_code_cli_missing" : classifyClaudeCodeFailure(error?.message));
     });
 
-    if (stop?.kind === "park") return { park: stop.approval, sessionRef };
-    if (stop?.kind === "expired") return { expired: stop.approval, sessionRef };
-    if (stop?.kind === "cancelled") return { cancelled: true, sessionRef };
-    if (stop?.kind === "aborted") return { aborted: stop.reason, sessionRef };
-    if (stop?.kind === "bypass") throw providerError("claude_code_permission_hook_bypassed", { retryable: false });
+    if (stop?.kind === "park") return { type: "park", approval: stop.approval, sessionRef };
+    if (stop?.kind === "expired") return { type: "expired", approval: stop.approval, sessionRef };
+    if (stop?.kind === "cancelled") return { type: "cancelled", sessionRef };
+    // The runner maps a lost lease from ctx.signal itself.
+    if (stop?.kind === "aborted") {
+      if (stop.reason === "timeout") throw nativeTimeoutError();
+      return { type: "cancelled", sessionRef };
+    }
+    if (stop?.kind === "bypass") throw claudeJobError("claude_code_permission_hook_bypassed", { sessionRef });
     if (stop?.kind === "error") throw claudeJobError(stop.reason, { sessionRef });
     if (resultError) throw claudeJobError(classifyClaudeCodeFailure(resultError), { sessionRef });
     if (code !== 0) throw claudeJobError(classifyClaudeCodeFailure(stderr || `exit_${code}_${signal || ""}`), { sessionRef });
     if (!sessionRef) throw claudeJobError("claude_code_session_missing");
-    return { output: claudeJobOutput(resultText || lastText, input.outputSchema), sessionRef };
+    return { type: "final", output: claudeJobOutput(resultText || lastText, input.outputSchema), sessionRef };
   } finally {
     ctx.signal?.removeEventListener?.("abort", onAbort);
     await broker.close();
@@ -277,9 +285,8 @@ async function runClaudeJobAttempt(ctx, input) {
 
 export const claudeCodeJobAdapter = Object.freeze({
   id: "claude-code",
-  // A real job-attempt executor: counts for the provider gate.
-  jobExecutor: true,
-  enabled: (env = process.env) => !disabled(env),
+  jobExecutor: "claude-code-cli",
+  enabled: (env = process.env) => nativeExecutorEnabled("claude-code", env),
   capabilities: Object.freeze({
     toolLoop: "native",
     resume: "session",
@@ -290,17 +297,8 @@ export const claudeCodeJobAdapter = Object.freeze({
     sandbox: "workspace_write",
     usage: true,
   }),
-  async probe(ctx) {
-    return (await agentJobExecutorFor("claude-code", ctx.env)) ? { ok: true } : { ok: false, reason: "job_executor_unavailable" };
+  async probe() {
+    return { ok: true };
   },
-  async run(ctx, input) {
-    // An executor registered by an overlay under `claude-code`/`claude` is an
-    // explicit operator choice and keeps precedence.
-    const overlay = await overlayAgentJobExecutorFor("claude-code", ctx.env);
-    if (overlay) return runExecutorTurn(overlay, ctx, input);
-    if (disabled(ctx.env)) throw providerError("job_executor_unavailable", { retryable: false });
-    return runClaudeJobAttempt(ctx, input);
-  },
+  run: runClaudeJobAttempt,
 });
-
-registerAgentJobAdapter(claudeCodeJobAdapter);

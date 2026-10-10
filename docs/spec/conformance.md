@@ -14,8 +14,8 @@ optional capabilities are reported as skipped together with the declared gap.
 ## Run it
 
 ```bash
-# All bundled harnesses (reference, Codex app-server, Claude Code thread
-# runtime, Claude Code job executor) + self-tests
+# All bundled harnesses (reference, Codex app-server, Codex job, Claude Code
+# thread runtime, Claude Code job) + self-tests
 npm run test:conformance
 
 # One adapter: point the runner at a harness module
@@ -117,25 +117,35 @@ misclassifies errors) and asserts the matching check fails.
 
 ## Current matrix
 
-| check | reference | codex-app-server | claude-code | claude-code-job |
-| --- | --- | --- | --- | --- |
-| start-turn | pass | pass | pass | pass |
-| final-output | pass | pass | pass | pass |
-| streaming-progress | pass | pass | pass | pass |
-| cancellation | pass | pass | pass | pass |
-| restart-resume | pass | pass | pass | pass |
-| idempotent-redelivery | pass | pass | pass | skip (by design: run admission dedupes) |
-| tool-permission-deny | pass | pass | skip (gap) | pass |
-| tool-permission-approve | pass | pass | skip (gap) | pass |
-| error-auth | pass | pass | pass | pass |
-| error-transient | pass | pass | pass | pass |
-| error-permanent | pass | pass | pass | pass |
+| check | reference | codex-app-server | codex-job | claude-code | claude-code-job |
+| --- | --- | --- | --- | --- | --- |
+| start-turn | pass | pass | pass | pass | pass |
+| final-output | pass | pass | pass | pass | pass |
+| streaming-progress | pass | pass | pass | pass | pass |
+| cancellation | pass | pass | pass | pass | pass |
+| restart-resume | pass | pass | pass | pass | pass |
+| idempotent-redelivery | pass | pass | pass (per session object) | pass | skip (by design: run admission dedupes) |
+| tool-permission-deny | pass | pass | pass | skip (gap) | pass |
+| tool-permission-approve | pass | pass | pass | skip (gap) | pass |
+| error-auth | pass | pass | pass | pass | pass |
+| error-transient | pass | pass | pass | pass | pass |
+| error-permanent | pass | pass | pass | pass | pass |
+
+Agent Jobs: the Codex job column passes 11/11; the Claude Code job column
+passes 10/11 including tool approve and deny through the `PreToolUse` hook
+(re-delivery is deduplicated by run admission, not by the executor).
 
 The Codex and Claude Code harnesses drive the real Orkestr adapters
 (`packages/core/src/codex-app-server*.js`,
 `packages/core/src/runtime-claude-code-adapter.js`) through the Orkestr thread
-layer against fake processes in `test/conformance/fakes/`, derived from the
-inline fakes in `test/codex-app-server.test.js` and
+layer against fake processes in `test/conformance/fakes/`. The `codex-job`
+harness drives the Agent Job Codex session (`packages/core/src/codex-job-session.js`,
+no Orkestr thread record) against the same fake app-server; its error classes
+come from `classifyCodexJobError` (the shared `classifyCodexTurnError`), not
+from the harness. The
+fake also has a scripted Agent Job mode (`FAKE_CODEX_JOB_SCRIPT`: dynamic tool
+calls, command approvals, waits) used by `test/agent-job-codex*.test.js`.
+The fakes are derived from the inline fakes in `test/codex-app-server.test.js` and
 `test/claude-code-runtime.test.js`. The `claude-code-job` harness
 (`claude-code-job-harness.js`) drives the Agent Job executor
 `packages/core/src/agent-job-claude-code.js` directly against the same fake,
@@ -169,7 +179,7 @@ These were found while writing the harnesses. Fixed items are marked.
    the job executor (`agent-job-claude-code.js`) installs a `PreToolUse` hook
    that asks Orkestr before every call and enforces the job's allow /
    approval_required / deny lists (see
-   [agent-job-runner.md](agent-job-runner.md#claude-code-jobs)). Interactive
+   [agent-job-runner.md](agent-job-runner.md#claude-code)). Interactive
    Claude Code *threads* still run under a fixed permission mode/MCP policy.
 4. **Claude Code: progress is only projected for connector-originated turns.**
    Fixed. `createClaudeCodeProgressReporter` still persists commentary only for
@@ -188,10 +198,17 @@ These were found while writing the harnesses. Fixed items are marked.
    finalMessageId, output, error }`. An outcome recorded for an earlier attempt
    is ignored once the input is requeued or resubmitted under a new turn. The
    harnesses answer duplicate inputs through this lookup.
-7. **Both: no common adapter interface yet.** The harnesses translate the
-   contract onto adapter-specific functions (`startCodexAppServerThread`,
-   `sendClaudeCodeInput`, …). Progress is read back from persisted thread
-   messages after the turn rather than streamed through a callback.
+7. **Both: no common adapter interface yet.** Fixed for Agent Jobs. The
+   `codex` and `claude-code` job executors implement one native executor
+   interface (`packages/core/src/agent-job-native-interface.js`; see
+   [agent-job-runner.md](agent-job-runner.md#native-executors)): start/resume
+   through `ctx.resume`, cancel through `ctx.signal`, progress through
+   `ctx.emit`, the tool-permission hook `ctx.authorizeTool` with the approval
+   pause, one outcome shape and errors with the shared turn error classes.
+   `test/agent-job-native-interface.test.js` drives both through the same
+   context. The thread runtimes (`startCodexAppServerThread`,
+   `sendClaudeCodeInput`, …) keep their own functions; their harnesses still
+   translate the contract.
 
 ## Naming assumptions (to align with `docs/spec/adapter-interface.md`)
 

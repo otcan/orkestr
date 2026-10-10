@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { claudeCodeJobAdapter } from "../../packages/core/src/agent-job-claude-code.js";
+import { conformanceErrorClass } from "../../packages/core/src/runtime-turn-error-class.js";
 
 // Conformance harness for the Claude Code *job-attempt* adapter
 // (packages/core/src/agent-job-claude-code.js) driven against
@@ -62,6 +63,11 @@ export const claudeCodeJobConformance = {
           provider: "claude-code",
           env,
           workspace: path.join(home, "workspaces", session.key),
+          async prepareWorkspace() {
+            await fs.mkdir(ctx.workspace, { recursive: true });
+            return { path: ctx.workspace, kind: "directory", repository: null };
+          },
+          resume: sessionRef ? { sessionRef, attempt: turns - 1, reason: "next conformance turn" } : null,
           signal: controller.signal,
           emit(event) {
             if (event.type === "session.started") sessionRef = event.sessionRef;
@@ -73,7 +79,7 @@ export const claudeCodeJobConformance = {
             return decision === "approve" ? { decision: "allow" } : { decision: "deny" };
           },
         };
-        const runInput = { prompt: `${input.text} [scenario:${input.scenario || "echo"}]`, inputs: {}, resumeSessionRef: sessionRef };
+        const runInput = { prompt: `${input.text} [scenario:${input.scenario || "echo"}]`, inputs: {} };
         let result = null;
         let failure = null;
         try {
@@ -85,7 +91,7 @@ export const claudeCodeJobConformance = {
         }
         if (sessionRef) await fs.writeFile(sessionsFile, JSON.stringify({ ...(await sessions()), [session.key]: sessionRef }));
         if (tool) tool.executed = (await lines(toolsFile)).length > toolsBefore;
-        const status = failure ? "failed" : result?.cancelled ? "cancelled" : "completed";
+        const status = failure ? "failed" : result?.type === "cancelled" ? "cancelled" : "completed";
         if (status === "completed") onEvent({ type: "final", text: result.output?.text || "" });
         return {
           turnId,
@@ -93,7 +99,7 @@ export const claudeCodeJobConformance = {
           duplicate: false,
           providerSessionId: sessionRef,
           output: status === "completed" ? { text: result.output?.text || "" } : null,
-          error: failure ? { class: failure.errorClass || "permanent", code: String(failure.code || failure.message || "") } : null,
+          error: failure ? { class: conformanceErrorClass(failure.errorClass), code: String(failure.code || failure.message || "") } : null,
           ...(tool ? { tool } : {}),
         };
       },

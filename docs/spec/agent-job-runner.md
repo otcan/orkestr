@@ -3,9 +3,10 @@
 Status: the runtime (store, recovery, ledger, approvals, triggers, CLI) is
 implemented and proven with the `simulated` **test fixture**. Real jobs must
 use a connected `codex` or `claude-code` provider (owner decision 2026-10-10,
-[agent-job.md §9](agent-job.md#9-owner-decisions-2026-10-10)). `claude-code`
-has a built-in job executor with a per-call permission hook; `codex` still
-needs an overlay executor (gaps below). Orkestr
+[agent-job.md §9](agent-job.md#9-owner-decisions-2026-10-10)). Both have a
+built-in job executor behind one shared native executor interface
+([Native executors](#native-executors)): `codex` on its own Codex app-server,
+`claude-code` on `claude -p` with a per-call permission hook. Orkestr
 sends no usage telemetry or pings. Spec: [agent-job.md](agent-job.md).
 Guarantees: [runtime-guarantees.md](runtime-guarantees.md).
 
@@ -13,18 +14,20 @@ Guarantees: [runtime-guarantees.md](runtime-guarantees.md).
 
 | Provider | Connected when | Runnable when | Stock install |
 | --- | --- | --- | --- |
-| `codex` | `codex login status` reports logged in **and** `codex app-server --help` works (the same checks as `orkestr doctor`) | a non-placeholder executor with id `codex` is registered (`agentJobExecutorFor`) | connected possible, **not runnable**: the built-in `codex` executor is a placeholder |
-| `claude-code` | `claude auth status --json` reports logged in | the built-in Claude Code job executor (`agent-job-claude-code.js`) is registered and not switched off with `ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR=0`, or an overlay executor with id `claude-code` / `claude` is registered | **runnable** once logged in |
+| `codex` | `codex login status` reports logged in **and** `codex app-server --help` works (the same checks as `orkestr doctor`) | connected **and** the built-in Codex job executor (`agent-job-codex.js`, `jobExecutor: "codex-app-server"`) is registered and not switched off with `ORKESTR_AGENT_JOB_CODEX_EXECUTOR=0`, or an overlay executor with id `codex` is registered | **runnable** once logged in |
+| `claude-code` | `claude auth status --json` reports logged in | connected **and** the built-in Claude Code job executor (`agent-job-claude-code.js`, `jobExecutor: "claude-code-cli"`) is registered and not switched off with `ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR=0`, or an overlay executor with id `claude-code` / `claude` is registered | **runnable** once logged in |
 | `openai-compatible` | no probe yet | no adapter yet | not runnable |
 | `simulated` | only under `node --test` | only under `node --test` | never selectable in user job specs |
 
-So on a stock install a logged-in Claude Code runs jobs; with only Codex
-logged in, `orkestr init` writes a job (and warns that no job executor exists
-yet), while `orkestr run`, the trigger endpoint, schedules and WhatsApp
-triggers refuse and audit the refusal. Executors registered by an overlay
-(`ORKESTR_OVERLAY_DIR`) under those ids make the provider runnable and take
-precedence over the built-in Claude Code executor. `getExecutorAdapter()`'s fallback to the
-no-op executor never counts as an executor. The runtime itself (store,
+So on a stock install a logged-in Codex or Claude Code runs jobs. When a
+provider is logged in but has no executor (its switch is `0`), `orkestr init`
+writes a job and warns, while `orkestr run`, the trigger endpoint, schedules
+and WhatsApp triggers refuse and audit the refusal. Executors registered by an
+overlay (`ORKESTR_OVERLAY_DIR`) under those ids are an explicit operator
+choice and take precedence over the built-in executors. The thread-level
+`codex` registry entry in `executors.js` (used by thread routing, not by jobs)
+and `getExecutorAdapter()`'s fallback to the no-op executor never count as job
+executors. The runtime itself (store,
 recovery, ledger, approvals, triggers, audit) is fully exercised by the
 tests with the simulated fixture.
 
@@ -38,10 +41,13 @@ tests with the simulated fixture.
 | `agent-job-effects.js` | Authorizes every tool call (`agentJobToolDecision`), runs side effects through the ledger, reconciles after crashes and applies approval binding. |
 | `agent-job-ledger.js` | Effect rows (`intended` → `committed` \| `failed` \| `unknown`) and approvals. |
 | `agent-job-tools.js` | Tool registry (`effect`, `logicalKey`, `reconcile`, `perform`) and the offline tools: `demo.*`, `repo.*` (local git) and `github.*` (fake code host only, opt-in with `inputs.code_host: fake`). |
-| `agent-job-adapters.js` | Adapter registry and the job-executor gate (`agentJobExecutorFor`), `codex` (one native turn through `executors.js`, trigger event included in the prompt) and the `simulated` test fixture (scripted, Orkestr tool loop, transcript resume; resolvable only under `node --test`). |
-| `agent-job-claude-code.js` | Claude Code job-attempt adapter, see [Claude Code jobs](#claude-code-jobs). |
-| `agent-job-native-attempt.js` | Runner side of native attempts: internal workspace, cancel/timeout/lease signal, progress into the run journal, session resume, per-call authorization (`authorizeNativeToolCall`). |
+| `agent-job-adapters.js` | Adapter registry and the provider gate (`agentJobExecutorFor`): overlay executor first, else the built-in native executor if its env switch is on. Registers `codex`, `claude-code` and the `simulated` test fixture (scripted, Orkestr tool loop, transcript resume; resolvable only under `node --test`). Overlay executors run one native turn through `executors.js` (trigger event included in the prompt). |
+| `agent-job-native-interface.js` | The shared native executor interface: context and outcome contract, `NATIVE_EVENT_TYPES`, env switches, `nativeAttemptError` (turn error classes → runner kind/retryable) and `nativeExecutorProblems` (shape check). |
+| `agent-job-native-attempt.js` | Runner side of native attempts: builds the context (workspace, resume, signal, `emit` into the run journal, `authorizeTool` per-call authorization with approvals, `executeTool` through the effect ledger) and maps the outcome. |
+| `agent-job-codex.js` | The `codex` executor, see [Codex](#codex). Uses `codex-job-session.js` (start/resume/turn/interrupt on a Codex thread that has no Orkestr thread record) and `codex-job-client.js` (a separate app-server process whose notifications go to the job session, never to thread projection or WhatsApp). |
+| `agent-job-claude-code.js` | The `claude-code` executor, see [Claude Code](#claude-code). |
 | `agent-job-permission-broker.js`, `agent-job-claude-permission-hook.js` | Per-attempt Unix-socket permission broker and the Claude Code `PreToolUse` hook command that asks it (fails closed). |
+| `agent-job-workspace.js` | Per-run workspace `ORKESTR_HOME/agent-job-workspaces/<job>/<run>`: a detached `git worktree` of `inputs.repository_path` for repository jobs, else a plain directory. |
 | `agent-job-providers.js` | Honest provider gate. A provider is *connected* when the user's login works and *runnable* when Orkestr also has a real job executor for it. Runs are admitted, and attempts started, only on runnable providers; every admission refusal is written to `trigger_audit`. Probes live in `packages/connectors/src/agent-job-provider-probes.js` (cached 60 s); with no probe a provider counts as not connected. |
 | `packages/connectors/src/whatsapp-job-triggers.js` | WhatsApp group-message triggers and `approve`/`deny` replies, called from the existing inbound router (`routeWhatsAppInbound`). |
 | `agent-job-audit.js` | Sealed audit record per terminal run and notification intents, written in the same transaction as the state change they announce. |
@@ -85,44 +91,88 @@ same effect state names.
    properties, items, enum), the run becomes terminal and its audit record is
    sealed in the same transaction, together with the notification intents.
 
-## Claude Code jobs
+## Native executors
 
-A `claude-code` attempt runs `claude -p --output-format stream-json` with the
-host Claude login (the one `claude auth status` reports), no thread record:
+`codex` and `claude-code` implement one interface
+(`agent-job-native-interface.js`, conformance gap 7). The runner
+(`agent-job-native-attempt.js`) gives each attempt the same context and reads
+the same outcome:
 
-* **Workspace.** The working directory is
-  `ORKESTR_HOME/agent-jobs/workspaces/<run-id>` (mode 0700), the same for
-  every attempt of the run. The child gets an allowlisted env (`PATH`, `HOME`,
-  locale, `TMPDIR`, TLS CA vars, `CLAUDE_CONFIG_DIR`), background tasks off,
-  no MCP servers (`--strict-mcp-config`) and no `ORKESTR_*` values besides the
-  broker address and token.
+| Part | Contract |
+| --- | --- |
+| start | `run(ctx, input)` runs one attempt in `await ctx.prepareWorkspace(input)` and emits `session.started {sessionRef, resumed}` before any tool runs |
+| resume | `ctx.resume = {sessionRef, attempt, reason}` from the last `session_started` checkpoint of the same provider; the executor resumes that provider session (`thread/resume`, `--resume`) |
+| cancel | `ctx.signal` aborts with `cancelled`, `timeout` or `lease_lost`; cooperative executors (`codex`) get 10 s to interrupt the turn, kill-style ones (`claude-code`) 5 s |
+| progress | `ctx.emit(event)` with `workspace.ready`, `session.started`, `message.delta` / `message.completed`, `tool.requested` / `tool.completed`, `usage`, `output.repair`; the runner writes redacted, capped checkpoints (`workspace`, `session_started`, `progress`, `usage`, `output_repair`) |
+| tool permission hook | every provider-native call asks `ctx.authorizeTool({tool, args, callId})` → `allow`, `deny`, `pending`, `expired`, `cancelled` under `permissions.tools` (default deny); each decision is a `tool_decision` checkpoint |
+| approval pause | `pending` binds an approval to `(tool, args)`; the executor stops the turn and returns `{type: "park", approval}`; after `approve` the next attempt resumes the session and the same call is allowed once (G7), after `deny` it is refused |
+| Orkestr tools | `ctx.executeTool(call)` runs a job tool through the decision and the effect ledger (`codex` exposes them as dynamic tools) |
+| output | `{type: "final", output}`; with `output_schema` the final answer is parsed as JSON (bare or fenced) |
+| error class | failures throw `nativeAttemptError(classification)` with the turn error classes of `runtime-turn-error-class.js`: `auth` → provider error, no retry (fallback applies); `rate_limit` / `transient` → retryable provider error; `permanent` → task error |
+| gate | `jobExecutor`, `enabled(env)` and an env switch (`ORKESTR_AGENT_JOB_CODEX_EXECUTOR`, `ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR`; `0`/`false`/`off` disables) |
+
+`test/agent-job-native-interface.test.js` checks that both executors satisfy
+the interface and the gate and drives each with the same recording context
+(one turn, and the approval pause).
+
+### Codex
+
+One attempt is one turn on a Codex app-server thread owned by the run.
+
+* **Workspace.** Codex runs in the run's workspace with sandbox
+  `workspace-write` and approval policy `untrusted`. Repository jobs get a
+  detached git worktree of the repository's `HEAD`; the repository's own
+  working tree and `HEAD` are untouched.
+* **Orkestr tools.** Every registered job tool that `permissions.tools` does
+  not deny is given to Codex as a dynamic tool (`repo.branch.push` →
+  `repo__branch__push`). Each `item/tool/call` runs `ctx.executeTool`. A call
+  to a tool that was not exposed is still checked and denied.
+* **Codex approvals.** Codex's own approval requests go through
+  `ctx.authorizeTool` as job tools:
+  `item/commandExecution/requestApproval` → `codex.command {command, cwd}`,
+  `item/fileChange/requestApproval` → `codex.file_change {changes}`,
+  `item/permissions/requestApproval` → `codex.permissions`, MCP tool-call
+  elicitations → `codex.mcp {server, message}`. `allow` accepts (not
+  ledgered: it stays inside the sandbox), `deny` or unlisted declines,
+  `approval_required` interrupts the turn and parks the run. Other server
+  requests (user input, auth refresh) are refused: nobody watches a job turn.
+* **Cancel, timeout, resume.** The abort sends `turn/interrupt`. The next
+  attempt (after a crash, restart, backoff or approval) resumes the Codex
+  thread with `thread/resume` and starts a turn that says what was already
+  committed. If the thread cannot be resumed, a new one is started with the
+  committed-effects summary.
+* **Output.** A schema mismatch is re-asked once. Without a schema, non-JSON
+  text becomes `{ text }`. API keys are redacted from error messages.
+
+### Claude Code
+
+An attempt runs `claude -p --output-format stream-json` with the host Claude
+login (the one `claude auth status` reports), no thread record:
+
+* **Workspace.** The run's workspace (mode 0700), the same for every attempt.
+  The child gets an allowlisted env (`PATH`, `HOME`, locale, `TMPDIR`, TLS CA
+  vars, `CLAUDE_CONFIG_DIR`), background tasks off, no MCP servers
+  (`--strict-mcp-config`) and no `ORKESTR_*` values besides the broker address
+  and token.
 * **Per-call permissions (G6).** `--settings` installs a `PreToolUse` hook for
-  every tool. The hook asks the attempt's broker, which applies the pinned
-  job policy: Claude tools are named `claude.<tool>` (`Bash` → `claude.bash`,
-  `Read` → `claude.read`), MCP tools `mcp.<server>.<tool>`, matched against
-  `permissions.tools` (default deny). `deny` and unlisted tools are blocked
-  and the model gets the reason. `approval_required` creates an approval bound
-  to `(tool, args)`, blocks the call, stops the process and parks the run;
-  after `approve` the next attempt resumes the session and the same call is
-  allowed once (G7), after `deny` it is blocked. A hook error, timeout or
-  missing broker blocks the call (exit 2). A `tool_result` for a call that
-  never passed the hook fails the attempt with
-  `claude_code_permission_hook_bypassed`.
-* **Progress.** Session start, assistant text, tool requests/results, tool
-  decisions and usage are written to the run journal (`session_started`,
-  `progress`, `tool_decision`, `usage` checkpoints; text redacted and capped).
-* **Cancel and timeout.** A cancel request, the attempt timeout or a lost
-  lease aborts the attempt; the process group gets SIGTERM, then SIGKILL.
-* **Resume.** The session id is checkpointed before any tool runs; the next
-  attempt (after an approval wait, a retry or a crash) runs `--resume` on it.
-* **Output.** With `output_schema` the final answer is parsed as JSON (bare or
-  in a fenced block), otherwise it is `{ text }`. Errors map to `provider`
-  (auth, CLI missing, rate limit, timeout; rate limit and timeout retry) or
-  `task`.
+  every tool. The hook asks the attempt's broker, which calls
+  `ctx.authorizeTool`: Claude tools are named `claude.<tool>` (`Bash` →
+  `claude.bash`), MCP tools `mcp.<server>.<tool>`. A blocked call is reported
+  to the model with the reason. A hook error, timeout or missing broker
+  blocks the call (exit 2). A `tool_result` for a call that never passed the
+  hook fails the attempt with `claude_code_permission_hook_bypassed`.
+* **Cancel and resume.** The abort sends SIGTERM, then SIGKILL, to the process
+  group. The session id is emitted before any tool runs; the next attempt runs
+  `--resume` on it.
+* **Errors.** CLI failure codes are classified with
+  `classifyClaudeCodeFailureCode`; a killed process is `transient`, a missing
+  CLI a non-retryable provider error.
 
-Switch the executor off with `ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR=0`. Tests:
-`test/agent-job-claude-code.test.js` and the `claude-code-job` conformance
-suite, both against fake Claude CLIs that run the real hook.
+Tests: `test/agent-job-codex.test.js`, `test/agent-job-codex-example-a.test.js`
+(Example A end to end on the fake Codex app-server and fake code host),
+`test/agent-job-claude-code.test.js` and the `codex-job` and
+`claude-code-job` conformance suites, all against fake CLIs (the Claude fake
+runs the real hook).
 
 ## Approvals
 
@@ -215,12 +265,19 @@ or creates user jobs (`test/simulated-provider.test.js`).
 | G3 | `test/agent-job-runner.test.js` (crash at every effect checkpoint, 30 randomized double-fault runs); `test/agent-job-recovery.test.js` (real `kill -9` at all 8 checkpoints); `test/agent-job-example-a.test.js` (git branch push) |
 | G4 | `test/agent-job-runner.test.js` (at-most-once tool crashed after dispatch: blocks, deny skips, approve retries once) |
 | G5 | `test/agent-job-runner.test.js` (recovery_loop, provider errors, task errors, fallback, backoff) |
-| G6 | `test/agent-job-approvals.test.js` (unlisted and denied tools never execute and are audited) |
+| G6 | `test/agent-job-approvals.test.js` (unlisted and denied tools never execute and are audited); `test/agent-job-codex.test.js` (codex: unexposed and denied tools, Codex commands declined by default) |
 | G7 | `test/agent-job-approvals.test.js` (args changed after approval, approve twice, concurrent decisions across processes, single use after a lost dispatch, expiry, denial) |
 | G8 | `test/agent-job-approvals.test.js` (job file edited mid-run) |
 | G9 | `test/agent-job-recovery.test.js` (sealed record contents, canary secret absent from the record and the database files) |
 | G10 | `test/agent-job-recovery.test.js` (crash after parking, and between outbox enqueue and marking the intent relayed, for `approval_required` and `succeeded`) |
 | G11 | `test/agent-job-recovery.test.js` (cancel during a tool call, during backoff, and of a run leased elsewhere) |
+
+Codex job executor: `test/agent-job-codex.test.js` (provider gate, default
+deny, `codex.command` approval park/approve/deny, cancel, resume after an
+app-server restart, output repair, error classes),
+`test/agent-job-codex-example-a.test.js` (Example A end to end on the fake
+Codex app-server and fake code host, also with a crash after the branch push)
+and `test/conformance/codex-job.test.js`.
 
 Owner-decision tests: `test/agent-job-whatsapp-trigger.test.js` (group,
 allowlist, DM/unknown/own rejections, match, message-id dedupe, quoted
@@ -231,23 +288,27 @@ test-only `simulated`).
 
 ## Gaps and follow-ups
 
-* **Codex job executor (most important).** `codex` calls the executor
-  registry (`getExecutorAdapter`); the built-in `codex` executor is still a
-  placeholder, so Codex needs a job-attempt adapter for the app-server (one
-  that does not need a thread record, like the Claude Code one). Overlay
-  executors registered under that id work today.
 * **Claude Code executor follow-ups.** It uses the host Claude login, not the
   Orkestr-managed Claude account profiles; a re-ask on invalid structured
   output, secret injection (`ctx.resolveSecret`) and an OS sandbox for the
   workspace (Bash can still reach the rest of the host when allowed) are not
   implemented.
+* **Codex executor limits.** Commands Codex itself treats as safe (read-only
+  ones) run in the sandbox without an approval request, so they are not
+  journaled as tool decisions. MCP servers from the user's Codex config stay
+  available; side-effecting MCP calls reach Orkestr as `codex.mcp` only when
+  Codex asks for approval. Dynamic tools are assumed to survive
+  `thread/resume` (Codex persists them with the thread); this is covered by the
+  fake app-server only. Usage/token accounting is a follow-up.
+* **Workspace retention.** Per-run workspaces are kept; cleanup is a
+  follow-up.
 * **WhatsApp triggers.** `fromMe` messages are ignored, so the owner cannot
   trigger a job from the account Orkestr itself sends with; sender LIDs must
   be listed as `…@lid` until the alias store is consulted; the broker
   forwarding path passes `quoted` only if the broker includes it.
-* **G6 for native tool loops.** Claude Code is gated per call
-  (`permissionHook: "pre_call"`). Overlay executors and `codex` run their own
-  tools; only Orkestr tools pass `agentJobToolDecision` there
+* **G6 for native tool loops.** `codex` and `claude-code` route provider
+  tool calls through `ctx.authorizeTool` (`permissionHook: "pre_call"`).
+  Overlay executors still run their own tools
   (`permissionHook: "sandbox_only"`).
 * **Notification delivery.** Notifications are enqueued once in the connector
   outbox (`connector: agent_job`, payload with channel and target) by the

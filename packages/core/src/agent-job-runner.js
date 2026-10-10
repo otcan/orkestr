@@ -9,6 +9,7 @@ import { classifyAdapterError, getAgentJobAdapter } from "./agent-job-adapters.j
 import { finalizeRunSync, recordNotificationsSync } from "./agent-job-audit.js";
 import { LeaseLost, ensureUnknownEffectApprovals, executeToolCall, reconcileDispatchedEffects } from "./agent-job-effects.js";
 import { faultsFrom, injectFault } from "./agent-job-faults.js";
+import { runNativeAttempt } from "./agent-job-native-attempt.js";
 import { agentJobProviderStatus } from "./agent-job-providers.js";
 import { expireApprovalSync, failEffectSync, listEffectsSync, pendingApprovalForRunSync, redactValue } from "./agent-job-ledger.js";
 import { validateOutput } from "./agent-job-output.js";
@@ -31,8 +32,6 @@ import {
   updateAttemptSync,
   updateRunSync,
 } from "./agent-job-store.js";
-import { runNativeAttempt } from "./agent-job-native-attempt.js";
-import "./agent-job-claude-code.js";
 import "./agent-job-tools.js";
 
 const defaultHolder = processHolderId();

@@ -35,7 +35,7 @@ const RULES = [
   ["rate_limit", "quota_exceeded", /quota|usage limit|insufficient_quota|billing|credit balance/i],
   ["transient", "model_capacity", /selected model is at capacity|model\s+.+\s+at capacity|server is overloaded|overloaded_error|temporarily unavailable due to (?:high )?demand/i],
   ["transient", "server_error", /\b(?:status|http|code|error)\s*:?\s*5\d\d\b|\b5\d\d\s+(?:internal|bad gateway|service|gateway)|internal server error|bad gateway|service unavailable|gateway timeout|server_error/i],
-  ["transient", "network", /stream disconnected|connection (?:reset|refused|closed)|network error|fetch failed|ENOTFOUND|EAI_AGAIN|ETIMEDOUT/i],
+  ["transient", "network", /stream disconnected|connection (?:reset|refused|closed)|network error|fetch failed|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPIPE/i],
   ["transient", "timeout", /timed? ?out|deadline exceeded/i],
   ["transient", "transport", TRANSPORT_PATTERN],
   ["permanent", "invalid_request", /invalid_request|invalid request|bad request|\b(?:status|http|code|error)\s*:?\s*40[04]\b|malformed|unsupported|not supported/i],

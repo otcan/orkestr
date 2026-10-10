@@ -8,7 +8,6 @@ import { setAgentJobProviderProbe } from "../../core/src/agent-job-providers.js"
 import { claudeCodeStatusAuthenticated } from "../../core/src/claude-code-auth-status.js";
 import { claudeCodeCommand } from "../../core/src/claude-code-client.js";
 import { agentJobExecutorFor } from "../../core/src/agent-job-adapters.js";
-import "../../core/src/agent-job-claude-code.js";
 import { codexAppServerStatus } from "../../core/src/codex-app-server-client.js";
 import { codexLoginStatus } from "./codex.js";
 
