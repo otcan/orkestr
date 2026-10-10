@@ -5,6 +5,12 @@
 //   [scenario:slow]            turn stays active until turn/interrupt
 //   [scenario:tool]            command approval request before the answer
 //   [scenario:fault:<class>]   turn fails with an auth/transient/permanent error
+//   FAKE_CODEX_JOB_SCRIPT      (env, JSON array; prompts without a marker) a
+//                              scripted Agent Job: {say}, {tool, args} via
+//                              item/tool/call, {command} via a command approval,
+//                              {wait} (stay active), {final}. Each thread keeps
+//                              its script position, so a resumed thread continues
+//                              after the last answered step.
 // State persists in FAKE_CODEX_STATE so a respawned process (restart) sees the
 // same threads, but marks them notLoaded like a real app-server would.
 import fs from "node:fs";
@@ -41,7 +47,9 @@ const STEP_MS = Number(process.env.FAKE_CODEX_STEP_MS || 50);
 const nextServerRequestId = { value: 9000 };
 const pendingApprovals = new Map();
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
-const scenarioOf = (text) => /\[scenario:([a-z:]+)\]/.exec(text)?.[1] || "echo";
+const jobScript = process.env.FAKE_CODEX_JOB_SCRIPT ? JSON.parse(process.env.FAKE_CODEX_JOB_SCRIPT) : null;
+const scenarioOf = (text) => /\[scenario:([a-z:]+)\]/.exec(text)?.[1] || (jobScript ? "script" : "echo");
+const pendingToolCalls = new Map();
 
 function completeTurn(state, thread, turn, status, extra = {}) {
   turn.status = status;
@@ -87,6 +95,7 @@ function continueTurn(threadId, turnId, scenario, text) {
     return completeTurn(state, thread, turn, "failed", { error: { message } });
   }
   if (scenario === "slow") return undefined;
+  if (scenario === "script") return continueScript(state, thread, turn);
   if (scenario === "tool") {
     const requestId = nextServerRequestId.value++;
     pendingApprovals.set(String(requestId), { threadId, turnId, text });
@@ -101,7 +110,56 @@ function continueTurn(threadId, turnId, scenario, text) {
   return completeTurn(state, thread, turn, "completed");
 }
 
+// Scripted Agent Job turn: run steps from the thread's position until a step
+// waits for an answer from Orkestr (tool call, approval) or the turn ends.
+function continueScript(state, thread, turn) {
+  const step = jobScript[thread.scriptStep || 0];
+  if (!step) {
+    agentItem(turn, "Nothing left to do.", "final_answer");
+    return completeTurn(state, thread, turn, "completed");
+  }
+  if (step.wait) return undefined;
+  if (step.say !== undefined || step.final !== undefined) {
+    const final = step.final !== undefined;
+    agentItem(turn, final ? (typeof step.final === "string" ? step.final : JSON.stringify(step.final)) : step.say, final ? "final_answer" : "commentary");
+    thread.scriptStep = (thread.scriptStep || 0) + 1;
+    if (final) return completeTurn(state, thread, turn, "completed");
+    writeState(state);
+    return setTimeout(() => continueTurn(thread.id, turn.id, "script", ""), STEP_MS);
+  }
+  const requestId = nextServerRequestId.value++;
+  pendingToolCalls.set(String(requestId), { threadId: thread.id, turnId: turn.id, step });
+  if (step.command) {
+    return send({ id: requestId, method: "item/commandExecution/requestApproval", params: { threadId: thread.id, turnId: turn.id, itemId: `cmd_${requestId}`, command: step.command, cwd: thread.cwd } });
+  }
+  const tool = String(step.tool).replace(/\./g, "__");
+  if (!step.force && !(thread.dynamicTools || []).includes(tool)) {
+    // A model cannot call a tool it was not given.
+    (state.toolCalls ||= []).push({ tool: step.tool, exposed: false });
+    thread.scriptStep = (thread.scriptStep || 0) + 1;
+    writeState(state);
+    return setTimeout(() => continueTurn(thread.id, turn.id, "script", ""), STEP_MS);
+  }
+  return send({ id: requestId, method: "item/tool/call", params: { threadId: thread.id, turnId: turn.id, callId: `call_${requestId}`, tool, arguments: step.args || {} } });
+}
+
+function answerToolCall(message, pending) {
+  pendingToolCalls.delete(String(message.id));
+  const state = readState();
+  const thread = state.threads.find((item) => item.id === pending.threadId);
+  const turn = thread?.turns.find((item) => item.id === pending.turnId);
+  // An answer for an interrupted turn is ignored: the step is retried later.
+  if (!turn || turn.status !== "inProgress") return;
+  if (pending.step.command) (state.commandDecisions ||= []).push({ command: pending.step.command, decision: message.result?.decision || "error" });
+  else (state.toolCalls ||= []).push({ tool: pending.step.tool, exposed: true, success: message.result?.success === true, text: message.result?.contentItems?.[0]?.text || message.error?.message || "" });
+  thread.scriptStep = (thread.scriptStep || 0) + 1;
+  writeState(state);
+  setTimeout(() => continueTurn(thread.id, turn.id, "script", ""), STEP_MS);
+}
+
 function answerApproval(message) {
+  const call = pendingToolCalls.get(String(message.id));
+  if (call) return answerToolCall(message, call);
   const pending = pendingApprovals.get(String(message.id));
   if (!pending) return;
   pendingApprovals.delete(String(message.id));
@@ -129,7 +187,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     case "initialize": return send({ id, result: { userAgent: "fake", platformFamily: "linux", platformOs: "linux" } });
     case "initialized": return undefined;
     case "thread/start": {
-      const thread = { id: `thr_${String(state.threads.length + 1).padStart(3, "0")}`, sessionId: "sess_001", name: "", preview: "", cwd: params.cwd || "", status: { type: "idle" }, loaded: true, turns: [] };
+      const thread = { id: `thr_${String(state.threads.length + 1).padStart(3, "0")}`, sessionId: "sess_001", name: "", preview: "", cwd: params.cwd || "", status: { type: "idle" }, loaded: true, turns: [], dynamicTools: (params.dynamicTools || []).map((tool) => tool.name), startParams: { approvalPolicy: params.approvalPolicy, sandbox: params.sandbox } };
       state.threads.push(thread);
       writeState(state);
       send({ id, result: { thread } });

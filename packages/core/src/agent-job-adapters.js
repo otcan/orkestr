@@ -6,10 +6,13 @@
 //   through authorization and the effect ledger. Resume is "transcript": the
 //   runner passes back every completed step, so a new attempt continues after
 //   the last checkpointed step.
-// * toolLoop "native": `run(ctx, input)` runs one whole turn and returns
-//   { output }. Codex and Claude Code go through the existing executor
-//   registry; their own tools are not visible to the runner (see the gaps in
-//   docs/spec/agent-job-runner.md).
+// * toolLoop "native": `run(ctx, input)` runs the provider's own loop and
+//   returns { output } (or a park/cancel outcome, agent-job-native-attempt.js).
+//   `codex` runs on the Codex app-server (agent-job-codex.js) with its tool
+//   calls routed through the runner. `claude-code` still goes through the
+//   executor registry; its own tools are not visible to the runner (see the
+//   gaps in docs/spec/agent-job-runner.md).
+import { codexJobAdapter } from "./agent-job-codex.js";
 import { agentJobTestProvidersAllowed } from "./agent-job-spec.js";
 import { getExecutorAdapter, loadOverlayExecutorAdapters } from "./executors.js";
 
@@ -111,10 +114,14 @@ export const simulatedJobAdapter = Object.freeze({
 
 const executorIdsByProvider = Object.freeze({ codex: ["codex"], "claude-code": ["claude-code", "claude"] });
 
-// The executor that can really run a job attempt for `provider`, or null.
-// getExecutorAdapter() falls back to the no-op executor and the built-in
-// `codex` executor is a placeholder; neither counts.
+// The executor that can really run a job attempt for `provider`, or null: a
+// registered job-attempt adapter (`jobExecutor`, e.g. codex on the app-server)
+// or a real executor from the registry. getExecutorAdapter() falls back to the
+// no-op executor and the built-in thread `codex` executor is a placeholder;
+// neither counts.
 export async function agentJobExecutorFor(provider, env = process.env) {
+  const adapter = adapters.get(String(provider || ""));
+  if (adapter?.jobExecutor && !adapter.testOnly) return adapter;
   await loadOverlayExecutorAdapters(env);
   for (const id of executorIdsByProvider[provider] || []) {
     const executor = getExecutorAdapter(id);
@@ -164,5 +171,5 @@ function nativeExecutorAdapter(id) {
 }
 
 registerAgentJobAdapter(simulatedJobAdapter);
-registerAgentJobAdapter(nativeExecutorAdapter("codex"));
+registerAgentJobAdapter(codexJobAdapter);
 registerAgentJobAdapter(nativeExecutorAdapter("claude-code"));

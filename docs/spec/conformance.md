@@ -14,7 +14,7 @@ optional capabilities are reported as skipped together with the declared gap.
 ## Run it
 
 ```bash
-# All bundled harnesses (reference, Codex app-server, Claude Code) + self-tests
+# All bundled harnesses (reference, Codex app-server, Codex job, Claude Code) + self-tests
 npm run test:conformance
 
 # One adapter: point the runner at a harness module
@@ -115,24 +115,29 @@ misclassifies errors) and asserts the matching check fails.
 
 ## Current matrix
 
-| check | reference | codex-app-server | claude-code |
-| --- | --- | --- | --- |
-| start-turn | pass | pass | pass |
-| final-output | pass | pass | pass |
-| streaming-progress | pass | pass | pass (connector-origin input only, see gaps) |
-| cancellation | pass | pass | pass |
-| restart-resume | pass | pass | pass |
-| idempotent-redelivery | pass | pass | pass |
-| tool-permission-deny | pass | pass | skip (gap) |
-| tool-permission-approve | pass | pass | skip (gap) |
-| error-auth | pass | pass | pass |
-| error-transient | pass | skip (gap) | pass (class mapped in harness) |
-| error-permanent | pass | skip (gap) | pass (class mapped in harness) |
+| check | reference | codex-app-server | codex-job | claude-code |
+| --- | --- | --- | --- | --- |
+| start-turn | pass | pass | pass | pass |
+| final-output | pass | pass | pass | pass |
+| streaming-progress | pass | pass | pass | pass (connector-origin input only, see gaps) |
+| cancellation | pass | pass | pass | pass |
+| restart-resume | pass | pass | pass | pass |
+| idempotent-redelivery | pass | pass | pass (per session object) | pass |
+| tool-permission-deny | pass | pass | pass | skip (gap) |
+| tool-permission-approve | pass | pass | pass | skip (gap) |
+| error-auth | pass | pass | pass | pass |
+| error-transient | pass | skip (gap) | pass | pass (class mapped in harness) |
+| error-permanent | pass | skip (gap) | pass | pass (class mapped in harness) |
 
 The Codex and Claude Code harnesses drive the real Orkestr adapters
 (`packages/core/src/codex-app-server*.js`,
 `packages/core/src/runtime-claude-code-adapter.js`) through the Orkestr thread
-layer against fake processes in `test/conformance/fakes/`, derived from the
+layer against fake processes in `test/conformance/fakes/`. The `codex-job`
+harness drives the Agent Job Codex session (`packages/core/src/codex-job-session.js`,
+no Orkestr thread record) against the same fake app-server; its error classes
+come from `classifyCodexJobError` in the adapter, not from the harness. The
+fake also has a scripted Agent Job mode (`FAKE_CODEX_JOB_SCRIPT`: dynamic tool
+calls, command approvals, waits) used by `test/agent-job-codex*.test.js`. The fakes are derived from the
 inline fakes in `test/codex-app-server.test.js` and
 `test/claude-code-runtime.test.js`.
 

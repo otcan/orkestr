@@ -127,7 +127,7 @@ Code: `codex-app-server.js`, `codex-app-server-client.js`, and the façade
 | events | `item/started` and `item/completed` → `tool.*` and `message.*`; `thread/status/changed` → status |
 | permission hook | `item/commandExecution/requestApproval`, `item/fileChange/requestApproval` → `pre_call` (today these become `awaiting_approval` prompts to a human; they must route to `ctx.authorizeTool` first) |
 | recovery | `codex-app-server-recovery.js`, `codex-app-server-active-turn-recovery.js` (stale-turn detection) |
-| gaps | Codex is coupled to Orkestr *threads*. A job attempt must be able to own a Codex thread without a chat/thread UI record. Structured output is `validate` for now. |
+| gaps | Thread-level Codex is coupled to Orkestr *threads*. Agent Jobs use `agent-job-codex.js` instead: a job-owned Codex thread with no thread record (`codex-job-session.js`, `codex-job-client.js`), approvals routed to `ctx.authorizeTool` (`pre_call`), Orkestr tools exposed as dynamic tools (`item/tool/call`), `resume: "session"`. Structured output is `validate` (one re-ask). See [agent-job-runner.md](agent-job-runner.md#codex-job-executor). |
 
 ### Claude Code (CLI, stream-json)
 

@@ -56,7 +56,7 @@ export async function connectedAgentJobProviders(env = process.env, candidates =
 }
 
 export const executorUnavailableHint =
-  "the provider is logged in, but this Orkestr install has no job executor for it yet (the built-in codex executor is a placeholder; see docs/spec/agent-job-runner.md)";
+  "the provider is logged in, but this Orkestr install has no job executor for it yet (codex jobs use the built-in Codex app-server executor; claude-code needs an executor registered by an overlay; see docs/spec/agent-job-runner.md)";
 
 export function providerNotConnectedError(provider, reason = "provider_not_connected") {
   const hint = reason === "job_executor_unavailable" ? executorUnavailableHint : connectProviderHint;
