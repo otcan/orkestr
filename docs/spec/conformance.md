@@ -14,7 +14,8 @@ optional capabilities are reported as skipped together with the declared gap.
 ## Run it
 
 ```bash
-# All bundled harnesses (reference, Codex app-server, Claude Code) + self-tests
+# All bundled harnesses (reference, Codex app-server, Codex job, Claude Code
+# thread runtime, Claude Code job) + self-tests
 npm run test:conformance
 
 # One adapter: point the runner at a harness module
@@ -87,6 +88,7 @@ The bundled fakes read a `[scenario:<name>]` marker appended to the prompt.
   error: { class: "auth" | "transient" | "permanent", code } | null,
   providerSessionId: "…",        // required for session.resume
   duplicate: false,              // true when inputId was already handled
+  finalMessageId: "msg-…",       // optional: persisted final message of the turn
   tool: { requested, decision: "approve" | "deny", executed }, // tool scenario only
 }
 ```
@@ -103,7 +105,7 @@ receives `{ tool, input }` and resolves to `"approve"` or `"deny"`.
 | `turn.streaming` | no | `streaming-progress` | a `progress` event precedes the `final` event |
 | `turn.cancel` | no | `cancellation` | active turn settles `cancelled`, no `final` event, session still usable |
 | `session.resume` | no | `restart-resume` | after `restart()` the same `providerSessionId` is resumed and used |
-| `input.idempotent` | no | `idempotent-redelivery` | same `inputId` twice → `duplicate: true`, same turn id, one provider turn |
+| `input.idempotent` | no | `idempotent-redelivery` | same `inputId` twice → `duplicate: true`, same turn id, status, output and final message id, one provider turn |
 | `tools.approval` | no | `tool-permission-deny`, `tool-permission-approve` | hook called once; deny blocks, approve runs the tool |
 | `errors.auth` | no | `error-auth` | `status: failed`, `error.class: auth` |
 | `errors.transient` | no | `error-transient` | `error.class: transient` |
@@ -115,36 +117,56 @@ misclassifies errors) and asserts the matching check fails.
 
 ## Current matrix
 
-| check | reference | codex-app-server | claude-code |
-| --- | --- | --- | --- |
-| start-turn | pass | pass | pass |
-| final-output | pass | pass | pass |
-| streaming-progress | pass | pass | pass (connector-origin input only, see gaps) |
-| cancellation | pass | pass | pass |
-| restart-resume | pass | pass | pass |
-| idempotent-redelivery | pass | pass | pass |
-| tool-permission-deny | pass | pass | skip (gap) |
-| tool-permission-approve | pass | pass | skip (gap) |
-| error-auth | pass | pass | pass |
-| error-transient | pass | skip (gap) | pass (class mapped in harness) |
-| error-permanent | pass | skip (gap) | pass (class mapped in harness) |
+| check | reference | codex-app-server | codex-job | claude-code | claude-code-job |
+| --- | --- | --- | --- | --- | --- |
+| start-turn | pass | pass | pass | pass | pass |
+| final-output | pass | pass | pass | pass | pass |
+| streaming-progress | pass | pass | pass | pass | pass |
+| cancellation | pass | pass | pass | pass | pass |
+| restart-resume | pass | pass | pass | pass | pass |
+| idempotent-redelivery | pass | pass | pass (per session object) | pass | skip (by design: run admission dedupes) |
+| tool-permission-deny | pass | pass | pass | skip (gap) | pass |
+| tool-permission-approve | pass | pass | pass | skip (gap) | pass |
+| error-auth | pass | pass | pass | pass | pass |
+| error-transient | pass | pass | pass | pass | pass |
+| error-permanent | pass | pass | pass | pass | pass |
+
+Agent Jobs: the Codex job column passes 11/11; the Claude Code job column
+passes 10/11 including tool approve and deny through the `PreToolUse` hook
+(re-delivery is deduplicated by run admission, not by the executor).
 
 The Codex and Claude Code harnesses drive the real Orkestr adapters
 (`packages/core/src/codex-app-server*.js`,
 `packages/core/src/runtime-claude-code-adapter.js`) through the Orkestr thread
-layer against fake processes in `test/conformance/fakes/`, derived from the
-inline fakes in `test/codex-app-server.test.js` and
-`test/claude-code-runtime.test.js`.
+layer against fake processes in `test/conformance/fakes/`. The `codex-job`
+harness drives the Agent Job Codex session (`packages/core/src/codex-job-session.js`,
+no Orkestr thread record) against the same fake app-server; its error classes
+come from `classifyCodexJobError` (the shared `classifyCodexTurnError`), not
+from the harness. The
+fake also has a scripted Agent Job mode (`FAKE_CODEX_JOB_SCRIPT`: dynamic tool
+calls, command approvals, waits) used by `test/agent-job-codex*.test.js`.
+The fakes are derived from the inline fakes in `test/codex-app-server.test.js` and
+`test/claude-code-runtime.test.js`. The `claude-code-job` harness
+(`claude-code-job-harness.js`) drives the Agent Job executor
+`packages/core/src/agent-job-claude-code.js` directly against the same fake,
+whose `tool` scenario runs the `PreToolUse` hooks from `--settings` like the
+real CLI.
 
 ## Known gaps
 
 These were found while writing the harnesses. Fixed items are marked.
 
-1. **Codex: no transient vs permanent error class.** Non-auth turn failures
-   persist only raw error text (`thread.state = "failed"`,
-   `runtime.lastTurnError`). Only auth failures are classified
-   (`failed_auth` + `runtime.authFailure`). A retry policy cannot tell a 429 or
-   stream disconnect from a malformed request.
+1. **Codex: no transient vs permanent error class.** Fixed. Failed turns are
+   classified by `packages/core/src/runtime-turn-error-class.js` into `auth`,
+   `rate_limit` (429, quota, usage limit), `transient` (network, transport,
+   5xx, overload, timeouts) or `permanent` (invalid request, context too long,
+   unknown), each with `code`, `retryable`, `retryAfterMs` and `hint`. The
+   class is stored as `runtime.lastTurnErrorClass`, on the input message's
+   `turnOutcome.error`, and on the `turn_failed` lifecycle event
+   (`errorClass`, `errorCode`, `retryable`). Stale-turn recovery and the
+   acceptance-uncertain delivery retry use the classifier instead of their own
+   string matches. The conformance contract has three classes, so the
+   harnesses report `rate_limit` as `transient`.
 2. **Codex: stale runtime snapshot written after `turn/start`.** Fixed.
    Runtime writers now merge only the fields they own onto the latest record
    under the thread store lock (`updateThreadRuntime` in
@@ -153,27 +175,40 @@ These were found while writing the harnesses. Fixed items are marked.
    writer for an older turn from overwriting a newer one. Regression tests:
    `test/codex-app-server-start-write-race.test.js` and
    `test/runtime-write-ordering.test.js` (`FAKE_CODEX_STEP_MS=30`).
-3. **Claude Code: no tool-permission hook.** Claude Code runs its own tool loop
-   under a fixed permission mode/MCP policy. Orkestr cannot approve or deny
-   individual calls, so `approval_required` actions cannot be enforced for this
-   adapter yet.
+3. **Claude Code: no tool-permission hook.** Fixed for Agent Job attempts:
+   the job executor (`agent-job-claude-code.js`) installs a `PreToolUse` hook
+   that asks Orkestr before every call and enforces the job's allow /
+   approval_required / deny lists (see
+   [agent-job-runner.md](agent-job-runner.md#claude-code)). Interactive
+   Claude Code *threads* still run under a fixed permission mode/MCP policy.
 4. **Claude Code: progress is only projected for connector-originated turns.**
-   `createClaudeCodeProgressReporter` is enabled only for WhatsApp-origin
-   inputs. The harness poses the `progress` scenario as a WhatsApp input with
-   fake ids. API, timer and job callers get no progress stream.
-5. **Claude Code: error class lives in the harness.** The adapter throws
-   low-cardinality codes (`claude_code_auth_required`,
-   `claude_code_rate_limited`, `claude_code_failed`, …). The code-to-class
-   mapping is in `claude-code-harness.js`, not in the adapter.
-6. **Both: no result lookup by input id.** Idempotency comes from the thread
-   layer (`clientMessageId` dedupe in `appendThreadMessage`). A re-delivered
-   input returns the original queued message, but there is no API that returns
-   the original turn's structured result for that input id. Durable jobs will
-   need one to reconcile after a crash.
-7. **Both: no common adapter interface yet.** The harnesses translate the
-   contract onto adapter-specific functions (`startCodexAppServerThread`,
-   `sendClaudeCodeInput`, …). Progress is read back from persisted thread
-   messages after the turn rather than streamed through a callback.
+   Fixed. `createClaudeCodeProgressReporter` still persists commentary only for
+   WhatsApp-origin inputs, but `sendClaudeCodeInput(..., { onProgress })`
+   receives the same throttled, redacted progress for every origin; the
+   harness now uses a non-connector input. Job attempts write progress into
+   the run journal.
+5. **Claude Code: error class lives in the harness.** Fixed. The adapter maps
+   its failure codes with `classifyClaudeCodeFailureCode` and stores the class
+   on the runtime, the input message and the lifecycle event, like Codex.
+6. **Both: no result lookup by input id.** Fixed. When a turn settles, both
+   adapters persist `turnOutcome` (`turnId`, `status`, `error`, `settledAt`) on
+   every input message the turn consumed. `lookupThreadInputResult(threadId,
+   inputId)` in `packages/core/src/runtime-input-result.js` resolves a client
+   input id (or Orkestr message id) to `{ turnId, status, settled,
+   finalMessageId, output, error }`. An outcome recorded for an earlier attempt
+   is ignored once the input is requeued or resubmitted under a new turn. The
+   harnesses answer duplicate inputs through this lookup.
+7. **Both: no common adapter interface yet.** Fixed for Agent Jobs. The
+   `codex` and `claude-code` job executors implement one native executor
+   interface (`packages/core/src/agent-job-native-interface.js`; see
+   [agent-job-runner.md](agent-job-runner.md#native-executors)): start/resume
+   through `ctx.resume`, cancel through `ctx.signal`, progress through
+   `ctx.emit`, the tool-permission hook `ctx.authorizeTool` with the approval
+   pause, one outcome shape and errors with the shared turn error classes.
+   `test/agent-job-native-interface.test.js` drives both through the same
+   context. The thread runtimes (`startCodexAppServerThread`,
+   `sendClaudeCodeInput`, …) keep their own functions; their harnesses still
+   translate the contract.
 
 ## Naming assumptions (to align with `docs/spec/adapter-interface.md`)
 

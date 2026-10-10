@@ -13,6 +13,8 @@ import {
   startClaudeCodeThread,
 } from "../../packages/core/src/runtime-claude-code-adapter.js";
 import { createThread, enqueueThreadInput, getThread, listThreadMessages } from "../../packages/core/src/threads.js";
+import { lookupThreadInputResult } from "../../packages/core/src/runtime-input-result.js";
+import { classifyClaudeCodeFailureCode, conformanceErrorClass } from "../../packages/core/src/runtime-turn-error-class.js";
 
 // Conformance harness for the Claude Code adapter
 // (packages/core/src/runtime-claude-code-adapter.js) driven against
@@ -21,17 +23,13 @@ import { createThread, enqueueThreadInput, getThread, listThreadMessages } from 
 const fakePath = fileURLToPath(new URL("./fakes/fake-claude-code.mjs", import.meta.url));
 const OWNER = "conformance-owner";
 
-// The adapter reports low-cardinality failure codes; the error class mapping
-// lives here because the adapter does not expose a provider-neutral class.
-const ERROR_CLASS_BY_CODE = {
-  claude_code_auth_required: "auth",
-  llm_account_profile_login_required: "auth",
-  claude_code_rate_limited: "transient",
-  claude_code_timeout: "transient",
-};
-
 export function classifyClaudeCodeFailure(code = "") {
-  return ERROR_CLASS_BY_CODE[code] || "permanent";
+  return conformanceErrorClass(classifyClaudeCodeFailureCode(code).class);
+}
+
+function conformanceError(outcome) {
+  if (!outcome?.error) return null;
+  return { class: conformanceErrorClass(outcome.error.class), code: outcome.error.code || "" };
 }
 
 export const claudeCodeConformance = {
@@ -93,31 +91,31 @@ export const claudeCodeConformance = {
       },
       async runTurn(session, input, { onEvent = () => {} } = {}) {
         const scenario = input.scenario || "echo";
-        // Progress is only projected for connector-originated turns, so the
-        // streaming scenario poses as a WhatsApp input with fake ids.
-        const origin = scenario === "progress"
-          ? { source: "whatsapp_inbound", connector: "whatsapp", accountId: "account-fixture", chatId: "chat-fixture" }
-          : { source: "conformance" };
         const queued = await enqueueThreadInput(session.threadId, {
           text: `${input.text} [scenario:${scenario}]`,
           clientMessageId: input.inputId,
-          ...origin,
+          source: "conformance",
         }, env);
         const thread = await getThread(session.threadId, env);
         if (queued.duplicate) {
+          const original = await lookupThreadInputResult(session.threadId, input.inputId, env);
           return {
-            turnId: await turnIdForInput(session.threadId, queued.id),
-            status: queued.state === "failed" ? "failed" : queued.state === "interrupted" ? "cancelled" : "completed",
+            turnId: original?.turnId || "",
+            status: original?.status,
             duplicate: true,
             providerSessionId: await getClaudeCodeSession(thread, env),
-            output: null,
-            error: queued.state === "failed" ? { class: classifyClaudeCodeFailure(queued.error), code: String(queued.error || "") } : null,
+            output: original?.output || null,
+            finalMessageId: original?.finalMessageId || null,
+            error: conformanceError(original),
           };
         }
         let failure = null;
         let interrupted = false;
         try {
-          const result = await sendClaudeCodeInput(thread, queued, env);
+          // Progress for a non-connector input arrives through onProgress.
+          const result = await sendClaudeCodeInput(thread, queued, env, {
+            onProgress: ({ text }) => onEvent({ type: "progress", text }),
+          });
           interrupted = result?.interrupted === true;
         } catch (error) {
           failure = error;
@@ -138,7 +136,8 @@ export const claudeCodeConformance = {
           duplicate: false,
           providerSessionId: await getClaudeCodeSession(after, env),
           output: status === "completed" && finals.length ? { text: finals.at(-1).text } : null,
-          error: failure ? { class: classifyClaudeCodeFailure(code), code } : null,
+          finalMessageId: (await lookupThreadInputResult(session.threadId, input.inputId, env))?.finalMessageId || null,
+          error: failure ? { class: conformanceErrorClass(failure.errorClass?.class) || classifyClaudeCodeFailure(code), code } : null,
         };
       },
       async cancelTurn(session) {

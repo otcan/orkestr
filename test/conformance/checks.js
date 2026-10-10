@@ -143,7 +143,7 @@ export const CHECKS = Object.freeze([
   {
     id: "idempotent-redelivery",
     capability: "input.idempotent",
-    title: "runs a re-delivered input at most once",
+    title: "runs a re-delivered input at most once and returns the original outcome",
     async run(harness, session) {
       const input = conformanceInput();
       const startCount = await harness.providerTurnCount();
@@ -152,6 +152,9 @@ export const CHECKS = Object.freeze([
       assertTurnResultShape(second);
       assert.equal(second.duplicate, true, "the re-delivery must be reported as duplicate");
       assert.equal(second.turnId, first.turnId, "the duplicate resolves to the original turn");
+      assert.equal(second.status, first.status, "the duplicate returns the original turn status");
+      assert.equal(second.output?.text, first.output?.text, "the duplicate returns the original final output");
+      if (first.finalMessageId) assert.equal(second.finalMessageId, first.finalMessageId, "the duplicate returns the original final message id");
       assert.equal(await harness.providerTurnCount() - startCount, 1, "provider ran exactly one turn");
     },
   },

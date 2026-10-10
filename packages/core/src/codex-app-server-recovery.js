@@ -47,6 +47,7 @@ import {
 } from "./codex-remote-compaction-recovery.js";
 import { threadInFailedAuth } from "./codex-auth-failed-thread.js";
 import { runtimeTurnGeneration, updateThreadRuntime } from "./runtime-record-update.js";
+import { classifyCodexTurnError } from "./runtime-turn-error-class.js";
 
 const recoveryScanCache = new Map();
 
@@ -261,13 +262,12 @@ function staleRecoveryRuntimePatch(thread = {}, options = {}) {
   };
 }
 
-function terminalFailureReason(error = "") {
-  const normalized = clean(error).toLowerCase();
-  if (!normalized) return "";
-  if (/selected model is at capacity|model\s+.+\s+at capacity|server is overloaded|temporarily unavailable due to (?:high )?demand/.test(normalized)) {
-    return "model_capacity";
-  }
-  return "terminal_failure";
+// Uses the class recorded on the failed turn when present, otherwise
+// classifies the persisted error text.
+function terminalFailureReason(error = "", recordedClass = null) {
+  if (!clean(error) && !recordedClass) return "";
+  const classification = recordedClass?.code ? recordedClass : classifyCodexTurnError(error);
+  return classification.code === "model_capacity" ? "model_capacity" : "terminal_failure";
 }
 
 function deliveredTurnWithTerminalFailure(thread = {}, turn = null) {
@@ -293,7 +293,7 @@ function deliveredTurnWithTerminalFailure(thread = {}, turn = null) {
       terminalFailure,
     };
   }
-  const reason = terminalFailureReason(terminalError);
+  const reason = terminalFailureReason(terminalError, thread?.runtime?.lastTurnErrorClass);
   if (!reason) return turn;
   return { ...turn, reason, terminalError };
 }

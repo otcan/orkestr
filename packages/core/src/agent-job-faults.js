@@ -5,7 +5,8 @@
 // death in-process: the runner stops without any further writes.
 // Points: attempt_started, tool_requested, effect_intended, effect_dispatched,
 // effect_performed (external call done, commit not yet written),
-// effect_committed, approval_requested, final_output, notify.
+// effect_committed, approval_requested, final_output, notify; notification
+// dispatch: whatsapp_sent, email_sent, notify_delivered.
 
 export class InjectedCrash extends Error {
   constructor(point) {

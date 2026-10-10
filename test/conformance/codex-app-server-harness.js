@@ -12,6 +12,8 @@ import {
 } from "../../packages/core/src/codex-app-server.js";
 import { createThread, enqueueThreadInput, getThread, listThreadMessages } from "../../packages/core/src/threads.js";
 import { turnLifecycleEventName } from "../../packages/core/src/orkestr-events.js";
+import { lookupThreadInputResult } from "../../packages/core/src/runtime-input-result.js";
+import { conformanceErrorClass } from "../../packages/core/src/runtime-turn-error-class.js";
 import { listEvents } from "../../packages/storage/src/store.js";
 
 // Conformance harness for the Codex app-server adapter
@@ -32,11 +34,11 @@ async function waitFor(probe, { timeoutMs = 10_000, intervalMs = 10, describe = 
   throw new Error(`codex conformance harness timed out waiting for adapter state ${await describe()}`.trim());
 }
 
-function classifyCodexFailure(thread) {
-  // The adapter only distinguishes auth failures (failed_auth + authFailure).
-  // Everything else is an unclassified `failed` turn with raw error text.
-  if (thread?.state === "failed_auth" || thread?.runtime?.authFailure) return "auth";
-  return "unclassified";
+// The adapter persists the turn outcome (status + error class) on the input
+// message; the harness only maps it onto the conformance contract.
+function conformanceError(outcome) {
+  if (!outcome?.error) return null;
+  return { class: conformanceErrorClass(outcome.error.class), code: outcome.error.code || "" };
 }
 
 export const codexAppServerConformance = {
@@ -50,11 +52,10 @@ export const codexAppServerConformance = {
     "input.idempotent",
     "tools.approval",
     "errors.auth",
+    "errors.transient",
+    "errors.permanent",
   ],
-  gaps: {
-    "errors.transient": "gap: non-auth turn failures persist raw error text only (state=failed); no transient vs permanent class",
-    "errors.permanent": "gap: non-auth turn failures persist raw error text only (state=failed); no transient vs permanent class",
-  },
+  gaps: {},
   async create() {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-conformance-codex-"));
     const bin = path.join(home, "bin");
@@ -129,10 +130,17 @@ export const codexAppServerConformance = {
           clientMessageId: input.inputId,
         }, env);
         if (queued.duplicate) {
-          const turnId = await turnIdForInput(session.threadId, queued.id);
+          const original = await lookupThreadInputResult(session.threadId, input.inputId, env);
           const thread = await getThread(session.threadId, env);
-          const { terminal } = await lifecycle(session.threadId, turnId);
-          return { turnId, status: terminal === "interrupted" ? "cancelled" : terminal || "completed", duplicate: true, providerSessionId: thread.executor?.codexThreadId || "", output: null, error: null };
+          return {
+            turnId: original?.turnId || "",
+            status: original?.status,
+            duplicate: true,
+            providerSessionId: thread.executor?.codexThreadId || "",
+            output: original?.output || null,
+            finalMessageId: original?.finalMessageId || null,
+            error: conformanceError(original),
+          };
         }
         await deliverCodexAppServerPendingInputs(await getThread(session.threadId, env), env);
         const { turnId, terminal, thread, tool } = await settle(session.threadId, queued.id, onToolRequest);
@@ -144,6 +152,7 @@ export const codexAppServerConformance = {
           if (message.phase === "final_answer") onEvent({ type: "final", text: message.text });
         }
         const status = terminal === "interrupted" ? "cancelled" : terminal;
+        const outcome = await lookupThreadInputResult(session.threadId, input.inputId, env);
         const fake = await readFakeState();
         const executed = Boolean(fake.toolDecisions?.find((entry) => entry.turnId === turnId)?.executed);
         return {
@@ -152,7 +161,8 @@ export const codexAppServerConformance = {
           duplicate: false,
           providerSessionId: thread.executor?.codexThreadId || thread.codexThreadId || "",
           output: status === "completed" && finals.length ? { text: finals.at(-1).text } : null,
-          error: status === "failed" ? { class: classifyCodexFailure(thread), code: thread.lastError || thread.runtime?.lastTurnError || "" } : null,
+          finalMessageId: outcome?.finalMessageId || null,
+          error: status === "failed" ? conformanceError(outcome) || { class: "unclassified", code: thread.lastError || "" } : null,
           ...(tool ? { tool: { ...tool, executed } } : {}),
         };
       },

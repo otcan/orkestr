@@ -72,6 +72,7 @@ import {
   reconcileRejectedAuthProbeAfterDelivery,
 } from "./codex-auth-failed-thread.js";
 import { codexTurnAuthFailureReason, recordCodexRuntimeAuthFailureSignal } from "./codex-auth-health.js";
+import { isTransportErrorText } from "./runtime-turn-error-class.js";
 import { redactCodexSecrets } from "./codex-auth-failure.js";
 import { completeThreadSecurityApproveCommand } from "./security-thread-command.js";
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
@@ -863,6 +864,7 @@ function containedRuntimeBase(runtime = {}) {
     "lastTurnId",
     "lastTurnStatus",
     "lastTurnError",
+    "lastTurnErrorClass",
     "progress",
     "recoveredAt",
   ]) {
@@ -1613,7 +1615,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
         return { message: reconciled, result, observedVia: reconciled.observedVia, steered: true, reconciled: true };
       }
       recordRuntimeControlMetric({ signal: "unresolved_steering_input", outcome: "retryable" });
-      if (/timeout|timed out|closed|disconnect|socket|ECONN|transport|EOF/i.test(publicError(error))) {
+      if (isTransportErrorText(publicError(error))) {
         const held = await updateThreadMessage(thread.id, pending.id, { state: "awaiting_ack", deliveryState: "codex_acceptance_uncertain", deliveryClaimId: null }, env);
         scheduleCodexAppServerInputDelivery(thread.id, env, 15000);
         return { message: held, deferred: true, observedVia: "codex_acceptance_uncertain" };
@@ -2194,7 +2196,7 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
   } catch (error) {
     const errorText = publicError(error);
     const submitted = await getThreadMessage(thread.id, next.id, env).catch(() => null);
-    if (submitted?.codexSubmission && (submitted.codexSubmission.acceptedTurnId || /timeout|timed out|closed|disconnect|socket|ECONN|transport|EOF/i.test(errorText))) {
+    if (submitted?.codexSubmission && (submitted.codexSubmission.acceptedTurnId || isTransportErrorText(errorText))) {
       await updateThreadMessage(thread.id, next.id, { state: "awaiting_ack", deliveryState: "codex_acceptance_uncertain", deliveryClaimId: null }, env);
       scheduleCodexAppServerInputDelivery(thread.id, env, 15000);
       return delivered;
@@ -2586,6 +2588,7 @@ async function reconcileHydratedCodexTurnCompletion(thread, completedTurnId, env
       lastTurnId: turnId,
       lastTurnStatus: "completed",
       lastTurnError: null,
+      lastTurnErrorClass: null,
       state: "ready",
       codexStatus: { type: "idle" },
       updatedAt: nowIso(),

@@ -9,7 +9,9 @@ import type { INestApplication } from "@nestjs/common";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { loadOverlayExecutorAdapters, recoverInterruptedExecutions } from "../../../packages/core/src/executors.js";
 import { startAgentJobScheduler } from "../../../packages/core/src/agent-job-scheduler.js";
+import { stopCodexJobClients } from "../../../packages/core/src/codex-job-client.js";
 import { relayAgentJobNotifications } from "../../../packages/connectors/src/agent-job-notification-relay.js";
+import { dispatchAgentJobNotifications } from "../../../packages/connectors/src/agent-job-notification-dispatcher.js";
 import { installAgentJobProviderProbes } from "../../../packages/connectors/src/agent-job-provider-probes.js";
 import {
   activateThreadInputDeliveryScheduler,
@@ -742,7 +744,12 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   const agentJobScheduler = startAgentJobScheduler(serverEnv, {
     track: (task) => background.track(task),
     report: (detail: any) => reportServerError(serverEnv, detail),
-    relay: () => relayAgentJobNotifications({}, serverEnv),
+    // Enqueue notification intents, then deliver them (G10). Set
+    // ORKESTR_AGENT_JOB_NOTIFY_DISPATCH=0 to keep them queued in the outbox.
+    relay: async () => {
+      await relayAgentJobNotifications({}, serverEnv);
+      if (String(serverEnv.ORKESTR_AGENT_JOB_NOTIFY_DISPATCH || "1") !== "0") await dispatchAgentJobNotifications({}, serverEnv);
+    },
   });
   const scheduleWhatsAppDeliveryFollowUp = () => {
     clearWhatsAppDeliveryIdleCache();
@@ -841,6 +848,9 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     if (!drained.drained) {
       reportServerError(serverEnv, { source: "server.close", code: "background_tasks_not_drained", message: `${drained.pending} background task(s) still running at shutdown` });
     }
+    // Agent Job Codex sessions are resumed from their journaled session ref
+    // on the next start; stop their app-server only after in-flight runs drained.
+    stopCodexJobClients();
     await stopPerfRecording().catch(() => {});
   });
 }

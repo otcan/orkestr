@@ -42,7 +42,11 @@ Specs: [positioning](positioning.md), [agent-job](../spec/agent-job.md),
 * CLI modules: `orkestr demo`, `orkestr init`, `orkestr run <dir|file>`,
   `orkestr runs list|show`.
 * Replace the placeholder `codex` executor path (`executors.js`) with a
-  redirect to the adapter registry, behind a flag.
+  redirect to the adapter registry, behind a flag. Done for Agent Jobs
+  (2026-10-10): `codex` jobs run on the built-in Codex app-server executor
+  (`agent-job-codex.js`, switch `ORKESTR_AGENT_JOB_CODEX_EXECUTOR`) and
+  `claude-code` jobs on `agent-job-claude-code.js`, both behind the shared
+  native executor interface. The thread-level placeholder stays for threads.
 * **AC:** `npx orkestr demo` finishes in under 60 s on a clean machine with no
   network and no credentials. G1, G2, G5 and G8 have tests in
   `test/agent-job-*.test.js`.

@@ -12,10 +12,13 @@ import { listRuns, listTriggerAudit, registerJobSpec } from "../packages/core/sr
 import { registerExecutorAdapter } from "../packages/core/src/executors.js";
 import { makeSpec, tempEnv } from "./fixtures/agent-job-fixtures.js";
 
-test("the codex placeholder and the no-op fallback never count as job executors", async () => {
+test("the no-op fallback never counts as a job executor; codex uses the app-server job executor", async () => {
   const env = await tempEnv();
-  assert.equal(await agentJobExecutorFor("codex", env), null);
-  assert.equal(await agentJobExecutorFor("claude-code", env), null);
+  assert.equal((await agentJobExecutorFor("codex", env))?.jobExecutor, "codex-app-server");
+  assert.equal((await agentJobExecutorFor("claude-code", env))?.jobExecutor, "claude-code-cli");
+  // Each built-in executor has an env switch.
+  assert.equal(await agentJobExecutorFor("codex", { ...env, ORKESTR_AGENT_JOB_CODEX_EXECUTOR: "0" }), null);
+  assert.equal(await agentJobExecutorFor("claude-code", { ...env, ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR: "0" }), null);
   assert.equal(await agentJobExecutorFor("simulated", env), null);
 });
 

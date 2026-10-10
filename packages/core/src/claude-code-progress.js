@@ -60,9 +60,13 @@ function formatElapsed(ms) {
   return minutes > 0 ? `${minutes}m ${secs}s` : `${secs}s`;
 }
 
-export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = {}, attemptId = "", onPersisted = null, eventKeyPrefix = "" } = {}, env = process.env) {
+// Progress is persisted as thread commentary (and so delivered) only for
+// WhatsApp-origin inputs. `onProgress({ kind, text })` receives the same
+// throttled, redacted progress for every origin (API, timer, job callers).
+export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = {}, attemptId = "", onPersisted = null, onProgress = null, eventKeyPrefix = "" } = {}, env = process.env) {
   const deliveryParent = replyDeliveryProjectionParent(parentMessage) || parentMessage;
-  const enabled = whatsappOrigin(deliveryParent) && !trustedHushReplyDeliveryIntent(parentMessage);
+  const persistEnabled = whatsappOrigin(deliveryParent) && !trustedHushReplyDeliveryIntent(parentMessage);
+  const enabled = persistEnabled || typeof onProgress === "function";
   const seen = new Set();
   let sequence = 0;
   let persisted = 0;
@@ -72,6 +76,8 @@ export function createClaudeCodeProgressReporter({ thread = {}, parentMessage = 
   let pending = Promise.resolve();
 
   function persist(text, kind, key) {
+    try { onProgress?.({ kind, text }); } catch {}
+    if (!persistEnabled) return pending;
     const eventId = `claude-code:${clean(thread.id)}:${clean(attemptId)}:${kind}:${clean(eventKeyPrefix)}${clean(key) || sequence}`;
     pending = pending.then(async () => {
       const existing = (await listThreadMessages(thread.id, env)).find((message) => message.eventId === eventId);

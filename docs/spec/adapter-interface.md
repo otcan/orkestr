@@ -127,7 +127,7 @@ Code: `codex-app-server.js`, `codex-app-server-client.js`, and the façade
 | events | `item/started` and `item/completed` → `tool.*` and `message.*`; `thread/status/changed` → status |
 | permission hook | `item/commandExecution/requestApproval`, `item/fileChange/requestApproval` → `pre_call` (today these become `awaiting_approval` prompts to a human; they must route to `ctx.authorizeTool` first) |
 | recovery | `codex-app-server-recovery.js`, `codex-app-server-active-turn-recovery.js` (stale-turn detection) |
-| gaps | Codex is coupled to Orkestr *threads*. A job attempt must be able to own a Codex thread without a chat/thread UI record. Structured output is `validate` for now. |
+| gaps | Thread-level Codex is coupled to Orkestr *threads*. Agent Jobs use `agent-job-codex.js` instead: a job-owned Codex thread with no thread record (`codex-job-session.js`, `codex-job-client.js`), approvals routed to `ctx.authorizeTool` (`pre_call`), Orkestr tools exposed as dynamic tools (`item/tool/call`), `resume: "session"`. Structured output is `validate` (one re-ask). See [agent-job-runner.md](agent-job-runner.md#codex). |
 
 ### Claude Code (CLI, stream-json)
 
@@ -140,8 +140,8 @@ Code: `runtime-claude-code-adapter.js`, `claude-code-client.js`,
 | `resume` | `--resume <sessionId>`; `resume: "session"`. Reattach and orphan recovery: `claude-code-turn-reattach.js`, `claude-code-orphan-turn-recovery.js` |
 | `interrupt` | `requestClaudeCodeInstantInterrupt` / process signal; `cooperative` with `kill` fallback |
 | events | stream-json `tool_use` / `tool_result` blocks → `tool.*` (`claude-code-supervised-process.js`) |
-| permission hook | Today: `--permission-mode` plus an MCP allow-list (`claude-code-mcp-policy.js`) → `sandbox_only`. Target: `pre_call` via a permission-prompt MCP tool served by Orkestr that calls `ctx.authorizeTool`. |
-| gaps | The same thread coupling as Codex. Partial-work tracking exists (`claude-code-partial-work.js`) and can feed `resumeSummary`. |
+| permission hook | Threads: `--permission-mode` plus an MCP allow-list (`claude-code-mcp-policy.js`) → `sandbox_only`. Job attempts (`agent-job-claude-code.js`): `pre_call` via a `PreToolUse` hook command (`--settings`) that asks a per-attempt Orkestr broker, which calls `ctx.authorizeTool`. Both job executors implement the shared native executor interface ([agent-job-runner.md](agent-job-runner.md#native-executors)). |
+| gaps | Threads keep the thread coupling; job attempts do not need a thread record. Partial-work tracking exists (`claude-code-partial-work.js`) and can feed `resumeSummary`. |
 
 ### `simulated`
 

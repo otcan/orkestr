@@ -35,7 +35,13 @@ async function codexStatus(env) {
 async function claudeHostStatus(env) {
   try {
     const { stdout = "" } = await execFileAsync(claudeCodeCommand(env), ["auth", "status", "--json"], {
-      env: { PATH: env.PATH || process.env.PATH || "", HOME: env.HOME || os.homedir(), DISABLE_AUTOUPDATER: "1" },
+      // The same login the Claude Code job executor uses (agent-job-claude-code.js).
+      env: {
+        PATH: env.PATH || process.env.PATH || "",
+        HOME: env.HOME || os.homedir(),
+        ...(env.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR } : {}),
+        DISABLE_AUTOUPDATER: "1",
+      },
       timeout: 5_000,
       maxBuffer: 256 * 1024,
     });
