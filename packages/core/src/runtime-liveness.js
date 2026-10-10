@@ -81,27 +81,28 @@ function mergeRuntimeFields(threadId, fields, env) {
   return updateThread(threadId, (latest) => ({ runtime: { ...(latest.runtime || {}), ...fields } }), env);
 }
 
-export async function recordRuntimeLiveness(threadId, input = {}, env = process.env) {
-  const thread = await getThread(threadId, env);
-  if (!thread) return { ok: false, recorded: false, reason: "thread_not_found" };
-  if (!scopedToCurrentRuntime(thread, input)) {
-    await recordGenerationRejection(thread, input, "record", env);
-    return { ok: false, recorded: false, reason: "stale_runtime_generation" };
-  }
-  const evidenceType = clean(input.evidenceType || "runtime_probe").toLowerCase();
-  if (!EVIDENCE_TYPES.has(evidenceType)) {
-    const error = new Error("runtime_liveness_evidence_invalid");
-    error.statusCode = 400;
-    throw error;
-  }
-  const at = clean(input.at) || runtimeNowIso(env);
-  const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
-  const current = runtime.liveness && typeof runtime.liveness === "object" ? runtime.liveness : {};
+// Derive the next liveness from the latest record under the store lock, so
+// concurrent liveness writers (evidence, probe failures, completion) build on
+// each other instead of on a stale read. `build(thread, runtime, liveness)`
+// returns { fields, result } to write, or { result } alone to skip.
+async function updateLivenessLocked(thread, build, env) {
+  let outcome = null;
+  const updated = await updateThread(thread.id, (latest) => {
+    const runtime = latest.runtime && typeof latest.runtime === "object" ? latest.runtime : {};
+    const current = runtime.liveness && typeof runtime.liveness === "object" ? runtime.liveness : {};
+    outcome = build(latest, runtime, current);
+    return outcome?.fields ? { runtime: { ...runtime, ...outcome.fields } } : null;
+  }, env);
+  return { updated, ...(outcome || {}) };
+}
+
+function evidenceLiveness(thread, runtime, current, input, { evidenceType, at, counters }) {
+  if (!scopedToCurrentRuntime(thread, input)) return { result: { ok: false, recorded: false, reason: "stale_runtime_generation", rejected: true } };
   const generation = runtimeGeneration(thread, input);
   const turnId = clean(input.turnId || runtime.activeTurnId || current.turnId);
   const activeTurnId = clean(runtime.activeTurnId);
   if (activeTurnId && turnId && activeTurnId !== turnId) {
-    return { ok: false, recorded: false, reason: "stale_turn" };
+    return { result: { ok: false, recorded: false, reason: "stale_turn" } };
   }
   const executionId = clean(input.executionId || turnId || current.executionId || generation);
   const sameExecution = Boolean(current.executionId && executionId && current.executionId === executionId && clean(current.runtimeGeneration) === generation);
@@ -132,7 +133,7 @@ export async function recordRuntimeLiveness(threadId, input = {}, env = process.
         : null,
     phase: clean(input.phase) || current.phase || "executing",
     summary: clean(input.summary).slice(0, 1000) || current.summary || "",
-    counters: boundedObject(input.counters, 4096) || current.counters || null,
+    counters: counters || current.counters || null,
     consecutiveProbeFailures: 0,
     lastProbeFailureAt: null,
     lastProbeFailureReason: null,
@@ -140,37 +141,19 @@ export async function recordRuntimeLiveness(threadId, input = {}, env = process.
     completionStatus: sameExecution ? current.completionStatus : undefined,
     updatedAt: at,
   };
-  const updated = await mergeRuntimeFields(thread.id, {
-    runtimeGeneration: generation || runtime.runtimeGeneration || null,
-    liveness,
-  }, env);
-  await appendEvent({
-    type: "runtime_liveness_recorded",
-    threadId: thread.id,
-    runtimeGeneration: generation || null,
-    executionId: executionId || null,
-    turnId: turnId || null,
-    evidenceType,
-    phase: liveness.phase,
-  }, env).catch(() => {});
-  return { ok: true, recorded: true, liveness: updated.runtime?.liveness || liveness, thread: updated };
+  return {
+    fields: { runtimeGeneration: generation || runtime.runtimeGeneration || null, liveness },
+    result: { ok: true, recorded: true, liveness },
+  };
 }
 
-export async function recordRuntimeLivenessProbeFailure(threadId, input = {}, env = process.env) {
-  const thread = await getThread(threadId, env);
-  if (!thread) return { ok: false, lost: false, reason: "thread_not_found" };
-  if (!scopedToCurrentRuntime(thread, input)) {
-    await recordGenerationRejection(thread, input, "probe_failure", env);
-    return { ok: false, lost: false, reason: "stale_runtime_generation" };
-  }
-  const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
-  const current = runtime.liveness && typeof runtime.liveness === "object" ? runtime.liveness : {};
+function probeFailureLiveness(thread, runtime, current, input, { at }) {
+  if (!scopedToCurrentRuntime(thread, input)) return { result: { ok: false, lost: false, reason: "stale_runtime_generation", rejected: true } };
   const turnId = clean(input.turnId || runtime.activeTurnId || current.turnId);
   if (current.turnId && turnId && clean(current.turnId) !== turnId) {
-    return { ok: false, lost: false, reason: "stale_turn" };
+    return { result: { ok: false, lost: false, reason: "stale_turn" } };
   }
   const failures = Math.max(0, Number(current.consecutiveProbeFailures) || 0) + 1;
-  const at = runtimeNowIso(env);
   const liveness = {
     ...current,
     runtimeGeneration: runtimeGeneration(thread, input) || current.runtimeGeneration || null,
@@ -180,7 +163,71 @@ export async function recordRuntimeLivenessProbeFailure(threadId, input = {}, en
     lastProbeFailureReason: clean(input.reason || "runtime_probe_failed").slice(0, 500),
     updatedAt: at,
   };
-  const updated = await mergeRuntimeFields(thread.id, { liveness }, env);
+  return { fields: { liveness }, result: { ok: true, failures, liveness } };
+}
+
+function completedLiveness(thread, runtime, current, input, { at }) {
+  if (!scopedToCurrentRuntime(thread, input)) return { result: { ok: false, completed: false, reason: "stale_runtime_generation", rejected: true } };
+  const turnId = clean(input.turnId || current.turnId);
+  if (current.turnId && turnId && clean(current.turnId) !== turnId) {
+    return { result: { ok: false, completed: false, reason: "stale_turn" } };
+  }
+  const liveness = {
+    ...current,
+    phase: clean(input.phase || "complete"),
+    completedAt: at,
+    completionStatus: clean(input.status || "completed"),
+    summary: clean(input.summary).slice(0, 1000) || current.summary || "",
+    consecutiveProbeFailures: 0,
+    updatedAt: at,
+  };
+  return { fields: { liveness }, result: { ok: true, liveness } };
+}
+
+export async function recordRuntimeLiveness(threadId, input = {}, env = process.env) {
+  const thread = await getThread(threadId, env);
+  if (!thread) return { ok: false, recorded: false, reason: "thread_not_found" };
+  const evidenceType = clean(input.evidenceType || "runtime_probe").toLowerCase();
+  if (!EVIDENCE_TYPES.has(evidenceType)) {
+    const error = new Error("runtime_liveness_evidence_invalid");
+    error.statusCode = 400;
+    throw error;
+  }
+  const at = clean(input.at) || runtimeNowIso(env);
+  const counters = boundedObject(input.counters, 4096);
+  const { updated, result } = await updateLivenessLocked(thread, (latest, runtime, current) =>
+    evidenceLiveness(latest, runtime, current, input, { evidenceType, at, counters }), env);
+  if (result.rejected) {
+    await recordGenerationRejection(updated, input, "record", env);
+    return { ok: false, recorded: false, reason: result.reason };
+  }
+  if (!result.ok) return result;
+  const liveness = updated.runtime?.liveness || result.liveness;
+  await appendEvent({
+    type: "runtime_liveness_recorded",
+    threadId: thread.id,
+    runtimeGeneration: liveness.runtimeGeneration || null,
+    executionId: liveness.executionId || null,
+    turnId: liveness.turnId || null,
+    evidenceType,
+    phase: liveness.phase,
+  }, env).catch(() => {});
+  return { ok: true, recorded: true, liveness, thread: updated };
+}
+
+export async function recordRuntimeLivenessProbeFailure(threadId, input = {}, env = process.env) {
+  const thread = await getThread(threadId, env);
+  if (!thread) return { ok: false, lost: false, reason: "thread_not_found" };
+  const at = runtimeNowIso(env);
+  const { updated, result } = await updateLivenessLocked(thread, (latest, runtime, current) =>
+    probeFailureLiveness(latest, runtime, current, input, { at }), env);
+  if (result.rejected) {
+    await recordGenerationRejection(updated, input, "probe_failure", env);
+    return { ok: false, lost: false, reason: result.reason };
+  }
+  if (!result.ok) return result;
+  const { failures } = result;
+  const liveness = updated.runtime?.liveness || result.liveness;
   await appendEvent({
     type: "runtime_liveness_probe_failed",
     threadId: thread.id,
@@ -190,7 +237,7 @@ export async function recordRuntimeLivenessProbeFailure(threadId, input = {}, en
     lost: failures >= 2,
     reason: liveness.lastProbeFailureReason,
   }, env).catch(() => {});
-  return { ok: true, lost: failures >= 2, failures, liveness: updated.runtime?.liveness || liveness, thread: updated };
+  return { ok: true, lost: failures >= 2, failures, liveness, thread: updated };
 }
 
 export async function saveRuntimeCheckpoint(threadId, input = {}, env = process.env) {
@@ -237,27 +284,15 @@ export async function saveRuntimeCheckpoint(threadId, input = {}, env = process.
 export async function completeRuntimeLiveness(threadId, input = {}, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) return { ok: false, completed: false, reason: "thread_not_found" };
-  if (!scopedToCurrentRuntime(thread, input)) {
-    await recordGenerationRejection(thread, input, "complete", env);
-    return { ok: false, completed: false, reason: "stale_runtime_generation" };
-  }
-  const runtime = thread.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
-  const current = runtime.liveness && typeof runtime.liveness === "object" ? runtime.liveness : {};
-  const turnId = clean(input.turnId || current.turnId);
-  if (current.turnId && turnId && clean(current.turnId) !== turnId) {
-    return { ok: false, completed: false, reason: "stale_turn" };
-  }
   const at = runtimeNowIso(env);
-  const liveness = {
-    ...current,
-    phase: clean(input.phase || "complete"),
-    completedAt: at,
-    completionStatus: clean(input.status || "completed"),
-    summary: clean(input.summary).slice(0, 1000) || current.summary || "",
-    consecutiveProbeFailures: 0,
-    updatedAt: at,
-  };
-  const updated = await mergeRuntimeFields(thread.id, { liveness }, env);
+  const { updated, result } = await updateLivenessLocked(thread, (latest, runtime, current) =>
+    completedLiveness(latest, runtime, current, input, { at }), env);
+  if (result.rejected) {
+    await recordGenerationRejection(updated, input, "complete", env);
+    return { ok: false, completed: false, reason: result.reason };
+  }
+  if (!result.ok) return result;
+  const liveness = updated.runtime?.liveness || result.liveness;
   await appendEvent({
     type: "runtime_liveness_completed",
     threadId: thread.id,
@@ -266,5 +301,5 @@ export async function completeRuntimeLiveness(threadId, input = {}, env = proces
     turnId: liveness.turnId || null,
     status: liveness.completionStatus,
   }, env).catch(() => {});
-  return { ok: true, completed: true, liveness: updated.runtime?.liveness || liveness, thread: updated };
+  return { ok: true, completed: true, liveness, thread: updated };
 }

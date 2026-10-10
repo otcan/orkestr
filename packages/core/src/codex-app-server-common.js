@@ -24,6 +24,7 @@ import { defaultRuntimeSettings } from "./runtime-settings.js";
 import { compatibleCodexReasoningEffort, defaultCodexModel, normalizeCodexModelRole } from "./codex-model-policy.js";
 import { taskAgentDeveloperInstructions, taskAgentModelRole } from "./task-agent-profiles.js";
 import { currentCodexGenerationId, resolveCurrentCodexGeneration } from "./codex-generation.js";
+import { updateThreadRuntime } from "./runtime-record-update.js";
 
 export const appServerTransports = new Set(["app-server", "codex-app-server"]);
 export const tmuxTransports = new Set(["tmux", "legacy", "codex-tmux"]);
@@ -596,21 +597,22 @@ async function appendOrUpdateEventMessageLocked(thread, input, env) {
 export async function markThreadFromCodexStatus(thread, status, env = process.env) {
   const state = appServerStateFromStatus(status);
   if (!state) return;
-  // A Codex auth fault parks the thread in failed_auth; an idle/failed status
-  // echo from the same runtime must not silently mark it ready again.
-  if (clean(thread.state) === "failed_auth" && !["working", "awaiting_approval"].includes(state)) return;
-  const activeTurnId = state === "working" ? thread.runtime?.activeTurnId || null : null;
-  await updateThread(thread.id, {
-    state,
-    runtime: {
-      ...(thread.runtime || {}),
+  // Evaluated on the latest record under the store lock.
+  await updateThreadRuntime(thread.id, (current, runtime) => {
+    // A Codex auth fault parks the thread in failed_auth; an idle/failed status
+    // echo from the same runtime must not silently mark it ready again.
+    if (clean(current.state) === "failed_auth" && !["working", "awaiting_approval"].includes(state)) return null;
+    return {
       state,
-      runtimeKind: "codex-app-server",
-      codexStatus: status || null,
-      activeTurnId,
-      pendingRequest: state === "awaiting_approval" ? thread.runtime?.pendingRequest || null : null,
-      updatedAt: nowIso(),
-    },
+      runtime: {
+        state,
+        runtimeKind: "codex-app-server",
+        codexStatus: status || null,
+        activeTurnId: state === "working" ? runtime.activeTurnId || null : null,
+        pendingRequest: state === "awaiting_approval" ? runtime.pendingRequest || null : null,
+        updatedAt: nowIso(),
+      },
+    };
   }, env).catch(() => {});
 }
 
