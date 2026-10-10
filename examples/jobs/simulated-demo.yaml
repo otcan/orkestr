@@ -1,0 +1,19 @@
+# Credential-free demo job used by `orkestr demo` (simulated provider).
+apiVersion: orkestr/v0
+kind: AgentJob
+metadata:
+  name: simulated-demo
+  description: Simulated agent opens one pull request, survives a crash, waits for approval.
+triggers:
+  - type: api
+agent:
+  provider: simulated
+task:
+  prompt: Fix the failing test in the demo repository and open a pull request.
+permissions:
+  tools:
+    allow: [demo.repo.*, demo.pull_request.create]
+    approval_required: [demo.pull_request.merge]
+runtime:
+  max_attempts: 2
+  timeout: 2m

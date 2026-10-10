@@ -1,0 +1,53 @@
+# Agent Job v0 example (docs/spec/agent-job.md). All values are fake.
+apiVersion: orkestr/v0
+kind: AgentJob
+metadata:
+  name: repository-maintainer
+  description: Triage new issues and open at most one fix pull request per issue.
+  labels:
+    team: example
+triggers:
+  - type: webhook
+    name: issue-opened
+    secret_ref: vault://example-webhook-secret
+    event_id: /delivery_id
+  - type: schedule
+    cadence: daily
+    time: "09:00"
+    timezone: UTC
+  - type: api
+agent:
+  provider: codex
+  fallback:
+    - provider: claude-code
+task:
+  prompt: |
+    Read the triggering issue in example-org/example-repo. Label it. If it is a
+    small, well-scoped bug, prepare a fix on a branch and open one pull request.
+  inputs:
+    repository: example-org/example-repo
+permissions:
+  tools:
+    allow:
+      - repo.read
+      - repo.branch.push
+      - github.issue.label
+      - github.pull_request.create
+    approval_required:
+      - github.pull_request.merge
+    deny:
+      - repo.branch.force_push
+  secrets:
+    - vault://example-github-token
+runtime:
+  max_attempts: 3
+  timeout: 45m
+  concurrency: queue
+  retry:
+    backoff: exponential
+    initial_delay: 30s
+    max_delay: 10m
+notifications:
+  - on: [approval_required, failed]
+    channel: thread
+    target: example-maintainers

@@ -1,0 +1,30 @@
+# Agent Job v0 example for an OpenAI-compatible local model. Fake host and names.
+apiVersion: orkestr/v0
+kind: AgentJob
+metadata:
+  name: local-model-digest
+  description: Summarize yesterday's commits with a self-hosted model.
+triggers:
+  - type: schedule
+    cadence: interval
+    every: 6h
+agent:
+  provider: openai-compatible
+  model: example-local-model
+  base_url: http://llm.example.internal:8000/v1
+  fallback:
+    - provider: codex
+task:
+  prompt: Summarize commits merged since the previous successful run.
+  output_schema:
+    type: object
+    required: [summary]
+    properties:
+      summary: { type: string }
+permissions:
+  tools:
+    allow: [repo.read]
+notifications:
+  - on: [succeeded]
+    channel: webhook
+    target: https://hooks.example.com/digest
