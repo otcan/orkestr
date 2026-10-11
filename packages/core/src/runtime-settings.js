@@ -247,7 +247,9 @@ function defaultConnectorSettings(env = process.env) {
     whatsapp: {
       enabled: true,
       bridgeMode: firstValue(env.WHATSAPP_BRIDGE_MODE) || "local",
-      accessMode: firstValue(env.ORKESTR_WHATSAPP_ACCESS_MODE) || "relay",
+      // Relay needs a broker; without one the honest default is the built-in bridge.
+      accessMode: firstValue(env.ORKESTR_WHATSAPP_ACCESS_MODE) ||
+        (firstValue(env.ORKESTR_BROKER_BASE_URL, env.ORKESTR_DEMO_BROKER_BASE_URL) ? "relay" : "own"),
       senderRole: firstValue(env.ORKESTR_WHATSAPP_SENDER_ROLE, env.WHATSAPP_SENDER_ROLE) || "sender",
       responderRole: firstValue(env.ORKESTR_WHATSAPP_RESPONDER_ROLE, env.WHATSAPP_RESPONDER_ROLE) || "responder",
     },

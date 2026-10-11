@@ -82,7 +82,7 @@ async function staticContractCheck() {
   assert.match(demoNotify, /trycloudflare/);
   assert.match(demoNotify, /orkestr connect approve/);
   assert.match(chart, /name: orkestr/);
-  assert.match(values, /repository: orkestr\/orkestr/);
+  assert.match(values, /repository: ghcr\.io\/otcan\/orkestr/);
   assert.match(values, /ORKESTR_HOME: \/data/);
   assert.match(values, /ORKESTR_PORT: "3000"/);
   assert.match(values, /whatsappNumber: ""/);

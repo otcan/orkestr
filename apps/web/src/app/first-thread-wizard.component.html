@@ -37,6 +37,27 @@
     <div class="notice">{{ desktopWarning }}</div>
   }
 
+  @if (whatsappWarning) {
+    <div class="notice">{{ whatsappWarning }}</div>
+  }
+
+  @if (createdThread) {
+    <div class="wizard-proof" aria-live="polite">
+      <div class="wizard-section-title">
+        <p class="eyebrow">Try it</p>
+        <h3>Send a message from WhatsApp</h3>
+      </div>
+      <p>Open the WhatsApp group <strong>{{ boundChatName }}</strong> on your phone and send any message, for example <em>hi</em>. Only your own WhatsApp account is in this group.</p>
+      <ul class="wizard-proof-checks">
+        <li>{{ proof.inbound ? "✔" : "…" }} Message received from WhatsApp</li>
+        <li>{{ proof.reply ? "✔" : "…" }} {{ agentName() }} replied</li>
+      </ul>
+      <div class="wizard-actions">
+        <button type="button" (click)="openCreatedThread()">{{ proof.reply ? "Open thread" : "Skip and open thread" }}</button>
+      </div>
+    </div>
+  }
+
   @if (runtimeProvider === 'codex' && codexBlocked()) {
     <div class="notice">
       <strong>Codex Agent required.</strong>
@@ -52,6 +73,7 @@
     </div>
   }
 
+  @if (!createdThread) {
   <form class="wizard-panel" (submit)="createAndStart(); $event.preventDefault()">
     @if (activeStep() === "welcome") {
       <div class="wizard-section-title">
@@ -131,7 +153,7 @@
           [disabled]="busy"
         >
           <strong>Use Orkestr relay</strong>
-          <span>Default. Orkestr relays WhatsApp control through a managed sender so the demo works quickly.</span>
+          <span>Invitation-only. Uses an Orkestr-managed sender; needs a broker configured for this server.</span>
         </button>
         <button
           type="button"
@@ -141,12 +163,19 @@
           [disabled]="busy"
         >
           <strong>Use my own WhatsApp</strong>
-          <span>Self-managed. Pair your own WhatsApp bridge and keep the sender identity under your control.</span>
+          <span>Self-hosted. Link your WhatsApp to this server by QR code. The session stays in this server's data volume.</span>
         </button>
       </div>
-      <div class="notice">
-        This choice is stored as a non-secret setup preference. Credentials and WhatsApp sessions stay outside the repo.
-      </div>
+      @if (whatsappAccessMode === 'own') {
+        <ork-whatsapp-pair-panel [accountId]="whatsappAccountId" (readyChange)="onWhatsAppReady($event)" />
+        <div class="notice">
+          This uses WhatsApp Web, which WhatsApp does not officially support for automation. You can skip linking now and connect later in Setup.
+        </div>
+      } @else {
+        <div class="notice">
+          This choice is stored as a non-secret setup preference. Credentials and WhatsApp sessions stay outside the repo.
+        </div>
+      }
     }
 
     @if (activeStep() === "review") {
@@ -183,4 +212,5 @@
       }
     </div>
   </form>
+  }
 </section>

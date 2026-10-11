@@ -2018,6 +2018,14 @@ export interface WhatsAppStatusResponse {
   [key: string]: unknown;
 }
 
+export interface WhatsAppThreadGroupResponse {
+  ok: boolean;
+  created?: boolean;
+  reused?: boolean;
+  chat?: { id?: string; name?: string; isGroup?: boolean; generated?: boolean };
+  [key: string]: unknown;
+}
+
 export interface WhatsAppChatsResponse {
   accountId: string;
   state?: string;
@@ -2811,6 +2819,11 @@ export class ApiService {
       this.api(`/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/start`),
       {},
     );
+  }
+
+  // Creates a private WhatsApp group for the thread on the paired account and binds it.
+  createWhatsAppThreadGroup(body: { threadId: string; name?: string; participantIds?: string[] }): Observable<WhatsAppThreadGroupResponse> {
+    return this.http.post<WhatsAppThreadGroupResponse>(this.api("/connectors/whatsapp/thread-groups"), body);
   }
 
   logoutWhatsAppAccount(accountId: string): Observable<Record<string, unknown>> {

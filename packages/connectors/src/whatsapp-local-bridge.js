@@ -26,6 +26,7 @@ import {
   whatsappGroupCreateFailureEnvelope,
 } from "./whatsapp-group-create-evidence.js";
 import { attestWhatsAppRuntimeProvenance } from "./whatsapp-runtime-provenance.js";
+import { clearWhatsAppAccountPaired, markWhatsAppAccountPaired } from "./whatsapp-paired-accounts.js";
 import { sendGmailMessage } from "./google-workspace.js";
 import { enrichGmailTokenAccount, readGmailToken } from "./gmail.js";
 import { listHostNativeGmailAccounts, sendHostNativeGmailMessage } from "./gmail-host-native.js";
@@ -1882,7 +1883,8 @@ export function webCacheRoot(env = process.env) {
 async function ensureBridgeDirs(env = process.env) {
   await ensureDataDirs(env);
   await fs.mkdir(path.join(bridgeRoot(env), "qrs"), { recursive: true });
-  await fs.mkdir(sessionRoot(env), { recursive: true });
+  // WhatsApp session credentials: private when first created (existing dirs keep their mode).
+  await fs.mkdir(sessionRoot(env), { recursive: true, mode: 0o700 });
   await fs.mkdir(inboundMediaRoot(env), { recursive: true });
   await fs.mkdir(webCacheRoot(env), { recursive: true });
 }
@@ -6371,6 +6373,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     await clearQr(normalized, env);
     markLocalWhatsAppAccountReady(normalized, client);
     await appendEvent({ type: "whatsapp_local_ready", accountId: normalized }, env);
+    void markWhatsAppAccountPaired(normalized, env).catch(() => {});
     void recoverOutboundAfterLocalWhatsAppReady(normalized, env);
     void recoverUnreadLocalWhatsAppMessages(env, {
       force: true,
@@ -6403,6 +6406,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     });
     runtimes.delete(normalized);
     await appendEvent({ type: "whatsapp_local_auth_failure", accountId: normalized }, env);
+    void clearWhatsAppAccountPaired(normalized, env).catch(() => {});
     if (options.repairNotification !== false) {
       await notifyLocalWhatsAppPairingRequired({
         accountId: normalized,
@@ -6559,6 +6563,7 @@ export async function logoutLocalWhatsAppAccount(accountId = "", env = process.e
     chatOpsUnavailableSince: null,
     verifiedLogoutAt: nowIso(),
   });
+  await clearWhatsAppAccountPaired(normalized, env).catch(() => {});
   await appendEvent({ type: "whatsapp_local_logged_out", accountId: normalized }, env);
   return accountSnapshot(normalized, env);
 }

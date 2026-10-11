@@ -1,8 +1,9 @@
 # WhatsApp in Docker onboarding: two modes, one transport (plan)
 
-Status: **proposal**, 2026-10-11. Section 1 describes what exists on `main`
-(4b520936) and cites code. Everything after section 2 is proposed unless it is
-marked *implemented on this branch*. Tests are synthetic; nothing here needs a
+Status, 2026-10-11: **mode A (self-hosted) onboarding is implemented**. Mode B
+(managed gateway) has only its credential rules implemented, as an unwired
+module. Section 1 describes `main` before this work (4b520936) and cites code.
+Section 6 marks each increment as done, partial, or not started. Tests are synthetic; nothing here needs a
 real WhatsApp account, real sending, or live credentials.
 
 Goal: a person runs the Docker image, connects Codex or Claude Code, picks a
@@ -289,22 +290,32 @@ real account (manual, only with explicit authorization; not part of CI).
 Each increment is a small PR, behaviour-neutral for existing deployments
 unless stated otherwise.
 
-1. **Plan and transport contract.** This document; the `whatsapp-transport`
-   interface, a fake transport and contract tests (T1). No wiring. *Done on
-   this branch.*
-2. **Gateway credential primitives** as a standalone module: invite codes,
-   hashed tokens, revoke and expiry, nonce/timestamp replay window, chat
-   ownership index (T10–T14, units only). No routes. *Done on this branch.*
-3. **Chrome path in the entrypoint** plus a doctor check (T3).
-4. **Mode resolver** plus the wizard writing `connectors.whatsapp.mode`
-   (T2). Legacy env keeps precedence.
-5. **Local-bridge adapter** behind the interface; paired-marker auto-start
-   (T4, T6).
-6. **Onboarding "bind one chat" and "prove it" steps;** goal readiness
-   (T7, T16, T17).
-7. **Gateway client adapter plus gateway routes** using module 2 (T11–T15).
-   The gateway deployment and invitation issuing stay private.
-8. **Container smokes** for T3/T18 and the k3s smoke fix (G14).
+1. **Plan and transport contract.** *Done.* This document; the
+   `whatsapp-transport` interface, a fake transport and contract tests (T1).
+   Not yet wired to the bridge.
+2. **Gateway credential primitives.** *Done (unwired).* Invite codes, hashed
+   tokens, revoke and expiry, nonce/timestamp replay window, chat ownership
+   index (T10–T14, units only). No routes.
+3. **Chrome path in the entrypoint.** *Done* (T3, entrypoint test). The
+   `doctor whatsapp` Chrome report is not started.
+4. **Mode selection.** *Done for mode A, differently than planned.* The wizard
+   pairs through the existing connector config (`bridgeMode: "local"`), and the
+   access-mode default is `own` unless a broker is configured. The single
+   `connectors.whatsapp.mode` field and resolver were not needed for mode A and
+   were not added.
+5. **Restart persistence.** *Done* (T6): a paired-account marker
+   (`whatsapp-bridge/paired-accounts.json`, 0600, no credentials) restarts
+   linked accounts at boot, only when the built-in bridge is the active
+   transport. Opt out with `ORKESTR_WHATSAPP_AUTOSTART=0`. Wrapping the local
+   bridge behind the transport interface is *not started*.
+6. **Onboarding "link, bind one chat, prove it".** *Done* (T4, T7, T16 with a
+   synthetic browser E2E). Goal-specific readiness (T17) is *not started*;
+   `setupState` is unchanged.
+7. **Gateway client adapter and gateway routes** (T11–T15 end to end).
+   *Not started.* Needs decisions on hosting, invitation issuing and the
+   operator account; see section 3.3.
+8. **Container smokes** for T3/T18. *Not started.* The k3s smoke image-name
+   fix (G14) is *done*.
 
 ## 7. Test policy
 

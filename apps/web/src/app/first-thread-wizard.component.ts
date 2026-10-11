@@ -1,18 +1,20 @@
-import { Component, EventEmitter, Input, OnInit, Output, inject } from "@angular/core";
+import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadSummary } from "./api.service";
+import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadMessage, ThreadSummary } from "./api.service";
+import { WhatsAppPairPanelComponent } from "./whatsapp-pair-panel.component";
 
 type WizardStepId = "welcome" | "codex" | "whatsapp" | "review";
 type WhatsAppAccessMode = "relay" | "own";
 
 @Component({
   selector: "ork-first-thread-wizard",
-  imports: [FormsModule],
+  imports: [FormsModule, WhatsAppPairPanelComponent],
   templateUrl: "./first-thread-wizard.component.html",
 })
-export class FirstThreadWizardComponent implements OnInit {
+export class FirstThreadWizardComponent implements OnInit, OnDestroy {
   private readonly api = inject(ApiService);
+  private readonly cdr = inject(ChangeDetectorRef);
 
   @Input() canCancel = true;
   @Input() setupStatus: SetupStatus | null = null;
@@ -30,7 +32,15 @@ export class FirstThreadWizardComponent implements OnInit {
   stepIndex = 0;
   threadName = "orkest";
   repoUrl = "";
-  whatsappAccessMode: WhatsAppAccessMode = "relay";
+  whatsappAccessMode: WhatsAppAccessMode = "own";
+  readonly whatsappAccountId = "account-1";
+  whatsappReady = false;
+  whatsappWarning = "";
+  // After creation in self-hosted mode: the bound chat and the live check.
+  createdThread: ThreadSummary | null = null;
+  boundChatName = "";
+  proof = { inbound: false, reply: false };
+  private proofTimer: ReturnType<typeof setInterval> | null = null;
   runtimeProvider: "codex" | "claude-code" = "codex";
   claudeAccounts: LlmAccountProfile[] = [];
   claudeEnabled = false;
@@ -43,7 +53,12 @@ export class FirstThreadWizardComponent implements OnInit {
   private draftThreadId = "";
 
   ngOnInit(): void {
+    this.whatsappAccessMode = configuredWhatsAppAccessMode(this.setupStatus);
     void this.loadClaudeAccounts();
+  }
+
+  ngOnDestroy(): void {
+    if (this.proofTimer) clearInterval(this.proofTimer);
   }
 
   private async loadClaudeAccounts(): Promise<void> {
@@ -127,7 +142,13 @@ export class FirstThreadWizardComponent implements OnInit {
   }
 
   whatsappAccessLabel(): string {
-    return this.whatsappAccessMode === "own" ? "Own WhatsApp bridge" : "Orkestr relay";
+    if (this.whatsappAccessMode !== "own") return "Orkestr relay";
+    return this.whatsappReady ? "Own WhatsApp (linked) · a private group will be created" : "Own WhatsApp · not linked yet, connect later in Setup";
+  }
+
+  onWhatsAppReady(ready: boolean): void {
+    this.whatsappReady = ready;
+    this.cdr.markForCheck();
   }
 
   selectWhatsAppAccessMode(mode: WhatsAppAccessMode): void {
@@ -242,12 +263,45 @@ export class FirstThreadWizardComponent implements OnInit {
         this.desktopWarning = `Virtual Desk did not start: ${this.errorText(error)}. Open setup desktops after the thread opens.`;
       });
       this.creationStage = this.runtimeProvider === "claude-code" ? "Starting Claude Code in background" : "Starting Codex in background";
+      if (this.whatsappAccessMode === "own" && this.whatsappReady) {
+        this.creationStage = "Creating your private WhatsApp group";
+        try {
+          const group = await firstValueFrom(this.api.createWhatsAppThreadGroup({ threadId: thread.id, name: name }));
+          this.boundChatName = group.chat?.name || name;
+          this.createdThread = thread;
+          this.startProofCheck(thread.id);
+          return;
+        } catch (error) {
+          this.whatsappWarning = `The WhatsApp group could not be created: ${this.errorText(error)}. You can bind a chat later from the thread.`;
+        }
+      }
       this.created.emit(thread);
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
       this.busy = false;
     }
+  }
+
+  openCreatedThread(): void {
+    if (this.proofTimer) clearInterval(this.proofTimer);
+    if (this.createdThread) this.created.emit(this.createdThread);
+  }
+
+  // Watches the new thread for a message from WhatsApp and the agent's reply.
+  private startProofCheck(threadId: string): void {
+    const check = async () => {
+      try {
+        const response = await firstValueFrom(this.api.threadMessages(threadId, 50));
+        this.proof = whatsappRoundTrip(response.messages || []);
+        this.cdr.markForCheck();
+        if (this.proof.reply && this.proofTimer) clearInterval(this.proofTimer);
+      } catch {
+        // Keep polling; the thread may still be starting.
+      }
+    };
+    void check();
+    this.proofTimer = setInterval(() => void check(), 3000);
   }
 
   private threadId(name: string): string {
@@ -280,4 +334,20 @@ export class FirstThreadWizardComponent implements OnInit {
     const value = error as { error?: { message?: string; error?: string }; message?: string };
     return value?.error?.message || value?.error?.error || value?.message || String(error);
   }
+}
+
+function configuredWhatsAppAccessMode(status: SetupStatus | null): WhatsAppAccessMode {
+  const settings = (status?.settings || {}) as Record<string, unknown>;
+  const connectors = (settings["connectors"] || {}) as Record<string, Record<string, unknown>>;
+  const mode = String(connectors["whatsapp"]?.["accessMode"] || "").toLowerCase();
+  return mode === "relay" ? "relay" : "own";
+}
+
+// True once a message that arrived from WhatsApp is followed by an assistant reply.
+export function whatsappRoundTrip(messages: ThreadMessage[]): { inbound: boolean; reply: boolean } {
+  const index = messages.findIndex((message) => message.role === "user" &&
+    (String(message.source || "").startsWith("whatsapp") || message["originSurface"] === "whatsapp"));
+  if (index < 0) return { inbound: false, reply: false };
+  const reply = messages.slice(index + 1).some((message) => message.role === "assistant" && Boolean(String(message.text || "").trim()));
+  return { inbound: true, reply };
 }
