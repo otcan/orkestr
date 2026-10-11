@@ -6,6 +6,7 @@ const limitations = [
   "It has no accounts, logins, or real permissions: the role switcher is demonstration behaviour in your browser, not server-enforced authorization.",
   "It sends nothing to a server. State lives only in this browser's localStorage until you reset it or clear site data.",
   "Prices, stock, credit limits, and company names are invented sample data.",
+  "To keep the demo simple, repeating an account's latest open or approved order with identical lines is treated as a duplicate; change a quantity to order again.",
   "It is not a client project or case study, and it makes no claim about production performance.",
 ];
 

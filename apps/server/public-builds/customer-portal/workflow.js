@@ -168,13 +168,23 @@ function applyApproval(state, order) {
   if (account) account.openBalance += order.total;
 }
 
+function lineKey(lines) {
+  return lines.map((line) => `${line.sku}:${line.quantity}`).sort().join("|");
+}
+
+export function findRepeatOrder(state, accountId, lines) {
+  const latest = state.orders.find((order) => order.accountId === accountId);
+  if (!latest || ![STATUS.pendingApproval, STATUS.approved].includes(latest.status)) return null;
+  return lineKey(latest.lines) === lineKey(normalizeLines(lines)) ? latest : null;
+}
+
 function submitOrder(state, action, context) {
   if (action.role !== ROLES.customer) return fail("Only the customer role can submit orders.");
   const submissionId = String(action.submissionId || "").trim();
   if (!/^[A-Za-z0-9-]{8,64}$/.test(submissionId)) return fail("Missing submission id.");
   // Idempotency: replaying the same submission returns the order it already created.
   const existing = state.submissions[submissionId];
-  if (existing && findOrder(state, existing)) return { ok: true, state, orderId: existing, duplicate: true };
+  if (existing && findOrder(state, existing)) return { ok: true, state, orderId: existing, duplicate: true, duplicateOf: "submission" };
   const account = findAccount(state, action.accountId || state.accountId);
   if (!account) return fail("Choose a sample account.");
   const invalid = (Array.isArray(action.lines) ? action.lines : []).find((line) => !Number.isInteger(Number(line?.quantity)) || Number(line?.quantity) < 0 || Number(line?.quantity) > MAX_LINE_QUANTITY);
@@ -183,6 +193,10 @@ function submitOrder(state, action, context) {
   if (!lines.length) return fail("Add at least one product quantity.");
   const unknown = lines.find((line) => !findProduct(state, line.sku));
   if (unknown) return fail(`Unknown product ${unknown.sku}.`);
+  // The same request typed in again (same account, same lines) as the account's
+  // latest open or approved order is treated as a repeat, not a new order.
+  const repeat = findRepeatOrder(state, account.id, lines);
+  if (repeat) return { ok: true, state, orderId: repeat.id, duplicate: true, duplicateOf: "identical" };
   const { total, checks, exceptions } = evaluateRules(state, account.id, lines);
   const order = {
     id: `PO-${state.nextOrderNumber}`,

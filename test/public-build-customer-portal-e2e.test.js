@@ -132,6 +132,13 @@ test("customer portal demo runs the full order and approval flow in a real brows
       await waitStatus("already submitted. No duplicate order was created.");
       await page.$eval("#portal-order-form", (form) => { form.requestSubmit(); form.requestSubmit(); });
       assert.equal(await orderCount(), 1);
+      // Typing the same request in again is recognised as a repeat, not a new order.
+      await page.type('input[data-sku="VLV-100"]', "5");
+      await page.click(submit);
+      await waitStatus("PO-1001 already contains exactly these lines. No duplicate order was created");
+      assert.equal(await orderCount(), 1);
+      await page.click('input[data-sku="VLV-100"]', { count: 3 });
+      await page.keyboard.press("Backspace");
       await page.type('input[data-sku="FLT-405"]', "2");
       assert.match(await text(".portal-preview"), /will pause for an approver/);
       await page.click('#portal-order-form button[type="submit"]');

@@ -328,6 +328,7 @@ root.addEventListener("submit", (event) => {
   }
   const result = dispatch({ type: "submit", accountId: state.accountId, lines, submissionId }, (ok) => {
     const order = ok.state.orders.find((item) => item.id === ok.orderId);
+    if (ok.duplicateOf === "identical") return `${order.id} already contains exactly these lines. No duplicate order was created; change a quantity to place a different order.`;
     if (ok.duplicate) return `${order.id} was already submitted. No duplicate order was created.`;
     return order.status === STATUS.approved
       ? `${order.id} passed all rules and was auto-approved.`

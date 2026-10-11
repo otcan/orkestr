@@ -13,6 +13,7 @@ import {
   pendingOrders,
   serializeState,
   transition,
+  findRepeatOrder,
   validateDraft,
 } from "../apps/server/public-builds/customer-portal/workflow.js";
 
@@ -175,8 +176,9 @@ test("repeating a submission is idempotent and never creates a second order", ()
   assert.equal(again.state.audit.length, first.state.audit.length, "no extra audit entries");
   const replayedAfterReload = run(parseState(serializeState(first.state), context), action);
   assert.equal(replayedAfterReload.duplicate, true);
-  const fresh = run(first.state, { ...action, submissionId: "second-order-0002" });
-  assert.equal(fresh.state.orders.length, 2, "a new submission id is a new order");
+  const fresh = run(first.state, { ...action, submissionId: "second-order-0002", lines: [{ sku: "VLV-100", quantity: 11 }] });
+  assert.equal(fresh.duplicate, false);
+  assert.equal(fresh.state.orders.length, 2, "a different request is a new order");
   assert.equal(run(fresh.state, { type: "reset" }).state.submissions && Object.keys(run(fresh.state, { type: "reset" }).state.submissions).length, 0);
 });
 
@@ -184,4 +186,25 @@ test("saved state from before submission tracking still loads", () => {
   const legacy = createInitialState(context);
   delete legacy.submissions;
   assert.deepEqual(parseState(JSON.stringify(legacy), context).submissions, {});
+});
+
+test("the same request typed in again returns the existing order instead of a second one", () => {
+  const first = run(createInitialState(context), { type: "submit", role: ROLES.customer, lines: [{ sku: "FLT-405", quantity: 2 }, { sku: "VLV-100", quantity: 1 }] });
+  const retyped = run(first.state, { type: "submit", role: ROLES.customer, lines: [{ sku: "VLV-100", quantity: 1 }, { sku: "FLT-405", quantity: 2 }] });
+  assert.equal(retyped.duplicate, true);
+  assert.equal(retyped.duplicateOf, "identical");
+  assert.equal(retyped.orderId, first.orderId);
+  assert.equal(retyped.state.orders.length, 1);
+  assert.equal(retyped.state.audit.length, first.state.audit.length);
+
+  const other = run(first.state, { type: "submit", role: ROLES.customer, lines: [{ sku: "FLT-405", quantity: 3 }] });
+  assert.equal(other.duplicate, false, "changing a quantity places a different order");
+  const harbor = run(run(first.state, { type: "select_account", accountId: "ACC-HARBOR" }).state, { type: "submit", role: ROLES.customer, accountId: "ACC-HARBOR", lines: [{ sku: "FLT-405", quantity: 2 }, { sku: "VLV-100", quantity: 1 }] });
+  assert.equal(harbor.duplicate, false, "another account may place the same lines");
+
+  const rejected = run(first.state, { type: "reject", role: ROLES.approver, orderId: first.orderId, reason: "Out of stock (synthetic)." }).state;
+  assert.equal(findRepeatOrder(rejected, "ACC-NORTH", [{ sku: "FLT-405", quantity: 2 }, { sku: "VLV-100", quantity: 1 }]), null);
+  const again = run(rejected, { type: "submit", role: ROLES.customer, lines: [{ sku: "FLT-405", quantity: 2 }, { sku: "VLV-100", quantity: 1 }] });
+  assert.equal(again.duplicate, false, "a rejected request can be submitted again");
+  assert.equal(again.state.orders.length, 2);
 });
