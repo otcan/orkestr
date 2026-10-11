@@ -7,7 +7,7 @@ import { startServer } from "../apps/server/src/server.js";
 
 const envKeys = ["ORKESTR_HOME", "ORKESTR_RECOVER_RUNNING_ON_START", "ORKESTR_PUBLIC_SITE_URL", "ORKESTR_PRIMARY_PUBLIC_URL", "ORKESTR_PRIMARY_DOMAIN", "ORKESTR_DOMAIN"];
 const allowedPaths = new Set([
-  "/free/workout-log", "/free/workout-log/app.css", "/free/workout-log/app.js", "/free/workout-log/progression.js",
+  "/free/workout-log", "/free/workout-log/app.css", "/free/workout-log/app.js", "/free/workout-log/data-panel.js", "/free/workout-log/progression.js",
   "/free/workout-log/store.js", "/free/workout-log/timer.js", "/free/workout-log-sw.js", "/favicon.svg",
 ]);
 
@@ -143,14 +143,82 @@ test("workout log works end to end in a real browser without sending data anywhe
     await page.waitForFunction(() => document.getElementById("wl-data-status").textContent.startsWith("Imported 3 new sets"));
     await input.uploadFile(exportFile);
     await page.waitForFunction(() => document.getElementById("wl-data-status").textContent.startsWith("Imported 0 new sets"));
-    await fs.writeFile(exportFile, "{not json");
-    await input.uploadFile(exportFile);
-    await page.waitForFunction(() => document.getElementById("wl-data-status").textContent === "That file is not valid JSON.");
+
+    // Rejected imports explain why and leave existing data byte-for-byte unchanged.
+    const storedBefore = await page.evaluate(() => localStorage.getItem("orkestr.free.workoutLog.v1"));
+    const badFiles = [
+      ["{not json", /not valid JSON/],
+      ["", /empty/],
+      [JSON.stringify({ format: "something-else", sets: [] }), /not a workout log export/],
+      [JSON.stringify({ ...exported, version: 7 }), /unsupported version/],
+      [JSON.stringify({ ...exported, sets: [...exported.sets, { id: "new1", date: "2026-10-09", exercise: "Row", reps: 8, weight: 60 }, { id: "bad", date: "not-a-date", exercise: "Row", reps: -3 }] }), /1 of 5 entries .* invalid/],
+      [JSON.stringify({ ...exported, padding: "x".repeat(2 * 1024 * 1024) }), /at most 2 MB/],
+    ];
+    for (const [content, message] of badFiles) {
+      await page.$eval("#wl-data-status", (node) => { node.textContent = ""; });
+      await fs.writeFile(exportFile, content);
+      await input.uploadFile(exportFile);
+      await page.waitForFunction(() => document.getElementById("wl-data-status").textContent !== "");
+      const status = await text(page, "#wl-data-status");
+      assert.match(status, message);
+      assert.match(status, /Nothing was imported; your existing data is unchanged\./);
+      assert.equal(await page.$eval("#wl-data-status", (node) => node.classList.contains("wl-error")), true);
+      assert.equal(await page.evaluate(() => localStorage.getItem("orkestr.free.workoutLog.v1")), storedBefore, `data unchanged after ${message}`);
+    }
+    assert.equal(await text(page, "#wl-set-count"), "3");
+    assert.match(await text(page, "#wl-storage-notice"), /Browser storage can be lost.*private or incognito.*another browser or device.*Export a JSON file regularly/s);
+
+    // A running rest timer survives a reload.
+    await page.click("[data-rest='60']");
+    await page.waitForFunction(() => !document.getElementById("wl-timer-stop").disabled);
 
     // Persistence across reloads and mobile layout without horizontal scroll.
     await page.reload({ waitUntil: "networkidle0" });
     await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
     assert.equal(await text(page, "#wl-set-count"), "3");
+    assert.equal(await text(page, "#wl-timer-status"), "Rest timer resumed after the page reloaded.");
+    assert.equal(await page.$eval("#wl-timer-stop", (node) => node.disabled), false);
+    assert.match(await text(page, "#wl-timer-display"), /^0:(5\d|60)$|^1:00$/);
+    await page.click("#wl-timer-stop");
+    // History survives the reload too.
+    await page.select("#wl-progress-exercise", "Squat");
+    assert.equal(await page.$$eval("#wl-progress-rows tr", (rows) => rows.length), 2);
+    assert.match(await text(page, "#wl-best-set"), /100 kg × 5 \(2026-10-08\)/);
+
+    // Keyboard only: skip link first, then fill the form with Tab and submit with Enter.
+    await page.evaluate(() => {
+      document.body.tabIndex = -1;
+      document.body.focus();
+      document.body.removeAttribute("tabindex");
+    });
+    await page.keyboard.press("Tab");
+    assert.equal(await page.evaluate(() => document.activeElement.className), "skip-link");
+    await page.focus("#wl-exercise");
+    await page.keyboard.type("Row");
+    await page.keyboard.press("Tab");
+    assert.equal(await page.evaluate(() => document.activeElement.id), "wl-weight");
+    await page.keyboard.type("60");
+    await page.keyboard.press("Tab");
+    assert.equal(await page.evaluate(() => document.activeElement.id), "wl-unit");
+    await page.keyboard.press("Tab");
+    assert.equal(await page.evaluate(() => document.activeElement.id), "wl-reps");
+    await page.keyboard.type("8");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.getElementById("wl-form-status").textContent.startsWith("Added Row"));
+    assert.equal(await page.evaluate(() => document.activeElement.id), "wl-reps", "focus stays in the form for the next set");
+    // Repeated Enter / double tap does not log the same set twice.
+    await page.keyboard.press("Enter");
+    assert.match(await text(page, "#wl-form-status"), /repeated tap was ignored/);
+    await page.$eval("#wl-weight", (node) => { node.value = "62.5"; });
+    await page.$eval("#wl-set-form button[type=submit]", (button) => { button.click(); button.click(); });
+    assert.match(await text(page, "#wl-form-status"), /repeated tap was ignored/);
+    assert.equal(await text(page, "#wl-set-count"), "5");
+    await page.click("#wl-timer-stop");
+    // Removing a set keeps keyboard focus in the day list section.
+    await page.focus("#wl-day-list li:last-child button");
+    await page.keyboard.press("Enter");
+    assert.equal(await page.evaluate(() => document.activeElement.id), "wl-day-title");
+    assert.equal(await text(page, "#wl-set-count"), "4");
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "no horizontal overflow at 390px");
     const smallTargets = await page.$$eval("button:not(.wl-link), input:not([type=checkbox]):not([type=file]), select", (nodes) => nodes.filter((node) => node.getBoundingClientRect().height < 40).length);
     assert.equal(smallTargets, 0, "touch targets are at least 40px high");
@@ -162,7 +230,7 @@ test("workout log works end to end in a real browser without sending data anywhe
     await page.setOfflineMode(true);
     await page.reload({ waitUntil: "load" });
     await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
-    assert.equal(await text(page, "#wl-set-count"), "3");
+    assert.equal(await text(page, "#wl-set-count"), "4");
     await page.setOfflineMode(false);
 
     // Data never leaves the browser: no fetch/XHR/beacon, only same-origin page assets.

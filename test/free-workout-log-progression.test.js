@@ -6,6 +6,7 @@ import {
 } from "../apps/server/free-products/workout-log/progression.js";
 import { STORAGE_KEY, createStore } from "../apps/server/free-products/workout-log/store.js";
 import { createRestTimer } from "../apps/server/free-products/workout-log/timer.js";
+import { readImportFile } from "../apps/server/free-products/workout-log/data-panel.js";
 
 let counter = 0;
 function set(date, exercise, weight, reps, unit = "kg") {
@@ -149,4 +150,65 @@ test("store persists to the provided storage and clears it", () => {
   store.clear();
   assert.equal(backing.has(STORAGE_KEY), false);
   assert.equal(createStore(null).persistent, false);
+});
+
+test("strict parsing rejects a file with any invalid entry instead of importing part of it", () => {
+  const data = { format: FORMAT, version: 1, sets: [
+    { id: "ok1", date: "2026-10-01", exercise: "Squat", reps: 5, weight: 100 },
+    { id: "bad", date: "2026-10-01", exercise: "", reps: 5 },
+  ] };
+  assert.equal(parseLog(data).skipped, 1);
+  assert.throws(() => parseLog(data, { strict: true }), /1 of 2 entries .* invalid .* Nothing was imported/);
+});
+
+test("import file reader rejects oversized, empty, malformed, foreign, and overflowing files", async () => {
+  const file = (text, size = Buffer.byteLength(text)) => ({ size, text: async () => text });
+  const current = [set("2026-10-01", "Squat", 100, 5)];
+  const unchanged = /existing data is unchanged/;
+  await assert.rejects(readImportFile(null, current), /No file/);
+  await assert.rejects(readImportFile(file("{}", LIMITS.importBytes + 1), current), (error) => /at most 2 MB/.test(error.message) && unchanged.test(error.message));
+  await assert.rejects(readImportFile(file("   "), current), /empty/);
+  await assert.rejects(readImportFile(file("{oops"), current), /not valid JSON/);
+  await assert.rejects(readImportFile(file(JSON.stringify({ hello: 1 })), current), (error) => /not a workout log/.test(error.message) && unchanged.test(error.message));
+  const many = Array.from({ length: LIMITS.maxSets }, (_, i) => ({ id: `m${i}`, date: "2026-10-02", exercise: "Row", reps: 5, weight: 50 }));
+  await assert.rejects(readImportFile(file(JSON.stringify({ format: FORMAT, version: 1, sets: many })), current), /exceed/);
+  const ok = await readImportFile(file(exportLog({ ...emptyLog(), sets: [...current, set("2026-10-03", "Row", 60, 8)] })), current);
+  assert.equal(ok.added, 1);
+  assert.equal(ok.total, 2);
+  assert.equal(ok.sets.length, 2);
+  assert.equal(current.length, 1, "the current list is not mutated");
+});
+
+test("store save is all-or-nothing when the browser refuses the write", () => {
+  const backing = new Map();
+  let full = false;
+  const storage = {
+    getItem: (k) => backing.get(k) ?? null,
+    setItem: (k, v) => { if (full) throw new Error("QuotaExceededError"); backing.set(k, v); },
+    removeItem: (k) => backing.delete(k),
+  };
+  const store = createStore(storage);
+  assert.equal(store.save({ ...emptyLog(), sets: [set("2026-10-01", "Squat", 100, 5)] }), true);
+  const before = backing.get(STORAGE_KEY);
+  full = true;
+  assert.equal(store.save({ ...emptyLog(), sets: [] }), false);
+  assert.equal(store.log.sets.length, 1, "in-memory log keeps the last saved state");
+  assert.equal(backing.get(STORAGE_KEY), before, "stored log is untouched");
+});
+
+test("rest timer end time persists and resumes after a reload", () => {
+  const backing = new Map();
+  const storage = { getItem: (k) => backing.get(k) ?? null, setItem: (k, v) => backing.set(k, v), removeItem: (k) => backing.delete(k) };
+  const store = createStore(storage);
+  store.saveTimer(1_060_000);
+  assert.equal(createStore(storage).loadTimer(), 1_060_000);
+  let now = 1_030_000;
+  const timer = createRestTimer({ now: () => now, schedule: () => 1, cancel: () => {} });
+  assert.equal(timer.resume(store.loadTimer()), true);
+  assert.equal(Math.ceil(timer.remaining()), 30);
+  now = 2_000_000;
+  const late = createRestTimer({ now: () => now, schedule: () => 1, cancel: () => {} });
+  assert.equal(late.resume(1_060_000), false, "an expired rest does not restart");
+  store.clear();
+  assert.equal(store.loadTimer(), 0);
 });

@@ -1,6 +1,7 @@
 # Vertical Product Readiness
 
-Status: assessment only. Nothing in this document has been built.
+Status: assessment only. The career-preparation vertical is parked; nothing
+for it has been built.
 Date: 2026-10-11.
 
 Orkestr's free products are small, useful tools that work without an account,
@@ -32,10 +33,12 @@ What it shows works for this format:
 | --- | --- |
 | Storage | `localStorage` only, versioned JSON schema, tolerant of corrupt data |
 | Data leaving the browser | Page CSP has `connect-src 'none'`; a browser test asserts no fetch/XHR/beacon |
-| Portability | JSON export, merge-import with validation, delete-all |
+| Portability | JSON export, all-or-nothing import (malformed, foreign, oversized, or partly invalid files are rejected with a clear message and existing data is untouched), delete-all |
+| Interrupted actions | Repeated taps do not log a set twice; a running rest timer resumes after a reload; failed saves change nothing |
+| Storage loss | The page states plainly that browser storage can be lost (clearing data, private mode, other device) and points to export as the backup |
 | Offline | A small service worker caches only the page's own static files |
 | Claims | Neutral disclaimer: logging tool, no training, health, or medical advice |
-| Tests | Unit tests for progression logic; a headless-browser test for every flow |
+| Tests | Unit tests for progression, import, storage and timer logic; a headless-browser test covering every flow, reload persistence, keyboard use, offline use, and a 390px mobile viewport |
 
 Reusable pattern for later verticals: a standalone page with a strict CSP, a
 pure logic module that is unit tested in Node, a small storage module, and a
@@ -93,15 +96,21 @@ repository.
 - **Maintenance.** Keyword vocabularies age quickly; without an owner the tool
   degrades.
 
-### Recommendation: no-go for now, conditional go later
+### Recommendation: no-go. Do not build without evidence
 
-Do **not** build the career-preparation vertical now. The parts that made the
-earlier prototypes valuable (server-side LLM analysis, job cache, operator
-review) all conflict with the free-product rules, and the safe remainder is
-small enough that it should wait until the workout-log pattern has proven it
-is low-maintenance.
+Do **not** build the career-preparation vertical, and do not start it on
+assumption alone. It stays parked until there is evidence that people want a
+browser-only career tool from Orkestr. The parts that made the earlier
+prototypes valuable (server-side LLM analysis, job cache, operator review) all
+conflict with the free-product rules, and the safe remainder is small.
 
-Revisit when all of these are true:
+Acceptable evidence must be gathered without tracking, accounts, or lead
+forms, for example: repeated unsolicited requests through the existing public
+contact channels, or a documented need from the owner's own direct
+conversations. Page views or analytics are not an option because free products
+carry no instrumentation.
+
+Revisit only when that evidence exists and all of these are true:
 
 1. The workout log has run for at least one release cycle without user-data
    issues, CSP regressions, or support load.

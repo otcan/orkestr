@@ -3,6 +3,7 @@
 import { emptyLog, parseLog } from "./progression.js";
 
 export const STORAGE_KEY = "orkestr.free.workoutLog.v1";
+export const TIMER_KEY = `${STORAGE_KEY}.restEndsAt`;
 
 export function createStore(storage = safeStorage()) {
   let log = load(storage);
@@ -22,15 +23,18 @@ export function createStore(storage = safeStorage()) {
     get log() {
       return log;
     },
+    // All-or-nothing: if the browser refuses the write, the previous log stays
+    // both in memory and in storage.
     save(next) {
-      log = next;
-      if (!storage) return true;
-      try {
-        storage.setItem(STORAGE_KEY, JSON.stringify(log));
-        return true;
-      } catch {
-        return false;
+      if (storage) {
+        try {
+          storage.setItem(STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          return false;
+        }
       }
+      log = next;
+      return true;
     },
     reload() {
       log = load(storage);
@@ -41,11 +45,25 @@ export function createStore(storage = safeStorage()) {
       if (storage) {
         try {
           storage.removeItem(STORAGE_KEY);
+          storage.removeItem(TIMER_KEY);
         } catch {
           return false;
         }
       }
       return true;
+    },
+    // The rest timer end time survives a reload so an interrupted rest resumes.
+    loadTimer() {
+      const value = Number(storage?.getItem(TIMER_KEY));
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    },
+    saveTimer(endsAt) {
+      try {
+        if (endsAt) storage?.setItem(TIMER_KEY, String(Math.round(endsAt)));
+        else storage?.removeItem(TIMER_KEY);
+      } catch {
+        // Losing the timer on reload is acceptable; the log itself is unaffected.
+      }
     },
   };
 }

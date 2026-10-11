@@ -1,8 +1,9 @@
 // Workout log client. Everything runs in this page: no fetch, no XHR, no
 // beacons. Data lives in localStorage and leaves only via the user's export.
+import { initDataPanel } from "./data-panel.js";
 import {
-  LIMITS, UNITS, clampRest, exerciseKey, exerciseNames, exerciseSummary, exportLog, formatClock,
-  formatSet, isValidDate, localDateString, mergeSets, normalizeSet, normalizeSettings, parseLog,
+  LIMITS, UNITS, clampRest, exerciseKey, exerciseNames, exerciseSummary, formatClock,
+  formatSet, isValidDate, localDateString, normalizeSet, normalizeSettings,
 } from "./progression.js";
 import { STORAGE_KEY, createStore } from "./store.js";
 import { createRestTimer } from "./timer.js";
@@ -28,18 +29,21 @@ const timerDisplay = $("wl-timer-display");
 const timerStatus = $("wl-timer-status");
 const restInput = $("wl-rest-seconds");
 const progressSelect = $("wl-progress-exercise");
-const dataStatus = $("wl-data-status");
+const saveFailed = "This browser could not save (storage full or blocked). Nothing was changed.";
 
 let selectedExercise = "";
+let lastAdd = { signature: "", at: 0 };
 
 function settings() {
   return normalizeSettings(store.log.settings);
 }
 
+// Saves first and only reports success once the browser accepted the write.
 function commit(next, statusNode, message) {
   const saved = store.save(next);
-  if (statusNode) statusNode.textContent = saved ? message : `${message} Warning: this browser refused to save, so it will be lost when the tab closes.`;
+  if (statusNode) setStatus(statusNode, saved ? message : saveFailed, !saved);
   render();
+  return saved;
 }
 
 function setStatus(node, message, isError = false) {
@@ -57,10 +61,17 @@ form.addEventListener("submit", (event) => {
     }, { unit: settings().unit });
     if (!isValidDate(dateInput.value)) throw new Error("Choose a valid date.");
     if (store.log.sets.length >= LIMITS.maxSets) throw new Error("The log is full. Export and delete older data first.");
+    // A double tap or a repeated Enter would log the same set twice.
+    const signature = [set.date, exerciseKey(set.exercise), set.weight, set.unit, set.reps].join("|");
+    if (signature === lastAdd.signature && Date.now() - lastAdd.at < 1500) {
+      setStatus(formStatus, "That set was just added; the repeated tap was ignored. Tap Add set again to log another identical set.");
+      return;
+    }
     selectedExercise = set.exercise;
-    commit({ ...store.log, settings: { ...settings(), unit: set.unit }, sets: [...store.log.sets, set] }, formStatus, `Added ${set.exercise}: ${formatSet(set, set.unit)}.`);
-    formStatus.classList.remove("wl-error");
-    if (autoRest.checked) timer.start(settings().restSeconds);
+    const added = commit({ ...store.log, settings: { ...settings(), unit: set.unit }, sets: [...store.log.sets, set] }, formStatus, `Added ${set.exercise}: ${formatSet(set, set.unit)}.`);
+    if (!added) return;
+    lastAdd = { signature, at: Date.now() };
+    if (autoRest.checked) startTimer();
     repsInput.focus();
   } catch (error) {
     setStatus(formStatus, error.message, true);
@@ -76,6 +87,8 @@ function deleteSet(id) {
   const set = store.log.sets.find((item) => item.id === id);
   if (!set) return;
   commit({ ...store.log, sets: store.log.sets.filter((item) => item.id !== id) }, formStatus, `Removed one ${set.exercise} set.`);
+  // The pressed button is gone after re-rendering; keep keyboard focus nearby.
+  $("wl-day-title").focus();
 }
 
 // ---- Rest timer ------------------------------------------------------------
@@ -87,6 +100,7 @@ const timer = createRestTimer({
     $("wl-timer-add").disabled = !running;
   },
   onDone() {
+    store.saveTimer(0);
     timerStatus.textContent = "Rest finished.";
     timerDisplay.classList.add("wl-done");
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
@@ -108,9 +122,13 @@ document.querySelectorAll("[data-rest]").forEach((button) => {
 });
 restInput.addEventListener("change", () => updateRest(restInput.value));
 $("wl-timer-start").addEventListener("click", startTimer);
-$("wl-timer-add").addEventListener("click", () => timer.add(15));
+$("wl-timer-add").addEventListener("click", () => {
+  timer.add(15);
+  store.saveTimer(timer.endsAt);
+});
 $("wl-timer-stop").addEventListener("click", () => {
   timer.stop();
+  store.saveTimer(0);
   timerStatus.textContent = "Timer stopped.";
 });
 
@@ -118,6 +136,18 @@ function startTimer() {
   timerDisplay.classList.remove("wl-done");
   timerStatus.textContent = `Resting for ${formatClock(settings().restSeconds)}.`;
   timer.start(settings().restSeconds);
+  store.saveTimer(timer.endsAt);
+}
+
+function resumeTimer() {
+  const endsAt = store.loadTimer();
+  if (!endsAt) return;
+  if (timer.resume(endsAt)) {
+    timerStatus.textContent = "Rest timer resumed after the page reloaded.";
+  } else {
+    store.saveTimer(0);
+    if (Date.now() - endsAt < 15 * 60 * 1000) timerStatus.textContent = "Your rest finished while the page was closed.";
+  }
 }
 
 // ---- Rendering -------------------------------------------------------------
@@ -208,43 +238,15 @@ progressSelect.addEventListener("change", () => {
 });
 
 // ---- Export / import / delete ---------------------------------------------
-$("wl-export").addEventListener("click", () => {
-  const blob = new Blob([exportLog(store.log)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = el("a");
-  link.href = url;
-  link.download = `workout-log-${localDateString()}.json`;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  setStatus(dataStatus, `Exported ${store.log.sets.length} sets to a file on this device.`);
-});
-
-$("wl-import").addEventListener("change", async (event) => {
-  const input = event.target;
-  const file = input.files && input.files[0];
-  input.value = "";
-  if (!file) return;
-  try {
-    if (file.size > LIMITS.importBytes) throw new Error("That file is too large to be a workout log export.");
-    const { log, skipped } = parseLog(JSON.parse(await file.text()));
-    const { sets, added } = mergeSets(store.log.sets, log.sets);
-    const skippedText = skipped ? ` ${skipped} invalid entries were skipped.` : "";
-    commit({ ...store.log, sets }, dataStatus, `Imported ${added} new sets (${log.sets.length - added} already present).${skippedText}`);
-    dataStatus.classList.remove("wl-error");
-  } catch (error) {
-    setStatus(dataStatus, error instanceof SyntaxError ? "That file is not valid JSON." : error.message, true);
-  }
-});
-
-$("wl-delete-all").addEventListener("click", () => {
-  if (!window.confirm("Delete every logged set and setting from this browser? This cannot be undone. Export first if you want a backup.")) return;
-  timer.stop();
-  store.clear();
-  selectedExercise = "";
-  setStatus(dataStatus, "All workout data was deleted from this browser.");
-  render();
+initDataPanel({
+  $, store, setStatus,
+  onChange: render,
+  onCleared() {
+    timer.stop();
+    selectedExercise = "";
+    lastAdd = { signature: "", at: 0 };
+    render();
+  },
 });
 
 // Keep several open tabs consistent.
@@ -259,6 +261,7 @@ unitSelect.replaceChildren(...UNITS.map((unit) => Object.assign(document.createE
 dateInput.value = localDateString();
 $("wl-storage-warning").hidden = store.persistent;
 render();
+resumeTimer();
 document.documentElement.dataset.ready = "true";
 
 if ("serviceWorker" in navigator && window.isSecureContext) {

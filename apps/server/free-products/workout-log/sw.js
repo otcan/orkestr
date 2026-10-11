@@ -1,11 +1,12 @@
 // Offline cache for the workout log page only. It never sees workout data:
 // the log lives in localStorage and is not part of any request.
-const CACHE = "orkestr-free-workout-log-v1";
+const CACHE = "orkestr-free-workout-log-v2";
 const PAGE = "/free/workout-log";
 const ASSETS = [
   PAGE,
   "/free/workout-log/app.css",
   "/free/workout-log/app.js",
+  "/free/workout-log/data-panel.js",
   "/free/workout-log/progression.js",
   "/free/workout-log/store.js",
   "/free/workout-log/timer.js",

@@ -32,7 +32,7 @@ export function renderWorkoutLogPage(env = process.env) {
     <section class="wl-intro" aria-labelledby="wl-title">
       <p class="wl-eyebrow">Free product · no signup</p>
       <h1 id="wl-title">Workout log</h1>
-      <p>Log sets, run a rest timer, and see progress per exercise. Your log is stored in this browser on this device and is never uploaded.</p>
+      <p>Log sets, run a rest timer, and see progress per exercise. Your log is stored in this browser on this device and is never uploaded, so browser storage can be lost; <a href="#wl-storage-notice">keep an export as a backup</a>.</p>
       <ul class="wl-facts" aria-label="How this tool handles your data">
         <li>No account</li><li>No tracking or analytics</li><li>No network calls with your data</li><li>Works offline after the first visit</li>
       </ul>
@@ -72,7 +72,7 @@ export function renderWorkoutLogPage(env = process.env) {
     </section>
 
     <section class="wl-card" aria-labelledby="wl-day-title">
-      <h2 id="wl-day-title">Sets on <span id="wl-day-label"></span></h2>
+      <h2 id="wl-day-title" tabindex="-1">Sets on <span id="wl-day-label"></span></h2>
       <div id="wl-day-list"></div>
       <p id="wl-day-empty">No sets logged for this date yet.</p>
     </section>
@@ -100,7 +100,11 @@ export function renderWorkoutLogPage(env = process.env) {
 
     <section class="wl-card" aria-labelledby="wl-data-title">
       <h2 id="wl-data-title">Your data</h2>
-      <p><span id="wl-set-count">0</span> sets are stored in this browser. Export a JSON file as a backup or to move to another device; importing merges the sets from such a file.</p>
+      <p><span id="wl-set-count">0</span> sets are stored in this browser.</p>
+      <div class="wl-notice" id="wl-storage-notice">
+        <strong>Browser storage can be lost.</strong>
+        <p>Your log exists only in this browser on this device. It is gone if you clear site data or browsing history, use a private or incognito window, switch to another browser or device, or if the browser frees up space. Export a JSON file regularly as your backup; import it here or on another device to restore. Importing adds sets from the file and never changes or removes the sets already here.</p>
+      </div>
       <div class="wl-row">
         <button id="wl-export" type="button">Export JSON</button>
         <input id="wl-import" class="visually-hidden" type="file" accept="application/json,.json">
@@ -112,7 +116,7 @@ export function renderWorkoutLogPage(env = process.env) {
 
     <section class="wl-disclaimer" aria-labelledby="wl-note-title">
       <h2 id="wl-note-title">Please note</h2>
-      <p>This is a simple logging tool. It does not give training, health, or medical advice, and its numbers are plain arithmetic on what you enter (volume = weight × reps). Clearing site data or using another browser or device removes access to the log, so export a backup if it matters to you.</p>
+      <p>This is a simple logging tool. It does not give training, health, or medical advice, and its numbers are plain arithmetic on what you enter (volume = weight × reps). Nothing you enter is sent anywhere, and there is no tracking of any kind. Because the log lives only in this browser, export a backup if it matters to you.</p>
     </section>
   </main>
   <footer class="wl-footer">

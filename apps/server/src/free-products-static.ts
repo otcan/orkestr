@@ -6,6 +6,7 @@ import { renderWorkoutLogPage } from "./free-workout-log-page.js";
 const workoutLogAssets = new Map<string, string>([
   ["/free/workout-log/app.css", "text/css; charset=utf-8"],
   ["/free/workout-log/app.js", "text/javascript; charset=utf-8"],
+  ["/free/workout-log/data-panel.js", "text/javascript; charset=utf-8"],
   ["/free/workout-log/progression.js", "text/javascript; charset=utf-8"],
   ["/free/workout-log/store.js", "text/javascript; charset=utf-8"],
   ["/free/workout-log/timer.js", "text/javascript; charset=utf-8"],

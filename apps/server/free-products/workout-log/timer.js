@@ -29,7 +29,19 @@ export function createRestTimer({ onTick, onDone, now = () => Date.now(), schedu
     get running() {
       return Boolean(endsAt);
     },
+    get endsAt() {
+      return endsAt;
+    },
     remaining,
+    // Continue a rest that was running before a reload.
+    resume(until) {
+      if (!(until > now())) return false;
+      endsAt = Math.min(until, now() + LIMITS.maxRest * 1000);
+      stopTicking();
+      handle = schedule(tick, 250);
+      tick();
+      return true;
+    },
     start(seconds) {
       endsAt = now() + Math.max(1, Number(seconds) || 0) * 1000;
       stopTicking();

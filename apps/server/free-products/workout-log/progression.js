@@ -168,7 +168,9 @@ export function normalizeSettings(input) {
 }
 
 // Validates parsed JSON (export file or stored state). Throws on a wrong format.
-export function parseLog(data) {
+// Stored state is parsed leniently (bad entries are dropped); imports use
+// `strict` so a file with any invalid entry is rejected as a whole.
+export function parseLog(data, { strict = false } = {}) {
   if (!data || typeof data !== "object" || data.format !== FORMAT) throw new Error("This file is not a workout log export.");
   if (data.version !== VERSION) throw new Error("This export uses an unsupported version.");
   if (!Array.isArray(data.sets)) throw new Error("The export has no list of sets.");
@@ -187,6 +189,7 @@ export function parseLog(data) {
       skipped += 1;
     }
   }
+  if (strict && skipped) throw new Error(`${skipped} of ${data.sets.length} entries in this file are invalid or duplicated. Nothing was imported.`);
   return { log: { format: FORMAT, version: VERSION, settings, sets }, skipped };
 }
 
@@ -199,7 +202,7 @@ export function mergeSets(current, incoming) {
     added += 1;
   }
   const sets = [...byId.values()].sort((a, b) => `${a.date}${a.loggedAt}`.localeCompare(`${b.date}${b.loggedAt}`));
-  return { sets: sets.slice(-LIMITS.maxSets), added };
+  return { sets, added };
 }
 
 export function exportLog(log, now = new Date()) {
