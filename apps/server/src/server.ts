@@ -839,7 +839,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     clearInterval(mailboxVmRelayPoll);
     clearInterval(inboundAttachmentCleanupPoll);
     agentJobScheduler.stop();
-    whatsappDeliveryScheduler.close();
+    await whatsappDeliveryScheduler.close();
     stopCodexAppServerClients();
     await stopLocalWhatsAppBridge(serverEnv).catch(() => {});
     // Intervals are cleared above; wait for runs already in flight so nothing
