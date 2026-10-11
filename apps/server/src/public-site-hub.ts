@@ -21,6 +21,9 @@ const entryCards = [
   { path: "/studio", label: "STUDIO", title: "Build something serious", text: "For high-value software projects: we design, build, modernize, and operate custom systems with you.", link: "Visit the studio" },
 ];
 
+// The studio is the only journey with German and Turkish pages.
+const studioLanguages = '<p class="hub-languages">Also in <a href="/de/studio" hreflang="de-DE" lang="de">Deutsch</a> · <a href="/tr/studio" hreflang="tr-TR" lang="tr">Türkçe</a></p>';
+
 function evidenceLegend() {
   const items = (Object.keys(evidenceLabels) as PublicCatalogEvidence[]).map((key) => `<div><dt><span class="hub-badge hub-evidence-${key}">${evidenceLabels[key].label}</span></dt><dd>${evidenceLabels[key].text}</dd></div>`).join("");
   return `<dl class="hub-evidence-legend">${items}</dl>`;
@@ -42,7 +45,7 @@ function catalogList(section: PublicCatalogSection) {
 }
 
 export function umbrellaHomePage(): PublicPage {
-  const cards = entryCards.map((card) => `<li class="hub-entry-card"><p class="section-index">${card.label}</p><h3>${card.title}</h3><p>${card.text}</p><a class="text-link" href="${card.path}">${card.link} <span aria-hidden="true">→</span></a></li>`).join("");
+  const cards = entryCards.map((card) => `<li class="hub-entry-card"><p class="section-index">${card.label}</p><h3>${card.title}</h3><p>${card.text}</p><a class="text-link" href="${card.path}">${card.link} <span aria-hidden="true">→</span></a>${card.path === "/studio" ? studioLanguages : ""}</li>`).join("");
   return {
     id: "home",
     title: "We turn complex ideas into working software",

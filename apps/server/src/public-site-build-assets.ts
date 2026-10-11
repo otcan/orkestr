@@ -1,22 +1,38 @@
 import fs from "node:fs";
 import path from "node:path";
 
-// Static files for the live builds under /builds/<slug>/. Plain browser JS and
-// CSS live in apps/server/public-builds and ship unchanged with the server.
-const buildAssetDir = path.resolve(process.cwd(), "apps/server/public-builds");
-const buildAssetTypes: Record<string, string> = {
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-};
-const buildAssetFiles = new Set(["customer-portal/app.js", "customer-portal/workflow.js", "customer-portal/portal.css"]);
+// Static browser assets for interactive live builds, keyed by catalog slug.
+// Plain browser JS and CSS live in apps/server/public-builds and ship unchanged
+// with the server. Only the files listed here are served; everything else
+// falls through.
+const buildAssetRoot = path.resolve(process.cwd(), "apps/server/public-builds");
+const js = "text/javascript; charset=utf-8";
+const css = "text/css; charset=utf-8";
 
-// Only an explicit allowlist of static demo files is served; never arbitrary paths.
-export function readPublicBuildAsset(pathname = "") {
-  const relative = String(pathname || "").replace(/^\/builds\//, "");
-  if (!pathname.startsWith("/builds/") || !buildAssetFiles.has(relative)) return null;
+export const publicBuildAssets: Record<string, Record<string, string>> = {
+  "customer-portal": {
+    "app.js": js,
+    "workflow.js": js,
+    "portal.css": css,
+  },
+  "evidence-desk": {
+    "evidence-desk-app.js": js,
+    "evidence-desk-state.js": js,
+    "evidence-desk-score.js": js,
+    "evidence-desk-sample.js": js,
+    "evidence-desk-export.js": js,
+    "evidence-desk-views.js": js,
+    "evidence-desk.css": css,
+  },
+};
+
+export function publicBuildAsset(pathname = "") {
+  const match = /^\/builds\/([a-z0-9-]+)\/([a-z0-9.-]+)$/.exec(pathname);
+  if (!match) return null;
+  const type = publicBuildAssets[match[1]]?.[match[2]];
+  if (!type) return null;
   try {
-    const body = fs.readFileSync(path.join(buildAssetDir, relative), "utf8");
-    return { body, type: buildAssetTypes[path.extname(relative)] || "text/plain; charset=utf-8" };
+    return { type, body: fs.readFileSync(path.join(buildAssetRoot, match[1], match[2]), "utf8") };
   } catch {
     return null;
   }

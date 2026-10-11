@@ -59,11 +59,42 @@ function pageHref(pageId: PublicPageId, locale: PublicLocale, hash = "") {
 }
 
 // Pages of the umbrella journeys (builds, free products, open source) carry no
-// consulting CTA and no analytics script.
+// consulting CTA in the header.
 const umbrellaPageIds: PublicPageId[] = ["home", "builds", "free", "open-source"];
+
+// The first-party click/view beacon (/api/public/events) is opt-in per page.
+// Pages not listed here never load it and have data-event attributes removed.
+const analyticsPageIds: PublicPageId[] = [
+  "studio", "team", "security", "deployment", "developers", "use-cases", "project",
+  "websites-commerce", "business-systems", "opportunity-intelligence", "web-data-monitoring", "automation",
+  "workflow", "terms", "privacy", "impressum", "acceptable-use", "data-deletion", "support", "beta",
+];
+
+// Builds, free products, and open source promise no tracking: never opt in.
+const noTrackingPaths = /^\/(builds|free|open-source)(\/|$)/;
+
+function pageUsesAnalytics(page: PublicPage, locale: PublicLocale) {
+  const path = page.canonicalPath || publicPagePath(page.id, locale) || "";
+  return analyticsPageIds.includes(page.id) && !noTrackingPath(path);
+}
+
+function noTrackingPath(path: string) {
+  return noTrackingPaths.test(path);
+}
+
+function withoutTrackingAttributes(html: string) {
+  return html.replace(/\s+data-(?:view-)?event="[^"]*"/g, "");
+}
 
 function pageLocales(page: PublicPage) {
   return publicLocales.filter((locale) => publicPagePath(page.id, locale));
+}
+
+// Builds, free products, and open source are English-only. Localized pages
+// still link there, but mark the target language instead of implying a
+// translated page exists.
+function englishOnlyHint(id: PublicPageId, locale: PublicLocale) {
+  return locale !== "en" && !publicPagePath(id, locale) ? ' hreflang="en"' : "";
 }
 
 function umbrellaNav(page: PublicPage, locale: PublicLocale) {
@@ -71,7 +102,7 @@ function umbrellaNav(page: PublicPage, locale: PublicLocale) {
   const items: Array<[PublicPageId, string]> = [["builds", copy.builds], ["free", copy.free], ["open-source", copy.openSource], ["studio", copy.studio]];
   return items.map(([id, label]) => {
     const current = page.id === id ? (page.canonicalPath && page.canonicalPath !== publicPagePath(id, locale) ? ' aria-current="true"' : ' aria-current="page"') : "";
-    return `<a href="${pageHref(id, locale)}"${current}>${label}</a>`;
+    return `<a href="${pageHref(id, locale)}"${current}${englishOnlyHint(id, locale)}>${label}</a>`;
   }).join("");
 }
 
@@ -178,13 +209,14 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
   const copy = shellCopy[locale];
   const home = page.id === "home";
   const umbrella = umbrellaPageIds.includes(page.id);
+  const analytics = pageUsesAnalytics(page, locale);
   const pageTitle = `${page.title} | Orkestr`;
   const canonical = publicCanonicalUrl(page.canonicalPath || pageHref(page.id, locale), env);
   const appUrl = publicAppUrl(env);
   const repo = publicRepoUrl(env);
   const homePath = "/";
   const studioPath = pageHref("studio", locale);
-  return `<!doctype html>
+  const html = `<!doctype html>
 <html lang="${publicLocaleTags[locale]}">
 <head>
   <meta charset="utf-8">
@@ -228,16 +260,17 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
   ${page.body}
   <footer class="footer">
     <div class="footer-brand"><a class="wordmark inverse" href="${homePath}"><span>O</span> Orkestr</a><p>${umbrella ? copy.umbrellaFooter : copy.footer}</p></div>
-    <nav aria-label="${copy.explore}"><strong>${copy.explore}</strong><a href="/builds">${copy.builds}</a><a href="/free">${copy.free}</a><a href="/open-source">${copy.openSource}</a><a href="${studioPath}">${copy.studio}</a></nav>
+    <nav aria-label="${copy.explore}"><strong>${copy.explore}</strong><a href="/builds"${englishOnlyHint("builds", locale)}>${copy.builds}</a><a href="/free"${englishOnlyHint("free", locale)}>${copy.free}</a><a href="/open-source"${englishOnlyHint("open-source", locale)}>${copy.openSource}</a><a href="${studioPath}">${copy.studio}</a></nav>
     <nav aria-label="${copy.solutions}"><strong>${copy.solutions}</strong><a href="${pageHref("websites-commerce", locale)}">${copy.newSystems}</a><a href="${pageHref("business-systems", locale)}">${copy.modernization}</a><a href="${pageHref("automation", locale)}">${copy.automation}</a></nav>
     <nav aria-label="${copy.orkestr}"><strong>${copy.orkestr}</strong><a href="${studioPath}#how-we-work">${copy.process}</a><a href="${studioPath}#platform">${copy.operating}</a><a href="${pageHref("deployment", locale)}">${copy.deployment}</a><a href="${pageHref("security", locale)}">${copy.security}</a></nav>
-    <nav aria-label="${copy.resources}"><strong>${copy.resources}</strong><a href="/open-source">${copy.openSource}</a><a href="/developers">${copy.developers}</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="${escapeHtml(repo)}/tree/main/docs" rel="noreferrer">${copy.documentation}</a></nav>
+    <nav aria-label="${copy.resources}"><strong>${copy.resources}</strong><a href="/open-source"${englishOnlyHint("open-source", locale)}>${copy.openSource}</a><a href="/developers">${copy.developers}</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="${escapeHtml(repo)}/tree/main/docs" rel="noreferrer">${copy.documentation}</a></nav>
     <nav aria-label="${copy.company}"><strong>${copy.company}</strong><a href="${pageHref("team", locale)}">${copy.team}</a><a href="/support">${copy.contact}</a><a href="/impressum">${copy.impressum}</a><a href="/privacy">${copy.privacy}</a><a href="/terms">${copy.terms}</a></nav>
-    <nav aria-label="${copy.customers}"><strong>${copy.customers}</strong><a href="${escapeHtml(appUrl)}"${umbrella ? "" : ' data-event="client_portal_click"'}>${copy.portal}</a></nav>
+    <nav aria-label="${copy.customers}"><strong>${copy.customers}</strong><a href="${escapeHtml(appUrl)}"${analytics ? ' data-event="client_portal_click"' : ""}>${copy.portal}</a></nav>
     <p class="footer-note">${copy.note}</p>
   </footer>
-  ${umbrella ? (home ? legacyHashRedirectScript() : "") : analyticsScript()}
+  ${analytics ? analyticsScript() : home ? legacyHashRedirectScript() : ""}
   ${(page.scripts || []).map((src) => `<script type="module" src="${escapeHtml(src)}"></script>`).join("\n  ")}
 </body>
 </html>`;
+  return analytics ? html : withoutTrackingAttributes(html);
 }
