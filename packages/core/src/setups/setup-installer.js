@@ -5,7 +5,7 @@
 // account, and is a separate, later step (docs/setups/manifest-v1.md).
 import fs from "node:fs/promises";
 import { clearThreadStandingMission, setThreadStandingMission } from "../claude-standing-mission-admin.js";
-import { createThread, getThread, retireThread } from "../threads.js";
+import { createThread, getThread, retireThread, updateThread } from "../threads.js";
 import { createTimer, deleteTimer, listTimers, updateTimer } from "../timers.js";
 import { adminUserId, normalizeUserId } from "../users.js";
 import { getSetupManifest } from "./setup-registry.js";
@@ -36,6 +36,7 @@ export const defaultSetupDeps = {
   createThread,
   getThread,
   retireThread,
+  updateThread,
   setMission: setThreadStandingMission,
   clearMission: clearThreadStandingMission,
   createTimer,
@@ -112,6 +113,9 @@ async function createResources(instance, manifest, input, env, deps) {
   // createThread returns an existing thread on a name match; never adopt one.
   if (thread?.id !== threadId) throw setupError("setup_thread_conflict", 409, { existingThreadId: thread?.id || null });
   await updateSetupInstance(env, id, (entry) => { entry.resources.threadId = threadId; });
+  // Marks the thread as Setup-owned so Codex receives the Setup's instructions
+  // (setup-codex-instructions.js); the Claude runtime reads the mission directly.
+  await deps.updateThread(threadId, { setupInstanceId: id, setupId: manifest.id }, env);
 
   if (manifest.thread.mission) {
     await deps.setMission(threadId, manifest.thread.mission, instance.ownerUserId, env);

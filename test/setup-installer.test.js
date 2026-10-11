@@ -172,3 +172,17 @@ test("without a server-supplied provider check, install fails closed", async () 
   });
   assert.equal((await listThreads(env)).length, 0);
 });
+
+test("Setup threads carry their instructions to Codex; other Codex threads are unchanged", async () => {
+  const env = await freshEnv();
+  const { threadStartParams } = await import("../packages/core/src/codex-app-server-common.js");
+  const { instance } = await installSetup({ setupId: "fitness-tracker" }, env, deps());
+  const thread = await getThread(instance.resources.threadId, env);
+  assert.equal(thread.setupInstanceId, instance.instanceId);
+  assert.equal(thread.setupId, "fitness-tracker");
+  const params = threadStartParams(thread, env);
+  assert.match(params.developerInstructions, /Instructions from the installed Orkestr Setup \(fitness-tracker\):\nYou are the owner's personal training log/);
+  assert.equal(params.cwd, instance.resources.stateDir);
+  const plain = await createThread({ id: "plain-codex", name: "Plain", standingMission: "Only for Claude" }, env);
+  assert.doesNotMatch(threadStartParams(plain, env).developerInstructions || "", /Only for Claude/);
+});

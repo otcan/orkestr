@@ -23,6 +23,7 @@ import {
 import { defaultRuntimeSettings } from "./runtime-settings.js";
 import { compatibleCodexReasoningEffort, defaultCodexModel, normalizeCodexModelRole } from "./codex-model-policy.js";
 import { taskAgentDeveloperInstructions, taskAgentModelRole } from "./task-agent-profiles.js";
+import { setupDeveloperInstructions } from "./setups/setup-codex-instructions.js";
 import { currentCodexGenerationId, resolveCurrentCodexGeneration } from "./codex-generation.js";
 import { updateThreadRuntime } from "./runtime-record-update.js";
 
@@ -504,6 +505,7 @@ export function threadStartParams(thread, env = process.env) {
   const developerInstructions = [
     containedUserDeveloperInstructions(thread, env),
     taskAgentDeveloperInstructions(thread),
+    setupDeveloperInstructions(thread, env),
   ].filter(Boolean).join("\n\n");
   if (developerInstructions) params.developerInstructions = developerInstructions;
   const model = modelForThread(thread, env);

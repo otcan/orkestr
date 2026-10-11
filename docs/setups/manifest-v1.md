@@ -38,9 +38,9 @@ Code: `packages/core/src/setups/`. API: `GET /api/setups`, `GET /api/setups/stat
 
 ## Known gaps (verified, not fixed in Phase A)
 
-1. **Standing missions reach Claude Code threads only.** `claude-standing-mission.js` is applied by the Claude runtime; nothing on the Codex path reads `standingMission`. A Codex-backed fitness thread stores the instructions but does not receive them yet.
-2. **Timer loop overlap:** two overlapping ticks deliver the same due check-in twice (`test/timer-loop-reliability.test.js`, todo test: 2 messages instead of 1).
-3. **No retry backoff:** a failing timer keeps its `nextRunAt` and retries every loop tick (todo test).
+1. **Instructions on Codex:** fixed on this branch. Setup-created threads carry `setupInstanceId`, and Codex receives the Setup mission as `developerInstructions` at thread start (`setup-codex-instructions.js`). Other Codex threads are unchanged. Not yet verified in a real Codex session (backlog P0-01). A mission changed after the Codex thread started only applies to a new Codex thread.
+2. **Timer loop overlap:** fixed on this branch. Due-timer passes are serialized per home (`timer-run-guard.js`); the test shows one delivery.
+3. **Retry backoff:** fixed on this branch. Failed timers retry after 1 minute, doubling up to 1 hour.
 4. **Weekly cadence** repeats seven days after the first run; there is no weekday field.
 5. **Thread runtime readiness** of a Setup thread (first real turn on Codex and on Claude Code) is not verified in Phase A.
 6. **Single process writer:** the ledger lock is in-process; the CLI goes through the server API.
