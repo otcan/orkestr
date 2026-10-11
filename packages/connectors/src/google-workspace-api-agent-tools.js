@@ -276,6 +276,13 @@ export async function runTenantApiAgentGoogleWorkspaceTool(name = "", args = {},
     return { handled: true, result: { ok: true, provider: "gmail", ...selection, draftId: result.draftId, message: result.message } };
   }
   if (tool === "orkestr_send_gmail_message") {
+    // Approval covers only the plain-text fields the Gmail serializer uses.
+    // Reject every other argument, including attachments and the serializer's
+    // text fallback, before creating or consuming an approval.
+    const approvedFields = new Set(["accountId", "account", "to", "cc", "bcc", "subject", "body", "approvalRequestId"]);
+    if (Object.keys(args).some((field) => !approvedFields.has(field))) {
+      throw Object.assign(new Error("gmail_send_unsupported_field"), { statusCode: 400 });
+    }
     if (!googleWorkspaceTokenHasCapability(selected.token, "gmail_send")) {
       return { handled: true, result: { ok: false, provider: "gmail", ...selection, error: "google_workspace_capability_not_granted:gmail_send" } };
     }

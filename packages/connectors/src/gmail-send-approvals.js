@@ -26,9 +26,10 @@ function filePath(principal, env) {
   return path.join(userDataPaths(principalId(principal), env).secrets, "gmail-send-approvals.json");
 }
 
-function normalizedDetails(input = {}) {
+function normalizedDetails(input = {}, { preserveBody = false } = {}) {
   for (const [field, limit] of [["from", 4000], ["to", 4000], ["cc", 4000], ["bcc", 4000], ["subject", 1000], ["body", 60_000]]) {
-    if (String(input[field] ?? "").trim().length > limit) throw approvalError("gmail_send_approval_content_too_large", 400);
+    const value = String(input[field] ?? "");
+    if ((field === "body" && preserveBody ? value : value.trim()).length > limit) throw approvalError("gmail_send_approval_content_too_large", 400);
   }
   const header = (value, max) => clean(value, max).replace(/\r?\n/g, " ");
   const details = {
@@ -37,7 +38,7 @@ function normalizedDetails(input = {}) {
     cc: header(input.cc, 4000),
     bcc: header(input.bcc, 4000),
     subject: header(input.subject, 1000),
-    body: clean(input.body),
+    body: preserveBody ? String(input.body ?? "") : clean(input.body),
   };
   if (!details.to) throw approvalError("gmail_send_to_required", 400);
   return details;
@@ -54,7 +55,7 @@ function action({ connectionId = "", grantUpdatedAt = "", threadId = "", kind = 
   }
   return {
     connectionId: connection, grantUpdatedAt: clean(grantUpdatedAt, 100), threadId: clean(threadId, 200),
-    kind, draftId: draft, raw: approvedRaw, details: normalizedDetails(details),
+    kind, draftId: draft, raw: approvedRaw, details: normalizedDetails(details, { preserveBody: kind === "draft" }),
   };
 }
 
