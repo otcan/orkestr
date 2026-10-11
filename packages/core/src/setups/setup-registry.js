@@ -30,6 +30,6 @@ export function setupManifestSummary(manifest) {
     channels: manifest.requires.channels,
     alwaysOn: manifest.requires.platform.alwaysOn,
     permissions: manifest.permissions.map((permission) => permission.id),
-    timers: manifest.timers.map(({ key, label, cadence, time }) => ({ key, label, cadence, time })),
+    timers: manifest.timers.map(({ key, label, cadence, time, defaultEnabled }) => ({ key, label, cadence, time, defaultEnabled })),
   };
 }

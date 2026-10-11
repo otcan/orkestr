@@ -47,3 +47,12 @@ test("requirements, timers, state migrations and uninstall policy are checked", 
     assert.match(problems, expected);
   }
 });
+
+test("Setups must be subscription-only and check-ins must start off", () => {
+  const payg = clone();
+  delete payg.requires.providers.subscriptionOnly;
+  assert.match(validateSetupManifest(payg).problems.join(), /subscriptionOnly: must be true/);
+  const loud = clone();
+  loud.timers[0].defaultEnabled = true;
+  assert.match(validateSetupManifest(loud).problems.join(), /defaultEnabled: must be false/);
+});

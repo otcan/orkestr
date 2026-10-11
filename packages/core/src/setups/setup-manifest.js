@@ -37,6 +37,9 @@ function validateRequires(requires, problems) {
   if (!requires || typeof requires !== "object") return fail(problems, "requires", "required object");
   const anyOf = requires.providers?.anyOf;
   if (!Array.isArray(anyOf) || anyOf.length === 0) fail(problems, "requires.providers.anyOf", "list at least one provider");
+  // A Setup must run on the owner's subscription login and never fall back to
+  // pay-as-you-go API billing without being asked.
+  if (requires.providers?.subscriptionOnly !== true) fail(problems, "requires.providers.subscriptionOnly", "must be true");
   else for (const provider of anyOf) if (!SETUP_PROVIDERS.includes(provider)) fail(problems, "requires.providers.anyOf", `unknown provider ${provider}`);
   for (const [index, channel] of (requires.channels || []).entries()) {
     if (!SETUP_CHANNELS.includes(channel?.id)) fail(problems, `requires.channels[${index}].id`, "unknown channel");
@@ -81,6 +84,8 @@ function validateTimers(timers, problems) {
     if (!SETUP_TIMER_CADENCES.includes(timer?.cadence)) fail(problems, `${at}.cadence`, "daily or weekly");
     if (!CLOCK.test(timer?.time || "")) fail(problems, `${at}.time`, "HH:MM");
     if (!text(timer?.prompt)) fail(problems, `${at}.prompt`, "required");
+    // Check-ins message the owner unprompted, so they start off until opted in.
+    if (timer?.defaultEnabled !== false) fail(problems, `${at}.defaultEnabled`, "must be false; check-ins are opt-in");
   }
 }
 

@@ -2307,7 +2307,7 @@ Advanced:
   orkestr whatsapp codex [status|connect] --thread <thread> [--account id] [--json]
   orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
-  orkestr setup [list|install|status|uninstall] [setup-id] [--provider codex|claude-code] [--timezone Area/City] [--json]  (preview)
+  orkestr setup [list|status|install|configure|pause|resume|export|uninstall] [setup-id] [--provider codex|claude-code] [--timezone Area/City] [--opt-in|--enable|--disable check-in] [--json]  (preview)
   orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--signal-mode record_only|notify_passively] [--json]
   orkestr mailboxes [list|status|create|verify|delete|rotate|ingest|messages|retry|relay-audits|dead-letters|replay] [--json]
   orkestr connect approve <code> [--json]

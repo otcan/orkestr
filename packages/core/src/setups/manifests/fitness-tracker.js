@@ -9,7 +9,7 @@ export const fitnessTrackerManifest = {
   title: "Personal fitness tracker",
   summary: "Tell it what you trained, ask what to do today, and get a short weekly progress summary.",
   requires: {
-    providers: { anyOf: ["codex", "claude-code"] },
+    providers: { anyOf: ["codex", "claude-code"], subscriptionOnly: true },
     channels: [
       { id: "web", required: true, purpose: "Talk to the tracker in the Orkestr thread." },
       { id: "whatsapp", required: false, purpose: "Optional: talk to it from WhatsApp once you bind a chat yourself." },
@@ -43,6 +43,7 @@ export const fitnessTrackerManifest = {
       label: "Fitness: evening check-in",
       cadence: "daily",
       time: "19:00",
+      defaultEnabled: false,
       prompt: "Evening check-in: if the owner has not logged training today, ask briefly whether they trained and what they did. If they already logged, reply NO_REPLY.",
     },
     {
@@ -50,6 +51,7 @@ export const fitnessTrackerManifest = {
       label: "Fitness: weekly summary",
       cadence: "weekly",
       time: "18:00",
+      defaultEnabled: false,
       prompt: "Weekly summary: summarize the last 7 days of logged training (sessions, notable sets or distances, personal bests) in five lines or fewer, then suggest one focus for next week.",
     },
   ],

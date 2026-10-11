@@ -6,7 +6,7 @@
 import fs from "node:fs/promises";
 import { clearThreadStandingMission, setThreadStandingMission } from "../claude-standing-mission-admin.js";
 import { createThread, getThread, retireThread } from "../threads.js";
-import { createTimer, deleteTimer, listTimers } from "../timers.js";
+import { createTimer, deleteTimer, listTimers, updateTimer } from "../timers.js";
 import { adminUserId, normalizeUserId } from "../users.js";
 import { getSetupManifest } from "./setup-registry.js";
 import {
@@ -41,10 +41,11 @@ export const defaultSetupDeps = {
   createTimer,
   deleteTimer,
   listTimers,
+  updateTimer,
   makeStateDir: (dir) => fs.mkdir(dir, { recursive: true, mode: 0o700 }),
 };
 
-function ownerOf(input, env) {
+export function setupOwnerOf(input, env) {
   return normalizeUserId(input.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
 }
 
@@ -116,8 +117,11 @@ async function createResources(instance, manifest, input, env, deps) {
     await deps.setMission(threadId, manifest.thread.mission, instance.ownerUserId, env);
     await updateSetupInstance(env, id, (entry) => { entry.resources.missionSet = true; });
   }
+  // Check-ins start off unless the owner opted in to that key at install.
+  const optIn = new Set(Array.isArray(input.optIn) ? input.optIn : []);
   for (const spec of manifest.timers) {
     const timer = await deps.createTimer({
+      enabled: optIn.has(spec.key) ? true : spec.defaultEnabled,
       label: spec.label,
       targetType: "thread",
       target: threadId,
@@ -131,16 +135,23 @@ async function createResources(instance, manifest, input, env, deps) {
   }
 }
 
+async function checkInStates(instance, env, deps) {
+  const timers = await deps.listTimers(env);
+  return instance.resources.timers.map(({ key, id }) => ({ key, enabled: timers.some((timer) => timer.id === id && timer.enabled !== false) }));
+}
+
 export async function installSetup(input = {}, env = process.env, deps = defaultSetupDeps) {
   const manifest = getSetupManifest(input.setupId);
-  const ownerUserId = ownerOf(input, env);
+  const ownerUserId = setupOwnerOf(input, env);
   const prior = findActiveInstance(await readSetupLedger(env), ownerUserId, manifest.id);
-  if (prior?.status === "installed") return { outcome: "already_installed", instance: prior };
+  if (prior?.status === "installed") return { outcome: "already_installed", instance: prior, checkIns: await checkInStates(prior, env, deps) };
   if (prior) {
     // A previous install crashed or failed to roll back: finish undoing it first.
     await releaseResources(prior, env, deps, "setup_install_retry");
     await updateSetupInstance(env, prior.instanceId, (entry) => { entry.status = "rolled_back"; noteHistory(entry, "rollback", "done_before_retry"); });
   }
+  const unknownOptIn = (input.optIn || []).filter((key) => !manifest.timers.some((timer) => timer.key === key));
+  if (unknownOptIn.length) throw setupError("setup_check_in_unknown", 400, { unknown: unknownOptIn });
   const { provider, status } = await resolveProvider(manifest, input, ownerUserId, env, deps);
   const instance = newSetupInstance({ manifest, ownerUserId, provider, timezone: input.timezone });
   await withSetupLedger(env, (ledger) => { ledger.instances.push(instance); });
@@ -159,12 +170,12 @@ export async function installSetup(input = {}, env = process.env, deps = default
     throw setupError(error.code || "setup_install_failed", error.statusCode || 500, { instanceId: instance.instanceId, rollback, cause: error.message });
   }
   const installed = await updateSetupInstance(env, instance.instanceId, (entry) => { entry.status = "installed"; noteHistory(entry, "install", "done"); });
-  return { outcome: "installed", instance: installed };
+  return { outcome: "installed", instance: installed, checkIns: await checkInStates(installed, env, deps) };
 }
 
 export async function uninstallSetup(input = {}, env = process.env, deps = defaultSetupDeps) {
   const manifest = getSetupManifest(input.setupId);
-  const ownerUserId = ownerOf(input, env);
+  const ownerUserId = setupOwnerOf(input, env);
   const instance = findActiveInstance(await readSetupLedger(env), ownerUserId, manifest.id);
   if (!instance) return { outcome: "not_installed", setupId: manifest.id };
   await updateSetupInstance(env, instance.instanceId, (entry) => { entry.status = "uninstalling"; noteHistory(entry, "uninstall", "started"); });
@@ -174,7 +185,7 @@ export async function uninstallSetup(input = {}, env = process.env, deps = defau
 }
 
 export async function setupStatus(input = {}, env = process.env, deps = defaultSetupDeps) {
-  const ownerUserId = ownerOf(input, env);
+  const ownerUserId = setupOwnerOf(input, env);
   const ledger = await readSetupLedger(env);
   const timers = await deps.listTimers(env);
   const instances = ledger.instances.filter((instance) => instance.ownerUserId === ownerUserId && (!input.setupId || instance.setupId === input.setupId));
@@ -184,7 +195,10 @@ export async function setupStatus(input = {}, env = process.env, deps = defaultS
       ...instance,
       health: {
         thread: !instance.resources.threadId ? "none" : !thread ? "missing" : thread.retired ? "retired" : "active",
-        timers: instance.resources.timers.map((owned) => ({ ...owned, present: timers.some((timer) => timer.id === owned.id && timer.target === instance.resources.threadId) })),
+        timers: instance.resources.timers.map((owned) => {
+          const timer = timers.find((entry) => entry.id === owned.id && entry.target === instance.resources.threadId);
+          return { ...owned, present: Boolean(timer), enabled: Boolean(timer && timer.enabled !== false) };
+        }),
         whatsapp: "not_bound",
       },
     };

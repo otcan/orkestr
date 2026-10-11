@@ -38,9 +38,10 @@ function cli(baseUrl, cookie) {
 }
 
 // Stand-in for the Codex CLI's `login status`, so no real login is needed.
-async function fakeCodex(dir, loggedIn) {
-  const bin = path.join(dir, loggedIn ? "codex-in" : "codex-out");
-  await fs.writeFile(bin, `#!/bin/sh\necho "${loggedIn ? "Logged in using ChatGPT" : "Not logged in"}"\nexit ${loggedIn ? 0 : 1}\n`, { mode: 0o755 });
+async function fakeCodex(dir, mode) {
+  const lines = { chatgpt: ["Logged in using ChatGPT", 0], apikey: ["Logged in using an API key - sk-***", 0], out: ["Not logged in", 1] }[mode];
+  const bin = path.join(dir, `codex-${mode}`);
+  await fs.writeFile(bin, `#!/bin/sh\necho "${lines[0]}"\nexit ${lines[1]}\n`, { mode: 0o755 });
   return bin;
 }
 
@@ -49,7 +50,7 @@ test("setup CLI lists, refuses without a provider login, installs, reports statu
   const prior = { home: process.env.ORKESTR_HOME, auth: process.env.ORKESTR_AUTH_REQUIRED, bin: process.env.ORKESTR_CODEX_BIN };
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
-  process.env.ORKESTR_CODEX_BIN = await fakeCodex(home, false);
+  process.env.ORKESTR_CODEX_BIN = await fakeCodex(home, "out");
   t.after(async () => {
     for (const [key, value] of [["ORKESTR_HOME", prior.home], ["ORKESTR_AUTH_REQUIRED", prior.auth], ["ORKESTR_CODEX_BIN", prior.bin]]) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
@@ -74,13 +75,27 @@ test("setup CLI lists, refuses without a provider login, installs, reports statu
   assert.match(out.stderr, /needs a signed-in AI provider first \(codex: not_logged_in, claude-code: claude_account_not_ready\)/);
   assert.equal((await listTimers(process.env)).length, 0);
 
-  process.env.ORKESTR_CODEX_BIN = await fakeCodex(home, true);
+  // An API-key login would bill pay-as-you-go: not accepted for Setups.
+  process.env.ORKESTR_CODEX_BIN = await fakeCodex(home, "apikey");
+  assert.equal(await run("install", "fitness-tracker"), 1);
+  assert.match(out.stderr, /codex: codex_api_key_not_subscription/);
+  assert.equal((await listTimers(process.env)).length, 0);
+
+  process.env.ORKESTR_CODEX_BIN = await fakeCodex(home, "chatgpt");
   assert.equal(await run("install", "fitness-tracker", "--timezone", "Europe/Berlin"), 0);
   assert.match(out.stdout, /Installed\.\nfitness-tracker {2}installed {2}setup_/);
   assert.match(out.stdout, /WhatsApp is not connected/);
   assert.equal(await run("install", "fitness-tracker"), 0);
   assert.match(out.stdout, /Already installed; nothing changed\./);
   assert.equal((await listTimers(process.env)).length, 2);
+
+  assert.match(out.stdout, /Check-ins: evening-check-in off, weekly-summary off\./);
+  out.stdout = "";
+  assert.equal(await run("configure", "fitness-tracker", "--enable", "weekly-summary"), 0);
+  assert.match(out.stdout, /fitness-tracker: weekly-summary enabled\./);
+  out.stdout = "";
+  assert.equal(await run("export", "fitness-tracker"), 0);
+  assert.equal(JSON.parse(out.stdout).checkIns.find((checkIn) => checkIn.key === "weekly-summary").enabled, true);
 
   out.stdout = "";
   assert.equal(await run("status", "--json"), 0);

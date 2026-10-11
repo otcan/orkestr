@@ -1,13 +1,22 @@
 import { ApiError, requestJson } from "./api-client.js";
 
 export const SETUP_USAGE = [
-  "Usage: orkestr setup <list|install|status|uninstall> [setup-id] [--provider codex|claude-code] [--timezone Area/City] [--json]",
-  "  Preview: installs one thread, its standing instructions and scheduled check-ins. Never connects WhatsApp.",
+  "Usage: orkestr setup list|status [--json]",
+  "       orkestr setup install <setup-id> [--provider codex|claude-code] [--timezone Area/City] [--opt-in <check-in>[,...]] [--json]",
+  "       orkestr setup configure <setup-id> [--enable <check-in>[,...]] [--disable <check-in>[,...]] [--json]",
+  "       orkestr setup pause|resume|export|uninstall <setup-id> [--json]",
+  "  Preview: installs one thread, its standing instructions and scheduled check-ins (off until you opt in). Never connects WhatsApp.",
 ].join("\n");
 
 function flagValue(argv, flag) {
   const index = argv.indexOf(flag);
   return index >= 0 ? String(argv[index + 1] || "") : "";
+}
+
+function keys(argv, flag) {
+  const values = [];
+  argv.forEach((value, index) => { if (value === flag) values.push(...String(argv[index + 1] || "").split(",")); });
+  return values.map((value) => value.trim()).filter(Boolean);
 }
 
 function positional(argv) {
@@ -27,13 +36,13 @@ function formatList(setups) {
     `${setup.id}  ${setup.title}  (${setup.status}, v${setup.version})`,
     `  ${setup.summary}`,
     `  Needs: ${setup.providers.join(" or ")} login${setup.alwaysOn ? "; host must stay on for check-ins" : ""}`,
-    `  Creates: 1 thread, ${setup.timers.length} scheduled check-ins (${setup.timers.map((timer) => `${timer.cadence} ${timer.time}`).join(", ")})`,
+    `  Creates: 1 thread, ${setup.timers.length} scheduled check-ins, off until you opt in (${setup.timers.map((timer) => `${timer.key}: ${timer.cadence} ${timer.time}`).join(", ")})`,
   ].join("\n")).join("\n\n") || "No Setups available.";
 }
 
 function formatInstance(instance) {
   const health = instance.health || {};
-  const timers = (health.timers || instance.resources.timers || []).map((timer) => `${timer.key}${timer.present === false ? " (missing)" : ""}`);
+  const timers = (health.timers || instance.resources.timers || []).map((timer) => `${timer.key}${timer.present === false ? " (missing)" : timer.enabled === undefined ? "" : timer.enabled ? " (on)" : " (off)"}`);
   return [
     `${instance.setupId}  ${instance.status}  ${instance.instanceId}`,
     `  provider: ${instance.provider}${instance.timezone ? `, timezone: ${instance.timezone}` : ""}`,
@@ -77,10 +86,21 @@ export async function setupCommand(argv, ctx) {
       const payload = await requestJson(`/api/setups/${encodeURIComponent(setupId)}/install`, {
         ...ctx,
         method: "POST",
-        body: { provider: flagValue(rest, "--provider"), timezone: flagValue(rest, "--timezone") },
+        body: { provider: flagValue(rest, "--provider"), timezone: flagValue(rest, "--timezone"), optIn: keys(rest, "--opt-in") },
       });
       const lead = payload.outcome === "already_installed" ? "Already installed; nothing changed." : "Installed.";
-      write(payload, `${lead}\n${formatInstance(payload.instance)}\nWhatsApp is not connected. Bind a chat yourself if you want to use it there.`);
+      write(payload, `${lead}\n${formatInstance(payload.instance)}\nCheck-ins: ${(payload.checkIns || []).map((checkIn) => `${checkIn.key} ${checkIn.enabled ? "on" : "off"}`).join(", ")}. Turn one on with: orkestr setup configure ${setupId} --enable <check-in>\nWhatsApp is not connected. Bind a chat yourself if you want to use it there.`);
+      return 0;
+    }
+    if (["configure", "pause", "resume"].includes(subcommand)) {
+      const body = subcommand === "configure" ? { enable: keys(rest, "--enable"), disable: keys(rest, "--disable") } : {};
+      const payload = await requestJson(`/api/setups/${encodeURIComponent(setupId)}/${subcommand}`, { ...ctx, method: "POST", body });
+      write(payload, `${setupId}: ${payload.changes.map((change) => `${change.key} ${change.result}`).join(", ") || "nothing to change"}.`);
+      return 0;
+    }
+    if (subcommand === "export") {
+      const payload = await requestJson(`/api/setups/${encodeURIComponent(setupId)}/export`, ctx);
+      ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
       return 0;
     }
     if (subcommand === "uninstall") {
