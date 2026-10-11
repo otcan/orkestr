@@ -15,10 +15,11 @@ export class FirstThreadWizardComponent implements OnInit {
   private readonly api = inject(ApiService);
 
   @Input() canCancel = true;
+  @Input() canManageSetup = false;
   @Input() setupStatus: SetupStatus | null = null;
   @Output() cancel = new EventEmitter<void>();
   @Output() created = new EventEmitter<ThreadSummary>();
-  @Output() setupRequested = new EventEmitter<"codex">();
+  @Output() setupRequested = new EventEmitter<"codex" | "whatsapp">();
 
   readonly steps: Array<{ id: WizardStepId; label: string }> = [
     { id: "welcome", label: "Welcome" },
@@ -30,7 +31,7 @@ export class FirstThreadWizardComponent implements OnInit {
   stepIndex = 0;
   threadName = "orkest";
   repoUrl = "";
-  whatsappAccessMode: WhatsAppAccessMode = "relay";
+  whatsappAccessMode: WhatsAppAccessMode = "own";
   runtimeProvider: "codex" | "claude-code" = "codex";
   claudeAccounts: LlmAccountProfile[] = [];
   claudeEnabled = false;
@@ -39,11 +40,26 @@ export class FirstThreadWizardComponent implements OnInit {
   error = "";
   desktopWarning = "";
   creationStage = "";
+  createdThread: ThreadSummary | null = null;
   private draftName = "";
   private draftThreadId = "";
+  private whatsappChoiceChanged = false;
 
   ngOnInit(): void {
+    this.whatsappAccessMode = this.configuredWhatsAppAccessMode(this.setupStatus) || "own";
     void this.loadClaudeAccounts();
+  }
+
+  private configuredWhatsAppAccessMode(status: SetupStatus | null): WhatsAppAccessMode | null {
+    const settings = status?.settings;
+    const connectors = settings?.["connectors"];
+    if (!connectors || typeof connectors !== "object") return null;
+    const whatsapp = (connectors as Record<string, unknown>)["whatsapp"];
+    if (!whatsapp || typeof whatsapp !== "object") return null;
+    const values = whatsapp as Record<string, unknown>;
+    if (values["accessMode"] === "own" || values["bridgeMode"] === "local") return "own";
+    if (values["accessMode"] === "relay" || values["bridgeMode"] === "relay") return "relay";
+    return null;
   }
 
   private async loadClaudeAccounts(): Promise<void> {
@@ -60,7 +76,7 @@ export class FirstThreadWizardComponent implements OnInit {
   }
 
   activeStep(): WizardStepId {
-    return this.steps[this.stepIndex]?.id || "name";
+    return this.steps[this.stepIndex]?.id || "welcome";
   }
 
   progressPercent(): number {
@@ -99,7 +115,7 @@ export class FirstThreadWizardComponent implements OnInit {
   }
 
   canCreate(): boolean {
-    return Boolean(this.agentName() && this.agentReady() && !this.busy);
+    return Boolean(this.agentName() && this.agentReady() && !this.busy && !this.createdThread);
   }
 
   agentName(): string {
@@ -127,12 +143,13 @@ export class FirstThreadWizardComponent implements OnInit {
   }
 
   whatsappAccessLabel(): string {
-    return this.whatsappAccessMode === "own" ? "Own WhatsApp bridge" : "Orkestr relay";
+    return this.whatsappAccessMode === "own" ? "Own WhatsApp bridge" : "Managed relay";
   }
 
   selectWhatsAppAccessMode(mode: WhatsAppAccessMode): void {
-    if (this.busy) return;
+    if (this.busy || !this.canManageSetup) return;
     this.whatsappAccessMode = mode;
+    this.whatsappChoiceChanged = true;
   }
 
   codexConnector(): ConnectorStatus | null {
@@ -213,10 +230,15 @@ export class FirstThreadWizardComponent implements OnInit {
       const name = this.agentName();
       const repoUrl = this.repoUrlValue();
       const cloneRepo = Boolean(repoUrl);
-      this.creationStage = "Saving WhatsApp access choice";
-      await firstValueFrom(this.api.saveSetupDemoPreferences({
-        whatsappAccessMode: this.whatsappAccessMode,
-      }));
+      const currentSetup = this.canManageSetup ? await firstValueFrom(this.api.setupStatus()) : this.setupStatus;
+      const configuredMode = this.configuredWhatsAppAccessMode(currentSetup);
+      if (!this.whatsappChoiceChanged && configuredMode) this.whatsappAccessMode = configuredMode;
+      if (this.canManageSetup && (this.whatsappChoiceChanged || !configuredMode)) {
+        this.creationStage = "Saving WhatsApp access choice";
+        await firstValueFrom(this.api.saveSetupDemoPreferences({
+          whatsappAccessMode: this.whatsappAccessMode,
+        }));
+      }
       this.creationStage = cloneRepo ? "Cloning repo" : "Creating local git repo";
       const response = await firstValueFrom(this.api.createThread({
         id: this.generatedWorkspaceName(),
@@ -238,11 +260,11 @@ export class FirstThreadWizardComponent implements OnInit {
       }));
       const thread = response.thread;
       this.creationStage = "Starting Virtual Desk";
-      await this.startVirtualDesk(thread).catch((error) => {
-        this.desktopWarning = `Virtual Desk did not start: ${this.errorText(error)}. Open setup desktops after the thread opens.`;
+      await this.startVirtualDesk(thread).catch(() => {
+        this.desktopWarning = "The desktop did not start. Open Desktops after entering the conversation to retry.";
       });
-      this.creationStage = this.runtimeProvider === "claude-code" ? "Starting Claude Code in background" : "Starting Codex in background";
-      this.created.emit(thread);
+      this.creationStage = "";
+      this.createdThread = thread;
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
