@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { checkSetupClaudeSubscription } from "./setups/setup-dispatch-guard.js";
 import path from "node:path";
 import readline from "node:readline";
 import {
@@ -92,6 +93,13 @@ export async function runClaudeCodeProcess({
 }) {
   const command = claudeCodeCommand(env);
   const childEnv = await claudeCodeExecutionEnv(profile, thread, env);
+  const subscription = checkSetupClaudeSubscription(thread, profile, childEnv);
+  if (!subscription.ok) {
+    const refused = new Error(subscription.reason);
+    refused.code = subscription.reason;
+    refused.setupSubscriptionRefused = true;
+    throw refused;
+  }
   const statusCapture = claudeCodeStatusCapture(profile, thread);
   await Promise.all([
     fs.mkdir(childEnv.HOME, { recursive: true, mode: 0o700 }),
