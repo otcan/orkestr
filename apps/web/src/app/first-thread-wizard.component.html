@@ -37,6 +37,27 @@
     <div class="notice">{{ desktopWarning }}</div>
   }
 
+  @if (whatsappWarning) {
+    <div class="notice">{{ whatsappWarning }}</div>
+  }
+
+  @if (createdThread) {
+    <div class="wizard-proof" aria-live="polite">
+      <div class="wizard-section-title">
+        <p class="eyebrow">Try it</p>
+        <h3>Send a message from WhatsApp</h3>
+      </div>
+      <p>On your phone, open your own chat in WhatsApp (<strong>Message yourself</strong>, at the top of a new chat) and send any message, for example <em>hi</em>. Only you can write in this chat; nobody else is added.</p>
+      <ul class="wizard-proof-checks">
+        <li>{{ proof.inbound ? "✔" : "…" }} Message received from WhatsApp</li>
+        <li>{{ proof.reply ? "✔" : "…" }} {{ agentName() }} replied</li>
+      </ul>
+      <div class="wizard-actions">
+        <button type="button" (click)="openCreatedThread()">{{ proof.reply ? "Open thread" : "Skip and open thread" }}</button>
+      </div>
+    </div>
+  }
+
   @if (runtimeProvider === 'codex' && codexBlocked()) {
     <div class="notice">
       <strong>Codex Agent required.</strong>
@@ -52,6 +73,7 @@
     </div>
   }
 
+  @if (!createdThread) {
   <form class="wizard-panel" (submit)="createAndStart(); $event.preventDefault()">
     @if (activeStep() === "welcome") {
       <div class="wizard-section-title">
@@ -124,16 +146,16 @@
       </div>
       <div class="wizard-choice-grid">
         @if (availableWhatsAppModes().includes('self_hosted')) {
-        <button
-          type="button"
-          class="choice-card"
-          [class.active]="whatsappAccessMode === 'self_hosted'"
-          (click)="selectWhatsAppAccessMode('self_hosted')"
-          [disabled]="busy"
-        >
-          <strong>Use my own WhatsApp</strong>
-          <span>Recommended for self-hosted installs. Pair your device with the local bridge; session data stays in this instance's data volume.</span>
-        </button>
+          <button
+            type="button"
+            class="choice-card"
+            [class.active]="whatsappAccessMode === 'self_hosted'"
+            (click)="selectWhatsAppAccessMode('self_hosted')"
+            [disabled]="busy"
+          >
+            <strong>Use my own WhatsApp</strong>
+            <span>Recommended for self-hosted installs. Pair your device with the local bridge; session data stays in this instance's data volume.</span>
+          </button>
         }
         @if (availableWhatsAppModes().includes('managed')) {
           <button
@@ -151,9 +173,14 @@
       @if (availableWhatsAppModes().length === 0) {
         <div class="notice">No WhatsApp onboarding mode is available. Ask this instance's operator to repair its configured bridge.</div>
       } @else {
-        <div class="notice">
-        This choice is stored as a non-secret setup preference. Credentials and WhatsApp sessions stay outside the repo.
-        </div>
+        @if (whatsappAccessMode === 'self_hosted') {
+          <ork-whatsapp-pair-panel [accountId]="whatsappAccountId" (readyChange)="onWhatsAppReady($event)" (pairedAccount)="onWhatsAppPaired($event)" />
+          <div class="notice">
+            This uses WhatsApp Web, which WhatsApp does not officially support for automation. You can skip linking now and connect later in Setup.
+          </div>
+        } @else {
+          <div class="notice">This choice is stored as a non-secret setup preference. Credentials and WhatsApp sessions stay outside the repo.</div>
+        }
       }
     }
 
@@ -191,4 +218,5 @@
       }
     </div>
   </form>
+  }
 </section>

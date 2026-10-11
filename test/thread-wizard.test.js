@@ -115,6 +115,25 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(!wizardSources.includes('executorId: "noop"'));
 });
 
+test("WhatsApp wizard maps relay modes, pins self-hosted pairing, and cleans up polling", async () => {
+  const wizard = await fs.readFile("apps/web/src/app/first-thread-wizard.component.ts", "utf8");
+  const template = await fs.readFile("apps/web/src/app/first-thread-wizard.component.html", "utf8");
+  const pairPanel = await fs.readFile("apps/web/src/app/whatsapp-pair-panel.component.ts", "utf8");
+  const create = wizard.slice(wizard.indexOf("async createAndStart()"), wizard.indexOf("private threadId("));
+
+  assert.match(wizard, /normalizeWhatsAppAccessMode[\s\S]*\["managed", "relay", "external"\]/);
+  assert.match(wizard, /normalizeWhatsAppAccessMode[\s\S]*\["self_hosted", "own", "local"\]/);
+  assert.match(template, /availableWhatsAppModes\(\)\.includes\('managed'\)/);
+  assert.match(template, /whatsappAccessMode === 'self_hosted'[\s\S]*ork-whatsapp-pair-panel/);
+  assert.match(template, /\(pairedAccount\)="onWhatsAppPaired\(\$event\)"/);
+  assert.match(wizard, /onWhatsAppPaired\(account:[\s\S]*pairedWhatsAppAccount = account/);
+  assert.match(create, /whatsappAccessMode === "self_hosted" && this\.whatsappReady && this\.pairedWhatsAppAccount/);
+  assert.match(create, /connectWhatsAppPrivateChat\([\s\S]*pairedAccountId:[\s\S]*pairedContactId:/);
+  assert.match(create, /whatsappAccessMode: this\.whatsappAccessMode/);
+  assert.match(wizard, /ngOnDestroy\(\): void \{\s*if \(this\.proofTimer\) clearInterval\(this\.proofTimer\);/);
+  assert.match(pairPanel, /ngOnDestroy\(\): void \{\s*if \(this\.timer\) clearInterval\(this\.timer\);/);
+});
+
 test("web thread input uses the server-stamped UI route", async () => {
   const apiSource = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
   const sendThreadInput = apiSource.slice(apiSource.indexOf("sendThreadInput("), apiSource.indexOf("wakeThread("));

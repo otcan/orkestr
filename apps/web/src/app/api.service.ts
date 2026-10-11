@@ -2024,6 +2024,14 @@ export interface WhatsAppStatusResponse {
   [key: string]: unknown;
 }
 
+export interface WhatsAppThreadGroupResponse {
+  ok: boolean;
+  created?: boolean;
+  reused?: boolean;
+  chat?: { id?: string; name?: string; isGroup?: boolean; generated?: boolean };
+  [key: string]: unknown;
+}
+
 export interface WhatsAppChatsResponse {
   accountId: string;
   state?: string;
@@ -2817,6 +2825,17 @@ export class ApiService {
       this.api(`/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/start`),
       {},
     );
+  }
+
+  // Creates a private WhatsApp group for the thread on the paired account and binds it.
+  createWhatsAppThreadGroup(body: { threadId: string; name?: string; participantIds?: string[] }): Observable<WhatsAppThreadGroupResponse> {
+    return this.http.post<WhatsAppThreadGroupResponse>(this.api("/connectors/whatsapp/thread-groups"), body);
+  }
+
+  // First-run wizard: binds the thread to the paired account's own chat. The server
+  // never adds anyone and refuses if the pinned account is no longer usable.
+  connectWhatsAppPrivateChat(body: { threadId: string; name: string; pairedAccountId: string; pairedContactId: string }): Observable<WhatsAppThreadGroupResponse> {
+    return this.http.post<WhatsAppThreadGroupResponse>(this.api("/connectors/whatsapp/onboarding/private-chat"), body);
   }
 
   logoutWhatsAppAccount(accountId: string): Observable<Record<string, unknown>> {

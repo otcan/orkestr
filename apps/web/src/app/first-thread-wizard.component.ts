@@ -1,18 +1,20 @@
-import { Component, EventEmitter, Input, OnChanges, OnInit, Output, SimpleChanges, inject } from "@angular/core";
+import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadSummary } from "./api.service";
+import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadMessage, ThreadSummary } from "./api.service";
+import { WhatsAppPairPanelComponent } from "./whatsapp-pair-panel.component";
 
 type WizardStepId = "welcome" | "codex" | "whatsapp" | "review";
 type WhatsAppAccessMode = "managed" | "self_hosted";
 
 @Component({
   selector: "ork-first-thread-wizard",
-  imports: [FormsModule],
+  imports: [FormsModule, WhatsAppPairPanelComponent],
   templateUrl: "./first-thread-wizard.component.html",
 })
-export class FirstThreadWizardComponent implements OnInit, OnChanges {
+export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit {
   private readonly api = inject(ApiService);
+  private readonly cdr = inject(ChangeDetectorRef);
 
   @Input() canCancel = true;
   @Input() setupStatus: SetupStatus | null = null;
@@ -31,6 +33,15 @@ export class FirstThreadWizardComponent implements OnInit, OnChanges {
   threadName = "orkest";
   repoUrl = "";
   whatsappAccessMode: WhatsAppAccessMode = "self_hosted";
+  readonly whatsappAccountId = "account-1";
+  whatsappReady = false;
+  pairedWhatsAppAccount: { accountId: string; contactId: string } | null = null;
+  whatsappWarning = "";
+  // After creation in self-hosted mode: the bound chat and the live check.
+  createdThread: ThreadSummary | null = null;
+  boundChatName = "";
+  proof = { inbound: false, reply: false };
+  private proofTimer: ReturnType<typeof setInterval> | null = null;
   runtimeProvider: "codex" | "claude-code" = "codex";
   claudeAccounts: LlmAccountProfile[] = [];
   claudeEnabled = false;
@@ -55,10 +66,13 @@ export class FirstThreadWizardComponent implements OnInit, OnChanges {
   private syncWhatsAppAccessMode(): void {
     if (this.whatsappModeTouched || !this.setupStatus) return;
     const available = this.availableWhatsAppModes();
-    const selected = this.setupStatus.whatsappOnboarding?.selectedMode;
-    this.whatsappAccessMode = selected && available.includes(selected)
-      ? selected
-      : available[0] || "self_hosted";
+    const selected = normalizeWhatsAppAccessMode(this.setupStatus.whatsappOnboarding?.selectedMode)
+      || configuredWhatsAppAccessMode(this.setupStatus);
+    this.whatsappAccessMode = available.includes(selected) ? selected : available[0] || "self_hosted";
+  }
+
+  ngOnDestroy(): void {
+    if (this.proofTimer) clearInterval(this.proofTimer);
   }
 
   private async loadClaudeAccounts(): Promise<void> {
@@ -142,13 +156,26 @@ export class FirstThreadWizardComponent implements OnInit, OnChanges {
   }
 
   whatsappAccessLabel(): string {
-    return this.whatsappAccessMode === "self_hosted" ? "My WhatsApp (self-hosted)" : "Managed WhatsApp relay";
+    if (this.whatsappAccessMode !== "self_hosted") return "Managed WhatsApp relay";
+    return this.whatsappReady && this.pairedWhatsAppAccount
+      ? "Own WhatsApp (linked) · your own private chat will be connected"
+      : "Own WhatsApp · not linked yet, connect later in Setup";
   }
 
   availableWhatsAppModes(): WhatsAppAccessMode[] {
     const modes = this.setupStatus?.whatsappOnboarding?.availableModes;
     if (!Array.isArray(modes)) return ["self_hosted"];
-    return modes.filter((mode): mode is WhatsAppAccessMode => mode === "self_hosted" || mode === "managed");
+    return modes.map(normalizeWhatsAppAccessMode).filter((mode): mode is WhatsAppAccessMode => mode !== null);
+  }
+
+  onWhatsAppPaired(account: { accountId: string; contactId: string } | null): void {
+    this.pairedWhatsAppAccount = account;
+    this.cdr.markForCheck();
+  }
+
+  onWhatsAppReady(ready: boolean): void {
+    this.whatsappReady = ready;
+    this.cdr.markForCheck();
   }
 
   selectWhatsAppAccessMode(mode: WhatsAppAccessMode): void {
@@ -264,12 +291,51 @@ export class FirstThreadWizardComponent implements OnInit, OnChanges {
         this.desktopWarning = `Virtual Desk did not start: ${this.errorText(error)}. Open setup desktops after the thread opens.`;
       });
       this.creationStage = this.runtimeProvider === "claude-code" ? "Starting Claude Code in background" : "Starting Codex in background";
+      if (this.whatsappAccessMode === "self_hosted" && this.whatsappReady && this.pairedWhatsAppAccount) {
+        this.creationStage = "Connecting your private WhatsApp chat";
+        try {
+          // Server enforces: only the account paired above, only its own chat, refused if no longer linked.
+          const group = await firstValueFrom(this.api.connectWhatsAppPrivateChat({
+            threadId: thread.id,
+            name,
+            pairedAccountId: this.pairedWhatsAppAccount.accountId,
+            pairedContactId: this.pairedWhatsAppAccount.contactId,
+          }));
+          this.boundChatName = group.chat?.name || name;
+          this.createdThread = thread;
+          this.startProofCheck(thread.id);
+          return;
+        } catch (error) {
+          this.whatsappWarning = `Your WhatsApp chat could not be connected: ${this.errorText(error)}. Link WhatsApp again in Setup, then bind a chat from the thread.`;
+        }
+      }
       this.created.emit(thread);
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
       this.busy = false;
     }
+  }
+
+  openCreatedThread(): void {
+    if (this.proofTimer) clearInterval(this.proofTimer);
+    if (this.createdThread) this.created.emit(this.createdThread);
+  }
+
+  // Watches the new thread for a message from WhatsApp and the agent's reply.
+  private startProofCheck(threadId: string): void {
+    const check = async () => {
+      try {
+        const response = await firstValueFrom(this.api.threadMessages(threadId, 50));
+        this.proof = whatsappRoundTrip(response.messages || []);
+        this.cdr.markForCheck();
+        if (this.proof.reply && this.proofTimer) clearInterval(this.proofTimer);
+      } catch {
+        // Keep polling; the thread may still be starting.
+      }
+    };
+    void check();
+    this.proofTimer = setInterval(() => void check(), 3000);
   }
 
   private threadId(name: string): string {
@@ -302,4 +368,27 @@ export class FirstThreadWizardComponent implements OnInit, OnChanges {
     const value = error as { error?: { message?: string; error?: string }; message?: string };
     return value?.error?.message || value?.error?.error || value?.message || String(error);
   }
+}
+
+function configuredWhatsAppAccessMode(status: SetupStatus | null): WhatsAppAccessMode {
+  const settings = (status?.settings || {}) as Record<string, unknown>;
+  const connectors = (settings["connectors"] || {}) as Record<string, Record<string, unknown>>;
+  const mode = String(connectors["whatsapp"]?.["accessMode"] || "").toLowerCase();
+  return normalizeWhatsAppAccessMode(mode) || "self_hosted";
+}
+
+function normalizeWhatsAppAccessMode(value: unknown): WhatsAppAccessMode | null {
+  const mode = String(value || "").toLowerCase();
+  if (["self_hosted", "own", "local"].includes(mode)) return "self_hosted";
+  if (["managed", "relay", "external"].includes(mode)) return "managed";
+  return null;
+}
+
+// True once a message that arrived from WhatsApp is followed by an assistant reply.
+export function whatsappRoundTrip(messages: ThreadMessage[]): { inbound: boolean; reply: boolean } {
+  const index = messages.findIndex((message) => message.role === "user" &&
+    (String(message.source || "").startsWith("whatsapp") || message["originSurface"] === "whatsapp"));
+  if (index < 0) return { inbound: false, reply: false };
+  const reply = messages.slice(index + 1).some((message) => message.role === "assistant" && Boolean(String(message.text || "").trim()));
+  return { inbound: true, reply };
 }
