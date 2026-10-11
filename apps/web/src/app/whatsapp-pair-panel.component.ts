@@ -40,6 +40,8 @@ export class WhatsAppPairPanelComponent implements OnInit, OnDestroy {
 
   @Input() accountId = "account-1";
   @Output() readyChange = new EventEmitter<boolean>();
+  // Stable identity captured at pairing: the runtime slot id and the linked WhatsApp contact id.
+  @Output() pairedAccount = new EventEmitter<{ accountId: string; contactId: string } | null>();
 
   account: WhatsAppAccount | null = null;
   error = "";
@@ -103,7 +105,9 @@ export class WhatsAppPairPanelComponent implements OnInit, OnDestroy {
   private async refresh(): Promise<void> {
     try {
       const status = await firstValueFrom(this.api.whatsappStatus());
-      this.account = (status.accounts || []).find((item) => (item.accountId || item.id) === this.accountId) || null;
+      // Once linked, the status reports the phone identity as accountId; the slot id stays in runtimeAccountId.
+      this.account = (status.accounts || []).find((item) => [item.runtimeAccountId, item.accountId, item.id].includes(this.accountId) ||
+        (item.legacyRoleAliases || []).includes(this.accountId)) || null;
       const error = String(this.account?.["error"] || "");
       if (error && this.state() !== "ready") this.error = error;
     } catch (error) {
@@ -114,6 +118,8 @@ export class WhatsAppPairPanelComponent implements OnInit, OnDestroy {
     if (ready !== this.lastReady) {
       this.lastReady = ready;
       this.readyChange.emit(ready);
+      const contactId = String(this.account?.contactId || "");
+      this.pairedAccount.emit(ready && contactId ? { accountId: this.accountId, contactId } : null);
     }
   }
 }

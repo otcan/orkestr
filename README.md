@@ -200,10 +200,12 @@ First run:
    the `/data` volume. After a container restart the linked account
    reconnects without a new QR (set `ORKESTR_WHATSAPP_AUTOSTART=0` to turn
    that off). The Orkestr relay is invitation-only and needs a broker.
-3. Start the default `orkest` thread. With WhatsApp linked, the wizard creates
-   a private WhatsApp group that contains only your own account and binds it
-   to the thread, then waits for you to send a message there and for the
-   thread's reply.
+3. Start the default `orkest` thread. With WhatsApp linked, the wizard binds
+   the thread to your own WhatsApp chat ("Message yourself") on exactly the
+   account you just linked. Nobody else is added, even if default
+   participants are configured, and the step is refused if that account is
+   no longer linked. It then waits for you to send a message there and for
+   the thread's reply.
 4. Orkestr starts Virtual Desk for that thread.
 
 The built-in bridge uses WhatsApp Web through the bundled Chromium. WhatsApp

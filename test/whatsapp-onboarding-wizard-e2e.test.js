@@ -63,8 +63,13 @@ test("wizard links WhatsApp by QR, binds a private group, and shows the inbound/
   const origin = `http://127.0.0.1:${server.address().port}`;
 
   const fake = { started: false, linked: false, inbound: false, calls: [], external: [] };
+  // Mirrors the real status shape: once linked, accountId becomes the phone
+  // identity and the slot id moves to runtimeAccountId.
   const whatsappAccount = () => ({
-    accountId: "account-1",
+    accountId: fake.linked ? "15550000001" : "account-1",
+    runtimeAccountId: "account-1",
+    legacyRoleAliases: fake.linked ? ["account-1"] : [],
+    contactId: fake.started ? "15550000001@c.us" : "",
     state: fake.linked ? "ready" : fake.started ? "qr_needed" : "idle",
     qrUrl: fake.started && !fake.linked ? "/__fake/qr.svg" : "",
     updatedAt: "2026-10-11T12:00:00.000Z",
@@ -122,7 +127,7 @@ test("wizard links WhatsApp by QR, binds a private group, and shows the inbound/
         }
         if (route === "POST /api/connectors/whatsapp/thread-groups") {
           fake.calls.push(["thread-group", JSON.parse(request.postData() || "{}")]);
-          return request.respond(json({ ok: true, created: true, chat: { id: "120363000000000001@g.us", name: "orkest", isGroup: true } }));
+          return request.respond(json({ ok: true, created: false, privateOwnerChat: true, chat: { id: "15550000001@c.us", name: "orkest", isGroup: false } }));
         }
         if (route === "GET /api/threads/orkest/messages") {
           const messages = fake.inbound
@@ -162,8 +167,13 @@ test("wizard links WhatsApp by QR, binds a private group, and shows the inbound/
     await clickButton("Start orkest");
     await page.waitForSelector(".wizard-proof", { timeout: 20_000 });
     const group = fake.calls.find((call) => call[0] === "thread-group");
-    assert.equal(group[1].threadId, "orkest");
-    assert.equal(group[1].participantIds, undefined, "the wizard does not add other people to the group");
+    assert.deepEqual(group[1], {
+      threadId: "orkest",
+      name: "orkest",
+      privateOwnerOnly: true,
+      pairedAccountId: "account-1",
+      pairedContactId: "15550000001@c.us",
+    }, "the wizard requests only the paired account's own chat and adds nobody");
     assert.deepEqual(fake.calls.find((call) => call[0] === "preferences")[1], { whatsappAccessMode: "own" });
     assert.match(await page.$eval(".wizard-proof", (node) => node.textContent), /…\s*Message received from WhatsApp/);
 

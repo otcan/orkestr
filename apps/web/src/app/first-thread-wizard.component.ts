@@ -35,6 +35,7 @@ export class FirstThreadWizardComponent implements OnInit, OnDestroy {
   whatsappAccessMode: WhatsAppAccessMode = "own";
   readonly whatsappAccountId = "account-1";
   whatsappReady = false;
+  pairedWhatsAppAccount: { accountId: string; contactId: string } | null = null;
   whatsappWarning = "";
   // After creation in self-hosted mode: the bound chat and the live check.
   createdThread: ThreadSummary | null = null;
@@ -143,7 +144,12 @@ export class FirstThreadWizardComponent implements OnInit, OnDestroy {
 
   whatsappAccessLabel(): string {
     if (this.whatsappAccessMode !== "own") return "Orkestr relay";
-    return this.whatsappReady ? "Own WhatsApp (linked) · a private group will be created" : "Own WhatsApp · not linked yet, connect later in Setup";
+    return this.whatsappReady ? "Own WhatsApp (linked) · your own private chat will be connected" : "Own WhatsApp · not linked yet, connect later in Setup";
+  }
+
+  onWhatsAppPaired(account: { accountId: string; contactId: string } | null): void {
+    this.pairedWhatsAppAccount = account;
+    this.cdr.markForCheck();
   }
 
   onWhatsAppReady(ready: boolean): void {
@@ -263,16 +269,23 @@ export class FirstThreadWizardComponent implements OnInit, OnDestroy {
         this.desktopWarning = `Virtual Desk did not start: ${this.errorText(error)}. Open setup desktops after the thread opens.`;
       });
       this.creationStage = this.runtimeProvider === "claude-code" ? "Starting Claude Code in background" : "Starting Codex in background";
-      if (this.whatsappAccessMode === "own" && this.whatsappReady) {
-        this.creationStage = "Creating your private WhatsApp group";
+      if (this.whatsappAccessMode === "own" && this.whatsappReady && this.pairedWhatsAppAccount) {
+        this.creationStage = "Connecting your private WhatsApp chat";
         try {
-          const group = await firstValueFrom(this.api.createWhatsAppThreadGroup({ threadId: thread.id, name: name }));
+          // Server enforces: only the account paired above, only its own chat, refused if no longer linked.
+          const group = await firstValueFrom(this.api.createWhatsAppThreadGroup({
+            threadId: thread.id,
+            name,
+            privateOwnerOnly: true,
+            pairedAccountId: this.pairedWhatsAppAccount.accountId,
+            pairedContactId: this.pairedWhatsAppAccount.contactId,
+          }));
           this.boundChatName = group.chat?.name || name;
           this.createdThread = thread;
           this.startProofCheck(thread.id);
           return;
         } catch (error) {
-          this.whatsappWarning = `The WhatsApp group could not be created: ${this.errorText(error)}. You can bind a chat later from the thread.`;
+          this.whatsappWarning = `Your WhatsApp chat could not be connected: ${this.errorText(error)}. Link WhatsApp again in Setup, then bind a chat from the thread.`;
         }
       }
       this.created.emit(thread);

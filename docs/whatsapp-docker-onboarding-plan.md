@@ -308,7 +308,12 @@ unless stated otherwise.
    linked accounts at boot, only when the built-in bridge is the active
    transport. Opt out with `ORKESTR_WHATSAPP_AUTOSTART=0`. Wrapping the local
    bridge behind the transport interface is *not started*.
-6. **Onboarding "link, bind one chat, prove it".** *Done* (T4, T7, T16 with a
+6. **Onboarding "link, bind one chat, prove it".** The chat is the paired
+   account's own chat ("Message yourself"); a WhatsApp group cannot contain only
+   its creator. The `thread-groups` route enforces it when `privateOwnerOnly`
+   is set: no configured participants, the exact paired account and contact
+   id, refusal when that account is unusable (route-level tests in
+   `test/whatsapp-onboarding-private-chat-route.test.js`). *Done* (T4, T7, T16 with a
    synthetic browser E2E). Goal-specific readiness (T17) is *not started*;
    `setupState` is unchanged.
 7. **Gateway client adapter and gateway routes** (T11–T15 end to end).

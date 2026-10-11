@@ -2822,7 +2822,7 @@ export class ApiService {
   }
 
   // Creates a private WhatsApp group for the thread on the paired account and binds it.
-  createWhatsAppThreadGroup(body: { threadId: string; name?: string; participantIds?: string[] }): Observable<WhatsAppThreadGroupResponse> {
+  createWhatsAppThreadGroup(body: { threadId: string; name?: string; participantIds?: string[]; privateOwnerOnly?: boolean; pairedAccountId?: string; pairedContactId?: string }): Observable<WhatsAppThreadGroupResponse> {
     return this.http.post<WhatsAppThreadGroupResponse>(this.api("/connectors/whatsapp/thread-groups"), body);
   }
 

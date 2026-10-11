@@ -47,7 +47,7 @@
         <p class="eyebrow">Try it</p>
         <h3>Send a message from WhatsApp</h3>
       </div>
-      <p>Open the WhatsApp group <strong>{{ boundChatName }}</strong> on your phone and send any message, for example <em>hi</em>. Only your own WhatsApp account is in this group.</p>
+      <p>On your phone, open your own chat in WhatsApp (<strong>Message yourself</strong>, at the top of a new chat) and send any message, for example <em>hi</em>. Only you can write in this chat; nobody else is added.</p>
       <ul class="wizard-proof-checks">
         <li>{{ proof.inbound ? "✔" : "…" }} Message received from WhatsApp</li>
         <li>{{ proof.reply ? "✔" : "…" }} {{ agentName() }} replied</li>
@@ -167,7 +167,7 @@
         </button>
       </div>
       @if (whatsappAccessMode === 'own') {
-        <ork-whatsapp-pair-panel [accountId]="whatsappAccountId" (readyChange)="onWhatsAppReady($event)" />
+        <ork-whatsapp-pair-panel [accountId]="whatsappAccountId" (readyChange)="onWhatsAppReady($event)" (pairedAccount)="onWhatsAppPaired($event)" />
         <div class="notice">
           This uses WhatsApp Web, which WhatsApp does not officially support for automation. You can skip linking now and connect later in Setup.
         </div>
