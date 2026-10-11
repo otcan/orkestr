@@ -28,12 +28,73 @@ test("Codex check: only a ChatGPT login passes for Setup threads; others are una
   assert.deepEqual(await checkSetupCodexSubscription(fakeClient({ type: "apiKey" }), plainThread), { ok: true, applies: false });
 });
 
-test("Claude check: Setup threads need a subscription profile and no API-billing env", () => {
-  assert.equal(checkSetupClaudeSubscription(setupThread, { authMode: "subscription" }, { HOME: "/x" }).ok, true);
-  assert.equal(checkSetupClaudeSubscription(setupThread, {}, {}).reason, "claude_profile_not_subscription");
-  assert.equal(checkSetupClaudeSubscription(setupThread, { authMode: "subscription" }, { ANTHROPIC_API_KEY: "fake-value" }).reason, "claude_api_billing_env_present");
-  assert.equal(checkSetupClaudeSubscription(setupThread, { authMode: "subscription" }, { CLAUDE_CODE_USE_BEDROCK: "1" }).reason, "claude_api_billing_env_present");
-  assert.equal(checkSetupClaudeSubscription(plainThread, {}, { ANTHROPIC_API_KEY: "fake-value" }).ok, true);
+// Fake `claude` CLI: `auth status --json` prints $FAKE_CLAUDE_STATUS, or
+// status.json next to the script when the runner's allowlisted env drops it (and
+// exits 1 when loggedIn is false, like the real CLI); any other invocation
+// is recorded in $FAKE_CLAUDE_RAN, so a refused turn proves nothing ran.
+async function fakeClaude(dir) {
+  const bin = path.join(dir, "claude");
+  await fs.writeFile(bin, `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "auth" && args[1] === "status") {
+  const raw = fs.readFileSync(process.env.FAKE_CLAUDE_STATUS || require("node:path").join(__dirname, "status.json"), "utf8");
+  process.stdout.write(raw);
+  let loggedIn = false; try { loggedIn = JSON.parse(raw).loggedIn === true; } catch {}
+  process.exit(loggedIn ? 0 : 1);
+}
+fs.appendFileSync(process.env.FAKE_CLAUDE_RAN || require("node:path").join(__dirname, "ran"), args.join(" ") + "\\n");
+`, { mode: 0o755 });
+  return bin;
+}
+
+test("Claude check needs positive subscription evidence from the CLI in the child env", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-claude-auth-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const command = await fakeClaude(dir);
+  const statusFile = path.join(dir, "status.json");
+  const childEnv = { PATH: process.env.PATH, HOME: dir, FAKE_CLAUDE_STATUS: statusFile, FAKE_CLAUDE_RAN: path.join(dir, "ran") };
+  const subscriptionProfile = { authMode: "subscription" };
+  const check = async (status, profile = subscriptionProfile, env = childEnv) => {
+    await fs.writeFile(statusFile, typeof status === "string" ? status : JSON.stringify(status));
+    return checkSetupClaudeSubscription(setupThread, profile, env, { command });
+  };
+  const base = { apiProvider: "firstParty", analyticsDisabled: false };
+  assert.deepEqual(await check({ ...base, loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), { ok: true, applies: true });
+  assert.deepEqual(await check({ ...base, loggedIn: true, authMethod: "oauth_token" }), { ok: true, applies: true });
+  // Declared subscription profile, but the CLI is actually on an API key.
+  assert.equal((await check({ ...base, loggedIn: true, authMethod: "api_key", apiKeySource: "/login managed key" })).reason, "claude_login_not_subscription");
+  assert.equal((await check({ ...base, loggedIn: true, authMethod: "claude.ai" })).reason, "claude_login_not_subscription", "claude.ai without a subscription type is not evidence");
+  assert.equal((await check({ loggedIn: true, authMethod: "third_party", apiProvider: "bedrock" })).reason, "claude_login_not_subscription");
+  assert.equal((await check({ ...base, loggedIn: true, authMethod: "something_new" })).reason, "claude_login_not_subscription");
+  assert.equal((await check({ ...base, loggedIn: false, authMethod: "none" })).reason, "claude_not_logged_in");
+  assert.equal((await check("not json at all")).reason, "claude_auth_status_unavailable");
+  assert.equal((await checkSetupClaudeSubscription(setupThread, subscriptionProfile, childEnv, { command: path.join(dir, "missing") })).reason, "claude_auth_status_unavailable");
+  // Declaration and environment checks still apply first.
+  assert.equal((await check({ ...base, loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }, {})).reason, "claude_profile_not_subscription");
+  assert.equal((await check({ ...base, loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }, subscriptionProfile, { ...childEnv, ANTHROPIC_API_KEY: "fake-value" })).reason, "claude_api_billing_env_present");
+  // Ordinary threads are never checked.
+  let called = false;
+  assert.deepEqual(await checkSetupClaudeSubscription(plainThread, {}, { ANTHROPIC_API_KEY: "fake-value" }, { command, readStatus: async () => { called = true; return { ok: false }; } }), { ok: true, applies: false });
+  assert.equal(called, false);
+  await assert.rejects(fs.stat(path.join(dir, "ran")), { code: "ENOENT" }, "status checks never start a Claude turn");
+});
+
+test("a Setup Claude turn is refused before the CLI starts when the login is an API key", async (t) => {
+  const { runClaudeCodeProcess } = await import("../packages/core/src/claude-code-process-runner.js");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-claude-run-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const command = await fakeClaude(dir);
+  const statusFile = path.join(dir, "status.json");
+  await fs.writeFile(statusFile, JSON.stringify({ loggedIn: true, authMethod: "api_key", apiProvider: "firstParty", apiKeySource: "/login managed key" }));
+  const env = { ...process.env, ORKESTR_HOME: path.join(dir, "home"), ORKESTR_CLAUDE_CODE_BIN: command, FAKE_CLAUDE_STATUS: statusFile, FAKE_CLAUDE_RAN: path.join(dir, "ran") };
+  const thread = { id: "setup-claude", setupInstanceId: "setup_x", setupId: "fitness-tracker", cwd: dir };
+  const profile = { authMode: "subscription", credentialRoot: path.join(dir, "profile") };
+  await assert.rejects(
+    runClaudeCodeProcess({ thread, profile, prompt: "hi", sessionId: "", attemptId: "a1", assertProfileReady: async () => {}, activeTurns: new Map(), env }),
+    (error) => error.code === "claude_login_not_subscription",
+  );
+  await assert.rejects(fs.stat(path.join(dir, "ran")), { code: "ENOENT" }, "the Claude turn never started");
 });
 
 async function waitFor(predicate, timeoutMs = 15_000) {

@@ -93,7 +93,7 @@ export async function runClaudeCodeProcess({
 }) {
   const command = claudeCodeCommand(env);
   const childEnv = await claudeCodeExecutionEnv(profile, thread, env);
-  const subscription = checkSetupClaudeSubscription(thread, profile, childEnv);
+  const subscription = await checkSetupClaudeSubscription(thread, profile, childEnv, { command });
   if (!subscription.ok) {
     const refused = new Error(subscription.reason);
     refused.code = subscription.reason;

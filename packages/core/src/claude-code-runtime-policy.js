@@ -17,6 +17,9 @@ export function publicClaudeCodeFailure(error) {
     "claude_code_background_task_attempted",
     "claude_profile_not_subscription",
     "claude_api_billing_env_present",
+    "claude_not_logged_in",
+    "claude_login_not_subscription",
+    "claude_auth_status_unavailable",
   ]).has(exact)) return exact;
   return classifyClaudeCodeFailure(`${error?.code || ""} ${error?.message || error || ""}`);
 }
