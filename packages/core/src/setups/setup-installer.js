@@ -111,7 +111,7 @@ async function createResources(instance, manifest, input, env, deps) {
   await updateSetupInstance(env, id, (entry) => { entry.resources.threadId = threadId; });
   const thread = await deps.createThread({
     id: threadId,
-    name: `${manifest.thread.name} (${id.slice(-4)})`,
+    name: `${manifest.thread.name} (${id.slice(-6)})`,
     ownerUserId: instance.ownerUserId,
     wakePolicy: "wake-on-message",
     executorId: instance.provider,

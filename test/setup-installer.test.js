@@ -187,3 +187,14 @@ test("Setup threads carry their instructions to Codex; other Codex threads are u
   const plain = await createThread({ id: "plain-codex", name: "Plain", standingMission: "Only for Claude" }, env);
   assert.doesNotMatch(threadStartParams(plain, env).developerInstructions || "", /Only for Claude/);
 });
+
+test("instance ids and thread names carry no fixed digits", async () => {
+  const { newSetupInstance } = await import("../packages/core/src/setups/setup-install-ledger.js");
+  const manifest = { id: "fitness-tracker", version: "0.1.0", state: { schemaVersion: 1 } };
+  const ids = Array.from({ length: 400 }, () => newSetupInstance({ manifest, ownerUserId: "admin", provider: "codex" }).instanceId);
+  assert.ok(ids.every((id) => /^setup_[0-9a-f]{16}$/.test(id)));
+  for (let position = 6; position < 22; position += 1) {
+    assert.ok(new Set(ids.map((id) => id[position])).size > 1, `character ${position} varies`);
+  }
+  assert.equal(new Set(ids.map((id) => id.slice(-6))).size, ids.length, "thread-name suffixes are unique in practice");
+});

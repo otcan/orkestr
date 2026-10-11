@@ -3,7 +3,7 @@
 // The ledger is the only source of truth for what a Setup owns. Every
 // resource is recorded the moment it is created, so rollback and uninstall act
 // on exact IDs and never on names or guesses.
-import { randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { appHome } from "../../../storage/src/paths.js";
 import { readJson, writeJson } from "../../../storage/src/store.js";
@@ -61,7 +61,9 @@ export function withSetupLifecycle(env, ownerUserId, setupId, run) {
 export function newSetupInstance({ manifest, ownerUserId, provider, timezone }) {
   const now = new Date().toISOString();
   return {
-    instanceId: `setup_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+    // 64 random bits. (A UUID v4 has a fixed version digit, which made
+    // short suffixes derived from it far less unique than they looked.)
+    instanceId: `setup_${randomBytes(8).toString("hex")}`,
     setupId: manifest.id,
     version: manifest.version,
     schemaVersion: manifest.state?.schemaVersion || null,
