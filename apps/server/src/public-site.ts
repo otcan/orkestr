@@ -1,6 +1,5 @@
 import { studioPage } from "./public-site-home.js";
 import { buildsIndexPage, freeIndexPage, umbrellaHomePage } from "./public-site-hub.js";
-import { openSourcePage } from "./public-site-oss-placeholder.js";
 import { publicCatalog, publicCatalogEntryForPath, publicCatalogEntryIsLive, publicCatalogPath } from "./public-site-catalog.js";
 import { deploymentPage, developersPage, securityPage } from "./public-site-content.js";
 import { projectIntakePage } from "./public-project-intake.js";
@@ -21,6 +20,7 @@ import {
   type PublicPageId,
 } from "./public-site-config.js";
 import { legalPage } from "./public-site-legal.js";
+import { openSourcePage } from "./public-site-oss.js";
 import { renderPublicShell } from "./public-site-shell.js";
 import { renderCommercialSiteCss } from "./public-site-style.js";
 import { workflowIntakePage } from "./public-workflow-intake.js";
