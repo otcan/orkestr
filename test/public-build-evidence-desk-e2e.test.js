@@ -38,6 +38,13 @@ async function waitUntil(page, fn, label) {
   }
 }
 
+// Keyboard activation: independent of smooth scrolling (a mouse click computed
+// mid-scroll can land on the sticky header) and exercises keyboard access.
+async function activate(page, selector) {
+  await page.$eval(selector, (node) => node.focus());
+  await page.keyboard.press("Enter");
+}
+
 const count = (page, selector) => page.$$eval(selector, (nodes) => nodes.length);
 const text = (page, selector) => page.$eval(selector, (node) => node.textContent.trim());
 
@@ -101,30 +108,30 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     await page.click("#ed-detail .ed-evidence-list button[aria-label^='Edit evidence']");
     const editForm = "#ed-detail .ed-evidence.is-editing form";
     await page.select(`${editForm} select[name=stance]`, "contradicts");
-    await page.click(`${editForm} button[type=submit]`);
+    await activate(page, `${editForm} button[type=submit]`);
     await waitUntil(page, () => document.querySelector("#ed-detail .ed-score strong")?.textContent === "25", "step 3");
     assert.match(await text(page, "#ed-detail .ed-evidence-list .ed-badge"), /Contradicts/);
 
     // Every evidence item links to an in-app source record.
-    await page.click("#ed-detail .ed-evidence-list .ed-source-link");
+    await activate(page, "#ed-detail .ed-evidence-list .ed-source-link");
     await waitUntil(page, () => /^ed-source-s\d+$/.test(document.activeElement?.id || ""), "step 4");
     assert.match(await page.evaluate(() => document.activeElement.textContent), /Synthetic workshop sign-in sheet[\s\S]*Provenance: Entered in this browser/);
 
     // Link it as contradicting another claim, then record an accept decision.
-    await page.click("#ed-detail .ed-link-form button[type=submit]");
+    await activate(page, "#ed-detail .ed-link-form button[type=submit]");
     await waitUntil(page, () => document.querySelectorAll("#ed-detail .ed-links button.ed-link-button").length === 1, "step 5");
     const queued = await page.$$eval("#ed-queue > li > button", (nodes) => nodes.map((node) => node.textContent));
     assert.ok(queued.includes("Evening workshops increased tool returns."));
     await page.select("#ed-decision-outcome", "accepted");
     await page.type("#ed-decision-rationale", "Checked against the synthetic sheet.");
-    await page.click("#ed-detail form[aria-label='Record review decision'] button[type=submit]");
+    await activate(page, "#ed-detail form[aria-label='Record review decision'] button[type=submit]");
     await waitUntil(page, () => ![...document.querySelectorAll("#ed-queue > li > button")].some((node) => node.textContent.startsWith("Evening workshops")), "step 6");
     assert.match(await text(page, "#ed-detail .ed-review-status"), /Decision: Accepted — Checked against the synthetic sheet\./);
 
     // Editing the claim reopens review and is written to the decision history.
     await page.$eval("#ed-claim-text", (node) => { node.value = ""; });
     await page.type("#ed-claim-text", "Evening workshops increased on-time returns.");
-    await page.click("#ed-detail form[aria-label='Edit claim'] button[type=submit]");
+    await activate(page, "#ed-detail form[aria-label='Edit claim'] button[type=submit]");
     await waitUntil(page, () => document.querySelector("#ed-detail-title")?.textContent === "Evening workshops increased on-time returns.", "step 7");
     assert.ok((await page.$$eval("#ed-queue > li > button", (nodes) => nodes.map((node) => node.textContent))).includes("Evening workshops increased on-time returns."));
     const history = await page.$$eval("#ed-detail .ed-history > li", (nodes) => nodes.map((node) => node.textContent));
@@ -137,9 +144,9 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
       const original = URL.createObjectURL;
       URL.createObjectURL = (blob) => { window.__exports.push(blob); return original.call(URL, blob); };
     });
-    await page.click("#ed-export-json");
-    await page.click("#ed-export-md");
-    await page.click("#ed-export-json");
+    await activate(page, "#ed-export-json");
+    await activate(page, "#ed-export-md");
+    await activate(page, "#ed-export-json");
     const exported = await page.evaluate(async () => Promise.all(window.__exports.map((blob) => blob.text())));
     assert.equal(exported[0], exported[2]);
     const json = JSON.parse(exported[0]);
@@ -159,7 +166,7 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     await page.reload({ waitUntil: "networkidle0" });
     await page.waitForSelector("#ed-app:not([hidden])");
     assert.equal(await count(page, "#ed-claims > li"), 6);
-    await page.click("#ed-reset");
+    await activate(page, "#ed-reset");
     await waitUntil(page, () => document.querySelectorAll("#ed-claims > li").length === 5, "step 9");
     assert.match(await text(page, "#ed-status"), /reset/i);
 
