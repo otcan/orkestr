@@ -9,6 +9,8 @@ const envKeys = ["ORKESTR_HOME", "ORKESTR_RECOVER_RUNNING_ON_START", "ORKESTR_PU
 const allowedPaths = new Set([
   "/free/workout-log", "/free/workout-log/app.css", "/free/workout-log/app.js", "/free/workout-log/data-panel.js", "/free/workout-log/progression.js",
   "/free/workout-log/store.js", "/free/workout-log/timer.js", "/free/workout-log-sw.js", "/favicon.svg",
+  // Static files of the shared site shell.
+  "/public-site.css",
 ]);
 
 async function findChrome() {
@@ -56,7 +58,7 @@ async function setDate(page, value) {
   }, value);
 }
 
-test("workout log works end to end in a real browser without sending data anywhere", { timeout: 120_000 }, async (t) => {
+test("workout log works end to end and sends nothing back after the page loads", { timeout: 120_000 }, async (t) => {
   const puppeteer = await loadPuppeteer(t);
   if (!puppeteer) return;
   const chrome = await findChrome();
@@ -71,6 +73,8 @@ test("workout log works end to end in a real browser without sending data anywhe
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const origin = `http://127.0.0.1:${server.address().port}`;
+  // Render as the public site (canonical URL, structured data) like production.
+  process.env.ORKESTR_PUBLIC_SITE_URL = origin;
   let browser;
   try {
     browser = await puppeteer.launch({ headless: "new", executablePath: chrome, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
@@ -82,16 +86,37 @@ test("workout log works end to end in a real browser without sending data anywhe
     page.on("console", (message) => { if (message.type() === "error") errors.push(`console: ${message.text()}`); });
     page.on("dialog", (dialog) => dialog.accept());
     page.on("request", (request) => requests.push({ url: request.url(), type: request.resourceType(), method: request.method() }));
+    // Spy on every way page code could send data, installed before the page's
+    // own scripts on each load. Static file delivery is not counted.
+    const pageCalls = [];
+    await page.exposeFunction("__reportNetworkCall", (kind, target) => pageCalls.push(`${kind} ${target}`));
+    await page.evaluateOnNewDocument(() => {
+      const report = (kind, target) => window.__reportNetworkCall(kind, String(target));
+      const fetchImpl = window.fetch;
+      window.fetch = function (input, init) { report("fetch", input && input.url ? input.url : input); return fetchImpl.call(this, input, init); };
+      const open = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function (method, url, ...rest) { report("xhr", url); return open.call(this, method, url, ...rest); };
+      if (navigator.sendBeacon) {
+        const beacon = navigator.sendBeacon.bind(navigator);
+        navigator.sendBeacon = (url, data) => { report("sendBeacon", url); return beacon(url, data); };
+      }
+      for (const name of ["WebSocket", "EventSource"]) {
+        const Original = window[name];
+        if (Original) window[name] = class extends Original { constructor(url, ...rest) { report(name, url); super(url, ...rest); } };
+      }
+    });
 
     await page.goto(`${origin}/free/workout-log`, { waitUntil: "networkidle0" });
     await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
     assert.equal(await text(page, "#wl-set-count"), "0");
     assert.equal(await page.$eval("#wl-progress-body", (node) => node.hidden), true);
+    assert.ok(await page.$('script[type="application/ld+json"]'), "renders with the production shell");
     // No site beacon: no event hooks, no tracking global, only the page's own module script.
     assert.deepEqual(await page.evaluate(() => ({
       hooks: document.querySelectorAll("[data-event], [data-view-event]").length,
       tracker: typeof window.orkestrTrack,
-      scripts: [...document.scripts].map((script) => script.getAttribute("src")),
+      // JSON-LD data blocks are not executed; every executable script is listed.
+      scripts: [...document.scripts].filter((script) => script.type !== "application/ld+json").map((script) => script.getAttribute("src")),
     })), { hooks: 0, tracker: "undefined", scripts: ["/free/workout-log/app.js"] });
 
     // Logging: two dates for one exercise, plus a second exercise.
@@ -239,7 +264,10 @@ test("workout log works end to end in a real browser without sending data anywhe
     assert.equal(await text(page, "#wl-set-count"), "4");
     await page.setOfflineMode(false);
 
-    // Data never leaves the browser: no fetch/XHR/beacon, only same-origin page assets.
+    // After load the page sends nothing back: page code never called a network
+    // API across every load, reload, and the offline reload above...
+    assert.deepEqual(pageCalls, [], "no fetch/XHR/sendBeacon/WebSocket/EventSource from page code");
+    // ...and the browser only ever requested the page's own static files.
     const network = requests.filter((request) => ["fetch", "xhr", "eventsource", "websocket", "ping"].includes(request.type));
     assert.deepEqual(network, [], "the page made no fetch/XHR/beacon requests");
     // Chrome draws the date-picker icon from a data: URL; that is not a network request.
@@ -254,6 +282,7 @@ test("workout log works end to end in a real browser without sending data anywhe
     // The page CSP also blocks connections if a script ever tried one.
     const blocked = await page.evaluate(() => fetch("/api/public/events", { method: "POST", body: "{}" }).then(() => "sent", () => "blocked"));
     assert.equal(blocked, "blocked");
+    assert.deepEqual(pageCalls, ["fetch /api/public/events"], "the spy sees calls, so the empty list above is meaningful");
   } finally {
     await browser?.close();
     await new Promise((resolve) => server.close(resolve));

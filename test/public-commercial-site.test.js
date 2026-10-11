@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderPublicSite, renderPublicSiteCss, renderPublicSitemap } from "../dist/server/apps/server/src/public-site.js";
-import { maybeServePublicSite } from "../dist/server/apps/server/src/public-site-static.js";
 
 const baseEnv = {
   ORKESTR_PUBLIC_SITE_URL: "https://product.example.test",
@@ -125,7 +124,7 @@ test("public copy avoids defensive internal-positioning language across every lo
   const paths = [...new Set([...indexedPaths, ...utilityPaths])];
   assert.equal(paths.length, 49);
   for (const path of paths) {
-    const html = servePublicPath(path, baseEnv);
+    const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
     assert.doesNotMatch(html, banned, path);
   }
 });
@@ -281,17 +280,6 @@ test("personal beta remains available but is removed from commercial indexing", 
   assert.match(html, /Start a private Orkestr workspace/);
 });
 
-// Standalone catalog entries (e.g. free products) bypass the shell renderer and
-// are served by the static handler instead.
-function servePublicPath(path, env) {
-  const shell = renderPublicSite(path, env, { host: "product.example.test" });
-  if (shell) return shell;
-  let body = "";
-  const response = { status: () => response, header: () => response, type: () => response, send: (value) => { body = String(value); return response; } };
-  maybeServePublicSite({ headers: { host: "product.example.test" } }, response, path, env);
-  return body;
-}
-
 test("every sitemap location renders a unique canonical public page", () => {
   const sitemap = renderPublicSitemap(baseEnv);
   const locations = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]);
@@ -299,7 +287,7 @@ test("every sitemap location renders a unique canonical public page", () => {
   assert.equal(new Set(locations).size, locations.length);
   for (const location of locations) {
     const path = new URL(location).pathname;
-    const html = servePublicPath(path, baseEnv);
+    const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
     assert.match(html, /<main id="main-content"/);
     assert.match(html, new RegExp(`rel="canonical" href="${location.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
     assert.match(html, /<h1[^>]*>[^<]+<\/h1>/);

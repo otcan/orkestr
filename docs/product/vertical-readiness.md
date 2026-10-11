@@ -15,7 +15,9 @@ is ready to build.
 These come from the public-site strategy and apply to any future vertical:
 
 - Useful on first visit: no account, no signup, no personal-data form.
-- User data stays on the user's device unless the user exports it.
+- After the page loads it sends nothing back: no analytics, no data uploads.
+  User entries stay on the user's device unless the user exports them.
+  Delivering the page's own static files over HTTP(S) is fine.
 - No analytics, tracking pixels, or third-party scripts.
 - Only verifiable claims. No invented users, results, or testimonials.
   Synthetic examples only; never client or private data.
@@ -25,14 +27,15 @@ These come from the public-site strategy and apply to any future vertical:
 
 ## Pilot 1: workout log
 
-Route: `/free/workout-log`, listed under Free products at `/free`.
+Route: `/free/workout-log`, registered in the shared public-site catalog and
+listed as Live under Free products at `/free`.
 
 What it shows works for this format:
 
 | Concern | How the pilot handles it |
 | --- | --- |
 | Storage | `localStorage` only, versioned JSON schema, tolerant of corrupt data |
-| Data leaving the browser | Page CSP has `connect-src 'none'`; a browser test asserts no fetch/XHR/beacon |
+| Calls after load | Page CSP has `connect-src 'none'`; a browser test asserts no fetch/XHR/sendBeacon/WebSocket after load and that only the page's own static files are requested |
 | Portability | JSON export, all-or-nothing import (malformed, foreign, oversized, or partly invalid files are rejected with a clear message and existing data is untouched), delete-all |
 | Interrupted actions | Repeated taps do not log a set twice; a running rest timer resumes after a reload; failed saves change nothing |
 | Storage loss | The page states plainly that browser storage can be lost (clearing data, private mode, other device) and points to export as the backup |
@@ -40,7 +43,8 @@ What it shows works for this format:
 | Claims | Neutral disclaimer: logging tool, no training, health, or medical advice |
 | Tests | Unit tests for progression, import, storage and timer logic; a headless-browser test covering every flow, reload persistence, keyboard use, offline use, and a 390px mobile viewport |
 
-Reusable pattern for later verticals: a standalone page with a strict CSP, a
+Reusable pattern for later verticals: one catalog entry whose page renders in
+the shared site shell without the analytics beacon, a route-scoped strict CSP, a
 pure logic module that is unit tested in Node, a small storage module, and a
 same-origin ES module client. No build step and no runtime dependencies.
 
@@ -121,6 +125,7 @@ Revisit only when that evidence exists and all of these are true:
    terms match or are missing, everything computed in the browser, export or
    delete locally, no score that implies a hiring outcome.
 
-If those hold, the build follows the workout-log pattern: one standalone page,
-strict CSP, pure tested logic module, no network calls, a neutral disclaimer,
+If those hold, the build follows the workout-log pattern: one catalog-registered
+page, route-scoped strict CSP, pure tested logic module, no application-data or analytics calls
+after load, a neutral disclaimer,
 and a catalog entry under Free products.

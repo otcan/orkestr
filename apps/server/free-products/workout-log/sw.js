@@ -1,6 +1,6 @@
-// Offline cache for the workout log page only. It never sees workout data:
+// Offline cache for the workout log page and the site stylesheet it uses. It never sees workout data:
 // the log lives in localStorage and is not part of any request.
-const CACHE = "orkestr-free-workout-log-v2";
+const CACHE = "orkestr-free-workout-log-v3";
 const PAGE = "/free/workout-log";
 const ASSETS = [
   PAGE,
@@ -11,6 +11,7 @@ const ASSETS = [
   "/free/workout-log/store.js",
   "/free/workout-log/timer.js",
   "/favicon.svg",
+  "/public-site.css",
 ];
 
 self.addEventListener("install", (event) => {
