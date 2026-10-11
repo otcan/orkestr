@@ -129,6 +129,8 @@ test("server serves the public site at root and Angular UI at app routes", async
   process.env.ORKESTR_HOME = home;
   delete process.env.ORKESTR_OVERLAY_DIR;
   clearEnv(publicRuntimeEnvKeys);
+  // The marketing site is served only for the configured public host.
+  process.env.ORKESTR_PUBLIC_SITE_URL = "http://127.0.0.1";
   const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
   const brokerRegistration = await registerBrokerInstance({
     env: process.env,
@@ -271,7 +273,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.match(publicCss, /\.hero/);
     assert.equal(robotsResponse.status, 200);
     assert.match(robotsResponse.headers.get("content-type") || "", /text\/plain/);
-    assert.equal(robots, "User-agent: *\nAllow: /\n");
+    assert.equal(robots, "User-agent: *\nAllow: /\n\nSitemap: http://127.0.0.1/sitemap.xml\n");
     assert.equal(onboardingResponse.status, 200);
     assertAngularShell(onboardingHtml);
     assert.equal(setupGmailResponse.status, 200);
@@ -2243,4 +2245,28 @@ test("desktop share Desk inventory presents only redacted lifecycle and attempt 
   assert.match(template, /attempt\.expiresAt/);
   assert.match(component, /desktopShareReference\(value: string \| null \| undefined\)/);
   assert.match(component, /id\.slice\(-8\)/);
+});
+
+
+test("a self-hosted install without a public site host serves the app, not the marketing page, at root", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-selfhost-root-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorPublicRuntimeEnv = snapshotEnv(publicRuntimeEnvKeys);
+  process.env.ORKESTR_HOME = home;
+  clearEnv(publicRuntimeEnvKeys);
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  try {
+    const root = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+    assert.doesNotMatch(root, /We turn complex ideas into working software/);
+    assert.doesNotMatch(root, /Explore free products/);
+    const app = await (await fetch(`http://127.0.0.1:${port}/app`)).text();
+    assert.equal(root, app, "root serves the same app shell as /app");
+    assert.equal((await fetch(`http://127.0.0.1:${port}/setup`)).status, 200);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(priorPublicRuntimeEnv);
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME; else process.env.ORKESTR_HOME = priorHome;
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
 });
