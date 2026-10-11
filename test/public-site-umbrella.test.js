@@ -125,9 +125,33 @@ test("EN/DE/TR routing stays consistent: no stale alternates or untranslated umb
     for (const target of ["/builds", "/free", "/open-source"]) assert.match(nav, new RegExp(`href="${target}" hreflang="en"`), path);
     assert.match(nav, new RegExp(`href="/${path.split("/")[1]}/studio"`), path);
     assert.doesNotMatch(html, />Explore</, path);
+    assert.doesNotMatch(html, /href="\/(builds|free|open-source)"(?! hreflang="en")/, path);
   }
   const root = renderPublicSite("/", env, host);
   assert.match(root, /href="\/de\/studio" hreflang="de-DE" lang="de">Deutsch</);
   assert.match(root, /href="\/tr\/studio" hreflang="tr-TR" lang="tr">Türkçe</);
   assert.doesNotMatch(root, /rel="alternate"/);
+});
+
+test("builds, free products, and open source never load the analytics beacon or tracked attributes", () => {
+  const tracking = /\/api\/public\/events|orkestrTrack|sendBeacon|data-event=|data-view-event=/;
+  const fixtures = [
+    { section: "builds", slug: "beacon-fixture", title: "Beacon fixture", summary: "Synthetic.", status: "live", evidence: "simulation" },
+    { section: "free", slug: "beacon-fixture", title: "Beacon fixture", summary: "Synthetic.", status: "live", evidence: "simulation" },
+  ].map((entry) => ({ ...entry, render: () => ({ id: entry.section, title: entry.title, summary: entry.summary, canonicalPath: `/${entry.section}/${entry.slug}`, body: '<main id="main-content"><h1>Fixture</h1><a href="#" data-event="book_project_hero" data-view-event="platform_console_view">x</a></main>' }) }));
+  publicCatalog.push(...fixtures);
+  try {
+    for (const path of ["/builds", "/free", "/open-source", "/builds/beacon-fixture", "/free/beacon-fixture"]) {
+      const html = renderPublicSite(path, env, host);
+      assert.match(html, /<main\b/, path);
+      assert.doesNotMatch(html, tracking, path);
+    }
+  } finally {
+    for (const entry of fixtures) publicCatalog.splice(publicCatalog.indexOf(entry), 1);
+  }
+  for (const path of ["/studio", "/de/studio", "/project", "/security", "/privacy"]) {
+    const html = renderPublicSite(path, env, host);
+    assert.match(html, /\/api\/public\/events/, path);
+    assert.match(html, /data-event="client_portal_click"/, path);
+  }
 });
