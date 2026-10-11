@@ -203,9 +203,12 @@ export function publicSiteHost(env = process.env) {
   return requestHost(publicSiteBaseUrl(env));
 }
 
+// The marketing site is only served for the configured public site host
+// (ORKESTR_PUBLIC_SITE_URL, e.g. orkestr.de). A self-hosted install has none,
+// so its root goes to the app and setup wizard instead of the marketing page.
 export function publicSiteAllowedForHost(hostHeader = "", env = process.env) {
   const expected = publicSiteHost(env);
-  if (!expected) return true;
+  if (!expected) return false;
   const actual = requestHost(hostHeader);
   if (!actual) return true;
   return actual === expected || actual === `www.${expected}` || (expected.startsWith("www.") && actual === expected.slice(4));
