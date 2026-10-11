@@ -202,3 +202,64 @@ test("Codex dispatch refuses Setup turns after the login changes; ordinary threa
   await deliver("plain-codex", { text: "ordinary work" });
   await waitFor(async () => (await turns()) === 2);
 });
+
+// Re-review: the status check must run where generation runs, and a failed
+// status subprocess must never authorize generation.
+async function cwdAwareFakeClaude(dir) {
+  const bin = path.join(dir, "claude");
+  await fs.writeFile(bin, `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (args[0] === "auth" && args[1] === "status") {
+  // Like project-local settings: a status file in the working directory wins.
+  const local = path.join(process.cwd(), ".fake-claude-status.json");
+  const raw = fs.readFileSync(fs.existsSync(local) ? local : path.join(__dirname, "status.json"), "utf8");
+  process.stdout.write(raw);
+  const mode = fs.existsSync(path.join(__dirname, "mode")) ? fs.readFileSync(path.join(__dirname, "mode"), "utf8").trim() : "";
+  if (mode === "exit3") process.exit(3);
+  if (mode === "hang") setTimeout(() => process.exit(0), 60_000);
+  else process.exit(0);
+  return;
+}
+fs.appendFileSync(path.join(__dirname, "ran"), args.join(" ") + "\\n");
+`, { mode: 0o755 });
+  return bin;
+}
+
+const positive = { loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "max" };
+const apiKey = { loggedIn: true, authMethod: "api_key", apiProvider: "firstParty", apiKeySource: "apiKeyHelper" };
+
+async function runSetupClaude(dir, command, workspace) {
+  const { runClaudeCodeProcess } = await import("../packages/core/src/claude-code-process-runner.js");
+  const env = { ...process.env, ORKESTR_HOME: path.join(dir, "home"), ORKESTR_CLAUDE_CODE_BIN: command };
+  const thread = { id: "setup-claude", setupInstanceId: "setup_x", setupId: "fitness-tracker", cwd: workspace, workspace };
+  const profile = { authMode: "subscription", credentialRoot: path.join(dir, "profile") };
+  return runClaudeCodeProcess({ thread, profile, prompt: "hi", sessionId: "", attemptId: "a1", assertProfileReady: async () => {}, activeTurns: new Map(), env });
+}
+
+test("a workspace-local non-subscription login refuses the Setup turn before generation", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-claude-cwd-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const command = await cwdAwareFakeClaude(dir);
+  const workspace = path.join(dir, "workspace");
+  await fs.mkdir(workspace);
+  await fs.writeFile(path.join(dir, "status.json"), JSON.stringify(positive));
+  await fs.writeFile(path.join(workspace, ".fake-claude-status.json"), JSON.stringify(apiKey));
+  await assert.rejects(runSetupClaude(dir, command, workspace), (error) => error.code === "claude_login_not_subscription");
+  await assert.rejects(fs.stat(path.join(dir, "ran")), { code: "ENOENT" }, "generation never started");
+});
+
+for (const [mode, name] of [["exit3", "positive status then a non-zero exit"], ["hang", "positive status then a timeout"]]) {
+  test(`a failed status subprocess never authorizes generation: ${name}`, async (t) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-claude-fail-"));
+    t.after(() => fs.rm(dir, { recursive: true, force: true }));
+    const command = await cwdAwareFakeClaude(dir);
+    await fs.writeFile(path.join(dir, "status.json"), JSON.stringify(positive));
+    await fs.writeFile(path.join(dir, "mode"), mode);
+    const result = await checkSetupClaudeSubscription(setupThread, { authMode: "subscription" }, { PATH: process.env.PATH }, { command, timeoutMs: 1500 });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "claude_auth_status_unavailable");
+    await assert.rejects(fs.stat(path.join(dir, "ran")), { code: "ENOENT" });
+  });
+}

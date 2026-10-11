@@ -39,17 +39,25 @@ export async function checkSetupCodexSubscription(client, thread) {
 const anthropicApiEnv = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"];
 
 // Runs the installed CLI's own status command (`claude auth status --json`,
-// verified on Claude Code 2.1.295) with exactly the command and child
-// environment the turn would use. It reports the login method; no credential
-// file is read by Orkestr.
-export async function readClaudeAuthStatus(command, childEnv, { timeoutMs = 15_000 } = {}) {
+// verified on Claude Code 2.1.295) with exactly the command, child
+// environment and working directory the turn would use; project-local
+// settings (for example an apiKeyHelper) depend on the working directory.
+// No credential file is read by Orkestr. Only a clean exit counts as status:
+// a non-zero exit, timeout or signal never authorizes anything, even if
+// positive-looking JSON was printed first. Output from a failed run is kept
+// only to explain the refusal.
+export async function readClaudeAuthStatus(command, childEnv, { cwd, timeoutMs = 15_000 } = {}) {
   try {
-    const { stdout = "" } = await execFileAsync(command, ["auth", "status", "--json"], { env: childEnv, timeout: timeoutMs, maxBuffer: 256 * 1024 });
+    const { stdout = "" } = await execFileAsync(command, ["auth", "status", "--json"], { env: childEnv, cwd: cwd || undefined, timeout: timeoutMs, maxBuffer: 256 * 1024 });
     return { ok: true, status: JSON.parse(stdout) };
   } catch (error) {
-    // A logged-out CLI exits non-zero but still prints its status.
-    try { return { ok: true, status: JSON.parse(String(error?.stdout || "")) }; } catch {}
-    return { ok: false, error: error?.code === "ENOENT" ? "claude_cli_missing" : String(error?.message || error).slice(0, 200) };
+    let reported = null;
+    try { reported = JSON.parse(String(error?.stdout || "")); } catch {}
+    const reason = error?.code === "ENOENT" ? "claude_cli_missing"
+      : error?.killed || error?.signal ? `status_${error.signal || "killed"}`
+      : typeof error?.code === "number" ? `status_exit_${error.code}`
+      : String(error?.message || error).slice(0, 200);
+    return { ok: false, error: reason, reportedLoggedIn: reported?.loggedIn === true ? true : reported?.loggedIn === false ? false : null };
   }
 }
 
@@ -69,12 +77,12 @@ export function claudeAuthStatusIsSubscription(status = {}) {
 // Claude Code: the profile must be declared a subscription profile, the child
 // env must carry no API-billing settings, and the CLI itself, run in that
 // exact env, must report a subscription login.
-export async function checkSetupClaudeSubscription(thread, profile = {}, childEnv = {}, { command = "claude", readStatus = readClaudeAuthStatus } = {}) {
+export async function checkSetupClaudeSubscription(thread, profile = {}, childEnv = {}, { command = "claude", cwd, timeoutMs, readStatus = readClaudeAuthStatus } = {}) {
   if (!isSetupThread(thread)) return { ok: true, applies: false };
   if (String(profile?.authMode || "").trim() !== "subscription") return refusal("claude_profile_not_subscription");
   const leaked = anthropicApiEnv.filter((key) => String(childEnv?.[key] || "").trim());
   if (leaked.length) return refusal("claude_api_billing_env_present", leaked.join(","));
-  const read = await readStatus(command, childEnv);
-  if (!read.ok) return refusal("claude_auth_status_unavailable", read.error);
+  const read = await readStatus(command, childEnv, { cwd, ...(timeoutMs ? { timeoutMs } : {}) });
+  if (!read.ok) return refusal(read.reportedLoggedIn === false ? "claude_not_logged_in" : "claude_auth_status_unavailable", read.error);
   return claudeAuthStatusIsSubscription(read.status);
 }
