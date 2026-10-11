@@ -9,6 +9,7 @@ import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { multipartUploadLimits } from "../../../../../packages/shared/src/multipart-limits.js";
 import { doctorRuntimeResources, listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
 import { getSetupStatus, publicSetupStatus } from "../../../../../packages/core/src/setup.js";
+import { assertWhatsAppOnboardingModeAvailable } from "../../../../../packages/connectors/src/whatsapp-onboarding.js";
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
 import { saveWhatsAppOnboardingMode } from "../../../../../packages/core/src/whatsapp-onboarding-preferences.js";
 import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
@@ -661,7 +662,8 @@ export class SystemController {
   @HttpCode(200)
   async saveSetupDemoPreferences(@Body() body: Record<string, unknown> = {}) {
     const requestedMode = body.whatsappAccessMode || body.whatsappMode || body.whatsapp || "own";
-    const { transport: whatsappAccessMode, settings } = await saveWhatsAppOnboardingMode(requestedMode, process.env);
+    const whatsappAccessMode = await assertWhatsAppOnboardingModeAvailable(requestedMode, process.env);
+    const { settings } = await saveWhatsAppOnboardingMode(whatsappAccessMode, process.env);
     return {
       ok: true,
       demo: { whatsappAccessMode },

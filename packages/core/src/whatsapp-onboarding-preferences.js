@@ -1,15 +1,12 @@
-import { assertWhatsAppOnboardingModeAvailable } from "../../connectors/src/whatsapp-onboarding.js";
 import { readConnectorConfig, writeConnectorConfig } from "../../storage/src/config.js";
 import { readRuntimeSettings, writeRuntimeSettings } from "./runtime-settings.js";
 
-function requestedModeValue(mode) {
-  return mode === "own" ? "self_hosted" : mode === "relay" ? "managed" : mode;
-}
-
 // Keep the UI preference and the connector's actual transport in sync. The
 // connector reads bridgeMode from connector config/env, not runtime settings.
-export async function saveWhatsAppOnboardingMode(mode, env = process.env) {
-  const transport = await assertWhatsAppOnboardingModeAvailable(requestedModeValue(mode), env);
+export async function saveWhatsAppOnboardingMode(transport, env = process.env) {
+  if (!new Set(["own", "relay"]).has(transport)) {
+    throw Object.assign(new Error("whatsapp_access_mode_invalid"), { statusCode: 400, code: "whatsapp_access_mode_invalid" });
+  }
   const bridgeMode = transport === "own" ? "local" : "relay";
   const previousConfig = await readConnectorConfig("whatsapp", env);
   const previousSettings = await readRuntimeSettings(env);
