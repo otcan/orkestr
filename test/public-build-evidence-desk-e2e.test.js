@@ -122,11 +122,13 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     await waitUntil(page, () => document.querySelectorAll("#ed-detail .ed-links button.ed-link-button").length === 1, "step 5");
     const queued = await page.$$eval("#ed-queue > li > button", (nodes) => nodes.map((node) => node.textContent));
     assert.ok(queued.includes("Evening workshops increased tool returns."));
+    await page.select("#ed-actor", "You (this browser), as reviewer");
     await page.select("#ed-decision-outcome", "accepted");
     await page.type("#ed-decision-rationale", "Checked against the synthetic sheet.");
     await activate(page, "#ed-detail form[aria-label='Record review decision'] button[type=submit]");
     await waitUntil(page, () => ![...document.querySelectorAll("#ed-queue > li > button")].some((node) => node.textContent.startsWith("Evening workshops")), "step 6");
-    assert.match(await text(page, "#ed-detail .ed-review-status"), /Decision: Accepted — Checked against the synthetic sheet\./);
+    assert.match(await text(page, "#ed-detail .ed-review-status"), /Decision: Accepted — Checked against the synthetic sheet\. \(You \(this browser\), as reviewer, \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\)/);
+    await page.select("#ed-actor", "You (this browser), as analyst");
 
     // Editing the claim reopens review and is written to the decision history.
     await page.$eval("#ed-claim-text", (node) => { node.value = ""; });
@@ -135,7 +137,10 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     await waitUntil(page, () => document.querySelector("#ed-detail-title")?.textContent === "Evening workshops increased on-time returns.", "step 7");
     assert.ok((await page.$$eval("#ed-queue > li > button", (nodes) => nodes.map((node) => node.textContent))).includes("Evening workshops increased on-time returns."));
     const history = await page.$$eval("#ed-detail .ed-history > li", (nodes) => nodes.map((node) => node.textContent));
+    assert.match(history[0], /Step \d+ · \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC · You \(this browser\), as analyst/);
     assert.match(history[0], /Earlier review decision cleared: claim text changed/);
+    assert.match(history[1], /text: “Evening workshops increased tool returns\.” → “Evening workshops increased on-time returns\.”/);
+    assert.ok(await page.$eval("#ed-detail .ed-history time", (node) => !Number.isNaN(Date.parse(node.getAttribute("datetime")))));
     assert.ok(history.some((entry) => /Review decision: Accepted/.test(entry)));
 
     // Exports are generated in the browser and are byte-identical for the same data.

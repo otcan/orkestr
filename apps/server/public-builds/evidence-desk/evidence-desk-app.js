@@ -14,6 +14,12 @@ let selectedId = state.claims[0]?.id || "";
 let editingEvidenceId = "";
 let storageOk = true;
 
+// Who and when for history entries. The actor is a role picked in the toolbar;
+// the demo never asks for a name.
+function meta() {
+  return { at: new Date().toISOString(), actor: $("ed-actor")?.value || "You (this browser)" };
+}
+
 function loadState() {
   try {
     const stored = sanitizeState(JSON.parse(localStorage.getItem(STORAGE_KEY) || "null"));
@@ -68,20 +74,20 @@ const act = {
     $(evidenceId ? `ed-edit-${evidenceId}-source` : `ed-evidence-${returnTo}`)?.focus();
   },
   saveEvidence: (claimId, item, fields) => attempt(() => {
-    if (!item) return commit(addEvidence(state, claimId, fields).state, "Evidence attached and traced to its source record. Score updated.", "ed-new-evidence-source");
+    if (!item) return commit(addEvidence(state, claimId, fields, meta()).state, "Evidence attached and traced to its source record. Score updated.", "ed-new-evidence-source");
     editingEvidenceId = "";
-    commit(updateEvidence(state, item.id, fields), "Evidence updated.", `ed-evidence-${item.id}`);
+    commit(updateEvidence(state, item.id, fields, meta()), "Evidence updated.", `ed-evidence-${item.id}`);
   }),
-  removeEvidence: (evidenceId) => attempt(() => commit(removeEvidence(state, evidenceId), "Evidence removed. The source record is kept.", "ed-detail-title")),
-  link: (claimId, otherId) => attempt(() => commit(linkContradiction(state, claimId, otherId), "Claims marked as contradicting each other. Both return to the review queue.", "ed-link-target")),
-  unlink: (claimId, otherId) => attempt(() => commit(unlinkContradiction(state, claimId, otherId), "Contradiction link removed.", "ed-detail-title")),
-  decide: (claimId, outcome, rationale) => attempt(() => commit(recordDecision(state, claimId, outcome, rationale), "Review decision recorded in the claim history.", "ed-detail-title")),
-  reopen: (claimId) => attempt(() => commit(reopenClaim(state, claimId), "Review reopened.", "ed-detail-title")),
-  editClaim: (claimId, text) => attempt(() => commit(updateClaim(state, claimId, text), "Claim updated.", "ed-detail-title")),
+  removeEvidence: (evidenceId) => attempt(() => commit(removeEvidence(state, evidenceId, meta()), "Evidence removed. The source record is kept.", "ed-detail-title")),
+  link: (claimId, otherId) => attempt(() => commit(linkContradiction(state, claimId, otherId, meta()), "Claims marked as contradicting each other. Both return to the review queue.", "ed-link-target")),
+  unlink: (claimId, otherId) => attempt(() => commit(unlinkContradiction(state, claimId, otherId, meta()), "Contradiction link removed.", "ed-detail-title")),
+  decide: (claimId, outcome, rationale) => attempt(() => commit(recordDecision(state, claimId, outcome, rationale, meta()), "Review decision recorded in the claim history.", "ed-detail-title")),
+  reopen: (claimId) => attempt(() => commit(reopenClaim(state, claimId, meta()), "Review reopened.", "ed-detail-title")),
+  editClaim: (claimId, text) => attempt(() => commit(updateClaim(state, claimId, text, meta()), "Claim updated.", "ed-detail-title")),
   deleteClaim(claimId) {
     if (!window.confirm("Delete this claim, its evidence and its history?")) return;
     selectedId = state.claims.find((entry) => entry.id !== claimId)?.id || "";
-    attempt(() => commit(deleteClaim(state, claimId), "Claim deleted.", "ed-detail-title"));
+    attempt(() => commit(deleteClaim(state, claimId, meta()), "Claim deleted.", "ed-detail-title"));
   },
 };
 
@@ -113,7 +119,7 @@ $("ed-add-claim").addEventListener("submit", (event) => {
   event.preventDefault();
   const input = $("ed-new-claim");
   attempt(() => {
-    const result = addClaim(state, input.value);
+    const result = addClaim(state, input.value, meta());
     input.value = "";
     selectedId = result.id;
     commit(result.state, "Claim added. Attach evidence to score it.", "ed-detail-title");

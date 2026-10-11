@@ -12,6 +12,7 @@ import { publicBuildAsset, publicBuildAssets } from "../dist/server/apps/server/
 import { publicCatalog } from "../dist/server/apps/server/src/public-site-catalog.js";
 
 const env = { ORKESTR_PUBLIC_SITE_URL: "https://product.example.test", ORKESTR_PUBLIC_APP_URL: "https://app.example.test" };
+const at = (time, actor = "Reviewer (test)") => ({ at: time, actor });
 const roundTrip = (state) => sanitizeState(JSON.parse(JSON.stringify(state)));
 
 test("claims are created, trimmed, edited and deleted with their evidence, links and history", () => {
@@ -106,6 +107,33 @@ test("review decisions are recorded in history and later changes reopen the clai
   assert.deepEqual(numbers, [...numbers].sort((a, b) => a - b), "history steps are monotonic");
 });
 
+test("history records when, who and what changed for every step", () => {
+  let { id, state } = addClaim(emptyState(), "Original text.", at("2026-05-01T08:00:00.000Z", "Analyst (test)"));
+  const added = addEvidence(state, id, { source: "Ledger", type: "measurement", strength: "weak" }, at("2026-05-01T08:01:00.000Z"));
+  state = recordDecision(added.state, id, "accepted", "Fine.", at("2026-05-01T08:02:00.000Z"));
+  assert.deepEqual(state.claims[0].decision, { outcome: "accepted", rationale: "Fine.", n: 3, at: "2026-05-01T08:02:00.000Z", actor: "Reviewer (test)" });
+  state = updateEvidence(state, added.id, { source: "Counter", strength: "strong" }, at("2026-05-01T08:03:00.000Z"));
+  state = updateClaim(state, id, "New text.", at("2026-05-01T08:04:00.000Z", "Analyst (test)"));
+  const history = claimHistory(state, id);
+  assert.deepEqual(history.map((entry) => [entry.n, entry.at.slice(11, 16), entry.actor, entry.action]), [
+    [1, "08:00", "Analyst (test)", "created"],
+    [2, "08:01", "Reviewer (test)", "evidence-added"],
+    [3, "08:02", "Reviewer (test)", "decision"],
+    [4, "08:03", "Reviewer (test)", "evidence-edited"],
+    [5, "08:03", "Reviewer (test)", "reopened"],
+    [6, "08:04", "Analyst (test)", "edited"],
+  ]);
+  assert.match(history[1].text, /New source record S1 created\./);
+  assert.deepEqual(history[2].changes, [{ field: "decision", from: "none", to: "Accepted" }]);
+  assert.deepEqual(history[3].changes, [{ field: "E2 source", from: "S1 · Ledger", to: "S2 · Counter" }, { field: "E2 strength", from: "weak", to: "strong" }]);
+  assert.deepEqual(history[4].changes, [{ field: "decision", from: "Accepted", to: "none" }]);
+  assert.deepEqual(history[5].changes, [{ field: "text", from: "Original text.", to: "New text." }]);
+  const fallback = claimHistory(addClaim(emptyState(), "x", { at: "yesterday", actor: "" }).state, "c1")[0];
+  assert.deepEqual([fallback.at, fallback.actor], ["", "You (this browser)"]);
+  const md = exportMarkdown(state);
+  assert.match(md, /- Step 4 · 2026-05-01T08:03:00\.000Z · Reviewer \(test\): Evidence E2 .* edited\.\n  - E2 source: “S1 · Ledger” → “S2 · Counter”\n  - E2 strength: “weak” → “strong”/);
+});
+
 test("sample dataset is fictional, deterministic, traceable and resettable", () => {
   const a = sampleState();
   assert.deepEqual(a, sampleState());
@@ -113,23 +141,24 @@ test("sample dataset is fictional, deterministic, traceable and resettable", () 
   assert.equal(a.sources.length, 8);
   assert.ok(a.sources.every((source) => /synthetic/i.test(source.kind) && /fictional/i.test(source.provenance)));
   assert.ok(a.evidence.every((item) => a.sources.some((source) => source.id === item.sourceId)));
+  assert.ok(a.history.every((entry) => entry.actor === "Sample reviewer (fictional)" && entry.at.startsWith("2026-03-02T09:")));
   assert.doesNotMatch(JSON.stringify(a), /patient|disease|vaccine|symptom|treatment|@|https?:/i);
 });
 
 test("sanitizeState restores valid storage and rejects or repairs corrupted data", () => {
   const sample = sampleState();
   assert.deepEqual(roundTrip(sample), sample);
-  for (const bad of [null, "x", 1, {}, { version: 1, claims: [], evidence: [], sources: [], history: [] }]) assert.equal(sanitizeState(bad), null);
+  for (const bad of [null, "x", 1, {}, { version: 2, claims: [], evidence: [], sources: [], history: [] }]) assert.equal(sanitizeState(bad), null);
   const repaired = sanitizeState({
-    version: 2, seq: 1, hseq: 1,
+    version: 3, seq: 1, hseq: 1,
     sources: [{ id: "s7", title: "Record" }, { id: "x", title: "bad" }],
     claims: [{ id: "c1", text: "Kept", contradicts: ["c1", "c2", "c404"], decision: { outcome: "bogus" } }, { id: "c2", text: "Peer", decision: { outcome: "accepted", n: 3 } }, { id: "bad", text: "x" }],
     evidence: [{ id: "e9", claimId: "c1", sourceId: "s7", type: "nope" }, { id: "e10", claimId: "c404", sourceId: "s7" }, { id: "e11", claimId: "c1", sourceId: "s404" }],
-    history: [{ n: 4, claimId: "c1", action: "created", text: "x" }, { n: "5", claimId: "c1" }, { n: 6, claimId: "c404" }],
+    history: [{ n: 4, at: "not a time", actor: "", claimId: "c1", action: "created", text: "x", changes: [{ field: "text", from: "", to: "x" }, { from: "no field" }] }, { n: "5", claimId: "c1" }, { n: 6, claimId: "c404" }],
   });
   assert.deepEqual(repaired.claims.map((claim) => [claim.id, claim.contradicts, claim.reviewed]), [["c1", ["c2"], false], ["c2", ["c1"], true]]);
   assert.deepEqual(repaired.evidence.map((item) => [item.id, item.type]), [["e9", "observation"]]);
-  assert.equal(repaired.history.length, 1);
+  assert.deepEqual(repaired.history, [{ n: 4, at: "", actor: "You (this browser)", claimId: "c1", action: "created", text: "x", changes: [{ field: "text", from: "", to: "x" }] }]);
   assert.equal(repaired.seq, 10);
   assert.equal(repaired.hseq, 5);
   assert.equal(repaired.sseq, 8);
@@ -139,8 +168,8 @@ test("sanitizeState restores valid storage and rejects or repairs corrupted data
 test("exports are reproducible: same data gives byte-identical JSON and Markdown", () => {
   const replay = () => {
     let state = sampleState();
-    state = addEvidence(state, "c4", { source: "Brindlemere loan ledger, Jan–May", type: "primary-record", strength: "weak", stance: "contradicts" }).state;
-    return recordDecision(state, "c4", "needs-evidence", "Check seasonal mix.");
+    state = addEvidence(state, "c4", { source: "Brindlemere loan ledger, Jan–May", type: "primary-record", strength: "weak", stance: "contradicts" }, at("2026-04-01T10:00:00.000Z")).state;
+    return recordDecision(state, "c4", "needs-evidence", "Check seasonal mix.", at("2026-04-01T10:05:00.000Z"));
   };
   const a = replay();
   const b = replay();
@@ -151,11 +180,12 @@ test("exports are reproducible: same data gives byte-identical JSON and Markdown
   assert.equal(exportFileName(a, "json"), exportFileName(b, "json"));
   assert.notEqual(exportJson(a), exportJson(sampleState()));
   const json = exportJson(sampleState());
-  assert.doesNotMatch(json, /\d{4}-\d{2}-\d{2}T|exportedAt|userAgent/);
+  assert.doesNotMatch(json, /exportedAt|userAgent|navigator/);
+  assert.ok([...json.matchAll(/"at": "([^"]*)"/g)].every(([, value]) => value.startsWith("2026-03-02T09:")), "only the sample's fixed history times appear");
   const parsed = JSON.parse(json);
   const { checksum: embedded, ...rest } = parsed;
   assert.equal(embedded, checksum(JSON.stringify(rest, null, 2)), "embedded checksum covers the payload");
-  assert.equal(embedded, "fnv1a32-718fbdaf", "golden checksum for the sample; update only on an intended format change");
+  assert.equal(embedded, "fnv1a32-effa441c", "golden checksum for the sample; update only on an intended format change");
 });
 
 test("exports carry provenance, rubric caveat, source links and decision history", () => {

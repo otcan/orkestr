@@ -1,10 +1,11 @@
 // Evidence desk: pure state transitions. No DOM, no network, no clock.
 // Loaded by the browser as an ES module and imported directly by unit tests.
-// Every mutation is deterministic: the same sequence of actions always yields
-// the same ids, history numbers and therefore byte-identical exports.
+// Every mutation is deterministic: the clock and actor are passed in as
+// `meta = { at, actor }` (the browser supplies the current time), so the same
+// actions with the same meta always yield byte-identical state and exports.
 
-export const STORAGE_KEY = "orkestr.builds.evidence-desk.v2";
-export const STATE_VERSION = 2;
+export const STORAGE_KEY = "orkestr.builds.evidence-desk.v3";
+export const STATE_VERSION = 3;
 export const MAX_CLAIMS = 60;
 export const MAX_EVIDENCE = 400;
 export const MAX_SOURCES = 200;
@@ -22,6 +23,7 @@ export const EVIDENCE_TYPES = {
 export const STRENGTHS = { weak: 1, moderate: 2, strong: 3 };
 export const STANCES = { supports: "Supports", contradicts: "Contradicts" };
 export const OUTCOMES = { accepted: "Accepted", rejected: "Rejected", "needs-evidence": "Needs more evidence" };
+export const DEFAULT_ACTOR = "You (this browser)";
 export const USER_SOURCE_PROVENANCE = "Entered in this browser for the demo. Treat as synthetic.";
 
 export function cleanText(value, max = MAX_TEXT) {
@@ -44,10 +46,24 @@ export function sourceLabel(source) {
   return `${source.id.toUpperCase()} · ${source.title}`;
 }
 
-function log(state, claimId, action, text) {
-  const history = [...state.history, { n: state.hseq, claimId, action, text }];
-  return { ...state, hseq: state.hseq + 1, history: history.slice(-MAX_HISTORY) };
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?Z$/;
+
+// Who and when for a history entry. Invalid or missing times become "".
+export function normalizeMeta(meta = {}) {
+  const at = String(meta?.at || "");
+  return { at: ISO_TIME.test(at) ? at : "", actor: cleanText(meta?.actor, 80) || DEFAULT_ACTOR };
 }
+
+function sanitizeChanges(changes) {
+  return (Array.isArray(changes) ? changes : []).slice(0, 10).map((change) => ({ field: cleanText(change?.field, 40), from: cleanText(change?.from, MAX_NOTE), to: cleanText(change?.to, MAX_NOTE) })).filter((change) => change.field);
+}
+
+function log(state, claimId, action, text, meta, changes = []) {
+  const entry = { n: state.hseq, ...normalizeMeta(meta), claimId, action, text, changes: sanitizeChanges(changes) };
+  return { ...state, hseq: state.hseq + 1, history: [...state.history, entry].slice(-MAX_HISTORY) };
+}
+
+const decisionLabel = (decision) => (decision ? OUTCOMES[decision.outcome] : "none");
 
 export function requireClaim(state, claimId) {
   const claim = state.claims.find((item) => item.id === claimId);
@@ -56,13 +72,13 @@ export function requireClaim(state, claimId) {
 }
 
 // Any change to a claim's evidence, text or links invalidates an earlier review.
-function invalidate(state, claimIds, why) {
+function invalidate(state, claimIds, why, meta) {
   let next = state;
   for (const id of claimIds) {
     const claim = next.claims.find((item) => item.id === id);
     if (!claim?.decision) continue;
     next = { ...next, claims: next.claims.map((item) => (item.id === id ? { ...item, reviewed: false, decision: null } : item)) };
-    next = log(next, id, "reopened", `Earlier review decision cleared: ${why}.`);
+    next = log(next, id, "reopened", `Earlier review decision cleared: ${why}.`, meta, [{ field: "decision", from: decisionLabel(claim.decision), to: "none" }]);
   }
   return next;
 }
@@ -85,25 +101,25 @@ export function ensureSource(state, title) {
   return existing ? { id: existing.id, state } : addSource(state, { title: value });
 }
 
-export function addClaim(state, text) {
+export function addClaim(state, text, meta) {
   const value = cleanText(text);
   if (!value) throw new Error("Claim text is required.");
   if (state.claims.length >= MAX_CLAIMS) throw new Error(`The demo is limited to ${MAX_CLAIMS} claims.`);
   const next = nextId(state, "c");
   const claim = { id: next.id, text: value, reviewed: false, decision: null, contradicts: [] };
-  return { id: next.id, state: log({ ...next.state, claims: [...next.state.claims, claim] }, next.id, "created", "Claim created.") };
+  return { id: next.id, state: log({ ...next.state, claims: [...next.state.claims, claim] }, next.id, "created", "Claim created.", meta, [{ field: "text", from: "", to: value }]) };
 }
 
-export function updateClaim(state, claimId, text) {
+export function updateClaim(state, claimId, text, meta) {
   const value = cleanText(text);
   if (!value) throw new Error("Claim text is required.");
   const claim = requireClaim(state, claimId);
   if (claim.text === value) return state;
   const next = { ...state, claims: state.claims.map((item) => (item.id === claimId ? { ...item, text: value } : item)) };
-  return invalidate(log(next, claimId, "edited", `Text changed from “${claim.text}”.`), [claimId], "claim text changed");
+  return invalidate(log(next, claimId, "edited", "Claim text edited.", meta, [{ field: "text", from: claim.text, to: value }]), [claimId], "claim text changed", meta);
 }
 
-export function deleteClaim(state, claimId) {
+export function deleteClaim(state, claimId, meta) {
   requireClaim(state, claimId);
   const peers = state.claims.filter((claim) => claim.contradicts.includes(claimId)).map((claim) => claim.id);
   let next = {
@@ -112,25 +128,25 @@ export function deleteClaim(state, claimId) {
     evidence: state.evidence.filter((item) => item.claimId !== claimId),
     history: state.history.filter((entry) => entry.claimId !== claimId),
   };
-  for (const peer of peers) next = log(next, peer, "unlinked", `Contradiction link removed because claim ${claimId.toUpperCase()} was deleted.`);
-  return invalidate(next, peers, "a linked claim was deleted");
+  for (const peer of peers) next = log(next, peer, "unlinked", `Contradiction link removed because claim ${claimId.toUpperCase()} was deleted.`, meta, [{ field: "contradicts", from: claimId.toUpperCase(), to: "" }]);
+  return invalidate(next, peers, "a linked claim was deleted", meta);
 }
 
-export function recordDecision(state, claimId, outcome, rationale = "") {
-  requireClaim(state, claimId);
+export function recordDecision(state, claimId, outcome, rationale = "", meta) {
+  const claim = requireClaim(state, claimId);
   const value = pick(outcome, OUTCOMES, "");
   if (!value) throw new Error("Choose a review outcome.");
   const note = cleanText(rationale, MAX_NOTE);
-  const decision = { outcome: value, rationale: note, n: state.hseq };
+  const decision = { outcome: value, rationale: note, n: state.hseq, ...normalizeMeta(meta) };
   const next = { ...state, claims: state.claims.map((claim) => (claim.id === claimId ? { ...claim, reviewed: value !== "needs-evidence", decision } : claim)) };
-  return log(next, claimId, "decision", `Review decision: ${OUTCOMES[value]}.${note ? ` Rationale: ${note}` : ""}`);
+  return log(next, claimId, "decision", `Review decision: ${OUTCOMES[value]}.${note ? ` Rationale: ${note}` : ""}`, meta, [{ field: "decision", from: decisionLabel(claim.decision), to: OUTCOMES[value] }]);
 }
 
-export function reopenClaim(state, claimId) {
+export function reopenClaim(state, claimId, meta) {
   const claim = requireClaim(state, claimId);
   if (!claim.decision) return state;
   const next = { ...state, claims: state.claims.map((item) => (item.id === claimId ? { ...item, reviewed: false, decision: null } : item)) };
-  return log(next, claimId, "reopened", "Review reopened by the reviewer.");
+  return log(next, claimId, "reopened", "Review reopened by the reviewer.", meta, [{ field: "decision", from: decisionLabel(claim.decision), to: "none" }]);
 }
 
 function evidenceFields(fields) {
@@ -142,40 +158,51 @@ function evidenceFields(fields) {
   };
 }
 
+function sourceName(state, sourceId) {
+  const source = state.sources.find((entry) => entry.id === sourceId);
+  return source ? sourceLabel(source) : sourceId;
+}
+
 function describe(state, item) {
   const source = state.sources.find((entry) => entry.id === item.sourceId);
   return `${item.id.toUpperCase()} (${item.stance}, ${EVIDENCE_TYPES[item.type].label.toLowerCase()}, ${item.strength}) from ${source ? sourceLabel(source) : item.sourceId}`;
 }
 
 // fields.source is a title or source id; fields.sourceId wins when present.
-export function addEvidence(state, claimId, fields) {
+export function addEvidence(state, claimId, fields, meta) {
   requireClaim(state, claimId);
   if (state.evidence.length >= MAX_EVIDENCE) throw new Error(`The demo is limited to ${MAX_EVIDENCE} evidence items.`);
   const resolved = fields.sourceId && state.sources.some((source) => source.id === fields.sourceId) ? { id: fields.sourceId, state } : ensureSource(state, fields.source);
   const next = nextId(resolved.state, "e");
   const item = { id: next.id, claimId, sourceId: resolved.id, ...evidenceFields(fields) };
-  const added = log({ ...next.state, evidence: [...next.state.evidence, item] }, claimId, "evidence-added", `Evidence ${describe(next.state, item)} attached.`);
-  return { id: next.id, state: invalidate(added, [claimId], "evidence was added") };
+  const created = resolved.state.sources.length > state.sources.length ? ` New source record ${resolved.id.toUpperCase()} created.` : "";
+  const added = log({ ...next.state, evidence: [...next.state.evidence, item] }, claimId, "evidence-added", `Evidence ${describe(next.state, item)} attached.${created}`, meta, [{ field: "evidence", from: "", to: item.id.toUpperCase() }]);
+  return { id: next.id, state: invalidate(added, [claimId], "evidence was added", meta) };
 }
 
-export function updateEvidence(state, evidenceId, fields) {
+export function updateEvidence(state, evidenceId, fields, meta) {
   const existing = state.evidence.find((item) => item.id === evidenceId);
   if (!existing) throw new Error("Evidence not found.");
   const resolved = fields.source != null ? ensureSource(state, fields.source) : { id: existing.sourceId, state };
   const item = { ...existing, sourceId: resolved.id, ...evidenceFields({ ...existing, ...fields }) };
   if (JSON.stringify(item) === JSON.stringify(existing)) return resolved.state;
   const next = { ...resolved.state, evidence: resolved.state.evidence.map((entry) => (entry.id === evidenceId ? item : entry)) };
-  return invalidate(log(next, existing.claimId, "evidence-edited", `Evidence changed to ${describe(next, item)}.`), [existing.claimId], "evidence was edited");
+  const changes = ["sourceId", "type", "strength", "stance", "note"].filter((key) => item[key] !== existing[key]).map((key) => ({
+    field: `${item.id.toUpperCase()} ${key === "sourceId" ? "source" : key}`,
+    from: key === "sourceId" ? sourceName(next, existing.sourceId) : existing[key],
+    to: key === "sourceId" ? sourceName(next, item.sourceId) : item[key],
+  }));
+  return invalidate(log(next, existing.claimId, "evidence-edited", `Evidence ${describe(next, item)} edited.`, meta, changes), [existing.claimId], "evidence was edited", meta);
 }
 
-export function removeEvidence(state, evidenceId) {
+export function removeEvidence(state, evidenceId, meta) {
   const existing = state.evidence.find((item) => item.id === evidenceId);
   if (!existing) throw new Error("Evidence not found.");
-  const next = log({ ...state, evidence: state.evidence.filter((item) => item.id !== evidenceId) }, existing.claimId, "evidence-removed", `Evidence ${describe(state, existing)} removed.`);
-  return invalidate(next, [existing.claimId], "evidence was removed");
+  const next = log({ ...state, evidence: state.evidence.filter((item) => item.id !== evidenceId) }, existing.claimId, "evidence-removed", `Evidence ${describe(state, existing)} removed.`, meta, [{ field: "evidence", from: existing.id.toUpperCase(), to: "" }]);
+  return invalidate(next, [existing.claimId], "evidence was removed", meta);
 }
 
-export function linkContradiction(state, claimA, claimB) {
+export function linkContradiction(state, claimA, claimB, meta) {
   if (claimA === claimB) throw new Error("A claim cannot contradict itself.");
   const a = requireClaim(state, claimA);
   requireClaim(state, claimB);
@@ -184,21 +211,21 @@ export function linkContradiction(state, claimA, claimB) {
     ...state,
     claims: state.claims.map((claim) => (claim.id === claimA ? { ...claim, contradicts: [...claim.contradicts, claimB] } : claim.id === claimB ? { ...claim, contradicts: [...claim.contradicts, claimA] } : claim)),
   };
-  next = log(next, claimA, "linked", `Marked as contradicting ${claimB.toUpperCase()}.`);
-  next = log(next, claimB, "linked", `Marked as contradicting ${claimA.toUpperCase()}.`);
-  return invalidate(next, [claimA, claimB], "a contradiction link was added");
+  next = log(next, claimA, "linked", `Marked as contradicting ${claimB.toUpperCase()}.`, meta, [{ field: "contradicts", from: "", to: claimB.toUpperCase() }]);
+  next = log(next, claimB, "linked", `Marked as contradicting ${claimA.toUpperCase()}.`, meta, [{ field: "contradicts", from: "", to: claimA.toUpperCase() }]);
+  return invalidate(next, [claimA, claimB], "a contradiction link was added", meta);
 }
 
-export function unlinkContradiction(state, claimA, claimB) {
+export function unlinkContradiction(state, claimA, claimB, meta) {
   const a = state.claims.find((claim) => claim.id === claimA);
   if (!a || !a.contradicts.includes(claimB)) return state;
   let next = {
     ...state,
     claims: state.claims.map((claim) => (claim.id === claimA ? { ...claim, contradicts: claim.contradicts.filter((id) => id !== claimB) } : claim.id === claimB ? { ...claim, contradicts: claim.contradicts.filter((id) => id !== claimA) } : claim)),
   };
-  next = log(next, claimA, "unlinked", `Contradiction link with ${claimB.toUpperCase()} removed.`);
-  next = log(next, claimB, "unlinked", `Contradiction link with ${claimA.toUpperCase()} removed.`);
-  return invalidate(next, [claimA, claimB], "a contradiction link was removed");
+  next = log(next, claimA, "unlinked", `Contradiction link with ${claimB.toUpperCase()} removed.`, meta, [{ field: "contradicts", from: claimB.toUpperCase(), to: "" }]);
+  next = log(next, claimB, "unlinked", `Contradiction link with ${claimA.toUpperCase()} removed.`, meta, [{ field: "contradicts", from: claimA.toUpperCase(), to: "" }]);
+  return invalidate(next, [claimA, claimB], "a contradiction link was removed", meta);
 }
 
 export function claimHistory(state, claimId) {
@@ -229,7 +256,7 @@ export function sanitizeState(raw) {
     if (!/^c\d+$/.test(id) || !text || ids.has(id)) continue;
     ids.add(id);
     const outcome = pick(entry.decision?.outcome, OUTCOMES, "");
-    const decision = outcome ? { outcome, rationale: cleanText(entry.decision.rationale, MAX_NOTE), n: Number.isInteger(entry.decision.n) ? entry.decision.n : 0 } : null;
+    const decision = outcome ? { outcome, rationale: cleanText(entry.decision.rationale, MAX_NOTE), n: Number.isInteger(entry.decision.n) ? entry.decision.n : 0, ...normalizeMeta(entry.decision) } : null;
     claims.push({ id, text, reviewed: Boolean(decision) && outcome !== "needs-evidence", decision, contradicts: Array.isArray(entry.contradicts) ? entry.contradicts.map(String) : [] });
   }
   for (const claim of claims) claim.contradicts = [...new Set(claim.contradicts)].filter((id) => id !== claim.id && ids.has(id));
@@ -247,7 +274,8 @@ export function sanitizeState(raw) {
   }
   const history = raw.history.slice(-MAX_HISTORY)
     .filter((entry) => Number.isInteger(entry?.n) && ids.has(String(entry.claimId)))
-    .map((entry) => ({ n: entry.n, claimId: String(entry.claimId), action: cleanText(entry.action, 40), text: cleanText(entry.text, MAX_NOTE) }));
+    // Same key order as log() so a reload exports byte-identically.
+    .map((entry) => ({ n: entry.n, ...normalizeMeta(entry), claimId: String(entry.claimId), action: cleanText(entry.action, 40), text: cleanText(entry.text, MAX_NOTE), changes: sanitizeChanges(entry.changes) }));
   const maxSeq = [...ids, ...evidenceIds].reduce((max, id) => Math.max(max, Number(id.slice(1))), 0);
   const maxSource = [...sourceIds].reduce((max, id) => Math.max(max, Number(id.slice(1))), 0);
   const maxH = history.reduce((max, entry) => Math.max(max, entry.n), 0);

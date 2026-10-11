@@ -39,6 +39,7 @@ export function evidenceDeskPage(): PublicPage {
             <button type="button" id="ed-reset" class="button button-small button-outline">Reset demo</button>
             <button type="button" id="ed-export-json" class="button button-small button-ghost">Export JSON</button>
             <button type="button" id="ed-export-md" class="button button-small button-ghost">Export Markdown</button>
+            <label class="ed-actor"><span>Acting as</span><select id="ed-actor"><option>You (this browser), as analyst</option><option>You (this browser), as reviewer</option></select></label>
             <p class="ed-checksum-line">Export checksum <code id="ed-checksum"></code></p>
             <p id="ed-status" class="ed-status" role="status" aria-live="polite"></p>
           </div>
@@ -74,8 +75,8 @@ export function evidenceDeskPage(): PublicPage {
         <ul>
           <li>Each item weighs <code>strength × type</code>: weak 1, moderate 2, strong 3; primary record and measurement ×1, observation ×0.8, secondary report ×0.6, anecdote ×0.4.</li>
           <li>Rubric score = <code>50 + 50 × (support − against) / (support + against + 2)</code>, from 0 to 100. With no evidence a claim sits at 50.</li>
-          <li>A claim enters the review queue when it has contradicting evidence, a contradiction link, no evidence, a single source record, only weak evidence, or a reviewer asked for more evidence. Accepting or rejecting it clears it; any later change to its text, evidence or links reopens it and is written to its decision history.</li>
-          <li>Exports contain no timestamps or browser details, so the same data always produces the same bytes and the same checksum.</li>
+          <li>A claim enters the review queue when it has contradicting evidence, a contradiction link, no evidence, a single source record, only weak evidence, or a reviewer asked for more evidence. Accepting or rejecting it clears it; any later change to its text, evidence or links reopens it. Every step is written to the claim's decision history with a UTC timestamp, the acting role and the exact before → after values.</li>
+          <li>Exports are a pure function of the data: history timestamps are part of the data, but nothing is added at export time (no export date, browser or locale details). The same data always produces the same bytes and the same checksum.</li>
         </ul>
       </section>
     </main>`,
