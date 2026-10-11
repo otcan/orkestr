@@ -62,9 +62,6 @@
 .build-explainer h2 { font-size: 24px; letter-spacing: -.02em; margin-bottom: 10px; }
 .build-explainer li { margin-bottom: 6px; line-height: 1.45; }
 .build-ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
-.builds-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; max-width: 1180px; padding: 0; list-style: none; }
-.builds-list li { padding: 20px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
-.builds-list h2 { margin: 10px 0; font-size: 26px; letter-spacing: -.02em; }
 @media (max-width: 640px) {
   .portal-catalog thead { display: none; }
   .portal-catalog tr { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }

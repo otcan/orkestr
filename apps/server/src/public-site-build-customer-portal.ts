@@ -21,13 +21,12 @@ const steps = [
 
 export function customerPortalBuildPage(): PublicPage {
   return {
-    id: "build-customer-portal",
+    id: "builds",
     title: "Live build: B2B customer portal",
     summary: "Synthetic interactive demo: a buyer submits an order, stock and credit rules check it, exceptions pause for an approver, and status, timeline and audit log update in your browser.",
     canonicalPath: "/builds/customer-portal",
     stylesheets: ["/builds/customer-portal/portal.css"],
     scripts: ["/builds/customer-portal/app.js"],
-    analytics: false,
     body: `<main id="main-content" class="build-page">
     <section class="build-hero">
       <p class="eyebrow"><a href="/builds">Live builds</a> · <span class="evidence-tag">Simulation · runs in your browser</span></p>
@@ -64,7 +63,7 @@ export function customerPortalBuildPage(): PublicPage {
     </div>
     <div class="build-ctas">
       <a class="button" href="/builds">Explore live builds</a>
-      <a class="button button-outline" href="/project">Discuss a project</a>
+      <a class="button button-outline" href="/studio">Discuss a project</a>
     </div>
   </main>`,
   };

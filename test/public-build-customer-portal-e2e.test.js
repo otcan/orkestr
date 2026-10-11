@@ -48,13 +48,15 @@ test("live build routes are public, self-contained, and serve only allowlisted a
     assert.match(html, /data-action="reset"/);
     assert.match(html, /<script type="module" src="\/builds\/customer-portal\/app\.js"><\/script>/);
     assert.doesNotMatch(html, /orkestrTrack|sendBeacon|\son[a-z]+="/);
+    assert.doesNotMatch(html, /Book a project call/, "live builds carry no consulting CTA in the header");
     assert.doesNotMatch(html, /<script[^>]+src="https?:/);
 
     const catalog = await fetch(`${baseUrl}/builds`);
     assert.equal(catalog.status, 200);
     const catalogHtml = await catalog.text();
     assert.match(catalogHtml, /href="\/builds\/customer-portal"/);
-    assert.match(catalogHtml, /Simulation · runs in your browser/);
+    assert.match(catalogHtml, /<a href="\/builds\/customer-portal">B2B customer portal with approval rules<\/a>/);
+    assert.match(catalogHtml, /hub-evidence-simulation">Simulation</);
 
     for (const [asset, type] of [["app.js", /text\/javascript/], ["workflow.js", /text\/javascript/], ["portal.css", /text\/css/]]) {
       const response = await fetch(`${baseUrl}/builds/customer-portal/${asset}`);
