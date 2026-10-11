@@ -1,10 +1,12 @@
 // First-run onboarding: bind the default thread to the paired account's own
-// WhatsApp chat ("Message yourself"). Nobody else is ever added: configured
-// default/owner participant lists are deliberately ignored, the account is the
-// exact one paired in the wizard, and the request is refused if that account
-// is no longer linked and ready.
+// WhatsApp chat ("Message yourself"). This path is separate from the shared
+// thread-groups route on purpose: it never reads configured default/owner
+// participant lists, rejects any participant fields, uses exactly the account
+// pinned at pairing, and refuses if that account is no longer linked and ready
+// or not accessible to the requesting principal.
 import { getThread, updateThread } from "../../core/src/threads.js";
 import { defaultWhatsAppReplyPrefix } from "../../core/src/whatsapp-defaults.js";
+import { assertWhatsAppConnectorAccountAccess } from "./whatsapp-account-registry.js";
 import { dualWriteWhatsAppParticipantIdentity } from "./whatsapp-participant-identity.js";
 
 const clean = (value) => String(value || "").trim();
@@ -15,6 +17,25 @@ export class PrivateChatError extends Error {
     this.code = code;
     this.statusCode = statusCode;
   }
+}
+
+// Fields that would let a caller add people or pick another account.
+const forbiddenFields = [
+  "participantIds", "participants", "adminParticipantIds", "promoteParticipantsAsAdmins",
+  "receivingAccountId", "inboundAccountId", "senderAccountId", "replyAccountId", "bridgeAccountId",
+  "responderAccountId", "outboundAccountId", "forceNew",
+];
+
+// Validates the request body; returns the pinned identity.
+export function privateChatRequest(body = {}) {
+  const present = forbiddenFields.filter((key) => Object.prototype.hasOwnProperty.call(body || {}, key));
+  if (present.length) throw new PrivateChatError("whatsapp_private_chat_fields_not_allowed", 400);
+  const threadId = clean(body.threadId);
+  if (!threadId) throw new PrivateChatError("thread_id_required", 400);
+  const pairedAccountId = clean(body.pairedAccountId);
+  const pairedContactId = clean(body.pairedContactId);
+  if (!pairedAccountId || !/@c\.us$/i.test(pairedContactId)) throw new PrivateChatError("whatsapp_paired_account_required", 400);
+  return { threadId, pairedAccountId, pairedContactId, name: clean(body.name).slice(0, 100) };
 }
 
 function statusAccounts(status = {}) {
@@ -29,18 +50,24 @@ function accountUsable(account) {
     account.chatOpsReady !== false;
 }
 
-// Resolves the account pinned by the wizard; throws PrivateChatError otherwise.
-export function pairedAccountForPrivateChat(status = {}, { pairedAccountId = "", pairedContactId = "" } = {}) {
-  const accountId = clean(pairedAccountId);
-  if (!accountId) throw new PrivateChatError("whatsapp_paired_account_required", 400);
+// Resolves the pinned account from the live bridge status and checks that the
+// principal may use it (registered owner, or the instance admin for
+// unregistered built-in bridge slots).
+export function pairedAccountForPrivateChat(status = {}, { pairedAccountId, pairedContactId }, { principal = {}, registeredAccounts = [], env = process.env } = {}) {
   if (!["local", "worker"].includes(clean(status.mode))) throw new PrivateChatError("whatsapp_private_chat_requires_built_in_bridge", 409);
-  const account = statusAccounts(status).find((item) => [item.accountId, item.id, item.runtimeAccountId].map(clean).includes(accountId));
+  const account = statusAccounts(status).find((item) => [item.runtimeAccountId, item.accountId, item.id].map(clean).includes(pairedAccountId));
   if (!accountUsable(account)) throw new PrivateChatError("whatsapp_paired_account_unavailable", 409);
+  const accountId = clean(account.runtimeAccountId || account.accountId || account.id);
+  const registered = registeredAccounts.find((item) => [item.accountId, item.id, item.runtimeAccountId].map(clean).some((id) => id && [accountId, clean(account.accountId)].includes(id)));
+  try {
+    assertWhatsAppConnectorAccountAccess(registered || {}, principal, "wa_onboarding_private_chat", env);
+  } catch {
+    throw new PrivateChatError("whatsapp_paired_account_forbidden", 403);
+  }
   const contactId = clean(account.contactId);
   if (!/@c\.us$/i.test(contactId)) throw new PrivateChatError("whatsapp_paired_account_unavailable", 409);
-  const expected = clean(pairedContactId);
-  if (expected && expected !== contactId) throw new PrivateChatError("whatsapp_paired_account_changed", 409);
-  return { accountId: clean(account.runtimeAccountId || account.accountId || account.id), contactId };
+  if (contactId !== pairedContactId) throw new PrivateChatError("whatsapp_paired_account_changed", 409);
+  return { accountId, contactId };
 }
 
 // Binds the thread to the account's own chat, owner-only. Idempotent for the same chat.
@@ -74,7 +101,6 @@ export async function bindThreadToPrivateOwnerChat(thread, { accountId, contactI
   const updated = await updateThread(thread.id, { binding, bindingName: binding.displayName }, env);
   return {
     ok: true,
-    created: false,
     reused,
     privateOwnerChat: true,
     thread: updated || (await getThread(thread.id, env)),

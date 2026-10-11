@@ -273,10 +273,9 @@ export class FirstThreadWizardComponent implements OnInit, OnDestroy {
         this.creationStage = "Connecting your private WhatsApp chat";
         try {
           // Server enforces: only the account paired above, only its own chat, refused if no longer linked.
-          const group = await firstValueFrom(this.api.createWhatsAppThreadGroup({
+          const group = await firstValueFrom(this.api.connectWhatsAppPrivateChat({
             threadId: thread.id,
             name,
-            privateOwnerOnly: true,
             pairedAccountId: this.pairedWhatsAppAccount.accountId,
             pairedContactId: this.pairedWhatsAppAccount.contactId,
           }));

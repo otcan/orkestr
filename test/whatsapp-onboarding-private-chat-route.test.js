@@ -10,9 +10,13 @@ import {
   setLocalWhatsAppRuntimeForTest,
 } from "../dist/server/packages/connectors/src/whatsapp-local-bridge.js";
 import { createThread, getThread } from "../dist/server/packages/core/src/threads.js";
+import { pairedAccountForPrivateChat, privateChatRequest } from "../packages/connectors/src/whatsapp-onboarding-private-chat.js";
+import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 
-// Route-level tests for the first-run "Start orkest" WhatsApp step
-// (POST /api/connectors/whatsapp/thread-groups as sent by the wizard).
+// Route-level tests for the first-run "Start orkest" WhatsApp step, which
+// uses its own endpoint (POST /api/connectors/whatsapp/onboarding/private-chat),
+// and for the shared POST /api/connectors/whatsapp/thread-groups route, whose
+// behaviour for its other callers must stay unchanged.
 // Fake WhatsApp clients and synthetic numbers only.
 
 const envKeys = [
@@ -72,14 +76,18 @@ async function withServer(t, extraEnv, run) {
   }
 }
 
-// Exactly what the wizard sends for the private onboarding chat.
-async function requestPrivateChat(origin, pairedAccountId, pairedContactId) {
-  const response = await fetch(`${origin}/api/connectors/whatsapp/thread-groups`, {
+async function post(origin, route, body) {
+  const response = await fetch(`${origin}${route}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ threadId: "orkest", name: "orkest", privateOwnerOnly: true, pairedAccountId, pairedContactId }),
+    body: JSON.stringify(body),
   });
   return { status: response.status, body: await response.json().catch(() => ({})) };
+}
+
+// Exactly what the wizard sends for the private onboarding chat.
+function requestPrivateChat(origin, pairedAccountId, pairedContactId, extra = {}) {
+  return post(origin, "/api/connectors/whatsapp/onboarding/private-chat", { threadId: "orkest", name: "orkest", pairedAccountId, pairedContactId, ...extra });
 }
 
 test("private onboarding chat never adds configured default participants", { timeout: 60_000 }, async (t) => {
@@ -132,4 +140,53 @@ test("private onboarding chat is refused when the paired account is no longer us
     assert.deepEqual(createGroupCalls, []);
     assert.equal((await getThread("orkest", env)).binding ?? null, null, "no chat was bound");
   });
+});
+
+test("private onboarding chat rejects participant and account-selection fields", { timeout: 60_000 }, async (t) => {
+  await withServer(t, defaults, async ({ origin, env }) => {
+    const createGroupCalls = [];
+    setLocalWhatsAppRuntimeForTest("account-1", { client: fakeClient(1, createGroupCalls) }, {}, env);
+    for (const extra of [
+      { participantIds: ["15559990009@c.us"] },
+      { participants: [] },
+      { adminParticipantIds: ["15559990009@c.us"] },
+      { promoteParticipantsAsAdmins: true },
+      { responderAccountId: "account-2" },
+    ]) {
+      const result = await requestPrivateChat(origin, "account-1", wid(1)._serialized, extra);
+      assert.equal(result.status, 400, JSON.stringify(extra));
+      assert.match(JSON.stringify(result.body), /whatsapp_private_chat_fields_not_allowed/);
+    }
+    const noContact = await requestPrivateChat(origin, "account-1", "");
+    assert.equal(noContact.status, 400, "the contact id captured at pairing is required");
+    assert.deepEqual(createGroupCalls, []);
+    assert.equal((await getThread("orkest", env)).binding ?? null, null);
+  });
+});
+
+test("shared thread-groups route keeps its default-participant behaviour for other callers", { timeout: 60_000 }, async (t) => {
+  await withServer(t, defaults, async ({ origin, env }) => {
+    const createGroupCalls = [];
+    setLocalWhatsAppRuntimeForTest("account-1", { client: fakeClient(1, createGroupCalls) }, {}, env);
+    setLocalWhatsAppRuntimeForTest("account-2", { client: fakeClient(2, createGroupCalls) }, {}, env);
+    // A client flag on the shared route has no effect: the wizard does not rely on it.
+    const result = await post(origin, "/api/connectors/whatsapp/thread-groups", { threadId: "orkest", name: "orkest", privateOwnerOnly: true, pairedAccountId: "account-2" });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.deepEqual(createGroupCalls, [{ account: 1, title: "orkest", participants: ["15559990001@c.us", "15559990002@c.us", "15559990003@c.us"] }]);
+    assert.equal(result.body.binding?.senderAccountId, "account-1");
+  });
+});
+
+test("private onboarding chat only uses accounts the principal may use", () => {
+  const status = { mode: "local", accounts: [{ accountId: "15550000001", runtimeAccountId: "account-1", state: "ready", ready: true, contactId: wid(1)._serialized }] };
+  const input = privateChatRequest({ threadId: "orkest", pairedAccountId: "account-1", pairedContactId: wid(1)._serialized });
+  const admin = adminPrincipal();
+  const alice = userPrincipal({ id: "alice" });
+  const bob = userPrincipal({ id: "bob" });
+  assert.deepEqual(pairedAccountForPrivateChat(status, input, { principal: admin }), { accountId: "account-1", contactId: wid(1)._serialized });
+  assert.throws(() => pairedAccountForPrivateChat(status, input, { principal: bob }), /whatsapp_paired_account_forbidden/, "an unregistered built-in slot belongs to the instance admin");
+  const registeredAccounts = [{ accountId: "account-1", ownerUserId: "alice" }];
+  assert.equal(pairedAccountForPrivateChat(status, input, { principal: alice, registeredAccounts }).accountId, "account-1");
+  assert.throws(() => pairedAccountForPrivateChat(status, input, { principal: bob, registeredAccounts }), /whatsapp_paired_account_forbidden/);
+  assert.throws(() => pairedAccountForPrivateChat({ ...status, mode: "external" }, input, { principal: admin }), /requires_built_in_bridge/);
 });

@@ -126,6 +126,10 @@ test("wizard links WhatsApp by QR, binds a private group, and shows the inbound/
           return request.respond(json({ ok: true, lease: { fencingToken: "synthetic" } }));
         }
         if (route === "POST /api/connectors/whatsapp/thread-groups") {
+          fake.calls.push(["shared-thread-groups"]);
+          return request.respond(json({ ok: false }, 500));
+        }
+        if (route === "POST /api/connectors/whatsapp/onboarding/private-chat") {
           fake.calls.push(["thread-group", JSON.parse(request.postData() || "{}")]);
           return request.respond(json({ ok: true, created: false, privateOwnerChat: true, chat: { id: "15550000001@c.us", name: "orkest", isGroup: false } }));
         }
@@ -170,10 +174,10 @@ test("wizard links WhatsApp by QR, binds a private group, and shows the inbound/
     assert.deepEqual(group[1], {
       threadId: "orkest",
       name: "orkest",
-      privateOwnerOnly: true,
       pairedAccountId: "account-1",
       pairedContactId: "15550000001@c.us",
     }, "the wizard requests only the paired account's own chat and adds nobody");
+    assert.equal(fake.calls.some((call) => call[0] === "shared-thread-groups"), false, "the wizard does not use the shared thread-groups route");
     assert.deepEqual(fake.calls.find((call) => call[0] === "preferences")[1], { whatsappAccessMode: "own" });
     assert.match(await page.$eval(".wizard-proof", (node) => node.textContent), /…\s*Message received from WhatsApp/);
 

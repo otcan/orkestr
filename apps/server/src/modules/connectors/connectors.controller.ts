@@ -62,7 +62,6 @@ import {
 } from "../../../../../packages/connectors/src/whatsapp.js";
 import { createAndBindWhatsAppThreadGroup } from "../../../../../packages/connectors/src/whatsapp-thread-groups.js";
 import { createWhatsAppGroupForStatus } from "../../../../../packages/connectors/src/whatsapp-group-transport.js";
-import { PrivateChatError, bindThreadToPrivateOwnerChat, pairedAccountForPrivateChat } from "../../../../../packages/connectors/src/whatsapp-onboarding-private-chat.js";
 import { publicWhatsAppGroupCreateFailure } from "../../../../../packages/connectors/src/whatsapp-group-create-evidence.js";
 import { assertWhatsAppBridgeBindingAcl } from "../../../../../packages/connectors/src/whatsapp-account-bindings.js";
 import { assertWhatsAppBridgeTokenContext } from "../../../../../packages/connectors/src/whatsapp-binding-acl.js";
@@ -810,20 +809,6 @@ export class ConnectorsController {
     if (!threadId) throw httpError("thread_id_required", 400);
     const thread = await getThreadForPrincipal(threadId, requestPrincipal(request));
     if (!thread) throw httpError("thread_not_found", 404);
-    // First-run onboarding: only the paired account's own chat, never configured participants.
-    if (optionalBodyBoolean(body, "privateOwnerOnly", false)) {
-      try {
-        const paired = pairedAccountForPrivateChat(await getWhatsAppStatus(), {
-          pairedAccountId: String(body.pairedAccountId || ""),
-          pairedContactId: String(body.pairedContactId || ""),
-        });
-        assertBridgeAccountScope("manage", { accountId: paired.accountId }, request.orkestrMachineAuthContext);
-        return await bindThreadToPrivateOwnerChat(thread, { ...paired, name: String(body.name || "") }, process.env);
-      } catch (error: any) {
-        if (error instanceof PrivateChatError) throw httpError(error.code, error.statusCode);
-        throw error;
-      }
-    }
     const requestedParticipants = bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants"));
     const participantIds = requestedParticipants.length
       ? requestedParticipants

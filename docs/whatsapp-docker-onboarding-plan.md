@@ -310,9 +310,12 @@ unless stated otherwise.
    bridge behind the transport interface is *not started*.
 6. **Onboarding "link, bind one chat, prove it".** The chat is the paired
    account's own chat ("Message yourself"); a WhatsApp group cannot contain only
-   its creator. The `thread-groups` route enforces it when `privateOwnerOnly`
-   is set: no configured participants, the exact paired account and contact
-   id, refusal when that account is unusable (route-level tests in
+   its creator. The wizard uses a dedicated endpoint,
+   `POST /api/connectors/whatsapp/onboarding/private-chat`, that never reads
+   configured participants, rejects participant/account fields, requires the
+   account and contact id pinned at pairing, checks the principal may use the
+   account, and refuses when it is unusable. The shared `thread-groups` route
+   is unchanged for its other callers (route-level tests in
    `test/whatsapp-onboarding-private-chat-route.test.js`). *Done* (T4, T7, T16 with a
    synthetic browser E2E). Goal-specific readiness (T17) is *not started*;
    `setupState` is unchanged.
