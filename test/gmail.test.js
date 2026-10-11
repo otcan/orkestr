@@ -1061,6 +1061,7 @@ test("successful gmail oauth clears previous token error status", async () => {
         access_token: "access-ok",
         refresh_token: "refresh-ok",
         expires_in: 3600,
+        scope: "https://www.googleapis.com/auth/gmail.send",
       }),
     { account: "person@example.com" },
   );
@@ -1085,6 +1086,7 @@ test("gmail message list uses stored access token", async () => {
       access_token: "access-list",
       refresh_token: "refresh-list",
       expires_in: 3600,
+      scope: "https://www.googleapis.com/auth/gmail.readonly",
     }),
   );
 
@@ -1102,6 +1104,27 @@ test("gmail message list uses stored access token", async () => {
   assert.equal(result.messages[0].id, "m1");
 });
 
+test("Gmail read fails closed when Google does not report a granted scope", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-unverified-scope-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode("code-123", env, async () => jsonResponse({
+    access_token: "access-without-scope",
+    refresh_token: "refresh-without-scope",
+    expires_in: 3600,
+  }));
+  const token = await readGmailToken(env);
+  assert.deepEqual(token.grantedScopes, []);
+  await assert.rejects(
+    () => listGmailMessages({}, env, async () => { throw new Error("provider_must_not_be_called"); }),
+    /google_workspace_capability_not_granted:gmail_read/,
+  );
+});
+
 test("gmail API authentication failures force one refresh and retry", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-api-recover-"));
   const env = { ORKESTR_HOME: home };
@@ -1114,6 +1137,7 @@ test("gmail API authentication failures force one refresh and retry", async () =
     access_token: "access-stale",
     refresh_token: "refresh-valid",
     expires_in: 3600,
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
   }), { account: "casey@example.com" });
   const calls = [];
 
@@ -1204,6 +1228,7 @@ test("a second Gmail API 401 after refresh stops after one retry", async () => {
     access_token: "access-stale",
     refresh_token: "refresh-valid",
     expires_in: 3600,
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
   }), { account: "casey@example.com" });
   let calls = 0;
 
@@ -1233,6 +1258,7 @@ test("temporary Gmail provider failures are degraded rather than revoked", async
     access_token: "access-valid",
     refresh_token: "refresh-valid",
     expires_in: 3600,
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
   }), { account: "casey@example.com" });
 
   await assert.rejects(
@@ -1266,6 +1292,7 @@ test("gmail message list reads the scoped user access token", async () => {
         access_token: "alice-access-list",
         refresh_token: "alice-refresh-list",
         expires_in: 3600,
+        scope: "https://www.googleapis.com/auth/gmail.readonly",
       }),
     { principal: alice },
   );
@@ -1294,6 +1321,7 @@ test("gmail message fetch normalizes headers and text", async () => {
       access_token: "access-fetch",
       refresh_token: "refresh-fetch",
       expires_in: 3600,
+      scope: "https://www.googleapis.com/auth/gmail.readonly",
     }),
   );
 

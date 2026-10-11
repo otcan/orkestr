@@ -15,6 +15,7 @@ import {
   removeGoogleWorkspaceConnection,
   resolveGoogleWorkspaceConnection,
 } from "./google-workspace-connections.js";
+import { clearGmailSendApprovalsForConnection } from "./gmail-send-approvals.js";
 import {
   googleWorkspaceCapabilityLabels,
   googleWorkspaceCapabilitiesForScopes,
@@ -361,6 +362,7 @@ export async function disconnectConnectorAuth(args = {}, principal = {}, env = p
     }, env, { principal, threadId: args.threadId });
     const revocation = await revokeGmailOAuthGrant(selected.token, options.fetchImpl || fetch);
     const removed = await removeGoogleWorkspaceConnection(selected.connection.connectionId, env, { principal });
+    await clearGmailSendApprovalsForConnection(selected.connection.connectionId, principal, env);
     await unlinkIfExists(errorFile(provider, scope));
     await unlinkIfExists(oauthStateFile(provider, scope));
     await appendEvent({

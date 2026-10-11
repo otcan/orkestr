@@ -4,6 +4,8 @@ import path from "node:path";
 import test from "node:test";
 import { setGmailOAuthBrowserOpenerForTest } from "../dist/server/apps/server/src/modules/connectors/gmail-oauth-start-page.js";
 import { createUser } from "../packages/core/src/users.js";
+import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { saveGoogleWorkspaceConnectionToken } from "../packages/connectors/src/google-workspace-connections.js";
 import { userDataPaths } from "../packages/storage/src/paths.js";
 import {
   eventsOfType,
@@ -112,6 +114,93 @@ test("connector onboarding: an intent starts OAuth once with its bound parameter
     assert.equal(replay.json.error, "connector_use_intent_replayed");
     assert.equal(await fs.readFile(stateFile, "utf8"), before);
     assert.equal((await eventsOfType("connector_use_intent_replayed")).length, 1);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("selected Gmail permissions are validated, bound to the intent, and cannot be substituted", async () => {
+  const fixture = await startFixtureServer({ ORKESTR_GOOGLE_OAUTH_ALLOWED_CAPABILITIES: "gmail_read,gmail_drafts,gmail_send" });
+  try {
+    const cookie = await pairedCookie();
+    const intent = await jsonPost(fixture.port, "/api/connectors/gmail/oauth/intent", {
+      capabilities: ["gmail_read", "gmail_drafts"],
+    }, { cookie });
+    assert.equal(intent.status, 201, intent.text);
+    const substitution = await jsonPost(fixture.port, "/api/connectors/gmail/oauth/start", {
+      ...intent.json,
+      capabilities: ["gmail_send"],
+    }, { cookie });
+    assert.equal(substitution.status, 403);
+    assert.equal(substitution.json.error, "connector_use_intent_binding_mismatch");
+
+    const second = await jsonPost(fixture.port, "/api/connectors/gmail/oauth/intent", {
+      capabilities: ["gmail_read", "gmail_drafts"],
+    }, { cookie });
+    const started = await jsonPost(fixture.port, "/api/connectors/gmail/oauth/start", second.json, { cookie });
+    assert.equal(started.status, 200, started.text);
+    const scopes = new Set(new URL(started.json.authorizeUrl).searchParams.get("scope").split(" "));
+    assert.ok(scopes.has("https://www.googleapis.com/auth/gmail.readonly"));
+    assert.ok(scopes.has("https://www.googleapis.com/auth/gmail.compose"));
+    assert.ok(!scopes.has("https://www.googleapis.com/auth/gmail.send"));
+
+    const unknown = await jsonPost(fixture.port, "/api/connectors/gmail/oauth/intent", { capabilities: ["gmail_admin"] }, { cookie });
+    assert.equal(unknown.status, 400);
+    const empty = await jsonPost(fixture.port, "/api/connectors/gmail/oauth/intent", { capabilities: [] }, { cookie });
+    assert.equal(empty.status, 400);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("self-hosted app configuration exposes only its local Gmail capability allowlist", async () => {
+  const fixture = await startFixtureServer();
+  try {
+    await writeConnectorConfig("gmail", { allowedCapabilities: "gmail_read,gmail_drafts,gmail_send" }, process.env);
+    const cookie = await pairedCookie();
+    const accounts = await rawRequest(fixture.port, { pathname: "/api/connectors/gmail/accounts", headers: { cookie } });
+    assert.equal(accounts.status, 200, accounts.text);
+    assert.deepEqual(accounts.json.availableCapabilities.map((item) => item.id), ["gmail_read", "gmail_send", "gmail_drafts"]);
+    const intent = await jsonPost(fixture.port, "/api/connectors/gmail/oauth/intent", { capabilities: ["gmail_read"] }, { cookie });
+    assert.equal(intent.status, 201, intent.text);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a hosted named OAuth app keeps its own allowlist when reconnecting", async () => {
+  const fixture = await startFixtureServer({
+    ORKESTR_GOOGLE_OAUTH_APPS_JSON: JSON.stringify({
+      "read-app": {
+        clientId: "fake-read-client",
+        clientSecret: "fake-read-secret",
+        redirectUri: "https://connect.example.test/oauth/gmail/callback",
+        allowedCapabilities: "gmail_read,gmail_drafts",
+      },
+    }),
+  });
+  try {
+    const saved = await saveGoogleWorkspaceConnectionToken({
+      account: "reader@example.test",
+      oauthAppId: "read-app",
+      accessToken: "fake-reader-token",
+      refreshToken: "fake-reader-refresh",
+      grantedScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+      capabilities: ["gmail_read"],
+      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+    }, process.env, { principal: { userId: "admin", role: "admin" }, setAsMain: true });
+    const cookie = await pairedCookie();
+    const accounts = await rawRequest(fixture.port, { pathname: "/api/connectors/gmail/accounts", headers: { cookie } });
+    assert.equal(accounts.status, 200, accounts.text);
+    assert.deepEqual(accounts.json.availableCapabilities.map((item) => item.id), ["gmail_send"]);
+    const account = accounts.json.connections.find((item) => item.connectionId === saved.connection.connectionId);
+    assert.deepEqual(account.availableCapabilities.map((item) => item.id), ["gmail_read", "gmail_drafts"]);
+    const intent = await jsonPost(fixture.port, "/api/connectors/gmail/oauth/intent", {
+      accountId: account.connectionId,
+      oauthApp: "read-app",
+      capabilities: ["gmail_read", "gmail_drafts"],
+    }, { cookie });
+    assert.equal(intent.status, 201, intent.text);
   } finally {
     await fixture.close();
   }

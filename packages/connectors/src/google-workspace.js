@@ -19,6 +19,7 @@ import {
   googleWorkspaceScopesForCapabilities,
   normalizeGoogleWorkspaceCapabilities,
   requireAllowedGoogleWorkspaceCapabilities,
+  googleWorkspaceTokenHasCapability,
 } from "./google-workspace-scopes.js";
 import {
   createGoogleWorkspaceReviewAccessTicket,
@@ -279,11 +280,9 @@ export function googleWorkspaceCapabilitiesFromToken(token = {}, fallback = []) 
   const grantedScopes = Array.isArray(token.grantedScopes)
     ? token.grantedScopes.map(clean).filter(Boolean)
     : clean(token.scope).split(/[\s,]+/g).map(clean).filter(Boolean);
-  if (grantedScopes.length) return googleWorkspaceCapabilitiesForScopes(grantedScopes, fallback);
-  if (Array.isArray(token.capabilities) && token.capabilities.length) {
-    return normalizeGoogleWorkspaceCapabilities(token.capabilities, []);
-  }
-  return googleWorkspaceCapabilitiesForScopes("", fallback);
+  // Capability labels cached with the token are not proof of a Google grant.
+  return googleWorkspaceCapabilitiesForScopes(grantedScopes, [])
+    .filter((capability) => googleWorkspaceTokenHasCapability(token, capability));
 }
 
 export function publicGoogleWorkspaceTokenStatus(token = {}) {
@@ -563,7 +562,7 @@ async function assertGoogleWorkspaceCapability(capability, env = process.env, fe
     throw connectorError("google_workspace_not_connected", 403);
   }
   const capabilities = googleWorkspaceCapabilitiesFromToken(token, []);
-  if (!capabilities.includes(capability)) {
+  if (!googleWorkspaceTokenHasCapability(token, capability)) {
     throw connectorError(`google_workspace_capability_not_granted:${capability}`, 403);
   }
   await getGmailAccessToken(env, fetchImpl, options);
@@ -721,10 +720,11 @@ export async function createGmailDraft(args = {}, env = process.env, fetchImpl =
 export async function sendGmailDraft(args = {}, env = process.env, fetchImpl = fetch, options = {}) {
   const draftId = clean(args.draftId || args.id);
   if (!draftId) throw connectorError("gmail_draft_id_required", 400);
+  await assertGoogleWorkspaceCapability("gmail_send", env, fetchImpl, options);
   const accessToken = await accessTokenWithCapability("gmail_drafts", env, fetchImpl, options);
   const sent = await jsonApiRequest(`${gmailApiBase}/drafts/send`, {
     method: "POST",
-    body: { id: draftId },
+    body: clean(args.approvedRaw) ? { id: draftId, message: { raw: clean(args.approvedRaw) } } : { id: draftId },
     accessToken,
     fetchImpl,
   });

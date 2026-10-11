@@ -2073,7 +2073,7 @@ test("Google Workspace connector UI requires reviewed access and exposes bounded
 
   assert.match(accessComponent, /selectedAccountId = ""/);
   assert.match(accessComponent, /startGmailOAuth\(\{/);
-  assert.doesNotMatch(accessComponent, /selectedCapabilities/);
+  assert.match(accessComponent, /selectedCapabilities/);
   assert.doesNotMatch(accessComponent, /privacyConsent/);
   assert.match(accessTemplate, /Google handles account selection and consent/);
   assert.doesNotMatch(accessTemplate, /Permissions/);

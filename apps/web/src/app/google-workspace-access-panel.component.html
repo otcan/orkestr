@@ -18,6 +18,23 @@
     </label>
   }
 
+  <fieldset>
+    <legend>Google permissions</legend>
+    @for (capability of capabilitiesForSelection(); track capability.id) {
+      @if (capability.id === "gmail_read" || capability.id === "gmail_drafts" || capability.id === "gmail_send") {
+        <label>
+          <input type="checkbox" [checked]="capabilitySelected(capability.id)" (change)="setCapability(capability.id, $any($event.target).checked)" />
+          <span>{{ capability.label }} — {{ capability.summary }}</span>
+        </label>
+      }
+    }
+    <small>Choose each permission you need. Sending also requires explicit approval of the final email. Reconnecting updates the granted permissions.</small>
+  </fieldset>
+
+  @if (!selectedCapabilities.length) {
+    <small>{{ selectedAccountId && capabilitiesForSelection().length === 0 ? "This account's OAuth app is no longer configured. Restore it before reconnecting." : "Select at least one Google permission to continue." }}</small>
+  }
+
   @if (error) {
     <p class="inline-error">{{ error }}</p>
   }

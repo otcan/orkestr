@@ -517,12 +517,13 @@
                 <strong>Create a Google OAuth app</strong>
                 <ol>
                   <li>Skip this unless you want mail, calendar, or Drive actions. Codex and WhatsApp do not require Google.</li>
-                  <li>Open Google Cloud Console, enable Gmail API plus any selected Calendar or Drive APIs, and configure the OAuth consent screen.</li>
+                  <li>Open Google Cloud Console, enable the Gmail API, and configure the OAuth consent screen with your own project.</li>
                   <li>Create an OAuth client for a web application.</li>
                   <li>Add this authorized redirect URI: <code>{{ gmailRedirectUri }}</code></li>
-                  <li>Paste the client ID and secret here, then start auth. From WhatsApp, send exactly <code>/connect google</code>.</li>
+                  <li>While the app is in Testing, add each account as a test user. Gmail consent in Testing is limited to 100 test users and offline refresh grants expire after seven days.</li>
+                  <li>Paste the client ID and secret here, then start authorization. Choose read, draft, and send separately on the Google account page.</li>
                 </ol>
-                <small>Use your own Google project. Orkestr requests only the scopes required for the user-requested action; Drive uses selected-file access only.</small>
+                <small>Credentials and tokens remain in your local Orkestr data volume. Publishing your OAuth app to Production removes the Testing refresh expiry, but restricted Gmail scopes may require Google verification and a security assessment. Production status alone does not grant verification.</small>
                 <a class="oauth-link" href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">Open Google credentials</a>
               } @else {
                 <strong>Create a Microsoft app registration</strong>
@@ -553,12 +554,18 @@
                   <span>Redirect URI</span>
                   <input name="gmail-redirect-uri" [(ngModel)]="gmailRedirectUri" />
                 </label>
+                <fieldset>
+                  <legend>Gmail permissions</legend>
+                  <label><input name="gmail-read" type="checkbox" [(ngModel)]="gmailRead" /> Read messages</label>
+                  <label><input name="gmail-drafts" type="checkbox" [(ngModel)]="gmailDrafts" /> Create drafts</label>
+                  <label><input name="gmail-send" type="checkbox" [(ngModel)]="gmailSend" /> Send approved messages</label>
+                </fieldset>
                 <small class="form-section-note">{{ mailProviderMailboxHint("gmail") }}</small>
                 <label>
                   <span>Mailbox</span>
                   <input name="gmail-account" type="email" [(ngModel)]="gmailAccount" placeholder="email@example.com" autocomplete="email" />
                 </label>
-                <button type="submit" [disabled]="busy || !gmailClientId.trim() || !gmailRedirectUri.trim()">
+                <button type="submit" [disabled]="busy || !gmailClientId.trim() || !gmailRedirectUri.trim() || !gmailSelectedCapabilities().length">
                   {{ busy ? "Starting" : mailProviderAuthButtonLabel("gmail") }}
                 </button>
                 <small>{{ mailProviderActionHint("gmail") }}</small>
@@ -613,7 +620,7 @@
               </dl>
               <div class="button-row">
                 @if (mailProvider === "gmail") {
-                  <button type="button" (click)="submitGmailAuth()" [disabled]="busy || !gmailClientId.trim() || !gmailRedirectUri.trim()">{{ mailProviderAuthButtonLabel("gmail") }}</button>
+                  <button type="button" (click)="submitGmailAuth()" [disabled]="busy || !gmailClientId.trim() || !gmailRedirectUri.trim() || !gmailSelectedCapabilities().length">{{ mailProviderAuthButtonLabel("gmail") }}</button>
                 } @else {
                   <button type="button" (click)="submitOutlookAuth()" [disabled]="busy || !outlookClientId.trim()">{{ mailProviderAuthButtonLabel("outlook") }}</button>
                 }

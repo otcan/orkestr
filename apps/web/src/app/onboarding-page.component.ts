@@ -104,6 +104,9 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   gmailClientId = "";
   gmailClientSecret = "";
   gmailRedirectUri = this.defaultGmailRedirectUri();
+  gmailRead = false;
+  gmailDrafts = false;
+  gmailSend = false;
   outlookAccount = "";
   outlookClientId = "";
   outlookTenantId = "common";
@@ -250,7 +253,11 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.error = "Gmail needs a client ID and redirect URI.";
       return;
     }
-    const body: Record<string, string> = { clientId, redirectUri };
+    const body: Record<string, string> = {
+      clientId,
+      redirectUri,
+      allowedCapabilities: "gmail_read,gmail_drafts,gmail_send",
+    };
     if (this.gmailAccount.trim()) body["account"] = this.gmailAccount.trim();
     if (clientSecret) body["clientSecret"] = clientSecret;
     await this.saveConnector("gmail", body, "Gmail OAuth settings saved.");
@@ -258,6 +265,10 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   async submitGmailAuth(): Promise<void> {
+    if (!this.gmailSelectedCapabilities().length) {
+      this.error = "Choose at least one Gmail permission.";
+      return;
+    }
     await this.saveGmail();
     if (this.error) return;
     await this.startGmailOAuth();
@@ -265,10 +276,23 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   async startGmailOAuth(): Promise<void> {
     const account = this.gmailAccount.trim();
-    const suffix = account ? `?account=${encodeURIComponent(account)}` : "";
     this.error = "";
-    this.notice = "Opening Gmail authorization.";
-    globalThis.location.href = `/oauth/gmail/start${suffix}`;
+    try {
+      const started = await firstValueFrom(this.api.startGmailOAuth({ account, capabilities: this.gmailSelectedCapabilities() }));
+      if (!started.authorizeUrl) throw new Error("Google authorization URL was not returned.");
+      this.notice = "Opening Google authorization.";
+      globalThis.location.href = started.authorizeUrl;
+    } catch (error) {
+      this.error = this.errorText(error);
+    }
+  }
+
+  gmailSelectedCapabilities(): string[] {
+    return [
+      ...(this.gmailRead ? ["gmail_read"] : []),
+      ...(this.gmailDrafts ? ["gmail_drafts"] : []),
+      ...(this.gmailSend ? ["gmail_send"] : []),
+    ];
   }
 
   async saveOutlook(): Promise<void> {

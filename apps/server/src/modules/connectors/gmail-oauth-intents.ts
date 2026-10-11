@@ -22,6 +22,7 @@ export const gmailOAuthStartParamKeys = [
   "setAsThreadDefault",
   "threadId",
   "returnTarget",
+  "capabilities",
 ] as const;
 
 const booleanKeys = new Set(["setAsMain", "setAsThreadDefault"]);
@@ -44,7 +45,8 @@ export function gmailOAuthStartParams(body: Record<string, unknown> = {}): Recor
   for (const key of gmailOAuthStartParamKeys) {
     if (!Object.hasOwn(body || {}, key)) continue;
     const value = (body as any)[key];
-    if (booleanKeys.has(key)) params[key] = truthy(value);
+    if (key === "capabilities") params[key] = Array.isArray(value) ? value.map(clean) : [];
+    else if (booleanKeys.has(key)) params[key] = truthy(value);
     else params[key] = key === "account" ? clean(value).toLowerCase() : clean(value);
   }
   return params;
@@ -53,7 +55,7 @@ export function gmailOAuthStartParams(body: Record<string, unknown> = {}): Recor
 function withDefaults(params: Record<string, unknown>): Record<string, unknown> {
   const complete: Record<string, unknown> = {};
   for (const key of gmailOAuthStartParamKeys) {
-    complete[key] = Object.hasOwn(params, key) ? params[key] : booleanKeys.has(key) ? false : "";
+    complete[key] = Object.hasOwn(params, key) ? params[key] : key === "capabilities" ? [] : booleanKeys.has(key) ? false : "";
   }
   return complete;
 }

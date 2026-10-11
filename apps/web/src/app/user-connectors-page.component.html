@@ -113,7 +113,7 @@
                       @if (connectorIntentThreadId() && !googleAccountIsThreadDefault(connection)) {
                         <button class="secondary" type="button" (click)="makeGoogleAccountThreadDefault(googleAccountId(connection))" [disabled]="busy || !!actionBusy">Use in this thread</button>
                       }
-                      <button class="secondary danger-soft" type="button" (click)="deleteGoogleAccount(googleAccountId(connection))" [disabled]="busy || !!actionBusy">Delete</button>
+                      <button class="secondary danger-soft" type="button" (click)="deleteGoogleAccount(googleAccountId(connection))" [disabled]="busy || !!actionBusy">Revoke access</button>
                     </span>
                   </dd>
                 </div>
@@ -136,8 +136,33 @@
         @if (connector.id === "gmail") {
           <ork-google-workspace-access-panel
             [accounts]="googleAccounts"
+            [availableCapabilities]="googleAvailableCapabilities"
             [threadId]="connectorIntentThreadId()"
           ></ork-google-workspace-access-panel>
+          <section class="connector-action" aria-label="Gmail send approvals">
+            <strong>Pending email sends</strong>
+            <small>Review the exact account, recipients, subject, and body before approving. Approval expires after 15 minutes and can be used once.</small>
+            <button class="secondary" type="button" (click)="load(false)" [disabled]="busy || !!actionBusy">Refresh send requests</button>
+            @for (request of gmailSendApprovals; track request.requestId) {
+              <article class="mail-card">
+                <p><strong>Account:</strong> {{ gmailSendAccountLabel(request) }}</p>
+                @if (request.kind === "draft") { <p><strong>Draft:</strong> {{ request.draftId }} (plain text)</p> }
+                @if (request.details.from) { <p><strong>From:</strong> {{ request.details.from }}</p> }
+                <p><strong>To:</strong> {{ request.details.to }}</p>
+                @if (request.details.cc) { <p><strong>Cc:</strong> {{ request.details.cc }}</p> }
+                @if (request.details.bcc) { <p><strong>Bcc:</strong> {{ request.details.bcc }}</p> }
+                <p><strong>Subject:</strong> {{ request.details.subject }}</p>
+                <pre>{{ request.details.body }}</pre>
+                <small>Expires {{ request.expiresAt }}. {{ request.approved ? "Approved; awaiting agent retry." : "Awaiting your decision." }}</small>
+                @if (!request.approved) {
+                  <div class="button-row">
+                    <button type="button" (click)="decideGmailSend(request.requestId, true)" [disabled]="busy || !!actionBusy">Approve exact send</button>
+                    <button class="secondary" type="button" (click)="decideGmailSend(request.requestId, false)" [disabled]="busy || !!actionBusy">Reject</button>
+                  </div>
+                }
+              </article>
+            }
+          </section>
           @if (!connectorIntentActive()) {
             <ork-gmail-notifications-panel
               [accounts]="googleAccounts"

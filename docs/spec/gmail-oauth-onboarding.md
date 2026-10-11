@@ -216,3 +216,38 @@ approved. It must use its own isolated environment, not a personal mailbox.
    negative tests and verify the operator-approved production scope set.
 
 These PRs do not modify WhatsApp transport or LinkedIn connector code.
+
+## Worker 3 implementation status
+
+The current branch adds capability choices to the existing authenticated
+OAuth intent flow. A self-hosted owner who saves a local Google OAuth app gets
+the Read, Draft, and Send choices; an Orkestr-hosted deployment continues to
+show only its operator-configured allowlist. The server binds the choices to
+the one-use intent, and both direct Gmail reads and Google Workspace helpers
+require provider-reported scope evidence. Draft-only grants cannot use the
+Orkestr draft-send helper.
+
+For agent-created messages, a first send attempt creates a 15-minute approval
+request under the requesting user's local secrets directory. The Gmail
+connector page shows the account, recipients, subject, and full plain-text
+body. Its same-site approval is bound to the account grant version and thread;
+the agent's retry consumes it before one provider call. Rejection, edits,
+replay, a different user, or a changed grant block the send. The record is
+removed when consumed or rejected and expired records are pruned on access.
+
+For a plain-text Gmail draft, the agent fetches Google's raw draft, shows its
+parsed headers and body for approval, fetches it again before execution, and
+sends the approved raw MIME in the `drafts.send` request. A changed draft
+fails its approval digest. Complex MIME drafts, including attachments, fail
+closed because this UI cannot yet present every part accurately. Google's
+[draft guide](https://developers.google.com/workspace/gmail/api/guides/drafts)
+documents the raw-message send behavior. Remaining acceptance work includes
+complex draft previews, persistent owner permission settings separate from
+the OAuth grant, and an idempotent provider-send record.
+
+Brokered connect links now require the signed instance's tenant VM label and
+the VM owner to match the requested destination; incoming grants require the
+registered instance and VM id to match the receiving tenant runtime. Negative
+tests cover cross-instance, cross-owner, and cross-VM requests. The remaining
+hosted work is an attended configuration check for the owner's actual Google
+app and verification status, which this public repository cannot infer.

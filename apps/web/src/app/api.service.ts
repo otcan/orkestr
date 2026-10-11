@@ -918,6 +918,7 @@ export interface GoogleWorkspaceConnection {
   isMain?: boolean;
   isThreadDefault?: boolean;
   capabilities?: string[];
+  availableCapabilities?: GoogleWorkspaceCapability[];
   [key: string]: unknown;
 }
 
@@ -928,6 +929,18 @@ export interface GoogleWorkspaceAccountsResponse {
   threadDefaultConnectionId?: string;
   availableCapabilities?: GoogleWorkspaceCapability[];
   privacyPolicyVersion?: string;
+}
+
+export interface GmailSendApproval {
+  requestId: string;
+  connectionId: string;
+  threadId: string;
+  kind: "message" | "draft";
+  draftId: string;
+  details: { from: string; to: string; cc: string; bcc: string; subject: string; body: string };
+  createdAt: string;
+  expiresAt: string;
+  approved: boolean;
 }
 
 export interface OutlookOAuthStartResponse {
@@ -2634,6 +2647,17 @@ export class ApiService {
   googleWorkspaceAccounts(threadId = ""): Observable<GoogleWorkspaceAccountsResponse> {
     const suffix = threadId.trim() ? `?threadId=${encodeURIComponent(threadId.trim())}` : "";
     return this.http.get<GoogleWorkspaceAccountsResponse>(this.api(`/connectors/gmail/accounts${suffix}`));
+  }
+
+  gmailSendApprovals(): Observable<{ ok: boolean; requests: GmailSendApproval[] }> {
+    return this.http.get<{ ok: boolean; requests: GmailSendApproval[] }>(this.api("/connectors/gmail/send-approvals"));
+  }
+
+  decideGmailSendApproval(requestId: string, approve: boolean): Observable<{ ok: boolean; approved: boolean }> {
+    return this.http.post<{ ok: boolean; approved: boolean }>(
+      this.api(`/connectors/gmail/send-approvals/${encodeURIComponent(requestId)}/decision`),
+      { approve },
+    );
   }
 
   updateGoogleWorkspaceAccount(connectionId: string, body: Record<string, unknown>): Observable<{ ok: boolean; connection: GoogleWorkspaceConnection }> {

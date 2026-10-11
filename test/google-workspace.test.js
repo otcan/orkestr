@@ -672,6 +672,7 @@ test("gmail action and draft helpers build scoped Gmail requests", async () => {
     [
       "https://www.googleapis.com/auth/gmail.modify",
       "https://www.googleapis.com/auth/gmail.compose",
+      "https://www.googleapis.com/auth/gmail.send",
     ].join(" "),
   );
 
@@ -704,6 +705,16 @@ test("gmail action and draft helpers build scoped Gmail requests", async () => {
   assert.equal(calls[0].url.pathname, "/gmail/v1/users/me/messages/m1/modify");
   assert.equal(calls[1].url.pathname, "/gmail/v1/users/me/drafts");
   assert.equal(calls[2].url.pathname, "/gmail/v1/users/me/drafts/send");
+});
+
+test("draft permission alone cannot send a Gmail draft", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-workspace-draft-only-"));
+  const env = await configureGoogle(home);
+  await storeToken(env, "https://www.googleapis.com/auth/gmail.compose");
+  await assert.rejects(
+    () => sendGmailDraft({ draftId: "draft-1" }, env, async () => { throw new Error("provider_must_not_be_called"); }),
+    /google_workspace_capability_not_granted:gmail_send/,
+  );
 });
 
 test("calendar and drive helpers build scoped google workspace requests", async () => {
