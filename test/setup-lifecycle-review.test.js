@@ -112,3 +112,40 @@ test("a reminder turned off explicitly stays off after resume", async () => {
   await resumeSetup({ setupId: "fitness-tracker" }, env, ready);
   assert.deepEqual(await enabledByKey(env), { "evening-check-in": false, "weekly-summary": true });
 });
+
+// Re-review: ownership comes only from pre-recorded ids, never from target.
+test("an owner's own timer on an interrupted install's thread survives the retry", async () => {
+  const env = await freshEnv();
+  const crash = { ...ready,
+    createTimer: async (input, actualEnv) => { await createTimer(input, actualEnv); throw Object.assign(new Error("killed"), { code: "simulated_crash" }); },
+    retireThread: async () => { throw new Error("still down"); },
+  };
+  await assert.rejects(() => installSetup({ setupId: "fitness-tracker" }, env, crash), /setup_rollback_failed/);
+  const [interrupted] = (await readSetupLedger(env)).instances;
+  const independent = await createTimer({ label: "My own reminder", prompt: "stretch", targetType: "thread", target: interrupted.resources.threadId }, env);
+  const retry = await installSetup({ setupId: "fitness-tracker" }, env, ready);
+  assert.equal(retry.outcome, "installed");
+  const timers = await listTimers(env);
+  assert.ok(timers.some((timer) => timer.id === independent.id), "independent timer survives");
+  assert.equal(timers.filter((timer) => timer.target === interrupted.resources.threadId).length, 1, "only the owner's timer remains on the old thread");
+});
+
+test("direct uninstall after a create-then-record failure removes the owned timer", async () => {
+  const env = await freshEnv();
+  let calls = 0;
+  const broken = { ...ready,
+    createTimer: async (input, actualEnv) => {
+      calls += 1;
+      const timer = await createTimer(input, actualEnv);
+      if (calls === 2) throw Object.assign(new Error("record failed"), { code: "simulated_record_failure" });
+      return timer;
+    },
+    listTimers: async () => { throw new Error("rollback could not read timers"); },
+  };
+  await assert.rejects(() => installSetup({ setupId: "fitness-tracker", optIn: ["weekly-summary"] }, env, broken), /setup_rollback_failed/);
+  assert.equal((await listTimers(env)).length, 2, "both timers exist after the failed rollback");
+  const removed = await uninstallSetup({ setupId: "fitness-tracker" }, env, ready);
+  assert.equal(removed.outcome, "uninstalled");
+  assert.deepEqual(await listTimers(env), [], "no owned timer survives or is forgotten");
+  assert.deepEqual((await readSetupLedger(env)).instances.map((instance) => instance.status), ["uninstalled"]);
+});

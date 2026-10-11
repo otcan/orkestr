@@ -616,8 +616,16 @@ export async function createTimer(input, env = process.env) {
     error.statusCode = 400;
     throw error;
   }
+  // A caller may choose the id (Setups record it before creating the timer so
+  // an interrupted install still knows exactly which timers it owns).
+  const requestedId = String(input.id || "").trim();
+  if (requestedId && timers.some((existing) => existing.id === requestedId)) {
+    const error = new Error("timer_id_conflict");
+    error.statusCode = 409;
+    throw error;
+  }
   let timer = {
-    id: randomUUID(),
+    id: requestedId || randomUUID(),
     ownerUserId: normalizeUserId(input.ownerUserId || input.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
     label: String(input.label || "Recurring agent task").trim(),
     targetType: String(input.targetType || (input.threadId ? "thread" : "agent")).trim(),

@@ -66,17 +66,18 @@ async function resolveProvider(manifest, input, ownerUserId, env, deps) {
 
 // Undo exactly the recorded resources, newest first. Each step is guarded so a
 // resource the owner changed or removed in the meantime is skipped, not forced.
-// `incomplete` is set for an install that failed or crashed before finishing:
-// its thread id is recorded before the thread is created and is unique to the
-// instance, so any check-in targeting it was created by that install, even if
-// the install died before recording the check-in's id.
+// Ownership is proven only by ids recorded in the ledger. The thread id and
+// every check-in id are recorded *before* creation, so an interrupted install
+// can still remove exactly what it created and nothing else (an owner may
+// point their own timers at the Setup's thread; those are never touched).
+// `incomplete` marks an install that failed or crashed before finishing.
 async function releaseResources(instance, env, deps, reason, { incomplete = false } = {}) {
   const report = { timers: [], mission: "untouched", thread: "untouched" };
   const { threadId } = instance.resources;
   const existing = await deps.listTimers(env);
   for (const owned of [...instance.resources.timers].reverse()) {
     const timer = existing.find((entry) => entry.id === owned.id);
-    if (!timer) report.timers.push({ ...owned, result: "already_gone" });
+    if (!timer) report.timers.push({ ...owned, result: incomplete ? "not_created" : "already_gone" });
     else if (timer.target !== threadId) report.timers.push({ ...owned, result: "skipped_retargeted" });
     else {
       await deps.deleteTimer(owned.id, env);
@@ -85,13 +86,6 @@ async function releaseResources(instance, env, deps, reason, { incomplete = fals
     await updateSetupInstance(env, instance.instanceId, (entry) => {
       entry.resources.timers = entry.resources.timers.filter((timer) => timer.id !== owned.id);
     });
-  }
-  if (incomplete && threadId) {
-    const recorded = new Set(instance.resources.timers.map((owned) => owned.id));
-    for (const orphan of existing.filter((timer) => timer.target === threadId && !recorded.has(timer.id))) {
-      await deps.deleteTimer(orphan.id, env);
-      report.timers.push({ key: null, id: orphan.id, result: "unrecorded_deleted" });
-    }
   }
   const thread = threadId ? await deps.getThread(threadId, env).catch(() => null) : null;
   if (thread && (instance.resources.missionSet || (incomplete && thread.standingMission))) {
@@ -139,7 +133,10 @@ async function createResources(instance, manifest, input, env, deps) {
   const optIn = new Set(Array.isArray(input.optIn) ? input.optIn : []);
   for (const spec of manifest.timers) {
     const wanted = optIn.has(spec.key) ? true : spec.defaultEnabled;
-    const timer = await deps.createTimer({
+    const timerId = `${id}-${spec.key}`;
+    await updateSetupInstance(env, id, (entry) => { entry.resources.timers.push({ key: spec.key, id: timerId, wanted }); });
+    await deps.createTimer({
+      id: timerId,
       enabled: wanted,
       label: spec.label,
       targetType: "thread",
@@ -150,7 +147,6 @@ async function createResources(instance, manifest, input, env, deps) {
       timezone: instance.timezone || undefined,
       prompt: spec.prompt,
     }, env);
-    await updateSetupInstance(env, id, (entry) => { entry.resources.timers.push({ key: spec.key, id: timer.id, wanted }); });
   }
 }
 
@@ -206,8 +202,12 @@ export function uninstallSetup(input = {}, env = process.env, deps = defaultSetu
 async function uninstallLocked(manifest, ownerUserId, env, deps) {
   const instance = findActiveInstance(await readSetupLedger(env), ownerUserId, manifest.id);
   if (!instance) return { outcome: "not_installed", setupId: manifest.id };
-  await updateSetupInstance(env, instance.instanceId, (entry) => { entry.status = "uninstalling"; noteHistory(entry, "uninstall", "started"); });
-  const released = await releaseResources(instance, env, deps, "setup_uninstalled");
+  // An install that never finished (crash, or rollback that failed) is
+  // cleaned up the same way rollback would; ownership still comes only from
+  // the ledger's pre-recorded ids.
+  const incomplete = ["installing", "rollback_failed"].includes(instance.status);
+  await updateSetupInstance(env, instance.instanceId, (entry) => { entry.status = "uninstalling"; noteHistory(entry, "uninstall", "started", { incomplete }); });
+  const released = await releaseResources(instance, env, deps, "setup_uninstalled", { incomplete });
   const done = await updateSetupInstance(env, instance.instanceId, (entry) => { entry.status = "uninstalled"; noteHistory(entry, "uninstall", "done"); });
   return { outcome: "uninstalled", instance: done, released, stateRetained: manifest.state?.onUninstall === "retain" ? done.resources.stateDir : null };
 }
