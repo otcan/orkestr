@@ -44,6 +44,7 @@ test("live build routes are public, self-contained, and serve only allowlisted a
     const html = await page.text();
     assert.match(html, /Synthetic demo - not a client project, no real orders\./);
     assert.match(html, /What this demo does not do/);
+    assert.match(html, /not server-enforced authorization/);
     assert.match(html, /data-action="reset"/);
     assert.match(html, /<script type="module" src="\/builds\/customer-portal\/app\.js"><\/script>/);
     assert.doesNotMatch(html, /orkestrTrack|sendBeacon|\son[a-z]+="/);
@@ -104,22 +105,51 @@ test("customer portal demo runs the full order and approval flow in a real brows
 
       // Everything after load must work without the network.
       await page.setOfflineMode(true);
-      await page.type('input[data-sku="VLV-100"]', "5");
-      await page.click('#portal-order-form button[type="submit"]');
+      const submit = '#portal-order-form button[type="submit"]';
+      const orderCount = () => page.evaluate(() => document.querySelectorAll("#customer-panel .portal-order").length);
+
+      // Invalid input: empty form and a fractional quantity are refused with messages.
+      await page.click(submit);
+      await waitStatus("Add at least one product quantity.");
+      assert.match(await text("#portal-form-error"), /Add at least one product quantity/);
+      await page.type('input[data-sku="VLV-100"]', "2.5");
+      assert.equal(await text("#qty-error-VLV-100"), "Enter a whole number of units.");
+      await page.click(submit);
+      await waitStatus("Check the quantities");
+      assert.equal(await page.evaluate(() => document.activeElement.getAttribute("data-sku")), "VLV-100");
+      assert.equal(await page.$eval('input[data-sku="VLV-100"]', (node) => node.getAttribute("aria-invalid")), "true");
+      assert.equal(await orderCount(), 0);
+
+      // Duplicate submission: a double click and a scripted double submit create one order.
+      await page.click('input[data-sku="VLV-100"]', { count: 3 });
+      await page.keyboard.type("5");
+      assert.equal(await text("#qty-error-VLV-100"), "");
+      await page.click(submit);
       await waitStatus("auto-approved");
+      await page.click(submit);
+      await waitStatus("already submitted. No duplicate order was created.");
+      await page.$eval("#portal-order-form", (form) => { form.requestSubmit(); form.requestSubmit(); });
+      assert.equal(await orderCount(), 1);
       await page.type('input[data-sku="FLT-405"]', "2");
       assert.match(await text(".portal-preview"), /will pause for an approver/);
       await page.click('#portal-order-form button[type="submit"]');
       await waitStatus("paused for approval");
-      assert.match(await text("#portal-pending-count"), /1 waiting/);
+      await page.type('input[data-sku="SNS-310"]', "50");
+      await page.click(submit);
+      await waitStatus("PO-1003 paused for approval");
+      assert.equal(await orderCount(), 3);
+      assert.match(await text("#portal-pending-count"), /2 waiting/);
 
       // Switch role with the keyboard only: arrow keys move between the native radios.
       await page.focus('input[name="portal-role"][value="customer"]');
       await page.keyboard.press("ArrowRight");
       await page.waitForSelector("#approver-panel");
-      assert.match(await text("#approver-panel"), /Approval queue \(1\)/);
-      await page.click('button[data-action="reject"][data-order="PO-1002"]');
+      assert.match(await text("#approver-panel"), /Approval queue \(2\)/);
+      await page.click('button[data-action="reject"][data-order="PO-1003"]');
       assert.match(await text("#portal-status"), /reason is required/);
+      await page.type('[data-reason="PO-1003"]', "Stock cannot cover this quarter (synthetic).");
+      await page.click('button[data-action="reject"][data-order="PO-1003"]');
+      await waitStatus("PO-1003 rejected");
       await page.focus('[data-reason="PO-1002"]');
       await page.keyboard.type("Partial delivery accepted (synthetic).");
       await page.focus('button[data-action="approve"][data-order="PO-1002"]');
@@ -127,12 +157,12 @@ test("customer portal demo runs the full order and approval flow in a real brows
       await waitStatus("PO-1002 approved");
       assert.match(await text("#approver-panel"), /Approval queue \(0\)/);
       const audit = await text(".portal-audit");
-      for (const action of ["order submitted", "order auto approved", "order paused", "order approved"]) assert.match(audit, new RegExp(action));
+      for (const action of ["order submitted", "order auto approved", "order paused", "order approved", "order rejected"]) assert.match(audit, new RegExp(action));
 
       await page.setOfflineMode(false);
       await page.reload({ waitUntil: "networkidle0" });
       await page.waitForSelector("#portal-app.is-ready #approver-panel");
-      assert.match(await text("#approver-panel"), /Decided orders \(2\)/, "state persists in localStorage across reloads");
+      assert.match(await text("#approver-panel"), /Decided orders \(3\)/, "state persists in localStorage across reloads");
 
       await page.click('button[data-action="reset"]');
       await waitStatus("Demo reset");

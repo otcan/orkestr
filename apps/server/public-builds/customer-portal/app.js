@@ -10,11 +10,11 @@ import {
   evaluateRules,
   findAccount,
   findProduct,
-  normalizeLines,
   parseState,
   pendingOrders,
   serializeState,
   transition,
+  validateDraft,
 } from "./workflow.js";
 
 const root = document.getElementById("portal-app");
@@ -55,7 +55,24 @@ const storage = (() => {
 })();
 
 let state = parseState(storage ? storage.getItem(STORAGE_KEY) : "");
+// draft holds raw text per SKU; submissionId identifies one submission of that draft
+// so repeated clicks or replays never create a second order.
 let draft = {};
+let submissionId = newSubmissionId();
+let lastSubmitted = null;
+let showErrors = false;
+
+function newSubmissionId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+  return `sub-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function resetDraft() {
+  draft = {};
+  submissionId = newSubmissionId();
+  lastSubmitted = null;
+  showErrors = false;
+}
 
 function persist() {
   if (!storage) return;
@@ -138,12 +155,9 @@ function orderCard(order, actions = null) {
   ]);
 }
 
-function draftLines() {
-  return Object.entries(draft).map(([sku, quantity]) => ({ sku, quantity }));
-}
-
 function previewChildren() {
-  const lines = normalizeLines(draftLines());
+  const { lines, errors } = validateDraft(state, draft);
+  if (Object.keys(errors).length) return [h("p", { text: "Fix the highlighted quantities to see the rule check." })];
   if (!lines.length) return [h("p", { text: "Enter quantities to see the rule check before submitting." })];
   const preview = evaluateRules(state, state.accountId, lines);
   return [
@@ -152,8 +166,27 @@ function previewChildren() {
   ];
 }
 
+function fieldError(sku, message) {
+  const input = root.querySelector(`input[data-sku="${CSS.escape(sku)}"]`);
+  const slot = root.querySelector(`#qty-error-${CSS.escape(sku)}`);
+  if (!input || !slot) return;
+  slot.textContent = message || "";
+  if (message) input.setAttribute("aria-invalid", "true");
+  else input.removeAttribute("aria-invalid");
+}
+
+function refreshValidation() {
+  const result = validateDraft(state, draft);
+  for (const product of state.products) fieldError(product.sku, result.errors[product.sku] || "");
+  const formError = root.querySelector("#portal-form-error");
+  if (formError) formError.textContent = showErrors ? result.formError : "";
+  root.querySelector(".portal-preview")?.replaceChildren(...previewChildren());
+  return result;
+}
+
 function renderOrderForm() {
   const account = findAccount(state, state.accountId);
+  const { errors } = validateDraft(state, draft);
   return h("form", { id: "portal-order-form", className: "portal-form", novalidate: true }, [
     h("label", { for: "portal-account", text: "Ordering as sample account" }),
     h("select", { id: "portal-account", name: "account" }, state.accounts.map((item) => h("option", { value: item.id, selected: item.id === state.accountId, text: item.name }))),
@@ -165,14 +198,19 @@ function renderOrderForm() {
         h("th", { scope: "row" }, [product.name, h("span", { className: "portal-sku", text: ` ${product.sku}` })]),
         h("td", { "data-label": "Unit price", text: money(product.unitPrice) }),
         h("td", { "data-label": "In stock", text: product.stock }),
-        h("td", { "data-label": "Quantity" }, h("input", {
-          type: "number", inputmode: "numeric", min: "0", max: String(MAX_LINE_QUANTITY), step: "1",
-          name: `qty-${product.sku}`, "data-sku": product.sku, value: draft[product.sku] || "",
-          "aria-label": `Quantity of ${product.name}`,
-        })),
+        h("td", { "data-label": "Quantity" }, [
+          h("input", {
+            type: "text", inputmode: "numeric", autocomplete: "off", maxlength: "6",
+            name: `qty-${product.sku}`, "data-sku": product.sku, value: draft[product.sku] || "",
+            "aria-label": `Quantity of ${product.name} (0 to ${MAX_LINE_QUANTITY})`,
+            "aria-describedby": `qty-error-${product.sku}`, "aria-invalid": errors[product.sku] ? "true" : null,
+          }),
+          h("span", { className: "portal-field-error", id: `qty-error-${product.sku}`, text: errors[product.sku] || "" }),
+        ]),
       ]))),
     ]),
     h("div", { className: "portal-preview", "aria-live": "polite" }, previewChildren()),
+    h("p", { className: "portal-field-error", id: "portal-form-error", role: "alert" }),
     h("button", { type: "submit", className: "button", text: "Submit order" }),
   ]);
 }
@@ -252,7 +290,7 @@ root.addEventListener("change", (event) => {
   if (target.name === "portal-role") {
     dispatch({ type: "switch_role", role: target.value }, target.value === ROLES.approver ? "Viewing as approver." : "Viewing as customer.");
   } else if (target.id === "portal-account") {
-    draft = {};
+    resetDraft();
     dispatch({ type: "select_account", accountId: target.value }, `Ordering as ${findAccount(state, target.value)?.name || "sample account"}.`);
   }
 });
@@ -260,23 +298,45 @@ root.addEventListener("change", (event) => {
 root.addEventListener("input", (event) => {
   const sku = event.target.getAttribute("data-sku");
   if (!sku) return;
-  const quantity = Math.floor(Number(event.target.value));
-  if (Number.isFinite(quantity) && quantity > 0) draft[sku] = Math.min(quantity, MAX_LINE_QUANTITY);
+  if (event.target.value.trim()) draft[sku] = event.target.value;
   else delete draft[sku];
-  root.querySelector(".portal-preview").replaceChildren(...previewChildren());
+  // Any edit starts a new submission; an unchanged draft keeps its id.
+  if (lastSubmitted) {
+    lastSubmitted = null;
+    submissionId = newSubmissionId();
+  }
+  refreshValidation();
 });
 
 root.addEventListener("submit", (event) => {
   if (event.target.id !== "portal-order-form") return;
   event.preventDefault();
-  const result = dispatch({ type: "submit", accountId: state.accountId, lines: draftLines() }, (ok) => {
+  // Re-submitting right after a success replays the same submission id, which the
+  // workflow recognises as a duplicate instead of creating a second order.
+  const replay = lastSubmitted && !Object.keys(draft).length;
+  let lines = replay ? lastSubmitted.lines : [];
+  if (!replay) {
+    showErrors = true;
+    const checked = refreshValidation();
+    if (!checked.valid) {
+      const firstInvalid = Object.keys(checked.errors)[0];
+      announce(checked.formError || `Check the quantities: ${Object.values(checked.errors).join(" ")}`);
+      (firstInvalid ? root.querySelector(`input[data-sku="${CSS.escape(firstInvalid)}"]`) : root.querySelector('input[data-sku]'))?.focus();
+      return;
+    }
+    lines = checked.lines;
+  }
+  const result = dispatch({ type: "submit", accountId: state.accountId, lines, submissionId }, (ok) => {
     const order = ok.state.orders.find((item) => item.id === ok.orderId);
+    if (ok.duplicate) return `${order.id} was already submitted. No duplicate order was created.`;
     return order.status === STATUS.approved
       ? `${order.id} passed all rules and was auto-approved.`
       : `${order.id} paused for approval: ${order.exceptions.join(", ")}. Switch to the approver role to decide.`;
   }, true);
-  if (result) {
+  if (result && !result.duplicate) {
     draft = {};
+    showErrors = false;
+    lastSubmitted = { lines };
     render();
   }
 });
@@ -287,7 +347,7 @@ root.addEventListener("click", (event) => {
   const action = button.getAttribute("data-action");
   const orderId = button.getAttribute("data-order");
   if (action === "reset") {
-    draft = {};
+    resetDraft();
     dispatch({ type: "reset" }, "Demo reset. Synthetic sample data restored.", true);
   } else if (action === "cancel") {
     dispatch({ type: "cancel", orderId }, `${orderId} cancelled.`, true);

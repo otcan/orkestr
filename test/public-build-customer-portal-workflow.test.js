@@ -13,13 +13,18 @@ import {
   pendingOrders,
   serializeState,
   transition,
+  validateDraft,
 } from "../apps/server/public-builds/customer-portal/workflow.js";
 
 let tick = 0;
 const context = { now: () => Date.UTC(2026, 0, 1, 9, 0, tick++) };
 
+let submission = 0;
+const nextSubmission = () => `test-submission-${++submission}`;
+
 function run(state, action) {
-  const result = transition(state, action, context);
+  const withId = action.type === "submit" && !action.submissionId ? { ...action, submissionId: nextSubmission() } : action;
+  const result = transition(state, withId, context);
   assert.equal(result.ok, true, result.error);
   return result;
 }
@@ -110,8 +115,8 @@ test("roles are enforced and decided orders cannot change again", () => {
 test("submissions validate quantities and products", () => {
   const state = createInitialState(context);
   assert.deepEqual(normalizeLines([{ sku: "VLV-100", quantity: "2" }, { sku: "VLV-100", quantity: 3 }, { sku: "SNS-310", quantity: -1 }, { sku: "", quantity: 4 }, { sku: "PMP-220", quantity: 5000 }]), [{ sku: "VLV-100", quantity: 5 }, { sku: "PMP-220", quantity: 999 }]);
-  assert.equal(transition(state, { type: "submit", role: ROLES.customer, lines: [] }).error, "Add at least one product quantity.");
-  assert.equal(transition(state, { type: "submit", role: ROLES.customer, lines: [{ sku: "NOPE-1", quantity: 1 }] }).error, "Unknown product NOPE-1.");
+  assert.equal(transition(state, { type: "submit", role: ROLES.customer, submissionId: nextSubmission(), lines: [] }).error, "Add at least one product quantity.");
+  assert.equal(transition(state, { type: "submit", role: ROLES.customer, submissionId: nextSubmission(), lines: [{ sku: "NOPE-1", quantity: 1 }] }).error, "Unknown product NOPE-1.");
 });
 
 test("reset restores sample data and state round-trips through storage", () => {
@@ -127,4 +132,56 @@ test("reset restores sample data and state round-trips through storage", () => {
     assert.equal(fallback.orders.length, 0);
     assert.equal(fallback.audit[0].action, "demo_reset");
   }
+});
+
+test("draft validation reports every invalid quantity with a message", () => {
+  const state = createInitialState(context);
+  const result = validateDraft(state, { "VLV-100": "2.5", "SNS-310": "-3", "PMP-220": "abc", "FLT-405": "1000", "NOPE-1": "1" });
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.lines, []);
+  assert.deepEqual(result.errors, {
+    "VLV-100": "Enter a whole number of units.",
+    "SNS-310": "Quantity cannot be negative.",
+    "PMP-220": "Enter a whole number of units.",
+    "FLT-405": "At most 999 units per line.",
+    "NOPE-1": "Unknown product NOPE-1.",
+  });
+  assert.equal(validateDraft(state, {}).formError, "Add at least one product quantity.");
+  assert.equal(validateDraft(state, { "VLV-100": "0", "SNS-310": "  " }).formError, "Add at least one product quantity.");
+  assert.deepEqual(validateDraft(state, { "VLV-100": " 4 ", "SNS-310": "0" }), { lines: [{ sku: "VLV-100", quantity: 4 }], errors: {}, formError: "", valid: true });
+});
+
+test("the state machine refuses invalid quantities and missing submission ids", () => {
+  const state = createInitialState(context);
+  const base = { type: "submit", role: ROLES.customer };
+  assert.equal(transition(state, { ...base, lines: [{ sku: "VLV-100", quantity: 1 }] }).error, "Missing submission id.");
+  for (const quantity of [2.5, -1, 1000, "abc"]) {
+    const result = transition(state, { ...base, submissionId: nextSubmission(), lines: [{ sku: "VLV-100", quantity }] });
+    assert.equal(result.ok, false, String(quantity));
+    assert.match(result.error, /Invalid quantity for VLV-100/);
+  }
+});
+
+test("repeating a submission is idempotent and never creates a second order", () => {
+  const initial = createInitialState(context);
+  const action = { type: "submit", role: ROLES.customer, submissionId: "double-click-0001", lines: [{ sku: "VLV-100", quantity: 10 }] };
+  const first = run(initial, action);
+  assert.equal(first.duplicate, false);
+  const again = run(first.state, action);
+  assert.equal(again.duplicate, true);
+  assert.equal(again.orderId, first.orderId);
+  assert.equal(again.state.orders.length, 1);
+  assert.equal(findProduct(again.state, "VLV-100").stock, 110, "stock is reserved only once");
+  assert.equal(again.state.audit.length, first.state.audit.length, "no extra audit entries");
+  const replayedAfterReload = run(parseState(serializeState(first.state), context), action);
+  assert.equal(replayedAfterReload.duplicate, true);
+  const fresh = run(first.state, { ...action, submissionId: "second-order-0002" });
+  assert.equal(fresh.state.orders.length, 2, "a new submission id is a new order");
+  assert.equal(run(fresh.state, { type: "reset" }).state.submissions && Object.keys(run(fresh.state, { type: "reset" }).state.submissions).length, 0);
+});
+
+test("saved state from before submission tracking still loads", () => {
+  const legacy = createInitialState(context);
+  delete legacy.submissions;
+  assert.deepEqual(parseState(JSON.stringify(legacy), context).submissions, {});
 });

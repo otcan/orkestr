@@ -73,3 +73,7 @@
   .portal-catalog td::before { content: attr(data-label) ": "; color: var(--muted); font-size: 13px; }
   .portal-buttons .button, .portal-form .button { width: 100%; }
 }
+.portal-role-note { margin: 12px 0 0; padding: 10px 12px; border-left: 4px solid var(--accent); background: #fff7f2; font-size: 15px; }
+.portal-field-error { display: block; margin-top: 6px; color: #9b2a10; font-size: 13px; font-weight: 720; }
+.portal-field-error:empty { display: none; }
+.portal-catalog input[aria-invalid="true"] { border: 2px solid #9b2a10; }

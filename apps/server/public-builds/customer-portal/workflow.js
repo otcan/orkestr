@@ -6,6 +6,7 @@ export const STATE_VERSION = 1;
 export const LARGE_ORDER_THRESHOLD = 5000;
 export const MAX_LINE_QUANTITY = 999;
 export const MAX_REASON_LENGTH = 200;
+export const MAX_REMEMBERED_SUBMISSIONS = 50;
 
 export const ROLES = Object.freeze({ customer: "customer", approver: "approver" });
 
@@ -53,6 +54,7 @@ export function createInitialState(context = {}) {
     products: clone(SAMPLE_PRODUCTS),
     accounts: clone(SAMPLE_ACCOUNTS),
     orders: [],
+    submissions: {},
     audit: [{ seq: 1, at, role: "system", action: "demo_reset", orderId: "", detail: "Synthetic sample data loaded." }],
     nextOrderNumber: 1001,
     nextAuditSeq: 2,
@@ -80,6 +82,24 @@ export function normalizeLines(lines = []) {
     merged.set(sku, Math.min(MAX_LINE_QUANTITY, (merged.get(sku) || 0) + quantity));
   }
   return [...merged].map(([sku, quantity]) => ({ sku, quantity }));
+}
+
+// Validate raw form input ({ sku: "text" }) without guessing: anything that is not
+// a whole number between 0 and MAX_LINE_QUANTITY is reported back to the buyer.
+export function validateDraft(state, raw = {}) {
+  const lines = [];
+  const errors = {};
+  for (const [sku, value] of Object.entries(raw || {})) {
+    const text = String(value ?? "").trim();
+    if (!text) continue;
+    if (!findProduct(state, sku)) errors[sku] = `Unknown product ${sku}.`;
+    else if (!/^-?\d+$/.test(text)) errors[sku] = "Enter a whole number of units.";
+    else if (Number(text) < 0) errors[sku] = "Quantity cannot be negative.";
+    else if (Number(text) > MAX_LINE_QUANTITY) errors[sku] = `At most ${MAX_LINE_QUANTITY} units per line.`;
+    else if (Number(text) > 0) lines.push({ sku, quantity: Number(text) });
+  }
+  const formError = !Object.keys(errors).length && !lines.length ? "Add at least one product quantity." : "";
+  return { lines, errors, formError, valid: !formError && !Object.keys(errors).length };
 }
 
 export function orderTotal(state, lines) {
@@ -150,8 +170,15 @@ function applyApproval(state, order) {
 
 function submitOrder(state, action, context) {
   if (action.role !== ROLES.customer) return fail("Only the customer role can submit orders.");
+  const submissionId = String(action.submissionId || "").trim();
+  if (!/^[A-Za-z0-9-]{8,64}$/.test(submissionId)) return fail("Missing submission id.");
+  // Idempotency: replaying the same submission returns the order it already created.
+  const existing = state.submissions[submissionId];
+  if (existing && findOrder(state, existing)) return { ok: true, state, orderId: existing, duplicate: true };
   const account = findAccount(state, action.accountId || state.accountId);
   if (!account) return fail("Choose a sample account.");
+  const invalid = (Array.isArray(action.lines) ? action.lines : []).find((line) => !Number.isInteger(Number(line?.quantity)) || Number(line?.quantity) < 0 || Number(line?.quantity) > MAX_LINE_QUANTITY);
+  if (invalid) return fail(`Invalid quantity for ${String(invalid?.sku || "a line")}.`);
   const lines = normalizeLines(action.lines);
   if (!lines.length) return fail("Add at least one product quantity.");
   const unknown = lines.find((line) => !findProduct(state, line.sku));
@@ -183,7 +210,10 @@ function submitOrder(state, action, context) {
     appendAudit(state, { role: "rules", action: "order_auto_approved", orderId: order.id, detail: "All rules passed." }, context);
   }
   state.orders.unshift(order);
-  return { ok: true, state, orderId: order.id };
+  state.submissions[submissionId] = order.id;
+  const remembered = Object.keys(state.submissions);
+  for (const key of remembered.slice(0, Math.max(0, remembered.length - MAX_REMEMBERED_SUBMISSIONS))) delete state.submissions[key];
+  return { ok: true, state, orderId: order.id, duplicate: false };
 }
 
 function decideOrder(state, action, context) {
@@ -249,10 +279,12 @@ export function serializeState(state) {
 export function parseState(raw, context = {}) {
   try {
     const value = JSON.parse(String(raw || ""));
+    if (value && value.submissions === undefined) value.submissions = {};
     const valid = value && value.version === STATE_VERSION
       && Object.values(ROLES).includes(value.role)
       && Array.isArray(value.products) && Array.isArray(value.accounts)
       && Array.isArray(value.orders) && Array.isArray(value.audit)
+      && value.submissions && typeof value.submissions === "object" && !Array.isArray(value.submissions)
       && Number.isInteger(value.nextOrderNumber) && Number.isInteger(value.nextAuditSeq)
       && value.orders.every((order) => order && typeof order.id === "string" && Object.values(STATUS).includes(order.status) && Array.isArray(order.lines) && Array.isArray(order.timeline));
     if (valid) return value;

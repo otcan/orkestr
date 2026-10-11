@@ -3,7 +3,7 @@ import type { PublicPage } from "./public-site-config.js";
 const limitations = [
   "It does not create, send, or store real orders, invoices, or payments.",
   "It does not connect to an ERP, inventory, CRM, email, or any other external system.",
-  "It has no accounts, logins, or real permissions: the role switcher is a viewing mode, not access control.",
+  "It has no accounts, logins, or real permissions: the role switcher is demonstration behaviour in your browser, not server-enforced authorization.",
   "It sends nothing to a server. State lives only in this browser's localStorage until you reset it or clear site data.",
   "Prices, stock, credit limits, and company names are invented sample data.",
   "It is not a client project or case study, and it makes no claim about production performance.",
@@ -15,6 +15,7 @@ const steps = [
   "Orders that pass every rule are auto-approved and stock is reserved.",
   "Exceptions pause the order for an approver instead of failing silently.",
   "As the approver, approve or reject with a note; rejection requires a reason.",
+  "Invalid quantities get a validation message, and submitting the same order twice never creates a duplicate.",
   "Every step lands on the order timeline and in an append-only audit log.",
 ];
 
@@ -46,6 +47,7 @@ export function customerPortalBuildPage(): PublicPage {
         </fieldset>
         <button type="button" class="button button-outline" data-action="reset">Reset demo</button>
       </div>
+      <p class="portal-role-note" id="portal-role-note"><strong>Demonstration behaviour:</strong> switching between customer and approver happens only in your browser. It is not server-enforced authorization; a real portal would authenticate each user and check every action on the server.</p>
       <p class="portal-storage" id="portal-storage-note">State is saved only in this browser.</p>
       <p id="portal-status" role="status" aria-live="polite" tabindex="-1"></p>
       <div id="portal-view"><noscript><p>This demo needs JavaScript. It runs entirely in your browser and makes no network calls.</p></noscript></div>
