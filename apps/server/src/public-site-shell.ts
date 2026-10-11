@@ -158,7 +158,7 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
   const appUrl = publicAppUrl(env);
   const repo = publicRepoUrl(env);
   const homePath = pageHref("home", locale);
-  return `<!doctype html>
+  const html = `<!doctype html>
 <html lang="${publicLocaleTags[locale]}">
 <head>
   <meta charset="utf-8">
@@ -216,4 +216,6 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
   ${page.analytics === false ? "" : analyticsScript(home)}
 </body>
 </html>`;
+  // Pages without the beacon also carry no event hooks for it.
+  return page.analytics === false ? html.replace(/\sdata-(?:view-)?event="[^"]*"/g, "") : html;
 }

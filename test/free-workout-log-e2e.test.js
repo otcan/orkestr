@@ -87,6 +87,12 @@ test("workout log works end to end in a real browser without sending data anywhe
     await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
     assert.equal(await text(page, "#wl-set-count"), "0");
     assert.equal(await page.$eval("#wl-progress-body", (node) => node.hidden), true);
+    // No site beacon: no event hooks, no tracking global, only the page's own module script.
+    assert.deepEqual(await page.evaluate(() => ({
+      hooks: document.querySelectorAll("[data-event], [data-view-event]").length,
+      tracker: typeof window.orkestrTrack,
+      scripts: [...document.scripts].map((script) => script.getAttribute("src")),
+    })), { hooks: 0, tracker: "undefined", scripts: ["/free/workout-log/app.js"] });
 
     // Logging: two dates for one exercise, plus a second exercise.
     await setDate(page, "2026-10-01");
