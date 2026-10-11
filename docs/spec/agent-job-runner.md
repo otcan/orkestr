@@ -15,7 +15,7 @@ Guarantees: [runtime-guarantees.md](runtime-guarantees.md).
 | Provider | Connected when | Runnable when | Stock install |
 | --- | --- | --- | --- |
 | `codex` | `codex login status` reports logged in **and** `codex app-server --help` works (the same checks as `orkestr doctor`) | connected **and** the built-in Codex job executor (`agent-job-codex.js`, `jobExecutor: "codex-app-server"`) is registered and not switched off with `ORKESTR_AGENT_JOB_CODEX_EXECUTOR=0`, or an overlay executor with id `codex` is registered | **runnable** once logged in |
-| `claude-code` | `claude auth status --json` reports logged in | connected **and** the built-in Claude Code job executor (`agent-job-claude-code.js`, `jobExecutor: "claude-code-cli"`) is registered and not switched off with `ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR=0`, or an overlay executor with id `claude-code` / `claude` is registered | **runnable** once logged in |
+| `claude-code` | `claude auth status --json` reports logged in | connected **and** the built-in Claude Code job executor (`agent-job-claude-code.js`, `jobExecutor: "claude-code-cli"`) is registered and switched on with `ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR=1` (off by default until a pre-run check proves the approval hook works for the job's run-as user), or an overlay executor with id `claude-code` / `claude` is registered | **runnable** once logged in |
 | `openai-compatible` | no probe yet | no adapter yet | not runnable |
 | `simulated` | only under `node --test` | only under `node --test` | never selectable in user job specs |
 
@@ -113,7 +113,7 @@ the same outcome:
 | Orkestr tools | `ctx.executeTool(call)` runs a job tool through the decision and the effect ledger (`codex` exposes them as dynamic tools) |
 | output | `{type: "final", output}`; with `output_schema` the final answer is parsed as JSON (bare or fenced) |
 | error class | failures throw `nativeAttemptError(classification)` with the turn error classes of `runtime-turn-error-class.js`: `auth` → provider error, no retry (fallback applies); `rate_limit` / `transient` → retryable provider error; `permanent` → task error |
-| gate | `jobExecutor`, `enabled(env)` and an env switch (`ORKESTR_AGENT_JOB_CODEX_EXECUTOR`, `ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR`; `0`/`false`/`off` disables) |
+| gate | `jobExecutor`, `enabled(env)` and an env switch (`ORKESTR_AGENT_JOB_CODEX_EXECUTOR`: on unless `0`/`false`/`off`; `ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR`: off unless `1`/`true`/`yes`/`on`) |
 
 `test/agent-job-native-interface.test.js` checks that both executors satisfy
 the interface and the gate and drives each with the same recording context

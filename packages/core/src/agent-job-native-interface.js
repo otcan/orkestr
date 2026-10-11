@@ -54,9 +54,15 @@ export function nativeExecutorSwitch(provider) {
 }
 
 // Built-in executors are on unless their switch is 0/false/no/off.
+// Executors that stay off unless explicitly switched on. Claude Code jobs are
+// off by default until a pre-run check proves the approval hook can run for
+// the job's run-as user (owner decision 2026-10-11).
+const executorsOffByDefault = new Set(["claude-code"]);
+
 export function nativeExecutorEnabled(provider, env = process.env) {
   const name = nativeExecutorSwitch(provider);
   const value = String((name && env[name]) ?? "").trim().toLowerCase();
+  if (executorsOffByDefault.has(provider)) return ["1", "true", "yes", "on"].includes(value);
   return !["0", "false", "no", "off"].includes(value);
 }
 

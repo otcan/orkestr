@@ -13,7 +13,9 @@ export const workerPath = fileURLToPath(new URL("./agent-job-worker.mjs", import
 
 export async function tempEnv(extra = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-agent-job-"));
-  return { ORKESTR_HOME: home, ...extra };
+  // Claude Code jobs are off by default in product; these fixtures opt in so
+  // the executor itself stays covered.
+  return { ORKESTR_HOME: home, ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR: "1", ...extra };
 }
 
 export const prScript = [

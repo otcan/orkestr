@@ -68,3 +68,14 @@ test("a real executor registered for claude-code makes it runnable and is used f
     restore();
   }
 });
+
+test("Claude Code jobs are off unless explicitly switched on", async () => {
+  const { nativeExecutorEnabled } = await import("../packages/core/src/agent-job-native-interface.js");
+  for (const value of [undefined, "", "0", "false", "off", "maybe"]) {
+    const env = value === undefined ? {} : { ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR: value };
+    assert.equal(nativeExecutorEnabled("claude-code", env), false, `claude-code with ${JSON.stringify(value)}`);
+  }
+  for (const value of ["1", "true", "yes", "on"]) assert.equal(nativeExecutorEnabled("claude-code", { ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR: value }), true);
+  assert.equal(nativeExecutorEnabled("codex", {}), true, "codex keeps its default");
+  assert.equal(nativeExecutorEnabled("codex", { ORKESTR_AGENT_JOB_CODEX_EXECUTOR: "0" }), false);
+});
