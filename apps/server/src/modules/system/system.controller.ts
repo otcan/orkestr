@@ -9,6 +9,7 @@ import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { multipartUploadLimits } from "../../../../../packages/shared/src/multipart-limits.js";
 import { doctorRuntimeResources, listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
 import { getSetupStatus, publicSetupStatus } from "../../../../../packages/core/src/setup.js";
+import { assertWhatsAppOnboardingModeAvailable } from "../../../../../packages/connectors/src/whatsapp-onboarding.js";
 import { readRuntimeSettings, writeRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
 import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
 import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
@@ -497,12 +498,6 @@ function setupStatusForRequest(request: any, status: any): any {
   };
 }
 
-function normalizeWhatsAppAccessMode(value: unknown) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (["own", "self", "self-managed", "self_managed", "local"].includes(normalized)) return "own";
-  return "relay";
-}
-
 function apiSessionDeliveryResultForMessage(delivery: any, messageId: string) {
   const delivered = Array.isArray(delivery?.delivered)
     ? delivery.delivered.find((item: any) => String(item?.messageId || "") === messageId)
@@ -665,7 +660,8 @@ export class SystemController {
   @Post("setup/demo-preferences")
   @HttpCode(200)
   async saveSetupDemoPreferences(@Body() body: Record<string, unknown> = {}) {
-    const whatsappAccessMode = normalizeWhatsAppAccessMode(body.whatsappAccessMode || body.whatsappMode || body.whatsapp);
+    const requestedMode = body.whatsappAccessMode || body.whatsappMode || body.whatsapp || "own";
+    const whatsappAccessMode = await assertWhatsAppOnboardingModeAvailable(requestedMode, process.env);
     const settings = await writeRuntimeSettings({
       connectors: {
         whatsapp: {

@@ -123,30 +123,38 @@
         <h3>Choose the trust boundary</h3>
       </div>
       <div class="wizard-choice-grid">
+        @if (availableWhatsAppModes().includes('self_hosted')) {
         <button
           type="button"
           class="choice-card"
-          [class.active]="whatsappAccessMode === 'relay'"
-          (click)="selectWhatsAppAccessMode('relay')"
-          [disabled]="busy"
-        >
-          <strong>Use Orkestr relay</strong>
-          <span>Default. Orkestr relays WhatsApp control through a managed sender so the demo works quickly.</span>
-        </button>
-        <button
-          type="button"
-          class="choice-card"
-          [class.active]="whatsappAccessMode === 'own'"
-          (click)="selectWhatsAppAccessMode('own')"
+          [class.active]="whatsappAccessMode === 'self_hosted'"
+          (click)="selectWhatsAppAccessMode('self_hosted')"
           [disabled]="busy"
         >
           <strong>Use my own WhatsApp</strong>
-          <span>Self-managed. Pair your own WhatsApp bridge and keep the sender identity under your control.</span>
+          <span>Recommended for self-hosted installs. Pair your device with the local bridge; session data stays in this instance's data volume.</span>
         </button>
+        }
+        @if (availableWhatsAppModes().includes('managed')) {
+          <button
+          type="button"
+          class="choice-card"
+          [class.active]="whatsappAccessMode === 'managed'"
+          (click)="selectWhatsAppAccessMode('managed')"
+          [disabled]="busy"
+          >
+            <strong>Use managed WhatsApp</strong>
+            <span>This instance has a server-configured WhatsApp relay. The relay operator manages its transport; your instance uses only the configured connection.</span>
+          </button>
+        }
       </div>
-      <div class="notice">
+      @if (availableWhatsAppModes().length === 0) {
+        <div class="notice">No WhatsApp onboarding mode is available. Ask this instance's operator to repair its configured bridge.</div>
+      } @else {
+        <div class="notice">
         This choice is stored as a non-secret setup preference. Credentials and WhatsApp sessions stay outside the repo.
-      </div>
+        </div>
+      }
     }
 
     @if (activeStep() === "review") {

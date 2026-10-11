@@ -583,6 +583,12 @@ export interface SetupStatus {
   onboarding?: {
     autoOpen?: boolean;
   };
+  whatsappOnboarding?: {
+    availableModes?: Array<"self_hosted" | "managed">;
+    selectedMode?: "self_hosted" | "managed" | null;
+    health?: "connected" | "partial" | "not_connected" | "broken";
+    pairingState?: "paired" | "qr_needed" | "pairing_code" | "authenticating" | "starting" | "needs_attention" | "not_started";
+  };
   urls?: {
     primaryDomain?: string;
     appUrl?: string;

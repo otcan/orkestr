@@ -1,17 +1,17 @@
-import { Component, EventEmitter, Input, OnInit, Output, inject } from "@angular/core";
+import { Component, EventEmitter, Input, OnChanges, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadSummary } from "./api.service";
 
 type WizardStepId = "welcome" | "codex" | "whatsapp" | "review";
-type WhatsAppAccessMode = "relay" | "own";
+type WhatsAppAccessMode = "managed" | "self_hosted";
 
 @Component({
   selector: "ork-first-thread-wizard",
   imports: [FormsModule],
   templateUrl: "./first-thread-wizard.component.html",
 })
-export class FirstThreadWizardComponent implements OnInit {
+export class FirstThreadWizardComponent implements OnInit, OnChanges {
   private readonly api = inject(ApiService);
 
   @Input() canCancel = true;
@@ -30,7 +30,7 @@ export class FirstThreadWizardComponent implements OnInit {
   stepIndex = 0;
   threadName = "orkest";
   repoUrl = "";
-  whatsappAccessMode: WhatsAppAccessMode = "relay";
+  whatsappAccessMode: WhatsAppAccessMode = "self_hosted";
   runtimeProvider: "codex" | "claude-code" = "codex";
   claudeAccounts: LlmAccountProfile[] = [];
   claudeEnabled = false;
@@ -41,9 +41,24 @@ export class FirstThreadWizardComponent implements OnInit {
   creationStage = "";
   private draftName = "";
   private draftThreadId = "";
+  private whatsappModeTouched = false;
 
   ngOnInit(): void {
+    this.syncWhatsAppAccessMode();
     void this.loadClaudeAccounts();
+  }
+
+  ngOnChanges(_changes: SimpleChanges): void {
+    this.syncWhatsAppAccessMode();
+  }
+
+  private syncWhatsAppAccessMode(): void {
+    if (this.whatsappModeTouched || !this.setupStatus) return;
+    const available = this.availableWhatsAppModes();
+    const selected = this.setupStatus.whatsappOnboarding?.selectedMode;
+    this.whatsappAccessMode = selected && available.includes(selected)
+      ? selected
+      : available[0] || "self_hosted";
   }
 
   private async loadClaudeAccounts(): Promise<void> {
@@ -94,12 +109,12 @@ export class FirstThreadWizardComponent implements OnInit {
     const step = this.activeStep();
     if (step === "welcome") return Boolean(this.agentName());
     if (step === "codex") return this.agentReady();
-    if (step === "whatsapp") return Boolean(this.whatsappAccessMode);
+    if (step === "whatsapp") return this.availableWhatsAppModes().includes(this.whatsappAccessMode);
     return true;
   }
 
   canCreate(): boolean {
-    return Boolean(this.agentName() && this.agentReady() && !this.busy);
+    return Boolean(this.agentName() && this.agentReady() && this.availableWhatsAppModes().includes(this.whatsappAccessMode) && !this.busy);
   }
 
   agentName(): string {
@@ -127,11 +142,18 @@ export class FirstThreadWizardComponent implements OnInit {
   }
 
   whatsappAccessLabel(): string {
-    return this.whatsappAccessMode === "own" ? "Own WhatsApp bridge" : "Orkestr relay";
+    return this.whatsappAccessMode === "self_hosted" ? "My WhatsApp (self-hosted)" : "Managed WhatsApp relay";
+  }
+
+  availableWhatsAppModes(): WhatsAppAccessMode[] {
+    const modes = this.setupStatus?.whatsappOnboarding?.availableModes;
+    if (!Array.isArray(modes)) return ["self_hosted"];
+    return modes.filter((mode): mode is WhatsAppAccessMode => mode === "self_hosted" || mode === "managed");
   }
 
   selectWhatsAppAccessMode(mode: WhatsAppAccessMode): void {
-    if (this.busy) return;
+    if (this.busy || !this.availableWhatsAppModes().includes(mode)) return;
+    this.whatsappModeTouched = true;
     this.whatsappAccessMode = mode;
   }
 

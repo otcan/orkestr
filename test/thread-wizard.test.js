@@ -14,10 +14,13 @@ test("main UI exposes a guided first thread generation flow", async () => {
   const sources = await read([
     "apps/web/src/app/app.component.ts",
     "apps/web/src/app/app.component.html",
+    "apps/web/src/app/onboarding-page.component.ts",
+    "apps/web/src/app/onboarding-page.component.html",
     "apps/web/src/app/pairing-required-page.component.ts",
     "apps/web/src/app/pairing-required-page.component.html",
     "apps/web/src/app/first-thread-wizard.component.ts",
     "apps/web/src/app/first-thread-wizard.component.html",
+    "apps/web/src/app/api.service.ts",
     "apps/server/src/modules/threads/threads.controller.ts",
     "apps/server/src/modules/connectors/connectors.controller.ts",
   ]);
@@ -41,9 +44,14 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("Start orkest"));
   assert.ok(sources.includes('type WizardStepId = "welcome" | "codex" | "whatsapp" | "review"'));
   assert.ok(sources.includes('threadName = "orkest"'));
-  assert.ok(sources.includes('type WhatsAppAccessMode = "relay" | "own"'));
-  assert.ok(sources.includes("Use Orkestr relay"));
+  assert.ok(sources.includes('type WhatsAppAccessMode = "managed" | "self_hosted"'));
+  assert.ok(sources.includes("Use managed WhatsApp"));
   assert.ok(sources.includes("Use my own WhatsApp"));
+  assert.ok(sources.includes('whatsappAccessMode: WhatsAppAccessMode = "self_hosted"'));
+  assert.ok(sources.includes('availableModes?: Array<"self_hosted" | "managed">'));
+  assert.ok(sources.includes("availableWhatsAppModes().includes('managed')"));
+  assert.ok(sources.includes("isSelfHostedWhatsApp()"));
+  assert.ok(sources.includes("whatsappModeSummary()"));
   assert.ok(sources.includes("saveSetupDemoPreferences"));
   assert.ok(sources.includes("acquireDesktopLease"));
   assert.ok(sources.includes('browserAction(slug, "start"'));
