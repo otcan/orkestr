@@ -242,3 +242,19 @@ test("catalog lists the evidence desk as a live simulation and only allow-listed
   }
   for (const bad of ["/builds/evidence-desk/../../../package.json", "/builds/evidence-desk/secret.js", "/builds/other/evidence-desk.css", "/builds/evidence-desk/"]) assert.equal(publicBuildAsset(bad), null);
 });
+
+test("evidence desk loads no analytics beacon and its page code makes no network requests", () => {
+  const html = renderPublicSite("/builds/evidence-desk", env, { host: "product.example.test" });
+  assert.doesNotMatch(html, /\/api\/public\/events|sendBeacon|orkestrTrack|data-event=|data-view-event=/);
+  const assets = publicBuildAssets["evidence-desk"];
+  const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)];
+  assert.ok(scripts.length >= 1);
+  for (const [, attrs, body] of scripts) {
+    if (/type="application\/ld\+json"/.test(attrs)) continue; // structured data, not executable
+    const src = /^\s*type="module" src="\/builds\/evidence-desk\/([a-z0-9.-]+)"\s*$/.exec(attrs);
+    assert.ok(src && assets[src[1]], `unexpected script tag: <script${attrs}>`);
+    assert.equal(body.trim(), "", "no inline executable script");
+  }
+  const network = /\bfetch\s*\(|XMLHttpRequest|sendBeacon|WebSocket|EventSource|\bimport\s*\(|new\s+Image\b|serviceWorker|\.src\s*=|https?:\/\/|\/api\/|data-event|data-view-event/;
+  for (const name of Object.keys(assets)) assert.doesNotMatch(publicBuildAsset(`/builds/evidence-desk/${name}`).body, network, name);
+});

@@ -74,14 +74,24 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     await page.setViewport({ width: 1280, height: 900 });
     const errors = [];
     const foreign = [];
+    const api = [];
+    const afterLoad = [];
+    let loaded = false;
     page.on("pageerror", (error) => errors.push(error.message || String(error)));
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+    page.on("request", (request) => {
+      if (request.url().includes("/api/")) api.push(request.url());
+      if (loaded && !request.url().startsWith("blob:")) afterLoad.push(request.url());
+    });
     page.on("request", (request) => { if (!request.url().startsWith(baseUrl) && !request.url().startsWith("blob:") && !request.url().startsWith("data:")) foreign.push(request.url()); });
     page.on("dialog", (dialog) => dialog.accept());
 
     const response = await page.goto(`${baseUrl}/builds/evidence-desk`, { waitUntil: "networkidle0" });
     assert.equal(response.status(), 200);
     await page.waitForSelector("#ed-app:not([hidden])");
+    loaded = true; // From here on the app must not touch the network at all.
+    assert.equal(await page.evaluate(() => typeof window.orkestrTrack), "undefined");
+    assert.equal(await count(page, "[data-event], [data-view-event]"), 0);
     assert.equal(await count(page, "#ed-claims > li"), 5);
     assert.ok(await count(page, "#ed-queue > li") >= 3);
     assert.equal(await count(page, "#ed-sources > li"), 8);
@@ -168,7 +178,9 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     await waitUntil(page, () => document.activeElement?.id === "ed-detail-title" && document.activeElement.textContent.includes("Brindlemere"), "step 8");
 
     // State persists across reloads, and reset restores the sample.
+    loaded = false;
     await page.reload({ waitUntil: "networkidle0" });
+    loaded = true;
     await page.waitForSelector("#ed-app:not([hidden])");
     assert.equal(await count(page, "#ed-claims > li"), 6);
     await activate(page, "#ed-reset");
@@ -176,8 +188,10 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     assert.match(await text(page, "#ed-status"), /reset/i);
 
     // Mobile width: no horizontal overflow and controls stay reachable.
+    loaded = false; // Switching to a mobile viewport makes Puppeteer reload the page.
     await page.setViewport({ width: 375, height: 812, isMobile: true, hasTouch: true });
     await page.reload({ waitUntil: "networkidle0" });
+    loaded = true;
     await page.waitForSelector("#ed-app:not([hidden])");
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     assert.ok(overflow <= 0, `horizontal overflow ${overflow}px`);
@@ -187,6 +201,8 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
 
     assert.deepEqual(errors, []);
     assert.deepEqual(foreign, []);
+    assert.deepEqual(api, [], "no /api/ calls, including the public events beacon");
+    assert.deepEqual(afterLoad, [], "no network requests while using the app");
   } finally {
     if (browser) await browser.close();
     await new Promise((resolve) => server.close(resolve));
