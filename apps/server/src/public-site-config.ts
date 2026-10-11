@@ -36,6 +36,8 @@ export type PublicPage = {
   canonicalPath?: string;
   locale?: PublicLocale;
   indexable?: boolean;
+  // false: render without the shared click-event script (page sends nothing after load).
+  analytics?: boolean;
 };
 
 export const publicLocales: PublicLocale[] = ["en", "de", "tr"];

@@ -29,6 +29,11 @@ test("/open-source renders the OSS entry line, labelled simulation and real-prov
   assert.doesNotMatch(html, /<main[\s\S]*data-event=[\s\S]*<\/main>/, "the OSS page body adds no tracked click events");
   assert.doesNotMatch(html, /\son[a-z]+="/i, "no inline event handlers");
   assert.doesNotMatch(html, /<script[^>]+src=/i, "no third-party scripts");
+  const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
+  for (const [, attrs] of scripts) assert.match(attrs, /type="application\/ld\+json"/, "only inert structured data, no executable page code");
+  assert.doesNotMatch(html, /\bfetch\s*\(|XMLHttpRequest|sendBeacon|WebSocket|EventSource/, "no requests from page code after load");
+  assert.doesNotMatch(html, /\/api\/public\/events|orkestrTrack/, "no analytics beacon (shell data-event markers stay inert without the script)");
+  assert.match(html, /After this page loads, it sends nothing back: no analytics, no data uploads\./);
   assert.doesNotMatch(html, /Book a project call<\/a><\/section>/, "no consulting CTA on the OSS page body");
 });
 

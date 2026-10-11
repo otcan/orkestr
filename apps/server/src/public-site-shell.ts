@@ -213,7 +213,7 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
     <nav aria-label="${copy.customers}"><strong>${copy.customers}</strong><a href="${escapeHtml(appUrl)}" data-event="client_portal_click">${copy.portal}</a></nav>
     <p class="footer-note">${copy.note}</p>
   </footer>
-  ${analyticsScript(home)}
+  ${page.analytics === false ? "" : analyticsScript(home)}
 </body>
 </html>`;
 }
