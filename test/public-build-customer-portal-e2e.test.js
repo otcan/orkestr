@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
+import { renderPublicSite } from "../dist/server/apps/server/src/public-site.js";
 
 const envKeys = ["ORKESTR_HOME", "ORKESTR_AUTH_REQUIRED", "ORKESTR_RECOVER_RUNNING_ON_START", "ORKESTR_THREAD_STORE"];
 
@@ -24,6 +25,16 @@ async function withServer(t, run) {
     }
   }
 }
+
+test("customer portal HTML carries no analytics beacon in a production-shaped render", () => {
+  const env = { ORKESTR_PUBLIC_SITE_URL: "https://product.example.test", ORKESTR_PUBLIC_APP_URL: "https://app.example.test" };
+  const html = renderPublicSite("/builds/customer-portal", env, { host: "product.example.test" });
+  assert.match(html, /<h1>B2B customer portal with approval rules<\/h1>/);
+  assert.match(html, /rel="canonical" href="https:\/\/product\.example\.test\/builds\/customer-portal"/);
+  assert.doesNotMatch(html, /\/api\/public\/events|sendBeacon|orkestrTrack|data-event=|data-view-event=/);
+  const scripts = html.match(/<script\b[^>]*>/g) || [];
+  assert.deepEqual(scripts.filter((tag) => !/type="application\/ld\+json"/.test(tag)), ['<script type="module" src="/builds/customer-portal/app.js">']);
+});
 
 async function findChrome() {
   for (const candidate of [process.env.PUPPETEER_EXECUTABLE_PATH, "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"].filter(Boolean)) {
@@ -47,7 +58,11 @@ test("live build routes are public, self-contained, and serve only allowlisted a
     assert.match(html, /not server-enforced authorization/);
     assert.match(html, /data-action="reset"/);
     assert.match(html, /<script type="module" src="\/builds\/customer-portal\/app\.js"><\/script>/);
-    assert.doesNotMatch(html, /orkestrTrack|sendBeacon|\son[a-z]+="/);
+    assert.doesNotMatch(html, /orkestrTrack|sendBeacon|\/api\/public\/events|\son[a-z]+="/, "no analytics beacon or inline handlers");
+    assert.doesNotMatch(html, /data-event=|data-view-event=/, "no beacon hooks on the page");
+    for (const tag of html.match(/<script\b[^>]*>/g) || []) {
+      assert.match(tag, /^<script type="module" src="\/builds\/customer-portal\/[a-z-]+\.js">$|^<script type="application\/ld\+json">$/, `unexpected script: ${tag}`);
+    }
     assert.doesNotMatch(html, /Book a project call/, "live builds carry no consulting CTA in the header");
     assert.doesNotMatch(html, /<script[^>]+src="https?:/);
 
@@ -63,7 +78,7 @@ test("live build routes are public, self-contained, and serve only allowlisted a
       assert.equal(response.status, 200, asset);
       assert.match(response.headers.get("content-type") || "", type);
       const body = await response.text();
-      assert.doesNotMatch(body, /fetch\(|XMLHttpRequest|sendBeacon|https?:\/\//, `${asset} must not make network calls`);
+      assert.doesNotMatch(body, /fetch\(|XMLHttpRequest|sendBeacon|WebSocket|EventSource|import\(|\/api\/|data-(view-)?event|https?:\/\//, `${asset} must not make network calls`);
     }
     for (const probe of ["/builds/customer-portal/../../../package.json", "/builds/customer-portal/missing.js", "/builds/..%2F..%2Fpackage.json"]) {
       const response = await fetch(`${baseUrl}${probe}`);
@@ -96,6 +111,10 @@ test("customer portal demo runs the full order and approval flow in a real brows
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${baseUrl}/builds/customer-portal`, { waitUntil: "networkidle0" });
       await page.waitForSelector("#portal-app.is-ready #portal-order-form");
+      // From here on the page must not issue any request at all, same-origin included.
+      const requestsAfterLoad = [];
+      const recordRequest = (request) => requestsAfterLoad.push(request.url());
+      page.on("request", recordRequest);
       const text = (selector) => page.$eval(selector, (node) => node.textContent);
       const waitStatus = async (needle) => {
         try {
@@ -168,6 +187,8 @@ test("customer portal demo runs the full order and approval flow in a real brows
       const audit = await text(".portal-audit");
       for (const action of ["order submitted", "order auto approved", "order paused", "order approved", "order rejected"]) assert.match(audit, new RegExp(action));
 
+      page.off("request", recordRequest);
+      assert.deepEqual(requestsAfterLoad, [], "the demo made network requests after load");
       await page.setOfflineMode(false);
       await page.reload({ waitUntil: "networkidle0" });
       await page.waitForSelector("#portal-app.is-ready #approver-panel");
