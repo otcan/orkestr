@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderPublicSite, renderPublicSiteCss, renderPublicSitemap } from "../dist/server/apps/server/src/public-site.js";
+import { maybeServePublicSite } from "../dist/server/apps/server/src/public-site-static.js";
 
 const baseEnv = {
   ORKESTR_PUBLIC_SITE_URL: "https://product.example.test",
@@ -9,10 +10,10 @@ const baseEnv = {
   ORKESTR_PUBLIC_CONTACT: "hello@example.test",
 };
 
-test("commercial homepage presents one simple booking-first business-system journey", () => {
-  const html = renderPublicSite("/", baseEnv, { host: "product.example.test" });
+test("studio page presents one simple booking-first business-system journey", () => {
+  const html = renderPublicSite("/studio", baseEnv, { host: "product.example.test" });
 
-  assert.match(html, /<title>Custom Business Software &amp; Automation \| Orkestr<\/title>/);
+  assert.match(html, /<title>Studio: Custom Business Software &amp; Automation \| Orkestr<\/title>/);
   assert.match(html, /Need a better system for your business/);
   assert.match(html, /Book a 20-minute project call/);
   assert.match(html, /data-event="book_project_hero"/);
@@ -34,18 +35,19 @@ test("commercial homepage presents one simple booking-first business-system jour
   assert.doesNotMatch(html, /class="approval-card"/);
   assert.doesNotMatch(html, /class="section faq"/);
   assert.doesNotMatch(html, /id="requirement-example"/);
-  assert.match(html, /rel="canonical" href="https:\/\/product\.example\.test\/"/);
+  assert.match(html, /rel="canonical" href="https:\/\/product\.example\.test\/studio"/);
   assert.match(html, /"@type":"Organization"/);
   assert.match(html, /"@type":"WebSite"/);
   assert.match(html, /"@type":"Person"/);
-  for (const alternate of ['hreflang="en" href="https://product.example.test/"', 'hreflang="de-DE" href="https://product.example.test/de"', 'hreflang="tr-TR" href="https://product.example.test/tr"', 'hreflang="x-default"']) assert.match(html, new RegExp(alternate));
-  assert.doesNotMatch(html, /"@type":"BreadcrumbList"/);
+  for (const alternate of ['hreflang="en" href="https://product.example.test/studio"', 'hreflang="de-DE" href="https://product.example.test/de/studio"', 'hreflang="tr-TR" href="https://product.example.test/tr/studio"', 'hreflang="x-default"']) assert.match(html, new RegExp(alternate));
+  assert.match(html, /<a href="\/studio" aria-current="page">Studio<\/a>/);
+  assert.match(html, /\/api\/public\/events/);
 });
 
-test("German and Turkish homepages are native, canonical, and reciprocal", () => {
+test("German and Turkish studio pages are native, canonical, and reciprocal", () => {
   const expectations = [
-    ["/de", "de-DE", "Individuelle Unternehmenssoftware", "Braucht Ihr Unternehmen ein besseres System", "/de/projekt#book", "ORKESTR-KONSOLE · ÖFFENTLICHE DEMO", "Datenschutz"],
-    ["/tr", "tr-TR", "Özel İş Yazılımı", "İşletmeniz için daha iyi bir sisteme", "/tr/proje#book", "ORKESTR KONSOLU · HERKESE AÇIK DEMO", "Gizlilik"],
+    ["/de/studio", "de-DE", "Individuelle Unternehmenssoftware", "Braucht Ihr Unternehmen ein besseres System", "/de/projekt#book", "ORKESTR-KONSOLE · ÖFFENTLICHE DEMO", "Datenschutz"],
+    ["/tr/studio", "tr-TR", "Özel İş Yazılımı", "İşletmeniz için daha iyi bir sisteme", "/tr/proje#book", "ORKESTR KONSOLU · HERKESE AÇIK DEMO", "Gizlilik"],
   ];
   for (const [path, language, title, heading, booking, consoleLabel, privacyLabel] of expectations) {
     const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
@@ -121,9 +123,9 @@ test("public copy avoids defensive internal-positioning language across every lo
   const utilityPaths = ["/project", "/de/projekt", "/tr/proje", "/privacy", "/terms", "/impressum", "/acceptable-use", "/data-deletion", "/support", "/beta"];
   const banned = /pretend|larger team|permanent Orkestr team|größer dar|dauerhaftes Orkestr-Team|daha büyük bir ekip|kalıcı bir Orkestr ekibi|honest no-fit|ehrliche Absage|uygun değil yanıtı|modischer Technologie|moda bir teknoloji|not every project|nicht jedes Projekt|her proje her|we do not prescribe|empfehlen keine KI|önermiyoruz|nützlichen Teil|gerekli kısmı|more than a hand-off|mehr als eine Software-Übergabe|teslim edip gitmek/i;
   const paths = [...new Set([...indexedPaths, ...utilityPaths])];
-  assert.equal(paths.length, 43);
+  assert.equal(paths.length, 47);
   for (const path of paths) {
-    const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
+    const html = servePublicPath(path, baseEnv);
     assert.doesNotMatch(html, banned, path);
   }
 });
@@ -246,7 +248,7 @@ test("sitemap prioritizes localized commercial routes and accessible progressive
   const sitemap = renderPublicSitemap(baseEnv);
   const css = renderPublicSiteCss();
 
-  for (const path of ["/", "/workflow", "/websites-commerce", "/business-systems", "/opportunity-intelligence", "/web-data-monitoring", "/automation", "/security", "/deployment", "/use-cases", "/developers", "/team", "/de", "/de/altsystem-modernisieren", "/de/ki-prozessautomatisierung", "/de/team", "/tr", "/tr/eski-sistem-modernizasyonu", "/tr/yapay-zeka-is-akisi-otomasyonu", "/tr/ekip"]) {
+  for (const path of ["/", "/workflow", "/websites-commerce", "/business-systems", "/opportunity-intelligence", "/web-data-monitoring", "/automation", "/security", "/deployment", "/use-cases", "/developers", "/team", "/studio", "/builds", "/free", "/open-source", "/de/studio", "/de/altsystem-modernisieren", "/de/ki-prozessautomatisierung", "/de/team", "/tr/studio", "/tr/eski-sistem-modernizasyonu", "/tr/yapay-zeka-is-akisi-otomasyonu", "/tr/ekip"]) {
     assert.match(sitemap, new RegExp(`https:\\/\\/product\\.example\\.test${path === "/" ? "/" : path}`));
   }
   for (const path of ["/beta", "/privacy", "/impressum", "/terms", "/support", "/project"]) assert.doesNotMatch(sitemap, new RegExp(`<loc>https:\\/\\/product\\.example\\.test${path}<\\/loc>`));
@@ -279,14 +281,25 @@ test("personal beta remains available but is removed from commercial indexing", 
   assert.match(html, /Start a private Orkestr workspace/);
 });
 
+// Standalone catalog entries (e.g. free products) bypass the shell renderer and
+// are served by the static handler instead.
+function servePublicPath(path, env) {
+  const shell = renderPublicSite(path, env, { host: "product.example.test" });
+  if (shell) return shell;
+  let body = "";
+  const response = { status: () => response, header: () => response, type: () => response, send: (value) => { body = String(value); return response; } };
+  maybeServePublicSite({ headers: { host: "product.example.test" } }, response, path, env);
+  return body;
+}
+
 test("every sitemap location renders a unique canonical public page", () => {
   const sitemap = renderPublicSitemap(baseEnv);
   const locations = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]);
-  assert.equal(locations.length, 33);
+  assert.equal(locations.length, 37);
   assert.equal(new Set(locations).size, locations.length);
   for (const location of locations) {
     const path = new URL(location).pathname;
-    const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
+    const html = servePublicPath(path, baseEnv);
     assert.match(html, /<main id="main-content"/);
     assert.match(html, new RegExp(`rel="canonical" href="${location.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
     assert.match(html, /<h1[^>]*>[^<]+<\/h1>/);

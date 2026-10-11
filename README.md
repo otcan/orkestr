@@ -5,28 +5,89 @@
 [![Node 22+](https://img.shields.io/badge/node-22%2B-339933.svg)](package.json)
 [![Local First](https://img.shields.io/badge/default-local--first-111827.svg)](docs/oss-managed-boundary.md)
 
-Orkestr is a local-first workstation for running persistent coding and
-operations agents from your laptop, browser, phone, or VPS.
+**Run your coding agent, leave your desk, and stay in control.**
 
-It gives Codex a durable home: persistent threads, browser control, status,
-interruptions, WhatsApp routing, timers, and local ops from a web UI or CLI.
-Codex remains the agent. Orkestr is the control surface around it.
+Orkestr is an open-source, self-hosted runtime for persistent agent jobs. A
+job has a trigger (API, webhook, schedule or message), an agent, a task, tool
+permissions and notifications. Its state is on disk, so it survives crashes
+and restarts; recovery reconciles side effects instead of repeating them;
+sensitive actions wait for your approval; and every run leaves an audit record.
 
-Use Orkestr when one interactive terminal is no longer enough and you need a
-private agent workstation with setup, routing, history, status, and recovery.
-You can run the deterministic coding-agent demo in five minutes with
-`npm run demo:coding-agent`; the full live path then connects your own Codex
-login from `/setup`.
+- **Self-hosted.** Runs on your own machine or VPS. No account with us; the
+  only credentials are the provider and connector logins you add.
+- **No telemetry.** The runtime does not send usage data to us.
+- **Provider-independent.** Providers sit behind one
+  [adapter interface](docs/spec/adapter-interface.md). Today only Codex jobs are
+  verified on a real provider (see the status below).
 
-oXRM is the first workflow app built around the same model: an MCP-first
-relationship workspace that gives agents structured relationship memory,
-follow-up queues, and safe human-approved actions.
+Positioning: [docs/product/positioning.md](docs/product/positioning.md).
+Guarantees: [docs/spec/runtime-guarantees.md](docs/spec/runtime-guarantees.md).
 
-For job applications and LinkedIn outreach, Orkestr can create a private
-job-alert address per thread, turn incoming alerts into passive Jobs signals,
-keep outbound drafts locally, and prepare calendar files or Google Calendar
-prefill links. This workflow does not require Gmail inbox read, Gmail drafts,
-or Google Calendar API access. See [Job Application And Outreach
+### Try it in one minute (simulation)
+
+```bash
+git clone https://github.com/otcan/orkestr.git
+cd orkestr
+npm ci
+# SIMULATION: simulated AI, fake code host, no real job
+node apps/cli/bin/orkestr-oss.js demo --yes   # or: orkestr demo --yes
+```
+
+`orkestr demo` is a **simulation**: it uses a simulated AI and a fake code host
+in a throwaway `ORKESTR_HOME`. It shows crash recovery without a duplicate pull
+request and an approval pause before merging. It does not call a real model.
+
+### Your first real job
+
+After `codex login` on the same host:
+
+```bash
+orkestr init my-jobs   # or: node apps/cli/bin/orkestr-oss.js init my-jobs
+orkestr run my-jobs
+```
+
+Details: [docs/quickstart.md](docs/quickstart.md) and
+[docs/spec/agent-job-runner.md](docs/spec/agent-job-runner.md).
+
+### What works today (2026-10-11)
+
+Evidence levels: **simulation** (simulated provider or fake external systems
+only), **offline-tested** (automated tests, no live service), **live-verified**
+(observed on a real provider or released build in a controlled test).
+
+<!-- status:start (keep in sync with apps/server/src/public-site-oss-status.ts) -->
+| Capability | Status | Evidence |
+| --- | --- | --- |
+| Codex jobs | live-verified once on production build (approval pause -> approve -> single-use approval consumed, effect ledgered) | live-verified |
+| Claude Code jobs | NOT supported yet (permission hook not enforced in live test; refused unless configured) | offline-tested |
+| YAML/JSON job specs | verified | live-verified |
+| WhatsApp/email notifications | built, not live-verified | offline-tested |
+| Webhooks (HMAC) | built and tested offline | offline-tested |
+| Guarantees G1-G11 | tested with simulated/fake providers | simulation |
+| orkestr demo | simulation by design | simulation |
+<!-- status:end -->
+
+Codex jobs, tested configuration: Codex CLI 0.157.1 job, approval-gated file
+change, live-verified once on release main-a343edf1ac91. One run is not a
+reliability measurement; other Codex versions and tool mixes are untested.
+
+Claude Code jobs are not working: in the one live test the per-call permission
+hook did not run, so tool approvals were not enforced. Production refuses
+Claude Code jobs unless a job login is configured. A host whose own Claude login is active
+can still start Claude Code jobs today; set
+`ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR=0` to turn them off. Anything not in
+this table should be treated as unverified. There is no public or hosted job
+runner.
+
+### Beyond jobs
+
+Orkestr is also a local-first workstation for running persistent coding and
+operations agents interactively. It gives Codex a durable home with
+persistent threads, browser control, status, interruptions, WhatsApp routing,
+timers, and local ops from a web UI or CLI. oXRM is the first workflow app built on the
+same model: an MCP-first relationship workspace with structured relationship
+memory, follow-up queues, and human-approved actions. For job applications and
+LinkedIn outreach, see [Job Application And Outreach
 Workflow](docs/job-application-workflow.md).
 
 > Public alpha. The Docker/Helm path is the primary OSS demo path. Browser

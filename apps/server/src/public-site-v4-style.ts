@@ -91,8 +91,6 @@ export const publicSiteV4Css = `
 .project-expectations li > span { color: var(--accent); font: 760 11px ui-monospace, monospace; }
 .project-expectations p { margin: 20px 0 0; color: var(--muted); line-height: 1.5; }
 .project-expectations strong { display: block; margin-bottom: 8px; color: var(--ink); font-size: 20px; }
-.free-product-grid { grid-template-columns: minmax(0, 620px); margin-top: 0; }
-.free-product-card ul { margin: 0 0 8px; padding-left: 20px; color: var(--muted); line-height: 1.6; }
 @media (max-width: 960px) {
   .v4-hero, .v4-process, .v4-proof, .project-booking-hero, .quick-intake-section { grid-template-columns: 1fr; }
   .v4-hero { min-height: auto; }

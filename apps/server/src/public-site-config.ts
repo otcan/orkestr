@@ -1,5 +1,9 @@
 export type PublicPageId =
   | "home"
+  | "builds"
+  | "free"
+  | "open-source"
+  | "studio"
   | "team"
   | "security"
   | "deployment"
@@ -18,8 +22,7 @@ export type PublicPageId =
   | "acceptable-use"
   | "data-deletion"
   | "support"
-  | "beta"
-  | "free-products";
+  | "beta";
 
 export type PublicLocale = "en" | "de" | "tr";
 
@@ -36,7 +39,6 @@ export type PublicPage = {
   canonicalPath?: string;
   locale?: PublicLocale;
   indexable?: boolean;
-  analytics?: boolean;
 };
 
 export const publicLocales: PublicLocale[] = ["en", "de", "tr"];
@@ -56,6 +58,10 @@ export const publicLocaleOpenGraphTags: Record<PublicLocale, string> = {
 const localizedPagePaths: Record<PublicLocale, Partial<Record<PublicPageId, string>>> = {
   en: {
     home: "/",
+    builds: "/builds",
+    free: "/free",
+    "open-source": "/open-source",
+    studio: "/studio",
     team: "/team",
     security: "/security",
     deployment: "/deployment",
@@ -75,10 +81,9 @@ const localizedPagePaths: Record<PublicLocale, Partial<Record<PublicPageId, stri
     "data-deletion": "/data-deletion",
     support: "/support",
     beta: "/beta",
-    "free-products": "/free",
   },
   de: {
-    home: "/de",
+    studio: "/de/studio",
     team: "/de/team",
     "use-cases": "/de/leistungen",
     "websites-commerce": "/de/websites-onlineshops",
@@ -91,7 +96,7 @@ const localizedPagePaths: Record<PublicLocale, Partial<Record<PublicPageId, stri
     deployment: "/de/betrieb",
   },
   tr: {
-    home: "/tr",
+    studio: "/tr/studio",
     team: "/tr/ekip",
     "use-cases": "/tr/hizmetler",
     "websites-commerce": "/tr/web-sitesi-e-ticaret",
@@ -104,6 +109,13 @@ const localizedPagePaths: Record<PublicLocale, Partial<Record<PublicPageId, stri
     deployment: "/tr/devreye-alma",
   },
 };
+
+// Former public URLs that moved when the root became the umbrella page.
+// Values are permanent (301) redirect targets.
+export const publicSiteRedirects: Readonly<Record<string, string>> = Object.freeze({
+  "/de": "/de/studio",
+  "/tr": "/tr/studio",
+});
 
 const defaultRepoUrl = "https://github.com/otcan/orkestr";
 

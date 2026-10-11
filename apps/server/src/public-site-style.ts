@@ -3,6 +3,8 @@ import { publicSiteV3Css } from "./public-site-v3-style.js";
 import { publicSiteV4Css } from "./public-site-v4-style.js";
 import { publicSiteLocalizationCss } from "./public-site-localization-style.js";
 import { publicSiteEvidenceCss } from "./public-site-evidence-style.js";
+import { publicSiteHubCss } from "./public-site-hub-style.js";
+import { publicSiteOssCss } from "./public-site-oss-style.js";
 
 export function renderCommercialSiteCss() {
   return `
@@ -349,6 +351,7 @@ ${publicSiteV3Css}
 ${publicSiteV4Css}
 ${publicSiteLocalizationCss}
 ${publicSiteEvidenceCss}
+${publicSiteOssCss}
 ${waitlistCss()}
 .beta-page .waitlist-band { display: grid; grid-template-columns: .7fr 1.3fr; gap: clamp(36px,7vw,90px); padding: clamp(60px,8vw,112px) clamp(20px,7vw,110px); border-top: 1px solid var(--line); }
 .footer { display: grid; grid-template-columns: 1.35fr repeat(5,minmax(110px,.68fr)); gap: 30px; padding: 58px clamp(20px,5vw,80px) 34px; background: var(--dark); color: #edf2ed; }
@@ -436,6 +439,7 @@ ${waitlistCss()}
   .footer { grid-template-columns: 1fr; }
   .footer-brand, .footer-note { grid-column: 1; }
 }
+${publicSiteHubCss}
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 `;
 }

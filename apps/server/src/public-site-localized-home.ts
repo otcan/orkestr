@@ -67,14 +67,14 @@ const localizedHomeCopy: Record<"de" | "tr", LocalizedHomeCopy> = {
   },
 };
 
-export function localizedCommercialHomePage(locale: "de" | "tr"): PublicPage {
+export function localizedStudioPage(locale: "de" | "tr"): PublicPage {
   const copy = localizedHomeCopy[locale];
   const project = publicPagePath("project", locale);
-  const home = publicPagePath("home", locale);
+  const home = publicPagePath("studio", locale);
   const security = publicPagePath("security", locale);
   const services = copy.services.items.map((item, index) => `<article class="v4-service-card"><span>0${index + 1}</span><h3>${item.title}</h3><p>${item.copy}</p><small>${item.examples}</small><a href="${publicPagePath(item.id, locale)}" data-event="service_group_click">${copy.services.link} <span aria-hidden="true">→</span></a></article>`).join("");
   return {
-    id: "home", locale, title: copy.title, summary: copy.summary, canonicalPath: home,
+    id: "studio", locale, title: copy.title, summary: copy.summary, canonicalPath: home,
     body: `<main id="main-content" class="v4-home">
       <section class="v4-section v4-hero" aria-labelledby="home-title"><div class="v4-hero-copy"><p class="eyebrow">${copy.eyebrow}</p><h1 id="home-title">${copy.heading}</h1><p class="lead">${copy.lead}</p><p class="hero-detail">${copy.detail}</p><div class="actions"><a class="button" href="${project}#book" data-event="book_project_hero">${copy.book}</a><a class="button button-ghost" href="#services" data-event="see_services">${copy.see}</a></div><ul class="v4-trust">${copy.trust.map((item) => `<li>${item}</li>`).join("")}</ul></div>
       <div class="v4-hero-visual">${renderHomepageSystemVisual(locale)}<article class="v4-brief-card"><div class="v4-brief-head"><span>${copy.brief.label}</span><strong>${copy.brief.title}</strong></div><dl>${copy.brief.items.map(([term, text]) => `<div><dt>${term}</dt><dd>${text}</dd></div>`).join("")}</dl><p><span aria-hidden="true">●</span>${copy.brief.note}</p></article></div></section>

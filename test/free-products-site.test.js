@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderPublicSite, renderPublicSitemap } from "../dist/server/apps/server/src/public-site.js";
 import { maybeServeFreeProduct, workoutLogCsp } from "../dist/server/apps/server/src/free-products-static.js";
-import { freeProducts } from "../dist/server/apps/server/src/free-products-catalog.js";
+import { publicCatalog, publicCatalogEntryIsLive } from "../dist/server/apps/server/src/public-site-catalog.js";
 
 const env = { ORKESTR_PUBLIC_SITE_URL: "https://product.example.test", ORKESTR_PUBLIC_REPO_URL: "https://github.com/otcan/orkestr" };
 
@@ -17,18 +17,16 @@ function fakeResponse() {
   return { response, result };
 }
 
-test("free products catalog lists the workout log without the event beacon", () => {
+test("free products catalog links the live workout log without the event beacon", () => {
   const html = renderPublicSite("/free", env, { host: "product.example.test" });
-  assert.match(html, /<title>Free Products \| Orkestr<\/title>/);
-  assert.match(html, /<link rel="canonical" href="https:\/\/product\.example\.test\/free">/);
-  for (const product of freeProducts) assert.match(html, new RegExp(`href="${product.path}"`));
-  assert.match(html, /href="\/free\/workout-log"/);
-  assert.doesNotMatch(html, /\/api\/public\/events|sendBeacon|orkestrTrack|IntersectionObserver/);
-  assert.doesNotMatch(html, /data-(?:view-)?event=/, "no event hooks on the free catalog");
-  assert.doesNotMatch(html, /<script(?! type="application\/ld\+json")/, "only structured data, no executable script");
+  const entry = publicCatalog.find((item) => item.section === "free" && item.slug === "workout-log");
+  assert.ok(entry && publicCatalogEntryIsLive(entry), "workout log is a live standalone catalog entry");
+  assert.equal(entry.render, undefined, "served outside the shell");
+  assert.match(html, /<a href="\/free\/workout-log">Workout log<\/a>/);
+  assert.doesNotMatch(html, /\/api\/public\/events|sendBeacon|orkestrTrack/);
   assert.doesNotMatch(html, /<form/);
-  assert.match(renderPublicSitemap(env), /<loc>https:\/\/product\.example\.test\/free<\/loc>/);
-  assert.match(renderPublicSite("/", env, { host: "product.example.test" }), /\/api\/public\/events/, "other pages keep their existing shell");
+  assert.match(renderPublicSitemap(env), /<loc>https:\/\/product\.example\.test\/free\/workout-log<\/loc>/);
+  assert.equal(renderPublicSite("/free/workout-log", env, { host: "product.example.test" }), "", "the shell never renders the standalone page");
 });
 
 test("workout log page is served with a strict no-network CSP and only same-origin assets", () => {
