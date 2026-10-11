@@ -197,7 +197,24 @@ profile is logged in, the provider reports `not_logged_in` and jobs on
   `claude.bash`), MCP tools `mcp.<server>.<tool>`. A blocked call is reported
   to the model with the reason. A hook error, timeout or missing broker
   blocks the call (exit 2). A `tool_result` for a call that never passed the
-  hook fails the attempt with `claude_code_permission_hook_bypassed`.
+  hook fails the attempt with `claude_code_permission_hook_bypassed`. Claude
+  Code treats a hook it cannot *spawn* (for example `EACCES` on its cwd) as a
+  non-blocking error and runs the tool, so only calls Claude refused before
+  any hook (`InputValidationError`, unknown tool) are exempt; a
+  `<tool_use_error>` from a tool that ran counts as a bypass.
+* **Run user.** A root server may start Claude through a wrapper that
+  switches to an unprivileged user (Claude Code refuses some modes as uid 0).
+  That user must own the run workspace (Claude's cwd and the hook's cwd) and
+  reach the broker socket, so both are handed to it
+  (`agent-job-claude-runtime.js`): `ORKESTR_AGENT_JOB_CLAUDE_RUN_USER`, else
+  the non-root owner of the job Claude config dir (a wrapper hands the profile
+  to its run user), else `ORKESTR_RUN_USER`. The broker token still guards
+  every request. `ORKESTR_HOME` must be traversable by that user, and the
+  Orkestr install (hook script) readable.
+* **Agent-reported failure.** Both executors tell the agent to answer
+  `TASK_FAILED: <reason>` when it cannot do the task; that answer fails the
+  attempt as a non-retryable task error (run reason `task_error`, run error
+  `agent_reported_failure: <reason>`) instead of a `succeeded` run.
 * **Cancel and resume.** The abort sends SIGTERM, then SIGKILL, to the process
   group. The session id is emitted before any tool runs; the next attempt runs
   `--resume` on it.

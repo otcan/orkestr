@@ -103,3 +103,17 @@ export function approvedCallsText(input) {
     ? `A person approved these exact calls. If the action is still needed, make the same call again with the same arguments; do not get the same result through a different tool:\n${input.approvedCalls}`
     : "";
 }
+
+// A task the agent could not do must not end as `succeeded`: executors tell
+// the agent to answer `TASK_FAILED: <reason>` and turn that answer into a
+// non-retryable task error (run reason task_error, the reason in run.error).
+export const TASK_FAILED_INSTRUCTION = "If you cannot complete the task, your whole final answer must be `TASK_FAILED: <short reason>` instead of a normal answer.";
+
+export function agentReportedFailure(text) {
+  const match = /^\s*TASK_FAILED:\s*([\s\S]*)$/.exec(String(text || ""));
+  return match ? match[1].trim().slice(0, 500) || "no reason given" : null;
+}
+
+export function agentFailureError(reason, { sessionRef = "" } = {}) {
+  return nativeAttemptError({ class: "permanent", code: "agent_reported_failure", retryable: false }, { message: `agent_reported_failure: ${reason}`, sessionRef });
+}
