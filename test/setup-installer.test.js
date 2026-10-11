@@ -196,7 +196,11 @@ test("instance ids and thread names carry no fixed digits", async () => {
   for (let position = 6; position < 22; position += 1) {
     assert.ok(new Set(ids.map((id) => id[position])).size > 1, `character ${position} varies`);
   }
-  assert.equal(new Set(ids.map((id) => id.slice(-6))).size, ids.length, "thread-name suffixes are unique in practice");
+  // Six random hex digits: a new install's name collides with one given
+  // earlier name with odds 1 in 16.7M. Among 400 random suffixes a pair may
+  // repeat (birthday effect, ~0.5%), so only require near-uniqueness here.
+  assert.ok(ids.every((id) => /^[0-9a-f]{6}$/.test(id.slice(-6))));
+  assert.ok(new Set(ids.map((id) => id.slice(-6))).size >= ids.length - 2, "thread-name suffixes are random");
 });
 
 test("the Setup thread gets the provider runtime and is started after its instructions are set", async () => {
