@@ -1,5 +1,6 @@
 // Evidence desk browser entry point: state, persistence and actions. Stores
-// state in localStorage only and makes no network requests.
+// state in localStorage only. Once loaded it sends nothing back: no fetch,
+// XHR, beacons or sockets; exports are generated locally as blob downloads.
 import {
   STORAGE_KEY, addClaim, addEvidence, deleteClaim, linkContradiction, recordDecision, removeEvidence,
   reopenClaim, sanitizeState, unlinkContradiction, updateClaim, updateEvidence,

@@ -6,7 +6,7 @@ import type { PublicPage } from "./public-site-config.js";
 const limitations = [
   "This is a demonstration, not a research tool. The topic, source records and numbers are invented.",
   "The rubric score is an illustrative teaching device. It is not calibrated, not statistical and not a scientific confidence measure, and it cannot tell whether a source is true.",
-  "Nothing is sent to a server and no AI model is involved. Clearing site data or pressing Reset demo removes your changes.",
+  "The page and its scripts are delivered like any web page. After it loads, it sends nothing back: no analytics, no data uploads, and no AI model is involved. Clearing site data or pressing Reset demo removes your entries.",
   "Please do not enter personal, confidential or health information; the demo is not built to protect it.",
 ];
 
@@ -27,7 +27,7 @@ export function evidenceDeskPage(): PublicPage {
         <div class="ed-notice" role="note">
           <strong>Fictional topic, synthetic records.</strong>
           <p>The sample data is about the <em>Brindlemere Tool Library</em>, an invented community lending service in an invented town. Every claim, source record, quote and number was written for this demo. Nothing describes a real person, organisation or client project.</p>
-          <p>The app runs entirely in this page. It keeps its state in your browser's local storage, makes no network requests and uses no AI model.</p>
+          <p class="ed-privacy">After this page loads, it sends nothing back: no analytics, no data uploads. Your entries stay in this browser (local storage). No AI model is involved.</p>
         </div>
         <details class="ed-limits"><summary>Limitations</summary><ul>${limitations.map((item) => `<li>${item}</li>`).join("")}</ul></details>
       </section>

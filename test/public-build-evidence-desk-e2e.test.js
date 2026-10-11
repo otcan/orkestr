@@ -85,6 +85,24 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     });
     page.on("request", (request) => { if (!request.url().startsWith(baseUrl) && !request.url().startsWith("blob:") && !request.url().startsWith("data:")) foreign.push(request.url()); });
     page.on("dialog", (dialog) => dialog.accept());
+    // Count every request API call made by page code. Static asset delivery
+    // (HTML, CSS, module scripts) is fine; application-data or analytics calls are not.
+    await page.evaluateOnNewDocument(() => {
+      const calls = (window.__edNetworkCalls = []);
+      const wrap = (owner, key, label) => {
+        const original = owner[key];
+        if (typeof original !== "function") return;
+        owner[key] = function (...args) { calls.push(`${label} ${String(args[0] ?? "")}`); return original.apply(this, args); };
+      };
+      wrap(window, "fetch", "fetch");
+      wrap(XMLHttpRequest.prototype, "open", "xhr");
+      wrap(Navigator.prototype, "sendBeacon", "beacon");
+      for (const name of ["WebSocket", "EventSource"]) {
+        const Original = window[name];
+        if (!Original) continue;
+        window[name] = function (...args) { calls.push(`${name} ${String(args[0] ?? "")}`); return new Original(...args); };
+      }
+    });
 
     const response = await page.goto(`${baseUrl}/builds/evidence-desk`, { waitUntil: "networkidle0" });
     assert.equal(response.status(), 200);
@@ -202,7 +220,8 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     assert.deepEqual(errors, []);
     assert.deepEqual(foreign, []);
     assert.deepEqual(api, [], "no /api/ calls, including the public events beacon");
-    assert.deepEqual(afterLoad, [], "no network requests while using the app");
+    assert.deepEqual(afterLoad, [], "after load the page sends nothing back (static asset delivery happens only during load)");
+    assert.deepEqual(await page.evaluate(() => window.__edNetworkCalls), [], "page code never calls fetch, XHR, sendBeacon, WebSocket or EventSource");
   } finally {
     if (browser) await browser.close();
     await new Promise((resolve) => server.close(resolve));

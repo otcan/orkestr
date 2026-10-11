@@ -243,7 +243,7 @@ test("catalog lists the evidence desk as a live simulation and only allow-listed
   for (const bad of ["/builds/evidence-desk/../../../package.json", "/builds/evidence-desk/secret.js", "/builds/other/evidence-desk.css", "/builds/evidence-desk/"]) assert.equal(publicBuildAsset(bad), null);
 });
 
-test("evidence desk loads no analytics beacon and its page code makes no network requests", () => {
+test("evidence desk loads no analytics beacon and its page code contains no request APIs", () => {
   const html = renderPublicSite("/builds/evidence-desk", env, { host: "product.example.test" });
   assert.doesNotMatch(html, /\/api\/public\/events|sendBeacon|orkestrTrack|data-event=|data-view-event=/);
   const assets = publicBuildAssets["evidence-desk"];
@@ -257,4 +257,12 @@ test("evidence desk loads no analytics beacon and its page code makes no network
   }
   const network = /\bfetch\s*\(|XMLHttpRequest|sendBeacon|WebSocket|EventSource|\bimport\s*\(|new\s+Image\b|serviceWorker|\.src\s*=|https?:\/\/|\/api\/|data-event|data-view-event/;
   for (const name of Object.keys(assets)) assert.doesNotMatch(publicBuildAsset(`/builds/evidence-desk/${name}`).body, network, name);
+});
+
+test("privacy wording says nothing is sent back after load, not that no HTTP happens", () => {
+  const html = renderPublicSite("/builds/evidence-desk", env, { host: "product.example.test" });
+  assert.match(html, /After this page loads, it sends nothing back: no analytics, no data uploads\. Your entries stay in this browser/);
+  assert.match(html, /The page and its scripts are delivered like any web page\./);
+  assert.doesNotMatch(html, /makes no network requests|nothing leaves your browser|Nothing is sent to a server/i);
+  assert.match(publicCatalog.find((item) => item.slug === "evidence-desk").summary, /after the page loads it sends nothing back/);
 });
