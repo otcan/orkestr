@@ -2,11 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 
 // Static browser assets for interactive live builds, keyed by catalog slug.
-// Only the files listed here are served; everything else falls through.
+// Plain browser JS and CSS live in apps/server/public-builds and ship unchanged
+// with the server. Only the files listed here are served; everything else
+// falls through.
 const buildAssetRoot = path.resolve(process.cwd(), "apps/server/public-builds");
 const js = "text/javascript; charset=utf-8";
+const css = "text/css; charset=utf-8";
 
 export const publicBuildAssets: Record<string, Record<string, string>> = {
+  "customer-portal": {
+    "app.js": js,
+    "workflow.js": js,
+    "portal.css": css,
+  },
   "evidence-desk": {
     "evidence-desk-app.js": js,
     "evidence-desk-state.js": js,
@@ -14,7 +22,7 @@ export const publicBuildAssets: Record<string, Record<string, string>> = {
     "evidence-desk-sample.js": js,
     "evidence-desk-export.js": js,
     "evidence-desk-views.js": js,
-    "evidence-desk.css": "text/css; charset=utf-8",
+    "evidence-desk.css": css,
   },
 };
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderPublicSite, renderPublicSitemap } from "../dist/server/apps/server/src/public-site.js";
 import { maybeServePublicSite } from "../dist/server/apps/server/src/public-site-static.js";
-import { publicCatalog } from "../dist/server/apps/server/src/public-site-catalog.js";
+import { publicCatalog, publicCatalogEntryIsLive } from "../dist/server/apps/server/src/public-site-catalog.js";
 
 const env = {
   ORKESTR_PUBLIC_SITE_URL: "https://product.example.test",
@@ -49,7 +49,7 @@ test("builds and free indexes list catalog entries with status badges and only l
     const entries = publicCatalog.filter((entry) => entry.section === section);
     assert.ok(entries.length > 0);
     for (const entry of entries) {
-      const live = entry.status === "live" && typeof entry.render === "function";
+      const live = publicCatalogEntryIsLive(entry);
       assert.match(html, new RegExp(entry.title));
       if (live) assert.match(html, new RegExp(`href="/${section}/${entry.slug}"`));
       else assert.doesNotMatch(html, new RegExp(`href="/${section}/${entry.slug}"`));
@@ -60,7 +60,7 @@ test("builds and free indexes list catalog entries with status badges and only l
 });
 
 test("pending catalog entries are not routable; registered live entries are", () => {
-  const pending = publicCatalog.find((entry) => !(entry.status === "live" && entry.render));
+  const pending = publicCatalog.find((entry) => !publicCatalogEntryIsLive(entry));
   if (pending) assert.equal(renderPublicSite(`/${pending.section}/${pending.slug}`, env, host), "");
   const entry = { section: "builds", slug: "fixture-build", title: "Fixture build", summary: "Synthetic fixture.", status: "live", evidence: "simulation", render: () => ({ id: "builds", title: "Fixture build", summary: "Synthetic fixture.", canonicalPath: "/builds/fixture-build", body: '<main id="main-content"><h1>Fixture build</h1></main>' }) };
   publicCatalog.push(entry);
@@ -99,5 +99,59 @@ test("moved localized homes redirect permanently to their studio pages", () => {
     const result = serve(path);
     assert.equal(result.status, 200, path);
     assert.match(result.body, /<main\b/, path);
+  }
+});
+
+test("EN/DE/TR routing stays consistent: no stale alternates or untranslated umbrella labels", () => {
+  const sitemap = renderPublicSitemap(env);
+  const paths = [...new Set([...sitemap.matchAll(/<loc>https:\/\/product\.example\.test([^<]*)<\/loc>/g)].map((match) => match[1] || "/"))];
+  const localized = paths.filter((path) => /^\/(de|tr)\//.test(path)).concat(["/de/projekt", "/tr/proje"]);
+  assert.ok(localized.length >= 22);
+  for (const path of paths.concat(["/de/projekt", "/tr/proje"])) {
+    const html = renderPublicSite(path, env, host);
+    const targets = [
+      ...[...html.matchAll(/<link rel="alternate" hreflang="[^"]+" href="https:\/\/product\.example\.test([^"]*)"/g)].map((match) => match[1] || "/"),
+      ...[...html.matchAll(/class="(?:mobile-)?language-switcher[^"]*"[^>]*>(.*?)<\/(?:nav|div)>/gs)].flatMap((match) => [...match[1].matchAll(/href="([^"]+)"/g)].map((link) => link[1])),
+    ];
+    for (const target of targets) {
+      const result = serve(target);
+      assert.equal(result.status, 200, `${path} -> ${target}`);
+    }
+  }
+  for (const path of localized) {
+    const html = renderPublicSite(path, env, host);
+    const nav = html.match(/<nav class="desktop-nav"[^>]*>(.*?)<\/nav>/s)[1];
+    assert.doesNotMatch(nav, />(Live builds|Free products|Open source)</, path);
+    for (const target of ["/builds", "/free", "/open-source"]) assert.match(nav, new RegExp(`href="${target}" hreflang="en"`), path);
+    assert.match(nav, new RegExp(`href="/${path.split("/")[1]}/studio"`), path);
+    assert.doesNotMatch(html, />Explore</, path);
+    assert.doesNotMatch(html, /href="\/(builds|free|open-source)"(?! hreflang="en")/, path);
+  }
+  const root = renderPublicSite("/", env, host);
+  assert.match(root, /href="\/de\/studio" hreflang="de-DE" lang="de">Deutsch</);
+  assert.match(root, /href="\/tr\/studio" hreflang="tr-TR" lang="tr">Türkçe</);
+  assert.doesNotMatch(root, /rel="alternate"/);
+});
+
+test("builds, free products, and open source never load the analytics beacon or tracked attributes", () => {
+  const tracking = /\/api\/public\/events|orkestrTrack|sendBeacon|data-event=|data-view-event=/;
+  const fixtures = [
+    { section: "builds", slug: "beacon-fixture", title: "Beacon fixture", summary: "Synthetic.", status: "live", evidence: "simulation" },
+    { section: "free", slug: "beacon-fixture", title: "Beacon fixture", summary: "Synthetic.", status: "live", evidence: "simulation" },
+  ].map((entry) => ({ ...entry, render: () => ({ id: entry.section, title: entry.title, summary: entry.summary, canonicalPath: `/${entry.section}/${entry.slug}`, body: '<main id="main-content"><h1>Fixture</h1><a href="#" data-event="book_project_hero" data-view-event="platform_console_view">x</a></main>' }) }));
+  publicCatalog.push(...fixtures);
+  try {
+    for (const path of ["/builds", "/free", "/open-source", "/builds/beacon-fixture", "/free/beacon-fixture"]) {
+      const html = renderPublicSite(path, env, host);
+      assert.match(html, /<main\b/, path);
+      assert.doesNotMatch(html, tracking, path);
+    }
+  } finally {
+    for (const entry of fixtures) publicCatalog.splice(publicCatalog.indexOf(entry), 1);
+  }
+  for (const path of ["/studio", "/de/studio", "/project", "/security", "/privacy"]) {
+    const html = renderPublicSite(path, env, host);
+    assert.match(html, /\/api\/public\/events/, path);
+    assert.match(html, /data-event="client_portal_click"/, path);
   }
 });

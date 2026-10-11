@@ -24,6 +24,8 @@ export const publicSiteHubCss = `
 .hub-evidence-legend { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 1px; margin: 0; border: 1px solid var(--line); background: var(--line); }
 .hub-evidence-legend div { padding: 22px; background: var(--panel); }
 .hub-evidence-legend dd { margin: 12px 0 0; color: var(--muted); line-height: 1.55; }
+.hub-languages { margin: 0; font-size: 14px; }
+.hub-languages a { font-weight: 700; }
 .hub-next { margin: 0; color: var(--muted); }
 @media (max-width: 1050px) { .footer { grid-template-columns: repeat(3,1fr); } .footer-brand, .footer-note { grid-column: 1/-1; } }
 @media (max-width: 760px) { .hub-evidence-legend { grid-template-columns: 1fr; } .footer { grid-template-columns: repeat(2,1fr); } }

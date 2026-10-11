@@ -18,7 +18,7 @@ export function evidenceDeskPage(): PublicPage {
     title: "Evidence desk — live build",
     summary: "A runnable in-browser demo on a fictional topic: trace evidence to synthetic source records, track contradictions, record review decisions and export a reproducible summary.",
     stylesheets: [`${assetBase}/evidence-desk.css`],
-    moduleScripts: [`${assetBase}/evidence-desk-app.js`],
+    scripts: [`${assetBase}/evidence-desk-app.js`],
     body: `<main id="main-content" class="evidence-desk">
       <section class="ed-intro" aria-labelledby="ed-title">
         <p class="eyebrow">LIVE BUILD · IN-BROWSER SIMULATION · FICTIONAL DATA</p>

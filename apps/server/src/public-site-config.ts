@@ -39,9 +39,8 @@ export type PublicPage = {
   canonicalPath?: string;
   locale?: PublicLocale;
   indexable?: boolean;
-  // Extra same-origin assets for interactive pages (e.g. live builds). No inline code.
   stylesheets?: string[];
-  moduleScripts?: string[];
+  scripts?: string[];
 };
 
 export const publicLocales: PublicLocale[] = ["en", "de", "tr"];
