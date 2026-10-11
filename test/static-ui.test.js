@@ -74,26 +74,18 @@ function assertAngularShell(html) {
   assert.match(html, /src="main[^"]*\.js"/);
 }
 
-function assertPublicShell(html) {
-  assert.match(html, /<title>We turn complex ideas into working software \| Orkestr<\/title>/);
-  assert.match(html, /We turn complex ideas into working software\./);
-  assert.match(html, />Explore free products</);
-  assert.match(html, />Discuss a project</);
-  for (const path of ["/free", "/open-source", "/studio"]) assert.match(html, new RegExp(`href="${path}"`));
-  assert.doesNotMatch(html, /href="\/builds/);
+function assertPublicHomepage(html) {
+  // The marketing site is a separate static site; on the public host the app
+  // serves the OAuth homepage, which identifies the app and links the policies.
+  assert.match(html, /<title>Orkestr<\/title>/);
+  assert.match(html, /<h1>Orkestr<\/h1>/);
   assert.match(html, /name="application-name" content="Orkestr"/);
-  assert.match(html, /property="og:site_name" content="Orkestr"/);
-  assert.match(html, /name="twitter:card" content="summary_large_image"/);
   assert.match(html, /rel="stylesheet" href="\/public-site\.css"/);
-  assert.doesNotMatch(html, /<style>/);
-  assert.doesNotMatch(html, /Personal beta/);
-  assert.doesNotMatch(html, /\/api\/public\/events/);
-  assert.doesNotMatch(html, /id="waitlist-form"/);
-  assert.doesNotMatch(html, /Join waitlist/);
-  assert.match(html, /href="\/privacy"/);
-  assert.match(html, /href="\/terms"/);
-  assert.match(html, />Client Portal</);
-  assert.doesNotMatch(html, />Sign in</);
+  assert.match(html, /href="\/privacy">Privacy Policy/);
+  assert.match(html, /href="\/terms">Terms of Service/);
+  assert.doesNotMatch(html, /We turn complex ideas into working software/);
+  assert.doesNotMatch(html, /<script/);
+  assert.doesNotMatch(html, /<h1>Which Orkestr\?<\/h1>/);
   assert.doesNotMatch(html, /<ork-root(?:\s|>)/);
 }
 
@@ -121,7 +113,7 @@ function assertInstancePairingRedirect(response, { instanceId, returnPath = "", 
   else assert.equal(returnTo, returnPath);
 }
 
-test("server serves the public site at root and Angular UI at app routes", async () => {
+test("server serves the OAuth homepage, legal and lead-form pages on the public host and the Angular UI at app routes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-ui-"));
   const priorHome = process.env.ORKESTR_HOME;
   const priorOverlay = process.env.ORKESTR_OVERLAY_DIR;
@@ -200,8 +192,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     const googleWorkspaceConnectHtml = await googleWorkspaceConnectResponse.text();
 
     assert.equal(response.status, 200);
-    assertPublicShell(html);
-    assert.match(html, /rel="icon" type="image\/svg\+xml" href="\/favicon\.svg"/);
+    assertPublicHomepage(html);
     assert.equal(appResponse.status, 200);
     assertAngularShell(appHtml);
     assert.equal(termsResponse.status, 200);
@@ -227,8 +218,8 @@ test("server serves the public site at root and Angular UI at app routes", async
     const expandedHomeHtml = await (await fetch(`http://127.0.0.1:${port}/`)).text();
     const expandedPrivacyHtml = await (await fetch(`http://127.0.0.1:${port}/privacy`)).text();
     const expandedAboutHtml = await (await fetch(`http://127.0.0.1:${port}/about`)).text();
-    assert.match(expandedHomeHtml, /We turn complex ideas into working software/);
-    assert.doesNotMatch(expandedHomeHtml, /read selected Gmail signals/);
+    assertPublicHomepage(expandedHomeHtml);
+    assert.match(expandedHomeHtml, /prepare or send email/);
     assert.match(expandedPrivacyHtml, /gmail\.readonly/);
     assert.match(expandedPrivacyHtml, /calendar\.events\.owned/);
     assert.match(expandedPrivacyHtml, /Notification rules default to bounded message metadata and snippets/);
@@ -243,19 +234,13 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.match(betaHtml, /content="noindex,follow"/);
     assert.match(betaHtml, /id="waitlist-form"/);
     assert.match(betaHtml, /\/api\/public\/waitlist/);
-    assert.equal(securityResponse.status, 200);
-    assert.match(securityHtml, /Your systems stay under your control/);
-    assert.match(securityHtml, /Certifications and regulatory requirements are assessed per deployment/);
-    assert.equal(deploymentResponse.status, 200);
-    assert.equal(developersResponse.status, 200);
-    assert.equal(useCasesResponse.status, 200);
-    assert.equal(germanHomeResponse.status, 200);
-    assert.match(germanHomeHtml, /<html lang="de-DE">/);
-    assert.match(germanHomeHtml, /Braucht Ihr Unternehmen ein besseres System/);
-    assert.equal(turkishTeamResponse.status, 200);
-    assert.match(turkishTeamHtml, /Oğuzcan Ünver/);
-    assert.equal(localizedSlashRedirect.status, 301);
-    assert.equal(localizedSlashRedirect.headers.get("location"), "/de/studio");
+    // Marketing pages moved to the separate static site; the app no longer
+    // renders or redirects them.
+    assert.doesNotMatch(securityHtml, /Your systems stay under your control/);
+    for (const removed of [deploymentResponse, developersResponse, useCasesResponse]) assert.doesNotMatch(await removed.text(), /href="\/public-site\.css"/);
+    assert.doesNotMatch(germanHomeHtml, /Braucht Ihr Unternehmen ein besseres System/);
+    assert.doesNotMatch(turkishTeamHtml, /Oğuzcan Ünver/);
+    assert.notEqual(localizedSlashRedirect.status, 301);
     assert.equal(workflowResponse.status, 200);
     assert.match(workflowHtml, /Show us one workflow worth fixing/);
     assert.match(workflowHtml, /id="workflow-form"/);
@@ -273,7 +258,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.match(publicCss, /\.hero/);
     assert.equal(robotsResponse.status, 200);
     assert.match(robotsResponse.headers.get("content-type") || "", /text\/plain/);
-    assert.equal(robots, "User-agent: *\nAllow: /\n\nSitemap: http://127.0.0.1/sitemap.xml\n");
+    assert.equal(robots, "User-agent: *\nAllow: /\n");
     assert.equal(onboardingResponse.status, 200);
     assertAngularShell(onboardingHtml);
     assert.equal(setupGmailResponse.status, 200);
@@ -1231,7 +1216,7 @@ test("server keeps public pages on the configured public site host only", async 
     const privateThreadHtml = await privateThreadResponse.text();
 
     assert.equal(publicResponse.status, 200);
-    assertPublicShell(publicHtml);
+    assertPublicHomepage(publicHtml);
     const privateRootHtml = await privateRootResponse.text();
     assert.equal(privateRootResponse.status, 200);
     assert.match(privateRootHtml, /<h1>Which Orkestr\?<\/h1>/);
@@ -1263,7 +1248,7 @@ test("server keeps public pages on the configured public site host only", async 
     });
     const overlappingHostHtml = await overlappingHostResponse.text();
     assert.equal(overlappingHostResponse.status, 200);
-    assertPublicShell(overlappingHostHtml);
+    assertPublicHomepage(overlappingHostHtml);
     assert.doesNotMatch(overlappingHostHtml, /<h1>Which Orkestr\?<\/h1>/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
