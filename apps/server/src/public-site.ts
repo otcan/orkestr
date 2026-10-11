@@ -1,4 +1,6 @@
-import { commercialHomePage } from "./public-site-home.js";
+import { studioPage } from "./public-site-home.js";
+import { buildsIndexPage, freeIndexPage, umbrellaHomePage } from "./public-site-hub.js";
+import { publicCatalog, publicCatalogEntryForPath, publicCatalogEntryIsLive, publicCatalogPath } from "./public-site-catalog.js";
 import { deploymentPage, developersPage, securityPage } from "./public-site-content.js";
 import { projectIntakePage } from "./public-project-intake.js";
 import { solutionPage, whatWeBuildPage } from "./public-site-solutions.js";
@@ -12,32 +14,37 @@ import {
   publicLocales,
   publicLocaleTags,
   publicPagePath,
+  publicSiteRedirects,
   publicSiteRoute,
   type PublicLocale,
   type PublicPageId,
 } from "./public-site-config.js";
-import { evidenceDeskPage } from "./public-site-builds.js";
 import { legalPage } from "./public-site-legal.js";
+import { openSourcePage } from "./public-site-oss.js";
 import { renderPublicShell } from "./public-site-shell.js";
 import { renderCommercialSiteCss } from "./public-site-style.js";
 import { workflowIntakePage } from "./public-workflow-intake.js";
-import { localizedCommercialHomePage } from "./public-site-localized-home.js";
+import { localizedStudioPage } from "./public-site-localized-home.js";
 import { localizedSolutionPage, localizedWhatWeBuildPage } from "./public-site-localized-solutions.js";
 import { localizedTrustPage, teamPage } from "./public-site-localized-trust.js";
 import { localizedProjectIntakePage } from "./public-project-intake-localized.js";
 
-export { publicPairingUrl, publicSiteAllowedForHost, publicSiteBaseUrl, publicSiteHost, publicSitePath, publicSiteRoute };
+export { publicPairingUrl, publicSiteAllowedForHost, publicSiteBaseUrl, publicSiteHost, publicSitePath, publicSiteRedirects, publicSiteRoute };
 
 function publicPage(pageId: PublicPageId, env = process.env, locale: PublicLocale = "en") {
   if (locale !== "en") {
-    if (pageId === "home") return localizedCommercialHomePage(locale);
+    if (pageId === "studio") return localizedStudioPage(locale);
     if (pageId === "use-cases") return localizedWhatWeBuildPage(locale);
     if (["websites-commerce", "business-systems", "opportunity-intelligence", "web-data-monitoring", "automation"].includes(pageId)) return localizedSolutionPage(pageId, locale);
     if (pageId === "project") return localizedProjectIntakePage(locale, env);
     if (pageId === "security" || pageId === "deployment") return localizedTrustPage(pageId, locale, env);
     if (pageId === "team") return teamPage(locale);
   }
-  if (pageId === "home") return commercialHomePage();
+  if (pageId === "home") return umbrellaHomePage();
+  if (pageId === "builds") return buildsIndexPage();
+  if (pageId === "free") return freeIndexPage();
+  if (pageId === "open-source") return openSourcePage(env);
+  if (pageId === "studio") return studioPage();
   if (pageId === "team") return teamPage();
   if (pageId === "security") return securityPage(env);
   if (pageId === "deployment") return deploymentPage(env);
@@ -46,16 +53,21 @@ function publicPage(pageId: PublicPageId, env = process.env, locale: PublicLocal
   if (pageId === "project") return projectIntakePage(env);
   if (["websites-commerce", "business-systems", "opportunity-intelligence", "web-data-monitoring", "automation"].includes(pageId)) return solutionPage(pageId);
   if (pageId === "workflow") return workflowIntakePage();
-  if (pageId === "evidence-desk") return evidenceDeskPage();
   return legalPage(pageId, env);
 }
 
 export function renderPublicSite(requestUrl = "/", env = process.env, options: { host?: string } = {}) {
   if (!publicSiteAllowedForHost(options.host || "", env)) return "";
   const url = new URL(requestUrl || "/", "http://localhost");
+  const catalogEntry = publicCatalogEntryForPath(url.pathname);
+  if (catalogEntry?.render) return renderPublicShell(catalogEntry.render(env), env);
   const route = publicSiteRoute(url.pathname);
   if (!route) return "";
   return renderPublicShell(publicPage(route.pageId, env, route.locale), env);
+}
+
+export function publicSiteKnownPath(pathname = "") {
+  return Boolean(publicSitePath(pathname) || publicCatalogEntryForPath(pathname));
 }
 
 export function renderPublicSiteCss() {
@@ -63,8 +75,8 @@ export function renderPublicSiteCss() {
 }
 
 export function renderPublicSitemap(env = process.env) {
-  const localizedIds: PublicPageId[] = ["home", "use-cases", "websites-commerce", "business-systems", "automation", "web-data-monitoring", "opportunity-intelligence", "security", "deployment", "team"];
-  const englishOnlyIds: PublicPageId[] = ["developers", "workflow", "evidence-desk"];
+  const localizedIds: PublicPageId[] = ["studio", "use-cases", "websites-commerce", "business-systems", "automation", "web-data-monitoring", "opportunity-intelligence", "security", "deployment", "team"];
+  const englishOnlyIds: PublicPageId[] = ["home", "builds", "free", "open-source", "developers", "workflow"];
   const lastmod = /^\d{4}-\d{2}-\d{2}$/.test(String(env.ORKESTR_PUBLIC_SITE_LASTMOD || "")) ? String(env.ORKESTR_PUBLIC_SITE_LASTMOD) : "2026-08-31";
   const xml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   const entries: string[] = [];
@@ -82,6 +94,10 @@ export function renderPublicSitemap(env = process.env) {
   }
   for (const pageId of englishOnlyIds) {
     const url = publicCanonicalUrl(publicPagePath(pageId, "en"), env);
+    if (url) entries.push(`  <url><loc>${xml(url)}</loc><lastmod>${lastmod}</lastmod></url>`);
+  }
+  for (const entry of publicCatalog.filter(publicCatalogEntryIsLive)) {
+    const url = publicCanonicalUrl(publicCatalogPath(entry), env);
     if (url) entries.push(`  <url><loc>${xml(url)}</loc><lastmod>${lastmod}</lastmod></url>`);
   }
   if (!entries.length) return "";

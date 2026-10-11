@@ -8,7 +8,8 @@ import { RUBRIC_NOTE, reviewQueue, scoreClaim } from "../apps/server/public-buil
 import { sampleState } from "../apps/server/public-builds/evidence-desk/evidence-desk-sample.js";
 import { checksum, exportFileName, exportJson, exportMarkdown } from "../apps/server/public-builds/evidence-desk/evidence-desk-export.js";
 import { renderPublicSite, renderPublicSitemap } from "../dist/server/apps/server/src/public-site.js";
-import { publicBuildAsset, publicBuilds } from "../dist/server/apps/server/src/public-site-builds.js";
+import { publicBuildAsset, publicBuildAssets } from "../dist/server/apps/server/src/public-site-build-assets.js";
+import { publicCatalog } from "../dist/server/apps/server/src/public-site-catalog.js";
 
 const env = { ORKESTR_PUBLIC_SITE_URL: "https://product.example.test", ORKESTR_PUBLIC_APP_URL: "https://app.example.test" };
 const roundTrip = (state) => sanitizeState(JSON.parse(JSON.stringify(state)));
@@ -189,19 +190,25 @@ test("evidence desk page renders with external assets, prominent fictional notic
   assert.match(html, /Fictional topic, synthetic records\./);
   assert.match(html, /not a measure of scientific confidence/);
   assert.match(html, /id="ed-sources"/);
-  assert.doesNotMatch(html, /\/api\/public\/events/);
+  assert.doesNotMatch(html, /\/api\/public\/events|data-event=|Book a project call/);
+  assert.match(html, /<a href="\/builds" aria-current="true">Live builds<\/a>/);
   assert.doesNotMatch(html, /\son[a-z]+="/i);
   assert.match(renderPublicSitemap(env), /https:\/\/product\.example\.test\/builds\/evidence-desk/);
 });
 
-test("build registry serves only allow-listed assets and the browser code makes no network calls", () => {
-  assert.equal(publicBuilds[0].slug, "evidence-desk");
-  assert.equal(publicBuilds[0].mode, "simulation");
-  for (const name of Object.keys(publicBuilds[0].assets)) {
+test("catalog lists the evidence desk as a live simulation and only allow-listed assets are served", () => {
+  const entry = publicCatalog.find((item) => item.slug === "evidence-desk");
+  assert.equal(entry.status, "live");
+  assert.equal(entry.evidence, "simulation");
+  assert.equal(entry.render(env).canonicalPath, "/builds/evidence-desk");
+  const index = renderPublicSite("/builds", env, { host: "product.example.test" });
+  assert.match(index, /<a href="\/builds\/evidence-desk">Evidence desk<\/a>/);
+  const assets = publicBuildAssets["evidence-desk"];
+  for (const name of Object.keys(assets)) {
     const asset = publicBuildAsset(`/builds/evidence-desk/${name}`);
     assert.ok(asset, name);
     assert.doesNotMatch(asset.body, /fetch\(|XMLHttpRequest|sendBeacon|WebSocket|innerHTML|import\(|https?:\/\//, name);
-    for (const [, imported] of asset.body.matchAll(/from "\.\/([^"]+)"/g)) assert.ok(publicBuilds[0].assets[imported], `${name} imports unserved ${imported}`);
+    for (const [, imported] of asset.body.matchAll(/from "\.\/([^"]+)"/g)) assert.ok(assets[imported], `${name} imports unserved ${imported}`);
   }
   for (const bad of ["/builds/evidence-desk/../../../package.json", "/builds/evidence-desk/secret.js", "/builds/other/evidence-desk.css", "/builds/evidence-desk/"]) assert.equal(publicBuildAsset(bad), null);
 });

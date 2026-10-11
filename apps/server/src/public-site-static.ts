@@ -1,8 +1,9 @@
 import { renderOAuthHomepage } from "./oauth-homepage.js";
-import { publicBuildAsset } from "./public-site-builds.js";
+import { publicBuildAsset } from "./public-site-build-assets.js";
 import {
   publicSiteAllowedForHost,
-  publicSitePath,
+  publicSiteKnownPath,
+  publicSiteRedirects,
   renderPublicSite,
   renderPublicSiteCss,
   renderPublicSitemap,
@@ -17,7 +18,14 @@ export function maybeServePublicSite(request: any, response: any, url: string, e
   const allowed = publicSiteAllowedForHost(host, env);
   const publicPath = new URL(url || "/", "http://localhost").pathname;
 
-  if (publicPath.length > 1 && publicPath.endsWith("/") && publicSitePath(publicPath) && allowed) {
+  const movedTo = publicSiteRedirects[publicPath.replace(/\/+$/, "")];
+  if (movedTo && allowed) {
+    const parsed = new URL(url || "/", "http://localhost");
+    response.status(301).header("cache-control", "public, max-age=3600").header("location", `${movedTo}${parsed.search}`).send("This page moved.");
+    return true;
+  }
+
+  if (publicPath.length > 1 && publicPath.endsWith("/") && publicSiteKnownPath(publicPath) && allowed) {
     const parsed = new URL(url || "/", "http://localhost");
     const canonicalPath = publicPath.replace(/\/+$/, "") || "/";
     response.status(301).header("cache-control", "public, max-age=3600").header("location", `${canonicalPath}${parsed.search}`).send("Redirecting to the canonical URL.");

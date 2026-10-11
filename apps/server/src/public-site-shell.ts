@@ -24,6 +24,8 @@ const shellCopy: Record<PublicLocale, Record<string, string>> = {
     developers: "Developers", documentation: "Documentation", company: "Company", team: "Team", contact: "Contact",
     customers: "Existing customers", portal: "Client Portal", note: "Managed implementations. Open-source operating core. Scope, deployment, access, and support vary by project.",
     breadcrumbHome: "Home", language: "Language", impressum: "Imprint", privacy: "Privacy", terms: "Terms",
+    builds: "Live builds", free: "Free products", openSource: "Open source", studio: "Studio", explore: "Explore",
+    umbrellaFooter: "We turn complex ideas into working software.",
   },
   de: {
     skip: "Zum Inhalt springen", home: "Orkestr Startseite", primary: "Hauptnavigation", menu: "Menü",
@@ -34,6 +36,8 @@ const shellCopy: Record<PublicLocale, Record<string, string>> = {
     developers: "Entwicklung", documentation: "Dokumentation", company: "Unternehmen", team: "Team", contact: "Kontakt",
     customers: "Bestehende Kunden", portal: "Kundenportal", note: "Betreute Implementierungen. Open-Source-Betriebskern. Umfang, Bereitstellung, Zugriff und Support werden je Projekt vereinbart.",
     breadcrumbHome: "Startseite", language: "Sprache", impressum: "Impressum", privacy: "Datenschutz", terms: "Nutzungsbedingungen",
+    builds: "Live-Builds", free: "Kostenlose Produkte", openSource: "Open Source", studio: "Studio", explore: "Entdecken",
+    umbrellaFooter: "Wir machen aus komplexen Ideen funktionierende Software.",
   },
   tr: {
     skip: "İçeriğe geç", home: "Orkestr ana sayfa", primary: "Ana navigasyon", menu: "Menü",
@@ -44,6 +48,8 @@ const shellCopy: Record<PublicLocale, Record<string, string>> = {
     developers: "Geliştiriciler", documentation: "Dokümantasyon", company: "Şirket", team: "Ekip", contact: "İletişim",
     customers: "Mevcut müşteriler", portal: "Müşteri Portalı", note: "Yönetilen uygulamalar. Açık kaynak işletim çekirdeği. Kapsam, devreye alma, erişim ve destek her proje için ayrıca belirlenir.",
     breadcrumbHome: "Ana sayfa", language: "Dil", impressum: "Yasal bilgiler", privacy: "Gizlilik", terms: "Kullanım koşulları",
+    builds: "Canlı projeler", free: "Ücretsiz ürünler", openSource: "Açık kaynak", studio: "Studio", explore: "Keşfet",
+    umbrellaFooter: "Karmaşık fikirleri çalışan yazılıma dönüştürüyoruz.",
   },
 };
 
@@ -52,21 +58,39 @@ function pageHref(pageId: PublicPageId, locale: PublicLocale, hash = "") {
   return `${path}${hash}`;
 }
 
-function navLink(id: PublicPageId, label: string, current: PublicPageId, locale: PublicLocale, event: string) {
-  return `<a href="${pageHref(id, locale)}"${current === id ? ' aria-current="page"' : ""} data-event="${event}">${label}</a>`;
+// Pages of the umbrella journeys (builds, free products, open source) carry no
+// consulting CTA and no analytics script.
+const umbrellaPageIds: PublicPageId[] = ["home", "builds", "free", "open-source"];
+
+function pageLocales(page: PublicPage) {
+  return publicLocales.filter((locale) => publicPagePath(page.id, locale));
+}
+
+function umbrellaNav(page: PublicPage, locale: PublicLocale) {
+  const copy = shellCopy[locale];
+  const items: Array<[PublicPageId, string]> = [["builds", copy.builds], ["free", copy.free], ["open-source", copy.openSource], ["studio", copy.studio]];
+  return items.map(([id, label]) => {
+    const current = page.id === id ? (page.canonicalPath && page.canonicalPath !== publicPagePath(id, locale) ? ' aria-current="true"' : ' aria-current="page"') : "";
+    return `<a href="${pageHref(id, locale)}"${current}>${label}</a>`;
+  }).join("");
 }
 
 function languageSwitcher(page: PublicPage, mobile = false) {
   const current = page.locale || "en";
+  if (pageLocales(page).length < 2) return "";
   const links = publicLocales.map((locale) => {
-    const href = publicPagePath(page.id, locale) || publicPagePath("home", locale);
+    const href = publicPagePath(page.id, locale) || publicPagePath("studio", locale);
     return `<a href="${href}" hreflang="${publicLocaleTags[locale]}" lang="${locale}"${locale === current ? ' aria-current="page"' : ""}>${locale.toUpperCase()}</a>`;
   }).join("");
   if (mobile) return `<div class="language-switcher mobile-language-switcher" aria-label="${shellCopy[current].language}">${links}</div>`;
   return `<nav class="language-switcher" aria-label="${shellCopy[current].language}">${links}</nav>`;
 }
 
-function analyticsScript(home = false) {
+function legacyHashRedirectScript() {
+  return `<script>if (location.hash === "#waitlist") location.replace("/beta#waitlist");</script>`;
+}
+
+function analyticsScript() {
   return `<script>
     (() => {
       const send = (event) => {
@@ -88,7 +112,6 @@ function analyticsScript(home = false) {
         }), { threshold: .35 });
         observed.forEach((element) => observer.observe(element));
       }
-      ${home ? 'if (location.hash === "#waitlist") location.replace("/beta#waitlist");' : ""}
     })();
   </script>`;
 }
@@ -101,7 +124,8 @@ function alternateLinks(page: PublicPage, env = process.env) {
   }).filter(Boolean);
   const english = publicPagePath(page.id, "en");
   const fallback = english ? publicCanonicalUrl(english, env) : "";
-  if (fallback && links.length > 1) links.push(`<link rel="alternate" hreflang="x-default" href="${escapeHtml(fallback)}">`);
+  if (links.length < 2) return "";
+  if (fallback) links.push(`<link rel="alternate" hreflang="x-default" href="${escapeHtml(fallback)}">`);
   return links.join("\n  ");
 }
 
@@ -153,11 +177,13 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
   const locale = page.locale || "en";
   const copy = shellCopy[locale];
   const home = page.id === "home";
+  const umbrella = umbrellaPageIds.includes(page.id);
   const pageTitle = `${page.title} | Orkestr`;
   const canonical = publicCanonicalUrl(page.canonicalPath || pageHref(page.id, locale), env);
   const appUrl = publicAppUrl(env);
   const repo = publicRepoUrl(env);
-  const homePath = pageHref("home", locale);
+  const homePath = "/";
+  const studioPath = pageHref("studio", locale);
   return `<!doctype html>
 <html lang="${publicLocaleTags[locale]}">
 <head>
@@ -187,34 +213,30 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
   <a class="skip-link" href="#main-content">${copy.skip}</a>
   <header class="topbar">
     <a class="wordmark" href="${homePath}" aria-label="${copy.home}"><span>O</span> Orkestr</a>
-    <nav class="desktop-nav" aria-label="${copy.primary}">
-      ${navLink("use-cases", copy.build, page.id, locale, "nav_what_we_build")}
-      <a href="${homePath}#examples" data-event="nav_examples">${copy.examples}</a>
-      <a href="${homePath}#how-we-work" data-event="nav_how_we_work">${copy.process}</a>
-      ${navLink("security", copy.security, page.id, locale, "nav_security")}
-    </nav>
+    <nav class="desktop-nav" aria-label="${copy.primary}">${umbrellaNav(page, locale)}</nav>
     <div class="header-actions">
       ${languageSwitcher(page)}
-      <a class="button button-small" href="${pageHref("project", locale)}#book" data-event="book_project_header">${copy.book}</a>
+      ${umbrella ? "" : `<a class="button button-small" href="${pageHref("project", locale)}#book" data-event="book_project_header">${copy.book}</a>`}
     </div>
     <details class="mobile-menu">
       <summary aria-label="${copy.menu}">${copy.menu}</summary>
       <nav aria-label="${copy.primary}">
-        <a href="${pageHref("use-cases", locale)}">${copy.build}</a><a href="${homePath}#examples">${copy.examples}</a><a href="${homePath}#how-we-work">${copy.process}</a><a href="${pageHref("security", locale)}">${copy.security}</a><a href="${pageHref("project", locale)}#book" data-event="book_project_mobile">${copy.book}</a>${languageSwitcher(page, true)}
+        ${umbrellaNav(page, locale)}${umbrella ? "" : `<a href="${pageHref("project", locale)}#book" data-event="book_project_mobile">${copy.book}</a>`}${languageSwitcher(page, true)}
       </nav>
     </details>
   </header>
   ${page.body}
   <footer class="footer">
-    <div class="footer-brand"><a class="wordmark inverse" href="${homePath}"><span>O</span> Orkestr</a><p>${copy.footer}</p></div>
+    <div class="footer-brand"><a class="wordmark inverse" href="${homePath}"><span>O</span> Orkestr</a><p>${umbrella ? copy.umbrellaFooter : copy.footer}</p></div>
+    <nav aria-label="${copy.explore}"><strong>${copy.explore}</strong><a href="/builds">${copy.builds}</a><a href="/free">${copy.free}</a><a href="/open-source">${copy.openSource}</a><a href="${studioPath}">${copy.studio}</a></nav>
     <nav aria-label="${copy.solutions}"><strong>${copy.solutions}</strong><a href="${pageHref("websites-commerce", locale)}">${copy.newSystems}</a><a href="${pageHref("business-systems", locale)}">${copy.modernization}</a><a href="${pageHref("automation", locale)}">${copy.automation}</a></nav>
-    <nav aria-label="${copy.orkestr}"><strong>${copy.orkestr}</strong><a href="${homePath}#how-we-work">${copy.process}</a><a href="${homePath}#platform">${copy.operating}</a><a href="${pageHref("deployment", locale)}">${copy.deployment}</a><a href="${pageHref("security", locale)}">${copy.security}</a></nav>
-    <nav aria-label="${copy.resources}"><strong>${copy.resources}</strong><a href="/developers">${copy.developers}</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="${escapeHtml(repo)}/tree/main/docs" rel="noreferrer">${copy.documentation}</a></nav>
+    <nav aria-label="${copy.orkestr}"><strong>${copy.orkestr}</strong><a href="${studioPath}#how-we-work">${copy.process}</a><a href="${studioPath}#platform">${copy.operating}</a><a href="${pageHref("deployment", locale)}">${copy.deployment}</a><a href="${pageHref("security", locale)}">${copy.security}</a></nav>
+    <nav aria-label="${copy.resources}"><strong>${copy.resources}</strong><a href="/open-source">${copy.openSource}</a><a href="/developers">${copy.developers}</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="${escapeHtml(repo)}/tree/main/docs" rel="noreferrer">${copy.documentation}</a></nav>
     <nav aria-label="${copy.company}"><strong>${copy.company}</strong><a href="${pageHref("team", locale)}">${copy.team}</a><a href="/support">${copy.contact}</a><a href="/impressum">${copy.impressum}</a><a href="/privacy">${copy.privacy}</a><a href="/terms">${copy.terms}</a></nav>
-    <nav aria-label="${copy.customers}"><strong>${copy.customers}</strong><a href="${escapeHtml(appUrl)}" data-event="client_portal_click">${copy.portal}</a></nav>
+    <nav aria-label="${copy.customers}"><strong>${copy.customers}</strong><a href="${escapeHtml(appUrl)}"${umbrella ? "" : ' data-event="client_portal_click"'}>${copy.portal}</a></nav>
     <p class="footer-note">${copy.note}</p>
   </footer>
-  ${page.analytics === false ? "" : analyticsScript(home)}
+  ${umbrella ? (home ? legacyHashRedirectScript() : "") : analyticsScript()}
   ${(page.moduleScripts || []).map((src) => `<script type="module" src="${escapeHtml(src)}"></script>`).join("")}
 </body>
 </html>`;

@@ -1,60 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { PublicPage } from "./public-site-config.js";
 
-// Registry of live builds on the public site. Each entry states honestly how
-// the build runs so catalog pages can label simulation vs replay vs live runs.
-export type PublicBuildMode = "simulation" | "replay" | "live-isolated";
-
-export type PublicBuild = {
-  slug: string;
-  path: string;
-  title: string;
-  summary: string;
-  mode: PublicBuildMode;
-  modeLabel: string;
-  data: string;
-  assets: Record<string, string>;
-};
-
-const buildAssetRoot = path.resolve(process.cwd(), "apps/server/public-builds");
-
-const js = "text/javascript; charset=utf-8";
-
-export const publicBuilds: PublicBuild[] = [
-  {
-    slug: "evidence-desk",
-    path: "/builds/evidence-desk",
-    title: "Evidence desk",
-    summary: "Add claims, trace every evidence item to a source record, mark contradictions, record review decisions with history, and export a reproducible summary.",
-    mode: "simulation",
-    modeLabel: "In-browser simulation",
-    data: "Fictional topic and synthetic source records; state stays in your browser",
-    assets: {
-      "evidence-desk-app.js": js,
-      "evidence-desk-state.js": js,
-      "evidence-desk-score.js": js,
-      "evidence-desk-sample.js": js,
-      "evidence-desk-export.js": js,
-      "evidence-desk-views.js": js,
-      "evidence-desk.css": "text/css; charset=utf-8",
-    },
-  },
-];
-
-export function publicBuildAsset(pathname = "") {
-  const match = /^\/builds\/([a-z0-9-]+)\/([a-z0-9.-]+)$/.exec(pathname);
-  if (!match) return null;
-  const build = publicBuilds.find((entry) => entry.slug === match[1]);
-  const type = build?.assets[match[2]];
-  if (!build || !type) return null;
-  try {
-    return { type, body: fs.readFileSync(path.join(buildAssetRoot, build.slug, match[2]), "utf8") };
-  } catch {
-    return null;
-  }
-}
-
+// SITE-2b: /builds/evidence-desk. Server-rendered shell only; the interactive
+// app is static JS under apps/server/public-builds/evidence-desk and runs fully
+// in the browser (see public-site-build-assets.ts).
 const limitations = [
   "This is a demonstration, not a research tool. The topic, source records and numbers are invented.",
   "The rubric score is an illustrative teaching device. It is not calibrated, not statistical and not a scientific confidence measure, and it cannot tell whether a source is true.",
@@ -65,12 +13,12 @@ const limitations = [
 export function evidenceDeskPage(): PublicPage {
   const assetBase = "/builds/evidence-desk";
   return {
-    id: "evidence-desk",
+    id: "builds",
+    canonicalPath: "/builds/evidence-desk",
     title: "Evidence desk — live build",
     summary: "A runnable in-browser demo on a fictional topic: trace evidence to synthetic source records, track contradictions, record review decisions and export a reproducible summary.",
     stylesheets: [`${assetBase}/evidence-desk.css`],
     moduleScripts: [`${assetBase}/evidence-desk-app.js`],
-    analytics: false,
     body: `<main id="main-content" class="evidence-desk">
       <section class="ed-intro" aria-labelledby="ed-title">
         <p class="eyebrow">LIVE BUILD · IN-BROWSER SIMULATION · FICTIONAL DATA</p>
