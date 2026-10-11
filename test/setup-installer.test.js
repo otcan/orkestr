@@ -82,7 +82,8 @@ test("failure halfway rolls back exactly the created resources", async () => {
     assert.equal(error.code, "timer_write_failed");
     assert.equal(error.rollback.thread, "retired");
     assert.equal(error.rollback.mission, "cleared");
-    assert.deepEqual(error.rollback.timers.map((timer) => timer.result), ["deleted"]);
+    // The second id was recorded before createTimer failed, so it is reported but was never created.
+    assert.deepEqual(error.rollback.timers.map((timer) => timer.result), ["not_created", "deleted"]);
     return true;
   });
   assert.equal((await listTimers(env)).length, 0);
