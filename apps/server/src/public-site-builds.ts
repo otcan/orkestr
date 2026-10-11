@@ -19,18 +19,24 @@ export type PublicBuild = {
 
 const buildAssetRoot = path.resolve(process.cwd(), "apps/server/public-builds");
 
+const js = "text/javascript; charset=utf-8";
+
 export const publicBuilds: PublicBuild[] = [
   {
     slug: "evidence-desk",
     path: "/builds/evidence-desk",
     title: "Evidence desk",
-    summary: "Add claims, attach evidence, mark contradictions, and see a transparent score and review queue. Export a summary as JSON or Markdown.",
+    summary: "Add claims, trace every evidence item to a source record, mark contradictions, record review decisions with history, and export a reproducible summary.",
     mode: "simulation",
     modeLabel: "In-browser simulation",
-    data: "Fictional sample dataset; state stays in your browser",
+    data: "Fictional topic and synthetic source records; state stays in your browser",
     assets: {
-      "evidence-desk-app.js": "text/javascript; charset=utf-8",
-      "evidence-desk-state.js": "text/javascript; charset=utf-8",
+      "evidence-desk-app.js": js,
+      "evidence-desk-state.js": js,
+      "evidence-desk-score.js": js,
+      "evidence-desk-sample.js": js,
+      "evidence-desk-export.js": js,
+      "evidence-desk-views.js": js,
       "evidence-desk.css": "text/css; charset=utf-8",
     },
   },
@@ -50,8 +56,8 @@ export function publicBuildAsset(pathname = "") {
 }
 
 const limitations = [
-  "This is a demonstration, not a research tool. The sample topic, sources and numbers are invented.",
-  "The score is a simple, documented heuristic. It does not judge whether a source is truthful.",
+  "This is a demonstration, not a research tool. The topic, source records and numbers are invented.",
+  "The rubric score is an illustrative teaching device. It is not calibrated, not statistical and not a scientific confidence measure, and it cannot tell whether a source is true.",
   "Nothing is sent to a server and no AI model is involved. Clearing site data or pressing Reset demo removes your changes.",
   "Please do not enter personal, confidential or health information; the demo is not built to protect it.",
 ];
@@ -61,28 +67,34 @@ export function evidenceDeskPage(): PublicPage {
   return {
     id: "evidence-desk",
     title: "Evidence desk — live build",
-    summary: "A runnable in-browser demo for organising claims and evidence: score each claim, track contradictions, work a review queue and export a summary. Synthetic data only.",
+    summary: "A runnable in-browser demo on a fictional topic: trace evidence to synthetic source records, track contradictions, record review decisions and export a reproducible summary.",
     stylesheets: [`${assetBase}/evidence-desk.css`],
     moduleScripts: [`${assetBase}/evidence-desk-app.js`],
     analytics: false,
     body: `<main id="main-content" class="evidence-desk">
       <section class="ed-intro" aria-labelledby="ed-title">
-        <p class="eyebrow">LIVE BUILD · IN-BROWSER SIMULATION</p>
+        <p class="eyebrow">LIVE BUILD · IN-BROWSER SIMULATION · FICTIONAL DATA</p>
         <h1 id="ed-title">Evidence desk</h1>
-        <p class="lead">Organise claims and the evidence behind them. Attach sources, mark contradictions, see a score per claim, work through a review queue and export a summary.</p>
-        <div class="ed-notice" role="note"><strong>Synthetic demo — nothing leaves your browser.</strong><p>The sample data describes an invented town's tool library. The app runs entirely in this page, keeps its state in your browser's local storage, makes no network requests and uses no AI model. It is not a client project.</p></div>
+        <p class="lead">Organise claims and the evidence behind them. Trace every item to a source record, mark contradictions, record review decisions and export a summary that is byte-for-byte reproducible.</p>
+        <div class="ed-notice" role="note">
+          <strong>Fictional topic, synthetic records.</strong>
+          <p>The sample data is about the <em>Brindlemere Tool Library</em>, an invented community lending service in an invented town. Every claim, source record, quote and number was written for this demo. Nothing describes a real person, organisation or client project.</p>
+          <p>The app runs entirely in this page. It keeps its state in your browser's local storage, makes no network requests and uses no AI model.</p>
+        </div>
         <details class="ed-limits"><summary>Limitations</summary><ul>${limitations.map((item) => `<li>${item}</li>`).join("")}</ul></details>
       </section>
       <section class="ed-shell" aria-label="Evidence desk demo">
         <p id="ed-loading" class="ed-empty">Loading the demo…</p>
-        <noscript><p class="ed-notice">This demo needs JavaScript. The scoring method is described below.</p></noscript>
+        <noscript><p class="ed-notice">This demo needs JavaScript. The rubric is described below.</p></noscript>
         <div id="ed-app" hidden>
           <div class="ed-toolbar">
             <button type="button" id="ed-reset" class="button button-small button-outline">Reset demo</button>
             <button type="button" id="ed-export-json" class="button button-small button-ghost">Export JSON</button>
             <button type="button" id="ed-export-md" class="button button-small button-ghost">Export Markdown</button>
+            <p class="ed-checksum-line">Export checksum <code id="ed-checksum"></code></p>
             <p id="ed-status" class="ed-status" role="status" aria-live="polite"></p>
           </div>
+          <datalist id="ed-source-options"></datalist>
           <div class="ed-grid">
             <div>
               <section class="ed-panel" aria-labelledby="ed-queue-title">
@@ -90,7 +102,7 @@ export function evidenceDeskPage(): PublicPage {
                 <ol id="ed-queue" class="ed-queue"></ol>
               </section>
               <section class="ed-panel" aria-labelledby="ed-claims-title">
-                <h2 id="ed-claims-title">Claims</h2>
+                <div class="ed-panel-head"><h2 id="ed-claims-title">Claims</h2><span class="ed-count">Fictional</span></div>
                 <form id="ed-add-claim" class="ed-form ed-add-claim" aria-label="Add claim">
                   <label class="ed-field"><span>New claim</span><input id="ed-new-claim" name="claim" maxlength="280" autocomplete="off" required></label>
                   <button type="submit" class="button button-small">Add claim</button>
@@ -100,15 +112,22 @@ export function evidenceDeskPage(): PublicPage {
             </div>
             <section id="ed-detail" class="ed-panel" aria-labelledby="ed-detail-title"></section>
           </div>
+          <section class="ed-panel ed-sources-panel" aria-labelledby="ed-sources-title">
+            <div class="ed-panel-head"><h2 id="ed-sources-title">Source records</h2><span id="ed-source-count" class="ed-count"></span></div>
+            <p class="ed-evidence-meta">Every evidence item links here. All records are synthetic and exist only inside this demo.</p>
+            <ul id="ed-sources" class="ed-sources"></ul>
+          </section>
         </div>
       </section>
       <section class="section ed-method" aria-labelledby="ed-method-title">
-        <p class="section-index">HOW THE SCORE WORKS</p>
-        <h2 id="ed-method-title">A transparent heuristic, not a verdict.</h2>
+        <p class="section-index">HOW THE RUBRIC WORKS</p>
+        <h2 id="ed-method-title">An illustrative rubric, not scientific confidence.</h2>
+        <p>The score shows how a team could make its weighting rules explicit. It is not calibrated against outcomes, not a probability and not a measure of scientific confidence.</p>
         <ul>
           <li>Each item weighs <code>strength × type</code>: weak 1, moderate 2, strong 3; primary record and measurement ×1, observation ×0.8, secondary report ×0.6, anecdote ×0.4.</li>
-          <li>Score = <code>50 + 50 × (support − against) / (support + against + 2)</code>, from 0 to 100. With no evidence a claim sits at 50.</li>
-          <li>A claim enters the review queue when it has contradicting evidence, a contradiction link to another claim, no evidence, a single source, or only weak evidence. Marking it reviewed clears it until its evidence or links change.</li>
+          <li>Rubric score = <code>50 + 50 × (support − against) / (support + against + 2)</code>, from 0 to 100. With no evidence a claim sits at 50.</li>
+          <li>A claim enters the review queue when it has contradicting evidence, a contradiction link, no evidence, a single source record, only weak evidence, or a reviewer asked for more evidence. Accepting or rejecting it clears it; any later change to its text, evidence or links reopens it and is written to its decision history.</li>
+          <li>Exports contain no timestamps or browser details, so the same data always produces the same bytes and the same checksum.</li>
         </ul>
       </section>
     </main>`,

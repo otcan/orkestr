@@ -30,6 +30,14 @@ async function loadPuppeteer(t) {
   }
 }
 
+async function waitUntil(page, fn, label) {
+  try {
+    await page.waitForFunction(fn, { timeout: 15_000 });
+  } catch (error) {
+    throw new Error(`Timed out waiting for: ${label} (${error.message})`);
+  }
+}
+
 const count = (page, selector) => page.$$eval(selector, (nodes) => nodes.length);
 const text = (page, selector) => page.$eval(selector, (node) => node.textContent.trim());
 
@@ -69,13 +77,16 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     await page.waitForSelector("#ed-app:not([hidden])");
     assert.equal(await count(page, "#ed-claims > li"), 5);
     assert.ok(await count(page, "#ed-queue > li") >= 3);
+    assert.equal(await count(page, "#ed-sources > li"), 8);
+    assert.doesNotMatch(await page.$eval("#ed-app", (node) => node.textContent), /\[object |undefined|NaN/);
+    assert.match(await text(page, "#ed-source-s1"), /Cited by: E6 on C1/);
     if (shots) await page.screenshot({ path: path.join(shots, "evidence-desk-desktop.png"), fullPage: true });
 
     // Create a claim using only the keyboard.
     await page.focus("#ed-new-claim");
     await page.keyboard.type("Evening workshops increased tool returns.");
     await page.keyboard.press("Enter");
-    await page.waitForFunction(() => document.activeElement?.id === "ed-detail-title");
+    await waitUntil(page, () => document.activeElement?.id === "ed-detail-title", "step 1");
     assert.equal(await count(page, "#ed-claims > li"), 6);
     assert.equal(await text(page, "#ed-detail-title"), "Evening workshops increased tool returns.");
     assert.match(await text(page, "#ed-detail .ed-score-label"), /No evidence/);
@@ -83,7 +94,7 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     // Attach evidence and see the score move.
     await page.type("#ed-new-evidence-source", "Synthetic workshop sign-in sheet");
     await page.keyboard.press("Enter");
-    await page.waitForFunction(() => document.querySelector("#ed-detail .ed-score strong")?.textContent === "75");
+    await waitUntil(page, () => document.querySelector("#ed-detail .ed-score strong")?.textContent === "75", "step 2");
     assert.match(await text(page, "#ed-detail .ed-score-label"), /Thin evidence/);
 
     // Edit that evidence into a contradicting item.
@@ -91,24 +102,36 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     const editForm = "#ed-detail .ed-evidence.is-editing form";
     await page.select(`${editForm} select[name=stance]`, "contradicts");
     await page.click(`${editForm} button[type=submit]`);
-    await page.waitForFunction(() => document.querySelector("#ed-detail .ed-score strong")?.textContent === "25");
+    await waitUntil(page, () => document.querySelector("#ed-detail .ed-score strong")?.textContent === "25", "step 3");
     assert.match(await text(page, "#ed-detail .ed-evidence-list .ed-badge"), /Contradicts/);
 
-    // Link it as contradicting another claim, then mark it reviewed.
+    // Every evidence item links to an in-app source record.
+    await page.click("#ed-detail .ed-evidence-list .ed-source-link");
+    await waitUntil(page, () => /^ed-source-s\d+$/.test(document.activeElement?.id || ""), "step 4");
+    assert.match(await page.evaluate(() => document.activeElement.textContent), /Synthetic workshop sign-in sheet[\s\S]*Provenance: Entered in this browser/);
+
+    // Link it as contradicting another claim, then record an accept decision.
     await page.click("#ed-detail .ed-link-form button[type=submit]");
-    await page.waitForFunction(() => document.querySelectorAll("#ed-detail .ed-links button.ed-link-button").length === 1);
+    await waitUntil(page, () => document.querySelectorAll("#ed-detail .ed-links button.ed-link-button").length === 1, "step 5");
     const queued = await page.$$eval("#ed-queue > li > button", (nodes) => nodes.map((node) => node.textContent));
     assert.ok(queued.includes("Evening workshops increased tool returns."));
-    await page.click("#ed-detail .ed-review button");
-    await page.waitForFunction(() => ![...document.querySelectorAll("#ed-queue > li > button")].some((node) => node.textContent.startsWith("Evening workshops")));
+    await page.select("#ed-decision-outcome", "accepted");
+    await page.type("#ed-decision-rationale", "Checked against the synthetic sheet.");
+    await page.click("#ed-detail form[aria-label='Record review decision'] button[type=submit]");
+    await waitUntil(page, () => ![...document.querySelectorAll("#ed-queue > li > button")].some((node) => node.textContent.startsWith("Evening workshops")), "step 6");
+    assert.match(await text(page, "#ed-detail .ed-review-status"), /Decision: Accepted — Checked against the synthetic sheet\./);
 
-    // Edit the claim text.
+    // Editing the claim reopens review and is written to the decision history.
     await page.$eval("#ed-claim-text", (node) => { node.value = ""; });
     await page.type("#ed-claim-text", "Evening workshops increased on-time returns.");
     await page.click("#ed-detail form[aria-label='Edit claim'] button[type=submit]");
-    await page.waitForFunction(() => document.querySelector("#ed-detail-title")?.textContent === "Evening workshops increased on-time returns.");
+    await waitUntil(page, () => document.querySelector("#ed-detail-title")?.textContent === "Evening workshops increased on-time returns.", "step 7");
+    assert.ok((await page.$$eval("#ed-queue > li > button", (nodes) => nodes.map((node) => node.textContent))).includes("Evening workshops increased on-time returns."));
+    const history = await page.$$eval("#ed-detail .ed-history > li", (nodes) => nodes.map((node) => node.textContent));
+    assert.match(history[0], /Earlier review decision cleared: claim text changed/);
+    assert.ok(history.some((entry) => /Review decision: Accepted/.test(entry)));
 
-    // Exports are generated in the browser.
+    // Exports are generated in the browser and are byte-identical for the same data.
     await page.evaluate(() => {
       window.__exports = [];
       const original = URL.createObjectURL;
@@ -116,24 +139,28 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     });
     await page.click("#ed-export-json");
     await page.click("#ed-export-md");
+    await page.click("#ed-export-json");
     const exported = await page.evaluate(async () => Promise.all(window.__exports.map((blob) => blob.text())));
+    assert.equal(exported[0], exported[2]);
     const json = JSON.parse(exported[0]);
     assert.equal(json.synthetic, true);
     assert.equal(json.claims.length, 6);
-    assert.match(exported[1], /# Evidence desk summary \(synthetic demo data\)/);
+    assert.equal(json.checksum, await text(page, "#ed-checksum"));
+    assert.match(exported[1], /# Evidence desk summary — fictional demo data/);
     assert.match(exported[1], /Evening workshops increased on-time returns\./);
+    assert.match(exported[1], /Not a calibrated or scientific confidence measure/);
 
     // Keyboard selection of a claim from the list moves focus to the detail panel.
     await page.focus("#ed-claims > li:first-child button.ed-claim-open");
     await page.keyboard.press("Enter");
-    await page.waitForFunction(() => document.activeElement?.id === "ed-detail-title" && document.activeElement.textContent.includes("Brindlemere"));
+    await waitUntil(page, () => document.activeElement?.id === "ed-detail-title" && document.activeElement.textContent.includes("Brindlemere"), "step 8");
 
     // State persists across reloads, and reset restores the sample.
     await page.reload({ waitUntil: "networkidle0" });
     await page.waitForSelector("#ed-app:not([hidden])");
     assert.equal(await count(page, "#ed-claims > li"), 6);
     await page.click("#ed-reset");
-    await page.waitForFunction(() => document.querySelectorAll("#ed-claims > li").length === 5);
+    await waitUntil(page, () => document.querySelectorAll("#ed-claims > li").length === 5, "step 9");
     assert.match(await text(page, "#ed-status"), /reset/i);
 
     // Mobile width: no horizontal overflow and controls stay reachable.
@@ -143,7 +170,7 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     assert.ok(overflow <= 0, `horizontal overflow ${overflow}px`);
     await page.tap("#ed-claims > li:nth-child(2) button.ed-claim-open");
-    await page.waitForFunction(() => document.querySelector("#ed-detail-title")?.textContent.includes("Saturdays"));
+    await waitUntil(page, () => document.querySelector("#ed-detail-title")?.textContent.includes("Saturdays"), "step 10");
     if (shots) await page.screenshot({ path: path.join(shots, "evidence-desk-mobile.png"), fullPage: true });
 
     assert.deepEqual(errors, []);

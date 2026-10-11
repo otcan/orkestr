@@ -66,11 +66,30 @@
 .ed-method h2 { max-width: 760px; font-size: clamp(28px,3.4vw,44px); }
 .ed-method ul { padding-left: 20px; line-height: 1.6; }
 .ed-method code { font-size: 14px; }
+.ed-notice p + p { margin-top: 8px; }
+.ed-checksum-line { margin: 0; color: var(--muted); font-size: 13px; }
+.ed-checksum-line code { color: var(--ink); font-size: 13px; }
+.ed-rubric-note { margin: 6px 0 0; color: #6b4f00; font-size: 13px; font-style: italic; }
+.ed-form-row-2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); }
+.ed-review { display: grid; }
+.ed-review-status { font-weight: 650; }
+.ed-source-link { font-size: 14px; font-weight: 650; color: #1d4f7a; text-underline-offset: 3px; }
+.ed-sources-panel { margin-top: 20px; }
+.ed-sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 12px; margin: 12px 0 0; padding: 0; list-style: none; }
+.ed-source { padding: 12px; border: 1px solid var(--line); border-radius: 5px; background: #fff; scroll-margin-top: 96px; }
+.ed-source p { margin: 0 0 6px; }
+.ed-source:target, .ed-source:focus { outline: 3px solid #1769aa; outline-offset: 2px; background: #eef5fb; }
+.ed-badge.ed-badge-synthetic { background: #f3e7c3; color: #5a4608; }
+.ed-excerpt { margin: 6px 0 8px; padding: 6px 10px; border-left: 3px solid #c9a227; background: #fdf9ea; font-size: 14px; }
+.ed-provenance { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.ed-history { margin: 12px 0 0; padding: 0; list-style: none; border-left: 2px solid var(--line); }
+.ed-history > li { display: grid; gap: 2px; padding: 6px 0 6px 12px; font-size: 14px; line-height: 1.4; }
+.ed-history-step { color: var(--muted); font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .05em; text-transform: uppercase; }
 @media (max-width: 900px) {
   .ed-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {
-  .ed-form-row, .ed-add-claim, .ed-link-form { grid-template-columns: 1fr; }
+  .ed-form-row, .ed-form-row-2, .ed-add-claim, .ed-link-form { grid-template-columns: 1fr; }
   .ed-toolbar .button { flex: 1 1 auto; }
   .ed-score { grid-template-columns: 1fr auto; }
   .ed-score-label { grid-column: 1 / -1; }
