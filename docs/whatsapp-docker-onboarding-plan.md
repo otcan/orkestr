@@ -105,7 +105,7 @@ dedupe and replay safety are shared.
 ### 3.1 One transport interface
 
 Proposed location: `packages/connectors/src/whatsapp-transport/`. The style
-follows [adapter-interface.md](adapter-interface.md): fixed lifecycle plus
+follows [spec/adapter-interface.md](spec/adapter-interface.md): fixed lifecycle plus
 explicit capabilities.
 
 ```js

@@ -1,5 +1,5 @@
 // Credential and scope rules for the invitation-only managed WhatsApp gateway
-// (mode B in docs/spec/whatsapp-docker-onboarding.md, section 3.3).
+// (mode B in docs/whatsapp-docker-onboarding-plan.md, section 3.3).
 //
 // Pure functions over a plain state object, so the rules can be tested without
 // files, network, or a WhatsApp account. Persistence and HTTP routes are a

@@ -12,7 +12,7 @@ import {
   routeInbound,
 } from "../packages/core/src/whatsapp-gateway-credentials.js";
 
-// Plan T10-T14 (docs/spec/whatsapp-docker-onboarding.md). Synthetic ids only.
+// Plan T10-T14 (docs/whatsapp-docker-onboarding-plan.md). Synthetic ids only.
 const T0 = 1_800_000_000_000;
 const chatA = "chat-a@g.example.test";
 const chatB = "chat-b@g.example.test";

@@ -11,7 +11,7 @@ import {
 } from "../packages/connectors/src/whatsapp-transport/contract.js";
 import { createFakeTransport } from "../packages/connectors/src/whatsapp-transport/fake-transport.js";
 
-// Plan T1/T8 (docs/spec/whatsapp-docker-onboarding.md). Synthetic only.
+// Plan T1/T8 (docs/whatsapp-docker-onboarding-plan.md). Synthetic only.
 
 test("contract rejects transports with a bad id, capabilities, or missing methods", () => {
   const good = createFakeTransport();

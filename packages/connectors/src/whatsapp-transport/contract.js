@@ -1,6 +1,6 @@
 // WhatsApp transport contract shared by the self-hosted local bridge (mode A)
 // and the invitation-only managed gateway (mode B). See
-// docs/spec/whatsapp-docker-onboarding.md, section 3.1.
+// docs/whatsapp-docker-onboarding-plan.md, section 3.1.
 //
 // Nothing is wired to this yet; adapters and the fake transport implement it
 // so routing, outbox, dedupe and replay safety can be shared.
