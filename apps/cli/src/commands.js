@@ -28,6 +28,7 @@ import { createCommand } from "./create-command.js";
 import { demoCommand, demoUsage } from "./demo-command.js";
 import { agentJobSubcommands, agentJobUsage, agentJobsCommand, initCommand, runJobCommand } from "./agent-job-command.js";
 import { desktopCommand } from "./desktop-command.js";
+import { setupCommand } from "./setup-command.js";
 import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
 import { interruptCommand, sendNowCommand } from "./interrupt-command.js";
 import { jiraCommand } from "./jira-command.js";
@@ -85,6 +86,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "api-session" || command === "api") return await apiSessionCommand(args, ctx);
     if (command === "whatsapp" || command === "wa") return await whatsappCommand(args, ctx);
     if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
+    if (command === "setup" || command === "setups") return await setupCommand(args, ctx);
     if (command === "jobs" || command === "job") return await jobsCommand(args, ctx);
     if (command === "mailboxes" || command === "mailbox") return await mailboxesCommand(args, ctx);
     if (command === "connect") return await connectCommand(args, ctx);
@@ -2305,6 +2307,7 @@ Advanced:
   orkestr whatsapp codex [status|connect] --thread <thread> [--account id] [--json]
   orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
+  orkestr setup [list|install|status|uninstall] [setup-id] [--provider codex|claude-code] [--timezone Area/City] [--json]  (preview)
   orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--signal-mode record_only|notify_passively] [--json]
   orkestr mailboxes [list|status|create|verify|delete|rotate|ingest|messages|retry|relay-audits|dead-letters|replay] [--json]
   orkestr connect approve <code> [--json]
