@@ -161,7 +161,11 @@ test("wizard links WhatsApp by QR, binds only the paired owner's private chat, a
     assert.match(await page.$eval(".wizard-choice-grid .choice-card.active", (node) => node.textContent), /Use my own WhatsApp/, "self-hosted is the default without a broker");
     await clickButton("Show QR code");
     await page.waitForSelector("img.whatsapp-pair-qr", { timeout: 10_000 });
-    assert.deepEqual(fake.calls.find((call) => call[0] === "config")[1], { bridgeMode: "local" });
+    const pairingPreference = fake.calls.findIndex((call) => call[0] === "preferences");
+    const accountStart = fake.calls.findIndex((call) => call[0] === "start");
+    assert.ok(pairingPreference >= 0 && pairingPreference < accountStart, "the self-hosted preference is validated before pairing starts");
+    assert.deepEqual(fake.calls[pairingPreference][1], { whatsappAccessMode: "self_hosted" });
+    assert.equal(fake.calls.some((call) => call[0] === "config"), false, "pairing does not overwrite connector transport config directly");
     fake.linked = true;
     await page.waitForFunction(() => document.querySelector(".whatsapp-pair-panel")?.textContent.includes("linked and ready"), { timeout: 10_000 });
     assert.equal(await page.$("img.whatsapp-pair-qr"), null, "the QR disappears once linked");

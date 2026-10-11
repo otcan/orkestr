@@ -90,7 +90,7 @@ export class WhatsAppPairPanelComponent implements OnInit, OnDestroy {
     this.starting = true;
     this.error = "";
     try {
-      await firstValueFrom(this.api.saveConnectorConfig("whatsapp", { bridgeMode: "local" }));
+      await firstValueFrom(this.api.saveSetupDemoPreferences({ whatsappAccessMode: "self_hosted" }));
       await firstValueFrom(this.api.startWhatsAppAccount(this.accountId));
       this.startedOnce = true;
       await this.refresh();
