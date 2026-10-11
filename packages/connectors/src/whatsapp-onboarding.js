@@ -1,15 +1,10 @@
-import { configuredWhatsAppBridgeUrl } from "./whatsapp.js";
+import { configuredWhatsAppBridgeMode, configuredWhatsAppBridgeUrl } from "./whatsapp.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
 
 const SAFE_CONNECTOR_STATES = new Set(["connected", "partial", "not_connected", "broken"]);
 
 function clean(value) {
   return String(value || "").trim().toLowerCase();
-}
-
-function configuredMode(settings = {}) {
-  const value = clean(settings?.connectors?.whatsapp?.accessMode);
-  return ["relay", "managed", "hosted"].includes(value) ? "managed" : "self_hosted";
 }
 
 function externalModeRequired(env = process.env) {
@@ -34,11 +29,13 @@ function safePairingState(connector = {}) {
 // The projection is enums and booleans only: never return bridge endpoints,
 // account IDs, QR data, pairing codes, phone numbers, or provider errors.
 export async function whatsappOnboardingStatus({ env = process.env, settings = {}, connectors = [] } = {}) {
-  const managedAvailable = Boolean(await configuredWhatsAppBridgeUrl(env).catch(() => ""));
+  const effectiveBridgeMode = await configuredWhatsAppBridgeMode(env).catch(() => "local");
+  const managedAvailable = effectiveBridgeMode === "external" && Boolean(await configuredWhatsAppBridgeUrl(env).catch(() => ""));
   const localAvailable = !externalModeRequired(env);
   const availableModes = [...(localAvailable ? ["self_hosted"] : []), ...(managedAvailable ? ["managed"] : [])];
-  const selected = configuredMode(settings);
-  const selectedMode = availableModes.includes(selected) ? selected : availableModes[0] || null;
+  const selectedMode = effectiveBridgeMode === "external"
+    ? (managedAvailable ? "managed" : null)
+    : (localAvailable ? "self_hosted" : null);
   const whatsapp = Array.isArray(connectors) ? connectors.find((item) => clean(item?.id) === "whatsapp") : null;
   return {
     availableModes,

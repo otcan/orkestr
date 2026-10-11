@@ -50,6 +50,18 @@ test("managed mode is advertised only from server bridge configuration and conta
   });
 });
 
+test("status follows effective relay transport instead of a stale self-hosted preference", async () => {
+  await withTempHome(async (env) => {
+    await writeConnectorConfig("whatsapp", { bridgeMode: "relay", bridgeUrl: "https://relay.example.test/private" }, env);
+    const status = await whatsappOnboardingStatus({
+      env,
+      settings: { connectors: { whatsapp: { accessMode: "own", bridgeMode: "local" } } },
+      connectors: [],
+    });
+    assert.equal(status.selectedMode, "managed");
+  });
+});
+
 test("invalid access mode fails closed instead of silently switching to a relay", async () => {
   await withTempHome(async (env) => {
     await assert.rejects(() => assertWhatsAppOnboardingModeAvailable("surprise", env), { code: "whatsapp_access_mode_invalid", statusCode: 400 });
