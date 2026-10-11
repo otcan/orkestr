@@ -1,4 +1,5 @@
 import { renderOAuthHomepage } from "./oauth-homepage.js";
+import { publicBuildAsset } from "./public-site-builds.js";
 import {
   publicSiteAllowedForHost,
   publicSitePath,
@@ -33,6 +34,11 @@ export function maybeServePublicSite(request: any, response: any, url: string, e
   }
   if (publicPath === "/public-site.css" && allowed) {
     response.status(200).header("cache-control", "public, max-age=300").type("text/css; charset=utf-8").send(renderPublicSiteCss());
+    return true;
+  }
+  const buildAsset = allowed ? publicBuildAsset(publicPath) : null;
+  if (buildAsset) {
+    response.status(200).header("cache-control", "public, max-age=300").header("x-content-type-options", "nosniff").type(buildAsset.type).send(buildAsset.body);
     return true;
   }
   if (publicPath === "/robots.txt" && allowed) {
