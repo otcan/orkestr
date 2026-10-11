@@ -55,7 +55,7 @@ Evidence levels: **simulation** (simulated provider or fake external systems
 only), **offline-tested** (automated tests, no live service), **live-verified**
 (observed on a real provider or released build in a controlled test).
 
-<!-- status:start (keep in sync with apps/server/src/public-site-oss-status.ts) -->
+<!-- status:start (keep in sync with the status table on the public /open-source page) -->
 | Capability | Status | Evidence |
 | --- | --- | --- |
 | Codex jobs | live-verified once on production build (approval pause -> approve -> single-use approval consumed, effect ledgered) | live-verified |
