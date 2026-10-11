@@ -29,9 +29,9 @@ const allowedEvents = new Set([
 ]);
 
 const allowedPaths = new Set([
-  "/", "/use-cases", "/websites-commerce", "/business-systems", "/opportunity-intelligence", "/web-data-monitoring", "/automation", "/project", "/security", "/deployment", "/developers", "/workflow", "/team", "/beta", "/privacy", "/impressum", "/terms", "/acceptable-use", "/data-deletion", "/support",
-  "/de", "/de/leistungen", "/de/websites-onlineshops", "/de/altsystem-modernisieren", "/de/ausschreibungsmonitoring", "/de/web-monitoring", "/de/ki-prozessautomatisierung", "/de/projekt", "/de/sicherheit", "/de/betrieb", "/de/team",
-  "/tr", "/tr/hizmetler", "/tr/web-sitesi-e-ticaret", "/tr/eski-sistem-modernizasyonu", "/tr/ihale-firsat-takibi", "/tr/web-veri-izleme", "/tr/yapay-zeka-is-akisi-otomasyonu", "/tr/proje", "/tr/guvenlik", "/tr/devreye-alma", "/tr/ekip",
+  "/", "/studio", "/use-cases", "/websites-commerce", "/business-systems", "/opportunity-intelligence", "/web-data-monitoring", "/automation", "/project", "/security", "/deployment", "/developers", "/workflow", "/team", "/beta", "/privacy", "/impressum", "/terms", "/acceptable-use", "/data-deletion", "/support",
+  "/de", "/de/studio", "/de/leistungen", "/de/websites-onlineshops", "/de/altsystem-modernisieren", "/de/ausschreibungsmonitoring", "/de/web-monitoring", "/de/ki-prozessautomatisierung", "/de/projekt", "/de/sicherheit", "/de/betrieb", "/de/team",
+  "/tr", "/tr/studio", "/tr/hizmetler", "/tr/web-sitesi-e-ticaret", "/tr/eski-sistem-modernizasyonu", "/tr/ihale-firsat-takibi", "/tr/web-veri-izleme", "/tr/yapay-zeka-is-akisi-otomasyonu", "/tr/proje", "/tr/guvenlik", "/tr/devreye-alma", "/tr/ekip",
 ]);
 
 export async function recordPublicSiteEvent(input = {}, env = process.env) {
