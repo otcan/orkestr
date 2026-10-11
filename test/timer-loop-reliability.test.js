@@ -1,8 +1,7 @@
 // Reliability checks for scheduled Setup check-ins (future P0).
 //
-// Tests marked `todo` describe the required behaviour and currently fail on
-// main; they run and report but do not fail the suite. Remove `todo` when the
-// fix lands. See docs/setups/manifest-v1.md, "Known gaps".
+// Overlap and backoff were failing on main 92a0ed80 (two deliveries, retry on
+// every tick); fixed by packages/core/src/timer-run-guard.js.
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -22,20 +21,41 @@ async function dueTimerEnv(threadId = "loop-thread") {
   return env;
 }
 
-test("overlapping timer ticks deliver a due check-in once", { todo: "timer loop has no in-flight guard (server.ts setInterval)" }, async () => {
+test("overlapping timer ticks deliver a due check-in once", async () => {
   const env = await dueTimerEnv();
   const now = new Date("2026-05-15T10:00:00Z");
   await Promise.all([markDueTimers(env, now), markDueTimers(env, now)]);
   assert.equal((await listThreadMessages("loop-thread", env)).length, 1);
 });
 
-test("a failing timer backs off instead of retrying every tick", { todo: "failed timers keep nextRunAt unchanged (retry every 30 s)" }, async () => {
+test("a failing timer backs off instead of retrying every tick", async () => {
+  const env = await dueTimerEnv(null);
+  const now = new Date("2026-05-15T10:00:00Z");
+  const at = (seconds) => new Date(now.getTime() + seconds * 1000);
+  await markDueTimers(env, now);
+  let [timer] = await listTimers(env);
+  assert.equal(timer.lastError, "thread_not_found");
+  assert.equal(timer.failureCount, 1);
+  assert.equal(timer.retryAt, at(60).toISOString(), "first retry one minute later");
+  await markDueTimers(env, at(30));
+  [timer] = await listTimers(env);
+  assert.equal(timer.failureCount, 1, "no attempt while backing off");
+  await markDueTimers(env, at(61));
+  [timer] = await listTimers(env);
+  assert.equal(timer.failureCount, 2);
+  assert.equal(timer.retryAt, at(61 + 120).toISOString(), "second retry doubles the wait");
+});
+
+test("a timer that recovers clears its backoff", async () => {
   const env = await dueTimerEnv(null);
   const now = new Date("2026-05-15T10:00:00Z");
   await markDueTimers(env, now);
+  await createThread({ id: "missing-thread", name: "Now present" }, env);
+  await markDueTimers(env, new Date(now.getTime() + 61_000));
   const [timer] = await listTimers(env);
-  assert.equal(timer.lastError, "thread_not_found");
-  assert.ok(Date.parse(timer.nextRunAt) >= now.getTime() + 60_000, `next attempt ${timer.nextRunAt} should be at least a minute later`);
+  assert.equal(timer.lastError, null);
+  assert.equal(timer.retryAt, null);
+  assert.equal((await listThreadMessages("missing-thread", env)).length, 1);
 });
 
 test("a daily check-in in a skipped DST hour still runs once that day", () => {

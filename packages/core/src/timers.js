@@ -5,6 +5,7 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 import { createTimerRepository } from "../../storage/src/repositories.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
+import { timerRetryAt, timerWaitingForRetry, withDueTimerPass } from "./timer-run-guard.js";
 import { enqueueAgentMessage } from "./messages.js";
 import { principalForUserId, userPrincipal } from "./principal.js";
 import { appendThreadSignal } from "./thread-signals.js";
@@ -933,14 +934,18 @@ export async function runTimerNowForPrincipal(id, principal, env = process.env, 
   return runTimerNow(id, env, now, { ...options, principal });
 }
 
-export async function markDueTimers(env = process.env, now = new Date(), options = {}) {
+export function markDueTimers(env = process.env, now = new Date(), options = {}) {
+  return withDueTimerPass(env, () => markDueTimersPass(env, now, options));
+}
+
+async function markDueTimersPass(env, now, options) {
   const timerRepository = createTimerRepository(env);
   const timers = await listTimers(env);
   let changed = false;
   const due = [];
   const next = [];
   for (const timer of timers) {
-    if (!timer.enabled || !timer.nextRunAt || Date.parse(timer.nextRunAt) > now.getTime()) {
+    if (!timer.enabled || !timer.nextRunAt || Date.parse(timer.nextRunAt) > now.getTime() || timerWaitingForRetry(timer, now)) {
       next.push(timer);
       continue;
     }
@@ -955,6 +960,7 @@ export async function markDueTimers(env = process.env, now = new Date(), options
         nextRunAt: timer.cadence === "once" ? null : nextRunAt(timer, now),
         lastError: null,
         lastErrorAt: null,
+        retryAt: null,
         blockedReason: null,
         blockedConnector: null,
         connectorState: null,
@@ -984,6 +990,7 @@ export async function markDueTimers(env = process.env, now = new Date(), options
         lastError: error?.message || String(error),
         lastErrorAt: now.toISOString(),
         failureCount: Number(timer.failureCount || 0) + 1,
+        retryAt: error?.blockedReason === "blocked_auth" ? null : timerRetryAt(Number(timer.failureCount || 0) + 1, now),
         blockedReason: error?.blockedReason || null,
         blockedConnector: error?.blockedConnector || null,
         connectorState: error?.connectorState || null,
