@@ -1,4 +1,4 @@
-import { configuredWhatsAppBridgeMode, configuredWhatsAppBridgeUrl } from "./whatsapp.js";
+import { configuredWhatsAppBridgeMode, effectiveWhatsAppBridgeMode } from "./whatsapp.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
 
 const SAFE_CONNECTOR_STATES = new Set(["connected", "partial", "not_connected", "broken"]);
@@ -10,6 +10,29 @@ function clean(value) {
 function externalModeRequired(env = process.env) {
   return ["external", "relay", "parent-forward", "control-plane-forward", "control-plane", "controlplane", "broker"]
     .includes(clean(env.WHATSAPP_BRIDGE_MODE));
+}
+
+function hasManagedBridgeUrl(config = {}, env = process.env) {
+  return Boolean(String(env.WHATSAPP_BRIDGE_URL || config.bridgeUrl || "").trim());
+}
+
+function managedModeCanBeSelected(config = {}, env = process.env) {
+  const environmentMode = clean(env.WHATSAPP_BRIDGE_MODE);
+  const environmentForcesLocal = environmentMode && ![
+    "external", "relay", "parent-forward", "control-plane-forward", "control-plane", "controlplane", "broker",
+  ].includes(environmentMode);
+  if (environmentForcesLocal || !hasManagedBridgeUrl(config, env)) return false;
+
+  const currentMode = effectiveWhatsAppBridgeMode(config, env);
+  const rememberedMode = clean(config.managedBridgeMode);
+  const rememberedIsEffective = rememberedMode && effectiveWhatsAppBridgeMode({ ...config, bridgeMode: rememberedMode }, env) === "external";
+  const externalModeIsEnabled = effectiveWhatsAppBridgeMode({ ...config, bridgeMode: "external" }, env) === "external";
+  return currentMode === "external" || Boolean(rememberedIsEffective) || externalModeIsEnabled;
+}
+
+export async function whatsappManagedModeAvailable(env = process.env) {
+  const config = await readConnectorConfig("whatsapp", env).catch(() => ({}));
+  return managedModeCanBeSelected(config, env);
 }
 
 function safeHealth(connector = {}) {
@@ -30,7 +53,7 @@ function safePairingState(connector = {}) {
 // account IDs, QR data, pairing codes, phone numbers, or provider errors.
 export async function whatsappOnboardingStatus({ env = process.env, settings = {}, connectors = [] } = {}) {
   const effectiveBridgeMode = await configuredWhatsAppBridgeMode(env).catch(() => "local");
-  const managedAvailable = effectiveBridgeMode === "external" && Boolean(await configuredWhatsAppBridgeUrl(env).catch(() => ""));
+  const managedAvailable = await whatsappManagedModeAvailable(env);
   const localAvailable = !externalModeRequired(env);
   const availableModes = [...(localAvailable ? ["self_hosted"] : []), ...(managedAvailable ? ["managed"] : [])];
   const selectedMode = effectiveBridgeMode === "external"
@@ -52,12 +75,8 @@ export async function assertWhatsAppOnboardingModeAvailable(mode, env = process.
     throw Object.assign(new Error("whatsapp_self_hosted_mode_unavailable"), { statusCode: 409, code: "whatsapp_self_hosted_mode_unavailable" });
   }
   if (["relay", "managed", "hosted"].includes(requested)) {
-    const environmentMode = clean(env.WHATSAPP_BRIDGE_MODE);
-    const environmentForcesLocal = environmentMode && ![
-      "external", "relay", "parent-forward", "control-plane-forward", "control-plane", "controlplane", "broker",
-    ].includes(environmentMode);
     const config = await readConnectorConfig("whatsapp", env).catch(() => ({}));
-    if (!environmentForcesLocal && (await configuredWhatsAppBridgeUrl(env).catch(() => "") || String(env.WHATSAPP_BRIDGE_URL || config.bridgeUrl || "").trim())) return "relay";
+    if (managedModeCanBeSelected(config, env)) return "relay";
     throw Object.assign(new Error("whatsapp_managed_mode_unavailable"), { statusCode: 409, code: "whatsapp_managed_mode_unavailable" });
   }
   throw Object.assign(new Error("whatsapp_access_mode_invalid"), { statusCode: 400, code: "whatsapp_access_mode_invalid" });

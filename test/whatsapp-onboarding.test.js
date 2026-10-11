@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { readConnectorConfig, writeConnectorConfig } from "../packages/storage/src/config.js";
-import { configuredWhatsAppBridgeUrl } from "../packages/connectors/src/whatsapp.js";
+import { configuredWhatsAppBridgeUrl, effectiveWhatsAppBridgeMode } from "../packages/connectors/src/whatsapp.js";
 import { assertWhatsAppOnboardingModeAvailable, whatsappOnboardingStatus } from "../packages/connectors/src/whatsapp-onboarding.js";
 import { saveWhatsAppOnboardingMode } from "../packages/core/src/whatsapp-onboarding-preferences.js";
 
@@ -15,6 +15,10 @@ async function withTempHome(run) {
   } finally {
     await fs.rm(home, { recursive: true, force: true });
   }
+}
+
+async function saveMode(mode, env) {
+  return saveWhatsAppOnboardingMode(mode, env, effectiveWhatsAppBridgeMode);
 }
 
 test("self-hosted onboarding is the default and never advertises an unconfigured managed relay", async () => {
@@ -62,6 +66,33 @@ test("status follows effective relay transport instead of a stale self-hosted pr
   });
 });
 
+test("managed selection cannot promote a disabled external connector based only on its saved URL", async () => {
+  await withTempHome(async (env) => {
+    await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://relay.example.test" }, env);
+    assert.equal(await configuredWhatsAppBridgeUrl(env), "", "external mode is locally disabled without the environment enable gate");
+    await assert.rejects(async () => {
+      const transport = await assertWhatsAppOnboardingModeAvailable("managed", env);
+      await saveMode(transport, env);
+    }, { code: "whatsapp_managed_mode_unavailable", statusCode: 409 });
+    assert.equal((await readConnectorConfig("whatsapp", env)).bridgeMode, "external");
+    assert.equal(await configuredWhatsAppBridgeUrl(env), "");
+  });
+});
+
+test("enabled external configuration may select managed without rewriting it to an ungated relay alias", async () => {
+  await withTempHome(async (baseEnv) => {
+    const env = { ...baseEnv, ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "true" };
+    await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://relay.example.test" }, env);
+    assert.equal(await configuredWhatsAppBridgeUrl(env), "http://relay.example.test");
+    assert.equal(await assertWhatsAppOnboardingModeAvailable("managed", env), "relay");
+
+    await saveMode("relay", env);
+
+    assert.equal((await readConnectorConfig("whatsapp", env)).bridgeMode, "external");
+    assert.equal(await configuredWhatsAppBridgeUrl(env), "http://relay.example.test");
+  });
+});
+
 test("invalid access mode fails closed instead of silently switching to a relay", async () => {
   await withTempHome(async (env) => {
     await assert.rejects(() => assertWhatsAppOnboardingModeAvailable("surprise", env), { code: "whatsapp_access_mode_invalid", statusCode: 400 });
@@ -83,7 +114,7 @@ test("selecting self-hosted must switch an existing relay connector to its local
     await writeConnectorConfig("whatsapp", { bridgeMode: "relay", bridgeUrl: "https://relay.example.test/private" }, env);
     assert.equal(await configuredWhatsAppBridgeUrl(env), "https://relay.example.test/private");
 
-    const result = await saveWhatsAppOnboardingMode("own", env);
+    const result = await saveMode("own", env);
 
     assert.equal((await readConnectorConfig("whatsapp", env)).bridgeMode, "local");
     assert.equal(await configuredWhatsAppBridgeUrl(env), "", "connector must not keep routing through the old relay after self-hosted is selected");
@@ -92,7 +123,7 @@ test("selecting self-hosted must switch an existing relay connector to its local
 
 test("fresh install self-hosted selection persists the same effective local transport", async () => {
   await withTempHome(async (env) => {
-    await saveWhatsAppOnboardingMode("own", env);
+    await saveMode("own", env);
     assert.equal((await readConnectorConfig("whatsapp", env)).bridgeMode, "local");
     assert.equal(await configuredWhatsAppBridgeUrl(env), "");
   });
@@ -101,10 +132,10 @@ test("fresh install self-hosted selection persists the same effective local tran
 test("managed selection stays on the configured relay and can switch back from self-hosted", async () => {
   await withTempHome(async (env) => {
     await writeConnectorConfig("whatsapp", { bridgeMode: "relay", bridgeUrl: "https://relay.example.test/private" }, env);
-    await saveWhatsAppOnboardingMode("own", env);
+    await saveMode("own", env);
     assert.equal(await configuredWhatsAppBridgeUrl(env), "");
 
-    await saveWhatsAppOnboardingMode("relay", env);
+    await saveMode("relay", env);
     assert.equal((await readConnectorConfig("whatsapp", env)).bridgeMode, "relay");
     assert.equal(await configuredWhatsAppBridgeUrl(env), "https://relay.example.test/private");
   });

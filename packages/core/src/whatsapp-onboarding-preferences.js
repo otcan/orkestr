@@ -3,15 +3,37 @@ import { readRuntimeSettings, writeRuntimeSettings } from "./runtime-settings.js
 
 // Keep the UI preference and the connector's actual transport in sync. The
 // connector reads bridgeMode from connector config/env, not runtime settings.
-export async function saveWhatsAppOnboardingMode(transport, env = process.env) {
+export async function saveWhatsAppOnboardingMode(transport, env = process.env, resolveBridgeMode) {
   if (!new Set(["own", "relay"]).has(transport)) {
     throw Object.assign(new Error("whatsapp_access_mode_invalid"), { statusCode: 400, code: "whatsapp_access_mode_invalid" });
   }
-  const bridgeMode = transport === "own" ? "local" : "relay";
+  if (typeof resolveBridgeMode !== "function") throw new TypeError("whatsapp_bridge_mode_resolver_required");
   const previousConfig = await readConnectorConfig("whatsapp", env);
   const previousSettings = await readRuntimeSettings(env);
+  const previousMode = resolveBridgeMode(previousConfig, env);
+  const previousConfiguredMode = String(previousConfig.bridgeMode || "").trim().toLowerCase();
+  let bridgeMode;
+  let connectorPatch;
+  if (transport === "own") {
+    bridgeMode = "local";
+    const rememberedMode = previousMode === "external"
+      ? (previousConfiguredMode || "external")
+      : previousConfig.managedBridgeMode;
+    connectorPatch = { bridgeMode, ...(rememberedMode ? { managedBridgeMode: rememberedMode } : {}) };
+  } else {
+    const rememberedMode = String(previousConfig.managedBridgeMode || "").trim().toLowerCase();
+    bridgeMode = rememberedMode && resolveBridgeMode({ ...previousConfig, bridgeMode: rememberedMode }, env) === "external"
+      ? rememberedMode
+      : previousMode === "external" && previousConfiguredMode
+        ? previousConfiguredMode
+        : "external";
+    if (resolveBridgeMode({ ...previousConfig, bridgeMode }, env) !== "external") {
+      throw Object.assign(new Error("whatsapp_managed_mode_unavailable"), { statusCode: 409, code: "whatsapp_managed_mode_unavailable" });
+    }
+    connectorPatch = { bridgeMode, ...(rememberedMode ? { managedBridgeMode: rememberedMode } : {}) };
+  }
 
-  await writeConnectorConfig("whatsapp", { bridgeMode }, env);
+  await writeConnectorConfig("whatsapp", connectorPatch, env);
   try {
     const settings = await writeRuntimeSettings({
       connectors: {

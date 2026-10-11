@@ -288,7 +288,7 @@ export async function configuredWhatsAppBridgeUrl(env = process.env) {
 
 export async function configuredWhatsAppBridgeMode(env = process.env) {
   const config = await readConnectorConfig("whatsapp", env);
-  return bridgeMode(config, env);
+  return effectiveWhatsAppBridgeMode(config, env);
 }
 
 function bridgeAuthHeaders(config = {}, env = process.env) {
@@ -337,6 +337,10 @@ function bridgeMode(config = {}, env = process.env) {
     return "external";
   }
   return mode === "external" && externalBridgeEnabled(env) ? "external" : "local";
+}
+
+export function effectiveWhatsAppBridgeMode(config = {}, env = process.env) {
+  return bridgeMode(config, env);
 }
 
 function bridgeModeRaw(config = {}, env = process.env) {
