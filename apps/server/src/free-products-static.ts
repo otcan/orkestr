@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { renderWorkoutLogPage } from "./free-workout-log-page.js";
+import { workoutLogPath } from "./free-workout-log-page.js";
 
 const workoutLogAssets = new Map<string, string>([
   ["/free/workout-log/app.css", "text/css; charset=utf-8"],
@@ -13,8 +13,8 @@ const workoutLogAssets = new Map<string, string>([
 ]);
 const serviceWorkerPath = "/free/workout-log-sw.js";
 
-// The page may only load its own same-origin files and may not open any
-// network connection, so logged data cannot leave the browser from this page.
+// After load the page may only use its own same-origin files and may not open
+// any connection (no fetch/XHR/beacon/WebSocket), so entries are never sent.
 export const workoutLogCsp = [
   "default-src 'none'",
   "script-src 'self'",
@@ -52,21 +52,15 @@ function sendAsset(response: any, file: string, type: string, extraHeaders: Reco
   return true;
 }
 
-export function maybeServeFreeProduct(response: any, publicPath: string, env = process.env) {
-  if (publicPath === "/free/workout-log/") {
-    response.status(301).header("cache-control", "public, max-age=3600").header("location", "/free/workout-log").send("Redirecting to the canonical URL.");
-    return true;
-  }
-  if (publicPath === "/free/workout-log") {
-    response.status(200)
-      .header("cache-control", "no-cache")
-      .header("content-security-policy", workoutLogCsp)
-      .header("referrer-policy", "no-referrer")
-      .header("x-content-type-options", "nosniff")
-      .type("text/html; charset=utf-8")
-      .send(renderWorkoutLogPage(env));
-    return true;
-  }
+// Extra response headers for free-product pages rendered by the site shell.
+export function freeProductPageHeaders(publicPath: string): Record<string, string> {
+  if (publicPath.replace(/\/+$/, "") !== workoutLogPath) return {};
+  return { "content-security-policy": workoutLogCsp, "referrer-policy": "no-referrer", "x-content-type-options": "nosniff" };
+}
+
+// Serves the free products' own static files (the pages themselves are
+// registered in public-site-catalog.ts and rendered by the shared shell).
+export function maybeServeFreeProduct(response: any, publicPath: string) {
   if (publicPath === serviceWorkerPath) {
     return sendAsset(response, "sw.js", "text/javascript; charset=utf-8", { "content-security-policy": serviceWorkerCsp });
   }

@@ -1,4 +1,4 @@
-import { maybeServeFreeProduct } from "./free-products-static.js";
+import { freeProductPageHeaders, maybeServeFreeProduct } from "./free-products-static.js";
 import { renderOAuthHomepage } from "./oauth-homepage.js";
 import { publicBuildAsset } from "./public-site-build-assets.js";
 import {
@@ -41,7 +41,7 @@ export function maybeServePublicSite(request: any, response: any, url: string, e
     response.status(200).header("cache-control", "no-store").type("text/html; charset=utf-8").send(renderOAuthHomepage(env));
     return true;
   }
-  if (allowed && maybeServeFreeProduct(response, publicPath, env)) return true;
+  if (allowed && maybeServeFreeProduct(response, publicPath)) return true;
   if (publicPath === "/public-site.css" && allowed) {
     response.status(200).header("cache-control", "public, max-age=300").type("text/css; charset=utf-8").send(renderPublicSiteCss());
     return true;
@@ -67,6 +67,8 @@ export function maybeServePublicSite(request: any, response: any, url: string, e
 
   const page = renderPublicSite(url, env, { host });
   if (!page) return false;
-  response.status(200).header("cache-control", "no-store").type("text/html; charset=utf-8").send(page);
+  response.status(200).header("cache-control", "no-store");
+  for (const [key, value] of Object.entries(freeProductPageHeaders(publicPath))) response.header(key, value);
+  response.type("text/html; charset=utf-8").send(page);
   return true;
 }

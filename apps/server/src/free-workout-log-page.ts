@@ -1,40 +1,27 @@
-import { escapeHtml, publicCanonicalUrl } from "./public-site-config.js";
+import type { PublicPage } from "./public-site-config.js";
 
-export const workoutLogTitle = "Free Workout Log – No Signup, Stays in Your Browser";
-export const workoutLogSummary = "Log exercises, sets, reps, and weight, run a rest timer, and see progress per exercise. No account, no tracking; data stays in this browser.";
+export const workoutLogPath = "/free/workout-log";
+export const workoutLogTitle = "Free Workout Log – No Signup, No Data Uploads";
+export const workoutLogSummary = "Log exercises, sets, reps, and weight, run a rest timer, and see progress per exercise. No account. After this page loads, it sends nothing back: no analytics, no data uploads.";
 
-// Standalone page: it deliberately skips the shared site shell so it loads no
-// event beacon or other script besides its own same-origin module.
-export function renderWorkoutLogPage(env = process.env) {
-  const canonical = publicCanonicalUrl("/free/workout-log", env);
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>${escapeHtml(workoutLogTitle)} | Orkestr</title>
-  <meta name="description" content="${escapeHtml(workoutLogSummary)}">
-  <meta name="robots" content="index,follow">
-  <meta name="theme-color" content="#f2efe6">
-  <meta name="referrer" content="no-referrer">
-  ${canonical ? `<link rel="canonical" href="${escapeHtml(canonical)}">` : ""}
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <link rel="stylesheet" href="/free/workout-log/app.css">
-  <script type="module" src="/free/workout-log/app.js"></script>
-</head>
-<body>
-  <a class="skip-link" href="#main-content">Skip to content</a>
-  <header class="wl-top">
-    <a class="wl-brand" href="/">Orkestr</a>
-    <nav aria-label="Free products"><a href="/free">Free products</a></nav>
-  </header>
-  <main id="main-content" class="wl-main">
+// Registered through the public-site catalog and rendered inside the shared
+// shell (an umbrella "free" page, so the shell adds no analytics beacon). The
+// page loads only its own stylesheet and module; free-products-static.ts adds
+// a strict CSP for this route and serves those files.
+export function workoutLogPage(): PublicPage {
+  return {
+    id: "free",
+    title: workoutLogTitle,
+    summary: workoutLogSummary,
+    canonicalPath: workoutLogPath,
+    body: `<link rel="stylesheet" href="/free/workout-log/app.css">
+  <main id="main-content" class="wl-app wl-main">
     <section class="wl-intro" aria-labelledby="wl-title">
       <p class="wl-eyebrow">Free product · no signup</p>
       <h1 id="wl-title">Workout log</h1>
-      <p>Log sets, run a rest timer, and see progress per exercise. Your log is stored in this browser on this device and is never uploaded, so browser storage can be lost; <a href="#wl-storage-notice">keep an export as a backup</a>.</p>
+      <p>Log sets, run a rest timer, and see progress per exercise. After this page loads, it sends nothing back: no analytics, no data uploads. Your entries stay in this browser on this device, and browser storage can be lost; <a href="#wl-storage-notice">keep an export as a backup</a>.</p>
       <ul class="wl-facts" aria-label="How this tool handles your data">
-        <li>No account</li><li>No tracking or analytics</li><li>No network calls with your data</li><li>Works offline after the first visit</li>
+        <li>No account</li><li>No analytics</li><li>No data uploads after the page loads</li><li>Works offline after the first visit</li>
       </ul>
       <p id="wl-storage-warning" class="wl-warning" hidden>This browser blocks local storage (for example in some private modes). You can use the log, but it is lost when the tab closes; export before leaving.</p>
       <noscript><p class="wl-warning">The workout log needs JavaScript. It runs entirely in your browser.</p></noscript>
@@ -116,12 +103,9 @@ export function renderWorkoutLogPage(env = process.env) {
 
     <section class="wl-disclaimer" aria-labelledby="wl-note-title">
       <h2 id="wl-note-title">Please note</h2>
-      <p>This is a simple logging tool. It does not give training, health, or medical advice, and its numbers are plain arithmetic on what you enter (volume = weight × reps). Nothing you enter is sent anywhere, and there is no tracking of any kind. Because the log lives only in this browser, export a backup if it matters to you.</p>
+      <p>This is a simple logging tool. It does not give training, health, or medical advice, and its numbers are plain arithmetic on what you enter (volume = weight × reps). After this page loads, it sends nothing back: no analytics, no data uploads. Like any web page, its own files (page, scripts, styles) are downloaded from our server and may be re-downloaded to pick up updates; your entries are never part of those requests. Because your entries stay only in this browser, export a backup if it matters to you.</p>
     </section>
   </main>
-  <footer class="wl-footer">
-    <a href="/free">Free products</a><a href="/">Orkestr</a><a href="/impressum">Imprint</a><a href="/privacy">Privacy</a>
-  </footer>
-</body>
-</html>`;
+  <script type="module" src="/free/workout-log/app.js"></script>`,
+  };
 }
