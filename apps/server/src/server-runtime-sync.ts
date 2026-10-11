@@ -322,6 +322,11 @@ export function createWhatsAppDeliveryScheduler(env = process.env) {
   let timer: NodeJS.Timeout | null = null;
   let running = false;
   let rerunRequested = false;
+  // A pass that is already running when the server closes must finish before
+  // close() resolves, or it keeps writing (outbox lock, typing state) into
+  // ORKESTR_HOME after shutdown.
+  let inFlight: Promise<unknown> | null = null;
+  let closed = false;
   const retryDelayMs = whatsAppDeliveryRetryDelayMs();
   const shouldRetry = (result: any) => {
     if (!result || !Array.isArray(result.failed) || !result.failed.length) return false;
@@ -350,13 +355,14 @@ export function createWhatsAppDeliveryScheduler(env = process.env) {
     return recovery;
   };
   const run = () => {
+    if (closed) return;
     if (running) {
       rerunRequested = true;
       return;
     }
     running = true;
     const startedAt = Date.now();
-    timeBackgroundRun("whatsapp_outbox", () => deliverWhatsAppReplies(env))
+    inFlight = timeBackgroundRun("whatsapp_outbox", () => deliverWhatsAppReplies(env))
       .then((result) => {
         recordWhatsAppDeliveryMetrics({ source: "delivery_scheduler", result, durationMs: Date.now() - startedAt });
         return result;
@@ -392,7 +398,8 @@ export function createWhatsAppDeliveryScheduler(env = process.env) {
       })
       .finally(() => {
         running = false;
-        if (rerunRequested) {
+        inFlight = null;
+        if (rerunRequested && !closed) {
           rerunRequested = false;
           scheduler.schedule();
         }
@@ -400,16 +407,18 @@ export function createWhatsAppDeliveryScheduler(env = process.env) {
   };
   const scheduler = {
     schedule(delayMs = 0) {
-      if (timer) return;
+      if (closed || timer) return;
       timer = setTimeout(() => {
         timer = null;
         run();
       }, Math.max(0, delayMs));
       if (typeof timer.unref === "function") timer.unref();
     },
-    close() {
+    close(): Promise<void> {
+      closed = true;
       if (timer) clearTimeout(timer);
       timer = null;
+      return Promise.resolve(inFlight).then(() => undefined, () => undefined);
     },
   };
   return scheduler;
