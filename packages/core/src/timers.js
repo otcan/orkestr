@@ -902,6 +902,9 @@ export async function runTimerNow(id, env = process.env, now = new Date(), optio
   if (timer.cadence === "once") timer.enabled = false;
   delete timer.lastError;
   delete timer.lastErrorAt;
+  // A successful manual run ends any failure streak and pending backoff.
+  delete timer.retryAt;
+  timer.consecutiveFailures = 0;
   delete timer.blockedReason;
   delete timer.blockedConnector;
   delete timer.connectorState;
@@ -961,6 +964,7 @@ async function markDueTimersPass(env, now, options) {
         lastError: null,
         lastErrorAt: null,
         retryAt: null,
+        consecutiveFailures: 0,
         blockedReason: null,
         blockedConnector: null,
         connectorState: null,
@@ -989,8 +993,10 @@ async function markDueTimersPass(env, now, options) {
           : timer.nextRunAt,
         lastError: error?.message || String(error),
         lastErrorAt: now.toISOString(),
+        // failureCount is a lifetime diagnostic; backoff uses the current streak.
         failureCount: Number(timer.failureCount || 0) + 1,
-        retryAt: error?.blockedReason === "blocked_auth" ? null : timerRetryAt(Number(timer.failureCount || 0) + 1, now),
+        consecutiveFailures: Number(timer.consecutiveFailures || 0) + 1,
+        retryAt: error?.blockedReason === "blocked_auth" ? null : timerRetryAt(Number(timer.consecutiveFailures || 0) + 1, now),
         blockedReason: error?.blockedReason || null,
         blockedConnector: error?.blockedConnector || null,
         connectorState: error?.connectorState || null,

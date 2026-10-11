@@ -81,3 +81,46 @@ test("after downtime, many missed daily runs collapse into one catch-up run", as
   const [timer] = await listTimers(env);
   assert.ok(Date.parse(timer.nextRunAt) > Date.parse("2026-05-20T10:00:00Z"));
 });
+
+// Finding 3: backoff tracks consecutive failures and recovers fully.
+test("after a recovery, a fresh failure backs off from one minute again", async () => {
+  const env = await dueTimerEnv(null);
+  const t0 = Date.parse("2026-05-15T10:00:00Z");
+  const at = (seconds) => new Date(t0 + seconds * 1000);
+  await markDueTimers(env, at(0));
+  await markDueTimers(env, at(61));
+  await markDueTimers(env, at(182));
+  let [timer] = await listTimers(env);
+  assert.equal(timer.retryAt, at(182 + 240).toISOString(), "third consecutive failure waits 4 minutes");
+  await createThread({ id: "missing-thread", name: "Now present" }, env);
+  await markDueTimers(env, at(423));
+  [timer] = await listTimers(env);
+  assert.equal(timer.retryAt, null);
+  // The thread disappears again: the next failure is a fresh one.
+  const stored = await listTimers(env);
+  stored[0].target = "gone-thread";
+  stored[0].nextRunAt = at(500).toISOString();
+  await fs.writeFile(path.join(env.ORKESTR_HOME, "timers.json"), `${JSON.stringify(stored, null, 2)}\n`);
+  await markDueTimers(env, at(500));
+  [timer] = await listTimers(env);
+  assert.equal(timer.retryAt, at(560).toISOString(), "fresh failure waits one minute, not the old 8 minutes");
+  assert.ok(timer.failureCount >= 4, "lifetime failure count is kept for diagnostics");
+});
+
+test("a successful manual run clears a pending backoff", async () => {
+  const { runTimerNow } = await import("../packages/core/src/timers.js");
+  const env = await dueTimerEnv(null);
+  const now = new Date("2026-05-15T10:00:00Z");
+  await markDueTimers(env, now);
+  let [timer] = await listTimers(env);
+  assert.ok(timer.retryAt);
+  await createThread({ id: "missing-thread", name: "Now present" }, env);
+  await runTimerNow(timer.id, env, new Date(now.getTime() + 10_000));
+  [timer] = await listTimers(env);
+  assert.equal(timer.retryAt ?? null, null, "manual success clears retryAt");
+  const stored = await listTimers(env);
+  stored[0].nextRunAt = new Date(now.getTime() + 20_000).toISOString();
+  await fs.writeFile(path.join(env.ORKESTR_HOME, "timers.json"), `${JSON.stringify(stored, null, 2)}\n`);
+  const due = await markDueTimers(env, new Date(now.getTime() + 30_000));
+  assert.equal(due.length, 1, "the next scheduled run is not suppressed by a stale retryAt");
+});
