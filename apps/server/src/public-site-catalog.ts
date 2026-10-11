@@ -1,4 +1,5 @@
 import type { PublicPage } from "./public-site-config.js";
+import { customerPortalBuildPage } from "./public-site-build-customer-portal.js";
 
 // Shared registry for the /builds and /free index pages.
 //
@@ -30,9 +31,10 @@ export type PublicCatalogEntry = {
 export const publicCatalog: PublicCatalogEntry[] = [
   // SITE-2a: /builds/customer-portal
   {
-    section: "builds", slug: "customer-portal", status: "coming-soon",
-    title: "Customer portal",
-    summary: "A customer-facing portal for requests, documents, and status updates, shown with synthetic data.",
+    section: "builds", slug: "customer-portal", status: "live", evidence: "simulation",
+    title: "B2B customer portal with approval rules",
+    summary: "A buyer submits an order, stock and credit rules check it, exceptions pause for an approver, and the timeline and audit log update. Synthetic data, runs in your browser.",
+    render: () => customerPortalBuildPage(),
   },
 
   // SITE-2b: /builds/evidence-desk

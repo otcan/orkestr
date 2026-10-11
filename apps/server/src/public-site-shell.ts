@@ -238,6 +238,7 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
   <meta name="twitter:description" content="${escapeHtml(page.summary)}">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/public-site.css">
+  ${(page.stylesheets || []).map((href) => `<link rel="stylesheet" href="${escapeHtml(href)}">`).join("\n  ")}
   ${structuredData(page, env)}
 </head>
 <body class="page-${page.id} locale-${locale}">
@@ -268,6 +269,7 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
     <p class="footer-note">${copy.note}</p>
   </footer>
   ${analytics ? analyticsScript() : home ? legacyHashRedirectScript() : ""}
+  ${(page.scripts || []).map((src) => `<script type="module" src="${escapeHtml(src)}"></script>`).join("\n  ")}
 </body>
 </html>`;
   return analytics ? html : withoutTrackingAttributes(html);

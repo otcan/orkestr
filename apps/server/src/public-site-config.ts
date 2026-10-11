@@ -39,6 +39,8 @@ export type PublicPage = {
   canonicalPath?: string;
   locale?: PublicLocale;
   indexable?: boolean;
+  stylesheets?: string[];
+  scripts?: string[];
 };
 
 export const publicLocales: PublicLocale[] = ["en", "de", "tr"];
