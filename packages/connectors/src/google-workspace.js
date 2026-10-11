@@ -670,7 +670,7 @@ async function gmailAttachmentPart(attachment) {
   ].join("\r\n");
 }
 
-async function gmailRawMessage(args = {}) {
+export async function gmailRawMessage(args = {}) {
   const body = clean(args.body || args.text);
   const headers = rfc822Headers(args);
   const attachments = attachmentDescriptors(args);
@@ -733,9 +733,13 @@ export async function sendGmailDraft(args = {}, env = process.env, fetchImpl = f
 
 export async function sendGmailMessage(args = {}, env = process.env, fetchImpl = fetch, options = {}) {
   const accessToken = await accessTokenWithCapability("gmail_send", env, fetchImpl, options);
+  const raw = options.approvedRaw === undefined ? await gmailRawMessage(args) : clean(options.approvedRaw);
+  if (!raw || !/^[A-Za-z0-9_-]+={0,2}$/.test(raw) || raw.length > 120_000) {
+    throw connectorError("gmail_approved_raw_invalid", 400);
+  }
   const sent = await jsonApiRequest(`${gmailApiBase}/messages/send`, {
     method: "POST",
-    body: { raw: await gmailRawMessage(args) },
+    body: { raw },
     accessToken,
     fetchImpl,
   });

@@ -49,13 +49,17 @@ function action({ connectionId = "", grantUpdatedAt = "", threadId = "", kind = 
   if (!connection) throw approvalError("gmail_send_connection_required", 400);
   if (!["message", "draft"].includes(kind)) throw approvalError("gmail_send_approval_kind_invalid", 400);
   const draft = kind === "draft" ? clean(draftId, 200) : "";
-  const approvedRaw = kind === "draft" ? clean(raw, 120_000) : "";
+  const approvedRaw = clean(raw, 120_000);
   if (kind === "draft" && (!draft || !approvedRaw || clean(raw).length > 120_000)) {
     throw approvalError("gmail_send_approval_draft_required", 400);
   }
+  if (raw && (!approvedRaw || clean(raw).length > 120_000 || !/^[A-Za-z0-9_-]+={0,2}$/.test(approvedRaw))) {
+    throw approvalError("gmail_send_approval_raw_invalid", 400);
+  }
+  const rawSha256 = approvedRaw ? createHash("sha256").update(Buffer.from(approvedRaw, "base64url")).digest("hex") : "";
   return {
     connectionId: connection, grantUpdatedAt: clean(grantUpdatedAt, 100), threadId: clean(threadId, 200),
-    kind, draftId: draft, raw: approvedRaw, details: normalizedDetails(details, { preserveBody: kind === "draft" }),
+    kind, draftId: draft, raw: approvedRaw, rawSha256, details: normalizedDetails(details, { preserveBody: kind === "draft" }),
   };
 }
 
@@ -129,6 +133,9 @@ export async function consumeGmailSendApproval(requestId = "", input = {}, princ
     if (!record || record.rejectedAt || record.consumedAt) throw approvalError("gmail_send_approval_not_found", 404);
     if (Date.parse(record.expiresAt) <= Date.now()) throw approvalError("gmail_send_approval_expired", 410);
     if (record.hash !== expectedHash) throw approvalError("gmail_send_approval_mismatch", 403);
+    if (record.rawSha256 !== (record.raw ? createHash("sha256").update(Buffer.from(record.raw, "base64url")).digest("hex") : "")) {
+      throw approvalError("gmail_send_approval_mismatch", 403);
+    }
     if (!record.approvedAt) throw approvalError("gmail_send_approval_pending", 409);
     record.consumedAt = new Date().toISOString();
     await writeSecretJson(location, current(records));

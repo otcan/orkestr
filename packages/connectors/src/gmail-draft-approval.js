@@ -47,7 +47,7 @@ function decodeHeader(value = "") {
   return decoded;
 }
 
-function parsePlainTextDraft(raw = "") {
+export function parsePlainTextDraft(raw = "") {
   const encoded = clean(raw);
   if (!encoded || encoded.length > 120_000 || !/^[A-Za-z0-9_-]+={0,2}$/.test(encoded)) {
     throw draftError("gmail_draft_approval_raw_unavailable");

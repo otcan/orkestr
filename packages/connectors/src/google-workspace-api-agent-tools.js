@@ -3,6 +3,7 @@ import {
   createGmailDraft,
   deleteGoogleCalendarEvent,
   getGoogleDriveFile,
+  gmailRawMessage,
   listGoogleCalendarEvents,
   modifyGmailMessage,
   sendGmailDraft,
@@ -12,7 +13,7 @@ import {
 import { resolveGoogleWorkspaceConnection } from "./google-workspace-connections.js";
 import { consumeGmailSendApproval, requestGmailSendApproval } from "./gmail-send-approvals.js";
 import { googleWorkspaceTokenHasCapability } from "./google-workspace-scopes.js";
-import { getGmailDraftApprovalSnapshot } from "./gmail-draft-approval.js";
+import { getGmailDraftApprovalSnapshot, parsePlainTextDraft } from "./gmail-draft-approval.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -286,18 +287,20 @@ export async function runTenantApiAgentGoogleWorkspaceTool(name = "", args = {},
     if (!googleWorkspaceTokenHasCapability(selected.token, "gmail_send")) {
       return { handled: true, result: { ok: false, provider: "gmail", ...selection, error: "google_workspace_capability_not_granted:gmail_send" } };
     }
+    const snapshot = parsePlainTextDraft(await gmailRawMessage(args));
     const approval = {
       connectionId: selected.connection.connectionId,
       grantUpdatedAt: selected.connection.updatedAt,
       threadId: clean(context.thread?.id || context.threadId),
-      details: args,
+      raw: snapshot.raw,
+      details: snapshot.details,
     };
     if (!clean(args.approvalRequestId)) {
       const requested = await requestGmailSendApproval(approval, principal, env);
       return { handled: true, result: { ok: false, provider: "gmail", ...selection, error: "gmail_send_approval_required", ...requested } };
     }
-    await consumeGmailSendApproval(args.approvalRequestId, approval, principal, env);
-    const result = await sendGmailMessage(args, env, fetchImpl, options);
+    const approved = await consumeGmailSendApproval(args.approvalRequestId, approval, principal, env);
+    const result = await sendGmailMessage(args, env, fetchImpl, { ...options, approvedRaw: approved.raw });
     return { handled: true, result: { ok: true, provider: "gmail", ...selection, message: result.message } };
   }
   if (tool === "orkestr_list_google_calendar_events") {

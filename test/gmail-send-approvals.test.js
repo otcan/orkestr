@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -25,12 +26,14 @@ test("agent Gmail sends require a reviewed exact payload and consume approval on
     subject: "Hello", body: "A reviewed message", approvalRequestId: "",
   };
   let sent = 0;
+  let approvedRaw = "";
   const context = {
     principal,
     threadId: "thread-1",
     fetchImpl: async (url, options) => {
       assert.match(String(url), /\/messages\/send$/);
       assert.equal(options.method, "POST");
+      assert.equal(JSON.parse(options.body).raw, approvedRaw);
       const raw = Buffer.from(JSON.parse(options.body).raw, "base64url").toString("utf8");
       assert.equal(raw, "To: friend@example.test\r\nSubject: Hello\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nA reviewed message");
       sent += 1;
@@ -48,6 +51,10 @@ test("agent Gmail sends require a reviewed exact payload and consume approval on
   assert.equal(listed[0].details.body, args.body);
   const storedPath = path.join(env.ORKESTR_HOME, "users", "alice", "secrets", "gmail-send-approvals.json");
   assert.equal((await fs.stat(storedPath)).mode & 0o777, 0o600);
+  const [stored] = JSON.parse(await fs.readFile(storedPath, "utf8"));
+  approvedRaw = stored.raw;
+  assert.equal(Buffer.from(approvedRaw, "base64url").toString("utf8"), "To: friend@example.test\r\nSubject: Hello\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nA reviewed message");
+  assert.equal(stored.rawSha256, createHash("sha256").update(Buffer.from(approvedRaw, "base64url")).digest("hex"));
 
   await assert.rejects(() => run({ ...args, approvalRequestId: requestId }), /gmail_send_approval_pending/);
   await assert.rejects(() => run({ ...args, body: "Altered", approvalRequestId: requestId }), /gmail_send_approval_mismatch/);
@@ -169,6 +176,20 @@ test("an approval cannot be reused after its connection grant changes", async ()
     () => consumeGmailSendApproval(requestId, { ...original, grantUpdatedAt: "new-grant" }, principal, env),
     /gmail_send_approval_mismatch/,
   );
+});
+
+test("a changed stored MIME payload fails its SHA-256 check", async () => {
+  const env = { ORKESTR_HOME: await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-raw-integrity-")) };
+  const principal = { userId: "alice" };
+  const raw = Buffer.from("To: friend@example.test\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nApproved").toString("base64url");
+  const input = { connectionId: "connection-1", threadId: "thread-1", raw, details: { to: "friend@example.test", body: "Approved" } };
+  const { requestId } = await requestGmailSendApproval(input, principal, env);
+  await decideGmailSendApproval(requestId, true, principal, env);
+  const location = path.join(env.ORKESTR_HOME, "users", "alice", "secrets", "gmail-send-approvals.json");
+  const records = JSON.parse(await fs.readFile(location, "utf8"));
+  records[0].raw = Buffer.from("To: friend@example.test\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nChanged").toString("base64url");
+  await fs.writeFile(location, JSON.stringify(records), { mode: 0o600 });
+  await assert.rejects(() => consumeGmailSendApproval(requestId, input, principal, env), /gmail_send_approval_mismatch/);
 });
 
 test("oversized email content is rejected before a review record is created", async () => {
