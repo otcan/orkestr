@@ -37,11 +37,29 @@ function cli(baseUrl, cookie) {
   return { out, run: (...argv) => setupCommand(argv, ctx) };
 }
 
-// Stand-in for the Codex CLI's `login status`, so no real login is needed.
+// Stand-in for the Codex CLI: `login status` reports the requested login and
+// `app-server` answers the minimal protocol the installer's runtime start
+// needs (initialize, thread/start). No real login is involved.
 async function fakeCodex(dir, mode) {
   const lines = { chatgpt: ["Logged in using ChatGPT", 0], apikey: ["Logged in using an API key - sk-***", 0], out: ["Not logged in", 1] }[mode];
   const bin = path.join(dir, `codex-${mode}`);
-  await fs.writeFile(bin, `#!/bin/sh\necho "${lines[0]}"\nexit ${lines[1]}\n`, { mode: 0o755 });
+  await fs.writeFile(bin, `#!/usr/bin/env node
+const readline = require("node:readline");
+const args = process.argv.slice(2);
+if (args[0] === "login") { console.log(${JSON.stringify(lines[0])}); process.exit(${lines[1]}); }
+if (args[0] === "--version") { console.log("codex-cli fake"); process.exit(0); }
+if (args[0] === "app-server" && args.includes("--help")) { console.log("Usage: codex app-server"); process.exit(0); }
+if (args[0] !== "app-server") process.exit(0);
+let n = 0;
+const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method } = JSON.parse(line);
+  if (method === "initialize") return send({ id, result: { userAgent: "fake", platformFamily: "linux", platformOs: "linux" } });
+  if (method === "initialized") return;
+  if (method === "thread/start") { n += 1; const thread = { id: "thr_" + n, status: { type: "idle" }, turns: [] }; send({ id, result: { thread } }); return send({ method: "thread/started", params: { thread } }); }
+  send({ id, result: {} });
+});
+`, { mode: 0o755 });
   return bin;
 }
 

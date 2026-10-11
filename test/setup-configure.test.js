@@ -13,7 +13,7 @@ async function freshEnv() {
   return { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin" };
 }
 
-const deps = { ...defaultSetupDeps, providerReady: async () => ({ ready: true, reason: "chatgpt_login" }) };
+const deps = { ...defaultSetupDeps, providerReady: async () => ({ ready: true, reason: "chatgpt_login" }), startRuntime: async () => ({}) };
 const enabledByKey = async (env, instance) => {
   const timers = await listTimers(env);
   return Object.fromEntries(instance.resources.timers.map(({ key, id }) => [key, timers.find((timer) => timer.id === id).enabled !== false]));
