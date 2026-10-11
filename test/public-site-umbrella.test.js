@@ -101,3 +101,33 @@ test("moved localized homes redirect permanently to their studio pages", () => {
     assert.match(result.body, /<main\b/, path);
   }
 });
+
+test("EN/DE/TR routing stays consistent: no stale alternates or untranslated umbrella labels", () => {
+  const sitemap = renderPublicSitemap(env);
+  const paths = [...new Set([...sitemap.matchAll(/<loc>https:\/\/product\.example\.test([^<]*)<\/loc>/g)].map((match) => match[1] || "/"))];
+  const localized = paths.filter((path) => /^\/(de|tr)\//.test(path)).concat(["/de/projekt", "/tr/proje"]);
+  assert.ok(localized.length >= 22);
+  for (const path of paths.concat(["/de/projekt", "/tr/proje"])) {
+    const html = renderPublicSite(path, env, host);
+    const targets = [
+      ...[...html.matchAll(/<link rel="alternate" hreflang="[^"]+" href="https:\/\/product\.example\.test([^"]*)"/g)].map((match) => match[1] || "/"),
+      ...[...html.matchAll(/class="(?:mobile-)?language-switcher[^"]*"[^>]*>(.*?)<\/(?:nav|div)>/gs)].flatMap((match) => [...match[1].matchAll(/href="([^"]+)"/g)].map((link) => link[1])),
+    ];
+    for (const target of targets) {
+      const result = serve(target);
+      assert.equal(result.status, 200, `${path} -> ${target}`);
+    }
+  }
+  for (const path of localized) {
+    const html = renderPublicSite(path, env, host);
+    const nav = html.match(/<nav class="desktop-nav"[^>]*>(.*?)<\/nav>/s)[1];
+    assert.doesNotMatch(nav, />(Live builds|Free products|Open source)</, path);
+    for (const target of ["/builds", "/free", "/open-source"]) assert.match(nav, new RegExp(`href="${target}" hreflang="en"`), path);
+    assert.match(nav, new RegExp(`href="/${path.split("/")[1]}/studio"`), path);
+    assert.doesNotMatch(html, />Explore</, path);
+  }
+  const root = renderPublicSite("/", env, host);
+  assert.match(root, /href="\/de\/studio" hreflang="de-DE" lang="de">Deutsch</);
+  assert.match(root, /href="\/tr\/studio" hreflang="tr-TR" lang="tr">Türkçe</);
+  assert.doesNotMatch(root, /rel="alternate"/);
+});

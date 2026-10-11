@@ -66,12 +66,19 @@ function pageLocales(page: PublicPage) {
   return publicLocales.filter((locale) => publicPagePath(page.id, locale));
 }
 
+// Builds, free products, and open source are English-only. Localized pages
+// still link there, but mark the target language instead of implying a
+// translated page exists.
+function englishOnlyHint(id: PublicPageId, locale: PublicLocale) {
+  return locale !== "en" && !publicPagePath(id, locale) ? ' hreflang="en"' : "";
+}
+
 function umbrellaNav(page: PublicPage, locale: PublicLocale) {
   const copy = shellCopy[locale];
   const items: Array<[PublicPageId, string]> = [["builds", copy.builds], ["free", copy.free], ["open-source", copy.openSource], ["studio", copy.studio]];
   return items.map(([id, label]) => {
     const current = page.id === id ? (page.canonicalPath && page.canonicalPath !== publicPagePath(id, locale) ? ' aria-current="true"' : ' aria-current="page"') : "";
-    return `<a href="${pageHref(id, locale)}"${current}>${label}</a>`;
+    return `<a href="${pageHref(id, locale)}"${current}${englishOnlyHint(id, locale)}>${label}</a>`;
   }).join("");
 }
 
@@ -227,7 +234,7 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
   ${page.body}
   <footer class="footer">
     <div class="footer-brand"><a class="wordmark inverse" href="${homePath}"><span>O</span> Orkestr</a><p>${umbrella ? copy.umbrellaFooter : copy.footer}</p></div>
-    <nav aria-label="${copy.explore}"><strong>${copy.explore}</strong><a href="/builds">${copy.builds}</a><a href="/free">${copy.free}</a><a href="/open-source">${copy.openSource}</a><a href="${studioPath}">${copy.studio}</a></nav>
+    <nav aria-label="${copy.explore}"><strong>${copy.explore}</strong><a href="/builds"${englishOnlyHint("builds", locale)}>${copy.builds}</a><a href="/free"${englishOnlyHint("free", locale)}>${copy.free}</a><a href="/open-source"${englishOnlyHint("open-source", locale)}>${copy.openSource}</a><a href="${studioPath}">${copy.studio}</a></nav>
     <nav aria-label="${copy.solutions}"><strong>${copy.solutions}</strong><a href="${pageHref("websites-commerce", locale)}">${copy.newSystems}</a><a href="${pageHref("business-systems", locale)}">${copy.modernization}</a><a href="${pageHref("automation", locale)}">${copy.automation}</a></nav>
     <nav aria-label="${copy.orkestr}"><strong>${copy.orkestr}</strong><a href="${studioPath}#how-we-work">${copy.process}</a><a href="${studioPath}#platform">${copy.operating}</a><a href="${pageHref("deployment", locale)}">${copy.deployment}</a><a href="${pageHref("security", locale)}">${copy.security}</a></nav>
     <nav aria-label="${copy.resources}"><strong>${copy.resources}</strong><a href="/open-source">${copy.openSource}</a><a href="/developers">${copy.developers}</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="${escapeHtml(repo)}/tree/main/docs" rel="noreferrer">${copy.documentation}</a></nav>

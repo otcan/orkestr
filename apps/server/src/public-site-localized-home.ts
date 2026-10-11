@@ -16,7 +16,7 @@ const localizedHomeCopy: Record<"de" | "tr", LocalizedHomeCopy> = {
   de: {
     title: "Individuelle Unternehmenssoftware & Automatisierung",
     summary: "Orkestr konzipiert, entwickelt, modernisiert und betreibt Unternehmenssoftware, Websites, Datensysteme und Automatisierung für konkrete Geschäftsanforderungen.",
-    eyebrow: "UNTERNEHMENSSYSTEME · GEBAUT & BETRIEBEN",
+    eyebrow: "ORKESTR STUDIO · UNTERNEHMENSSYSTEME · GEBAUT & BETRIEBEN",
     heading: "Braucht Ihr Unternehmen ein besseres System?",
     lead: "Orkestr konzipiert, entwickelt, modernisiert und betreibt die Software hinter realen Geschäftsprozessen.",
     detail: "Von Websites und internen Anwendungen bis zu Datensystemen und Automatisierung. Ein kurzes Gespräch genügt für den Anfang – ein technisches Lastenheft ist nicht erforderlich.",
@@ -42,7 +42,7 @@ const localizedHomeCopy: Record<"de" | "tr", LocalizedHomeCopy> = {
   tr: {
     title: "Özel İş Yazılımı ve Otomasyon",
     summary: "Orkestr, somut iş ihtiyaçları için kurumsal yazılım, web sitesi, veri sistemi ve otomasyon tasarlar, geliştirir, modernleştirir ve işletir.",
-    eyebrow: "İŞ SİSTEMLERİ · GELİŞTİRME & İŞLETİM",
+    eyebrow: "ORKESTR STUDIO · İŞ SİSTEMLERİ · GELİŞTİRME & İŞLETİM",
     heading: "İşletmeniz için daha iyi bir sisteme mi ihtiyacınız var?",
     lead: "Orkestr, gerçek iş süreçlerinin arkasındaki yazılımı tasarlar, geliştirir, modernleştirir ve işletir.",
     detail: "Web sitelerinden şirket içi araçlara, veri sistemlerinden otomasyona kadar. Başlamak için kısa bir görüşme yeterlidir; teknik şartname hazırlamanız gerekmez.",
