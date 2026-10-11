@@ -30,16 +30,16 @@ function serviceCard(service: typeof services[number]) {
   return `<article class="v4-service-card"><span>${service.number}</span><h3>${service.title}</h3><p>${service.copy}</p><small>${service.examples}</small><a href="${service.path}" data-event="service_group_click">Explore this work <span aria-hidden="true">→</span></a></article>`;
 }
 
-export function commercialHomePage(): PublicPage {
+export function studioPage(): PublicPage {
   return {
-    id: "home",
-    title: "Custom Business Software & Automation",
-    summary: "Orkestr designs, builds, modernizes, and operates websites, business software, data systems, and automation around real business needs.",
-    canonicalPath: "/",
+    id: "studio",
+    title: "Studio: Custom Business Software & Automation",
+    summary: "Orkestr Studio designs, builds, modernizes, and operates websites, business software, data systems, and automation around real business needs.",
+    canonicalPath: "/studio",
     body: `<main id="main-content" class="v4-home">
   <section class="v4-section v4-hero" aria-labelledby="home-title">
     <div class="v4-hero-copy">
-      <p class="eyebrow">CUSTOM BUSINESS SOFTWARE · BUILT &amp; OPERATED</p>
+      <p class="eyebrow">ORKESTR STUDIO · CUSTOM BUSINESS SOFTWARE · BUILT &amp; OPERATED</p>
       <h1 id="home-title">Need a better system for your business?</h1>
       <p class="lead">Orkestr designs, builds, modernizes, and operates the software behind real business work.</p>
       <p class="hero-detail">From websites and internal tools to data systems and automation. Start with a short conversation—no technical specification required.</p>

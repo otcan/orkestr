@@ -3,6 +3,7 @@ import { publicSiteV3Css } from "./public-site-v3-style.js";
 import { publicSiteV4Css } from "./public-site-v4-style.js";
 import { publicSiteLocalizationCss } from "./public-site-localization-style.js";
 import { publicSiteEvidenceCss } from "./public-site-evidence-style.js";
+import { publicSiteHubCss } from "./public-site-hub-style.js";
 
 export function renderCommercialSiteCss() {
   return `
@@ -436,6 +437,7 @@ ${waitlistCss()}
   .footer { grid-template-columns: 1fr; }
   .footer-brand, .footer-note { grid-column: 1; }
 }
+${publicSiteHubCss}
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 `;
 }
