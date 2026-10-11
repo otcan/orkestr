@@ -157,7 +157,7 @@ function renderLinks({ state, act }, claim) {
 function renderDecision({ state, act }, claim) {
   const reasons = reviewReasons(state, claim.id);
   const status = claim.decision
-    ? `Decision: ${OUTCOMES[claim.decision.outcome]}${claim.decision.rationale ? ` — ${claim.decision.rationale}` : ""}`
+    ? `Decision: ${OUTCOMES[claim.decision.outcome]}${claim.decision.rationale ? ` — ${claim.decision.rationale}` : ""} (${claim.decision.actor}, ${formatTime(claim.decision.at)})`
     : reasons.length ? `Needs review: ${reasons.map((reason) => reason.text.toLowerCase()).join("; ")}.` : "No open review flags.";
   const outcome = h("select", { id: "ed-decision-outcome", name: "outcome" }, options(OUTCOMES, "accepted", (entry) => entry));
   const rationale = h("textarea", { id: "ed-decision-rationale", rows: 2, maxlength: 500 });
@@ -169,10 +169,22 @@ function renderDecision({ state, act }, claim) {
       h("div", { class: "ed-actions" }, h("button", { type: "submit", class: "button button-small", text: "Record decision" }))));
 }
 
+export function formatTime(at) {
+  return at ? `${at.slice(0, 10)} ${at.slice(11, 16)} UTC` : "time not recorded";
+}
+
+export function formatChange(change) {
+  const show = (value) => (value ? `“${value}”` : "none");
+  return `${change.field}: ${show(change.from)} → ${show(change.to)}`;
+}
+
 function renderHistory(state, claim) {
   const entries = claimHistory(state, claim.id);
   return h("ol", { class: "ed-history", reversed: true },
-    entries.length ? [...entries].reverse().map((entry) => h("li", { value: entry.n }, h("span", { class: "ed-history-step", text: `Step ${entry.n}` }), h("span", { text: entry.text })))
+    entries.length ? [...entries].reverse().map((entry) => h("li", { value: entry.n },
+      h("span", { class: "ed-history-step" }, `Step ${entry.n} · `, h("time", { datetime: entry.at || null, text: formatTime(entry.at) }), ` · ${entry.actor}`),
+      h("span", { text: entry.text }),
+      entry.changes.length ? h("ul", { class: "ed-changes" }, entry.changes.map((change) => h("li", { text: formatChange(change) }))) : null))
       : h("li", { class: "ed-empty", text: "No recorded steps." }));
 }
 

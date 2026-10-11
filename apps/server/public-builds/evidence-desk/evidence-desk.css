@@ -85,6 +85,10 @@
 .ed-history { margin: 12px 0 0; padding: 0; list-style: none; border-left: 2px solid var(--line); }
 .ed-history > li { display: grid; gap: 2px; padding: 6px 0 6px 12px; font-size: 14px; line-height: 1.4; }
 .ed-history-step { color: var(--muted); font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .05em; text-transform: uppercase; }
+.ed-actor { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 720; }
+.ed-actor select { min-height: 40px; padding: 6px 8px; border: 1px solid #8d9088; border-radius: 4px; background: #fff; color: var(--ink); }
+.ed-changes { margin: 4px 0 0; padding-left: 18px; color: #3d4139; font-size: 13px; }
+.ed-changes li { overflow-wrap: anywhere; }
 @media (max-width: 900px) {
   .ed-grid { grid-template-columns: 1fr; }
 }

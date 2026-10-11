@@ -43,7 +43,7 @@ export const publicCatalog: PublicCatalogEntry[] = [
   {
     section: "builds", slug: "evidence-desk", status: "live", evidence: "simulation",
     title: "Evidence desk",
-    summary: "Trace claims to synthetic source records, mark contradictions, record review decisions, and export a reproducible summary. Runs in your browser on a fictional topic.",
+    summary: "Trace claims to synthetic source records, mark contradictions, record review decisions, and export a reproducible summary. Runs in your browser on a fictional topic; after the page loads it sends nothing back.",
     render: () => evidenceDeskPage(),
   },
 

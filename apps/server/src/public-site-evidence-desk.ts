@@ -6,7 +6,7 @@ import type { PublicPage } from "./public-site-config.js";
 const limitations = [
   "This is a demonstration, not a research tool. The topic, source records and numbers are invented.",
   "The rubric score is an illustrative teaching device. It is not calibrated, not statistical and not a scientific confidence measure, and it cannot tell whether a source is true.",
-  "Nothing is sent to a server and no AI model is involved. Clearing site data or pressing Reset demo removes your changes.",
+  "The page and its scripts are delivered like any web page. After it loads, it sends nothing back: no analytics, no data uploads, and no AI model is involved. Clearing site data or pressing Reset demo removes your entries.",
   "Please do not enter personal, confidential or health information; the demo is not built to protect it.",
 ];
 
@@ -27,7 +27,7 @@ export function evidenceDeskPage(): PublicPage {
         <div class="ed-notice" role="note">
           <strong>Fictional topic, synthetic records.</strong>
           <p>The sample data is about the <em>Brindlemere Tool Library</em>, an invented community lending service in an invented town. Every claim, source record, quote and number was written for this demo. Nothing describes a real person, organisation or client project.</p>
-          <p>The app runs entirely in this page. It keeps its state in your browser's local storage, makes no network requests and uses no AI model.</p>
+          <p class="ed-privacy">After this page loads, it sends nothing back: no analytics, no data uploads. Your entries stay in this browser (local storage). No AI model is involved.</p>
         </div>
         <details class="ed-limits"><summary>Limitations</summary><ul>${limitations.map((item) => `<li>${item}</li>`).join("")}</ul></details>
       </section>
@@ -39,6 +39,7 @@ export function evidenceDeskPage(): PublicPage {
             <button type="button" id="ed-reset" class="button button-small button-outline">Reset demo</button>
             <button type="button" id="ed-export-json" class="button button-small button-ghost">Export JSON</button>
             <button type="button" id="ed-export-md" class="button button-small button-ghost">Export Markdown</button>
+            <label class="ed-actor"><span>Acting as</span><select id="ed-actor"><option>You (this browser), as analyst</option><option>You (this browser), as reviewer</option></select></label>
             <p class="ed-checksum-line">Export checksum <code id="ed-checksum"></code></p>
             <p id="ed-status" class="ed-status" role="status" aria-live="polite"></p>
           </div>
@@ -74,8 +75,8 @@ export function evidenceDeskPage(): PublicPage {
         <ul>
           <li>Each item weighs <code>strength × type</code>: weak 1, moderate 2, strong 3; primary record and measurement ×1, observation ×0.8, secondary report ×0.6, anecdote ×0.4.</li>
           <li>Rubric score = <code>50 + 50 × (support − against) / (support + against + 2)</code>, from 0 to 100. With no evidence a claim sits at 50.</li>
-          <li>A claim enters the review queue when it has contradicting evidence, a contradiction link, no evidence, a single source record, only weak evidence, or a reviewer asked for more evidence. Accepting or rejecting it clears it; any later change to its text, evidence or links reopens it and is written to its decision history.</li>
-          <li>Exports contain no timestamps or browser details, so the same data always produces the same bytes and the same checksum.</li>
+          <li>A claim enters the review queue when it has contradicting evidence, a contradiction link, no evidence, a single source record, only weak evidence, or a reviewer asked for more evidence. Accepting or rejecting it clears it; any later change to its text, evidence or links reopens it. Every step is written to the claim's decision history with a UTC timestamp, the acting role and the exact before → after values.</li>
+          <li>Exports are a pure function of the data: history timestamps are part of the data, but nothing is added at export time (no export date, browser or locale details). The same data always produces the same bytes and the same checksum.</li>
         </ul>
       </section>
     </main>`,

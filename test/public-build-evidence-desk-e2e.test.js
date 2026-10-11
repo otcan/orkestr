@@ -74,14 +74,42 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     await page.setViewport({ width: 1280, height: 900 });
     const errors = [];
     const foreign = [];
+    const api = [];
+    const afterLoad = [];
+    let loaded = false;
     page.on("pageerror", (error) => errors.push(error.message || String(error)));
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+    page.on("request", (request) => {
+      if (request.url().includes("/api/")) api.push(request.url());
+      if (loaded && !request.url().startsWith("blob:")) afterLoad.push(request.url());
+    });
     page.on("request", (request) => { if (!request.url().startsWith(baseUrl) && !request.url().startsWith("blob:") && !request.url().startsWith("data:")) foreign.push(request.url()); });
     page.on("dialog", (dialog) => dialog.accept());
+    // Count every request API call made by page code. Static asset delivery
+    // (HTML, CSS, module scripts) is fine; application-data or analytics calls are not.
+    await page.evaluateOnNewDocument(() => {
+      const calls = (window.__edNetworkCalls = []);
+      const wrap = (owner, key, label) => {
+        const original = owner[key];
+        if (typeof original !== "function") return;
+        owner[key] = function (...args) { calls.push(`${label} ${String(args[0] ?? "")}`); return original.apply(this, args); };
+      };
+      wrap(window, "fetch", "fetch");
+      wrap(XMLHttpRequest.prototype, "open", "xhr");
+      wrap(Navigator.prototype, "sendBeacon", "beacon");
+      for (const name of ["WebSocket", "EventSource"]) {
+        const Original = window[name];
+        if (!Original) continue;
+        window[name] = function (...args) { calls.push(`${name} ${String(args[0] ?? "")}`); return new Original(...args); };
+      }
+    });
 
     const response = await page.goto(`${baseUrl}/builds/evidence-desk`, { waitUntil: "networkidle0" });
     assert.equal(response.status(), 200);
     await page.waitForSelector("#ed-app:not([hidden])");
+    loaded = true; // From here on the app must not touch the network at all.
+    assert.equal(await page.evaluate(() => typeof window.orkestrTrack), "undefined");
+    assert.equal(await count(page, "[data-event], [data-view-event]"), 0);
     assert.equal(await count(page, "#ed-claims > li"), 5);
     assert.ok(await count(page, "#ed-queue > li") >= 3);
     assert.equal(await count(page, "#ed-sources > li"), 8);
@@ -122,11 +150,13 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     await waitUntil(page, () => document.querySelectorAll("#ed-detail .ed-links button.ed-link-button").length === 1, "step 5");
     const queued = await page.$$eval("#ed-queue > li > button", (nodes) => nodes.map((node) => node.textContent));
     assert.ok(queued.includes("Evening workshops increased tool returns."));
+    await page.select("#ed-actor", "You (this browser), as reviewer");
     await page.select("#ed-decision-outcome", "accepted");
     await page.type("#ed-decision-rationale", "Checked against the synthetic sheet.");
     await activate(page, "#ed-detail form[aria-label='Record review decision'] button[type=submit]");
     await waitUntil(page, () => ![...document.querySelectorAll("#ed-queue > li > button")].some((node) => node.textContent.startsWith("Evening workshops")), "step 6");
-    assert.match(await text(page, "#ed-detail .ed-review-status"), /Decision: Accepted — Checked against the synthetic sheet\./);
+    assert.match(await text(page, "#ed-detail .ed-review-status"), /Decision: Accepted — Checked against the synthetic sheet\. \(You \(this browser\), as reviewer, \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\)/);
+    await page.select("#ed-actor", "You (this browser), as analyst");
 
     // Editing the claim reopens review and is written to the decision history.
     await page.$eval("#ed-claim-text", (node) => { node.value = ""; });
@@ -135,7 +165,10 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     await waitUntil(page, () => document.querySelector("#ed-detail-title")?.textContent === "Evening workshops increased on-time returns.", "step 7");
     assert.ok((await page.$$eval("#ed-queue > li > button", (nodes) => nodes.map((node) => node.textContent))).includes("Evening workshops increased on-time returns."));
     const history = await page.$$eval("#ed-detail .ed-history > li", (nodes) => nodes.map((node) => node.textContent));
+    assert.match(history[0], /Step \d+ · \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC · You \(this browser\), as analyst/);
     assert.match(history[0], /Earlier review decision cleared: claim text changed/);
+    assert.match(history[1], /text: “Evening workshops increased tool returns\.” → “Evening workshops increased on-time returns\.”/);
+    assert.ok(await page.$eval("#ed-detail .ed-history time", (node) => !Number.isNaN(Date.parse(node.getAttribute("datetime")))));
     assert.ok(history.some((entry) => /Review decision: Accepted/.test(entry)));
 
     // Exports are generated in the browser and are byte-identical for the same data.
@@ -163,7 +196,9 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     await waitUntil(page, () => document.activeElement?.id === "ed-detail-title" && document.activeElement.textContent.includes("Brindlemere"), "step 8");
 
     // State persists across reloads, and reset restores the sample.
+    loaded = false;
     await page.reload({ waitUntil: "networkidle0" });
+    loaded = true;
     await page.waitForSelector("#ed-app:not([hidden])");
     assert.equal(await count(page, "#ed-claims > li"), 6);
     await activate(page, "#ed-reset");
@@ -171,8 +206,10 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
     assert.match(await text(page, "#ed-status"), /reset/i);
 
     // Mobile width: no horizontal overflow and controls stay reachable.
+    loaded = false; // Switching to a mobile viewport makes Puppeteer reload the page.
     await page.setViewport({ width: 375, height: 812, isMobile: true, hasTouch: true });
     await page.reload({ waitUntil: "networkidle0" });
+    loaded = true;
     await page.waitForSelector("#ed-app:not([hidden])");
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     assert.ok(overflow <= 0, `horizontal overflow ${overflow}px`);
@@ -182,6 +219,9 @@ test("evidence desk create, edit, link, score, review, export and reset flows wo
 
     assert.deepEqual(errors, []);
     assert.deepEqual(foreign, []);
+    assert.deepEqual(api, [], "no /api/ calls, including the public events beacon");
+    assert.deepEqual(afterLoad, [], "after load the page sends nothing back (static asset delivery happens only during load)");
+    assert.deepEqual(await page.evaluate(() => window.__edNetworkCalls), [], "page code never calls fetch, XHR, sendBeacon, WebSocket or EventSource");
   } finally {
     if (browser) await browser.close();
     await new Promise((resolve) => server.close(resolve));

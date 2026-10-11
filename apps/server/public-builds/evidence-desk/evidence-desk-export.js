@@ -87,7 +87,10 @@ export function exportMarkdown(state) {
     lines.push("", "Decision history:", "");
     const history = claimHistory(state, claim.id);
     if (!history.length) lines.push("- No recorded steps.");
-    for (const entry of history) lines.push(`- Step ${entry.n}: ${mdEscape(entry.text)}`);
+    for (const entry of history) {
+      lines.push(`- Step ${entry.n} · ${entry.at || "time not recorded"} · ${mdEscape(entry.actor)}: ${mdEscape(entry.text)}`);
+      for (const change of entry.changes) lines.push(`  - ${mdEscape(change.field)}: ${change.from ? `“${mdEscape(change.from)}”` : "none"} → ${change.to ? `“${mdEscape(change.to)}”` : "none"}`);
+    }
   }
   lines.push("", "## Source records", "");
   for (const source of state.sources) {

@@ -5,6 +5,7 @@ import { addClaim, addEvidence, addSource, emptyState, linkContradiction, record
 
 export const SAMPLE_TOPIC = "Brindlemere Tool Library";
 export const SAMPLE_DESCRIPTION = "Brindlemere is an invented town and its tool library is an invented community lending service. Every claim, source record and number in this demo was written for the demo.";
+export const SAMPLE_ACTOR = "Sample reviewer (fictional)";
 const PROVENANCE = "Synthetic record written for the Orkestr evidence desk demo. Fictional; not drawn from any real organisation.";
 
 const SOURCES = [
@@ -18,7 +19,14 @@ const SOURCES = [
   { title: "Board meeting minutes, March", kind: "Meeting minutes (synthetic)", excerpt: "One board member felt Saturdays “changed nothing”." },
 ];
 
+// Fixed synthetic timestamps, one minute apart, keep the sample deterministic.
+function sampleClock() {
+  let minute = 0;
+  return () => ({ at: new Date(Date.UTC(2026, 2, 2, 9, minute++)).toISOString(), actor: SAMPLE_ACTOR });
+}
+
 export function sampleState() {
+  const meta = sampleClock();
   let state = emptyState();
   const sourceIds = SOURCES.map((fields) => {
     const result = addSource(state, { ...fields, provenance: PROVENANCE });
@@ -26,12 +34,12 @@ export function sampleState() {
     return result.id;
   });
   const claim = (text) => {
-    const result = addClaim(state, text);
+    const result = addClaim(state, text, meta());
     state = result.state;
     return result.id;
   };
   const evidence = (claimId, source, fields) => {
-    state = addEvidence(state, claimId, { sourceId: sourceIds[source], ...fields }).state;
+    state = addEvidence(state, claimId, { sourceId: sourceIds[source], ...fields }, meta()).state;
   };
   const c1 = claim("The Brindlemere tool library lent more items in spring than in winter.");
   const c2 = claim("Opening on Saturdays brought in more first-time borrowers.");
@@ -46,7 +54,7 @@ export function sampleState() {
   evidence(c3, 5, { type: "primary-record", strength: "strong", stance: "supports" });
   evidence(c3, 6, { type: "secondary-report", strength: "moderate", stance: "supports" });
   evidence(c5, 7, { type: "anecdote", strength: "weak", stance: "supports" });
-  state = linkContradiction(state, c2, c5);
-  state = recordDecision(state, c3, "accepted", "Two independent synthetic records agree.");
+  state = linkContradiction(state, c2, c5, meta());
+  state = recordDecision(state, c3, "accepted", "Two independent synthetic records agree.", meta());
   return state;
 }
