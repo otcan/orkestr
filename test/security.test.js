@@ -1030,16 +1030,17 @@ test("tenant CLI setup status uses instance connector scope", async () => {
       headers: { authorization: "Bearer cli-secret", "content-type": "application/json" },
       body: JSON.stringify({}),
     }));
-    const ignoredScopeOverride = await json(await fetch(
+    const scopeOverrideResponse = await fetch(
       `http://127.0.0.1:${port}/api/connectors/gmail/oauth/start`,
       {
         method: "POST",
         headers: { authorization: "Bearer cli-secret", "content-type": "application/json" },
         body: JSON.stringify({ intentId: intent2.intentId, token: intent2.token, capabilities: ["gmail_read"], privacyConsent: "1", privacyPolicyVersion: "invalid" }),
       },
-    ));
-    assert.deepEqual(ignoredScopeOverride.capabilities, ["gmail_send"]);
-    assert.match(ignoredScopeOverride.authorizeUrl, /^https:\/\/accounts\.google\.com\//);
+    );
+    const rejectedScopeOverride = await json(scopeOverrideResponse);
+    assert.equal(scopeOverrideResponse.status, 403);
+    assert.equal(rejectedScopeOverride.error, "connector_use_intent_binding_mismatch");
   } finally {
     globalThis.fetch = priorFetch;
     if (server) {

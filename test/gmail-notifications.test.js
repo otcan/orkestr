@@ -72,6 +72,7 @@ test("gmail notifications schedule safe previews and dedupe Gmail message ids", 
       access_token: "gmail-notification-access",
       refresh_token: "gmail-notification-refresh",
       expires_in: 3600,
+      scope: "https://www.googleapis.com/auth/gmail.readonly",
     }),
   );
 
@@ -195,6 +196,7 @@ test("due Gmail notifications use the rule owner's scoped token", async () => {
       access_token: "alice-gmail-notification-access",
       refresh_token: "alice-gmail-notification-refresh",
       expires_in: 3600,
+      scope: "https://www.googleapis.com/auth/gmail.readonly",
     }), { principal });
   const notification = await createGmailNotificationForPrincipal({
     label: "Alice unread Gmail",

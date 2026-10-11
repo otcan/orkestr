@@ -1035,7 +1035,11 @@ export async function validateGmailConnection(env = process.env, fetchImpl = fet
 }
 
 export async function listGmailMessages({ maxResults = 10, query = "" } = {}, env = process.env, fetchImpl = fetch, options = {}) {
-  const token = await readGmailToken(env, options);
+  let token = await readGmailToken(env, options);
+  if (!token.accessToken) {
+    await getGmailAccessToken(env, fetchImpl, options);
+    token = await readGmailToken(env, options);
+  }
   if (!googleWorkspaceTokenHasCapability(token, "gmail_read")) {
     const error = new Error("google_workspace_capability_not_granted:gmail_read");
     error.statusCode = 403;
@@ -1065,7 +1069,11 @@ export async function getGmailMessage(messageId, env = process.env, fetchImpl = 
     error.statusCode = 400;
     throw error;
   }
-  const token = await readGmailToken(env, options);
+  let token = await readGmailToken(env, options);
+  if (!token.accessToken) {
+    await getGmailAccessToken(env, fetchImpl, options);
+    token = await readGmailToken(env, options);
+  }
   if (!googleWorkspaceTokenHasCapability(token, "gmail_read")) {
     const error = new Error("google_workspace_capability_not_granted:gmail_read");
     error.statusCode = 403;
