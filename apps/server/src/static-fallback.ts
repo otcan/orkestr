@@ -9,7 +9,7 @@ import { cookieHeaderValue } from "../../../packages/core/src/cookie-header.js";
 import { resolveSharedAppShare } from "../../../packages/core/src/shared-apps.js";
 import { instanceSetupPairingRedirectPath, normalizeInstanceId } from "./instance-connect-setup.js";
 import { maybeHandleInstanceEntry } from "./instance-entry.js";
-import { publicPairingUrl, publicSiteAllowedForHost, publicSiteKnownPath, publicSiteRedirects } from "./public-site.js";
+import { publicPairingUrl, publicSiteAllowedForHost, publicSiteKnownPath } from "./public-site.js";
 import { maybeServePublicSite } from "./public-site-static.js";
 
 const publicDir = path.resolve(process.cwd(), "dist/web/browser");
@@ -192,7 +192,7 @@ function isInstanceSetupPath(requestUrl: string): boolean {
 
 async function privatePublicPathRedirectUrl(request: any, requestUrl: string, env = process.env) {
   const url = new URL(requestUrl || "/", "http://localhost");
-  if (!publicSiteKnownPath(url.pathname) && !publicSiteRedirects[url.pathname.replace(/\/+$/, "")]) return "";
+  if (!publicSiteKnownPath(url.pathname)) return "";
   if (publicSiteAllowedForHost(requestHostHeader(request), env)) return "";
   if (request?.orkestrSecuritySession) return "";
   if (await requestHasSecuritySession(request, env)) return "";

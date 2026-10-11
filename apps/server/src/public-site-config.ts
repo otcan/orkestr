@@ -56,6 +56,8 @@ export const publicLocaleOpenGraphTags: Record<PublicLocale, string> = {
   tr: "tr_TR",
 };
 
+// Paths of the public site, also used for navigation links. The app itself
+// serves only the legal, support and lead-form pages (see public-site.ts).
 const localizedPagePaths: Record<PublicLocale, Partial<Record<PublicPageId, string>>> = {
   en: {
     home: "/",
@@ -109,13 +111,6 @@ const localizedPagePaths: Record<PublicLocale, Partial<Record<PublicPageId, stri
     deployment: "/tr/devreye-alma",
   },
 };
-
-// Former public URLs that moved when the root became the umbrella page.
-// Values are permanent (301) redirect targets.
-export const publicSiteRedirects: Readonly<Record<string, string>> = Object.freeze({
-  "/de": "/de/studio",
-  "/tr": "/tr/studio",
-});
 
 const defaultRepoUrl = "https://github.com/otcan/orkestr";
 
