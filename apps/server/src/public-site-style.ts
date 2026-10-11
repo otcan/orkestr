@@ -2,7 +2,6 @@ import { waitlistCss } from "./public-waitlist.js";
 import { publicSiteV3Css } from "./public-site-v3-style.js";
 import { publicSiteV4Css } from "./public-site-v4-style.js";
 import { publicSiteLocalizationCss } from "./public-site-localization-style.js";
-import { publicSiteEvidenceCss } from "./public-site-evidence-style.js";
 import { publicSiteHubCss } from "./public-site-hub-style.js";
 import { publicSiteOssCss } from "./public-site-oss-style.js";
 
@@ -350,7 +349,6 @@ h3 { margin: 0; font-size: 22px; line-height: 1.15; letter-spacing: -.025em; }
 ${publicSiteV3Css}
 ${publicSiteV4Css}
 ${publicSiteLocalizationCss}
-${publicSiteEvidenceCss}
 ${publicSiteOssCss}
 ${waitlistCss()}
 .beta-page .waitlist-band { display: grid; grid-template-columns: .7fr 1.3fr; gap: clamp(36px,7vw,90px); padding: clamp(60px,8vw,112px) clamp(20px,7vw,110px); border-top: 1px solid var(--line); }
