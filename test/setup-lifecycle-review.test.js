@@ -14,7 +14,7 @@ async function freshEnv() {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-setup-review-"));
   return { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin" };
 }
-const ready = { ...defaultSetupDeps, providerReady: async () => ({ ready: true, reason: "chatgpt_login" }) };
+const ready = { ...defaultSetupDeps, providerReady: async () => ({ ready: true, reason: "chatgpt_login" }), startRuntime: async () => ({}) };
 const enabledByKey = async (env) => {
   const [instance] = (await readSetupLedger(env)).instances.filter((entry) => entry.status === "installed");
   const timers = await listTimers(env);

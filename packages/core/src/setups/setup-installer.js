@@ -32,6 +32,34 @@ async function providerCheckUnavailable(_provider = "", _ownerUserId = "", _env 
   return { ready: false, reason: "provider_check_unavailable" };
 }
 
+// Same runtime fields the thread-create route sets for each provider.
+export function setupThreadRuntime(provider, accountProfileId = "") {
+  if (provider === "claude-code") {
+    const profile = String(accountProfileId || "").trim();
+    return {
+      executorId: "claude-code",
+      runtimeKind: "claude-code",
+      executor: {
+        id: "claude-code",
+        type: "claude-code",
+        transport: "stream-json",
+        accountProfileId: profile,
+        metadata: { runtimeKind: "claude-code", transport: "stream-json", accountProfileId: profile, claudePermissionMode: "acceptEdits" },
+      },
+    };
+  }
+  return { executorId: "codex", runtimeKind: "codex-app-server", executor: { type: "codex" } };
+}
+
+async function startSetupRuntime(thread, env = process.env) {
+  if (thread?.runtimeKind === "claude-code") {
+    const { startClaudeCodeThread } = await import("../runtime-claude-code-adapter.js");
+    return startClaudeCodeThread(thread, env);
+  }
+  const { startCodexAppServerThread } = await import("../codex-app-server.js");
+  return startCodexAppServerThread(thread, env);
+}
+
 export const defaultSetupDeps = {
   providerReady: providerCheckUnavailable,
   createThread,
@@ -45,6 +73,7 @@ export const defaultSetupDeps = {
   listTimers,
   updateTimer,
   makeStateDir: (dir) => fs.mkdir(dir, { recursive: true, mode: 0o700 }),
+  startRuntime: startSetupRuntime,
 };
 
 export function setupOwnerOf(input, env) {
@@ -114,8 +143,7 @@ async function createResources(instance, manifest, input, env, deps) {
     name: `${manifest.thread.name} (${id.slice(-6)})`,
     ownerUserId: instance.ownerUserId,
     wakePolicy: "wake-on-message",
-    executorId: instance.provider,
-    executor: { type: instance.provider, ...(input.accountProfileId ? { accountProfileId: input.accountProfileId } : {}) },
+    ...setupThreadRuntime(instance.provider, input.accountProfileId),
     cwd: stateDir,
     workspace: stateDir,
   }, env);
@@ -129,6 +157,10 @@ async function createResources(instance, manifest, input, env, deps) {
     await deps.setMission(threadId, manifest.thread.mission, instance.ownerUserId, env);
     await updateSetupInstance(env, id, (entry) => { entry.resources.missionSet = true; });
   }
+  // Start the provider runtime once, after the instructions and Setup marker
+  // are in place, so the first Codex thread/start already carries them. Without
+  // this a Setup thread never gets a runtime and check-ins are never delivered.
+  await deps.startRuntime(await deps.getThread(threadId, env), env);
   // Check-ins start off unless the owner opted in to that key at install.
   const optIn = new Set(Array.isArray(input.optIn) ? input.optIn : []);
   for (const spec of manifest.timers) {

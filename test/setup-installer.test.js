@@ -15,7 +15,7 @@ async function freshEnv() {
 
 // Real thread/timer/mission storage; only the provider login check is faked.
 function deps(overrides = {}) {
-  return { ...defaultSetupDeps, providerReady: async (provider) => ({ ready: provider === "codex", reason: provider === "codex" ? "logged_in" : "not_logged_in" }), ...overrides };
+  return { ...defaultSetupDeps, providerReady: async (provider) => ({ ready: provider === "codex", reason: provider === "codex" ? "logged_in" : "not_logged_in" }), startRuntime: async () => ({}), ...overrides };
 }
 
 test("fresh install creates exactly one thread, its mission and the manifest timers", async () => {
@@ -196,5 +196,45 @@ test("instance ids and thread names carry no fixed digits", async () => {
   for (let position = 6; position < 22; position += 1) {
     assert.ok(new Set(ids.map((id) => id[position])).size > 1, `character ${position} varies`);
   }
-  assert.equal(new Set(ids.map((id) => id.slice(-6))).size, ids.length, "thread-name suffixes are unique in practice");
+  // Six random hex digits: a new install's name collides with one given
+  // earlier name with odds 1 in 16.7M. Among 400 random suffixes a pair may
+  // repeat (birthday effect, ~0.5%), so only require near-uniqueness here.
+  assert.ok(ids.every((id) => /^[0-9a-f]{6}$/.test(id.slice(-6))));
+  assert.ok(new Set(ids.map((id) => id.slice(-6))).size >= ids.length - 2, "thread-name suffixes are random");
+});
+
+test("the Setup thread gets the provider runtime and is started after its instructions are set", async () => {
+  const env = await freshEnv();
+  const started = [];
+  const recording = deps({ startRuntime: async (thread) => { started.push({ ...thread }); return { thread }; } });
+  const { instance } = await installSetup({ setupId: "fitness-tracker" }, env, recording);
+  const thread = await getThread(instance.resources.threadId, env);
+  assert.equal(thread.runtimeKind, "codex-app-server");
+  assert.equal(thread.executor.id, "codex");
+  assert.equal(thread.executor.type, "codex");
+  assert.equal(started.length, 1, "runtime started exactly once");
+  assert.equal(started[0].id, thread.id);
+  assert.equal(started[0].setupInstanceId, instance.instanceId, "started after the Setup marker");
+  assert.match(started[0].standingMission, /personal training log/, "started after the instructions");
+  assert.equal(started[0].runtimeKind, "codex-app-server");
+});
+
+test("a Claude Code Setup thread gets the same runtime fields as the thread-create route", async () => {
+  const env = await freshEnv();
+  const claude = deps({ providerReady: async (provider) => ({ ready: provider === "claude-code", reason: "account_ready", accountProfileId: "profile-1" }) });
+  const { instance } = await installSetup({ setupId: "fitness-tracker", provider: "claude-code" }, env, claude);
+  const thread = await getThread(instance.resources.threadId, env);
+  assert.equal(thread.runtimeKind, "claude-code");
+  assert.equal(thread.executor.id, "claude-code");
+  assert.equal(thread.executor.type, "claude-code");
+  assert.equal(thread.executor.metadata.accountProfileId, "profile-1");
+  assert.equal(thread.executor.metadata.runtimeKind, "claude-code");
+});
+
+test("a runtime that fails to start rolls the install back", async () => {
+  const env = await freshEnv();
+  const failing = deps({ startRuntime: async () => { throw Object.assign(new Error("codex app-server unavailable"), { code: "runtime_start_failed" }); } });
+  await assert.rejects(() => installSetup({ setupId: "fitness-tracker" }, env, failing), (error) => error.code === "runtime_start_failed");
+  assert.equal((await listTimers(env)).length, 0);
+  assert.ok((await listThreads(env)).every((thread) => thread.retired));
 });
