@@ -1,4 +1,5 @@
 import { configuredWhatsAppBridgeUrl } from "./whatsapp.js";
+import { readConnectorConfig } from "../../storage/src/config.js";
 
 const SAFE_CONNECTOR_STATES = new Set(["connected", "partial", "not_connected", "broken"]);
 
@@ -54,7 +55,12 @@ export async function assertWhatsAppOnboardingModeAvailable(mode, env = process.
     throw Object.assign(new Error("whatsapp_self_hosted_mode_unavailable"), { statusCode: 409, code: "whatsapp_self_hosted_mode_unavailable" });
   }
   if (["relay", "managed", "hosted"].includes(requested)) {
-    if (await configuredWhatsAppBridgeUrl(env).catch(() => "")) return "relay";
+    const environmentMode = clean(env.WHATSAPP_BRIDGE_MODE);
+    const environmentForcesLocal = environmentMode && ![
+      "external", "relay", "parent-forward", "control-plane-forward", "control-plane", "controlplane", "broker",
+    ].includes(environmentMode);
+    const config = await readConnectorConfig("whatsapp", env).catch(() => ({}));
+    if (!environmentForcesLocal && (await configuredWhatsAppBridgeUrl(env).catch(() => "") || String(env.WHATSAPP_BRIDGE_URL || config.bridgeUrl || "").trim())) return "relay";
     throw Object.assign(new Error("whatsapp_managed_mode_unavailable"), { statusCode: 409, code: "whatsapp_managed_mode_unavailable" });
   }
   throw Object.assign(new Error("whatsapp_access_mode_invalid"), { statusCode: 400, code: "whatsapp_access_mode_invalid" });
