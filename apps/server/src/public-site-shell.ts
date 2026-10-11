@@ -24,7 +24,7 @@ const shellCopy: Record<PublicLocale, Record<string, string>> = {
     developers: "Developers", documentation: "Documentation", company: "Company", team: "Team", contact: "Contact",
     customers: "Existing customers", portal: "Client Portal", note: "Managed implementations. Open-source operating core. Scope, deployment, access, and support vary by project.",
     breadcrumbHome: "Home", language: "Language", impressum: "Imprint", privacy: "Privacy", terms: "Terms",
-    builds: "Live builds", free: "Free products", openSource: "Open source", studio: "Studio", explore: "Explore",
+    free: "Free products", openSource: "Open source", studio: "Studio", explore: "Explore",
     umbrellaFooter: "We turn complex ideas into working software.",
   },
   de: {
@@ -36,7 +36,7 @@ const shellCopy: Record<PublicLocale, Record<string, string>> = {
     developers: "Entwicklung", documentation: "Dokumentation", company: "Unternehmen", team: "Team", contact: "Kontakt",
     customers: "Bestehende Kunden", portal: "Kundenportal", note: "Betreute Implementierungen. Open-Source-Betriebskern. Umfang, Bereitstellung, Zugriff und Support werden je Projekt vereinbart.",
     breadcrumbHome: "Startseite", language: "Sprache", impressum: "Impressum", privacy: "Datenschutz", terms: "Nutzungsbedingungen",
-    builds: "Live-Builds", free: "Kostenlose Produkte", openSource: "Open Source", studio: "Studio", explore: "Entdecken",
+    free: "Kostenlose Produkte", openSource: "Open Source", studio: "Studio", explore: "Entdecken",
     umbrellaFooter: "Wir machen aus komplexen Ideen funktionierende Software.",
   },
   tr: {
@@ -48,7 +48,7 @@ const shellCopy: Record<PublicLocale, Record<string, string>> = {
     developers: "Geliştiriciler", documentation: "Dokümantasyon", company: "Şirket", team: "Ekip", contact: "İletişim",
     customers: "Mevcut müşteriler", portal: "Müşteri Portalı", note: "Yönetilen uygulamalar. Açık kaynak işletim çekirdeği. Kapsam, devreye alma, erişim ve destek her proje için ayrıca belirlenir.",
     breadcrumbHome: "Ana sayfa", language: "Dil", impressum: "Yasal bilgiler", privacy: "Gizlilik", terms: "Kullanım koşulları",
-    builds: "Canlı projeler", free: "Ücretsiz ürünler", openSource: "Açık kaynak", studio: "Studio", explore: "Keşfet",
+    free: "Ücretsiz ürünler", openSource: "Açık kaynak", studio: "Studio", explore: "Keşfet",
     umbrellaFooter: "Karmaşık fikirleri çalışan yazılıma dönüştürüyoruz.",
   },
 };
@@ -58,9 +58,9 @@ function pageHref(pageId: PublicPageId, locale: PublicLocale, hash = "") {
   return `${path}${hash}`;
 }
 
-// Pages of the umbrella journeys (builds, free products, open source) carry no
+// Pages of the umbrella journeys (free products, open source) carry no
 // consulting CTA in the header.
-const umbrellaPageIds: PublicPageId[] = ["home", "builds", "free", "open-source"];
+const umbrellaPageIds: PublicPageId[] = ["home", "free", "open-source"];
 
 // The first-party click/view beacon (/api/public/events) is opt-in per page.
 // Pages not listed here never load it and have data-event attributes removed.
@@ -70,8 +70,8 @@ const analyticsPageIds: PublicPageId[] = [
   "workflow", "terms", "privacy", "impressum", "acceptable-use", "data-deletion", "support", "beta",
 ];
 
-// Builds, free products, and open source promise no tracking: never opt in.
-const noTrackingPaths = /^\/(builds|free|open-source)(\/|$)/;
+// Free products and open source promise no tracking: never opt in.
+const noTrackingPaths = /^\/(free|open-source)(\/|$)/;
 
 function pageUsesAnalytics(page: PublicPage, locale: PublicLocale) {
   const path = page.canonicalPath || publicPagePath(page.id, locale) || "";
@@ -90,7 +90,7 @@ function pageLocales(page: PublicPage) {
   return publicLocales.filter((locale) => publicPagePath(page.id, locale));
 }
 
-// Builds, free products, and open source are English-only. Localized pages
+// Free products and open source are English-only. Localized pages
 // still link there, but mark the target language instead of implying a
 // translated page exists.
 function englishOnlyHint(id: PublicPageId, locale: PublicLocale) {
@@ -99,7 +99,7 @@ function englishOnlyHint(id: PublicPageId, locale: PublicLocale) {
 
 function umbrellaNav(page: PublicPage, locale: PublicLocale) {
   const copy = shellCopy[locale];
-  const items: Array<[PublicPageId, string]> = [["builds", copy.builds], ["free", copy.free], ["open-source", copy.openSource], ["studio", copy.studio]];
+  const items: Array<[PublicPageId, string]> = [["free", copy.free], ["open-source", copy.openSource], ["studio", copy.studio]];
   return items.map(([id, label]) => {
     const current = page.id === id ? (page.canonicalPath && page.canonicalPath !== publicPagePath(id, locale) ? ' aria-current="true"' : ' aria-current="page"') : "";
     return `<a href="${pageHref(id, locale)}"${current}${englishOnlyHint(id, locale)}>${label}</a>`;
@@ -260,7 +260,7 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
   ${page.body}
   <footer class="footer">
     <div class="footer-brand"><a class="wordmark inverse" href="${homePath}"><span>O</span> Orkestr</a><p>${umbrella ? copy.umbrellaFooter : copy.footer}</p></div>
-    <nav aria-label="${copy.explore}"><strong>${copy.explore}</strong><a href="/builds"${englishOnlyHint("builds", locale)}>${copy.builds}</a><a href="/free"${englishOnlyHint("free", locale)}>${copy.free}</a><a href="/open-source"${englishOnlyHint("open-source", locale)}>${copy.openSource}</a><a href="${studioPath}">${copy.studio}</a></nav>
+    <nav aria-label="${copy.explore}"><strong>${copy.explore}</strong><a href="/free"${englishOnlyHint("free", locale)}>${copy.free}</a><a href="/open-source"${englishOnlyHint("open-source", locale)}>${copy.openSource}</a><a href="${studioPath}">${copy.studio}</a></nav>
     <nav aria-label="${copy.solutions}"><strong>${copy.solutions}</strong><a href="${pageHref("websites-commerce", locale)}">${copy.newSystems}</a><a href="${pageHref("business-systems", locale)}">${copy.modernization}</a><a href="${pageHref("automation", locale)}">${copy.automation}</a></nav>
     <nav aria-label="${copy.orkestr}"><strong>${copy.orkestr}</strong><a href="${studioPath}#how-we-work">${copy.process}</a><a href="${studioPath}#platform">${copy.operating}</a><a href="${pageHref("deployment", locale)}">${copy.deployment}</a><a href="${pageHref("security", locale)}">${copy.security}</a></nav>
     <nav aria-label="${copy.resources}"><strong>${copy.resources}</strong><a href="/open-source"${englishOnlyHint("open-source", locale)}>${copy.openSource}</a><a href="/developers">${copy.developers}</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="${escapeHtml(repo)}/tree/main/docs" rel="noreferrer">${copy.documentation}</a></nav>

@@ -122,7 +122,7 @@ test("public copy avoids defensive internal-positioning language across every lo
   const utilityPaths = ["/project", "/de/projekt", "/tr/proje", "/privacy", "/terms", "/impressum", "/acceptable-use", "/data-deletion", "/support", "/beta"];
   const banned = /pretend|larger team|permanent Orkestr team|größer dar|dauerhaftes Orkestr-Team|daha büyük bir ekip|kalıcı bir Orkestr ekibi|honest no-fit|ehrliche Absage|uygun değil yanıtı|modischer Technologie|moda bir teknoloji|not every project|nicht jedes Projekt|her proje her|we do not prescribe|empfehlen keine KI|önermiyoruz|nützlichen Teil|gerekli kısmı|more than a hand-off|mehr als eine Software-Übergabe|teslim edip gitmek/i;
   const paths = [...new Set([...indexedPaths, ...utilityPaths])];
-  assert.equal(paths.length, 48);
+  assert.equal(paths.length, 46);
   for (const path of paths) {
     const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
     assert.doesNotMatch(html, banned, path);
@@ -247,7 +247,7 @@ test("sitemap prioritizes localized commercial routes and accessible progressive
   const sitemap = renderPublicSitemap(baseEnv);
   const css = renderPublicSiteCss();
 
-  for (const path of ["/", "/workflow", "/websites-commerce", "/business-systems", "/opportunity-intelligence", "/web-data-monitoring", "/automation", "/security", "/deployment", "/use-cases", "/developers", "/team", "/studio", "/builds", "/free", "/open-source", "/de/studio", "/de/altsystem-modernisieren", "/de/ki-prozessautomatisierung", "/de/team", "/tr/studio", "/tr/eski-sistem-modernizasyonu", "/tr/yapay-zeka-is-akisi-otomasyonu", "/tr/ekip"]) {
+  for (const path of ["/", "/workflow", "/websites-commerce", "/business-systems", "/opportunity-intelligence", "/web-data-monitoring", "/automation", "/security", "/deployment", "/use-cases", "/developers", "/team", "/studio", "/free", "/open-source", "/de/studio", "/de/altsystem-modernisieren", "/de/ki-prozessautomatisierung", "/de/team", "/tr/studio", "/tr/eski-sistem-modernizasyonu", "/tr/yapay-zeka-is-akisi-otomasyonu", "/tr/ekip"]) {
     assert.match(sitemap, new RegExp(`https:\\/\\/product\\.example\\.test${path === "/" ? "/" : path}`));
   }
   for (const path of ["/beta", "/privacy", "/impressum", "/terms", "/support", "/project"]) assert.doesNotMatch(sitemap, new RegExp(`<loc>https:\\/\\/product\\.example\\.test${path}<\\/loc>`));
@@ -283,7 +283,7 @@ test("personal beta remains available but is removed from commercial indexing", 
 test("every sitemap location renders a unique canonical public page", () => {
   const sitemap = renderPublicSitemap(baseEnv);
   const locations = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]);
-  assert.equal(locations.length, 38);
+  assert.equal(locations.length, 36);
   assert.equal(new Set(locations).size, locations.length);
   for (const location of locations) {
     const path = new URL(location).pathname;

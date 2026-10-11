@@ -1,17 +1,13 @@
 import type { PublicPage } from "./public-site-config.js";
-import { evidenceDeskPage } from "./public-site-evidence-desk.js";
 import { workoutLogPage } from "./free-workout-log-page.js";
 
-// Shared registry for the /builds and /free index pages.
+// Shared registry for the /free index page.
 //
-// Each build or free product lives in its own module and registers exactly one
+// Each free product lives in its own module and registers exactly one
 // entry below. An entry is only linked from the index once it has a `render`
 // function; without one it is listed as "coming soon" and never linked.
 //
 // Rules for entries (public site):
-// - Synthetic data only. Never present a build as a paid client case study.
-// - `evidence` must describe what a visitor actually sees: a simulation, a
-//   recorded/replayed run, or live execution in an isolated environment.
 // - The rendered page should use `section` as its PublicPage id and set
 //   `canonicalPath` to `path`.
 
@@ -20,9 +16,8 @@ import { workoutLogPage } from "./free-workout-log-page.js";
 // Only set `localOnly` when the page passes test/helpers/public-page-no-calls.mjs.
 export const publicNoCallsNotice = "After this page loads, it sends nothing back: no analytics, no data uploads. Your entries stay in this browser.";
 
-export type PublicCatalogSection = "builds" | "free";
+export type PublicCatalogSection = "free";
 export type PublicCatalogStatus = "live" | "coming-soon";
-export type PublicCatalogEvidence = "simulation" | "recorded" | "live-isolated";
 
 export type PublicCatalogEntry = {
   section: PublicCatalogSection;
@@ -30,20 +25,11 @@ export type PublicCatalogEntry = {
   title: string;
   summary: string;
   status: PublicCatalogStatus;
-  evidence?: PublicCatalogEvidence;
   localOnly?: boolean;
   render?: (env: NodeJS.ProcessEnv) => PublicPage;
 };
 
 export const publicCatalog: PublicCatalogEntry[] = [
-  // SITE-2b: /builds/evidence-desk
-  {
-    section: "builds", slug: "evidence-desk", status: "live", evidence: "simulation",
-    title: "Evidence desk",
-    summary: "Trace claims to synthetic source records, mark contradictions, record review decisions, and export a reproducible summary. Runs in your browser on a fictional topic; after the page loads it sends nothing back.",
-    render: () => evidenceDeskPage(),
-  },
-
   // SITE-4: /free/workout-log (route CSP and static files: free-products-static.ts)
   {
     section: "free", slug: "workout-log", status: "live",

@@ -25,7 +25,7 @@ test("no-calls helper flags data and analytics calls but allows static delivery"
 });
 
 test("umbrella pages make no calls after load and carry no analytics beacon", () => {
-  for (const path of ["/", "/builds", "/free", "/open-source"]) assertNoCallsAfterLoad(renderPublicSite(path, env, host), { label: path });
+  for (const path of ["/", "/free", "/open-source"]) assertNoCallsAfterLoad(renderPublicSite(path, env, host), { label: path });
 });
 
 test("the no-calls notice is shown only for live local-only entries whose page passes the check", () => {

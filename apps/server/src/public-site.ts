@@ -1,5 +1,5 @@
 import { studioPage } from "./public-site-home.js";
-import { buildsIndexPage, freeIndexPage, umbrellaHomePage } from "./public-site-hub.js";
+import { freeIndexPage, umbrellaHomePage } from "./public-site-hub.js";
 import { publicCatalog, publicCatalogEntryForPath, publicCatalogEntryIsLive, publicCatalogPath } from "./public-site-catalog.js";
 import { deploymentPage, developersPage, securityPage } from "./public-site-content.js";
 import { projectIntakePage } from "./public-project-intake.js";
@@ -41,7 +41,6 @@ function publicPage(pageId: PublicPageId, env = process.env, locale: PublicLocal
     if (pageId === "team") return teamPage(locale);
   }
   if (pageId === "home") return umbrellaHomePage();
-  if (pageId === "builds") return buildsIndexPage();
   if (pageId === "free") return freeIndexPage();
   if (pageId === "open-source") return openSourcePage(env);
   if (pageId === "studio") return studioPage();
@@ -76,7 +75,7 @@ export function renderPublicSiteCss() {
 
 export function renderPublicSitemap(env = process.env) {
   const localizedIds: PublicPageId[] = ["studio", "use-cases", "websites-commerce", "business-systems", "automation", "web-data-monitoring", "opportunity-intelligence", "security", "deployment", "team"];
-  const englishOnlyIds: PublicPageId[] = ["home", "builds", "free", "open-source", "developers", "workflow"];
+  const englishOnlyIds: PublicPageId[] = ["home", "free", "open-source", "developers", "workflow"];
   const lastmod = /^\d{4}-\d{2}-\d{2}$/.test(String(env.ORKESTR_PUBLIC_SITE_LASTMOD || "")) ? String(env.ORKESTR_PUBLIC_SITE_LASTMOD) : "2026-08-31";
   const xml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   const entries: string[] = [];

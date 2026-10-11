@@ -27,12 +27,12 @@ function serve(url) {
 test("root is the umbrella page with the approved headline, CTAs, and nav", () => {
   const html = renderPublicSite("/", env, host);
   assert.match(html, /<h1 id="home-title">We turn complex ideas into working software\.<\/h1>/);
-  assert.match(html, /<a class="button" href="\/builds">Explore live builds<\/a>/);
+  assert.match(html, /<a class="button" href="\/free">Explore free products<\/a>/);
   assert.match(html, /<a class="button button-ghost" href="\/studio">Discuss a project<\/a>/);
   const nav = html.match(/<nav class="desktop-nav"[^>]*>(.*?)<\/nav>/s)[1];
-  assert.deepEqual([...nav.matchAll(/>([^<]+)<\/a>/g)].map((match) => match[1]), ["Live builds", "Free products", "Open source", "Studio"]);
-  for (const path of ["/builds", "/free", "/open-source", "/studio"]) assert.match(html, new RegExp(`class="hub-entry-card"[\\s\\S]*href="${path}"`));
-  for (const label of ["Simulation", "Recorded run", "Live, isolated"]) assert.match(html, new RegExp(label));
+  assert.deepEqual([...nav.matchAll(/>([^<]+)<\/a>/g)].map((match) => match[1]), ["Free products", "Open source", "Studio"]);
+  for (const path of ["/free", "/open-source", "/studio"]) assert.match(html, new RegExp(`class="hub-entry-card"[\\s\\S]*href="${path}"`));
+  assert.doesNotMatch(html, /\/builds|Live builds|Simulation/);
   assert.match(html, /rel="canonical" href="https:\/\/product\.example\.test\/"/);
   assert.match(html, /href="\/impressum"/);
   assert.match(html, /href="\/privacy"/);
@@ -42,8 +42,8 @@ test("root is the umbrella page with the approved headline, CTAs, and nav", () =
   assert.doesNotMatch(html, /class="language-switcher"/);
 });
 
-test("builds and free indexes list catalog entries with status badges and only link live pages", () => {
-  for (const section of ["builds", "free"]) {
+test("the free index lists catalog entries with status badges and only link live pages", () => {
+  for (const section of ["free"]) {
     const html = renderPublicSite(`/${section}`, env, host);
     assert.match(html, new RegExp(`<a href="/${section}" aria-current="page">`));
     const entries = publicCatalog.filter((entry) => entry.section === section);
@@ -62,20 +62,19 @@ test("builds and free indexes list catalog entries with status badges and only l
 test("pending catalog entries are not routable; registered live entries are", () => {
   const pending = publicCatalog.find((entry) => !publicCatalogEntryIsLive(entry));
   if (pending) assert.equal(renderPublicSite(`/${pending.section}/${pending.slug}`, env, host), "");
-  const entry = { section: "builds", slug: "fixture-build", title: "Fixture build", summary: "Synthetic fixture.", status: "live", evidence: "simulation", render: () => ({ id: "builds", title: "Fixture build", summary: "Synthetic fixture.", canonicalPath: "/builds/fixture-build", body: '<main id="main-content"><h1>Fixture build</h1></main>' }) };
+  const entry = { section: "free", slug: "fixture-build", title: "Fixture build", summary: "Synthetic fixture.", status: "live", render: () => ({ id: "free", title: "Fixture build", summary: "Synthetic fixture.", canonicalPath: "/free/fixture-build", body: '<main id="main-content"><h1>Fixture build</h1></main>' }) };
   publicCatalog.push(entry);
   try {
-    const page = renderPublicSite("/builds/fixture-build", env, host);
+    const page = renderPublicSite("/free/fixture-build", env, host);
     assert.match(page, /<h1>Fixture build<\/h1>/);
-    assert.match(page, /rel="canonical" href="https:\/\/product\.example\.test\/builds\/fixture-build"/);
-    assert.match(page, /<a href="\/builds" aria-current="true">/);
-    const index = renderPublicSite("/builds", env, host);
-    assert.match(index, /href="\/builds\/fixture-build"/);
-    assert.match(index, /hub-evidence-simulation/);
-    assert.match(renderPublicSitemap(env), /<loc>https:\/\/product\.example\.test\/builds\/fixture-build<\/loc>/);
-    const slash = serve("/builds/fixture-build/");
+    assert.match(page, /rel="canonical" href="https:\/\/product\.example\.test\/free\/fixture-build"/);
+    assert.match(page, /<a href="\/free" aria-current="true">/);
+    const index = renderPublicSite("/free", env, host);
+    assert.match(index, /href="\/free\/fixture-build"/);
+    assert.match(renderPublicSitemap(env), /<loc>https:\/\/product\.example\.test\/free\/fixture-build<\/loc>/);
+    const slash = serve("/free/fixture-build/");
     assert.equal(slash.status, 301);
-    assert.equal(slash.headers.location, "/builds/fixture-build");
+    assert.equal(slash.headers.location, "/free/fixture-build");
   } finally {
     publicCatalog.splice(publicCatalog.indexOf(entry), 1);
   }
@@ -95,7 +94,7 @@ test("moved localized homes redirect permanently to their studio pages", () => {
     assert.equal(result.status, 301, from);
     assert.equal(result.headers.location, to, from);
   }
-  for (const path of ["/", "/builds", "/free", "/open-source", "/studio", "/de/studio", "/tr/studio", "/project", "/security", "/impressum", "/privacy", "/terms", "/support", "/developers"]) {
+  for (const path of ["/", "/free", "/open-source", "/studio", "/de/studio", "/tr/studio", "/project", "/security", "/impressum", "/privacy", "/terms", "/support", "/developers"]) {
     const result = serve(path);
     assert.equal(result.status, 200, path);
     assert.match(result.body, /<main\b/, path);
@@ -122,7 +121,7 @@ test("EN/DE/TR routing stays consistent: no stale alternates or untranslated umb
     const html = renderPublicSite(path, env, host);
     const nav = html.match(/<nav class="desktop-nav"[^>]*>(.*?)<\/nav>/s)[1];
     assert.doesNotMatch(nav, />(Live builds|Free products|Open source)</, path);
-    for (const target of ["/builds", "/free", "/open-source"]) assert.match(nav, new RegExp(`href="${target}" hreflang="en"`), path);
+    for (const target of ["/free", "/open-source"]) assert.match(nav, new RegExp(`href="${target}" hreflang="en"`), path);
     assert.match(nav, new RegExp(`href="/${path.split("/")[1]}/studio"`), path);
     assert.doesNotMatch(html, />Explore</, path);
     assert.doesNotMatch(html, /href="\/(builds|free|open-source)"(?! hreflang="en")/, path);
@@ -133,15 +132,14 @@ test("EN/DE/TR routing stays consistent: no stale alternates or untranslated umb
   assert.doesNotMatch(root, /rel="alternate"/);
 });
 
-test("builds, free products, and open source never load the analytics beacon or tracked attributes", () => {
+test("free products and open source never load the analytics beacon or tracked attributes", () => {
   const tracking = /\/api\/public\/events|orkestrTrack|sendBeacon|data-event=|data-view-event=/;
   const fixtures = [
-    { section: "builds", slug: "beacon-fixture", title: "Beacon fixture", summary: "Synthetic.", status: "live", evidence: "simulation" },
-    { section: "free", slug: "beacon-fixture", title: "Beacon fixture", summary: "Synthetic.", status: "live", evidence: "simulation" },
+    { section: "free", slug: "beacon-fixture", title: "Beacon fixture", summary: "Synthetic.", status: "live" },
   ].map((entry) => ({ ...entry, render: () => ({ id: entry.section, title: entry.title, summary: entry.summary, canonicalPath: `/${entry.section}/${entry.slug}`, body: '<main id="main-content"><h1>Fixture</h1><a href="#" data-event="book_project_hero" data-view-event="platform_console_view">x</a></main>' }) }));
   publicCatalog.push(...fixtures);
   try {
-    for (const path of ["/builds", "/free", "/open-source", "/builds/beacon-fixture", "/free/beacon-fixture"]) {
+    for (const path of ["/free", "/open-source", "/free/beacon-fixture"]) {
       const html = renderPublicSite(path, env, host);
       assert.match(html, /<main\b/, path);
       assert.doesNotMatch(html, tracking, path);
@@ -154,4 +152,14 @@ test("builds, free products, and open source never load the analytics beacon or 
     assert.match(html, /\/api\/public\/events/, path);
     assert.match(html, /data-event="client_portal_click"/, path);
   }
+});
+
+test("the removed /builds section answers 410 Gone and is not linked or listed", () => {
+  for (const path of ["/builds", "/builds/", "/builds/customer-portal", "/builds/evidence-desk", "/builds/evidence-desk/evidence-desk-app.js"]) {
+    const result = serve(path);
+    assert.equal(result.handled, true, path);
+    assert.equal(result.status, 410, path);
+  }
+  assert.doesNotMatch(renderPublicSitemap(env), /\/builds/);
+  for (const path of ["/", "/free", "/open-source", "/studio", "/de/studio", "/tr/studio"]) assert.doesNotMatch(renderPublicSite(path, env, host), /href="\/builds/, path);
 });

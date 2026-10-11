@@ -1,6 +1,5 @@
 import { freeProductPageHeaders, maybeServeFreeProduct } from "./free-products-static.js";
 import { renderOAuthHomepage } from "./oauth-homepage.js";
-import { publicBuildAsset } from "./public-site-build-assets.js";
 import {
   publicSiteAllowedForHost,
   publicSiteKnownPath,
@@ -41,14 +40,15 @@ export function maybeServePublicSite(request: any, response: any, url: string, e
     response.status(200).header("cache-control", "no-store").type("text/html; charset=utf-8").send(renderOAuthHomepage(env));
     return true;
   }
+  // The former /builds section was removed for good; say so instead of
+  // falling through to the app shell.
+  if (/^\/builds(\/|$)/.test(publicPath) && allowed) {
+    response.status(410).header("cache-control", "public, max-age=3600").type("text/plain; charset=utf-8").send("This page was removed.");
+    return true;
+  }
   if (allowed && maybeServeFreeProduct(response, publicPath)) return true;
   if (publicPath === "/public-site.css" && allowed) {
     response.status(200).header("cache-control", "public, max-age=300").type("text/css; charset=utf-8").send(renderPublicSiteCss());
-    return true;
-  }
-  const buildAsset = allowed ? publicBuildAsset(publicPath) : null;
-  if (buildAsset) {
-    response.status(200).header("cache-control", "public, max-age=300").header("x-content-type-options", "nosniff").type(buildAsset.type).send(buildAsset.body);
     return true;
   }
   if (publicPath === "/robots.txt" && allowed) {

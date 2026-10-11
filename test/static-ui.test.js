@@ -77,9 +77,10 @@ function assertAngularShell(html) {
 function assertPublicShell(html) {
   assert.match(html, /<title>We turn complex ideas into working software \| Orkestr<\/title>/);
   assert.match(html, /We turn complex ideas into working software\./);
-  assert.match(html, />Explore live builds</);
+  assert.match(html, />Explore free products</);
   assert.match(html, />Discuss a project</);
-  for (const path of ["/builds", "/free", "/open-source", "/studio"]) assert.match(html, new RegExp(`href="${path}"`));
+  for (const path of ["/free", "/open-source", "/studio"]) assert.match(html, new RegExp(`href="${path}"`));
+  assert.doesNotMatch(html, /href="\/builds/);
   assert.match(html, /name="application-name" content="Orkestr"/);
   assert.match(html, /property="og:site_name" content="Orkestr"/);
   assert.match(html, /name="twitter:card" content="summary_large_image"/);

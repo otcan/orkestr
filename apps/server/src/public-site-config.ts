@@ -1,6 +1,5 @@
 export type PublicPageId =
   | "home"
-  | "builds"
   | "free"
   | "open-source"
   | "studio"
@@ -60,7 +59,6 @@ export const publicLocaleOpenGraphTags: Record<PublicLocale, string> = {
 const localizedPagePaths: Record<PublicLocale, Partial<Record<PublicPageId, string>>> = {
   en: {
     home: "/",
-    builds: "/builds",
     free: "/free",
     "open-source": "/open-source",
     studio: "/studio",
