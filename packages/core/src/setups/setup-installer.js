@@ -4,9 +4,7 @@
 // WhatsApp: a chat binding needs the owner's explicit grant and a paired
 // account, and is a separate, later step (docs/setups/manifest-v1.md).
 import fs from "node:fs/promises";
-import { codexLoginStatus } from "../../../connectors/src/codex.js";
 import { clearThreadStandingMission, setThreadStandingMission } from "../claude-standing-mission-admin.js";
-import { listLlmAccountProfiles } from "../llm-account-profiles.js";
 import { createThread, getThread, retireThread } from "../threads.js";
 import { createTimer, deleteTimer, listTimers } from "../timers.js";
 import { adminUserId, normalizeUserId } from "../users.js";
@@ -25,18 +23,16 @@ function setupError(code, statusCode, extra = {}) {
   return Object.assign(new Error(code), { code, statusCode, ...extra });
 }
 
-async function defaultProviderReady(provider, ownerUserId, env) {
-  if (provider === "codex") {
-    const status = await codexLoginStatus({ env });
-    return { ready: Boolean(status.connected), reason: status.reason };
-  }
-  const profiles = await listLlmAccountProfiles(ownerUserId, { provider: "claude-code" }, env).catch(() => []);
-  const ready = profiles.find((profile) => profile.state === "ready");
-  return ready ? { ready: true, reason: "account_ready", accountProfileId: ready.id } : { ready: false, reason: "claude_account_not_ready" };
+// Core must not import connectors; the server supplies the real provider
+// login check (apps/server/src/modules/setups/setup-provider-readiness.ts).
+// Without one, installs fail closed.
+/** @returns {Promise<{ ready: boolean, reason: string, accountProfileId?: string }>} */
+async function providerCheckUnavailable(_provider = "", _ownerUserId = "", _env = process.env) {
+  return { ready: false, reason: "provider_check_unavailable" };
 }
 
 export const defaultSetupDeps = {
-  providerReady: defaultProviderReady,
+  providerReady: providerCheckUnavailable,
   createThread,
   getThread,
   retireThread,

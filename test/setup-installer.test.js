@@ -162,3 +162,13 @@ test("install never creates a WhatsApp binding", async () => {
   const files = await fs.readdir(env.ORKESTR_HOME, { recursive: true });
   assert.ok(!files.some((file) => /whatsapp/i.test(file)), files.join(","));
 });
+
+test("without a server-supplied provider check, install fails closed", async () => {
+  const env = await freshEnv();
+  await assert.rejects(() => installSetup({ setupId: "fitness-tracker" }, env, defaultSetupDeps), (error) => {
+    assert.equal(error.code, "setup_prerequisite_missing");
+    assert.ok(error.checked.every((entry) => entry.reason === "provider_check_unavailable"));
+    return true;
+  });
+  assert.equal((await listThreads(env)).length, 0);
+});
