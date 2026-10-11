@@ -3,6 +3,7 @@ import {
   publicCatalogEntries,
   publicCatalogEntryIsLive,
   publicCatalogPath,
+  publicNoCallsNotice,
   type PublicCatalogEntry,
   type PublicCatalogEvidence,
   type PublicCatalogSection,
@@ -35,7 +36,7 @@ function catalogCard(entry: PublicCatalogEntry) {
   const evidence = live && entry.evidence ? `<span class="hub-badge hub-evidence-${entry.evidence}">${evidenceLabels[entry.evidence].label}</span>` : "";
   const title = escapeHtml(entry.title);
   const heading = live ? `<a href="${publicCatalogPath(entry)}">${title}</a>` : title;
-  return `<li class="hub-catalog-card${live ? "" : " is-pending"}"><div class="hub-badges">${status}${evidence}</div><h3>${heading}</h3><p>${escapeHtml(entry.summary)}</p></li>`;
+  return `<li class="hub-catalog-card${live ? "" : " is-pending"}"><div class="hub-badges">${status}${evidence}</div><h3>${heading}</h3><p>${escapeHtml(entry.summary)}</p>${live && entry.localOnly ? `<p class="hub-local-only">${publicNoCallsNotice}</p>` : ""}</li>`;
 }
 
 function catalogList(section: PublicCatalogSection) {

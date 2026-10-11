@@ -26,6 +26,7 @@ export const publicSiteHubCss = `
 .hub-evidence-legend dd { margin: 12px 0 0; color: var(--muted); line-height: 1.55; }
 .hub-languages { margin: 0; font-size: 14px; }
 .hub-languages a { font-weight: 700; }
+.hub-catalog-card p.hub-local-only { padding-top: 12px; border-top: 1px solid var(--line); font-size: 14px; }
 .hub-next { margin: 0; color: var(--muted); }
 @media (max-width: 1050px) { .footer { grid-template-columns: repeat(3,1fr); } .footer-brand, .footer-note { grid-column: 1/-1; } }
 @media (max-width: 760px) { .hub-evidence-legend { grid-template-columns: 1fr; } .footer { grid-template-columns: repeat(2,1fr); } }
