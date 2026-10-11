@@ -17,6 +17,8 @@ import {
   type PublicPageId,
 } from "./public-site-config.js";
 import { legalPage } from "./public-site-legal.js";
+import { buildsCatalogPage } from "./public-site-builds.js";
+import { customerPortalBuildPage } from "./public-site-build-customer-portal.js";
 import { renderPublicShell } from "./public-site-shell.js";
 import { renderCommercialSiteCss } from "./public-site-style.js";
 import { workflowIntakePage } from "./public-workflow-intake.js";
@@ -45,6 +47,8 @@ function publicPage(pageId: PublicPageId, env = process.env, locale: PublicLocal
   if (pageId === "project") return projectIntakePage(env);
   if (["websites-commerce", "business-systems", "opportunity-intelligence", "web-data-monitoring", "automation"].includes(pageId)) return solutionPage(pageId);
   if (pageId === "workflow") return workflowIntakePage();
+  if (pageId === "builds") return buildsCatalogPage();
+  if (pageId === "build-customer-portal") return customerPortalBuildPage();
   return legalPage(pageId, env);
 }
 
@@ -62,7 +66,7 @@ export function renderPublicSiteCss() {
 
 export function renderPublicSitemap(env = process.env) {
   const localizedIds: PublicPageId[] = ["home", "use-cases", "websites-commerce", "business-systems", "automation", "web-data-monitoring", "opportunity-intelligence", "security", "deployment", "team"];
-  const englishOnlyIds: PublicPageId[] = ["developers", "workflow"];
+  const englishOnlyIds: PublicPageId[] = ["developers", "workflow", "builds", "build-customer-portal"];
   const lastmod = /^\d{4}-\d{2}-\d{2}$/.test(String(env.ORKESTR_PUBLIC_SITE_LASTMOD || "")) ? String(env.ORKESTR_PUBLIC_SITE_LASTMOD) : "2026-08-31";
   const xml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   const entries: string[] = [];

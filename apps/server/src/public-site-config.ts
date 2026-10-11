@@ -12,6 +12,8 @@ export type PublicPageId =
   | "web-data-monitoring"
   | "automation"
   | "workflow"
+  | "builds"
+  | "build-customer-portal"
   | "terms"
   | "privacy"
   | "impressum"
@@ -35,6 +37,9 @@ export type PublicPage = {
   canonicalPath?: string;
   locale?: PublicLocale;
   indexable?: boolean;
+  stylesheets?: string[];
+  scripts?: string[];
+  analytics?: boolean;
 };
 
 export const publicLocales: PublicLocale[] = ["en", "de", "tr"];
@@ -66,6 +71,8 @@ const localizedPagePaths: Record<PublicLocale, Partial<Record<PublicPageId, stri
     "web-data-monitoring": "/web-data-monitoring",
     automation: "/automation",
     workflow: "/workflow",
+    builds: "/builds",
+    "build-customer-portal": "/builds/customer-portal",
     terms: "/terms",
     privacy: "/privacy",
     impressum: "/impressum",
