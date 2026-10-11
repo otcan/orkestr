@@ -1,5 +1,6 @@
-// Browser UI for the synthetic customer portal demo. All state lives in this
-// browser (localStorage); the page makes no network calls after loading.
+// Browser UI for the synthetic customer portal demo. Entries stay in this
+// browser (localStorage). After the page and its static assets have loaded, the
+// code sends nothing back: no fetch/XHR/beacon/WebSocket, no analytics.
 import {
   MAX_LINE_QUANTITY,
   MAX_REASON_LENGTH,

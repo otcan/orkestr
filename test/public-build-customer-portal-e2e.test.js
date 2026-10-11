@@ -54,6 +54,8 @@ test("live build routes are public, self-contained, and serve only allowlisted a
     assert.equal(page.status, 200);
     const html = await page.text();
     assert.match(html, /Synthetic demo - not a client project, no real orders\./);
+    assert.match(html, /After this page loads, it sends nothing back: no analytics, no data uploads\. Your entries stay in this browser\./);
+    assert.doesNotMatch(html, /makes no network calls|nothing is sent to a server|sends nothing to a server/i, "no-network wording must be scoped to after load");
     assert.match(html, /What this demo does not do/);
     assert.match(html, /not server-enforced authorization/);
     assert.match(html, /data-action="reset"/);
@@ -77,7 +79,8 @@ test("live build routes are public, self-contained, and serve only allowlisted a
       const response = await fetch(`${baseUrl}/builds/customer-portal/${asset}`);
       assert.equal(response.status, 200, asset);
       assert.match(response.headers.get("content-type") || "", type);
-      const body = await response.text();
+      // Inspect code only: comments may describe what the code deliberately does not do.
+      const body = (await response.text()).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
       assert.doesNotMatch(body, /fetch\(|XMLHttpRequest|sendBeacon|WebSocket|EventSource|import\(|\/api\/|data-(view-)?event|https?:\/\//, `${asset} must not make network calls`);
     }
     for (const probe of ["/builds/customer-portal/../../../package.json", "/builds/customer-portal/missing.js", "/builds/..%2F..%2Fpackage.json"]) {
@@ -108,12 +111,33 @@ test("customer portal demo runs the full order and approval flow in a real brows
       page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
       page.on("console", (message) => { if (message.type() === "error") problems.push(`console: ${message.text()}`); });
       page.on("request", (request) => { if (!request.url().startsWith(baseUrl) && !request.url().startsWith("data:")) problems.push(`external request: ${request.url()}`); });
+      // Count every outbound API the page code could use; static asset delivery is not counted.
+      await page.evaluateOnNewDocument(() => {
+        const calls = [];
+        Object.defineProperty(window, "__portalNetworkCalls", { value: calls });
+        const wrap = (owner, key, label) => {
+          const original = owner[key];
+          if (typeof original !== "function") return;
+          owner[key] = function (...args) { calls.push(`${label} ${String(args[0] && args[0].url || args[0])}`); return original.apply(this, args); };
+        };
+        wrap(window, "fetch", "fetch");
+        wrap(XMLHttpRequest.prototype, "open", "xhr");
+        if (navigator.sendBeacon) wrap(Navigator.prototype, "sendBeacon", "beacon");
+        for (const name of ["WebSocket", "EventSource"]) {
+          const Original = window[name];
+          if (!Original) continue;
+          window[name] = function (...args) { calls.push(`${name} ${String(args[0])}`); return new Original(...args); };
+        }
+      });
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${baseUrl}/builds/customer-portal`, { waitUntil: "networkidle0" });
       await page.waitForSelector("#portal-app.is-ready #portal-order-form");
-      // From here on the page must not issue any request at all, same-origin included.
+      // From here on the page must not issue fetch/XHR/beacon/WebSocket/EventSource
+      // traffic, same-origin included. Static asset delivery would be fine.
       const requestsAfterLoad = [];
-      const recordRequest = (request) => requestsAfterLoad.push(request.url());
+      const recordRequest = (request) => {
+        if (["fetch", "xhr", "ping", "websocket", "eventsource"].includes(request.resourceType())) requestsAfterLoad.push(`${request.resourceType()} ${request.url()}`);
+      };
       page.on("request", recordRequest);
       const text = (selector) => page.$eval(selector, (node) => node.textContent);
       const waitStatus = async (needle) => {
@@ -188,7 +212,8 @@ test("customer portal demo runs the full order and approval flow in a real brows
       for (const action of ["order submitted", "order auto approved", "order paused", "order approved", "order rejected"]) assert.match(audit, new RegExp(action));
 
       page.off("request", recordRequest);
-      assert.deepEqual(requestsAfterLoad, [], "the demo made network requests after load");
+      assert.deepEqual(requestsAfterLoad, [], "the demo made API requests after load");
+      assert.deepEqual(await page.evaluate(() => window.__portalNetworkCalls), [], "page code called a network API");
       await page.setOfflineMode(false);
       await page.reload({ waitUntil: "networkidle0" });
       await page.waitForSelector("#portal-app.is-ready #approver-panel");

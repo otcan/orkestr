@@ -4,7 +4,7 @@ const limitations = [
   "It does not create, send, or store real orders, invoices, or payments.",
   "It does not connect to an ERP, inventory, CRM, email, or any other external system.",
   "It has no accounts, logins, or real permissions: the role switcher is demonstration behaviour in your browser, not server-enforced authorization.",
-  "It sends nothing to a server. State lives only in this browser's localStorage until you reset it or clear site data.",
+  "After this page loads, it sends nothing back: no analytics, no data uploads. Your entries stay in this browser's localStorage until you reset the demo or clear site data. (The page and its script and stylesheet are delivered over HTTP like any web page.)",
   "Prices, stock, credit limits, and company names are invented sample data.",
   "To keep the demo simple, repeating an account's latest open or approved order with identical lines is treated as a duplicate; change a quantity to order again.",
   "It is not a client project or case study, and it makes no claim about production performance.",
@@ -36,7 +36,7 @@ export function customerPortalBuildPage(): PublicPage {
     </section>
     <div class="build-notice" role="note">
       <strong>Synthetic demo - not a client project, no real orders.</strong>
-      <p>All companies, products and numbers are invented. Everything runs in your browser; nothing is sent to a server.</p>
+      <p>All companies, products and numbers are invented. After this page loads, it sends nothing back: no analytics, no data uploads. Your entries stay in this browser.</p>
     </div>
     <section id="portal-app" class="portal-demo" aria-label="Interactive customer portal demo">
       <div class="portal-toolbar">
@@ -50,7 +50,7 @@ export function customerPortalBuildPage(): PublicPage {
       <p class="portal-role-note" id="portal-role-note"><strong>Demonstration behaviour:</strong> switching between customer and approver happens only in your browser. It is not server-enforced authorization; a real portal would authenticate each user and check every action on the server.</p>
       <p class="portal-storage" id="portal-storage-note">State is saved only in this browser.</p>
       <p id="portal-status" role="status" aria-live="polite" tabindex="-1"></p>
-      <div id="portal-view"><noscript><p>This demo needs JavaScript. It runs entirely in your browser and makes no network calls.</p></noscript></div>
+      <div id="portal-view"><noscript><p>This demo needs JavaScript. It runs in your browser and, after the page loads, sends nothing back: no analytics, no data uploads.</p></noscript></div>
     </section>
     <div class="build-explainer">
       <section aria-labelledby="build-does">
