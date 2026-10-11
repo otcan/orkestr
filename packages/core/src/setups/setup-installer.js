@@ -17,6 +17,7 @@ import {
   setupInstanceDir,
   updateSetupInstance,
   withSetupLedger,
+  withSetupLifecycle,
 } from "./setup-install-ledger.js";
 
 function setupError(code, statusCode, extra = {}) {
@@ -65,7 +66,11 @@ async function resolveProvider(manifest, input, ownerUserId, env, deps) {
 
 // Undo exactly the recorded resources, newest first. Each step is guarded so a
 // resource the owner changed or removed in the meantime is skipped, not forced.
-async function releaseResources(instance, env, deps, reason) {
+// `incomplete` is set for an install that failed or crashed before finishing:
+// its thread id is recorded before the thread is created and is unique to the
+// instance, so any check-in targeting it was created by that install, even if
+// the install died before recording the check-in's id.
+async function releaseResources(instance, env, deps, reason, { incomplete = false } = {}) {
   const report = { timers: [], mission: "untouched", thread: "untouched" };
   const { threadId } = instance.resources;
   const existing = await deps.listTimers(env);
@@ -81,15 +86,22 @@ async function releaseResources(instance, env, deps, reason) {
       entry.resources.timers = entry.resources.timers.filter((timer) => timer.id !== owned.id);
     });
   }
+  if (incomplete && threadId) {
+    const recorded = new Set(instance.resources.timers.map((owned) => owned.id));
+    for (const orphan of existing.filter((timer) => timer.target === threadId && !recorded.has(timer.id))) {
+      await deps.deleteTimer(orphan.id, env);
+      report.timers.push({ key: null, id: orphan.id, result: "unrecorded_deleted" });
+    }
+  }
   const thread = threadId ? await deps.getThread(threadId, env).catch(() => null) : null;
-  if (thread && instance.resources.missionSet) {
+  if (thread && (instance.resources.missionSet || (incomplete && thread.standingMission))) {
     await deps.clearMission(threadId, instance.ownerUserId, env);
     report.mission = "cleared";
   }
   if (thread && thread.ownerUserId === instance.ownerUserId) {
     await deps.retireThread(threadId, { reason, retiredBy: instance.ownerUserId, retirementSource: "setup" }, env);
     report.thread = "retired";
-  } else if (threadId) report.thread = "already_gone";
+  } else if (threadId && !incomplete) report.thread = "already_gone";
   return report;
 }
 
@@ -99,7 +111,10 @@ async function createResources(instance, manifest, input, env, deps) {
   await deps.makeStateDir(stateDir);
   await updateSetupInstance(env, id, (entry) => { entry.resources.stateDir = stateDir; });
 
+  // Record the intended id first, so a crash right after creation still knows
+  // which thread (and which check-ins targeting it) this install owns.
   const threadId = `${manifest.id}-${id.slice(-8)}`;
+  await updateSetupInstance(env, id, (entry) => { entry.resources.threadId = threadId; });
   const thread = await deps.createThread({
     id: threadId,
     name: `${manifest.thread.name} (${id.slice(-4)})`,
@@ -112,7 +127,6 @@ async function createResources(instance, manifest, input, env, deps) {
   }, env);
   // createThread returns an existing thread on a name match; never adopt one.
   if (thread?.id !== threadId) throw setupError("setup_thread_conflict", 409, { existingThreadId: thread?.id || null });
-  await updateSetupInstance(env, id, (entry) => { entry.resources.threadId = threadId; });
   // Marks the thread as Setup-owned so Codex receives the Setup's instructions
   // (setup-codex-instructions.js); the Claude runtime reads the mission directly.
   await deps.updateThread(threadId, { setupInstanceId: id, setupId: manifest.id }, env);
@@ -124,8 +138,9 @@ async function createResources(instance, manifest, input, env, deps) {
   // Check-ins start off unless the owner opted in to that key at install.
   const optIn = new Set(Array.isArray(input.optIn) ? input.optIn : []);
   for (const spec of manifest.timers) {
+    const wanted = optIn.has(spec.key) ? true : spec.defaultEnabled;
     const timer = await deps.createTimer({
-      enabled: optIn.has(spec.key) ? true : spec.defaultEnabled,
+      enabled: wanted,
       label: spec.label,
       targetType: "thread",
       target: threadId,
@@ -135,7 +150,7 @@ async function createResources(instance, manifest, input, env, deps) {
       timezone: instance.timezone || undefined,
       prompt: spec.prompt,
     }, env);
-    await updateSetupInstance(env, id, (entry) => { entry.resources.timers.push({ key: spec.key, id: timer.id }); });
+    await updateSetupInstance(env, id, (entry) => { entry.resources.timers.push({ key: spec.key, id: timer.id, wanted }); });
   }
 }
 
@@ -144,14 +159,19 @@ async function checkInStates(instance, env, deps) {
   return instance.resources.timers.map(({ key, id }) => ({ key, enabled: timers.some((timer) => timer.id === id && timer.enabled !== false) }));
 }
 
-export async function installSetup(input = {}, env = process.env, deps = defaultSetupDeps) {
+export function installSetup(input = {}, env = process.env, deps = defaultSetupDeps) {
   const manifest = getSetupManifest(input.setupId);
   const ownerUserId = setupOwnerOf(input, env);
+  return withSetupLifecycle(env, ownerUserId, manifest.id, () => installLocked(manifest, ownerUserId, input, env, deps));
+}
+
+async function installLocked(manifest, ownerUserId, input, env, deps) {
   const prior = findActiveInstance(await readSetupLedger(env), ownerUserId, manifest.id);
   if (prior?.status === "installed") return { outcome: "already_installed", instance: prior, checkIns: await checkInStates(prior, env, deps) };
   if (prior) {
-    // A previous install crashed or failed to roll back: finish undoing it first.
-    await releaseResources(prior, env, deps, "setup_install_retry");
+    // Inside the lifecycle lock nothing else is working on this Setup, so a
+    // non-installed record is a crashed install/uninstall: finish undoing it.
+    await releaseResources(prior, env, deps, "setup_install_retry", { incomplete: prior.status !== "uninstalling" });
     await updateSetupInstance(env, prior.instanceId, (entry) => { entry.status = "rolled_back"; noteHistory(entry, "rollback", "done_before_retry"); });
   }
   const unknownOptIn = (input.optIn || []).filter((key) => !manifest.timers.some((timer) => timer.key === key));
@@ -165,7 +185,7 @@ export async function installSetup(input = {}, env = process.env, deps = default
     const current = (await readSetupLedger(env)).instances.find((entry) => entry.instanceId === instance.instanceId);
     let rollback;
     try {
-      rollback = await releaseResources(current, env, deps, "setup_install_failed");
+      rollback = await releaseResources(current, env, deps, "setup_install_failed", { incomplete: true });
       await updateSetupInstance(env, instance.instanceId, (entry) => { entry.status = "rolled_back"; noteHistory(entry, "install", "failed", { error: error.code || error.message }); });
     } catch (rollbackError) {
       await updateSetupInstance(env, instance.instanceId, (entry) => { entry.status = "rollback_failed"; noteHistory(entry, "rollback", "failed", { error: rollbackError.message }); });
@@ -177,9 +197,13 @@ export async function installSetup(input = {}, env = process.env, deps = default
   return { outcome: "installed", instance: installed, checkIns: await checkInStates(installed, env, deps) };
 }
 
-export async function uninstallSetup(input = {}, env = process.env, deps = defaultSetupDeps) {
+export function uninstallSetup(input = {}, env = process.env, deps = defaultSetupDeps) {
   const manifest = getSetupManifest(input.setupId);
   const ownerUserId = setupOwnerOf(input, env);
+  return withSetupLifecycle(env, ownerUserId, manifest.id, () => uninstallLocked(manifest, ownerUserId, env, deps));
+}
+
+async function uninstallLocked(manifest, ownerUserId, env, deps) {
   const instance = findActiveInstance(await readSetupLedger(env), ownerUserId, manifest.id);
   if (!instance) return { outcome: "not_installed", setupId: manifest.id };
   await updateSetupInstance(env, instance.instanceId, (entry) => { entry.status = "uninstalling"; noteHistory(entry, "uninstall", "started"); });

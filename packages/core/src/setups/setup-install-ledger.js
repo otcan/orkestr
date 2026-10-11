@@ -42,6 +42,22 @@ export function withSetupLedger(env, mutate) {
   return run;
 }
 
+const lifecycles = new Map();
+
+// Serializes the whole install / uninstall / configure lifecycle for one owner
+// and Setup in this process, so a second call waits instead of seeing a
+// half-finished install. Process-local: the server is the single writer and
+// the CLI goes through its API.
+export function withSetupLifecycle(env, ownerUserId, setupId, run) {
+  const key = `${appHome(env)}\u0000${ownerUserId}\u0000${setupId}`;
+  const previous = lifecycles.get(key) || Promise.resolve();
+  const current = previous.catch(() => {}).then(run);
+  const tail = current.catch(() => {});
+  lifecycles.set(key, tail);
+  tail.then(() => { if (lifecycles.get(key) === tail) lifecycles.delete(key); });
+  return current;
+}
+
 export function newSetupInstance({ manifest, ownerUserId, provider, timezone }) {
   const now = new Date().toISOString();
   return {
@@ -55,6 +71,7 @@ export function newSetupInstance({ manifest, ownerUserId, provider, timezone }) 
     status: "installing",
     grants: [],
     resources: { stateDir: null, threadId: null, missionSet: false, timers: [] },
+    paused: false,
     history: [{ at: now, action: "install", outcome: "started" }],
     createdAt: now,
     updatedAt: now,

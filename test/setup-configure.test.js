@@ -41,10 +41,15 @@ test("configure, pause and resume change only the Setup's own check-ins", async 
   assert.deepEqual(result.changes, [{ key: "evening-check-in", result: "enabled" }]);
   assert.deepEqual(await enabledByKey(env, instance), { "evening-check-in": true, "weekly-summary": false });
   result = await resumeSetup({ setupId: "fitness-tracker" }, env, deps);
-  assert.deepEqual(result.changes.map((change) => change.result), ["already_on", "enabled"]);
+  assert.deepEqual(result.changes.map((change) => change.result), ["already_on", "already_off"], "resume restores choices; it never opts in");
   result = await pauseSetup({ setupId: "fitness-tracker" }, env, deps);
-  assert.deepEqual(result.changes.map((change) => change.result), ["disabled", "disabled"]);
+  assert.deepEqual(result.changes.map((change) => change.result), ["disabled", "already_off"]);
   assert.deepEqual(await enabledByKey(env, instance), { "evening-check-in": false, "weekly-summary": false });
+  result = await configureSetup({ setupId: "fitness-tracker", enable: ["weekly-summary"] }, env, deps);
+  assert.deepEqual(result.changes, [{ key: "weekly-summary", result: "on_after_resume" }], "while paused only the choice is stored");
+  assert.deepEqual(await enabledByKey(env, instance), { "evening-check-in": false, "weekly-summary": false });
+  await resumeSetup({ setupId: "fitness-tracker" }, env, deps);
+  assert.deepEqual(await enabledByKey(env, instance), { "evening-check-in": true, "weekly-summary": true });
   await assert.rejects(() => configureSetup({ setupId: "fitness-tracker", enable: ["nope"] }, env, deps), /setup_check_in_unknown/);
   await assert.rejects(() => configureSetup({ setupId: "fitness-tracker", enable: ["weekly-summary"], disable: ["weekly-summary"] }, env, deps), /setup_check_in_conflict/);
 });
@@ -52,7 +57,8 @@ test("configure, pause and resume change only the Setup's own check-ins", async 
 test("configure skips a check-in the owner pointed elsewhere and refuses when not installed", async () => {
   const env = await freshEnv();
   await assert.rejects(() => configureSetup({ setupId: "fitness-tracker", enable: ["all"] }, env, deps), /setup_not_installed/);
-  const { instance } = await installSetup({ setupId: "fitness-tracker" }, env, deps);
+  const { instance } = await installSetup({ setupId: "fitness-tracker", optIn: ["evening-check-in", "weekly-summary"] }, env, deps);
+  await pauseSetup({ setupId: "fitness-tracker" }, env, deps);
   const timersPath = path.join(env.ORKESTR_HOME, "timers.json");
   const stored = JSON.parse(await fs.readFile(timersPath, "utf8"));
   stored.find((timer) => timer.id === instance.resources.timers[0].id).target = "someone-else";
