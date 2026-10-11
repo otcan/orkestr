@@ -1,5 +1,6 @@
 import type { PublicPage } from "./public-site-config.js";
 import { customerPortalBuildPage } from "./public-site-build-customer-portal.js";
+import { evidenceDeskPage } from "./public-site-evidence-desk.js";
 
 // Shared registry for the /builds and /free index pages.
 //
@@ -43,9 +44,10 @@ export const publicCatalog: PublicCatalogEntry[] = [
 
   // SITE-2b: /builds/evidence-desk
   {
-    section: "builds", slug: "evidence-desk", status: "coming-soon",
+    section: "builds", slug: "evidence-desk", status: "live", evidence: "simulation",
     title: "Evidence desk",
-    summary: "A workspace that collects, reviews, and traces evidence for a decision, shown with synthetic data.",
+    summary: "Trace claims to synthetic source records, mark contradictions, record review decisions, and export a reproducible summary. Runs in your browser on a fictional topic.",
+    render: () => evidenceDeskPage(),
   },
 
   // SITE-4: /free/workout-log

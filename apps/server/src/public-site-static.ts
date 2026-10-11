@@ -1,5 +1,6 @@
 import { maybeServeFreeProduct } from "./free-products-static.js";
 import { renderOAuthHomepage } from "./oauth-homepage.js";
+import { publicBuildAsset } from "./public-site-build-assets.js";
 import {
   publicSiteAllowedForHost,
   publicSiteKnownPath,
@@ -8,7 +9,6 @@ import {
   renderPublicSiteCss,
   renderPublicSitemap,
 } from "./public-site.js";
-import { readPublicBuildAsset } from "./public-site-build-assets.js";
 
 function requestHostHeader(request: any) {
   return String(request?.headers?.["x-forwarded-host"] || request?.headers?.host || "").trim();
@@ -46,12 +46,10 @@ export function maybeServePublicSite(request: any, response: any, url: string, e
     response.status(200).header("cache-control", "public, max-age=300").type("text/css; charset=utf-8").send(renderPublicSiteCss());
     return true;
   }
-  if (publicPath.startsWith("/builds/") && allowed) {
-    const asset = readPublicBuildAsset(publicPath);
-    if (asset) {
-      response.status(200).header("cache-control", "public, max-age=300").header("x-content-type-options", "nosniff").type(asset.type).send(asset.body);
-      return true;
-    }
+  const buildAsset = allowed ? publicBuildAsset(publicPath) : null;
+  if (buildAsset) {
+    response.status(200).header("cache-control", "public, max-age=300").header("x-content-type-options", "nosniff").type(buildAsset.type).send(buildAsset.body);
+    return true;
   }
   if (publicPath === "/robots.txt" && allowed) {
     const sitemap = renderPublicSitemap(env)
