@@ -12,8 +12,18 @@
 //                            skipHook, noToolUseId, fail: "auth"|"rate"|"task", hang }
 //   FAKE_CLAUDE_JOB_CALLS  JSONL log: one line per invocation
 //   FAKE_CLAUDE_JOB_RAN    JSONL log: one line per tool call that actually ran
+//   FAKE_CLAUDE_RUN_UID    simulates a wrapper that runs Claude as another user
+//                          (setpriv): a path is usable only when owned by that
+//                          uid, listed for it in FAKE_CLAUDE_HANDOVER (JSONL
+//                          { path, uid }, written by the test's chown hook) or
+//                          open to others. Like the real CLI, a hook whose cwd
+//                          is unusable cannot be spawned (EACCES, non-blocking:
+//                          the call runs), an unreachable broker socket blocks,
+//                          and Write/Edit/Bash in an unusable cwd fail with a
+//                          `<tool_use_error>Error calling tool ... EACCES`.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 
 const args = process.argv.slice(2);
 const write = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -34,8 +44,22 @@ const turn = plan.turns[Math.min(previousCalls, plan.turns.length - 1)] || {};
 const settings = flag("--settings") ? JSON.parse(flag("--settings")) : {};
 const hooks = (settings.hooks?.PreToolUse || []).flatMap((entry) => entry.hooks || []);
 
+const runUid = process.env.FAKE_CLAUDE_RUN_UID ? Number(process.env.FAKE_CLAUDE_RUN_UID) : null;
+
+function runUserCanUse(target) {
+  if (runUid === null) return true;
+  const handed = (fs.existsSync(process.env.FAKE_CLAUDE_HANDOVER || "") ? fs.readFileSync(process.env.FAKE_CLAUDE_HANDOVER, "utf8") : "")
+    .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  if (handed.some((entry) => entry.path === target && entry.uid === runUid)) return true;
+  const info = fs.statSync(target);
+  return info.uid === runUid || (info.mode & 0o005) === 0o005;
+}
+
 function runHooks(session, toolUseId, tool) {
   for (const hook of hooks) {
+    if (!runUserCanUse(process.cwd())) continue; // posix_spawn EACCES: non-blocking
+    const socket = process.env.ORKESTR_AGENT_JOB_PERMISSION_SOCKET;
+    if (socket && !runUserCanUse(path.dirname(socket))) return { allowed: false, reason: `connect EACCES ${socket}` };
     const result = spawnSync("/bin/sh", ["-c", hook.command], {
       input: JSON.stringify({ session_id: session, hook_event_name: "PreToolUse", cwd: process.cwd(), tool_name: tool.name, tool_input: tool.input || {}, ...(turn.noToolUseId ? {} : { tool_use_id: toolUseId }) }),
       encoding: "utf8",
@@ -74,6 +98,10 @@ process.stdin.on("end", async () => {
     const id = `toolu_fake_${previousCalls}_${n}`;
     write({ type: "assistant", session_id: session, message: { content: [{ type: "tool_use", id, name: tool.name, input: tool.input || {} }] } });
     const verdict = turn.skipHook ? { allowed: true } : runHooks(session, id, tool);
+    if (verdict.allowed && ["Write", "Edit", "Bash"].includes(tool.name) && !runUserCanUse(process.cwd())) {
+      verdict.allowed = false;
+      verdict.reason = `<tool_use_error>Error calling tool (${tool.name}): EACCES: permission denied</tool_use_error>`;
+    }
     if (verdict.allowed) fs.appendFileSync(ranFile, `${JSON.stringify({ name: tool.name, input: tool.input || {} })}\n`);
     write({ type: "user", session_id: session, message: { content: [{ type: "tool_result", tool_use_id: id, is_error: !verdict.allowed, content: verdict.allowed ? "ok" : verdict.reason }] } });
     if (turn.hang && !verdict.allowed) await new Promise(() => {}); // like a model waiting

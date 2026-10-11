@@ -22,7 +22,7 @@
 // * Output: the final message is parsed as JSON and validated against
 //   `task.output_schema`; an invalid answer is re-asked once.
 import { validateOutput } from "./agent-job-output.js";
-import { approvedCallsText, nativeAttemptError, nativeExecutorEnabled, nativeTimeoutError } from "./agent-job-native-interface.js";
+import { TASK_FAILED_INSTRUCTION, agentFailureError, agentReportedFailure, approvedCallsText, nativeAttemptError, nativeExecutorEnabled, nativeTimeoutError } from "./agent-job-native-interface.js";
 import { getAgentJobTool, listAgentJobTools } from "./agent-job-tools.js";
 import { CodexJobSession, classifyCodexJobError } from "./codex-job-session.js";
 
@@ -57,6 +57,7 @@ function developerInstructions(ctx, workspace) {
     `You are running an unattended Orkestr Agent Job (job ${ctx.job}, run ${ctx.runId}). Nobody watches this turn.`,
     `Work inside ${workspace.path}. External actions (pushing branches, pull requests, messages, network) must use the provided Orkestr tools.`,
     "Commands and file changes may be denied by the job permissions. If a tool result says the run is paused for approval, end your turn.",
+    TASK_FAILED_INSTRUCTION,
   ].join("\n");
 }
 
@@ -215,6 +216,8 @@ export const codexJobAdapter = Object.freeze({
           return { type: "cancelled" };
         }
         if (turn.status === "failed") throw nativeAttemptError(turn.error, { message: turn.error?.message || "codex_turn_failed", sessionRef: opened.sessionRef });
+        const failure = agentReportedFailure(turn.finalText);
+        if (failure) throw agentFailureError(failure, { sessionRef: opened.sessionRef });
         const output = parseCodexFinalOutput(turn.finalText);
         const invalid = input.outputSchema ? validateOutput(input.outputSchema, output) : null;
         if (!invalid || repairs >= 1) return { type: "final", output };

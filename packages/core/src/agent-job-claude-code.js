@@ -20,8 +20,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { approvedCallsText, nativeAttemptError, nativeExecutorEnabled, nativeTimeoutError } from "./agent-job-native-interface.js";
-import { startPermissionBroker } from "./agent-job-permission-broker.js";
+import { TASK_FAILED_INSTRUCTION, agentFailureError, agentReportedFailure, approvedCallsText, nativeAttemptError, nativeExecutorEnabled, nativeTimeoutError } from "./agent-job-native-interface.js";
+import { chownTreeTo, claudeJobRuntimeOwner } from "./agent-job-claude-runtime.js";
+import { nativeToolName, startPermissionBroker } from "./agent-job-permission-broker.js";
 import { claudeCodeCommand, claudeCodeEventSessionId, claudeCodeEventText, classifyClaudeCodeFailure } from "./claude-code-client.js";
 import { classifyClaudeCodeFailureCode, turnErrorClassification } from "./runtime-turn-error-class.js";
 
@@ -35,6 +36,7 @@ const JOB_NOTICE = [
   "Every tool call is checked against the job's tool policy before it runs. A blocked call is final for this attempt: do not try to work around it with other tools.",
   "When a call is blocked because it needs approval, stop and end your turn; Orkestr resumes this session after a person decides.",
   "Do not start background tasks. Finish with the final answer only.",
+  TASK_FAILED_INSTRUCTION,
 ].join("\n");
 
 function clean(value) {
@@ -144,9 +146,15 @@ function contentBlocks(event) {
   return Array.isArray(content) ? content.filter((block) => block && typeof block === "object") : [];
 }
 
+// Only calls Claude refused before any hook (invalid input, unknown tool) may
+// lack a broker decision. Any other tool_use_error, such as `Error calling tool
+// (Write): EACCES`, means the tool ran: a hook that cannot be spawned is a
+// non-blocking error in Claude Code, so that is a bypass (fail closed).
+const PRE_HOOK_REJECTION = /<tool_use_error>\s*(InputValidationError\b|Error: No such tool available\b)/;
+
 function rejectedBeforeHook(block) {
   const content = typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? "");
-  return block.is_error === true && content.includes("<tool_use_error>");
+  return block.is_error === true && PRE_HOOK_REJECTION.test(content);
 }
 
 function killGroup(proc, signal) {
@@ -158,6 +166,11 @@ function killGroup(proc, signal) {
 async function runClaudeJobAttempt(ctx, jobInput) {
   const workspace = await ctx.prepareWorkspace(jobInput);
   await fs.chmod(workspace.path, 0o700).catch(() => {});
+  // A wrapper that runs Claude as another user needs the workspace (its cwd
+  // and the hook's cwd) and the broker socket (agent-job-claude-runtime.js).
+  const runtimeEnv = { ...process.env, ...ctx.env };
+  const owner = await claudeJobRuntimeOwner(runtimeEnv, { configDir: agentJobClaudeConfigDir(runtimeEnv) });
+  if (owner && (await fs.stat(workspace.path)).uid !== owner.uid) await chownTreeTo(owner, workspace.path);
   ctx.emit({ type: "workspace.ready", path: workspace.path, kind: workspace.kind });
   const input = { ...jobInput, resumeSessionRef: clean(ctx.resume?.sessionRef), resumeReason: clean(ctx.resume?.reason) };
   let stop = null; // { kind: "park"|"expired"|"cancelled"|"bypass"|"aborted", approval?, reason? }
@@ -173,6 +186,7 @@ async function runClaudeJobAttempt(ctx, jobInput) {
   }
 
   const broker = await startPermissionBroker({
+    owner,
     async authorize({ tool, args, callId }) {
       if (stop) return { decision: "deny", reason: "the Orkestr job attempt is stopping" };
       toolsById.set(callId, tool);
@@ -253,7 +267,7 @@ async function runClaudeJobAttempt(ctx, jobInput) {
           terminate({ kind: "bypass", reason: callId || "unknown_call" });
           return;
         }
-        ctx.emit({ type: "tool.completed", callId, tool: toolsById.get(callId) || "", ok: decision === "allow" && block.is_error !== true });
+        ctx.emit({ type: "tool.completed", callId, tool: toolsById.get(callId) || nativeToolName(toolUseNames.get(callId)), ok: decision === "allow" && block.is_error !== true });
       }
     };
 
@@ -289,6 +303,8 @@ async function runClaudeJobAttempt(ctx, jobInput) {
     if (resultError) throw claudeJobError(classifyClaudeCodeFailure(resultError), { sessionRef });
     if (code !== 0) throw claudeJobError(classifyClaudeCodeFailure(stderr || `exit_${code}_${signal || ""}`), { sessionRef });
     if (!sessionRef) throw claudeJobError("claude_code_session_missing");
+    const failure = agentReportedFailure(resultText || lastText);
+    if (failure) throw agentFailureError(failure, { sessionRef });
     return { type: "final", output: claudeJobOutput(resultText || lastText, input.outputSchema), sessionRef };
   } finally {
     ctx.signal?.removeEventListener?.("abort", onAbort);

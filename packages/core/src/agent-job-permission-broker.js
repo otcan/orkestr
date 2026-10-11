@@ -12,6 +12,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { chownTreeTo } from "./agent-job-claude-runtime.js";
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
 
@@ -42,10 +43,12 @@ function tokensEqual(a, b) {
 
 /**
  * Start a broker. `authorize({ tool, rawTool, args, callId })` resolves to
- * { decision: "allow" | "deny", reason? }; anything else is a deny.
+ * { decision: "allow" | "deny", reason? }; anything else is a deny. `owner`
+ * ({ uid, gid }, agent-job-claude-runtime.js) gets the socket when the hook
+ * runs as another user than the server; the token still guards every request.
  * Returns { socketPath, token, env, decisionFor(callId, rawTool), close() }.
  */
-export async function startPermissionBroker({ authorize }) {
+export async function startPermissionBroker({ authorize, owner = null }) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-perm-"));
   await fs.chmod(dir, 0o700);
   const socketPath = path.join(dir, "broker.sock");
@@ -98,6 +101,7 @@ export async function startPermissionBroker({ authorize }) {
     server.listen(socketPath, () => resolve());
   });
   await fs.chmod(socketPath, 0o600).catch(() => {});
+  await chownTreeTo(owner, dir);
 
   return {
     socketPath,
