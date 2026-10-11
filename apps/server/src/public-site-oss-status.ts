@@ -34,19 +34,19 @@ export const ossCapabilityStatus: OssCapabilityStatus[] = [
     capability: "Codex jobs",
     status: "live-verified once on production build (approval pause -> approve -> single-use approval consumed, effect ledgered)",
     evidence: "live-verified",
-    note: "One controlled run on a real Codex login with an isolated ORKESTR_HOME. One run is not a reliability measurement.",
+    note: "Tested configuration: Codex CLI 0.157.1 job, approval-gated file change, live-verified once on release main-a343edf1ac91 (one controlled run, isolated ORKESTR_HOME, synthetic content). One run is not a reliability measurement; other Codex versions and tool mixes are untested.",
   },
   {
     capability: "Claude Code jobs",
     status: "NOT supported yet (permission hook not enforced in live test; refused unless configured)",
     evidence: "offline-tested",
-    note: "The executor passes its offline tests, but in the live test the per-call permission hook did not run, so tool approvals cannot be relied on. Where no Claude login is configured for jobs, runs are refused. A host whose own Claude login is active can still start them today; set ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR=0 to turn them off.",
+    note: "Not working. The executor passes its offline tests with a fake Claude CLI, but the one live test failed: the per-call permission hook did not run, so tool approvals were not enforced. Production refuses Claude Code jobs unless a job login is configured. A host whose own Claude login is active can still start them today; set ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR=0 to turn them off.",
   },
   {
     capability: "YAML/JSON job specs",
     status: "verified",
     evidence: "live-verified",
-    note: "A YAML job spec was loaded by the released CLI, and JSON job specs also loaded on the released build. Specs are validated before a job is registered.",
+    note: "Tested configuration: a YAML job spec loaded by the released CLI on release main-9b92e3c47f3d; JSON job specs loaded on earlier released builds. Specs are validated before a job is registered.",
   },
   {
     capability: "WhatsApp/email notifications",

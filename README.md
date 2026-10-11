@@ -67,8 +67,13 @@ only), **offline-tested** (automated tests, no live service), **live-verified**
 | orkestr demo | simulation by design | simulation |
 <!-- status:end -->
 
-Claude Code jobs: in the live test the per-call permission hook did not run,
-so tool approvals cannot be relied on. A host whose own Claude login is active
+Codex jobs, tested configuration: Codex CLI 0.157.1 job, approval-gated file
+change, live-verified once on release main-a343edf1ac91. One run is not a
+reliability measurement; other Codex versions and tool mixes are untested.
+
+Claude Code jobs are not working: in the one live test the per-call permission
+hook did not run, so tool approvals were not enforced. Production refuses
+Claude Code jobs unless a job login is configured. A host whose own Claude login is active
 can still start Claude Code jobs today; set
 `ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR=0` to turn them off. Anything not in
 this table should be treated as unverified. There is no public or hosted job

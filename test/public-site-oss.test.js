@@ -46,6 +46,8 @@ test("/open-source status table is rendered from the single data module with exa
   const status = Object.fromEntries(ossCapabilityStatus.map((row) => [row.capability, row]));
   assert.equal(status["Codex jobs"].status, "live-verified once on production build (approval pause -> approve -> single-use approval consumed, effect ledgered)");
   assert.equal(status["Codex jobs"].evidence, "live-verified");
+  assert.match(status["Codex jobs"].note, /Codex CLI 0\.157\.1 job, approval-gated file change, live-verified once on release main-a343edf1ac91/);
+  assert.match(status["Claude Code jobs"].note, /^Not working\./);
   assert.equal(status["Claude Code jobs"].status, "NOT supported yet (permission hook not enforced in live test; refused unless configured)");
   assert.notEqual(status["Claude Code jobs"].evidence, "live-verified");
   assert.equal(status["YAML/JSON job specs"].status, "verified");
