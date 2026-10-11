@@ -18,7 +18,8 @@ export type PublicPageId =
   | "acceptable-use"
   | "data-deletion"
   | "support"
-  | "beta";
+  | "beta"
+  | "free-products";
 
 export type PublicLocale = "en" | "de" | "tr";
 
@@ -35,6 +36,7 @@ export type PublicPage = {
   canonicalPath?: string;
   locale?: PublicLocale;
   indexable?: boolean;
+  analytics?: boolean;
 };
 
 export const publicLocales: PublicLocale[] = ["en", "de", "tr"];
@@ -73,6 +75,7 @@ const localizedPagePaths: Record<PublicLocale, Partial<Record<PublicPageId, stri
     "data-deletion": "/data-deletion",
     support: "/support",
     beta: "/beta",
+    "free-products": "/free",
   },
   de: {
     home: "/de",

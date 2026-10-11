@@ -20,6 +20,7 @@ import { legalPage } from "./public-site-legal.js";
 import { renderPublicShell } from "./public-site-shell.js";
 import { renderCommercialSiteCss } from "./public-site-style.js";
 import { workflowIntakePage } from "./public-workflow-intake.js";
+import { freeProductsPage } from "./free-products-catalog.js";
 import { localizedCommercialHomePage } from "./public-site-localized-home.js";
 import { localizedSolutionPage, localizedWhatWeBuildPage } from "./public-site-localized-solutions.js";
 import { localizedTrustPage, teamPage } from "./public-site-localized-trust.js";
@@ -45,6 +46,7 @@ function publicPage(pageId: PublicPageId, env = process.env, locale: PublicLocal
   if (pageId === "project") return projectIntakePage(env);
   if (["websites-commerce", "business-systems", "opportunity-intelligence", "web-data-monitoring", "automation"].includes(pageId)) return solutionPage(pageId);
   if (pageId === "workflow") return workflowIntakePage();
+  if (pageId === "free-products") return freeProductsPage();
   return legalPage(pageId, env);
 }
 
@@ -62,7 +64,7 @@ export function renderPublicSiteCss() {
 
 export function renderPublicSitemap(env = process.env) {
   const localizedIds: PublicPageId[] = ["home", "use-cases", "websites-commerce", "business-systems", "automation", "web-data-monitoring", "opportunity-intelligence", "security", "deployment", "team"];
-  const englishOnlyIds: PublicPageId[] = ["developers", "workflow"];
+  const englishOnlyIds: PublicPageId[] = ["developers", "workflow", "free-products"];
   const lastmod = /^\d{4}-\d{2}-\d{2}$/.test(String(env.ORKESTR_PUBLIC_SITE_LASTMOD || "")) ? String(env.ORKESTR_PUBLIC_SITE_LASTMOD) : "2026-08-31";
   const xml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   const entries: string[] = [];
