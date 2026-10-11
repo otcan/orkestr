@@ -122,7 +122,7 @@ test("public copy avoids defensive internal-positioning language across every lo
   const utilityPaths = ["/project", "/de/projekt", "/tr/proje", "/privacy", "/terms", "/impressum", "/acceptable-use", "/data-deletion", "/support", "/beta"];
   const banned = /pretend|larger team|permanent Orkestr team|größer dar|dauerhaftes Orkestr-Team|daha büyük bir ekip|kalıcı bir Orkestr ekibi|honest no-fit|ehrliche Absage|uygun değil yanıtı|modischer Technologie|moda bir teknoloji|not every project|nicht jedes Projekt|her proje her|we do not prescribe|empfehlen keine KI|önermiyoruz|nützlichen Teil|gerekli kısmı|more than a hand-off|mehr als eine Software-Übergabe|teslim edip gitmek/i;
   const paths = [...new Set([...indexedPaths, ...utilityPaths])];
-  assert.equal(paths.length, 49);
+  assert.equal(paths.length, 48);
   for (const path of paths) {
     const html = renderPublicSite(path, baseEnv, { host: "product.example.test" });
     assert.doesNotMatch(html, banned, path);
@@ -283,7 +283,7 @@ test("personal beta remains available but is removed from commercial indexing", 
 test("every sitemap location renders a unique canonical public page", () => {
   const sitemap = renderPublicSitemap(baseEnv);
   const locations = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]);
-  assert.equal(locations.length, 39);
+  assert.equal(locations.length, 38);
   assert.equal(new Set(locations).size, locations.length);
   for (const location of locations) {
     const path = new URL(location).pathname;

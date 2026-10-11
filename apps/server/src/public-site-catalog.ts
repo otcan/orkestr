@@ -1,5 +1,4 @@
 import type { PublicPage } from "./public-site-config.js";
-import { customerPortalBuildPage } from "./public-site-build-customer-portal.js";
 import { evidenceDeskPage } from "./public-site-evidence-desk.js";
 import { workoutLogPage } from "./free-workout-log-page.js";
 
@@ -37,14 +36,6 @@ export type PublicCatalogEntry = {
 };
 
 export const publicCatalog: PublicCatalogEntry[] = [
-  // SITE-2a: /builds/customer-portal
-  {
-    section: "builds", slug: "customer-portal", status: "live", evidence: "simulation",
-    title: "B2B customer portal with approval rules",
-    summary: "A buyer submits an order, stock and credit rules check it, exceptions pause for an approver, and the timeline and audit log update. Synthetic data, runs in your browser.",
-    render: () => customerPortalBuildPage(),
-  },
-
   // SITE-2b: /builds/evidence-desk
   {
     section: "builds", slug: "evidence-desk", status: "live", evidence: "simulation",

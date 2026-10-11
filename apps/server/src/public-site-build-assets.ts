@@ -10,11 +10,6 @@ const js = "text/javascript; charset=utf-8";
 const css = "text/css; charset=utf-8";
 
 export const publicBuildAssets: Record<string, Record<string, string>> = {
-  "customer-portal": {
-    "app.js": js,
-    "workflow.js": js,
-    "portal.css": css,
-  },
   "evidence-desk": {
     "evidence-desk-app.js": js,
     "evidence-desk-state.js": js,
