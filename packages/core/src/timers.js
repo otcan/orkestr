@@ -5,6 +5,7 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 import { createTimerRepository } from "../../storage/src/repositories.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
+import { timerRetryAt, timerWaitingForRetry, withDueTimerPass } from "./timer-run-guard.js";
 import { enqueueAgentMessage } from "./messages.js";
 import { principalForUserId, userPrincipal } from "./principal.js";
 import { appendThreadSignal } from "./thread-signals.js";
@@ -615,8 +616,16 @@ export async function createTimer(input, env = process.env) {
     error.statusCode = 400;
     throw error;
   }
+  // A caller may choose the id (Setups record it before creating the timer so
+  // an interrupted install still knows exactly which timers it owns).
+  const requestedId = String(input.id || "").trim();
+  if (requestedId && timers.some((existing) => existing.id === requestedId)) {
+    const error = new Error("timer_id_conflict");
+    error.statusCode = 409;
+    throw error;
+  }
   let timer = {
-    id: randomUUID(),
+    id: requestedId || randomUUID(),
     ownerUserId: normalizeUserId(input.ownerUserId || input.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
     label: String(input.label || "Recurring agent task").trim(),
     targetType: String(input.targetType || (input.threadId ? "thread" : "agent")).trim(),
@@ -901,6 +910,9 @@ export async function runTimerNow(id, env = process.env, now = new Date(), optio
   if (timer.cadence === "once") timer.enabled = false;
   delete timer.lastError;
   delete timer.lastErrorAt;
+  // A successful manual run ends any failure streak and pending backoff.
+  delete timer.retryAt;
+  timer.consecutiveFailures = 0;
   delete timer.blockedReason;
   delete timer.blockedConnector;
   delete timer.connectorState;
@@ -933,14 +945,18 @@ export async function runTimerNowForPrincipal(id, principal, env = process.env, 
   return runTimerNow(id, env, now, { ...options, principal });
 }
 
-export async function markDueTimers(env = process.env, now = new Date(), options = {}) {
+export function markDueTimers(env = process.env, now = new Date(), options = {}) {
+  return withDueTimerPass(env, () => markDueTimersPass(env, now, options));
+}
+
+async function markDueTimersPass(env, now, options) {
   const timerRepository = createTimerRepository(env);
   const timers = await listTimers(env);
   let changed = false;
   const due = [];
   const next = [];
   for (const timer of timers) {
-    if (!timer.enabled || !timer.nextRunAt || Date.parse(timer.nextRunAt) > now.getTime()) {
+    if (!timer.enabled || !timer.nextRunAt || Date.parse(timer.nextRunAt) > now.getTime() || timerWaitingForRetry(timer, now)) {
       next.push(timer);
       continue;
     }
@@ -955,6 +971,8 @@ export async function markDueTimers(env = process.env, now = new Date(), options
         nextRunAt: timer.cadence === "once" ? null : nextRunAt(timer, now),
         lastError: null,
         lastErrorAt: null,
+        retryAt: null,
+        consecutiveFailures: 0,
         blockedReason: null,
         blockedConnector: null,
         connectorState: null,
@@ -983,7 +1001,10 @@ export async function markDueTimers(env = process.env, now = new Date(), options
           : timer.nextRunAt,
         lastError: error?.message || String(error),
         lastErrorAt: now.toISOString(),
+        // failureCount is a lifetime diagnostic; backoff uses the current streak.
         failureCount: Number(timer.failureCount || 0) + 1,
+        consecutiveFailures: Number(timer.consecutiveFailures || 0) + 1,
+        retryAt: error?.blockedReason === "blocked_auth" ? null : timerRetryAt(Number(timer.consecutiveFailures || 0) + 1, now),
         blockedReason: error?.blockedReason || null,
         blockedConnector: error?.blockedConnector || null,
         connectorState: error?.connectorState || null,

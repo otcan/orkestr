@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { checkSetupCodexSubscription } from "./setups/setup-dispatch-guard.js";
 import { withThreadMessageMutation } from "./thread-message-mutation.js";
 import { resourceOwnerUserId } from "./policy.js";
 import { canonicalTurnParent, canonicalUserPatch, createSubmission, identityMetric, matchCanonicalInput, uniqueAcceptedSubmission } from "./codex-input-identity.js";
@@ -1457,6 +1458,26 @@ async function requeueInputForReplacedRuntime(thread, message, expectedCodexThre
   return updated;
 }
 
+// A Setup thread whose provider login is not a subscription never reaches
+// turn/start or turn/steer; the input fails with a stated reason, not retried.
+async function refuseSetupTurn(thread, pending, check, env) {
+  const failed = await updateThreadMessage(thread.id, pending.id, {
+    state: "failed",
+    deliveryState: "refused_setup_subscription",
+    deliveryClaimId: null,
+    error: check.reason,
+  }, env);
+  await appendEvent({
+    type: "setup_turn_refused",
+    threadId: thread.id,
+    messageId: pending.id,
+    setupInstanceId: thread.setupInstanceId,
+    reason: check.reason,
+    detail: check.detail || null,
+  }, env).catch(() => {});
+  return { message: failed, result: null, observedVia: "setup_subscription_refused", skipped: true, refused: check.reason };
+}
+
 export async function sendCodexAppServerInput(thread, message, env = process.env) {
   if (!containedCodexRuntimeIsCurrent(thread, env)) {
     const restarted = await resumeCodexAppServerThread(thread, env);
@@ -1471,6 +1492,8 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   if (!pending) {
     return { message, result: null, observedVia: "codex_app_server_stale_claim", skipped: true };
   }
+  const subscription = await checkSetupCodexSubscription(client, thread);
+  if (!subscription.ok) return refuseSetupTurn(thread, pending, subscription, env);
   let runtimeIdentity = await currentCodexDeliveryRuntime(thread, id, env);
   if (!runtimeIdentity.matches) {
     const requeued = await requeueInputForReplacedRuntime(thread, pending, id, runtimeIdentity, env);
