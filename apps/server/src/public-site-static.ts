@@ -1,3 +1,4 @@
+import { maybeServeFreeProduct } from "./free-products-static.js";
 import { renderOAuthHomepage } from "./oauth-homepage.js";
 import {
   publicSiteAllowedForHost,
@@ -40,6 +41,7 @@ export function maybeServePublicSite(request: any, response: any, url: string, e
     response.status(200).header("cache-control", "no-store").type("text/html; charset=utf-8").send(renderOAuthHomepage(env));
     return true;
   }
+  if (allowed && maybeServeFreeProduct(response, publicPath, env)) return true;
   if (publicPath === "/public-site.css" && allowed) {
     response.status(200).header("cache-control", "public, max-age=300").type("text/css; charset=utf-8").send(renderPublicSiteCss());
     return true;

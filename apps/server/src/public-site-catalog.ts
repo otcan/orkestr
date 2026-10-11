@@ -5,7 +5,8 @@ import { customerPortalBuildPage } from "./public-site-build-customer-portal.js"
 //
 // Each build or free product lives in its own module and registers exactly one
 // entry below. An entry is only linked from the index once it has a `render`
-// function; without one it is listed as "coming soon" and never linked.
+// function (or is `standalone`); otherwise it is listed as "coming soon" and
+// never linked.
 //
 // Rules for entries (public site):
 // - Synthetic data only. Never present a build as a paid client case study.
@@ -26,6 +27,9 @@ export type PublicCatalogEntry = {
   status: PublicCatalogStatus;
   evidence?: PublicCatalogEvidence;
   render?: (env: NodeJS.ProcessEnv) => PublicPage;
+  // Served by its own route handler outside the site shell (for example a
+  // free product with its own strict CSP and no site beacon).
+  standalone?: true;
 };
 
 export const publicCatalog: PublicCatalogEntry[] = [
@@ -45,10 +49,11 @@ export const publicCatalog: PublicCatalogEntry[] = [
   },
 
   // SITE-4: /free/workout-log
+  // Served by free-products-static.ts with its own strict CSP.
   {
-    section: "free", slug: "workout-log", status: "coming-soon",
+    section: "free", slug: "workout-log", status: "live", standalone: true,
     title: "Workout log",
-    summary: "A simple, free log for training sessions.",
+    summary: "Log sets, reps, and weight, run a rest timer, and see your best set and volume trend. No account; your data stays in your browser.",
   },
 ];
 
@@ -57,7 +62,7 @@ export function publicCatalogPath(entry: Pick<PublicCatalogEntry, "section" | "s
 }
 
 export function publicCatalogEntryIsLive(entry: PublicCatalogEntry) {
-  return entry.status === "live" && typeof entry.render === "function";
+  return entry.status === "live" && (typeof entry.render === "function" || entry.standalone === true);
 }
 
 export function publicCatalogEntries(section: PublicCatalogSection) {

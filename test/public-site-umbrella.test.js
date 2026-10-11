@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderPublicSite, renderPublicSitemap } from "../dist/server/apps/server/src/public-site.js";
 import { maybeServePublicSite } from "../dist/server/apps/server/src/public-site-static.js";
-import { publicCatalog } from "../dist/server/apps/server/src/public-site-catalog.js";
+import { publicCatalog, publicCatalogEntryIsLive } from "../dist/server/apps/server/src/public-site-catalog.js";
 
 const env = {
   ORKESTR_PUBLIC_SITE_URL: "https://product.example.test",
@@ -49,7 +49,7 @@ test("builds and free indexes list catalog entries with status badges and only l
     const entries = publicCatalog.filter((entry) => entry.section === section);
     assert.ok(entries.length > 0);
     for (const entry of entries) {
-      const live = entry.status === "live" && typeof entry.render === "function";
+      const live = publicCatalogEntryIsLive(entry);
       assert.match(html, new RegExp(entry.title));
       if (live) assert.match(html, new RegExp(`href="/${section}/${entry.slug}"`));
       else assert.doesNotMatch(html, new RegExp(`href="/${section}/${entry.slug}"`));
@@ -60,7 +60,7 @@ test("builds and free indexes list catalog entries with status badges and only l
 });
 
 test("pending catalog entries are not routable; registered live entries are", () => {
-  const pending = publicCatalog.find((entry) => !(entry.status === "live" && entry.render));
+  const pending = publicCatalog.find((entry) => !publicCatalogEntryIsLive(entry));
   if (pending) assert.equal(renderPublicSite(`/${pending.section}/${pending.slug}`, env, host), "");
   const entry = { section: "builds", slug: "fixture-build", title: "Fixture build", summary: "Synthetic fixture.", status: "live", evidence: "simulation", render: () => ({ id: "builds", title: "Fixture build", summary: "Synthetic fixture.", canonicalPath: "/builds/fixture-build", body: '<main id="main-content"><h1>Fixture build</h1></main>' }) };
   publicCatalog.push(entry);
