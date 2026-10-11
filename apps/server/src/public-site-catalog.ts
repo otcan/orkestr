@@ -16,6 +16,11 @@ import { workoutLogPage } from "./free-workout-log-page.js";
 // - The rendered page should use `section` as its PublicPage id and set
 //   `canonicalPath` to `path`.
 
+// Owner-approved wording for pages that keep user entries in the browser.
+// It promises no calls after load, not that the page is delivered offline.
+// Only set `localOnly` when the page passes test/helpers/public-page-no-calls.mjs.
+export const publicNoCallsNotice = "After this page loads, it sends nothing back: no analytics, no data uploads. Your entries stay in this browser.";
+
 export type PublicCatalogSection = "builds" | "free";
 export type PublicCatalogStatus = "live" | "coming-soon";
 export type PublicCatalogEvidence = "simulation" | "recorded" | "live-isolated";
@@ -27,6 +32,7 @@ export type PublicCatalogEntry = {
   summary: string;
   status: PublicCatalogStatus;
   evidence?: PublicCatalogEvidence;
+  localOnly?: boolean;
   render?: (env: NodeJS.ProcessEnv) => PublicPage;
 };
 
