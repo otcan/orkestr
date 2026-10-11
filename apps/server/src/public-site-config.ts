@@ -4,6 +4,7 @@ export type PublicPageId =
   | "security"
   | "deployment"
   | "developers"
+  | "open-source"
   | "use-cases"
   | "project"
   | "websites-commerce"
@@ -58,6 +59,7 @@ const localizedPagePaths: Record<PublicLocale, Partial<Record<PublicPageId, stri
     security: "/security",
     deployment: "/deployment",
     developers: "/developers",
+    "open-source": "/open-source",
     "use-cases": "/use-cases",
     project: "/project",
     "websites-commerce": "/websites-commerce",

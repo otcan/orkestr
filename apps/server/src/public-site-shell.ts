@@ -21,7 +21,7 @@ const shellCopy: Record<PublicLocale, Record<string, string>> = {
     footer: "We design, build, modernize, and operate systems for real business work.", solutions: "What we build",
     newSystems: "New systems", modernization: "System modernization", automation: "Work & data automation",
     orkestr: "Orkestr", operating: "Operating layer", deployment: "Deployment", resources: "Resources",
-    developers: "Developers", documentation: "Documentation", company: "Company", team: "Team", contact: "Contact",
+    developers: "Developers", openSource: "Open source", documentation: "Documentation", company: "Company", team: "Team", contact: "Contact",
     customers: "Existing customers", portal: "Client Portal", note: "Managed implementations. Open-source operating core. Scope, deployment, access, and support vary by project.",
     breadcrumbHome: "Home", language: "Language", impressum: "Imprint", privacy: "Privacy", terms: "Terms",
   },
@@ -31,7 +31,7 @@ const shellCopy: Record<PublicLocale, Record<string, string>> = {
     footer: "Wir konzipieren, bauen, modernisieren und betreiben Systeme für reale Geschäftsprozesse.", solutions: "Leistungen",
     newSystems: "Neue Systeme", modernization: "Systemmodernisierung", automation: "Arbeit & Daten automatisieren",
     orkestr: "Orkestr", operating: "Betriebsebene", deployment: "Betrieb", resources: "Ressourcen",
-    developers: "Entwicklung", documentation: "Dokumentation", company: "Unternehmen", team: "Team", contact: "Kontakt",
+    developers: "Entwicklung", openSource: "Open Source", documentation: "Dokumentation", company: "Unternehmen", team: "Team", contact: "Kontakt",
     customers: "Bestehende Kunden", portal: "Kundenportal", note: "Betreute Implementierungen. Open-Source-Betriebskern. Umfang, Bereitstellung, Zugriff und Support werden je Projekt vereinbart.",
     breadcrumbHome: "Startseite", language: "Sprache", impressum: "Impressum", privacy: "Datenschutz", terms: "Nutzungsbedingungen",
   },
@@ -41,7 +41,7 @@ const shellCopy: Record<PublicLocale, Record<string, string>> = {
     footer: "Gerçek iş süreçleri için sistemler tasarlıyor, geliştiriyor, modernleştiriyor ve işletiyoruz.", solutions: "Hizmetler",
     newSystems: "Yeni sistemler", modernization: "Sistem modernizasyonu", automation: "İş ve veri otomasyonu",
     orkestr: "Orkestr", operating: "İşletim katmanı", deployment: "Devreye alma", resources: "Kaynaklar",
-    developers: "Geliştiriciler", documentation: "Dokümantasyon", company: "Şirket", team: "Ekip", contact: "İletişim",
+    developers: "Geliştiriciler", openSource: "Açık kaynak", documentation: "Dokümantasyon", company: "Şirket", team: "Ekip", contact: "İletişim",
     customers: "Mevcut müşteriler", portal: "Müşteri Portalı", note: "Yönetilen uygulamalar. Açık kaynak işletim çekirdeği. Kapsam, devreye alma, erişim ve destek her proje için ayrıca belirlenir.",
     breadcrumbHome: "Ana sayfa", language: "Dil", impressum: "Yasal bilgiler", privacy: "Gizlilik", terms: "Kullanım koşulları",
   },
@@ -208,7 +208,7 @@ export function renderPublicShell(page: PublicPage, env = process.env) {
     <div class="footer-brand"><a class="wordmark inverse" href="${homePath}"><span>O</span> Orkestr</a><p>${copy.footer}</p></div>
     <nav aria-label="${copy.solutions}"><strong>${copy.solutions}</strong><a href="${pageHref("websites-commerce", locale)}">${copy.newSystems}</a><a href="${pageHref("business-systems", locale)}">${copy.modernization}</a><a href="${pageHref("automation", locale)}">${copy.automation}</a></nav>
     <nav aria-label="${copy.orkestr}"><strong>${copy.orkestr}</strong><a href="${homePath}#how-we-work">${copy.process}</a><a href="${homePath}#platform">${copy.operating}</a><a href="${pageHref("deployment", locale)}">${copy.deployment}</a><a href="${pageHref("security", locale)}">${copy.security}</a></nav>
-    <nav aria-label="${copy.resources}"><strong>${copy.resources}</strong><a href="/developers">${copy.developers}</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="${escapeHtml(repo)}/tree/main/docs" rel="noreferrer">${copy.documentation}</a></nav>
+    <nav aria-label="${copy.resources}"><strong>${copy.resources}</strong><a href="/open-source">${copy.openSource}</a><a href="/developers">${copy.developers}</a><a href="${escapeHtml(repo)}" rel="noreferrer">GitHub</a><a href="${escapeHtml(repo)}/tree/main/docs" rel="noreferrer">${copy.documentation}</a></nav>
     <nav aria-label="${copy.company}"><strong>${copy.company}</strong><a href="${pageHref("team", locale)}">${copy.team}</a><a href="/support">${copy.contact}</a><a href="/impressum">${copy.impressum}</a><a href="/privacy">${copy.privacy}</a><a href="/terms">${copy.terms}</a></nav>
     <nav aria-label="${copy.customers}"><strong>${copy.customers}</strong><a href="${escapeHtml(appUrl)}" data-event="client_portal_click">${copy.portal}</a></nav>
     <p class="footer-note">${copy.note}</p>

@@ -17,6 +17,7 @@ import {
   type PublicPageId,
 } from "./public-site-config.js";
 import { legalPage } from "./public-site-legal.js";
+import { openSourcePage } from "./public-site-oss.js";
 import { renderPublicShell } from "./public-site-shell.js";
 import { renderCommercialSiteCss } from "./public-site-style.js";
 import { workflowIntakePage } from "./public-workflow-intake.js";
@@ -41,6 +42,7 @@ function publicPage(pageId: PublicPageId, env = process.env, locale: PublicLocal
   if (pageId === "security") return securityPage(env);
   if (pageId === "deployment") return deploymentPage(env);
   if (pageId === "developers") return developersPage(env);
+  if (pageId === "open-source") return openSourcePage(env);
   if (pageId === "use-cases") return whatWeBuildPage();
   if (pageId === "project") return projectIntakePage(env);
   if (["websites-commerce", "business-systems", "opportunity-intelligence", "web-data-monitoring", "automation"].includes(pageId)) return solutionPage(pageId);
@@ -62,7 +64,7 @@ export function renderPublicSiteCss() {
 
 export function renderPublicSitemap(env = process.env) {
   const localizedIds: PublicPageId[] = ["home", "use-cases", "websites-commerce", "business-systems", "automation", "web-data-monitoring", "opportunity-intelligence", "security", "deployment", "team"];
-  const englishOnlyIds: PublicPageId[] = ["developers", "workflow"];
+  const englishOnlyIds: PublicPageId[] = ["developers", "open-source", "workflow"];
   const lastmod = /^\d{4}-\d{2}-\d{2}$/.test(String(env.ORKESTR_PUBLIC_SITE_LASTMOD || "")) ? String(env.ORKESTR_PUBLIC_SITE_LASTMOD) : "2026-08-31";
   const xml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   const entries: string[] = [];
