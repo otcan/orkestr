@@ -158,6 +158,7 @@ test("gmail prompt push collects messages through Gmail and queues prompts", asy
       access_token: "gmail-push-access",
       refresh_token: "gmail-push-refresh",
       expires_in: 3600,
+      scope: "https://www.googleapis.com/auth/gmail.readonly",
     }),
   );
   const push = await createConnectorPromptPush({

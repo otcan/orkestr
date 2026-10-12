@@ -16,6 +16,10 @@ import {
   saveBrokeredGmailGrant,
 } from "../../../../../packages/connectors/src/gmail.js";
 import {
+  assertBrokerGoogleWorkspaceGrantDestination,
+  assertBrokerGoogleWorkspaceTenant,
+} from "../../../../../packages/connectors/src/google-workspace-broker-boundary.js";
+import {
   getWhatsAppChatMessages,
   sendWhatsAppText,
 } from "../../../../../packages/connectors/src/whatsapp.js";
@@ -139,7 +143,8 @@ export class BrokerController {
     @Body() body: Record<string, unknown> = {},
   ) {
     const { record, payload } = await brokerCall(() => decryptBrokerInstanceRequest(instanceId, body, process.env));
-    const userId = clean(payload.userId || record.instanceId);
+    const tenant = await brokerCall(() => assertBrokerGoogleWorkspaceTenant(record, payload, process.env));
+    const userId = tenant.userId;
     const threadId = clean(payload.threadId);
     const chatId = clean(payload.chatId);
     const accountId = clean(payload.accountId);
@@ -173,7 +178,7 @@ export class BrokerController {
       setAsThreadDefault: payload.setAsThreadDefault === true,
       capabilities: Array.isArray(payload.capabilities) ? payload.capabilities.map((value) => clean(value)).filter(Boolean) : [],
       brokerInstanceId: record.instanceId,
-      brokerTenantVmId: clean(payload.tenantVmId),
+      brokerTenantVmId: tenant.tenantVmId,
       brokerTenantUserId: userId,
       brokerTenantThreadId: threadId,
       brokerTenantThreadName: clean(payload.threadName || payload.threadTitle || threadId),
@@ -203,9 +208,10 @@ export class BrokerController {
   @HttpCode(200)
   async receiveGoogleWorkspaceGrant(@Body() body: Record<string, unknown> = {}) {
     const { registration, payload } = await brokerCall(() => decryptBrokerClientPayload(body, process.env));
+    const destination = await brokerCall(async () => assertBrokerGoogleWorkspaceGrantDestination(registration, payload, process.env));
     const saved = await brokerCall(() => saveBrokeredGmailGrant({
       ...payload,
-      brokerInstanceId: clean(payload.brokerInstanceId || registration.instanceId),
+      brokerInstanceId: destination.brokerInstanceId,
     }, process.env));
     return { ok: true, instanceId: registration.instanceId, grant: saved };
   }

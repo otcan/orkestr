@@ -3,6 +3,7 @@ import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import {
   ApiService,
+  GoogleWorkspaceCapability,
   GoogleWorkspaceConnection,
 } from "./api.service";
 
@@ -17,15 +18,34 @@ export class GoogleWorkspaceAccessPanelComponent {
   private readonly cdr = inject(ChangeDetectorRef);
 
   @Input() accounts: GoogleWorkspaceConnection[] = [];
+  @Input() availableCapabilities: GoogleWorkspaceCapability[] = [];
   @Input() threadId = "";
 
   selectedAccountId = "";
   busy = false;
   error = "";
+  selectedCapabilities: string[] = [];
 
   selectAccount(connectionId: string): void {
     this.selectedAccountId = connectionId;
+    const account = this.accounts.find((candidate) => candidate.connectionId === connectionId);
+    this.selectedCapabilities = account?.capabilities?.filter((id) => this.capabilitiesForSelection().some((item) => item.id === id)) || [];
     this.error = "";
+  }
+
+  capabilitiesForSelection(): GoogleWorkspaceCapability[] {
+    const account = this.accounts.find((candidate) => candidate.connectionId === this.selectedAccountId);
+    return account?.availableCapabilities || this.availableCapabilities;
+  }
+
+  capabilitySelected(id: string): boolean {
+    return this.selectedCapabilities.includes(id);
+  }
+
+  setCapability(id: string, selected: boolean): void {
+    this.selectedCapabilities = selected
+      ? [...new Set([...this.selectedCapabilities, id])]
+      : this.selectedCapabilities.filter((value) => value !== id);
   }
 
   accountLabel(account: GoogleWorkspaceConnection): string {
@@ -33,7 +53,7 @@ export class GoogleWorkspaceAccessPanelComponent {
   }
 
   canContinue(): boolean {
-    return !this.busy;
+    return !this.busy && this.selectedCapabilities.length > 0;
   }
 
   async connect(): Promise<void> {
@@ -46,9 +66,11 @@ export class GoogleWorkspaceAccessPanelComponent {
       const result = await firstValueFrom(this.api.startGmailOAuth({
         accountId: account?.connectionId,
         account: account?.email,
+        oauthApp: account?.oauthAppId,
         useMode: account ? account.useMode : (this.accounts.length ? "explicit_only" : "default"),
         setAsMain: !account && this.accounts.length === 0,
         threadId: this.threadId,
+        capabilities: this.selectedCapabilities,
       }));
       if (!result.authorizeUrl) throw new Error("Google authorization URL was not returned.");
       globalThis.location.href = result.authorizeUrl;

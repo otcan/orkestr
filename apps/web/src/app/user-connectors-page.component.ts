@@ -1,7 +1,7 @@
 import { ChangeDetectorRef, Component, OnDestroy, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, GoogleWorkspaceConnection, OrkestrUser, OutlookOAuthStartResponse, SetupStatus } from "./api.service";
+import { ApiService, ConnectorStatus, GmailSendApproval, GoogleWorkspaceCapability, GoogleWorkspaceConnection, OrkestrUser, OutlookOAuthStartResponse, SetupStatus } from "./api.service";
 import { GoogleWorkspaceAccessPanelComponent } from "./google-workspace-access-panel.component";
 import { GmailNotificationsPanelComponent } from "./gmail-notifications-panel.component";
 
@@ -28,6 +28,8 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   currentUser: OrkestrUser | null = null;
   outlookAuth: OutlookOAuthStartResponse | null = null;
   googleAccounts: GoogleWorkspaceConnection[] = [];
+  googleAvailableCapabilities: GoogleWorkspaceCapability[] = [];
+  gmailSendApprovals: GmailSendApproval[] = [];
 
   ngOnInit(): void {
     void this.load();
@@ -45,16 +47,19 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
       this.renderNow();
     }
     try {
-      const [setup, user, googleAccounts] = await Promise.allSettled([
+      const [setup, user, googleAccounts, sendApprovals] = await Promise.allSettled([
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.currentUser()),
         firstValueFrom(this.api.googleWorkspaceAccounts(this.connectorIntentThreadId())),
+        firstValueFrom(this.api.gmailSendApprovals()),
       ]);
       if (setup.status === "fulfilled") this.setupStatus = setup.value;
       if (user.status === "fulfilled") this.currentUser = user.value.user;
       if (googleAccounts.status === "fulfilled") {
         this.googleAccounts = googleAccounts.value.connections || [];
+        this.googleAvailableCapabilities = googleAccounts.value.availableCapabilities || [];
       }
+      if (sendApprovals.status === "fulfilled") this.gmailSendApprovals = sendApprovals.value.requests || [];
       if (setup.status === "rejected") {
         this.error = this.errorText(setup.reason);
       } else if (user.status === "rejected" && !this.currentUser) {
@@ -192,7 +197,18 @@ export class UserConnectorsPageComponent implements OnDestroy, OnInit {
   async deleteGoogleAccount(connectionId: string): Promise<void> {
     await this.performConnectorAction(`gmail-delete-${connectionId}`, () => firstValueFrom(
       this.api.deleteGoogleWorkspaceAccount(connectionId),
-    ), "Google account removed.");
+    ), "Google access revoked and the local connection removed.");
+  }
+
+  async decideGmailSend(requestId: string, approve: boolean): Promise<void> {
+    await this.performConnectorAction(`gmail-send-${requestId}`, () => firstValueFrom(
+      this.api.decideGmailSendApproval(requestId, approve),
+    ), approve ? "Email send approved. The agent may now retry the exact request." : "Email send rejected.");
+  }
+
+  gmailSendAccountLabel(request: GmailSendApproval): string {
+    const account = this.googleAccounts.find((item) => item.connectionId === request.connectionId);
+    return String(account?.email || account?.alias || request.connectionId);
   }
 
   async startOutlook(): Promise<void> {

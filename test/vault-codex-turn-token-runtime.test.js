@@ -122,6 +122,10 @@ test("codex turns get their own thread-bound vault token, revoked at turn end", 
 
   await fs.writeFile(path.join(home, "go-thr_001"), "");
   await waitFor(async () => (await threadIdForVaultToken(tokenA, env)) === "");
+  // Registry revocation and removal of the turn's token file complete in
+  // separate steps; wait for both before asserting the final state.
+  await waitFor(async () => fs.stat(codexVaultTokenFile("thr_001", env.ORKESTR_HOME))
+    .then(() => false, (error) => error.code === "ENOENT"));
   await assert.rejects(fs.stat(codexVaultTokenFile("thr_001", env.ORKESTR_HOME)), { code: "ENOENT" });
   assert.equal(await threadIdForVaultToken(tokenB, env), "codex-vault-b", "thread B keeps its token while its turn runs");
   await fs.writeFile(path.join(home, "go-thr_002"), "");
