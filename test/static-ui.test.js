@@ -1351,7 +1351,7 @@ test("instance desktop links are brokered and only shown for running desktops", 
 
   assert.match(appTemplate, />Desktops<\/button>/);
   assert.doesNotMatch(appTemplate, />DESKTOPS<\/button>/);
-  assert.match(appTemplate, /\(click\)="openPanel\('instanceDesktops'\)"/);
+  assert.match(appTemplate, /openPanel\('instanceDesktops'\)/);
   assert.match(template, /@if \(browserRunning\(browser\)\)/);
   assert.doesNotMatch(template, /@if \(browser\.desk_url \|\| browser\.url\)/);
   assert.match(template, /\[disabled\]="actionBusy\(browser\)"/);
@@ -1802,18 +1802,18 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /This user account is limited to one chat\./);
   assert.match(template, /\[class\.user-mode\]="isUserMode\(\)"/);
   assert.match(template, /class="instance-topbar-nav"/);
-  assert.match(template, /aria-label="Instance navigation"/);
+  assert.match(template, /aria-label="Primary navigation"/);
   assert.doesNotMatch(template, /class="user-mode-card"/);
   assert.doesNotMatch(template, /class="user-mode-nav"/);
-  assert.match(template, /\(click\)="openPanel\('files'\)">Files<\/button>/);
-  assert.match(template, /\(click\)="openPanel\('instanceDesktops'\)">Desktops<\/button>/);
-  assert.match(template, /\(click\)="openPanel\('instanceTimers'\)">Timers<\/button>/);
+  assert.match(template, /openPanel\('files'\)">Files<\/button>/);
+  assert.match(template, /openPanel\('instanceDesktops'\)">Desktops<\/button>/);
+  assert.match(template, /openPanel\('instanceTimers'\)">Timers<\/button>/);
   assert.doesNotMatch(template, /\(click\)="openPanel\('instanceSettings'\)">Settings<\/button>/);
   assert.match(template, /\(click\)="copyCurrentViewLink\(\)"/);
   assert.doesNotMatch(template, />OPEN<\/a>|OPEN LINK/);
   assert.doesNotMatch(template, /openPanel\('userJobs'\)/);
   assert.doesNotMatch(template, />Jobs<\/button>/);
-  assert.doesNotMatch(template, /\(click\)="openPanel\('userConnectors'\)">Connectors<\/button>/);
+  assert.match(template, /openPanel\('userConnectors'\)">Connections<\/button>/);
   assert.doesNotMatch(template, /\(click\)="openPanel\('userSkills'\)">Skills<\/button>/);
   assert.match(template, /\[placeholder\]="sidebarSearchPlaceholder\(\)"/);
   assert.match(template, /@if \(isAdminMode\(\) && visibleChildWorkers\(thread\)\.length > 0\)/);
@@ -1842,7 +1842,7 @@ test("web shell exposes an instance-scoped timer management page", async () => {
   assert.match(component, /panel === "instanceTimers"\) return this\.instancePath\("\/timers"\)/);
   assert.match(component, /globalThis\.document\.title = "Timers · Orkestr"/);
   assert.match(template, /<ork-user-timers-page><\/ork-user-timers-page>/);
-  assert.match(template, /\(click\)="openPanel\('instanceTimers'\)"/);
+  assert.match(template, /openPanel\('instanceTimers'\)/);
   assert.match(timersComponent, /selector: "ork-user-timers-page"/);
   assert.match(timersComponent, /this\.api\.threads\(\)/);
   assert.match(timersComponent, /this\.api\.automations\(\)/);
@@ -1900,7 +1900,7 @@ test("web shell exposes an instance-scoped desktop page", async () => {
   assert.match(component, /panel === "instanceDesktops"\) return this\.instancePath\("\/desktops"\)/);
   assert.match(component, /globalThis\.document\.title = "Desktops · Orkestr"/);
   assert.match(template, /<ork-user-desk-page \[threads\]="threads" \[selectedThread\]="selectedThread\(\)"><\/ork-user-desk-page>/);
-  assert.match(template, /\(click\)="openPanel\('instanceDesktops'\)"/);
+  assert.match(template, /openPanel\('instanceDesktops'\)/);
   assert.match(deskComponent, /selector: "ork-user-desk-page"/);
   assert.match(deskComponent, /this\.api\.browserSessions\(threadId\)/);
   assert.match(deskComponent, /this\.api\.desktopLeases\(false, threadId\)/);
@@ -1972,7 +1972,7 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(template, /@else if \(connectorLoginActive\(\)\)/);
   assert.match(template, /class="connector-login-shell"/);
   assert.match(template, /<ork-user-connectors-page><\/ork-user-connectors-page>/);
-  assert.doesNotMatch(template, /\(click\)="openPanel\('userConnectors'\)"/);
+  assert.match(template, /openPanel\('userConnectors'\)">Connections<\/button>/);
   assert.match(connectorsComponent, /selector: "ork-user-connectors-page"/);
   assert.match(connectorsComponent, /imports: \[FormsModule, GmailNotificationsPanelComponent, GoogleWorkspaceAccessPanelComponent\]/);
   assert.match(connectorsComponent, /import \{ GoogleWorkspaceAccessPanelComponent \}/);

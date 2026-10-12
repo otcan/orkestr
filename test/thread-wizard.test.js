@@ -25,23 +25,23 @@ test("main UI exposes a guided first thread generation flow", async () => {
     "apps/server/src/modules/connectors/connectors.controller.ts",
   ]);
 
-  assert.ok(sources.includes("Orkestr First Run"));
+  assert.ok(sources.includes("First run · Step"));
   assert.ok(sources.includes("Create first coding agent"));
   assert.ok(sources.includes("sidebarSearchPlaceholder"));
   assert.ok(sources.includes("agent, project, thread"));
   assert.ok(sources.includes("sidebar-new-thread"));
-  assert.ok(sources.includes("(click)=\"openPanel('instanceDesktops')\""));
+  assert.ok(sources.includes("openPanel('instanceDesktops')"));
   assert.ok(sources.includes("copyCurrentViewLink"));
   assert.ok(sources.includes("[setupSection]=\"setupSection\""));
   assert.ok(sources.includes("handleSetupSectionChange"));
-  assert.ok(sources.includes("Create the demo thread"));
+  assert.ok(sources.includes("Name your first conversation"));
   assert.ok(sources.includes("Connect Codex"));
   assert.ok(sources.includes("WhatsApp Access"));
   assert.ok(sources.includes("Leave blank to start with a new local git repository."));
   assert.ok(sources.includes("generatedWorkspaceName"));
   assert.ok(sources.includes("autoWorkspace"));
   assert.ok(sources.includes("initGit"));
-  assert.ok(sources.includes("Start orkest"));
+  assert.ok(sources.includes("Create workspace"));
   assert.ok(sources.includes('type WizardStepId = "welcome" | "codex" | "whatsapp" | "review"'));
   assert.ok(sources.includes('threadName = "orkest"'));
   assert.ok(sources.includes('type WhatsAppAccessMode = "managed" | "self_hosted"'));
@@ -52,6 +52,7 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("availableWhatsAppModes().includes('managed')"));
   assert.ok(sources.includes("isSelfHostedWhatsApp()"));
   assert.ok(sources.includes("whatsappModeSummary()"));
+  assert.ok(sources.includes("canManageSetup"));
   assert.ok(sources.includes("saveSetupDemoPreferences"));
   assert.ok(sources.includes("acquireDesktopLease"));
   assert.ok(sources.includes('browserAction(slug, "start"'));
@@ -130,7 +131,12 @@ test("WhatsApp wizard maps relay modes, pins self-hosted pairing, and cleans up 
   assert.match(create, /whatsappAccessMode === "self_hosted" && this\.whatsappReady && this\.pairedWhatsAppAccount/);
   assert.match(create, /connectWhatsAppPrivateChat\([\s\S]*pairedAccountId:[\s\S]*pairedContactId:/);
   assert.match(create, /whatsappAccessMode: this\.whatsappAccessMode/);
-  assert.match(wizard, /ngOnDestroy\(\): void \{\s*if \(this\.proofTimer\) clearInterval\(this\.proofTimer\);/);
+  assert.match(wizard, /ngOnDestroy\(\): void \{\s*this\.stopProofCheck\(\);/);
+  assert.match(wizard, /stopProofCheck\(\): void \{\s*if \(this\.proofTimer\) clearInterval\(this\.proofTimer\);/);
+  assert.match(create, /availableModes\.includes\(this\.whatsappAccessMode\)/);
+  assert.match(create, /this\.canManageSetup && this\.whatsappModeTouched/);
+  assert.doesNotMatch(create, /saveConnectorConfig/);
+  assert.match(pairPanel, /await firstValueFrom\(this\.api\.saveSetupDemoPreferences\(\{ whatsappAccessMode: "self_hosted" \}\)\);[\s\S]*await firstValueFrom\(this\.api\.startWhatsAppAccount/);
   assert.match(pairPanel, /ngOnDestroy\(\): void \{\s*if \(this\.timer\) clearInterval\(this\.timer\);/);
 });
 

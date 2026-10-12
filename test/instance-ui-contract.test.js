@@ -9,9 +9,9 @@ test("instance shell uses one lean navigation and canonical desktop and timer ro
     fs.readFile("apps/web/src/styles.css", "utf8"),
   ]);
 
-  assert.match(template, /<nav class="instance-topbar-nav" aria-label="Instance navigation">/);
+  assert.match(template, /<nav class="instance-topbar-nav" aria-label="Primary navigation">/);
   assert.equal((template.match(/<nav\b/g) || []).length, 1);
-  for (const destination of ["Files", "Desktops", "Timers"]) {
+  for (const destination of ["Conversations", "Desktops", "Connections", "Timers", "Files"]) {
     assert.match(template, new RegExp(`>${destination}<\\/button>`));
   }
   const instanceNavigation = template.match(/<nav class="instance-topbar-nav"[\s\S]*?<\/nav>/)?.[0] || "";

@@ -11,6 +11,8 @@
     <button class="secondary desk-refresh" type="button" (click)="load()" [disabled]="busy">Refresh</button>
   </header>
 
+  <p class="desk-intro">Desktops are managed browser sessions for this instance. Open one to work on websites such as LinkedIn through the browser; this does not connect a LinkedIn API.</p>
+
   @if (searchVisible()) {
     <input class="desk-search" type="search" placeholder="Search desktops" aria-label="Search desktops"
       [value]="query" (input)="setQuery($any($event.target).value)">

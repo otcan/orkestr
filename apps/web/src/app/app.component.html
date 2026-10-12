@@ -21,6 +21,7 @@
     <ork-user-connectors-page></ork-user-connectors-page>
   </main>
 } @else if (appReady) {
+<a class="app-skip-link" href="#main-content">Skip to main content</a>
 <main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [class.user-mode]="isUserMode()" [class.mobile-sidebar-open]="mobileSidebarOpen" [style.--sidebar-width.px]="sidebarWidth">
   <header class="instance-topbar">
     <button class="instance-topbar-brand" type="button" (click)="openPanel('chat')">
@@ -30,48 +31,58 @@
         <em>{{ threadTitle(topbarThread) }}</em>
       }
     </button>
-    <nav class="instance-topbar-nav" aria-label="Instance navigation">
-      <button class="secondary" type="button" [class.active]="activePanel === 'instanceApps'" (click)="openPanel('instanceApps')">Apps</button>
-      <button class="secondary" type="button" [class.active]="activePanel === 'files'" (click)="openPanel('files')">Files</button>
-      <button class="secondary" type="button" [class.active]="activePanel === 'instanceDesktops'" (click)="openPanel('instanceDesktops')">Desktops</button>
-      <button class="secondary" type="button" [class.active]="activePanel === 'instanceVault'" (click)="openPanel('instanceVault')">Vault</button>
-      <button class="secondary" type="button" [class.active]="activePanel === 'instanceTimers'" (click)="openPanel('instanceTimers')">Timers</button>
-      @if (currentViewLinkAvailable()) {
-        <button class="secondary copy-link-action" type="button" (click)="copyCurrentViewLink()">{{ linkNotice || "COPY LINK" }}</button>
-      }
-      @if (accountSwitcherEnabled()) {
-        <details class="instance-account-menu">
-          <summary>ACCOUNTS</summary>
-          <div class="instance-account-popover">
-            <strong>Accounts</strong>
-            <small>Open an enabled child Orkestr without signing in again.</small>
-            <div class="instance-account-list">
-              @for (account of instanceAccounts; track account.publicRef) {
-                <button
-                  class="instance-account-option"
-                  type="button"
-                  (click)="openInstanceAccount(account)"
-                  [disabled]="!!accountSwitchBusyRef"
-                  [attr.aria-label]="'Open ' + account.displayName + ' in a new tab'"
-                >
-                  <strong>{{ account.displayName }}</strong>
-                  <small>{{ accountSwitchBusyRef === account.publicRef ? "OPENING…" : "OPEN ↗" }}</small>
-                </button>
-              } @empty {
-                <small class="instance-account-empty">No enabled child instances are currently available.</small>
-              }
-            </div>
-            <form method="post" target="_blank" [attr.action]="instanceChooserUrl()" autocomplete="off">
-              <label for="instance-switch-input">Log in to another instance</label>
-              <input id="instance-switch-input" name="instance" required maxlength="120" autocapitalize="none" spellcheck="false" placeholder="Name or ins_… ID" />
-              <button type="submit">CONTINUE</button>
-            </form>
-          </div>
-        </details>
-      }
-      <button class="secondary instance-logout-action danger-soft" type="button" (click)="logoutBrowser()" [disabled]="logoutBusy">
-        {{ logoutBusy ? "LOGGING OUT…" : "LOG OUT" }}
-      </button>
+    <nav class="instance-topbar-nav" aria-label="Primary navigation">
+      <button class="secondary" type="button" [class.active]="!isGlobalPanel(activePanel)" [attr.aria-current]="!isGlobalPanel(activePanel) ? 'page' : null" (click)="utilityMenu.open = false; openPanel('chat')">Conversations</button>
+      <button class="secondary" type="button" [class.active]="activePanel === 'instanceDesktops'" [attr.aria-current]="activePanel === 'instanceDesktops' ? 'page' : null" (click)="utilityMenu.open = false; openPanel('instanceDesktops')">Desktops</button>
+      <button class="secondary" type="button" [class.active]="activePanel === 'userConnectors'" [attr.aria-current]="activePanel === 'userConnectors' ? 'page' : null" (click)="utilityMenu.open = false; openPanel('userConnectors')">Connections</button>
+      <button class="secondary" type="button" [class.active]="activePanel === 'instanceTimers'" [attr.aria-current]="activePanel === 'instanceTimers' ? 'page' : null" (click)="utilityMenu.open = false; openPanel('instanceTimers')">Timers</button>
+      <details class="instance-utility-menu" #utilityMenu>
+        <summary>More</summary>
+        <div class="instance-utility-popover">
+          <button type="button" (click)="utilityMenu.open = false; openPanel('files')">Files</button>
+          <button type="button" (click)="utilityMenu.open = false; openPanel('instanceApps')">Apps</button>
+          <button type="button" (click)="utilityMenu.open = false; openPanel('instanceVault')">Vault</button>
+          @if (isAdminMode()) {
+            <button type="button" (click)="utilityMenu.open = false; openPanel('instanceSettings')">Instance settings</button>
+          }
+          @if (currentViewLinkAvailable()) {
+            <button class="secondary copy-link-action" type="button" (click)="copyCurrentViewLink()">{{ linkNotice || "Copy link" }}</button>
+          }
+          @if (accountSwitcherEnabled()) {
+            <details class="instance-account-menu">
+              <summary>Accounts</summary>
+              <div class="instance-account-popover">
+                <strong>Accounts</strong>
+                <small>Open an enabled child Orkestr without signing in again.</small>
+                <div class="instance-account-list">
+                  @for (account of instanceAccounts; track account.publicRef) {
+                    <button
+                      class="instance-account-option"
+                      type="button"
+                      (click)="openInstanceAccount(account)"
+                      [disabled]="!!accountSwitchBusyRef"
+                      [attr.aria-label]="'Open ' + account.displayName + ' in a new tab'"
+                    >
+                      <strong>{{ account.displayName }}</strong>
+                      <small>{{ accountSwitchBusyRef === account.publicRef ? "OPENING…" : "OPEN ↗" }}</small>
+                    </button>
+                  } @empty {
+                    <small class="instance-account-empty">No enabled child instances are currently available.</small>
+                  }
+                </div>
+                <form method="post" target="_blank" [attr.action]="instanceChooserUrl()" autocomplete="off">
+                  <label for="instance-switch-input">Log in to another instance</label>
+                  <input id="instance-switch-input" name="instance" required maxlength="120" autocapitalize="none" spellcheck="false" placeholder="Name or ins_… ID" />
+                  <button type="submit">CONTINUE</button>
+                </form>
+              </div>
+            </details>
+          }
+          <button class="secondary instance-logout-action danger-soft" type="button" (click)="logoutBrowser()" [disabled]="logoutBusy">
+            {{ logoutBusy ? "Logging out…" : "Log out" }}
+          </button>
+        </div>
+      </details>
     </nav>
   </header>
 
@@ -342,7 +353,7 @@
     (dblclick)="resetSidebarWidth()"
   ></button>
 
-  <section class="chat">
+  <section id="main-content" class="chat" tabindex="-1" aria-label="Main content">
     @if (activePanel === "instanceApps") {
       <ork-app-launcher-page></ork-app-launcher-page>
     } @else if (activePanel === "files") {
@@ -361,6 +372,7 @@
       <ork-first-thread-wizard
         class="first-thread-host"
         [canCancel]="threads.length > 0"
+        [canManageSetup]="isAdminMode()"
         [setupStatus]="setupStatus"
         (cancel)="closeThreadWizard()"
         (created)="handleThreadWizardCreated($event)"

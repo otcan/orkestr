@@ -78,7 +78,7 @@ test("app shell wires the Vault page next to the instance pages", async () => {
   assert.match(component, /parts\[0\] === "vault" \|\| \(parts\[0\] === "ng" && parts\[1\] === "vault"\)\) return "instanceVault"/);
   assert.match(component, /panel === "instanceVault"\) return this\.instancePath\("\/vault"\)/);
   assert.match(component, /globalThis\.document\.title = "Vault · Orkestr"/);
-  assert.match(template, /\(click\)="openPanel\('instanceVault'\)">Vault<\/button>/);
+  assert.match(template, /openPanel\('instanceVault'\)">Vault<\/button>/);
   assert.match(template, /<ork-vault-page \[threads\]="threads"><\/ork-vault-page>/);
   assert.match(styles, /ork-vault-page\n\) > \.panel-body/);
 });

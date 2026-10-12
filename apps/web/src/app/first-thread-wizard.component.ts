@@ -17,10 +17,11 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   private readonly cdr = inject(ChangeDetectorRef);
 
   @Input() canCancel = true;
+  @Input() canManageSetup = false;
   @Input() setupStatus: SetupStatus | null = null;
   @Output() cancel = new EventEmitter<void>();
   @Output() created = new EventEmitter<ThreadSummary>();
-  @Output() setupRequested = new EventEmitter<"codex">();
+  @Output() setupRequested = new EventEmitter<"codex" | "whatsapp">();
 
   readonly steps: Array<{ id: WizardStepId; label: string }> = [
     { id: "welcome", label: "Welcome" },
@@ -72,7 +73,12 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   }
 
   ngOnDestroy(): void {
+    this.stopProofCheck();
+  }
+
+  private stopProofCheck(): void {
     if (this.proofTimer) clearInterval(this.proofTimer);
+    this.proofTimer = null;
   }
 
   private async loadClaudeAccounts(): Promise<void> {
@@ -89,7 +95,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   }
 
   activeStep(): WizardStepId {
-    return this.steps[this.stepIndex]?.id || "name";
+    return this.steps[this.stepIndex]?.id || "welcome";
   }
 
   progressPercent(): number {
@@ -128,7 +134,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   }
 
   canCreate(): boolean {
-    return Boolean(this.agentName() && this.agentReady() && this.availableWhatsAppModes().includes(this.whatsappAccessMode) && !this.busy);
+    return Boolean(this.agentName() && this.agentReady() && this.availableWhatsAppModes().includes(this.whatsappAccessMode) && !this.busy && !this.createdThread);
   }
 
   agentName(): string {
@@ -179,7 +185,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   }
 
   selectWhatsAppAccessMode(mode: WhatsAppAccessMode): void {
-    if (this.busy || !this.availableWhatsAppModes().includes(mode)) return;
+    if (this.busy || !this.canManageSetup || !this.availableWhatsAppModes().includes(mode)) return;
     this.whatsappModeTouched = true;
     this.whatsappAccessMode = mode;
   }
@@ -262,10 +268,20 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       const name = this.agentName();
       const repoUrl = this.repoUrlValue();
       const cloneRepo = Boolean(repoUrl);
-      this.creationStage = "Saving WhatsApp access choice";
-      await firstValueFrom(this.api.saveSetupDemoPreferences({
-        whatsappAccessMode: this.whatsappAccessMode,
-      }));
+      const currentSetup = await firstValueFrom(this.api.setupStatus());
+      this.setupStatus = currentSetup;
+      const availableModes = this.availableWhatsAppModes();
+      if (!this.whatsappModeTouched) this.syncWhatsAppAccessMode();
+      if (!availableModes.includes(this.whatsappAccessMode)) {
+        this.error = "This WhatsApp mode is no longer available. Choose another mode in Setup.";
+        return;
+      }
+      if (this.canManageSetup && this.whatsappModeTouched) {
+        this.creationStage = "Saving WhatsApp access choice";
+        await firstValueFrom(this.api.saveSetupDemoPreferences({
+          whatsappAccessMode: this.whatsappAccessMode,
+        }));
+      }
       this.creationStage = cloneRepo ? "Cloning repo" : "Creating local git repo";
       const response = await firstValueFrom(this.api.createThread({
         id: this.generatedWorkspaceName(),
@@ -287,11 +303,11 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       }));
       const thread = response.thread;
       this.creationStage = "Starting Virtual Desk";
-      await this.startVirtualDesk(thread).catch((error) => {
-        this.desktopWarning = `Virtual Desk did not start: ${this.errorText(error)}. Open setup desktops after the thread opens.`;
+      await this.startVirtualDesk(thread).catch(() => {
+        this.desktopWarning = "The desktop did not start. Open Desktops after entering the conversation to retry.";
       });
       this.creationStage = this.runtimeProvider === "claude-code" ? "Starting Claude Code in background" : "Starting Codex in background";
-      if (this.whatsappAccessMode === "self_hosted" && this.whatsappReady && this.pairedWhatsAppAccount) {
+      if (this.canManageSetup && this.whatsappAccessMode === "self_hosted" && this.whatsappReady && this.pairedWhatsAppAccount) {
         this.creationStage = "Connecting your private WhatsApp chat";
         try {
           // Server enforces: only the account paired above, only its own chat, refused if no longer linked.
@@ -309,7 +325,8 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
           this.whatsappWarning = `Your WhatsApp chat could not be connected: ${this.errorText(error)}. Link WhatsApp again in Setup, then bind a chat from the thread.`;
         }
       }
-      this.created.emit(thread);
+      this.creationStage = "";
+      this.createdThread = thread;
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
@@ -318,7 +335,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   }
 
   openCreatedThread(): void {
-    if (this.proofTimer) clearInterval(this.proofTimer);
+    this.stopProofCheck();
     if (this.createdThread) this.created.emit(this.createdThread);
   }
 
@@ -329,7 +346,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
         const response = await firstValueFrom(this.api.threadMessages(threadId, 50));
         this.proof = whatsappRoundTrip(response.messages || []);
         this.cdr.markForCheck();
-        if (this.proof.reply && this.proofTimer) clearInterval(this.proofTimer);
+        if (this.proof.reply) this.stopProofCheck();
       } catch {
         // Keep polling; the thread may still be starting.
       }

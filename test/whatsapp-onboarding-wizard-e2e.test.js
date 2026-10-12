@@ -172,7 +172,7 @@ test("wizard links WhatsApp by QR, binds only the paired owner's private chat, a
 
     await clickButton("Next"); // review
     await page.waitForFunction(() => document.querySelector(".wizard-review")?.textContent.includes("Own WhatsApp (linked)"));
-    await clickButton("Start orkest");
+    await clickButton("Create workspace");
     await page.waitForSelector(".wizard-proof", { timeout: 20_000 });
     const group = fake.calls.find((call) => call[0] === "thread-group");
     assert.deepEqual(group[1], {

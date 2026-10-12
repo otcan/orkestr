@@ -706,6 +706,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.activePanel === panel;
   }
 
+  isGlobalPanel(panel: Panel): boolean {
+    return ["files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "instanceVault", "userConnectors"].includes(panel);
+  }
+
   private isRouteLevelUserPanel(panel: Panel): boolean {
     return ["files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "instanceVault", "userConnectors"].includes(panel);
   }

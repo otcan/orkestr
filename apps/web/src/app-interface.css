@@ -1,0 +1,453 @@
+/* Application interface layer. Keep the public marketing site styles separate. */
+:root {
+  --ui-canvas: #111719;
+  --ui-sidebar: #182022;
+  --ui-surface: #1d2728;
+  --ui-raised: #263133;
+  --ui-border: #3d4a4b;
+  --ui-text: #edf2ef;
+  --ui-muted: #afbfba;
+  --ui-accent: #8ed8c2;
+  --ui-accent-ink: #11241e;
+  --ui-focus: #f5d18a;
+  color: var(--ui-text);
+  background: var(--ui-canvas);
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  background: var(--ui-canvas);
+}
+
+button,
+.button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+.button {
+  border-radius: 9px;
+  background: var(--ui-accent);
+  color: var(--ui-accent-ink);
+  font-weight: 650;
+}
+
+button.secondary,
+.button.secondary,
+.button-link {
+  border-color: var(--ui-border);
+  background: var(--ui-raised);
+  color: var(--ui-text);
+}
+
+input,
+select,
+textarea {
+  border-color: var(--ui-border);
+  background: #121b1d;
+  color: var(--ui-text);
+}
+
+:is(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 3px solid var(--ui-focus);
+  outline-offset: 2px;
+}
+
+.app-skip-link {
+  position: fixed;
+  z-index: 500;
+  top: 8px;
+  left: 12px;
+  transform: translateY(-160%);
+  border-radius: 8px;
+  background: var(--ui-focus);
+  color: #20200f;
+  padding: 11px 16px;
+  font-weight: 700;
+}
+
+.app-skip-link:focus {
+  transform: translateY(0);
+}
+
+.app-shell {
+  grid-template-rows: 64px minmax(0, 1fr);
+  background: var(--ui-canvas);
+}
+
+.instance-topbar {
+  z-index: 30;
+  gap: 24px;
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-sidebar);
+  padding-inline: 20px;
+}
+
+.instance-topbar-brand strong {
+  color: var(--ui-text);
+  font-size: 1.1rem;
+  font-weight: 750;
+  letter-spacing: -0.035em;
+}
+
+.instance-topbar-brand em {
+  color: var(--ui-muted);
+  font-size: 0.8rem;
+}
+
+.instance-topbar-nav {
+  gap: 4px;
+}
+
+.instance-topbar-nav > button,
+.instance-utility-menu > summary {
+  min-height: 38px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ui-muted);
+  padding: 8px 13px;
+  font-size: 0.88rem;
+  font-weight: 650;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.instance-topbar-nav > button:hover,
+.instance-utility-menu > summary:hover,
+.instance-topbar-nav > button.active,
+.instance-utility-menu[open] > summary {
+  border-color: var(--ui-border);
+  background: var(--ui-raised);
+  color: var(--ui-text);
+}
+
+.instance-topbar-nav > button.active {
+  box-shadow: inset 0 -2px 0 var(--ui-accent);
+}
+
+.instance-utility-menu {
+  position: relative;
+}
+
+.instance-utility-menu > summary {
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+
+.instance-utility-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.instance-utility-popover {
+  position: absolute;
+  z-index: 100;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  gap: 4px;
+  width: min(280px, calc(100vw - 24px));
+  max-height: calc(100dvh - 80px);
+  overflow-y: auto;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-surface);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4);
+  padding: 8px;
+}
+
+.instance-utility-popover > button,
+.instance-utility-popover > .instance-account-menu {
+  width: 100%;
+}
+
+.instance-utility-popover > button {
+  min-height: 42px;
+  justify-content: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text);
+  padding-inline: 12px;
+  text-align: left;
+}
+
+.instance-utility-popover > button:hover,
+.instance-utility-popover > button:focus-visible {
+  background: var(--ui-raised);
+}
+
+.instance-account-menu > summary {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text);
+  padding-inline: 12px;
+  font-size: 0.88rem;
+  font-weight: 650;
+  text-transform: none;
+}
+
+.instance-account-popover {
+  right: calc(100% + 8px);
+  top: 0;
+  border-color: var(--ui-border);
+  background: var(--ui-surface);
+}
+
+.sidebar {
+  gap: 16px;
+  border-color: var(--ui-border);
+  background: var(--ui-sidebar);
+}
+
+.sidebar-resize-handle {
+  background: var(--ui-border);
+}
+
+.sidebar-heading h1 {
+  font-size: 1.1rem;
+  letter-spacing: -0.025em;
+}
+
+.sidebar .eyebrow,
+.chat-head .eyebrow,
+.panel-title .eyebrow,
+.first-thread-wizard .eyebrow {
+  color: var(--ui-accent);
+}
+
+.thread-entry.active {
+  border-color: #5d8276;
+  background: #2b403b;
+}
+
+.thread-item:hover {
+  background: var(--ui-raised);
+}
+
+.chat {
+  background: var(--ui-canvas);
+  padding: 16px;
+}
+
+.chat-head,
+.messages,
+.panel-body,
+.thread-tools-menu,
+.first-thread-wizard,
+.wizard-panel {
+  border-color: var(--ui-border);
+  background: var(--ui-surface);
+}
+
+.chat-head {
+  border-radius: 12px 12px 0 0;
+}
+
+.thread-tools-menu {
+  border-top: 0;
+  border-radius: 0 0 12px 12px;
+}
+
+.thread-tools-title {
+  color: var(--ui-muted);
+  font-size: 0.7rem;
+}
+
+.thread-tools-popover > button {
+  color: var(--ui-muted);
+}
+
+.thread-tools-popover > button.active {
+  background: var(--ui-raised);
+  box-shadow: inset 0 -2px 0 var(--ui-accent);
+  color: var(--ui-text);
+}
+
+.message {
+  border-color: var(--ui-border);
+  background: var(--ui-raised);
+  box-shadow: none;
+}
+
+.message.assistant-final {
+  border-color: #547d70;
+  background: #253631;
+}
+
+.message.user {
+  background: #344a44;
+}
+
+.first-thread-wizard {
+  border-radius: 14px;
+  max-width: 1040px;
+  margin-inline: auto;
+}
+
+.first-thread-head h2 {
+  font-size: clamp(1.6rem, 3vw, 2.3rem);
+}
+
+.first-thread-head .helper {
+  color: var(--ui-muted);
+  line-height: 1.5;
+}
+
+.wizard-progress {
+  height: 4px;
+  background: var(--ui-border);
+}
+
+.wizard-progress span {
+  background: var(--ui-accent);
+}
+
+.wizard-step-tabs button,
+.choice-card {
+  border-color: var(--ui-border);
+  background: var(--ui-raised);
+  color: var(--ui-text);
+}
+
+.wizard-step-tabs button.active,
+.wizard-step-tabs button.done,
+.choice-card.active {
+  border-color: var(--ui-accent);
+  background: #294139;
+  color: var(--ui-text);
+}
+
+.choice-card span,
+.wizard-field,
+.wizard-review dt {
+  color: var(--ui-muted);
+}
+
+.wizard-panel {
+  background: var(--ui-sidebar);
+}
+
+.wizard-complete {
+  align-content: center;
+  justify-items: start;
+  max-width: 640px;
+  min-height: 260px;
+  margin-inline: auto;
+  padding: clamp(20px, 4vw, 40px);
+}
+
+.wizard-complete h3,
+.wizard-complete p {
+  margin: 0;
+}
+
+.wizard-complete p:not(.eyebrow) {
+  color: var(--ui-muted);
+  line-height: 1.5;
+}
+
+.desk-intro {
+  max-width: 72ch;
+  margin: 0;
+  color: var(--ui-muted);
+  line-height: 1.5;
+}
+
+@media (max-width: 860px) {
+  .app-shell {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .instance-topbar {
+    display: grid;
+    grid-template-rows: 38px 42px;
+    gap: 4px;
+    padding: max(6px, env(safe-area-inset-top)) 8px 6px;
+  }
+
+  .instance-topbar-brand {
+    margin-left: 54px;
+  }
+
+  .instance-topbar-nav {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 2px;
+  }
+
+  .instance-topbar-nav > button,
+  .instance-utility-menu > summary {
+    width: 100%;
+    min-height: 38px;
+    padding: 7px 3px;
+    font-size: 0.7rem;
+  }
+
+  .instance-utility-popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+  }
+
+  .instance-account-popover {
+    position: fixed;
+    top: calc(104px + env(safe-area-inset-top));
+    right: 8px;
+  }
+
+  .mobile-instance-menu {
+    top: max(7px, env(safe-area-inset-top));
+    left: 8px;
+    border-color: var(--ui-border);
+    background: var(--ui-raised);
+    color: var(--ui-text);
+  }
+
+  .sidebar {
+    background: var(--ui-sidebar);
+  }
+
+  .chat {
+    padding: 8px;
+  }
+}
+
+@media (max-width: 620px) {
+  .wizard-choice-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .first-thread-wizard {
+    padding: 12px;
+  }
+
+  .wizard-step-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 3px;
+  }
+
+  .wizard-step-tabs button {
+    display: grid;
+    justify-items: center;
+    min-width: 0;
+    padding: 6px 2px;
+    font-size: 0.65rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wizard-progress span,
+  .wizard-stage span {
+    animation: none;
+    transition: none;
+  }
+}
