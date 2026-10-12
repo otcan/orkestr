@@ -5,6 +5,7 @@ import { readOverlay } from "./overlay.js";
 import { publicUrlConfig } from "./public-url-config.js";
 import { readRuntimeSettings } from "./runtime-settings.js";
 import { securityStatus } from "./security.js";
+import { whatsappOnboardingStatus } from "../../connectors/src/whatsapp-onboarding.js";
 
 export { connectorOrder };
 
@@ -36,6 +37,7 @@ export async function getSetupStatus({ env = process.env, home, principal = null
   const auth = publicAuthStatus(env);
   const urls = publicUrlConfig(env);
   const settings = await readRuntimeSettings(env);
+  const whatsappOnboarding = await whatsappOnboardingStatus({ env, settings, connectors });
   return {
     generatedAt: new Date().toISOString(),
     home: paths.home,
@@ -44,6 +46,7 @@ export async function getSetupStatus({ env = process.env, home, principal = null
       autoOpen: onboardingAutoOpenEnabled(env),
     },
     settings,
+    whatsappOnboarding,
     overlay,
     security,
     auth,

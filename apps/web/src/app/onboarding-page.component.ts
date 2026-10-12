@@ -1405,10 +1405,27 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     return Boolean(this.whatsappQrUrl(id));
   }
 
+  isSelfHostedWhatsApp(): boolean {
+    const status = this.setup?.whatsappOnboarding;
+    return status?.selectedMode !== "managed" && (!Array.isArray(status?.availableModes) || status.availableModes.includes("self_hosted"));
+  }
+
+  whatsappModeSummary(): string {
+    if (Array.isArray(this.setup?.whatsappOnboarding?.availableModes) && this.setup.whatsappOnboarding.availableModes.length === 0) {
+      return "No WhatsApp onboarding mode is available. Ask this instance's operator to repair its configured bridge.";
+    }
+    return this.isSelfHostedWhatsApp()
+      ? "Your WhatsApp device is paired to this instance's local bridge. Session data stays in this instance's data volume."
+      : "This instance uses its server-configured managed WhatsApp relay. Pairing and transport are managed by the instance operator.";
+  }
+
   async startWhatsApp(accountId: string): Promise<void> {
+    if (!this.isSelfHostedWhatsApp()) {
+      this.error = "Local WhatsApp pairing is unavailable while managed relay mode is selected.";
+      return;
+    }
     this.busy = true;
     try {
-      await firstValueFrom(this.api.saveConnectorConfig("whatsapp", { bridgeMode: "local", maxAccounts: "2" }));
       await firstValueFrom(this.api.startWhatsAppAccount(accountId));
       this.notice = `${this.whatsappAccountLabel(accountId)} is starting.`;
       this.error = "";
@@ -1421,6 +1438,10 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   async logoutWhatsApp(accountId: string): Promise<void> {
+    if (!this.isSelfHostedWhatsApp()) {
+      this.error = "Local WhatsApp pairing is unavailable while managed relay mode is selected.";
+      return;
+    }
     this.busy = true;
     try {
       await firstValueFrom(this.api.logoutWhatsAppAccount(accountId));
@@ -1462,9 +1483,12 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
         actions.push("desktop");
       }
       if (this.goalRequiredSteps().includes("whatsapp")) {
-        await firstValueFrom(this.api.saveConnectorConfig("whatsapp", { bridgeMode: "local", maxAccounts: "2" }));
-        await firstValueFrom(this.api.startWhatsAppAccount("account-1"));
-        actions.push("WhatsApp sender");
+        if (this.isSelfHostedWhatsApp()) {
+          await firstValueFrom(this.api.startWhatsAppAccount("account-1"));
+          actions.push("WhatsApp sender");
+        } else {
+          actions.push("managed WhatsApp relay");
+        }
       }
       this.notice = `${thread.name || thread.id} starter thread prepared: ${actions.join(", ")}.`;
       this.error = "";

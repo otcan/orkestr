@@ -193,10 +193,25 @@ profiles, secrets, and `CODEX_HOME=/data/codex`.
 
 First run:
 
-1. Connect Codex.
-2. Choose WhatsApp access: Orkestr relay or your own WhatsApp bridge.
-3. Start the default `orkest` thread.
+1. Connect Codex (or a Claude Code account, if enabled).
+2. Choose WhatsApp access. Without a configured broker the default is
+   **Use my own WhatsApp**: the wizard shows a QR code, you link WhatsApp on
+   your phone (Settings → Linked devices), and the session is stored only in
+   the `/data` volume. After a container restart the linked account
+   reconnects without a new QR (set `ORKESTR_WHATSAPP_AUTOSTART=0` to turn
+   that off). The Orkestr relay is invitation-only and needs a broker.
+3. Start the default `orkest` thread. With WhatsApp linked, the wizard binds
+   the thread to your own WhatsApp chat ("Message yourself") on exactly the
+   account you just linked. Nobody else is added, even if default
+   participants are configured, and the step is refused if that account is
+   no longer linked. It then waits for you to send a message there and for
+   the thread's reply.
 4. Orkestr starts Virtual Desk for that thread.
+
+The built-in bridge uses WhatsApp Web through the bundled Chromium. WhatsApp
+does not officially support automating WhatsApp Web, so use an account you
+are comfortable linking. Design notes and the remaining plan for the managed
+gateway are in [docs/whatsapp-docker-onboarding-plan.md](docs/whatsapp-docker-onboarding-plan.md).
 
 For WhatsApp deployments with more than one phone/account, keep the stable
 routing account separate from explicit skill-only accounts. See

@@ -26,8 +26,10 @@ import {
 } from "../../../packages/core/src/codex-app-server.js";
 import {
   startConfiguredLocalWhatsAppAccounts,
+  startLocalWhatsAppAccount,
   stopLocalWhatsAppBridge,
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
+import { startPairedLocalWhatsAppAccounts } from "../../../packages/connectors/src/whatsapp-paired-accounts.js";
 import { clearWhatsAppDeliveryIdleCache } from "../../../packages/connectors/src/whatsapp.js";
 import { mailboxThreadDeliveryPumpIntervalMs, runMailboxDeliveryPump } from "../../../packages/connectors/src/mailbox-delivery-pump.js";
 import { runThreadWatchPump, threadWatchPumpIntervalMs } from "../../../packages/core/src/thread-watch-pump.js";
@@ -630,6 +632,15 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     reportServerError(serverEnv, {
       source: "server.start.whatsapp",
       code: "whatsapp_start_failed",
+      message: error?.message || String(error),
+      error,
+    });
+  });
+  // Self-hosted installs: reconnect accounts that were paired before a restart.
+  await startPairedLocalWhatsAppAccounts(serverEnv, { startAccount: startLocalWhatsAppAccount }).catch((error) => {
+    reportServerError(serverEnv, {
+      source: "server.start.whatsapp_paired",
+      code: "whatsapp_paired_start_failed",
       message: error?.message || String(error),
       error,
     });
