@@ -431,6 +431,10 @@ function mergeJob(existing = {}, next = {}) {
     ...loser,
     ...winner,
     createdAt: existing.createdAt || next.createdAt,
+    // Retry accounting only grows: an idempotent re-ensure (a fresh pending
+    // row, attemptCount 0) must not reset the count that drives backoff and
+    // the retry cap after a claim was released back to pending.
+    attemptCount: Math.max(Number(existing.attemptCount || 0) || 0, Number(next.attemptCount || 0) || 0),
     metadata: {
       ...(loser.metadata || {}),
       ...(winner.metadata || {}),
