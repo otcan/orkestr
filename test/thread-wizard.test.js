@@ -14,10 +14,13 @@ test("main UI exposes a guided first thread generation flow", async () => {
   const sources = await read([
     "apps/web/src/app/app.component.ts",
     "apps/web/src/app/app.component.html",
+    "apps/web/src/app/onboarding-page.component.ts",
+    "apps/web/src/app/onboarding-page.component.html",
     "apps/web/src/app/pairing-required-page.component.ts",
     "apps/web/src/app/pairing-required-page.component.html",
     "apps/web/src/app/first-thread-wizard.component.ts",
     "apps/web/src/app/first-thread-wizard.component.html",
+    "apps/web/src/app/api.service.ts",
     "apps/server/src/modules/threads/threads.controller.ts",
     "apps/server/src/modules/connectors/connectors.controller.ts",
   ]);
@@ -41,9 +44,15 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("Create workspace"));
   assert.ok(sources.includes('type WizardStepId = "welcome" | "codex" | "whatsapp" | "review"'));
   assert.ok(sources.includes('threadName = "orkest"'));
-  assert.ok(sources.includes('type WhatsAppAccessMode = "relay" | "own"'));
-  assert.ok(sources.includes("Managed relay"));
-  assert.ok(sources.includes("My own WhatsApp"));
+  assert.ok(sources.includes('type WhatsAppAccessMode = "managed" | "self_hosted"'));
+  assert.ok(sources.includes("Use managed WhatsApp"));
+  assert.ok(sources.includes("Use my own WhatsApp"));
+  assert.ok(sources.includes('whatsappAccessMode: WhatsAppAccessMode = "self_hosted"'));
+  assert.ok(sources.includes('availableModes?: Array<"self_hosted" | "managed">'));
+  assert.ok(sources.includes("availableWhatsAppModes().includes('managed')"));
+  assert.ok(sources.includes("isSelfHostedWhatsApp()"));
+  assert.ok(sources.includes("whatsappModeSummary()"));
+  assert.ok(sources.includes("canManageSetup"));
   assert.ok(sources.includes("saveSetupDemoPreferences"));
   assert.ok(sources.includes("acquireDesktopLease"));
   assert.ok(sources.includes('browserAction(slug, "start"'));
@@ -105,6 +114,30 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(!wizardSources.includes("this.api.sendThreadInput"));
   assert.ok(!wizardSources.includes("this.api.wakeThread"));
   assert.ok(!wizardSources.includes('executorId: "noop"'));
+});
+
+test("WhatsApp wizard maps relay modes, pins self-hosted pairing, and cleans up polling", async () => {
+  const wizard = await fs.readFile("apps/web/src/app/first-thread-wizard.component.ts", "utf8");
+  const template = await fs.readFile("apps/web/src/app/first-thread-wizard.component.html", "utf8");
+  const pairPanel = await fs.readFile("apps/web/src/app/whatsapp-pair-panel.component.ts", "utf8");
+  const create = wizard.slice(wizard.indexOf("async createAndStart()"), wizard.indexOf("private threadId("));
+
+  assert.match(wizard, /normalizeWhatsAppAccessMode[\s\S]*\["managed", "relay", "external"\]/);
+  assert.match(wizard, /normalizeWhatsAppAccessMode[\s\S]*\["self_hosted", "own", "local"\]/);
+  assert.match(template, /availableWhatsAppModes\(\)\.includes\('managed'\)/);
+  assert.match(template, /whatsappAccessMode === 'self_hosted'[\s\S]*ork-whatsapp-pair-panel/);
+  assert.match(template, /\(pairedAccount\)="onWhatsAppPaired\(\$event\)"/);
+  assert.match(wizard, /onWhatsAppPaired\(account:[\s\S]*pairedWhatsAppAccount = account/);
+  assert.match(create, /whatsappAccessMode === "self_hosted" && this\.whatsappReady && this\.pairedWhatsAppAccount/);
+  assert.match(create, /connectWhatsAppPrivateChat\([\s\S]*pairedAccountId:[\s\S]*pairedContactId:/);
+  assert.match(create, /whatsappAccessMode: this\.whatsappAccessMode/);
+  assert.match(wizard, /ngOnDestroy\(\): void \{\s*this\.stopProofCheck\(\);/);
+  assert.match(wizard, /stopProofCheck\(\): void \{\s*if \(this\.proofTimer\) clearInterval\(this\.proofTimer\);/);
+  assert.match(create, /availableModes\.includes\(this\.whatsappAccessMode\)/);
+  assert.match(create, /this\.canManageSetup && this\.whatsappModeTouched/);
+  assert.doesNotMatch(create, /saveConnectorConfig/);
+  assert.match(pairPanel, /await firstValueFrom\(this\.api\.saveSetupDemoPreferences\(\{ whatsappAccessMode: "self_hosted" \}\)\);[\s\S]*await firstValueFrom\(this\.api\.startWhatsAppAccount/);
+  assert.match(pairPanel, /ngOnDestroy\(\): void \{\s*if \(this\.timer\) clearInterval\(this\.timer\);/);
 });
 
 test("web thread input uses the server-stamped UI route", async () => {

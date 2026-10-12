@@ -34,6 +34,31 @@
     <div class="notice error" role="alert">{{ error }}</div>
   }
 
+  @if (desktopWarning) {
+    <div class="notice" role="alert">{{ desktopWarning }}</div>
+  }
+
+  @if (whatsappWarning) {
+    <div class="notice">{{ whatsappWarning }}</div>
+  }
+
+  @if (createdThread && boundChatName) {
+    <div class="wizard-proof" aria-live="polite">
+      <div class="wizard-section-title">
+        <p class="eyebrow">Try it</p>
+        <h3>Send a message from WhatsApp</h3>
+      </div>
+      <p>On your phone, open your own chat in WhatsApp (<strong>Message yourself</strong>, at the top of a new chat) and send any message, for example <em>hi</em>. Only you can write in this chat; nobody else is added.</p>
+      <ul class="wizard-proof-checks">
+        <li>{{ proof.inbound ? "✔" : "…" }} Message received from WhatsApp</li>
+        <li>{{ proof.reply ? "✔" : "…" }} {{ agentName() }} replied</li>
+      </ul>
+      <div class="wizard-actions">
+        <button type="button" (click)="openCreatedThread()">{{ proof.reply ? "Open thread" : "Skip and open thread" }}</button>
+      </div>
+    </div>
+  }
+
   @if (!createdThread && runtimeProvider === 'codex' && codexBlocked()) {
     <div class="notice">
       <strong>Codex Agent required.</strong>
@@ -53,11 +78,12 @@
     <div class="wizard-panel wizard-complete" role="status" aria-live="polite">
       <p class="eyebrow">Workspace ready</p>
       <h3>{{ agentName() }} is ready for a conversation</h3>
-      <p>Open the thread and send a small first message. WhatsApp pairing and optional connections can be completed later.</p>
-      @if (desktopWarning) {
-        <div class="notice" role="alert">{{ desktopWarning }}</div>
+      @if (boundChatName) {
+        <p>Your private WhatsApp chat is connected. Send a message to check the round trip, or open the conversation now.</p>
+      } @else {
+        <p>Open the thread and send a small first message. WhatsApp pairing and optional connections can be completed later.</p>
       }
-      <button type="button" (click)="created.emit(createdThread)">Open conversation</button>
+      <button type="button" (click)="openCreatedThread()">Open conversation</button>
     </div>
   } @else {
   <form class="wizard-panel" (submit)="createAndStart(); $event.preventDefault()">
@@ -132,40 +158,49 @@
       </div>
       @if (canManageSetup) {
         <div class="wizard-choice-grid">
+        @if (availableWhatsAppModes().includes('self_hosted')) {
           <button
             type="button"
             class="choice-card"
-            [class.active]="whatsappAccessMode === 'relay'"
-            [attr.aria-pressed]="whatsappAccessMode === 'relay'"
-            (click)="selectWhatsAppAccessMode('relay')"
+            [class.active]="whatsappAccessMode === 'self_hosted'"
+            [attr.aria-pressed]="whatsappAccessMode === 'self_hosted'"
+            (click)="selectWhatsAppAccessMode('self_hosted')"
             [disabled]="busy"
           >
-            <strong>Managed relay</strong>
-            <span>For hosted instances where the operator offers a managed sender. Availability and pairing are verified separately.</span>
+            <strong>Use my own WhatsApp</strong>
+            <span>Recommended for self-hosted installs. Pair your device with the local bridge; session data stays in this instance's data volume.</span>
           </button>
+        }
+        @if (availableWhatsAppModes().includes('managed')) {
           <button
-            type="button"
-            class="choice-card"
-            [class.active]="whatsappAccessMode === 'own'"
-            [attr.aria-pressed]="whatsappAccessMode === 'own'"
-            (click)="selectWhatsAppAccessMode('own')"
-            [disabled]="busy"
+          type="button"
+          class="choice-card"
+          [class.active]="whatsappAccessMode === 'managed'"
+          [attr.aria-pressed]="whatsappAccessMode === 'managed'"
+          (click)="selectWhatsAppAccessMode('managed')"
+          [disabled]="busy"
           >
-            <strong>My own WhatsApp</strong>
-            <span>Recommended for self-hosted Docker. Pair an account you own after the workspace opens.</span>
+            <strong>Use managed WhatsApp</strong>
+            <span>This instance has a server-configured WhatsApp relay. The relay operator manages its transport; your instance uses only the configured connection.</span>
           </button>
+        }
         </div>
       }
-      <div class="notice">
-        @if (canManageSetup) {
-          This only selects an access mode; it does not pair an account or bind a chat. You can use the conversation and desktop first, then finish WhatsApp in Connections.
+      @if (availableWhatsAppModes().length === 0) {
+        <div class="notice">No WhatsApp onboarding mode is available. Ask this instance's operator to repair its configured bridge.</div>
+      } @else {
+        @if (!canManageSetup) {
+          <div class="notice">The instance owner manages WhatsApp access. You can use this conversation without changing that configuration.</div>
+        } @else if (whatsappAccessMode === 'self_hosted') {
+          <ork-whatsapp-pair-panel [accountId]="whatsappAccountId" (readyChange)="onWhatsAppReady($event)" (pairedAccount)="onWhatsAppPaired($event)" />
+          <div class="notice">
+            This uses WhatsApp Web, which WhatsApp does not officially support for automation. You can skip linking now and connect later in Setup.
+            <button class="secondary" type="button" (click)="setupRequested.emit('whatsapp')" [disabled]="busy">Open WhatsApp setup</button>
+          </div>
         } @else {
-          The instance owner manages WhatsApp access. You can use this conversation without changing that configuration.
+          <div class="notice">This choice is stored as a non-secret setup preference. Credentials and WhatsApp sessions stay outside the repo.</div>
         }
-        @if (canManageSetup) {
-          <button class="secondary" type="button" (click)="setupRequested.emit('whatsapp')" [disabled]="busy">Open WhatsApp setup</button>
-        }
-      </div>
+      }
     }
 
     @if (activeStep() === "review") {
@@ -189,7 +224,7 @@
         <dt>Virtual Desk</dt>
         <dd>{{ desktopSlug() }}</dd>
         <dt>WhatsApp</dt>
-        <dd>{{ canManageSetup ? whatsappAccessLabel() + ' · pairing still required' : 'Managed by the instance owner' }}</dd>
+        <dd>{{ canManageSetup ? whatsappAccessLabel() : 'Managed by the instance owner' }}</dd>
       </dl>
     }
 

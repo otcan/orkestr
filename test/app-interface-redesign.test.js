@@ -51,18 +51,22 @@ test("self-hosted first run defaults to owned WhatsApp without claiming pairing 
     source("apps/web/src/app/user-desk-page.component.html"),
   ]);
 
-  assert.match(component, /whatsappAccessMode: WhatsAppAccessMode = "own"/);
-  assert.match(component, /configuredWhatsAppAccessMode\(this\.setupStatus\) \|\| "own"/);
-  assert.match(component, /if \(!this\.whatsappChoiceChanged && configuredMode\) this\.whatsappAccessMode = configuredMode/);
-  assert.match(component, /if \(this\.canManageSetup && \(this\.whatsappChoiceChanged \|\| !configuredMode\)\)/);
+  assert.match(component, /whatsappAccessMode: WhatsAppAccessMode = "self_hosted"/);
+  assert.match(component, /this\.setupStatus\.whatsappOnboarding\?\.selectedMode/);
+  assert.match(component, /available\.includes\(selected\)/);
+  assert.match(component, /if \(this\.canManageSetup && this\.whatsappModeTouched\)/);
+  assert.match(component, /this\.whatsappReady && this\.pairedWhatsAppAccount/);
+  assert.match(component, /connectWhatsAppPrivateChat/);
   assert.match(component, /this\.createdThread = thread/);
-  assert.match(template, /pairing still required/);
-  assert.match(template, /it does not pair an account or bind a chat/);
+  assert.match(template, /availableWhatsAppModes\(\)\.includes\('managed'\)/);
+  assert.match(template, /availableWhatsAppModes\(\)\.includes\('self_hosted'\)/);
+  assert.match(template, /\(pairedAccount\)="onWhatsAppPaired\(\$event\)"/);
+  assert.match(template, /WhatsApp pairing and optional connections can be completed later/);
   assert.match(template, /setupRequested\.emit\('whatsapp'\)/);
   assert.match(template, /runtimeProvider === 'claude-code' \? 'Claude Code/);
   assert.match(template, /role="alert"/);
   assert.match(template, /role="status" aria-live="polite"/);
-  assert.match(template, /created\.emit\(createdThread\)/);
+  assert.match(template, /openCreatedThread\(\)/);
   assert.match(template, /@if \(desktopWarning\)/);
   assert.match(emptyMessages, /Ready for your first message/);
   assert.match(desk, /does not connect a LinkedIn API/);
