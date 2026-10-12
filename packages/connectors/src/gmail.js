@@ -12,6 +12,7 @@ import {
   googleWorkspaceCapabilitiesForScopes,
   googleWorkspaceDefaultGmailCapabilities,
   googleWorkspaceScopesForCapabilities,
+  googleWorkspaceTokenHasCapability,
   normalizeGoogleWorkspaceCapabilities,
   requireAllowedGoogleWorkspaceCapabilities,
 } from "./google-workspace-scopes.js";
@@ -288,10 +289,11 @@ function normalizeOAuthTokenPayload(payload, prior = {}, options = {}) {
     defaultGmailCapabilities,
   );
   const requestedScopes = uniqueList(options.scopes || options.requestedScopes || prior.requestedScopes || []);
-  const grantedScopes = uniqueList(
-    splitList(payload.scope || prior.scope || prior.grantedScopes || requestedScopes.join(" ")),
-  );
-  const capabilities = googleWorkspaceCapabilitiesForScopes(grantedScopes, requestedCapabilities);
+  // A missing scope in the first exchange is not evidence of a grant. A
+  // refresh may retain the scopes verified at the earlier exchange.
+  const grantedScopes = uniqueList(splitList(payload.scope || prior.scope || prior.grantedScopes || ""));
+  const capabilities = googleWorkspaceCapabilitiesForScopes(grantedScopes, [])
+    .filter((capability) => !requestedScopes.length || requestedCapabilities.includes(capability));
   const token = {
     accessToken,
     refreshToken: String(payload.refresh_token || prior.refreshToken || "").trim(),
@@ -351,7 +353,7 @@ function normalizeBrokerGrantToken(rawToken = {}, grant = {}, prior = {}) {
   const requestedScopes = uniqueList(grant.requestedScopes || rawToken.requestedScopes || prior.requestedScopes || []);
   const grantedScopeInput = Array.isArray(rawToken.grantedScopes)
     ? rawToken.grantedScopes
-    : splitList(rawToken.scope || rawToken.grantedScopes || requestedScopes.join(" "));
+    : splitList(rawToken.scope || rawToken.grantedScopes || "");
   const grantedScopes = uniqueList(grantedScopeInput);
   const expiresAt = Number(rawToken.expiresAt || 0);
   return {
@@ -360,7 +362,8 @@ function normalizeBrokerGrantToken(rawToken = {}, grant = {}, prior = {}) {
     account: normalizeEmail(grant.account || rawToken.account || prior.account || ""),
     scope: grantedScopes.join(" "),
     grantedScopes,
-    capabilities: googleWorkspaceCapabilitiesForScopes(grantedScopes, requestedCapabilities),
+    capabilities: googleWorkspaceCapabilitiesForScopes(grantedScopes, [])
+      .filter((capability) => !requestedScopes.length || requestedCapabilities.includes(capability)),
     requestedCapabilities,
     requestedScopes,
     provider: clean(grant.provider || rawToken.provider || prior.provider || "google_workspace"),
@@ -1032,6 +1035,16 @@ export async function validateGmailConnection(env = process.env, fetchImpl = fet
 }
 
 export async function listGmailMessages({ maxResults = 10, query = "" } = {}, env = process.env, fetchImpl = fetch, options = {}) {
+  let token = await readGmailToken(env, options);
+  if (!token.accessToken) {
+    await getGmailAccessToken(env, fetchImpl, options);
+    token = await readGmailToken(env, options);
+  }
+  if (!googleWorkspaceTokenHasCapability(token, "gmail_read")) {
+    const error = new Error("google_workspace_capability_not_granted:gmail_read");
+    error.statusCode = 403;
+    throw error;
+  }
   const payload = await gmailApiGet(
     "/messages",
     {
@@ -1054,6 +1067,16 @@ export async function getGmailMessage(messageId, env = process.env, fetchImpl = 
   if (!id) {
     const error = new Error("gmail_message_id_required");
     error.statusCode = 400;
+    throw error;
+  }
+  let token = await readGmailToken(env, options);
+  if (!token.accessToken) {
+    await getGmailAccessToken(env, fetchImpl, options);
+    token = await readGmailToken(env, options);
+  }
+  if (!googleWorkspaceTokenHasCapability(token, "gmail_read")) {
+    const error = new Error("google_workspace_capability_not_granted:gmail_read");
+    error.statusCode = 403;
     throw error;
   }
   const payload = await gmailApiGet(`/messages/${encodeURIComponent(id)}`, { format: "full" }, env, fetchImpl, options);

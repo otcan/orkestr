@@ -142,6 +142,18 @@ export function googleWorkspaceCapabilitiesForScopes(scopeValue = "", fallback =
   return capabilities.length ? capabilities : (values.length ? [] : [...fallback]);
 }
 
+export function googleWorkspaceTokenHasCapability(token = {}, capability = "") {
+  const granted = Array.isArray(token.grantedScopes)
+    ? token.grantedScopes
+    : String(token.scope || "").split(/[\s,]+/g);
+  if (!googleWorkspaceCapabilitiesForScopes(granted, []).includes(capability)) return false;
+  // Older grants did not record the requested capability set. Their provider
+  // scopes remain authoritative; new grants also honor the user's request.
+  const requested = Array.isArray(token.requestedCapabilities) ? token.requestedCapabilities : [];
+  const recordedIntent = Array.isArray(token.requestedScopes) && token.requestedScopes.length > 0;
+  return !recordedIntent || requested.includes(capability);
+}
+
 export function googleWorkspaceCapabilityDisclosure(input = []) {
   const selected = new Set(normalizeGoogleWorkspaceCapabilities(input));
   return capabilityDefinitions

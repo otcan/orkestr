@@ -69,6 +69,7 @@ test("Gmail jobs poll dedupes, classifies, and posts fits as passive signals", a
       access_token: "jobs-gmail-access",
       refresh_token: "jobs-gmail-refresh",
       expires_in: 3600,
+      scope: "https://www.googleapis.com/auth/gmail.readonly",
     }),
   );
 
@@ -479,6 +480,7 @@ test("Gmail jobs poll does not hide revoked OAuth behind host-native fallback", 
     access_token: "jobs-access-stale",
     refresh_token: "jobs-refresh-revoked",
     expires_in: 3600,
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
   }));
   let calls = 0;
 

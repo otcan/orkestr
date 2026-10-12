@@ -3,6 +3,7 @@ import {
   createGmailDraft,
   deleteGoogleCalendarEvent,
   getGoogleDriveFile,
+  gmailRawMessage,
   listGoogleCalendarEvents,
   modifyGmailMessage,
   sendGmailDraft,
@@ -10,6 +11,9 @@ import {
   updateGoogleCalendarEvent,
 } from "./google-workspace.js";
 import { resolveGoogleWorkspaceConnection } from "./google-workspace-connections.js";
+import { consumeGmailSendApproval, requestGmailSendApproval } from "./gmail-send-approvals.js";
+import { googleWorkspaceTokenHasCapability } from "./google-workspace-scopes.js";
+import { getGmailDraftApprovalSnapshot, parsePlainTextDraft } from "./gmail-draft-approval.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -80,13 +84,14 @@ export function tenantApiAgentGoogleWorkspaceToolDefinitions() {
     {
       type: "function",
       name: "orkestr_send_gmail_draft",
-      description: "Send an existing scoped Gmail draft after the user explicitly approves sending it.",
+      description: "Send a plain-text Gmail draft after the user approves its exact account, recipients, subject and body on the Gmail connector page. Complex MIME drafts are rejected.",
       parameters: {
         type: "object",
         properties: {
           draftId: { type: "string", description: "Gmail draft id to send." },
+          approvalRequestId: { type: "string", description: "One-time approval request id returned by the first attempt, or empty string." },
         },
-        required: ["draftId"],
+        required: ["draftId", "approvalRequestId"],
         additionalProperties: false,
       },
       strict: true,
@@ -103,8 +108,9 @@ export function tenantApiAgentGoogleWorkspaceToolDefinitions() {
           bcc: { type: "string", description: "Bcc recipients or empty string." },
           subject: { type: "string", description: "Email subject." },
           body: { type: "string", description: "Plain text email body." },
+          approvalRequestId: { type: "string", description: "One-time approval request id returned by the first send attempt, or empty string." },
         },
-        required: ["to", "cc", "bcc", "subject", "body"],
+        required: ["to", "cc", "bcc", "subject", "body", "approvalRequestId"],
         additionalProperties: false,
       },
       strict: true,
@@ -248,11 +254,53 @@ export async function runTenantApiAgentGoogleWorkspaceTool(name = "", args = {},
     return { handled: true, result: { ok: true, provider: "gmail", ...selection, draft: { id: clean(result.draft?.id), message: result.draft?.message || null } } };
   }
   if (tool === "orkestr_send_gmail_draft") {
-    const result = await sendGmailDraft(args, env, fetchImpl, options);
+    if (!googleWorkspaceTokenHasCapability(selected.token, "gmail_send") ||
+        !googleWorkspaceTokenHasCapability(selected.token, "gmail_drafts")) {
+      return { handled: true, result: { ok: false, provider: "gmail", ...selection, error: "google_workspace_capability_not_granted:gmail_send,gmail_drafts" } };
+    }
+    const snapshot = await getGmailDraftApprovalSnapshot(args.draftId, env, fetchImpl, options);
+    const approval = {
+      connectionId: selected.connection.connectionId,
+      grantUpdatedAt: selected.connection.updatedAt,
+      threadId: clean(context.thread?.id || context.threadId),
+      kind: "draft",
+      draftId: snapshot.draftId,
+      raw: snapshot.raw,
+      details: snapshot.details,
+    };
+    if (!clean(args.approvalRequestId)) {
+      const requested = await requestGmailSendApproval(approval, principal, env);
+      return { handled: true, result: { ok: false, provider: "gmail", ...selection, error: "gmail_send_approval_required", draftId: snapshot.draftId, ...requested } };
+    }
+    const approved = await consumeGmailSendApproval(args.approvalRequestId, approval, principal, env);
+    const result = await sendGmailDraft({ draftId: snapshot.draftId, approvedRaw: approved.raw }, env, fetchImpl, options);
     return { handled: true, result: { ok: true, provider: "gmail", ...selection, draftId: result.draftId, message: result.message } };
   }
   if (tool === "orkestr_send_gmail_message") {
-    const result = await sendGmailMessage(args, env, fetchImpl, options);
+    // Approval covers only the plain-text fields the Gmail serializer uses.
+    // Reject every other argument, including attachments and the serializer's
+    // text fallback, before creating or consuming an approval.
+    const approvedFields = new Set(["accountId", "account", "to", "cc", "bcc", "subject", "body", "approvalRequestId"]);
+    if (Object.keys(args).some((field) => !approvedFields.has(field))) {
+      throw Object.assign(new Error("gmail_send_unsupported_field"), { statusCode: 400 });
+    }
+    if (!googleWorkspaceTokenHasCapability(selected.token, "gmail_send")) {
+      return { handled: true, result: { ok: false, provider: "gmail", ...selection, error: "google_workspace_capability_not_granted:gmail_send" } };
+    }
+    const snapshot = parsePlainTextDraft(await gmailRawMessage(args));
+    const approval = {
+      connectionId: selected.connection.connectionId,
+      grantUpdatedAt: selected.connection.updatedAt,
+      threadId: clean(context.thread?.id || context.threadId),
+      raw: snapshot.raw,
+      details: snapshot.details,
+    };
+    if (!clean(args.approvalRequestId)) {
+      const requested = await requestGmailSendApproval(approval, principal, env);
+      return { handled: true, result: { ok: false, provider: "gmail", ...selection, error: "gmail_send_approval_required", ...requested } };
+    }
+    const approved = await consumeGmailSendApproval(args.approvalRequestId, approval, principal, env);
+    const result = await sendGmailMessage(args, env, fetchImpl, { ...options, approvedRaw: approved.raw });
     return { handled: true, result: { ok: true, provider: "gmail", ...selection, message: result.message } };
   }
   if (tool === "orkestr_list_google_calendar_events") {

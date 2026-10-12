@@ -73,7 +73,7 @@ import { getTenantVm } from "../../../../../packages/core/src/tenant-vm-registry
 import { requestPrincipal, userPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { createPairingChallenge, securityStatus } from "../../../../../packages/core/src/security.js";
-import { authenticatedAdminPrincipal, authenticatedPrincipal, callbackRequestHost } from "../../request-security.js";
+import { authenticatedAdminPrincipal, authenticatedPrincipal, callbackRequestHost, originPolicyViolation } from "../../request-security.js";
 import { boundBoolean, boundString, consumeGmailOAuthIntent, createGmailOAuthIntent } from "./gmail-oauth-intents.js";
 import { oauthStartDeniedPage, renderGmailOAuthStartPage, submitGmailOAuthStart } from "./gmail-oauth-start-page.js";
 import { handleWhatsAppRepairSend, renderWhatsAppRepairPage } from "./whatsapp-repair-handlers.js";
@@ -99,6 +99,8 @@ import { startWhatsAppTyping, stopWhatsAppTyping } from "../../../../../packages
 import { findWhatsAppAccountByAnyId, readyWhatsAppRuntimeAccountId } from "../../../../../packages/connectors/src/whatsapp-account-identity.js";
 import { whatsappWorkerConversation } from "../../../../../packages/connectors/src/whatsapp-worker-client.js";
 import { writeConnectorConfig } from "../../../../../packages/storage/src/config.js";
+import { readGoogleOAuthAppConfig } from "../../../../../packages/connectors/src/parent-connector-apps.js";
+import { decideGmailSendApproval, listGmailSendApprovals } from "../../../../../packages/connectors/src/gmail-send-approvals.js";
 import { dataPaths } from "../../../../../packages/storage/src/paths.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
 import { reportServerError } from "../../watcher-reporting.js";
@@ -198,14 +200,22 @@ function googleWorkspaceAuthIntent(connectRequest: any): Record<string, string> 
   };
 }
 
-// Scope selection belongs to Google. Ordinary connections begin narrowly; the
-// disposable review identity receives the submitted scope set. The server
-// decides and binds the capability set into the start intent.
-function gmailOAuthStartCapabilities(principal: any): string[] {
+// The app allowlist bounds the user's selected permissions. The disposable
+// review identity receives its configured scope set. The server binds the
+// resulting capabilities into a one-use start intent.
+function gmailOAuthStartCapabilities(principal: any, selected: unknown = undefined, allowedCapabilities = ""): string[] {
   const reviewer = googleWorkspaceReviewEnvironmentIdentity(process.env);
   const reviewerConnection = googleWorkspaceReviewEnvironmentEnabled(process.env) &&
     clean(principal?.userId || principal?.id) === reviewer.userId;
-  return reviewerConnection ? googleWorkspaceAllowedCapabilities(process.env) : googleWorkspaceDefaultGmailCapabilities();
+  if (reviewerConnection) return googleWorkspaceAllowedCapabilities(process.env);
+  if (selected === undefined) return googleWorkspaceDefaultGmailCapabilities();
+  if (!Array.isArray(selected) || !selected.length || selected.some((value) => typeof value !== "string" || !clean(value))) {
+    throw httpError("google_workspace_capabilities_required", 400);
+  }
+  const requested = selected.map((value) => clean(value));
+  const known = new Set(googleWorkspaceCapabilityDefinitions().map((item) => item.id));
+  if (requested.some((value) => !known.has(value))) throw httpError("google_workspace_capability_unknown", 400);
+  return requireAllowedGoogleWorkspaceCapabilities(requested, process.env, allowedCapabilities);
 }
 
 function googleWorkspaceAuthSessionHasAction(session: any, connectRequest: any): boolean {
@@ -549,9 +559,10 @@ export class ConnectorsController {
   async gmailOAuthIntent(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
     const principal = authenticatedPrincipal(request);
     try {
+      const config = await readGoogleOAuthAppConfig(clean(body.oauthApp), process.env);
       return await createGmailOAuthIntent(request, body, process.env, {
         purpose: "oauth_start",
-        capabilities: gmailOAuthStartCapabilities(principal),
+        capabilities: gmailOAuthStartCapabilities(principal, body.capabilities, config.allowedCapabilities),
       });
     } catch (error) {
       throw httpError(String((error as Error)?.message || "gmail_oauth_intent_failed"), Number((error as any)?.statusCode || 400) || 400);
@@ -568,7 +579,6 @@ export class ConnectorsController {
     try {
       consumed = await consumeGmailOAuthIntent(request, body, process.env, {
         purpose: "oauth_start",
-        capabilities: gmailOAuthStartCapabilities(authenticatedPrincipal(request)),
       });
     } catch (error) {
       throw httpError(String((error as Error)?.message || "gmail_oauth_intent_invalid"), Number((error as any)?.statusCode || 403) || 403);
@@ -585,7 +595,11 @@ export class ConnectorsController {
       clean(principal.userId || principal.id) === reviewer.userId;
     // The consumed intent already proved the bound capability set equals this
     // server-side selection; keep its canonical order for the OAuth request.
-    const requestedCapabilities = gmailOAuthStartCapabilities(principal);
+    const boundCapabilities = Array.isArray(params.capabilities) ? params.capabilities as string[] : gmailOAuthStartCapabilities(principal);
+    const selectedCapabilities = new Set(boundCapabilities);
+    const requestedCapabilities = googleWorkspaceCapabilityDefinitions()
+      .filter((definition) => selectedCapabilities.has(definition.id))
+      .map((definition) => definition.id);
     // The connector page starts OAuth directly, rather than through a chat
     // connect link. Preserve the reviewed environment binding in its OAuth
     // state so the callback returns to the root-mounted reviewer cockpit.
@@ -616,18 +630,55 @@ export class ConnectorsController {
 
   @Get("gmail/accounts")
   async gmailAccounts(@Req() request: any, @Query("threadId") threadId = "") {
-    const allowed = new Set(googleWorkspaceAllowedCapabilities(process.env));
+    const config = await readGoogleOAuthAppConfig("", process.env);
+    const allowed = new Set(googleWorkspaceAllowedCapabilities(process.env, config.allowedCapabilities));
+    const accountList = await listGoogleWorkspaceConnections(process.env, {
+      principal: requestPrincipal(request),
+      threadId,
+      includeExplicit: true,
+    });
+    const connections = await Promise.all(accountList.connections.map(async (connection: any) => {
+      const app = await readGoogleOAuthAppConfig(connection.oauthAppId, process.env).catch((error: any) => {
+        if (String(error?.message) === "google_oauth_app_not_found") return null;
+        throw error;
+      });
+      if (!app) return { ...connection, availableCapabilities: [], oauthAppMissing: true };
+      const appAllowed = new Set(googleWorkspaceAllowedCapabilities(process.env, app.allowedCapabilities));
+      return {
+        ...connection,
+        availableCapabilities: googleWorkspaceCapabilityDefinitions().filter((definition) => appAllowed.has(definition.id)),
+      };
+    }));
     return {
       ok: true,
-      ...(await listGoogleWorkspaceConnections(process.env, {
-        principal: requestPrincipal(request),
-        threadId,
-        includeExplicit: true,
-      })),
+      ...accountList,
+      connections,
       availableCapabilities: googleWorkspaceCapabilityDefinitions()
         .filter((definition) => allowed.has(definition.id)),
       privacyPolicyVersion: googleWorkspacePrivacyPolicyVersion,
     };
+  }
+
+  @Get("gmail/send-approvals")
+  async gmailSendApprovals(@Req() request: any) {
+    const principal = authenticatedPrincipal(request);
+    if (!principal) throw httpError("authentication_required", 401);
+    return { ok: true, requests: await listGmailSendApprovals(principal, process.env) };
+  }
+
+  @Post("gmail/send-approvals/:requestId/decision")
+  @HttpCode(200)
+  async decideGmailSendApproval(
+    @Req() request: any,
+    @Param("requestId") requestId: string,
+    @Body() body: Record<string, unknown> = {},
+  ) {
+    const principal = authenticatedPrincipal(request);
+    if (!principal) throw httpError("authentication_required", 401);
+    const violation = originPolicyViolation(request, process.env);
+    if (violation) throw httpError(violation, 403);
+    if (typeof body.approve !== "boolean") throw httpError("gmail_send_approval_decision_required", 400);
+    return decideGmailSendApproval(requestId, body.approve, principal, process.env);
   }
 
   @Patch("gmail/accounts/:connectionId")
