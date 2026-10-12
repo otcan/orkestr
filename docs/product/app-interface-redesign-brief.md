@@ -371,28 +371,29 @@ Worker 3 and Worker 4 retain ownership of their backend tracks.
 
 ## Worker implementation checkpoint
 
-The worker branch has begun the foundation and first-run phases. It now has
+The worker branch delivers the foundation and first-run UI slice. It now has
 an app-only token layer, task-based primary navigation, keyboard skip/focus
 support, a smaller mobile navigation row, clearer empty conversation and
-desktop explanations, and a first-run completion screen. The wizard defaults
-to owned WhatsApp for an unconfigured self-hosted instance, preserves an
-existing instance mode, and permits only an admin to change that preference.
-It does not claim to pair WhatsApp or to complete a first-message round trip.
+desktop explanations, and a first-run completion screen. The wizard consumes
+the server-resolved `whatsappOnboarding` modes, defaults to `self_hosted` when
+available, offers `managed` only when the server advertises it, and permits
+only an admin to change the validated preference. For an owner-paired account,
+it binds only that account's private chat and displays an inbound/reply proof
+check. Pairing and proof are optional; an unpaired workspace is still usable.
 
-This is **not** the complete redesign. Before a ready-to-merge PR, the worker
-must still deliver and verify the remaining milestones:
+This is **not** the complete redesign. The foundation slice can be reviewed
+and merged independently; the following milestones remain separate work:
 
 1. Unify Setup and first-run progress around an actual confirmed first
-   message, with truthful capability detection for self-hosted and hosted
-   WhatsApp modes once the separate transport contract is available.
+   message across all available channels, without making optional WhatsApp
+   pairing a prerequisite for a usable conversation.
 2. Rework conversation/activity, connections, desktops, operations and
    security/approvals screens against shared components, retaining existing
    deep links, role checks, desktop leases and drafts.
-3. Integrate the separate Gmail and WhatsApp status/action contracts only
-   after their owners land them; unsupported actions must not appear as
+3. Extend the landed Gmail and WhatsApp status/action contracts across the
+   remaining connection screens; unsupported actions must not appear as
    connected or ready.
 4. Run attended managed-desktop visual and keyboard checks at the target
-   widths, add sanitized screenshot fixtures, and bring full CI green. The
-   current worker cannot launch an unmanaged browser to substitute for that
-   review. Static public-site tests also need reconciliation with the main
-   branch's marketing-site migration; the UI worker must not edit the site.
+   widths and add sanitized screenshot fixtures. The current worker cannot
+   launch an unmanaged browser to substitute for that review. The app UI
+   changes must not modify the static marketing website.
