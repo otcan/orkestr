@@ -25,7 +25,8 @@ async function bridgeEnv(t, extra = {}) {
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-// health: "unreachable" | "failed" | "scoped" | "listed" | "listed-other"
+// health: "unreachable" | "failed" | "scoped" | "listed" | "listed-other" | "ready-unlisted"
+//   | "html" | "empty-object" | "accounts-object" | "ready-accounts-object"
 function fakeBridge(health) {
   const sends = [];
   const fetchImpl = async (url, options = {}) => {
@@ -34,6 +35,12 @@ function fakeBridge(health) {
       if (health === "unreachable") throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
       if (health === "scoped") return json({ ok: false, error: "forbidden" }, 403);
       if (health === "failed") return json({ ok: false, error: "synthetic_bridge_failure" }, 502);
+      if (health === "html") return new Response("<html><body>proxy error</body></html>", { status: 200, headers: { "content-type": "text/html" } });
+      if (health === "empty-object") return json({});
+      if (health === "accounts-object") return json({ ok: true, accounts: {} });
+      if (health === "ready-accounts-object") return json({ ok: true, ready: true, state: "ready", accounts: {} });
+      // An older bridge that reports ready but has no accounts field at all.
+      if (health === "ready-unlisted") return json({ ok: true, ready: true, state: "ready" });
       const account = health === "listed"
         ? { accountId: CANONICAL_ID, runtimeAccountId: RUNTIME_ID, phoneNumber: CANONICAL_ID, ready: true }
         : { accountId: "15550002222", runtimeAccountId: "responder", phoneNumber: "15550002222", ready: true };
@@ -129,4 +136,34 @@ test("no account ID: the request still omits accountId and uses the bridge defau
   await send(env, bridge.fetchImpl, "");
   assert.equal(bridge.sends.length, 1);
   assert.equal(Object.hasOwn(bridge.sends[0].body, "accountId"), false);
+});
+
+test("malformed or absent status payloads count as unavailable: a canonical ID is not dispatched", async (t) => {
+  for (const health of ["html", "empty-object", "accounts-object", "ready-accounts-object"]) {
+    const env = await bridgeEnv(t);
+    const bridge = fakeBridge(health);
+    await assert.rejects(send(env, bridge.fetchImpl, CANONICAL_ID), (error) => {
+      assert.equal(error.message, "whatsapp_account_resolution_unavailable", health);
+      assert.equal(error.retryable, true, health);
+      assert.equal(error.accountResolution?.reason, "status_unrecognized", health);
+      return true;
+    });
+    assert.equal(bridge.sends.length, 0, health);
+  }
+});
+
+test("a ready bridge without an accounts field keeps passing the ID through (older bridges)", async (t) => {
+  const env = await bridgeEnv(t);
+  const bridge = fakeBridge("ready-unlisted");
+  await send(env, bridge.fetchImpl, CANONICAL_ID);
+  assert.deepEqual(bridge.sends.map((item) => item.body.accountId), [CANONICAL_ID]);
+});
+
+test("runtime-style account IDs keep working with malformed status payloads", async (t) => {
+  for (const health of ["html", "empty-object", "accounts-object", "ready-accounts-object"]) {
+    const env = await bridgeEnv(t);
+    const bridge = fakeBridge(health);
+    await send(env, bridge.fetchImpl, RUNTIME_ID);
+    assert.deepEqual(bridge.sends.map((item) => item.body.accountId), [RUNTIME_ID], health);
+  }
 });
