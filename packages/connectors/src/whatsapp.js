@@ -159,6 +159,7 @@ import {
   canonicalWhatsAppAccountId,
   findWhatsAppAccountByAnyId,
   whatsappAccountLookupKeys,
+  whatsappNumericIdentity,
 } from "./whatsapp-account-identity.js";
 import { maybeApprovePairingChallengeFromWhatsApp, maybeBindApprovedBrokerChat } from "./whatsapp-security-approval.js";
 import {
@@ -612,8 +613,25 @@ async function resolveBridgeRuntimeAccountId(accountId = "", { config = null, en
   const bridgeUrl = configuredBridgeUrl(resolvedConfig, env);
   if (!bridgeUrl) return requested;
   const status = await getWhatsAppStatus(env, fetchImpl).catch(() => null);
-  const account = findWhatsAppAccountByAnyId(status?.accounts || [], requested, env);
-  return pickString(account?.runtimeAccountId, requested);
+  const accounts = Array.isArray(status?.accounts) ? status.accounts : [];
+  const account = findWhatsAppAccountByAnyId(accounts, requested, env);
+  if (account) return pickString(account.runtimeAccountId, requested);
+  // A phone identity is the canonical ID of a role-named runtime account
+  // ("sender"); the bridge only accepts the runtime ID. When the status lookup
+  // failed, or listed accounts without this one, do not dispatch the
+  // unverified ID that the bridge rejects as a terminal
+  // unknown_whatsapp_account. Nothing has been sent yet, so the delivery is
+  // retried later. Runtime-style IDs keep passing through, and so does any ID
+  // when status lists no accounts by design (scoped parent bridge, older
+  // bridges): the next hop resolves and verifies it.
+  if (!whatsappNumericIdentity(requested)) return requested;
+  const reason = !status || status.ok === false ? "status_unavailable" : accounts.length ? "account_not_listed" : "";
+  if (!reason) return requested;
+  throw Object.assign(new Error("whatsapp_account_resolution_unavailable"), {
+    statusCode: 503,
+    retryable: true,
+    accountResolution: { reason, statusState: pickString(status?.state), listedAccounts: accounts.length },
+  });
 }
 
 function normalizeParticipant(participant = {}) {
