@@ -7,6 +7,9 @@ import { appendThreadMessage, createThread } from "../packages/core/src/threads.
 import { readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { readJson } from "../packages/storage/src/store.js";
+import { dataPaths } from "../packages/storage/src/paths.js";
+import { acquireOutboundDeliveryClaim } from "../packages/connectors/src/whatsapp-delivery-ledger.js";
 
 // A retryable bridge failure must be retried when its backoff expires even if
 // nothing else changes in the thread. Synthetic chat/account IDs; mocked bridge.
@@ -162,4 +165,96 @@ test("a dead-lettered item is never revisited for sending", async (t) => {
   }
   assert.equal(wa.sends.length, 1);
   assert.equal((await job(env, reply)).state, "dead_letter");
+});
+
+// Another scanner holds the per-message delivery claim (lease) when the retry
+// becomes due. The due scan is claim-blocked; once the lease ends the retry
+// must still be revisited, exactly once, with the claim still respected.
+async function holdDeliveryClaim(env, reply) {
+  const state = await readJson(dataPaths(env).whatsapp, {});
+  const prior = (state.outboundDeliveryClaims || []).find((claim) => claim.messageId === reply.id);
+  assert.ok(prior?.textKey, "the first attempt recorded a delivery claim");
+  const held = await acquireOutboundDeliveryClaim({
+    state: {}, kind: prior.kind, deliveryType: prior.deliveryType, agentId: prior.agentId, threadId: prior.threadId,
+    messageId: prior.messageId, sourceMessageId: prior.sourceMessageId, chatId: prior.chatId, accountId: prior.accountId, textKey: prior.textKey,
+  }, env);
+  assert.equal(held.acquired, true, "competing lease taken");
+  return held;
+}
+
+test("a due retry blocked by an active delivery claim is revisited when the claim expires", async (t) => {
+  mock.timers.enable({ apis: ["Date"], now: T0 });
+  t.after(() => mock.timers.reset());
+  const { env, reply } = await fixture(t, "claim-expiry");
+  const wa = bridge();
+
+  await deliverWhatsAppReplies(env, wa.fetchImpl);
+  mock.timers.setTime(T0 + 1_000);
+  await deliverWhatsAppReplies(env, wa.fetchImpl);
+  mock.timers.setTime(T0 + 59_000);
+  const held = await holdDeliveryClaim(env, reply);
+  const leaseEndsMs = Date.parse(held.claim.expiresAt);
+
+  wa.set("ok");
+  mock.timers.setTime(T0 + BACKOFF_MS + 1_000);
+  await deliverWhatsAppReplies(env, wa.fetchImpl);
+  assert.equal(wa.sends.length, 1, "claim respected while held");
+
+  mock.timers.setTime(leaseEndsMs - 1_000);
+  await deliverWhatsAppReplies(env, wa.fetchImpl);
+  assert.equal(wa.sends.length, 1, "no send before the lease ends");
+
+  mock.timers.setTime(leaseEndsMs + 6_000);
+  const after = await deliverWhatsAppReplies(env, wa.fetchImpl);
+  assert.equal(wa.sends.length, 2, "revisited once the lease ended");
+  assert.equal(after.delivered.length, 1);
+  assert.equal((await job(env, reply)).state, "delivered");
+
+  mock.timers.setTime(leaseEndsMs + 60_000);
+  await deliverWhatsAppReplies(env, wa.fetchImpl);
+  assert.equal(wa.sends.length, 2, "no duplicate");
+});
+
+test("a due retry blocked by a delivery claim still goes out if the lease is removed early", async (t) => {
+  mock.timers.enable({ apis: ["Date"], now: T0 });
+  t.after(() => mock.timers.reset());
+  const { env, reply } = await fixture(t, "claim-removed");
+  const wa = bridge();
+
+  await deliverWhatsAppReplies(env, wa.fetchImpl);
+  mock.timers.setTime(T0 + 1_000);
+  await deliverWhatsAppReplies(env, wa.fetchImpl);
+  mock.timers.setTime(T0 + 59_000);
+  const held = await holdDeliveryClaim(env, reply);
+  const leaseEndsMs = Date.parse(held.claim.expiresAt);
+  wa.set("ok");
+  mock.timers.setTime(T0 + BACKOFF_MS + 1_000);
+  await deliverWhatsAppReplies(env, wa.fetchImpl);
+  assert.equal(wa.sends.length, 1);
+
+  await fs.rm(held.filePath, { force: true });
+  // Revisited no later than when the removed lease would have ended.
+  mock.timers.setTime(leaseEndsMs + 6_000);
+  await deliverWhatsAppReplies(env, wa.fetchImpl);
+  assert.equal(wa.sends.length, 2);
+  assert.equal((await job(env, reply)).state, "delivered");
+});
+
+test("at exactly the retry time, concurrent scanners send the due retry once", async (t) => {
+  mock.timers.enable({ apis: ["Date"], now: T0 });
+  t.after(() => mock.timers.reset());
+  const { env, reply } = await fixture(t, "boundary");
+  const wa = bridge();
+
+  await deliverWhatsAppReplies(env, wa.fetchImpl);
+  mock.timers.setTime(T0 + 1_000);
+  await deliverWhatsAppReplies(env, wa.fetchImpl);
+  const retryAtMs = Date.parse((await job(env, reply)).claimExpiresAt);
+  wa.set("ok");
+  mock.timers.setTime(retryAtMs);
+  await Promise.all(Array.from({ length: 12 }, () => deliverWhatsAppReplies(env, wa.fetchImpl)));
+  assert.equal(wa.sends.length, 2, "exactly one retry send");
+  const jobs = (await readConnectorOutbox(env)).jobs.filter((item) => item.sourceMessageId === reply.id);
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].state, "delivered");
 });

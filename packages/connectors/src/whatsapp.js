@@ -85,6 +85,7 @@ import {
 } from "./whatsapp-inbound-security.js";
 import {
   claimConnectorOutboxJob,
+  connectorOutboxRetryBackoffMs,
   connectorOutboxStoreFingerprint,
   connectorOutboxTerminalState,
   ensureConnectorOutboxJob,
@@ -3592,6 +3593,7 @@ async function sendClaimedWhatsAppText({
     claimant: `whatsapp-mirror:${process.pid}`,
   }, env);
   if (!outboxClaim.acquired) {
+    if (!outboxClaim.terminal) await deferDueWhatsAppIntentRetry({ state, outboundIntents, intent, until: outboxClaim.job?.claimExpiresAt }, env);
     await recordRouterTraceEvent({
       routerTraceId,
       turnId,
@@ -3619,6 +3621,7 @@ async function sendClaimedWhatsAppText({
   }, env, { persistState: writeWhatsAppState });
   if (!claimResult.acquired) {
     await releaseConnectorOutboxClaim(outboxClaim.job.id, { reason: claimResult.reason || "delivery_claim_active" }, env).catch(() => {});
+    await deferDueWhatsAppIntentRetry({ state, outboundIntents, intent, until: claimResult.claim?.expiresAt }, env);
     await recordRouterTraceEvent({
       routerTraceId,
       turnId,
@@ -5749,6 +5752,22 @@ function whatsappIntentRetryDue(intent = {}, nowMs = Date.now()) {
   if (String(intent?.status || "pending") !== "pending") return false;
   const retryAtMs = Date.parse(String(intent?.retryAt || ""));
   return Number.isFinite(retryAtMs) && retryAtMs <= nowMs;
+}
+
+// A due retry that is blocked by an active claim (another scanner's lease or
+// an unexpired outbox claim) moves its retry time to that claim's expiry, so
+// the scan key flips again and the thread is revisited when the claim ends.
+// Without an expiry it rechecks after one base backoff. The claim itself is
+// untouched and still decides who may send.
+async function deferDueWhatsAppIntentRetry({ state, outboundIntents, intent, until = "" } = {}, env = process.env) {
+  if (!intent?.intentId || !whatsappIntentRetryDue(intent)) return;
+  const nowMs = Date.now();
+  const untilMs = Date.parse(String(until || ""));
+  const retryAt = new Date(Number.isFinite(untilMs) && untilMs > nowMs ? untilMs : nowMs + Math.max(1_000, connectorOutboxRetryBackoffMs(env))).toISOString();
+  const marked = markWhatsAppOutboundIntent(outboundIntents, intent.intentId, { retryAt });
+  outboundIntents.splice(0, outboundIntents.length, ...marked);
+  state.outboundIntents = outboundIntents;
+  await writeWhatsAppState(state, env).catch(() => {});
 }
 
 function whatsappMirrorSqliteScanKey({ thread = {}, config = {}, state = null, messageSetKey = "", cursor = 0, fingerprint = "" } = {}) {
