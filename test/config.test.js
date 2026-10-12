@@ -74,7 +74,10 @@ test("runtime settings persist non-secret Codex, desktop, and connector routing"
   assert.equal(settings.codex.permissionPrompts.mirrorToWhatsApp, true);
   assert.equal(settings.desktops.gmailAuth, "gmail");
   assert.equal(settings.connectors.gmail.authDesktop, "gmail");
-  assert.equal(settings.connectors.whatsapp.accessMode, "relay");
+  assert.equal(settings.connectors.whatsapp.accessMode, "own", "no broker configured: built-in bridge");
+  const freshHome = async () => fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-settings-default-"));
+  assert.equal((await readRuntimeSettings({ ORKESTR_HOME: await freshHome(), ORKESTR_BROKER_BASE_URL: "https://broker.example.test" })).connectors.whatsapp.accessMode, "relay");
+  assert.equal((await readRuntimeSettings({ ORKESTR_HOME: await freshHome(), ORKESTR_WHATSAPP_ACCESS_MODE: "relay" })).connectors.whatsapp.accessMode, "relay");
   assert.equal(raw.codex.clientSecret, undefined);
   assert.equal(raw.connectors.gmail.clientSecret, undefined);
 });
