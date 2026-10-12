@@ -3835,6 +3835,9 @@ async function sendClaimedWhatsAppText({
         attempts: previousAttempts + 1,
         failedAt: now,
         error: errorText,
+        // Lets the scan cache notice when this backoff expires (see
+        // whatsappMirrorSqliteScanKey); the outbox job stays the authority.
+        retryAt,
       });
       outboundIntents.splice(0, outboundIntents.length, ...marked);
       state.outboundIntents = outboundIntents;
@@ -5742,6 +5745,12 @@ function threadEligibleForWhatsAppMirrorScan(thread = {}, config = {}) {
   return threadConfiguredForWhatsAppRoute(thread, config);
 }
 
+function whatsappIntentRetryDue(intent = {}, nowMs = Date.now()) {
+  if (String(intent?.status || "pending") !== "pending") return false;
+  const retryAtMs = Date.parse(String(intent?.retryAt || ""));
+  return Number.isFinite(retryAtMs) && retryAtMs <= nowMs;
+}
+
 function whatsappMirrorSqliteScanKey({ thread = {}, config = {}, state = null, messageSetKey = "", cursor = 0, fingerprint = "" } = {}) {
   const intents = (state?.outboundIntents || [])
     .filter((intent) => String(intent?.messageSetKey || "") === String(messageSetKey || ""))
@@ -5751,6 +5760,10 @@ function whatsappMirrorSqliteScanKey({ thread = {}, config = {}, state = null, m
       intent?.status || "pending",
       intent?.error || "",
       intent?.updatedAt || "",
+      // Flips once when a backed-off retry becomes due, so an otherwise
+      // unchanged thread is scanned again at its retry time. Claiming, backoff,
+      // retry caps and stale suppression still decide whether anything is sent.
+      whatsappIntentRetryDue(intent),
     ]);
   return JSON.stringify({
     fingerprint,
