@@ -145,36 +145,42 @@
         <h3>Choose the trust boundary</h3>
       </div>
       <div class="wizard-choice-grid">
-        <button
+        @if (availableWhatsAppModes().includes('self_hosted')) {
+          <button
+            type="button"
+            class="choice-card"
+            [class.active]="whatsappAccessMode === 'self_hosted'"
+            (click)="selectWhatsAppAccessMode('self_hosted')"
+            [disabled]="busy"
+          >
+            <strong>Use my own WhatsApp</strong>
+            <span>Recommended for self-hosted installs. Pair your device with the local bridge; session data stays in this instance's data volume.</span>
+          </button>
+        }
+        @if (availableWhatsAppModes().includes('managed')) {
+          <button
           type="button"
           class="choice-card"
-          [class.active]="whatsappAccessMode === 'relay'"
-          (click)="selectWhatsAppAccessMode('relay')"
+          [class.active]="whatsappAccessMode === 'managed'"
+          (click)="selectWhatsAppAccessMode('managed')"
           [disabled]="busy"
-        >
-          <strong>Use Orkestr relay</strong>
-          <span>Invitation-only. Uses an Orkestr-managed sender; needs a broker configured for this server.</span>
-        </button>
-        <button
-          type="button"
-          class="choice-card"
-          [class.active]="whatsappAccessMode === 'own'"
-          (click)="selectWhatsAppAccessMode('own')"
-          [disabled]="busy"
-        >
-          <strong>Use my own WhatsApp</strong>
-          <span>Self-hosted. Link your WhatsApp to this server by QR code. The session stays in this server's data volume.</span>
-        </button>
+          >
+            <strong>Use managed WhatsApp</strong>
+            <span>This instance has a server-configured WhatsApp relay. The relay operator manages its transport; your instance uses only the configured connection.</span>
+          </button>
+        }
       </div>
-      @if (whatsappAccessMode === 'own') {
-        <ork-whatsapp-pair-panel [accountId]="whatsappAccountId" (readyChange)="onWhatsAppReady($event)" (pairedAccount)="onWhatsAppPaired($event)" />
-        <div class="notice">
-          This uses WhatsApp Web, which WhatsApp does not officially support for automation. You can skip linking now and connect later in Setup.
-        </div>
+      @if (availableWhatsAppModes().length === 0) {
+        <div class="notice">No WhatsApp onboarding mode is available. Ask this instance's operator to repair its configured bridge.</div>
       } @else {
-        <div class="notice">
-          This choice is stored as a non-secret setup preference. Credentials and WhatsApp sessions stay outside the repo.
-        </div>
+        @if (whatsappAccessMode === 'self_hosted') {
+          <ork-whatsapp-pair-panel [accountId]="whatsappAccountId" (readyChange)="onWhatsAppReady($event)" (pairedAccount)="onWhatsAppPaired($event)" />
+          <div class="notice">
+            This uses WhatsApp Web, which WhatsApp does not officially support for automation. You can skip linking now and connect later in Setup.
+          </div>
+        } @else {
+          <div class="notice">This choice is stored as a non-secret setup preference. Credentials and WhatsApp sessions stay outside the repo.</div>
+        }
       }
     }
 

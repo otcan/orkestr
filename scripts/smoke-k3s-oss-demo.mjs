@@ -109,7 +109,7 @@ async function staticContractCheck() {
   assert.match(wizardTs, /acquireDesktopLease/);
   assert.match(wizardTs, /browserAction\(slug, "start"/);
   assert.doesNotMatch(wizardTs, /executorId: "noop"/);
-  assert.match(wizardHtml, /Use Orkestr relay/);
+  assert.match(wizardHtml, /Use managed WhatsApp/);
   assert.match(wizardHtml, /Use my own WhatsApp/);
   assert.match(wizardHtml, /Start orkest/);
   assert.match(pkg, /"smoke:k3s:oss-demo"/);

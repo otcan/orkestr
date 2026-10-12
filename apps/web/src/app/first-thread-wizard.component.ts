@@ -1,18 +1,18 @@
-import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
+import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadMessage, ThreadSummary } from "./api.service";
 import { WhatsAppPairPanelComponent } from "./whatsapp-pair-panel.component";
 
 type WizardStepId = "welcome" | "codex" | "whatsapp" | "review";
-type WhatsAppAccessMode = "relay" | "own";
+type WhatsAppAccessMode = "managed" | "self_hosted";
 
 @Component({
   selector: "ork-first-thread-wizard",
   imports: [FormsModule, WhatsAppPairPanelComponent],
   templateUrl: "./first-thread-wizard.component.html",
 })
-export class FirstThreadWizardComponent implements OnInit, OnDestroy {
+export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit {
   private readonly api = inject(ApiService);
   private readonly cdr = inject(ChangeDetectorRef);
 
@@ -32,7 +32,7 @@ export class FirstThreadWizardComponent implements OnInit, OnDestroy {
   stepIndex = 0;
   threadName = "orkest";
   repoUrl = "";
-  whatsappAccessMode: WhatsAppAccessMode = "own";
+  whatsappAccessMode: WhatsAppAccessMode = "self_hosted";
   readonly whatsappAccountId = "account-1";
   whatsappReady = false;
   pairedWhatsAppAccount: { accountId: string; contactId: string } | null = null;
@@ -52,10 +52,23 @@ export class FirstThreadWizardComponent implements OnInit, OnDestroy {
   creationStage = "";
   private draftName = "";
   private draftThreadId = "";
+  private whatsappModeTouched = false;
 
   ngOnInit(): void {
-    this.whatsappAccessMode = configuredWhatsAppAccessMode(this.setupStatus);
+    this.syncWhatsAppAccessMode();
     void this.loadClaudeAccounts();
+  }
+
+  ngOnChanges(_changes: SimpleChanges): void {
+    this.syncWhatsAppAccessMode();
+  }
+
+  private syncWhatsAppAccessMode(): void {
+    if (this.whatsappModeTouched || !this.setupStatus) return;
+    const available = this.availableWhatsAppModes();
+    const selected = normalizeWhatsAppAccessMode(this.setupStatus.whatsappOnboarding?.selectedMode)
+      || configuredWhatsAppAccessMode(this.setupStatus);
+    this.whatsappAccessMode = available.includes(selected) ? selected : available[0] || "self_hosted";
   }
 
   ngOnDestroy(): void {
@@ -110,12 +123,12 @@ export class FirstThreadWizardComponent implements OnInit, OnDestroy {
     const step = this.activeStep();
     if (step === "welcome") return Boolean(this.agentName());
     if (step === "codex") return this.agentReady();
-    if (step === "whatsapp") return Boolean(this.whatsappAccessMode);
+    if (step === "whatsapp") return this.availableWhatsAppModes().includes(this.whatsappAccessMode);
     return true;
   }
 
   canCreate(): boolean {
-    return Boolean(this.agentName() && this.agentReady() && !this.busy);
+    return Boolean(this.agentName() && this.agentReady() && this.availableWhatsAppModes().includes(this.whatsappAccessMode) && !this.busy);
   }
 
   agentName(): string {
@@ -143,8 +156,16 @@ export class FirstThreadWizardComponent implements OnInit, OnDestroy {
   }
 
   whatsappAccessLabel(): string {
-    if (this.whatsappAccessMode !== "own") return "Orkestr relay";
-    return this.whatsappReady ? "Own WhatsApp (linked) · your own private chat will be connected" : "Own WhatsApp · not linked yet, connect later in Setup";
+    if (this.whatsappAccessMode !== "self_hosted") return "Managed WhatsApp relay";
+    return this.whatsappReady && this.pairedWhatsAppAccount
+      ? "Own WhatsApp (linked) · your own private chat will be connected"
+      : "Own WhatsApp · not linked yet, connect later in Setup";
+  }
+
+  availableWhatsAppModes(): WhatsAppAccessMode[] {
+    const modes = this.setupStatus?.whatsappOnboarding?.availableModes;
+    if (!Array.isArray(modes)) return ["self_hosted"];
+    return modes.map(normalizeWhatsAppAccessMode).filter((mode): mode is WhatsAppAccessMode => mode !== null);
   }
 
   onWhatsAppPaired(account: { accountId: string; contactId: string } | null): void {
@@ -158,7 +179,8 @@ export class FirstThreadWizardComponent implements OnInit, OnDestroy {
   }
 
   selectWhatsAppAccessMode(mode: WhatsAppAccessMode): void {
-    if (this.busy) return;
+    if (this.busy || !this.availableWhatsAppModes().includes(mode)) return;
+    this.whatsappModeTouched = true;
     this.whatsappAccessMode = mode;
   }
 
@@ -269,7 +291,7 @@ export class FirstThreadWizardComponent implements OnInit, OnDestroy {
         this.desktopWarning = `Virtual Desk did not start: ${this.errorText(error)}. Open setup desktops after the thread opens.`;
       });
       this.creationStage = this.runtimeProvider === "claude-code" ? "Starting Claude Code in background" : "Starting Codex in background";
-      if (this.whatsappAccessMode === "own" && this.whatsappReady && this.pairedWhatsAppAccount) {
+      if (this.whatsappAccessMode === "self_hosted" && this.whatsappReady && this.pairedWhatsAppAccount) {
         this.creationStage = "Connecting your private WhatsApp chat";
         try {
           // Server enforces: only the account paired above, only its own chat, refused if no longer linked.
@@ -352,7 +374,14 @@ function configuredWhatsAppAccessMode(status: SetupStatus | null): WhatsAppAcces
   const settings = (status?.settings || {}) as Record<string, unknown>;
   const connectors = (settings["connectors"] || {}) as Record<string, Record<string, unknown>>;
   const mode = String(connectors["whatsapp"]?.["accessMode"] || "").toLowerCase();
-  return mode === "relay" ? "relay" : "own";
+  return normalizeWhatsAppAccessMode(mode) || "self_hosted";
+}
+
+function normalizeWhatsAppAccessMode(value: unknown): WhatsAppAccessMode | null {
+  const mode = String(value || "").toLowerCase();
+  if (["self_hosted", "own", "local"].includes(mode)) return "self_hosted";
+  if (["managed", "relay", "external"].includes(mode)) return "managed";
+  return null;
 }
 
 // True once a message that arrived from WhatsApp is followed by an assistant reply.
