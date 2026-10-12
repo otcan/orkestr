@@ -43,7 +43,7 @@ test("application navigation keeps core destinations, existing route handlers an
   assert.ok(JSON.parse(config).projects.web.architect.build.options.styles.includes("apps/web/src/app-interface.css"));
 });
 
-test("self-hosted first run defaults to owned WhatsApp without claiming pairing is complete", async () => {
+test("self-hosted first run offers owner pairing without claiming an unpaired chat is ready", async () => {
   const [template, component, emptyMessages, desk] = await Promise.all([
     source("apps/web/src/app/first-thread-wizard.component.html"),
     source("apps/web/src/app/first-thread-wizard.component.ts"),
