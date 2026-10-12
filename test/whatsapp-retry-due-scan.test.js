@@ -21,7 +21,7 @@ function response(payload, ok = true, status = 200) {
   return { ok, status, async json() { return payload; } };
 }
 
-async function fixture(t, name) {
+async function fixture(t, name, extraEnv = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-wa-retry-due-${name}-`));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
   const env = {
@@ -32,6 +32,7 @@ async function fixture(t, name) {
     ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: String(BACKOFF_MS),
     // Production store; the scan-skip cache only applies with its fingerprints.
     ORKESTR_THREAD_STORE: "sqlite",
+    ...extraEnv,
   };
   await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.example.test" }, env);
   const threadId = `thread-wa-retry-due-${name}`;
@@ -258,3 +259,52 @@ test("at exactly the retry time, concurrent scanners send the due retry once", a
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].state, "delivered");
 });
+
+// Retry accounting must survive a claim-blocked pass: the outbox claim counts an
+// attempt, the delivery-lease contention releases the job to pending, and the
+// next idempotent ensure must not reset attemptCount (which drives both the
+// backoff and the retry cap). Run with both thread stores.
+for (const threadStore of ["sqlite", "json"]) {
+  test(`retry count, backoff and cap survive delivery-claim contention (${threadStore} thread store)`, async (t) => {
+    mock.timers.enable({ apis: ["Date"], now: T0 });
+    t.after(() => mock.timers.reset());
+    const { env, reply } = await fixture(t, `cap-${threadStore}`, {
+      ORKESTR_THREAD_STORE: threadStore,
+      ORKESTR_WHATSAPP_OUTBOX_MAX_RETRY_ATTEMPTS: "2",
+      ORKESTR_CONNECTOR_OUTBOX_MAX_ATTEMPTS: "2",
+    });
+    const wa = bridge();
+
+    await deliverWhatsAppReplies(env, wa.fetchImpl);
+    assert.equal((await job(env, reply)).attemptCount, 1);
+    mock.timers.setTime(T0 + 1_000);
+    await deliverWhatsAppReplies(env, wa.fetchImpl);
+    mock.timers.setTime(T0 + 59_000);
+    const held = await holdDeliveryClaim(env, reply);
+    const leaseEndsMs = Date.parse(held.claim.expiresAt);
+
+    mock.timers.setTime(T0 + BACKOFF_MS + 1_000);
+    await deliverWhatsAppReplies(env, wa.fetchImpl);
+    const blocked = await job(env, reply);
+    assert.equal(blocked.state, "pending", "released after lease contention");
+    assert.equal(blocked.attemptCount, 2, "the claimed attempt is counted");
+
+    // Lease ends; the bridge is still failing.
+    mock.timers.setTime(leaseEndsMs + 6_000);
+    await deliverWhatsAppReplies(env, wa.fetchImpl);
+    assert.equal(wa.sends.length, 2, "one more real transport attempt");
+    const failed = await job(env, reply);
+    assert.equal(failed.state, "failed_retryable");
+    assert.ok(failed.attemptCount >= 3, `attempt count not reset (got ${failed.attemptCount})`);
+    const backoffMs = Date.parse(failed.claimExpiresAt) - (leaseEndsMs + 6_000);
+    assert.ok(backoffMs > BACKOFF_MS, `backoff grows with the preserved count (got ${backoffMs} ms)`);
+
+    // Past every backoff: the cap stops further transport attempts.
+    for (const extra of [5 * 60_000, 10 * 60_000, 14 * 60_000]) {
+      mock.timers.setTime(leaseEndsMs + extra);
+      await deliverWhatsAppReplies(env, wa.fetchImpl);
+    }
+    assert.equal(wa.sends.length, 2, "no third transport attempt beyond the cap");
+    assert.notEqual((await job(env, reply)).state, "delivered");
+  });
+}

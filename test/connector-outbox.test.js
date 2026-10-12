@@ -417,3 +417,20 @@ test("connector outbox migrates large JSON stores to SQLite without rewriting JS
   assert.equal(after.mtimeMs, before.mtimeMs);
   assert.equal(after.size, before.size);
 });
+
+test("merging a re-ensured job never lowers its retry attempt count", () => {
+  const base = { connector: "whatsapp", chatId: "synthetic-chat", threadId: "t1", sourceMessageId: "m1", deliveryType: "final", payload: { text: "x" } };
+  const released = { ...base, state: "pending", attemptCount: 2, updatedAt: "2026-10-12T16:06:01.000Z", metadata: { retryAfterAt: "2026-10-12T16:06:00.000Z" } };
+  const reensured = { ...base, state: "pending", attemptCount: 0, updatedAt: "2026-10-12T16:08:06.000Z" };
+  const [kept] = mergeConnectorOutboxJobs([released], [reensured], { ORKESTR_ADMIN_USER_ID: "admin" });
+  assert.equal(kept.attemptCount, 2, "newer fresh pending row does not reset the count");
+  assert.equal(kept.metadata.retryAfterAt, "2026-10-12T16:06:00.000Z");
+
+  const claimedAgain = { ...base, state: "claimed", attemptCount: 3, updatedAt: "2026-10-12T16:08:07.000Z" };
+  assert.equal(mergeConnectorOutboxJobs([released], [claimedAgain], {})[0].attemptCount, 3, "a real increase is kept");
+
+  const terminal = { ...base, state: "dead_letter", attemptCount: 1, updatedAt: "2026-10-12T16:05:00.000Z" };
+  const [deadKept] = mergeConnectorOutboxJobs([terminal], [reensured], {});
+  assert.equal(deadKept.state, "dead_letter", "terminal jobs are still returned unchanged");
+  assert.equal(deadKept.attemptCount, 1);
+});
