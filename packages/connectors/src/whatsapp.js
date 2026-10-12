@@ -235,8 +235,18 @@ async function fetchWithTimeout(url, fetchImpl, fetchOptions = {}, timeoutMs = 4
 async function fetchJson(url, fetchImpl, options = {}) {
   const { env, timeoutMs, ...fetchOptions } = options;
   const response = await fetchWithTimeout(url, fetchImpl, fetchOptions, positiveInteger(timeoutMs, whatsappBridgeStatusTimeoutMs(env), 1));
-  const payload = await response.json().catch(() => ({}));
-  return { ok: response.ok, status: response.status, payload };
+  let parsed = true;
+  const payload = await response.json().catch(() => { parsed = false; return {}; });
+  return { ok: response.ok, status: response.status, payload, parsed: parsed && Boolean(payload) && typeof payload === "object" && !Array.isArray(payload) };
+}
+
+// Whether a bridge health payload listed its accounts, deliberately omitted
+// them (older bridges), or was malformed (unparseable body, non-list field).
+function bridgeHealthAccountsField(health = {}) {
+  if (!health.parsed) return "malformed";
+  const accounts = health.payload?.accounts;
+  if (accounts === undefined) return "absent";
+  return Array.isArray(accounts) ? "listed" : "malformed";
 }
 
 async function fetchOk(url, fetchImpl, options = {}) {
@@ -618,14 +628,21 @@ async function resolveBridgeRuntimeAccountId(accountId = "", { config = null, en
   if (account) return pickString(account.runtimeAccountId, requested);
   // A phone identity is the canonical ID of a role-named runtime account
   // ("sender"); the bridge only accepts the runtime ID. When the status lookup
-  // failed, or listed accounts without this one, do not dispatch the
-  // unverified ID that the bridge rejects as a terminal
+  // failed, was malformed, or listed accounts without this one, do not
+  // dispatch the unverified ID that the bridge rejects as a terminal
   // unknown_whatsapp_account. Nothing has been sent yet, so the delivery is
   // retried later. Runtime-style IDs keep passing through, and so does any ID
-  // when status lists no accounts by design (scoped parent bridge, older
-  // bridges): the next hop resolves and verifies it.
+  // when status lists no accounts by design: a scoped parent bridge, or a
+  // ready older bridge without an accounts field. The next hop resolves and
+  // verifies it there.
   if (!whatsappNumericIdentity(requested)) return requested;
-  const reason = !status || status.ok === false ? "status_unavailable" : accounts.length ? "account_not_listed" : "";
+  const unlistedByDesign = status?.state === "send_ready_scoped" ||
+    (status?.state === "paired" && status?.accountsField === "absent");
+  const reason = !status || status.ok === false
+    ? "status_unavailable"
+    : accounts.length
+      ? "account_not_listed"
+      : unlistedByDesign ? "" : "status_unrecognized";
   if (!reason) return requested;
   throw Object.assign(new Error("whatsapp_account_resolution_unavailable"), {
     statusCode: 503,
@@ -886,6 +903,7 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch, op
         bridgeUrl,
         health: publicExternalBridgeHealth(health.payload),
         accounts,
+        accountsField: bridgeHealthAccountsField(health),
         qrAvailable: false,
       };
     }
@@ -903,6 +921,7 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch, op
       bridgeUrl,
       health: publicExternalBridgeHealth(health.payload),
       accounts,
+      accountsField: bridgeHealthAccountsField(health),
       qrAvailable,
       qrUrl: qrAvailable ? `${bridgeUrl}/qr.svg` : "",
     };
