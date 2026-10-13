@@ -2,6 +2,9 @@ import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadMessage, ThreadSummary } from "./api.service";
+import { CodexSignInPanelComponent } from "./codex-sign-in-panel.component";
+import { codexStateLabel } from "./codex-runtime-status";
+import { clearWizardProgress, loadWizardProgress, saveWizardProgress } from "./first-thread-wizard-progress";
 import { WhatsAppPairPanelComponent } from "./whatsapp-pair-panel.component";
 
 type WizardStepId = "whatsapp" | "codex" | "review";
@@ -9,7 +12,7 @@ type WhatsAppAccessMode = "managed" | "self_hosted";
 
 @Component({
   selector: "ork-first-thread-wizard",
-  imports: [FormsModule, WhatsAppPairPanelComponent],
+  imports: [CodexSignInPanelComponent, FormsModule, WhatsAppPairPanelComponent],
   templateUrl: "./first-thread-wizard.component.html",
 })
 export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit {
@@ -19,9 +22,11 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   @Input() canCancel = true;
   @Input() canManageSetup = false;
   @Input() setupStatus: SetupStatus | null = null;
+  @Input() progressScope = "";
   @Output() cancel = new EventEmitter<void>();
   @Output() created = new EventEmitter<ThreadSummary>();
   @Output() setupRequested = new EventEmitter<"codex" | "whatsapp">();
+  @Output() setupStatusChange = new EventEmitter<SetupStatus>();
 
   // WhatsApp first: it is the step users came for, and it can be skipped.
   readonly steps: Array<{ id: WizardStepId; label: string }> = [
@@ -58,8 +63,42 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   private whatsappModeTouched = false;
 
   ngOnInit(): void {
+    this.restoreProgress();
     this.syncWhatsAppAccessMode();
-    void this.loadClaudeAccounts();
+    void this.loadClaudeAccounts().then(() => this.clampRestoredStep());
+  }
+
+  // Coming back from Setup restores the step and answers; a step past the AI
+  // choice is only kept while that AI is still ready.
+  private restoreProgress(): void {
+    const saved = loadWizardProgress(this.progressScope);
+    if (!saved) return;
+    this.stepIndex = Math.min(saved.stepIndex, this.steps.length - 1);
+    this.threadName = saved.threadName || this.threadName;
+    this.repoUrl = saved.repoUrl;
+    this.runtimeProvider = saved.runtimeProvider;
+    this.whatsappModeTouched = saved.whatsappModeTouched;
+    if (saved.whatsappModeTouched) this.whatsappAccessMode = saved.whatsappAccessMode;
+    if (this.runtimeProvider === "codex") this.clampRestoredStep();
+  }
+
+  private clampRestoredStep(): void {
+    const aiStep = this.steps.findIndex((step) => step.id === "codex");
+    if (this.stepIndex > aiStep && this.setupStatus && !this.agentReady()) this.stepIndex = aiStep;
+    this.cdr.markForCheck();
+  }
+
+  private saveProgress(): void {
+    if (this.createdThread) return;
+    saveWizardProgress({
+      stepIndex: this.stepIndex,
+      threadName: this.threadName,
+      repoUrl: this.repoUrl,
+      runtimeProvider: this.runtimeProvider,
+      whatsappAccessMode: this.whatsappAccessMode,
+      whatsappModeTouched: this.whatsappModeTouched,
+      scope: this.progressScope,
+    });
   }
 
   ngOnChanges(_changes: SimpleChanges): void {
@@ -76,6 +115,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
 
   ngOnDestroy(): void {
     this.stopProofCheck();
+    this.saveProgress();
   }
 
   private stopProofCheck(): void {
@@ -111,11 +151,13 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   next(): void {
     if (!this.canContinue() || this.stepIndex >= this.steps.length - 1) return;
     this.stepIndex += 1;
+    this.saveProgress();
   }
 
   previous(): void {
     if (this.stepIndex <= 0 || this.busy) return;
     this.stepIndex -= 1;
+    this.saveProgress();
   }
 
   canSelectStep(index: number): boolean {
@@ -224,21 +266,20 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   }
 
   codexStateLabel(): string {
-    const connector = this.codexConnector();
-    const state = String(connector?.state || "checking").toLowerCase();
-    const reason = String(connector?.details?.["reason"] || "").toLowerCase();
-    if (state === "connected") return "connected";
-    if (state === "partial") return "sign-in required";
-    if (state === "not_connected" && reason === "codex_missing") return "runtime missing";
-    if (state === "not_connected" && reason.includes("disabled")) return "disabled";
-    if (state === "not_connected") return "runtime unavailable";
-    return state.replace(/_/g, " ");
+    return codexStateLabel(this.codexConnector());
   }
 
   codexSummary(): string {
     if (this.codexReady()) return "Codex is signed in with your ChatGPT account.";
     if (!this.codexConnector()) return "Checking whether Codex is signed in…";
     return "Sign in to Codex with your ChatGPT account. Sign-in uses a one-time code, which must first be allowed in ChatGPT → Settings → Security (\"device code\" sign-in).";
+  }
+
+  // Codex signed in from the inline panel: continue without reloading the app.
+  onCodexConnected(setup: SetupStatus): void {
+    this.setupStatus = setup;
+    this.setupStatusChange.emit(setup);
+    this.cdr.markForCheck();
   }
 
   openCodexSetup(): void {
@@ -326,6 +367,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
           this.boundChatName = group.chat?.name || name;
           this.creationStage = "";
           this.createdThread = thread;
+          clearWizardProgress();
           this.startProofCheck(thread.id);
           return;
         } catch (error) {
@@ -334,6 +376,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       }
       this.creationStage = "";
       this.createdThread = thread;
+      clearWizardProgress();
     } catch (error) {
       this.error = this.errorText(error);
     } finally {

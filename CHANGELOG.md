@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- One first-run path: a new install opens a three-step wizard (Link WhatsApp → Choose the AI → Name and start) at `/` and at a bare `/setup`. The long setup page is now Setup only (no goals, step tabs or starter thread); the timezone moved into Setup → Connections.
+- Codex sign-in happens inside the wizard with a ChatGPT device code (shared `ork-codex-sign-in-panel`, also used by Setup and the compact `?compact=1` link). Only admins see it.
+- Leaving Setup from the wizard returns to the same step. Existing installs with an expired Codex login are no longer redirected from `/` to Setup; they see the Codex notice instead. `ORKESTR_ONBOARDING_AUTO_OPEN=0` still turns first-run auto-open off.
+- Pairing page: plain explanation, the `docker exec` form of the approve command on Docker installs, expiry countdown and "Make a new code".
+- WhatsApp: own media echoes are recognised by message id (waiting for in-flight sends) and dropped before download; a real self-chat photo during a send is kept. The connector gateway delivers each inbox event once (single flight + lease), and routing for one event id runs in sequence.
+
 ## 0.1.0-alpha.47
 
 - Deliver Gmail notification rules as out-of-band ChatUI/WhatsApp notifications by default, instead of queuing them as Codex thread input.

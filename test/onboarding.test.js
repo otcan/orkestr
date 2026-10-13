@@ -9,13 +9,15 @@ const onboardingSources = [
   "apps/web/src/app/onboarding-page.component.html",
   "apps/web/src/app/security-challenges-panel.component.html",
   "apps/web/src/app/security-challenges-panel.component.ts",
+  "apps/web/src/app/codex-sign-in-panel.component.ts",
+  "apps/web/src/app/codex-runtime-status.ts",
 ];
 
 async function readSources(paths) {
   return (await Promise.all(paths.map((sourcePath) => fs.readFile(sourcePath, "utf8")))).join("\n");
 }
 
-test("onboarding focuses the starter setup on virtual desktop and WhatsApp", async () => {
+test("setup page is Setup only; first-run framing lives in the wizard", async () => {
   const onboarding = await readSources(onboardingSources);
   const browsers = await fs.readFile("packages/browsers/src/browsers.js", "utf8");
 
@@ -29,14 +31,14 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(!onboarding.includes("Pick the first workflow"));
   assert.ok(!onboarding.includes("System check"));
   assert.ok(!onboarding.includes("Choose what to add first"));
-  assert.ok(onboarding.includes("Self-hosted agent cockpit"));
-  assert.ok(onboarding.includes("Set up Orkestr"));
-  assert.ok(onboarding.includes("Start with one capability"));
+  assert.ok(!onboarding.includes("Self-hosted agent cockpit"));
+  assert.ok(!onboarding.includes("Set up Orkestr"));
+  assert.ok(!onboarding.includes("Start with one capability"));
   assert.ok(onboarding.includes("Timezone"));
   assert.ok(onboarding.includes("saveTimezone()"));
   assert.ok(onboarding.includes("myOnboarding()"));
-  assert.ok(onboarding.includes("Connect only what you need now"));
-  assert.ok(onboarding.includes("Start with Codex and WhatsApp"));
+  assert.ok(!onboarding.includes("Connect only what you need now"));
+  assert.ok(!onboarding.includes("Start with Codex and WhatsApp"));
   assert.ok(onboarding.includes("buildStamp()"));
   assert.ok(onboarding.includes("Connections"));
   assert.ok(onboarding.includes("Review runtime items that need attention"));
@@ -46,40 +48,42 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("OpenAI API"));
   assert.ok(onboarding.includes("Optional API"));
   assert.ok(onboarding.includes("agentRuntimeStateLabel()"));
-  assert.ok(onboarding.includes("canOpenApp()"));
-  assert.ok(onboarding.includes("openAppBlockReason()"));
+  assert.ok(!onboarding.includes("canOpenApp()"));
+  assert.ok(!onboarding.includes("openAppBlockReason()"));
   assert.ok(!onboarding.includes("Connect Codex Agent before opening Orkestr."));
-  assert.ok(onboarding.includes("Connect Codex Agent before starting coding-agent work."));
-  assert.ok(onboarding.includes("runtime-blocker"));
+  assert.ok(!onboarding.includes("runtime-blocker"));
   assert.ok(!onboarding.includes("[disabled]=\"busy || !canOpenApp()\""));
-  assert.ok(onboarding.includes("requiredConnectorSteps()"));
+  assert.ok(!onboarding.includes("requiredConnectorSteps()"));
   assert.ok(onboarding.includes("Agents should acquire Orkestr desktop leases"));
-  assert.ok(onboarding.includes("Codex from WhatsApp"));
-  assert.ok(onboarding.includes("Managed browser desktop"));
-  assert.ok(onboarding.includes("Optional mail summaries"));
+  assert.ok(!onboarding.includes("Codex from WhatsApp"));
+  assert.ok(!onboarding.includes("Managed browser desktop"));
+  assert.ok(!onboarding.includes("Optional mail summaries"));
   assert.ok(onboarding.includes("Open Codex sign-in"));
   assert.ok(onboarding.includes("Connect Codex with API key"));
   assert.ok(onboarding.includes("loginCodexWithApiKey"));
-  assert.ok(onboarding.includes("codexAuthPoller"));
-  assert.ok(onboarding.includes("startCodexAuthPolling"));
-  assert.ok(onboarding.includes("pollCodexAuth"));
-  assert.ok(onboarding.includes("Codex connected. You can open Orkestr when ready."));
-  assert.ok(onboarding.includes("Sign-in expired. Open Codex sign-in again."));
+  assert.ok(!onboarding.includes("codexAuthPoller"));
+  assert.ok(!onboarding.includes("startCodexAuthPolling"));
+  assert.ok(!onboarding.includes("pollCodexAuth"));
+  assert.ok(onboarding.includes("<ork-codex-sign-in-panel"));
+  assert.ok(onboarding.includes("onCodexConnected($event)"));
+  assert.ok(onboarding.includes("The sign-in code expired. Open Codex sign-in again."));
+  assert.ok(onboarding.includes("Your timezone"));
+  assert.ok(onboarding.includes("Used by timers and schedules."));
   assert.ok(!onboarding.includes("globalThis.setTimeout(() => this.openApp(), 250)"));
   assert.ok(onboarding.includes("agentRuntimeReady()"));
   assert.ok(onboarding.includes("codexCommandAvailable()"));
   assert.ok(onboarding.includes("codexCommandUnavailableHint()"));
   assert.ok(onboarding.includes("Host Codex is disabled for this macOS local install."));
-  assert.ok(onboarding.includes("[disabled]=\"busy || !codexCommandAvailable()\""));
+  assert.ok(onboarding.includes("[disabled]=\"busy || !commandAvailable()\""));
   assert.ok(onboarding.includes("[disabled]=\"busy || !codexApiKey.trim() || !codexCommandAvailable()\""));
-  assert.ok(onboarding.includes('id: "virtual-desktop"'));
-  assert.ok(onboarding.includes("Create first thread"));
-  assert.ok(onboarding.includes("Bind WhatsApp chat"));
-  assert.ok(onboarding.includes("Send test message"));
-  assert.ok(onboarding.includes('type SetupPageMode = "setup" | "onboarding"'));
-  assert.ok(onboarding.includes("after the installer has prepared the local Orkestr runtime"));
+  assert.ok(!onboarding.includes('id: "virtual-desktop"'));
+  assert.ok(!onboarding.includes("Create first thread"));
+  assert.ok(!onboarding.includes("Bind WhatsApp chat"));
+  assert.ok(!onboarding.includes("Send test message"));
+  assert.ok(!onboarding.includes('type SetupPageMode = "setup" | "onboarding"'));
+  assert.ok(!onboarding.includes("after the installer has prepared the local Orkestr runtime"));
   assert.ok(onboarding.includes('replaceState({}, "", this.appPath("/setup"))'));
-  assert.ok(onboarding.includes("@if (isOnboardingMode())"));
+  assert.ok(!onboarding.includes("@if (isOnboardingMode())"));
   assert.ok(onboarding.includes("setupSections()"));
   assert.ok(onboarding.includes('private readonly leanSetupConnectorIds: ConnectorStep[] = ["codex", "gmail", "whatsapp", "browsers"];'));
   assert.ok(onboarding.includes('retiredSetupSections = new Set(["google-marketing", "openai", "linkedin", "mail", "outlook"])'));

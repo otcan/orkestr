@@ -9,11 +9,9 @@
   <ork-public-apps-page></ork-public-apps-page>
 } @else if (onboardingActive) {
   <ork-onboarding-page
-    [mode]="setupPageMode"
     [setupSection]="setupSection"
     (setupSectionChange)="handleSetupSectionChange($event)"
-    (skip)="leaveOnboarding(false)"
-    (complete)="leaveOnboarding(true)"
+    (skip)="leaveOnboarding()"
     (openAppRequested)="leaveCompactSetup()"
   ></ork-onboarding-page>
 } @else if (connectorLoginActive()) {
@@ -374,9 +372,11 @@
         [canCancel]="threads.length > 0"
         [canManageSetup]="isAdminMode()"
         [setupStatus]="setupStatus"
+        [progressScope]="wizardProgressScope()"
         (cancel)="closeThreadWizard()"
         (created)="handleThreadWizardCreated($event)"
-        (setupRequested)="openSetup($event, true)"
+        (setupRequested)="openSetupFromWizard($event)"
+        (setupStatusChange)="setupStatus = $event"
       ></ork-first-thread-wizard>
     } @else if (selectedThread(); as thread) {
       <header class="chat-head">

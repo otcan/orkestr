@@ -108,15 +108,20 @@
           <small>Add or sign in again under Tools → Models. Your login stays on this server.</small>
         </label>
       }
-      <div class="notice">
-        @if (runtimeProvider === 'codex' && codexBlocked()) {
-          <strong>Codex is not signed in yet.</strong>&nbsp;
-        }
-        {{ agentSummary() }}
-        @if (runtimeProvider === 'codex' && !codexReady()) {
-          <button class="secondary" type="button" (click)="openCodexSetup()" [disabled]="busy">Sign in to Codex</button>
-        }
-      </div>
+      @if (runtimeProvider === 'codex' && codexBlocked()) {
+        <div class="notice">
+          <strong>Codex is not signed in yet.</strong>
+          @if (canManageSetup) {
+            <span>Sign in with your ChatGPT account here; you stay in this setup.</span>
+            <ork-codex-sign-in-panel [setupStatus]="setupStatus" (connected)="onCodexConnected($event)" />
+            <button class="secondary" type="button" (click)="openCodexSetup()" [disabled]="busy">More Codex options (API key)</button>
+          } @else {
+            <span>The person who runs this server needs to sign Codex in first.</span>
+          }
+        </div>
+      } @else {
+        <div class="notice">{{ agentSummary() }}</div>
+      }
     }
 
     @if (activeStep() === "whatsapp") {

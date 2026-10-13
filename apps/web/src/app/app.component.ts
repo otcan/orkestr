@@ -77,7 +77,6 @@ import { QuotaProvider, claudeEffortLabel, claudeModelName, executorLabel, threa
 
 type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "instanceVault" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
-type SetupPageMode = "setup" | "onboarding";
 type SetupSection = "system" | "security" | "secrets" | "maintenance" | "codex" | "gmail" | "whatsapp" | "browsers";
 type PersistedThreadTextField =
   | "draft"
@@ -128,7 +127,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly popStateHandler = () => {
     if (this.pairingPathActive()) this.pairingRequired = true;
     this.onboardingActive = this.onboardingFromPath();
-    this.setupPageMode = this.setupPageModeFromPath();
     this.setupSection = this.setupSectionFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
@@ -142,6 +140,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.updateDocumentTitle();
       this.renderNow();
       return;
+    }
+    // Back from a Setup page that the wizard opened: show the wizard again.
+    if (this.resumeWizardAfterSetup && !this.locationPathParts().length && this.canCreateThreadFromSidebar()) {
+      this.resumeWizardAfterSetup = false;
+      this.threadWizardOpen = true;
+      this.activePanel = "chat";
     }
     if (this.publicAppsActive()) {
       this.closeRawStream();
@@ -214,8 +218,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   sendingNow = false;
   implementingPlan = false;
   threadWizardOpen = false;
+  private resumeWizardAfterSetup = false;
   onboardingActive = false;
-  setupPageMode: SetupPageMode = "setup";
   setupSection: SetupSection = "system";
   activePanel: Panel = "chat";
   approveText = "Approved. Proceed.";
@@ -347,7 +351,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   ngOnInit(): void {
     this.pairingRequired = this.pairingPathActive();
     this.onboardingActive = this.onboardingFromPath();
-    this.setupPageMode = this.setupPageModeFromPath();
     this.setupSection = this.setupSectionFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
@@ -459,11 +462,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (this.canonicalizeCurrentThreadRoute()) return;
       this.seedReadStateIfNeeded(this.threads);
       if (this.normalizeUserModeView()) return;
-      if (this.shouldAutoOpenOnboarding()) {
-        this.onboardingActive = true;
-        this.setupPageMode = "setup";
-        this.replaceSetupPath(this.setupSection || "system");
-      }
+      if (this.shouldAutoOpenFirstRunWizard()) this.openFirstRunWizard();
       if (this.onboardingActive && this.setupStatus?.setupState === "ready" && this.codexAgentReady()) {
         this.onboardingActive = false;
         this.activePanel = "instanceSettings";
@@ -582,7 +581,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.appReady = true;
     this.pairingRequired = true;
     this.onboardingActive = false;
-    this.setupPageMode = "setup";
     this.setupSection = "security";
     this.threadWizardOpen = false;
     this.modelDetailsOpen = false;
@@ -1123,7 +1121,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.activePanel === "raw") this.closeRawStream();
     this.threadWizardOpen = false;
     this.onboardingActive = true;
-    this.setupPageMode = "setup";
     this.clearOnboardingFlag("skipped");
     this.pushSetupPath(this.setupSection || "system");
     this.updateDocumentTitle();
@@ -1143,12 +1140,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.activePanel === "raw") this.closeRawStream();
     this.threadWizardOpen = false;
     this.onboardingActive = true;
-    this.setupPageMode = "setup";
     this.setupSection = section;
     if (replace) this.replaceSetupPath(section);
     else this.pushSetupPath(section);
     this.updateDocumentTitle();
     this.renderNow();
+  }
+
+  // The wizard asked for a Setup section (e.g. more Codex or WhatsApp options).
+  // Leaving Setup returns to the wizard, which restores its own step.
+  openSetupFromWizard(section: SetupSection): void {
+    this.resumeWizardAfterSetup = true;
+    this.openSetup(section, false);
   }
 
   handleSetupSectionChange(section: string): void {
@@ -1169,33 +1172,22 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     await this.refresh(false);
   }
 
-  async leaveOnboarding(completed = false): Promise<void> {
+  async leaveOnboarding(): Promise<void> {
     if (this.pairingRequired) {
       this.enterPairingRequired();
       return;
     }
-    if (this.setupPageMode === "setup") {
-      this.onboardingActive = false;
-      this.threadWizardOpen = false;
-      if (this.selectedThread()) {
-        this.activePanel = "chat";
-        if (this.pushPath(this.selectedId, "chat")) return;
-      } else {
-        this.activePanel = "instanceSettings";
-        this.pushPath("", "instanceSettings");
-      }
-      this.updateDocumentTitle();
-      await this.refresh(false);
-      return;
-    }
     this.onboardingActive = false;
-    this.writeOnboardingFlag(completed ? "completed" : "skipped");
-    if (completed) {
+    this.threadWizardOpen = false;
+    if (this.resumeWizardAfterSetup && this.canCreateThreadFromSidebar()) {
+      this.resumeWizardAfterSetup = false;
       this.threadWizardOpen = true;
       this.activePanel = "chat";
       globalThis.history?.pushState({}, "", this.appPath("/"));
+    } else if (this.selectedThread()) {
+      this.activePanel = "chat";
+      if (this.pushPath(this.selectedId, "chat")) return;
     } else {
-      this.threadWizardOpen = false;
       this.activePanel = "instanceSettings";
       this.pushPath("", "instanceSettings");
     }
@@ -1305,6 +1297,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   closeThreadWizard(): void {
     if (!this.threads.length) return;
+    this.writeOnboardingFlag("skipped");
+    this.resumeWizardAfterSetup = false;
     this.threadWizardOpen = false;
     this.updateDocumentTitle();
     this.renderNow();
@@ -1322,6 +1316,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async handleThreadWizardCreated(thread: ThreadSummary): Promise<void> {
+    this.writeOnboardingFlag("completed");
+    this.resumeWizardAfterSetup = false;
     this.threadWizardOpen = false;
     await this.refresh(false);
     const created = this.threads.find((candidate) => candidate.id === thread.id) || thread;
@@ -5106,6 +5102,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return parts[0] === "setup" && parts[1] === "pairing";
   }
 
+  // Keeps first-run wizard drafts apart per instance and user in one tab.
+  wizardProgressScope(): string {
+    return `${this.appBasePath() || "/"}|${this.currentUser?.id || ""}`;
+  }
+
   private appBasePath(): string {
     const raw = globalThis.document?.querySelector("base")?.getAttribute("href") || "/";
     try {
@@ -5152,7 +5153,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private defaultInstanceRootToLauncher(): boolean {
-    if (this.locationPathParts().length || this.onboardingActive || this.pairingRequired) return false;
+    if (this.locationPathParts().length || this.onboardingActive || this.pairingRequired || this.threadWizardOpen) return false;
     if (!this.appBasePath().startsWith("/instance/") && !this.instanceContext?.canonicalPath) return false;
     this.selectedId = "";
     this.activePanel = "instanceApps";
@@ -5194,10 +5195,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       history: globalThis.history,
       location: globalThis.location,
     }).crossOrigin;
-  }
-
-  private setupPageModeFromPath(): SetupPageMode {
-    return "setup";
   }
 
   private setupSectionFromPath(): SetupSection {
@@ -5464,13 +5461,25 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }).crossOrigin;
   }
 
-  private shouldAutoOpenOnboarding(): boolean {
-    if (this.isUserMode()) return false;
-    if (this.onboardingActive || !this.setupStatus || !this.codexStatusAuthoritative() || this.codexAgentReady()) return false;
+  // First run (admin, Codex not signed in yet, not skipped or finished before)
+  // opens the three-step wizard at "/" or a bare "/setup", not the setup page.
+  private shouldAutoOpenFirstRunWizard(): boolean {
+    if (this.isUserMode() || this.threadWizardOpen || !this.canCreateThreadFromSidebar()) return false;
+    if (!this.setupStatus || !this.codexStatusAuthoritative() || this.codexAgentReady()) return false;
     if (this.setupStatus.onboarding?.autoOpen === false) return false;
     if (this.readOnboardingFlag("skipped") || this.readOnboardingFlag("completed")) return false;
     const parts = this.locationPathParts();
-    return parts.length === 0 || (parts.length === 1 && parts[0] === "ng");
+    if (parts.length === 1 && parts[0] === "setup") return !globalThis.location?.search;
+    return !this.onboardingActive && (parts.length === 0 || (parts.length === 1 && parts[0] === "ng"));
+  }
+
+  private openFirstRunWizard(): void {
+    const fromSetup = this.onboardingActive;
+    this.onboardingActive = false;
+    this.threadWizardOpen = true;
+    this.activePanel = "chat";
+    if (fromSetup) globalThis.history?.replaceState({}, "", this.appPath("/"));
+    this.updateDocumentTitle();
   }
 
   private readOnboardingFlag(name: "skipped" | "completed"): boolean {
@@ -5689,7 +5698,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     if (this.onboardingActive) {
-      globalThis.document.title = this.setupPageMode === "setup" ? "Setup · Orkestr" : "Onboarding · Orkestr";
+      globalThis.document.title = "Setup · Orkestr";
       return;
     }
     if (this.activePanel === "files") {
