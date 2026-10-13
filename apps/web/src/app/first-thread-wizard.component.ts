@@ -22,6 +22,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   @Input() canCancel = true;
   @Input() canManageSetup = false;
   @Input() setupStatus: SetupStatus | null = null;
+  @Input() progressScope = "";
   @Output() cancel = new EventEmitter<void>();
   @Output() created = new EventEmitter<ThreadSummary>();
   @Output() setupRequested = new EventEmitter<"codex" | "whatsapp">();
@@ -70,7 +71,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   // Coming back from Setup restores the step and answers; a step past the AI
   // choice is only kept while that AI is still ready.
   private restoreProgress(): void {
-    const saved = loadWizardProgress();
+    const saved = loadWizardProgress(this.progressScope);
     if (!saved) return;
     this.stepIndex = Math.min(saved.stepIndex, this.steps.length - 1);
     this.threadName = saved.threadName || this.threadName;
@@ -96,6 +97,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       runtimeProvider: this.runtimeProvider,
       whatsappAccessMode: this.whatsappAccessMode,
       whatsappModeTouched: this.whatsappModeTouched,
+      scope: this.progressScope,
     });
   }
 

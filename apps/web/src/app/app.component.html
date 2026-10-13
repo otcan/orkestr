@@ -372,6 +372,7 @@
         [canCancel]="threads.length > 0"
         [canManageSetup]="isAdminMode()"
         [setupStatus]="setupStatus"
+        [progressScope]="wizardProgressScope()"
         (cancel)="closeThreadWizard()"
         (created)="handleThreadWizardCreated($event)"
         (setupRequested)="openSetupFromWizard($event)"

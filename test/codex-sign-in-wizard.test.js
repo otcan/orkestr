@@ -132,6 +132,6 @@ test("wizard signs Codex in on the AI step without leaving the wizard", { timeou
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    await fs.rm(home, { recursive: true, force: true });
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
   }
 });

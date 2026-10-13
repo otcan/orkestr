@@ -1,6 +1,7 @@
 // Remembers the first-run wizard's step and answers for this browser tab, so
-// opening Setup from the wizard and coming back does not start over. No
-// Angular imports, so tests can load it directly.
+// opening Setup from the wizard and coming back does not start over. A draft
+// belongs to one instance and user (scope) and is never restored for another.
+// No Angular imports, so tests can load it directly.
 
 export interface WizardProgress {
   stepIndex: number;
@@ -9,6 +10,7 @@ export interface WizardProgress {
   runtimeProvider: "codex" | "claude-code";
   whatsappAccessMode: "managed" | "self_hosted";
   whatsappModeTouched: boolean;
+  scope: string;
   savedAt: number;
 }
 
@@ -25,11 +27,12 @@ function storage(): StorageLike | null {
   }
 }
 
-export function loadWizardProgress(store: StorageLike | null = storage(), now = Date.now()): WizardProgress | null {
+export function loadWizardProgress(scope: string, store: StorageLike | null = storage(), now = Date.now()): WizardProgress | null {
   try {
     const value = JSON.parse(store?.getItem(key) || "null");
     if (!value || typeof value !== "object") return null;
     if (!Number.isFinite(value.savedAt) || now - value.savedAt > maxAgeMs) return null;
+    if (String(value.scope ?? "") !== String(scope ?? "")) return null;
     return {
       stepIndex: Math.max(0, Math.floor(Number(value.stepIndex) || 0)),
       threadName: String(value.threadName || ""),
@@ -37,6 +40,7 @@ export function loadWizardProgress(store: StorageLike | null = storage(), now = 
       runtimeProvider: value.runtimeProvider === "claude-code" ? "claude-code" : "codex",
       whatsappAccessMode: value.whatsappAccessMode === "managed" ? "managed" : "self_hosted",
       whatsappModeTouched: value.whatsappModeTouched === true,
+      scope: String(value.scope ?? ""),
       savedAt: value.savedAt,
     };
   } catch {

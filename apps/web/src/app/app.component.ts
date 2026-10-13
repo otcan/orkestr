@@ -141,6 +141,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.renderNow();
       return;
     }
+    // Back from a Setup page that the wizard opened: show the wizard again.
+    if (this.resumeWizardAfterSetup && !this.locationPathParts().length && this.canCreateThreadFromSidebar()) {
+      this.resumeWizardAfterSetup = false;
+      this.threadWizardOpen = true;
+      this.activePanel = "chat";
+    }
     if (this.publicAppsActive()) {
       this.closeRawStream();
       this.disconnectSummaryStream();
@@ -5096,6 +5102,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return parts[0] === "setup" && parts[1] === "pairing";
   }
 
+  // Keeps first-run wizard drafts apart per instance and user in one tab.
+  wizardProgressScope(): string {
+    return `${this.appBasePath() || "/"}|${this.currentUser?.id || ""}`;
+  }
+
   private appBasePath(): string {
     const raw = globalThis.document?.querySelector("base")?.getAttribute("href") || "/";
     try {
@@ -5142,7 +5153,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private defaultInstanceRootToLauncher(): boolean {
-    if (this.locationPathParts().length || this.onboardingActive || this.pairingRequired) return false;
+    if (this.locationPathParts().length || this.onboardingActive || this.pairingRequired || this.threadWizardOpen) return false;
     if (!this.appBasePath().startsWith("/instance/") && !this.instanceContext?.canonicalPath) return false;
     this.selectedId = "";
     this.activePanel = "instanceApps";

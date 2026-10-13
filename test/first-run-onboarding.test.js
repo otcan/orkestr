@@ -11,18 +11,21 @@ function memoryStore() {
   return { getItem: (k) => (map.has(k) ? map.get(k) : null), setItem: (k, v) => map.set(k, String(v)), removeItem: (k) => map.delete(k) };
 }
 
-test("wizard progress round-trips, expires after a day, and survives corrupt storage", () => {
+test("wizard progress round-trips, stays within one instance and user, expires after a day, and survives corrupt storage", () => {
   const store = memoryStore();
-  const progress = { stepIndex: 2, threadName: "orkest", repoUrl: "", runtimeProvider: "codex", whatsappAccessMode: "self_hosted", whatsappModeTouched: false };
+  const scope = "/instance/a|user-1";
+  const progress = { stepIndex: 2, threadName: "orkest", repoUrl: "https://example.test/a.git", runtimeProvider: "codex", whatsappAccessMode: "self_hosted", whatsappModeTouched: false, scope };
   saveWizardProgress(progress, store, 1_000);
-  assert.deepEqual(loadWizardProgress(store, 2_000), { ...progress, savedAt: 1_000 });
-  assert.equal(loadWizardProgress(store, 1_000 + 25 * 60 * 60_000), null);
+  assert.deepEqual(loadWizardProgress(scope, store, 2_000), { ...progress, savedAt: 1_000 });
+  assert.equal(loadWizardProgress("/instance/b|user-1", store, 2_000), null, "another instance never sees the draft");
+  assert.equal(loadWizardProgress("/instance/a|user-2", store, 2_000), null, "another user never sees the draft");
+  assert.equal(loadWizardProgress(scope, store, 1_000 + 25 * 60 * 60_000), null);
   store.setItem("orkestr:first-run-wizard", "{not json");
-  assert.equal(loadWizardProgress(store), null);
+  assert.equal(loadWizardProgress(scope, store), null);
   saveWizardProgress({ ...progress, stepIndex: -3, runtimeProvider: "other", whatsappAccessMode: "other" }, store, 5);
-  assert.deepEqual(loadWizardProgress(store, 6), { ...progress, stepIndex: 0, savedAt: 5 });
+  assert.deepEqual(loadWizardProgress(scope, store, 6), { ...progress, stepIndex: 0, savedAt: 5 });
   clearWizardProgress(store);
-  assert.equal(loadWizardProgress(store), null);
+  assert.equal(loadWizardProgress(scope, store), null);
 });
 
 test("first run opens the wizard, not the setup page; returning from Setup resumes the wizard", async () => {
@@ -34,6 +37,11 @@ test("first run opens the wizard, not the setup page; returning from Setup resum
   assert.match(app, /isUserMode\(\) \|\| this\.threadWizardOpen \|\| !this\.canCreateThreadFromSidebar\(\)/);
   assert.match(app, /if \(this\.resumeWizardAfterSetup && this\.canCreateThreadFromSidebar\(\)\)/);
   assert.match(html, /\(setupRequested\)="openSetupFromWizard\(\$event\)"/);
+  assert.match(html, /\[progressScope\]="wizardProgressScope\(\)"/);
+  assert.match(app, /this\.pairingRequired \|\| this\.threadWizardOpen\) return false;/, "the instance launcher redirect never hides an open wizard");
+  assert.match(app, /Back from a Setup page that the wizard opened[\s\S]*this\.resumeWizardAfterSetup = false;\s*this\.threadWizardOpen = true;/);
+  const panel = await fs.readFile("apps/web/src/app/codex-sign-in-panel.component.ts", "utf8");
+  assert.match(panel, /startCodexDeviceAuth\(\)\);\s*\/\/[^\n]*\n\s*if \(this\.destroyed\) return;/, "no polling after the panel closed mid-request");
 });
 
 async function findChrome() {
@@ -123,6 +131,13 @@ test("fresh install: / and bare /setup show the wizard, /setup/<section> stays S
     await shows(".first-thread-wizard");
     await page.waitForFunction(() => document.querySelector(".first-thread-wizard")?.textContent.includes("Step 2 of 3"), { timeout: 15_000 });
     assert.ok(await page.$("ork-codex-sign-in-panel"), "the wizard is back on the AI step");
+
+    // The browser Back button from a Setup page the wizard opened does the same.
+    await click("More Codex options (API key)");
+    await shows(".onboarding-shell");
+    await page.goBack();
+    await shows(".first-thread-wizard");
+    await page.waitForFunction(() => document.querySelector(".first-thread-wizard")?.textContent.includes("Step 2 of 3"), { timeout: 15_000 });
   } finally {
     await browser?.close();
     await new Promise((resolve) => server.close(resolve));
@@ -130,7 +145,7 @@ test("fresh install: / and bare /setup show the wizard, /setup/<section> stays S
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    await fs.rm(home, { recursive: true, force: true });
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
   }
 });
 
@@ -204,6 +219,6 @@ test("Setup keeps the compact Codex link working through the shared panel and sh
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    await fs.rm(home, { recursive: true, force: true });
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
   }
 });

@@ -76,6 +76,8 @@ export class CodexSignInPanelComponent implements OnInit, OnDestroy {
     this.error = "";
     try {
       const result = await firstValueFrom(this.api.startCodexDeviceAuth());
+      // Closed while the request was in flight: do not start polling.
+      if (this.destroyed) return;
       this.deviceCode = result.code || "";
       this.authUrl = result.authUrl || "";
       this.copied = false;
@@ -102,6 +104,7 @@ export class CodexSignInPanelComponent implements OnInit, OnDestroy {
 
   private startPolling(expiresAt: string): void {
     this.stopPolling();
+    if (this.destroyed) return;
     const expiresAtMs = Date.parse(expiresAt) || Date.now() + 15 * 60_000;
     const poll = async (): Promise<void> => {
       if (Date.now() > expiresAtMs) {
