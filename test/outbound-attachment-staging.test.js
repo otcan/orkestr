@@ -23,7 +23,9 @@ async function fixture(t, phase = "final_answer") {
     binding: { connector: "whatsapp", chatId: "synthetic-chat", responderAccountId: "synthetic-account", outboundAccountId: "synthetic-account", mirrorToWhatsApp: true } }, env);
   await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.example.invalid" }, env);
   const parent = await appendThreadMessage(thread.id, { role: "user", source: "whatsapp_inbound", connector: "whatsapp", chatId: "synthetic-chat", state: "completed", text: "Document please" }, env);
-  const source = path.join(home, "synthetic.xlsx");
+  // Not directly in ORKESTR_HOME: links to files there are Orkestr's own data and never attach.
+  const source = path.join(home, "exports", "synthetic.xlsx");
+  await fs.mkdir(path.dirname(source), { recursive: true });
   const reply = () => appendThreadMessage(thread.id, { role: "assistant", source: "codex-app-server", connector: "whatsapp", chatId: "synthetic-chat",
     parentMessageId: parent.id, state: "completed", phase, text: "Document ready.",
     attachments: [{ path: source, filename: "synthetic.xlsx" }] }, env);
