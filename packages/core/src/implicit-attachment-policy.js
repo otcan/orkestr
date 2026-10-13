@@ -72,15 +72,25 @@ const inside = (root, candidate) => {
 export function implicitInternalDataPath(filePath = "", roots = {}) {
   if (!roots.home) return false;
   const resolved = path.resolve(String(filePath || ""));
-  // Compare against the data directory both as configured and as resolved, so
-  // a symlinked ORKESTR_HOME cannot hide realpath'd targets inside it.
-  for (const home of new Set([path.resolve(roots.home), realOrSame(path.resolve(roots.home))])) {
+  const configuredHome = path.resolve(roots.home);
+  // A symlinked ORKESTR_HOME: realpath'd targets are compared against its real
+  // location too. Only the data directory itself is resolved, never a root.
+  const realHome = realOrSame(configuredHome);
+  for (const home of new Set([configuredHome, realHome])) {
     if (!inside(home, resolved)) continue;
-    const shareable = (roots.allowed || []).flatMap((root) => [root, realOrSame(root)])
-      .filter((root) => root !== home && inside(home, root));
-    if (shareable.some((root) => inside(root, resolved))) return false;
     const [top] = path.relative(home, resolved).split(path.sep);
-    return path.dirname(resolved) === home || internalDataFolders.includes(top) || internalDataExtension.test(path.basename(resolved));
+    // Internal record folders are never exempt, whatever allowed root points at them.
+    if (internalDataFolders.includes(top)) return true;
+    // Otherwise a shareable folder exempts its contents only by its own
+    // configured path inside the data directory (rebased by prefix onto the
+    // real location). Symlinked roots are not followed, so an alias into
+    // internal data grants nothing.
+    const shareable = (roots.allowed || []).map((root) => path.resolve(root)).flatMap((root) => {
+      if (root !== configuredHome && inside(configuredHome, root)) return [root, path.join(realHome, path.relative(configuredHome, root))];
+      return root !== realHome && inside(realHome, root) ? [root] : [];
+    });
+    if (shareable.some((root) => inside(root, resolved))) return false;
+    return path.dirname(resolved) === home || internalDataExtension.test(path.basename(resolved));
   }
   return false;
 }
