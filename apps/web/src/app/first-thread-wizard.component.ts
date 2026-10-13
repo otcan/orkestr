@@ -2,6 +2,8 @@ import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadMessage, ThreadSummary } from "./api.service";
+import { CodexSignInPanelComponent } from "./codex-sign-in-panel.component";
+import { codexStateLabel } from "./codex-runtime-status";
 import { WhatsAppPairPanelComponent } from "./whatsapp-pair-panel.component";
 
 type WizardStepId = "whatsapp" | "codex" | "review";
@@ -9,7 +11,7 @@ type WhatsAppAccessMode = "managed" | "self_hosted";
 
 @Component({
   selector: "ork-first-thread-wizard",
-  imports: [FormsModule, WhatsAppPairPanelComponent],
+  imports: [CodexSignInPanelComponent, FormsModule, WhatsAppPairPanelComponent],
   templateUrl: "./first-thread-wizard.component.html",
 })
 export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit {
@@ -22,6 +24,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   @Output() cancel = new EventEmitter<void>();
   @Output() created = new EventEmitter<ThreadSummary>();
   @Output() setupRequested = new EventEmitter<"codex" | "whatsapp">();
+  @Output() setupStatusChange = new EventEmitter<SetupStatus>();
 
   // WhatsApp first: it is the step users came for, and it can be skipped.
   readonly steps: Array<{ id: WizardStepId; label: string }> = [
@@ -224,21 +227,20 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   }
 
   codexStateLabel(): string {
-    const connector = this.codexConnector();
-    const state = String(connector?.state || "checking").toLowerCase();
-    const reason = String(connector?.details?.["reason"] || "").toLowerCase();
-    if (state === "connected") return "connected";
-    if (state === "partial") return "sign-in required";
-    if (state === "not_connected" && reason === "codex_missing") return "runtime missing";
-    if (state === "not_connected" && reason.includes("disabled")) return "disabled";
-    if (state === "not_connected") return "runtime unavailable";
-    return state.replace(/_/g, " ");
+    return codexStateLabel(this.codexConnector());
   }
 
   codexSummary(): string {
     if (this.codexReady()) return "Codex is signed in with your ChatGPT account.";
     if (!this.codexConnector()) return "Checking whether Codex is signed in…";
     return "Sign in to Codex with your ChatGPT account. Sign-in uses a one-time code, which must first be allowed in ChatGPT → Settings → Security (\"device code\" sign-in).";
+  }
+
+  // Codex signed in from the inline panel: continue without reloading the app.
+  onCodexConnected(setup: SetupStatus): void {
+    this.setupStatus = setup;
+    this.setupStatusChange.emit(setup);
+    this.cdr.markForCheck();
   }
 
   openCodexSetup(): void {

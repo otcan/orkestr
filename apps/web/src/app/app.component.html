@@ -377,6 +377,7 @@
         (cancel)="closeThreadWizard()"
         (created)="handleThreadWizardCreated($event)"
         (setupRequested)="openSetup($event, true)"
+        (setupStatusChange)="setupStatus = $event"
       ></ork-first-thread-wizard>
     } @else if (selectedThread(); as thread) {
       <header class="chat-head">
