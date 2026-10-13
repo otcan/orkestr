@@ -4168,7 +4168,7 @@ test("local whatsapp suppresses an outbound media callback that races send confi
     const events = await listEvents(env, 20);
 
     assert.equal(callback.skipped, "outbound_echo_attachment_pending_send");
-    assert.equal(downloadAttempts, 1);
+    assert.equal(downloadAttempts, 0, "the echo is dropped before any download");
     assert.equal(messages.length, 0);
     assert.ok(events.some((event) =>
       event.type === "whatsapp_outbound_echo_attachment_pending_send" &&

@@ -4277,6 +4277,20 @@ export async function handleInboundMessage(accountId, message, env = process.env
     };
   }
   if (fromMe && outboundMessageIds.has(eventId)) return { skipped: "outbound_echo_id", eventId, chatId };
+  // Our own media send to this chat is still in flight: WhatsApp reports the
+  // message before sendMessage returns its id, so this is the echo. Drop it
+  // before downloading, or it reaches the thread as owner input.
+  if (pendingAttachmentEcho) {
+    rememberOutboundMessageId(eventId);
+    await appendEvent({
+      type: "whatsapp_outbound_echo_attachment_pending_send",
+      accountId,
+      eventId,
+      chatId,
+      messageType: message?.type || message?._data?.type || "",
+    }, env).catch(() => {});
+    return { skipped: "outbound_echo_attachment_pending_send", eventId, chatId };
+  }
   if (outboundTextRecentlySent(accountId, chatId, text, env)) {
     return { skipped: fromMe ? "outbound_echo_text" : "outbound_echo_cross_account_text", eventId, chatId };
   }
@@ -4310,18 +4324,6 @@ export async function handleInboundMessage(accountId, message, env = process.env
       error: error?.message || String(error),
       retryable: error?.retryable === true,
     }, env).catch(() => {});
-    if (pendingAttachmentEcho) {
-      rememberOutboundMessageId(eventId);
-      await appendEvent({
-        type: "whatsapp_outbound_echo_attachment_pending_send",
-        accountId,
-        eventId,
-        chatId,
-        messageType: message?.type || message?._data?.type || "",
-        downloadFailed: true,
-      }, env).catch(() => {});
-      return { skipped: "outbound_echo_attachment_pending_send", eventId, chatId };
-    }
     if (!failedInboundMediaCanRouteAsLinkText(message, text)) {
       const settled = await settleInboundMediaDownloadFailure({
         accountId,
@@ -7851,10 +7853,13 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
           throw error;
         }
         const deliveredMessageId = serializedMessageId(message);
+        // From here on the id identifies the echo; the in-flight marker must
+        // not outlive the send, or it would swallow a real photo from the owner.
+        if (deliveredMessageId) rememberOutboundMessageId(deliveredMessageId);
+        forgetPendingOutboundAttachmentEcho(pendingAttachmentEcho);
         stage = "confirm_media";
         if (!deliveredMessageId) throw new Error("media_ack_missing");
         attachmentOutcomes[index] = { index, outcome: "sent", id: deliveredMessageId };
-        rememberOutboundMessageId(deliveredMessageId);
         await rememberTransformedOutboundMediaEcho({
           accountId: selectedAccountId,
           chatId,
