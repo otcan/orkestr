@@ -3,32 +3,36 @@ import { firstValueFrom } from "rxjs";
 import { ApiService, WhatsAppAccount } from "./api.service";
 
 // Pairs the built-in WhatsApp bridge on this server by QR code (self-hosted
-// mode). The session stays in this instance's data volume; nothing here talks
-// to an Orkestr-hosted service.
+// mode). The session stays on this server; nothing here talks to an
+// Orkestr-hosted service.
 @Component({
   selector: "ork-whatsapp-pair-panel",
   styles: [`
     .whatsapp-pair-panel { display: grid; gap: 8px; justify-items: start; margin: 12px 0; }
     .whatsapp-pair-qr { width: 240px; height: 240px; background: #fff; padding: 8px; border-radius: 8px; }
-    .whatsapp-pair-state, .hint, .error { margin: 0; }
+    .whatsapp-pair-state, .hint, .error, .slow { margin: 0; }
+    .slow { color: #765100; }
     .error { color: #a2301f; }
   `],
   template: `
     <div class="whatsapp-pair-panel" aria-live="polite">
-      <p class="whatsapp-pair-state"><strong>WhatsApp on this server:</strong> {{ stateLabel() }}</p>
+      <p class="whatsapp-pair-state"><strong>WhatsApp:</strong> {{ stateLabel() }}</p>
       @if (qrUrl()) {
         <img class="whatsapp-pair-qr" [src]="qrUrl()" width="240" height="240" alt="QR code to link WhatsApp to this server">
-        <p class="hint">On your phone open WhatsApp → Settings → Linked devices → Link a device, then scan this code.</p>
+        <p class="hint">On your phone open WhatsApp → Settings → Linked devices → Link a device, then scan this code. The code renews itself every few seconds.</p>
       }
       @if (state() === "ready") {
-        <p class="hint">Linked. The session is stored only in this server's data volume and reconnects after restarts.</p>
+        <p class="hint">Linked. Your WhatsApp session is saved on this server only and reconnects by itself after a restart.</p>
+      }
+      @if (slowHint()) {
+        <p class="slow">{{ slowHint() }}</p>
       }
       @if (error) {
         <p class="error">{{ error }}</p>
       }
       @if (state() !== "ready") {
-        <button class="secondary" type="button" (click)="start()" [disabled]="starting">
-          {{ startedOnce ? "Restart pairing" : "Show QR code" }}
+        <button [class.secondary]="startedOnce" type="button" (click)="start()" [disabled]="starting">
+          {{ starting ? "Starting…" : startedOnce ? "Start over with a new QR code" : "Show QR code" }}
         </button>
       }
     </div>
@@ -49,6 +53,8 @@ export class WhatsAppPairPanelComponent implements OnInit, OnDestroy {
   startedOnce = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastReady = false;
+  private lastState = "";
+  private stateSince = Date.now();
 
   ngOnInit(): void {
     void this.refresh();
@@ -66,16 +72,26 @@ export class WhatsAppPairPanelComponent implements OnInit, OnDestroy {
   stateLabel(): string {
     const labels: Record<string, string> = {
       idle: "not linked yet",
-      starting: "starting…",
-      qr_needed: "waiting for you to scan the QR code",
-      authenticated: "linked, finishing sync…",
+      starting: "getting a QR code ready…",
+      qr_needed: "scan the QR code with your phone",
+      authenticated: "linked, loading your chats (usually under a minute)…",
       ready: "linked and ready",
-      disconnected: "disconnected",
-      auth_failure: "linking failed; restart pairing",
-      dependency_missing: "the WhatsApp bridge is not available in this installation",
-      failed: "failed to start",
+      disconnected: "disconnected. Start over to link again",
+      auth_failure: "linking did not work. Start over with a new QR code",
+      dependency_missing: "this installation cannot link WhatsApp (the WhatsApp component is missing)",
+      failed: "could not start. Start over, or check the server log",
     };
     return labels[this.state()] || this.state().replace(/_/g, " ");
+  }
+
+  // Shown when a waiting state lasts longer than it normally does.
+  slowHint(): string {
+    const seconds = (Date.now() - this.stateSince) / 1000;
+    const state = this.state();
+    if (state === "starting" && seconds > 45) return "This is taking longer than usual. Start over, or check the server log for WhatsApp errors.";
+    if (state === "authenticated" && seconds > 90) return "Still loading. Keep WhatsApp open on your phone with internet. If nothing changes in a few minutes, start over.";
+    if (state === "qr_needed" && seconds > 180) return "Not scanned yet? On the phone: Settings → Linked devices → Link a device. The QR code here stays current.";
+    return "";
   }
 
   qrUrl(): string {
@@ -108,6 +124,10 @@ export class WhatsAppPairPanelComponent implements OnInit, OnDestroy {
       // Once linked, the status reports the phone identity as accountId; the slot id stays in runtimeAccountId.
       this.account = (status.accounts || []).find((item) => [item.runtimeAccountId, item.accountId, item.id].includes(this.accountId) ||
         (item.legacyRoleAliases || []).includes(this.accountId)) || null;
+      if (this.state() !== this.lastState) {
+        this.lastState = this.state();
+        this.stateSince = Date.now();
+      }
       const error = String(this.account?.["error"] || "");
       if (error && this.state() !== "ready") this.error = error;
     } catch (error) {

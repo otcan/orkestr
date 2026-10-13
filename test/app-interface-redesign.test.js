@@ -61,7 +61,7 @@ test("self-hosted first run offers owner pairing without claiming an unpaired ch
   assert.match(template, /availableWhatsAppModes\(\)\.includes\('managed'\)/);
   assert.match(template, /availableWhatsAppModes\(\)\.includes\('self_hosted'\)/);
   assert.match(template, /\(pairedAccount\)="onWhatsAppPaired\(\$event\)"/);
-  assert.match(template, /WhatsApp pairing and optional connections can be completed later/);
+  assert.match(template, /You can link WhatsApp, Gmail and timers later in Setup/);
   assert.match(template, /setupRequested\.emit\('whatsapp'\)/);
   assert.match(template, /runtimeProvider === 'claude-code' \? 'Claude Code/);
   assert.match(template, /role="alert"/);

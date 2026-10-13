@@ -156,3 +156,32 @@ code {
 small {
   color: #647064;
 }
+
+.steps {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+  color: #3f4d59;
+  line-height: 1.4;
+}
+
+.command-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.command-row .copy {
+  min-width: 72px;
+}
+
+.hint {
+  line-height: 1.4;
+}
+
+code.inline {
+  display: inline;
+  padding: 0 3px;
+  font-size: 0.9em;
+}

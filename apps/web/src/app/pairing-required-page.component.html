@@ -5,13 +5,16 @@
       <h1>{{ approvalTitle() }}</h1>
       @if (approvalDescription()) {
         <span class="intent-summary">{{ approvalDescription() }}</span>
+      } @else {
+        <span class="intent-summary">
+          Only the person who runs this server may use it. To prove that, run one command on the server.
+          This page continues by itself once you have.
+        </span>
       }
     </header>
 
     @if (error) {
       <div class="notice error">{{ error }}</div>
-    } @else if (notice) {
-      <div class="notice">{{ notice }}</div>
     }
 
     @if (challenge) {
@@ -25,17 +28,40 @@
           }
         </dl>
       }
-      <button class="command" type="button" (click)="copyCommand()" [attr.aria-label]="'Copy ' + approveCommand()">
-        <code>{{ approveCommand() }}</code>
-      </button>
-      <div class="status">
-        <span [class]="challengeStatusClass()">{{ challenge.status }}</span>
-        <small>Expires {{ expiryLabel() }}</small>
-      </div>
-      <button class="secondary" type="button" (click)="refreshChallenge()" [disabled]="busy">Check</button>
+      @if (isExpired()) {
+        <div class="notice error">This code has expired. Make a new one and run the new command.</div>
+        <button type="button" (click)="createChallenge()" [disabled]="busy">{{ busy ? "Making a new code" : "Make a new code" }}</button>
+      } @else if (challenge.status === "rejected") {
+        <div class="notice error">This request was rejected on the server. Make a new code if that was a mistake.</div>
+        <button type="button" (click)="createChallenge()" [disabled]="busy">{{ busy ? "Making a new code" : "Make a new code" }}</button>
+      } @else {
+        <ol class="steps">
+          <li>{{ commandWhere() }}</li>
+          <li>Run this command:</li>
+        </ol>
+        <div class="command-row">
+          <button class="command" type="button" (click)="copyCommand()" [attr.aria-label]="'Copy ' + approveCommand()">
+            <code>{{ approveCommand() }}</code>
+          </button>
+          <button class="secondary copy" type="button" (click)="copyCommand()">{{ copied ? "Copied" : "Copy" }}</button>
+        </div>
+        @if (isDocker()) {
+          <small class="hint">
+            Gave the container another name? Replace the first <code class="inline">orkestr</code> with the name
+            <code class="inline">docker ps</code> shows.
+          </small>
+        }
+        <div class="status" aria-live="polite">
+          <span [class]="challengeStatusClass()">{{ statusLabel() }}</span>
+          <small>{{ expiryLabel() }}</small>
+        </div>
+        @if (notice) {
+          <div class="notice">{{ notice }}</div>
+        }
+      }
     } @else {
       <button type="button" (click)="createChallenge()" [disabled]="busy">
-        {{ busy ? "Creating" : "Create command" }}
+        {{ busy ? "Making a code" : "Make an approval code" }}
       </button>
     }
   </section>

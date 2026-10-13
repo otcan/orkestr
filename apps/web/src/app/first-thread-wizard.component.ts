@@ -4,7 +4,7 @@ import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadMessage, ThreadSummary } from "./api.service";
 import { WhatsAppPairPanelComponent } from "./whatsapp-pair-panel.component";
 
-type WizardStepId = "welcome" | "codex" | "whatsapp" | "review";
+type WizardStepId = "whatsapp" | "codex" | "review";
 type WhatsAppAccessMode = "managed" | "self_hosted";
 
 @Component({
@@ -23,11 +23,11 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   @Output() created = new EventEmitter<ThreadSummary>();
   @Output() setupRequested = new EventEmitter<"codex" | "whatsapp">();
 
+  // WhatsApp first: it is the step users came for, and it can be skipped.
   readonly steps: Array<{ id: WizardStepId; label: string }> = [
-    { id: "welcome", label: "Welcome" },
-    { id: "codex", label: "Coding agent" },
-    { id: "whatsapp", label: "WhatsApp" },
-    { id: "review", label: "Start" },
+    { id: "whatsapp", label: "Link WhatsApp" },
+    { id: "codex", label: "Choose the AI" },
+    { id: "review", label: "Name and start" },
   ];
 
   stepIndex = 0;
@@ -42,6 +42,8 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   createdThread: ThreadSummary | null = null;
   boundChatName = "";
   proof = { inbound: false, reply: false };
+  private proofStartedAt = 0;
+  private inboundAt = 0;
   private proofTimer: ReturnType<typeof setInterval> | null = null;
   runtimeProvider: "codex" | "claude-code" = "codex";
   claudeAccounts: LlmAccountProfile[] = [];
@@ -95,7 +97,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   }
 
   activeStep(): WizardStepId {
-    return this.steps[this.stepIndex]?.id || "welcome";
+    return this.steps[this.stepIndex]?.id || "whatsapp";
   }
 
   progressPercent(): number {
@@ -127,10 +129,14 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
 
   canContinue(): boolean {
     const step = this.activeStep();
-    if (step === "welcome") return Boolean(this.agentName());
     if (step === "codex") return this.agentReady();
     if (step === "whatsapp") return this.availableWhatsAppModes().includes(this.whatsappAccessMode);
     return true;
+  }
+
+  nextLabel(): string {
+    const linking = this.activeStep() === "whatsapp" && this.canManageSetup && this.whatsappAccessMode === "self_hosted";
+    return linking && !(this.whatsappReady && this.pairedWhatsAppAccount) ? "Skip for now" : "Next";
   }
 
   canCreate(): boolean {
@@ -150,7 +156,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   }
 
   codebaseLabel(): string {
-    return this.usesRemoteRepo() ? "Clone Git repository" : "New local git repository";
+    return this.usesRemoteRepo() ? "Copy of your Git repository" : "New empty project folder";
   }
 
   desktopSlug(): string {
@@ -162,10 +168,10 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   }
 
   whatsappAccessLabel(): string {
-    if (this.whatsappAccessMode !== "self_hosted") return "Managed WhatsApp relay";
+    if (this.whatsappAccessMode !== "self_hosted") return "WhatsApp provided by this server's operator";
     return this.whatsappReady && this.pairedWhatsAppAccount
-      ? "Own WhatsApp (linked) · your own private chat will be connected"
-      : "Own WhatsApp · not linked yet, connect later in Setup";
+      ? "Own WhatsApp (linked) · your \"Message yourself\" chat will talk to the agent"
+      : "Not linked yet · you can link it later in Setup";
   }
 
   availableWhatsAppModes(): WhatsAppAccessMode[] {
@@ -209,8 +215,8 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   agentSummary(): string {
     if (this.runtimeProvider === "codex") return this.codexSummary();
     const account = this.selectedClaudeAccount();
-    if (!account) return "Create and verify a Claude Code subscription profile under Tools → Models first.";
-    return account.state === "ready" ? `${account.label} is ready.` : `${account.label} is ${account.state.replace(/_/g, " ")}. Verify its attended login under Tools → Models.`;
+    if (!account) return "Add your Claude subscription under Tools → Models first.";
+    return account.state === "ready" ? `${account.label} is ready.` : `${account.label} is ${account.state.replace(/_/g, " ")}. Sign in again under Tools → Models.`;
   }
 
   codexBlocked(): boolean {
@@ -230,9 +236,9 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   }
 
   codexSummary(): string {
-    if (this.codexReady()) return this.codexConnector()?.summary || "Codex Agent is connected.";
-    const summary = this.codexConnector()?.summary || "Checking Codex Agent status.";
-    return `${summary} Connect Codex Agent before creating or opening workspaces.`;
+    if (this.codexReady()) return "Codex is signed in with your ChatGPT account.";
+    if (!this.codexConnector()) return "Checking whether Codex is signed in…";
+    return "Sign in to Codex with your ChatGPT account. Sign-in uses a one-time code, which must first be allowed in ChatGPT → Settings → Security (\"device code\" sign-in).";
   }
 
   openCodexSetup(): void {
@@ -304,7 +310,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       const thread = response.thread;
       this.creationStage = "Starting Virtual Desk";
       await this.startVirtualDesk(thread).catch(() => {
-        this.desktopWarning = "The desktop did not start. Open Desktops after entering the conversation to retry.";
+        this.desktopWarning = "The agent's browser did not start. Everything else works; you can start it later under Desktops in the conversation.";
       });
       this.creationStage = this.runtimeProvider === "claude-code" ? "Starting Claude Code in background" : "Starting Codex in background";
       if (this.canManageSetup && this.whatsappAccessMode === "self_hosted" && this.whatsappReady && this.pairedWhatsAppAccount) {
@@ -318,6 +324,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
             pairedContactId: this.pairedWhatsAppAccount.contactId,
           }));
           this.boundChatName = group.chat?.name || name;
+          this.creationStage = "";
           this.createdThread = thread;
           this.startProofCheck(thread.id);
           return;
@@ -345,6 +352,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       try {
         const response = await firstValueFrom(this.api.threadMessages(threadId, 50));
         this.proof = whatsappRoundTrip(response.messages || []);
+        if (this.proof.inbound && !this.inboundAt) this.inboundAt = Date.now();
         this.cdr.markForCheck();
         if (this.proof.reply) this.stopProofCheck();
       } catch {
@@ -352,7 +360,23 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       }
     };
     void check();
+    this.proofStartedAt = Date.now();
+    this.inboundAt = 0;
     this.proofTimer = setInterval(() => void check(), 3000);
+  }
+
+  // Help text when the WhatsApp check takes longer than it normally does.
+  proofHint(): string {
+    if (this.proof.reply || !this.proofStartedAt) return "";
+    const now = Date.now();
+    if (this.proof.inbound) {
+      return now - this.inboundAt > 90_000
+        ? "Your message arrived, but the agent has not answered yet. The first start can take a minute or two. Open the conversation to see what it is doing."
+        : "";
+    }
+    return now - this.proofStartedAt > 45_000
+      ? "Nothing received yet. Check that you wrote in \"Message yourself\" (your own name, marked \"You\") on the phone you linked, and that the phone is online. You can also open the conversation and type there."
+      : "";
   }
 
   private threadId(name: string): string {

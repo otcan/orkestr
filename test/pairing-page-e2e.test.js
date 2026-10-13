@@ -106,7 +106,7 @@ test("pairing required page generates and consumes a challenge in a real browser
     await page.waitForFunction(
       () => {
         const text = document.body.innerText.toLowerCase();
-        return text.includes("orkestr connect approve") && text.includes("pending");
+        return text.includes("orkestr connect approve") && text.includes("waiting for approval");
       },
       { timeout: 10_000 },
     );
@@ -403,7 +403,7 @@ test("pairing page redirects to challenge path after pairing", async (t) => {
     await page.waitForFunction(
       () => {
         const text = document.body.innerText.toLowerCase();
-        return text.includes("orkestr connect approve") && text.includes("pending");
+        return text.includes("orkestr connect approve") && text.includes("waiting for approval");
       },
       { timeout: 10_000 },
     );
