@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 
 // A path mentioned in prose is not approval to export configuration/credentials.
@@ -52,7 +53,11 @@ export function rejectImplicitAttachment(candidate, filePath, skipped, roots = n
   return true;
 }
 
-const internalDataExtension = /\.(?:sqlite|sqlite3|db)(?:-wal|-shm|-journal)?$|\.(?:jsonl|ndjson)(?:\.gz)?$/i;
+const internalDataExtension = /\.(?:sqlite|sqlite3|db)(?:-wal|-shm|-journal)?$|\.(?:jsonl|ndjson)(?:\.gz)?$|\.log(?:\.\d+)?(?:\.gz)?$/i;
+// Folders of internal records inside ORKESTR_HOME (staging intents, request
+// and health logs); nothing in them is an output meant for the user.
+const internalDataFolders = ["outbound-attachment-staging", "observability"];
+const realOrSame = (value) => { try { return fs.realpathSync(value); } catch { return value; } };
 const inside = (root, candidate) => {
   const relative = path.relative(root, candidate);
   return !relative || (!relative.startsWith("..") && !path.isAbsolute(relative));
@@ -65,12 +70,19 @@ const inside = (root, candidate) => {
 // broader allowed root that contains the data directory (tmp, /home) does not
 // exempt it. Explicit attachments keep the regular owner/path policy.
 export function implicitInternalDataPath(filePath = "", roots = {}) {
-  const home = roots.home ? path.resolve(roots.home) : "";
+  if (!roots.home) return false;
   const resolved = path.resolve(String(filePath || ""));
-  if (!home || !inside(home, resolved)) return false;
-  const shareable = (roots.allowed || []).filter((root) => root !== home && inside(home, root));
-  if (shareable.some((root) => inside(root, resolved))) return false;
-  return path.dirname(resolved) === home || internalDataExtension.test(path.basename(resolved));
+  // Compare against the data directory both as configured and as resolved, so
+  // a symlinked ORKESTR_HOME cannot hide realpath'd targets inside it.
+  for (const home of new Set([path.resolve(roots.home), realOrSame(path.resolve(roots.home))])) {
+    if (!inside(home, resolved)) continue;
+    const shareable = (roots.allowed || []).flatMap((root) => [root, realOrSame(root)])
+      .filter((root) => root !== home && inside(home, root));
+    if (shareable.some((root) => inside(root, resolved))) return false;
+    const [top] = path.relative(home, resolved).split(path.sep);
+    return path.dirname(resolved) === home || internalDataFolders.includes(top) || internalDataExtension.test(path.basename(resolved));
+  }
+  return false;
 }
 
 // Why a text-sourced path must not be attached implicitly, or "".
