@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-alpha.198
 
 - One first-run path: a new install opens a three-step wizard (Link WhatsApp → Choose the AI → Name and start) at `/` and at a bare `/setup`. The long setup page is now Setup only (no goals, step tabs or starter thread); the timezone moved into Setup → Connections.
 - Codex sign-in happens inside the wizard with a ChatGPT device code (shared `ork-codex-sign-in-panel`, also used by Setup and the compact `?compact=1` link). Only admins see it.
