@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { listAgentMessages } from "../packages/core/src/messages.js";
+import { listEvents } from "../packages/storage/src/store.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { handleInboundMessage, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage, setLocalWhatsAppRuntimeForTest } from "../packages/connectors/src/whatsapp-local-bridge.js";
@@ -24,6 +25,8 @@ async function boundThread(env, threadId, chatId) {
     binding: { connector: "whatsapp", chatId, responderAccountId: "responder", outboundAccountId: "responder", enabled: true },
   }, env);
 }
+
+const ownEchoReasons = ["outbound_echo_attachment_pending_send", "outbound_echo_id"];
 
 function ownImageCallback(chatId, id, downloads) {
   return {
@@ -77,7 +80,8 @@ test("own image echo that arrives before sendMessage returns is dropped even whe
     setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
     await sendLocalWhatsAppMessage({ accountId: "responder", chatId, attachments: files, env });
     const results = await Promise.all(callbacks);
-    assert.deepEqual(results.map((result) => result.skipped), ["outbound_echo_attachment_pending_send", "outbound_echo_attachment_pending_send"]);
+    // Before or after the send returns, the echo is dropped by id.
+    assert.ok(results.every((result) => ownEchoReasons.includes(result.skipped)), JSON.stringify(results.map((result) => result.skipped)));
     assert.deepEqual(downloads, [], "echoes are dropped before any download");
     assert.equal((await listThreadMessages("echo-race-thread", env)).length, 0);
     const media = await fs.readdir(path.join(home, "whatsapp-bridge", "inbound-media")).catch(() => []);
@@ -87,7 +91,7 @@ test("own image echo that arrives before sendMessage returns is dropped even whe
   }
 });
 
-test("the in-flight marker ends with the send, so a later own photo is not swallowed", async () => {
+test("after a send returns, a later own photo is not swallowed", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-echo-marker-"));
   const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder" };
   const chatId = "chat-echo-marker@g.us";
@@ -109,6 +113,122 @@ test("the in-flight marker ends with the send, so a later own photo is not swall
     await sendLocalWhatsAppMessage({ accountId: "responder", chatId, attachments: [{ path: file, filename: "sent.png", mimetype: "image/png" }], env });
     const later = await handleInboundMessage("responder", ownImageCallback(chatId, "3EB0OWNERPHOTO", []), env, { ownOnly: true });
     assert.notEqual(later.skipped, "outbound_echo_attachment_pending_send");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+// A runtime whose sends finish only when the test says so.
+function heldSendRuntime() {
+  const sends = [];
+  const runtime = {
+    MessageMedia: Object.assign(function MessageMedia(mimetype, data) { return { mimetype, data }; }, {
+      fromFilePath(filePath) { return { filePath, mimetype: "image/png", data: "" }; },
+    }),
+    client: {
+      sendMessage(to) {
+        return new Promise((resolve) => {
+          sends.push({ to, finish: (id) => resolve({ id: { _serialized: `true_${to}_${id}`, id } }) });
+        });
+      },
+    },
+  };
+  return { runtime, sends };
+}
+
+async function pngFile(home, name) {
+  const file = path.join(home, name);
+  await fs.writeFile(file, `png-${name}`);
+  return { path: file, filename: name, mimetype: "image/png" };
+}
+
+async function waitFor(check) {
+  for (let i = 0; i < 200 && !check(); i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.ok(check(), "condition reached");
+}
+
+const echoReasons = ["outbound_echo_attachment_pending_send", "outbound_echo_id", "outbound_echo_attachment"];
+
+test("a replay of an already sent image while the next one is sending does not let the next echo through", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-echo-replay-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder" };
+  const chatId = "chat-echo-replay@g.us";
+  await boundThread(env, "echo-replay-thread", chatId);
+  const { runtime, sends } = heldSendRuntime();
+  const downloads = [];
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    const sendA = sendLocalWhatsAppMessage({ accountId: "responder", chatId, attachments: [await pngFile(home, "a.png")], env });
+    await waitFor(() => sends.length === 1);
+    sends[0].finish("3EB0AAAA");
+    await sendA;
+    const sendB = sendLocalWhatsAppMessage({ accountId: "responder", chatId, attachments: [await pngFile(home, "b.png")], env });
+    await waitFor(() => sends.length === 2);
+    const replayA = await handleInboundMessage("responder", ownImageCallback(chatId, "3EB0AAAA", downloads), env, { ownOnly: true });
+    const echoB = handleInboundMessage("responder", ownImageCallback(chatId, "3EB0BBBB", downloads), env, { ownOnly: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    sends[1].finish("3EB0BBBB");
+    await sendB;
+    assert.equal(replayA.skipped, "outbound_echo_id");
+    assert.ok(ownEchoReasons.includes((await echoB).skipped), "the outgoing echo is dropped");
+    assert.deepEqual(downloads, []);
+    assert.equal((await listThreadMessages("echo-replay-thread", env)).length, 0);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("a real self-chat photo during an outgoing image send is kept, and the outgoing echo is still dropped", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-echo-genuine-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder" };
+  const chatId = "chat-echo-genuine@g.us";
+  await boundThread(env, "echo-genuine-thread", chatId);
+  const { runtime, sends } = heldSendRuntime();
+  const downloads = [];
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    const sendB = sendLocalWhatsAppMessage({ accountId: "responder", chatId, attachments: [await pngFile(home, "b.png")], env });
+    await waitFor(() => sends.length === 1);
+    const genuine = handleInboundMessage("responder", ownImageCallback(chatId, "3EB0OWNER", downloads), env, { ownOnly: true });
+    const echoB = handleInboundMessage("responder", ownImageCallback(chatId, "3EB0BBBB", downloads), env, { ownOnly: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    sends[0].finish("3EB0BBBB");
+    await sendB;
+    const genuineResult = await genuine;
+    assert.ok(!echoReasons.includes(genuineResult.skipped), `owner photo kept (got ${genuineResult.skipped || "routed"})`);
+    assert.deepEqual(downloads, ["3EB0OWNER"], "only the owner photo is downloaded");
+    assert.ok(ownEchoReasons.includes((await echoB).skipped), "the outgoing echo is dropped");
+    const again = await handleInboundMessage("responder", ownImageCallback(chatId, "3EB0OWNER", []), env, { ownOnly: true });
+    assert.notEqual(again.skipped, "outbound_echo_id", "the owner photo id was not recorded as outgoing");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("if the outgoing send outlasts the wait, an own photo is processed, not dropped", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-echo-timeout-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_PENDING_ATTACHMENT_ECHO_WAIT_MS: "100",
+    // The held send never finishes here; let it time out quickly.
+    ORKESTR_WHATSAPP_SEND_OPERATION_TIMEOUT_MS: "1000",
+  };
+  const chatId = "chat-echo-timeout@g.us";
+  await boundThread(env, "echo-timeout-thread", chatId);
+  const { runtime, sends } = heldSendRuntime();
+  const downloads = [];
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    const sendB = sendLocalWhatsAppMessage({ accountId: "responder", chatId, attachments: [await pngFile(home, "b.png")], env })
+      .catch((error) => error);
+    await waitFor(() => sends.length === 1);
+    const result = await handleInboundMessage("responder", ownImageCallback(chatId, "3EB0OWNER2", downloads), env, { ownOnly: true });
+    assert.ok(!echoReasons.includes(result.skipped));
+    assert.deepEqual(downloads, ["3EB0OWNER2"]);
+    const events = await listEvents(env, 50);
+    assert.ok(events.some((event) => event.type === "whatsapp_outbound_echo_attachment_wait_timeout" && event.eventId.endsWith("3EB0OWNER2")));
+    await sendB;
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }

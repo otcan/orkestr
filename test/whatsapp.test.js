@@ -4136,7 +4136,7 @@ test("local whatsapp suppresses an outbound media callback that races send confi
     client: {
       async sendMessage(to) {
         callbackPromise = handleInboundMessage("responder", {
-          id: { _serialized: `true_${chatId}_callback-before-confirmation`, remote: chatId },
+          id: { _serialized: `true_${chatId}_delivered-after-callback`, remote: chatId },
           from: "responder@lid",
           to,
           fromMe: true,
@@ -4150,6 +4150,7 @@ test("local whatsapp suppresses an outbound media callback that races send confi
             throw new Error("outbound callback media is unavailable");
           },
         }, env, { ownOnly: true });
+        await new Promise((resolve) => setTimeout(resolve, 10));
         return { id: { _serialized: `true_${chatId}_delivered-after-callback` } };
       },
     },
@@ -4172,7 +4173,7 @@ test("local whatsapp suppresses an outbound media callback that races send confi
     assert.equal(messages.length, 0);
     assert.ok(events.some((event) =>
       event.type === "whatsapp_outbound_echo_attachment_pending_send" &&
-      event.eventId.endsWith("callback-before-confirmation")
+      event.eventId.endsWith("delivered-after-callback")
     ));
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
