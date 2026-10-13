@@ -91,7 +91,38 @@ function securityApprovalResponse(response = {}) {
   return {};
 }
 
+function deliveryTimeoutMs(env = process.env) {
+  return Math.max(1000, Number(env.ORKESTR_CONNECTOR_INBOX_DELIVERY_TIMEOUT_MS || 60_000) || 60_000);
+}
+
+// One delivery per inbox event at a time. The retry timer and a worker
+// redelivery used to post the same pending event concurrently while the first
+// request was still running, which ingested the same WhatsApp message twice.
+const inFlightDeliveries = new Map();
+
 export async function deliverConnectorInboxEvent(event = {}, env = process.env, fetchImpl = fetch) {
+  const key = `${clean(env.ORKESTR_HOME)}\n${clean(event.id)}`;
+  const running = inFlightDeliveries.get(key);
+  if (running) return running;
+  const delivery = (async () => {
+    // Lease: other processes and later retry passes treat the event as not due
+    // until the delivery could have timed out.
+    if (event.id) {
+      await markConnectorInboxEvent(event.id, {
+        nextAttemptAt: new Date(Date.now() + deliveryTimeoutMs(env) + 5_000).toISOString(),
+      }, env).catch(() => null);
+    }
+    return deliverConnectorInboxEventOnce(event, env, fetchImpl);
+  })();
+  inFlightDeliveries.set(key, delivery);
+  try {
+    return await delivery;
+  } finally {
+    if (inFlightDeliveries.get(key) === delivery) inFlightDeliveries.delete(key);
+  }
+}
+
+async function deliverConnectorInboxEventOnce(event = {}, env = process.env, fetchImpl = fetch) {
   const attemptCount = Number(event.attemptCount || 0) + 1;
   try {
     const route = await deliveryTarget(event.payload, env);
@@ -104,7 +135,7 @@ export async function deliverConnectorInboxEvent(event = {}, env = process.env, 
         ...(route.token ? { authorization: `Bearer ${route.token}` } : {}),
       },
       body: JSON.stringify(payloadForTarget),
-      signal: AbortSignal.timeout(Math.max(1000, Number(env.ORKESTR_CONNECTOR_INBOX_DELIVERY_TIMEOUT_MS || 60_000) || 60_000)),
+      signal: AbortSignal.timeout(deliveryTimeoutMs(env)),
     });
     const payload = await response.json().catch(() => ({}));
     const classified = classifyConnectorInboxDelivery({ response, payload });
