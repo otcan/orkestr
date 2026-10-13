@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { implicitAttachmentSensitive, implicitAttachmentSource, rejectImplicitAttachment } from "./implicit-attachment-policy.js";
+import { implicitAttachmentSource, implicitTextPathRefusal, rejectImplicitAttachment } from "./implicit-attachment-policy.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 import { dataPaths } from "../../storage/src/paths.js";
@@ -366,7 +366,7 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
       continue;
     }
     if (textCandidateSource(candidate.source) && candidate.lineReference) continue;
-    if (rejectImplicitAttachment(candidate, candidate.path, skipped)) continue;
+    if (rejectImplicitAttachment(candidate, candidate.path, skipped, threadAttachmentRoots(thread, env))) continue;
     const sourcePathHash = candidate.path && crypto.createHash("sha256").update(path.resolve(candidate.path)).digest("hex");
     if (textCandidateSource(candidate.source) && snapshottedSourceHashes.has(sourcePathHash)) continue;
     if (candidate.sandboxArtifact && acceptedSandboxUriHashes.has(candidate.sandboxUriHash)) continue;
@@ -375,8 +375,8 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
         candidate,
         thread,
         env,
-        classifyPath: (filePath) => implicitAttachmentSource(candidate.source) && implicitAttachmentSensitive(filePath)
-          ? { ok: false, reason: "attachment_requires_explicit_selection" } : classifyThreadAttachmentPath(filePath, { thread, env }),
+        classifyPath: (filePath) => implicitAttachmentSource(candidate.source) && implicitTextPathRefusal(filePath, threadAttachmentRoots(thread, env))
+          ? { ok: false, reason: implicitTextPathRefusal(filePath, threadAttachmentRoots(thread, env)) } : classifyThreadAttachmentPath(filePath, { thread, env }),
         metadataForPath: metadataForAttachment,
       });
       if (result.skipped) skipped.push(result.skipped);
@@ -401,7 +401,7 @@ export async function resolveThreadAttachments({ thread = {}, text = "", attachm
     }
     let stats = null;
     if (textCandidateSource(candidate.source)) {
-      if (rejectImplicitAttachment(candidate, realPath, skipped)) continue;
+      if (rejectImplicitAttachment(candidate, realPath, skipped, threadAttachmentRoots(thread, env))) continue;
       stats = await fs.stat(realPath).catch(() => null);
       if (!stats?.isFile()) {
         continue;

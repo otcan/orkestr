@@ -35,7 +35,7 @@ export function markdownLinkNamesFile(label = "", filePath = "") {
   return /[\\/]/.test(text) && full.endsWith(text.replace(/^\.\//, ""));
 }
 
-export function rejectImplicitAttachment(candidate, filePath, skipped) {
+export function rejectImplicitAttachment(candidate, filePath, skipped, roots = null) {
   // The prose/citation rules judge links found in message text. A stored
   // attachment (re-resolved during staging) keeps its source tag but not its
   // label, and was already accepted, so only the sensitive-file check applies.
@@ -45,7 +45,36 @@ export function rejectImplicitAttachment(candidate, filePath, skipped) {
     skipped.push({ path: "", raw: "", reason: "attachment_requires_explicit_selection" });
     return true;
   }
-  if (!implicitAttachmentSource(candidate.source) || !implicitAttachmentSensitive(filePath)) return false;
-  skipped.push({ path: "", raw: "", reason: "attachment_requires_explicit_selection" });
+  if (!implicitAttachmentSource(candidate.source)) return false;
+  const reason = roots ? implicitTextPathRefusal(filePath, roots) : implicitAttachmentSensitive(filePath) ? "attachment_requires_explicit_selection" : "";
+  if (!reason) return false;
+  skipped.push({ path: "", raw: "", reason });
   return true;
+}
+
+const internalDataExtension = /\.(?:sqlite|sqlite3|db)(?:-wal|-shm|-journal)?$|\.(?:jsonl|ndjson)(?:\.gz)?$/i;
+const inside = (root, candidate) => {
+  const relative = path.relative(root, candidate);
+  return !relative || (!relative.startsWith("..") && !path.isAbsolute(relative));
+};
+
+// A file linked or named in message text is never attached from Orkestr's own
+// data directory (roots.home) unless it is in a shareable folder inside it
+// (uploads, WhatsApp media, the thread's workspace). Audit replies cite
+// databases and logs as evidence; that is not a request to export them. A
+// broader allowed root that contains the data directory (tmp, /home) does not
+// exempt it. Explicit attachments keep the regular owner/path policy.
+export function implicitInternalDataPath(filePath = "", roots = {}) {
+  const home = roots.home ? path.resolve(roots.home) : "";
+  const resolved = path.resolve(String(filePath || ""));
+  if (!home || !inside(home, resolved)) return false;
+  const shareable = (roots.allowed || []).filter((root) => root !== home && inside(home, root));
+  if (shareable.some((root) => inside(root, resolved))) return false;
+  return path.dirname(resolved) === home || internalDataExtension.test(path.basename(resolved));
+}
+
+// Why a text-sourced path must not be attached implicitly, or "".
+export function implicitTextPathRefusal(filePath = "", roots = {}) {
+  if (implicitAttachmentSensitive(filePath)) return "attachment_requires_explicit_selection";
+  return implicitInternalDataPath(filePath, roots) ? "attachment_internal_data_requires_explicit_selection" : "";
 }
