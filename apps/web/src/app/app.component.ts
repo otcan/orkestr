@@ -77,7 +77,6 @@ import { QuotaProvider, claudeEffortLabel, claudeModelName, executorLabel, threa
 
 type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "instanceVault" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
-type SetupPageMode = "setup" | "onboarding";
 type SetupSection = "system" | "security" | "secrets" | "maintenance" | "codex" | "gmail" | "whatsapp" | "browsers";
 type PersistedThreadTextField =
   | "draft"
@@ -128,7 +127,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly popStateHandler = () => {
     if (this.pairingPathActive()) this.pairingRequired = true;
     this.onboardingActive = this.onboardingFromPath();
-    this.setupPageMode = this.setupPageModeFromPath();
     this.setupSection = this.setupSectionFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
@@ -216,7 +214,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   threadWizardOpen = false;
   private resumeWizardAfterSetup = false;
   onboardingActive = false;
-  setupPageMode: SetupPageMode = "setup";
   setupSection: SetupSection = "system";
   activePanel: Panel = "chat";
   approveText = "Approved. Proceed.";
@@ -348,7 +345,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   ngOnInit(): void {
     this.pairingRequired = this.pairingPathActive();
     this.onboardingActive = this.onboardingFromPath();
-    this.setupPageMode = this.setupPageModeFromPath();
     this.setupSection = this.setupSectionFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
@@ -579,7 +575,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.appReady = true;
     this.pairingRequired = true;
     this.onboardingActive = false;
-    this.setupPageMode = "setup";
     this.setupSection = "security";
     this.threadWizardOpen = false;
     this.modelDetailsOpen = false;
@@ -1120,7 +1115,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.activePanel === "raw") this.closeRawStream();
     this.threadWizardOpen = false;
     this.onboardingActive = true;
-    this.setupPageMode = "setup";
     this.clearOnboardingFlag("skipped");
     this.pushSetupPath(this.setupSection || "system");
     this.updateDocumentTitle();
@@ -1140,7 +1134,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.activePanel === "raw") this.closeRawStream();
     this.threadWizardOpen = false;
     this.onboardingActive = true;
-    this.setupPageMode = "setup";
     this.setupSection = section;
     if (replace) this.replaceSetupPath(section);
     else this.pushSetupPath(section);
@@ -1173,38 +1166,22 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     await this.refresh(false);
   }
 
-  async leaveOnboarding(completed = false): Promise<void> {
+  async leaveOnboarding(): Promise<void> {
     if (this.pairingRequired) {
       this.enterPairingRequired();
       return;
     }
-    if (this.setupPageMode === "setup") {
-      this.onboardingActive = false;
-      this.threadWizardOpen = false;
-      if (this.resumeWizardAfterSetup && this.canCreateThreadFromSidebar()) {
-        this.resumeWizardAfterSetup = false;
-        this.threadWizardOpen = true;
-        this.activePanel = "chat";
-        globalThis.history?.pushState({}, "", this.appPath("/"));
-      } else if (this.selectedThread()) {
-        this.activePanel = "chat";
-        if (this.pushPath(this.selectedId, "chat")) return;
-      } else {
-        this.activePanel = "instanceSettings";
-        this.pushPath("", "instanceSettings");
-      }
-      this.updateDocumentTitle();
-      await this.refresh(false);
-      return;
-    }
     this.onboardingActive = false;
-    this.writeOnboardingFlag(completed ? "completed" : "skipped");
-    if (completed) {
+    this.threadWizardOpen = false;
+    if (this.resumeWizardAfterSetup && this.canCreateThreadFromSidebar()) {
+      this.resumeWizardAfterSetup = false;
       this.threadWizardOpen = true;
       this.activePanel = "chat";
       globalThis.history?.pushState({}, "", this.appPath("/"));
+    } else if (this.selectedThread()) {
+      this.activePanel = "chat";
+      if (this.pushPath(this.selectedId, "chat")) return;
     } else {
-      this.threadWizardOpen = false;
       this.activePanel = "instanceSettings";
       this.pushPath("", "instanceSettings");
     }
@@ -5209,10 +5186,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }).crossOrigin;
   }
 
-  private setupPageModeFromPath(): SetupPageMode {
-    return "setup";
-  }
-
   private setupSectionFromPath(): SetupSection {
     const parts = this.locationPathParts();
     return parts[0] === "setup" ? this.normalizeSetupSection(parts[1]) : "system";
@@ -5714,7 +5687,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     if (this.onboardingActive) {
-      globalThis.document.title = this.setupPageMode === "setup" ? "Setup · Orkestr" : "Onboarding · Orkestr";
+      globalThis.document.title = "Setup · Orkestr";
       return;
     }
     if (this.activePanel === "files") {

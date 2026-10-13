@@ -8,17 +8,16 @@ alive, and control them from browser, phone, CLI, or WhatsApp.
 ## First User Journey
 
 1. Install Orkestr.
-2. Open `/setup`.
-3. Connect Codex from the setup page with device authorization or an API key.
-4. Pair WhatsApp 1 with the built-in local bridge.
-5. Prepare the desktop profile.
-6. Create the first coding thread.
-7. Send a task from the web UI, CLI, or WhatsApp.
-8. Inspect the Codex status, history, and activity log from the web cockpit.
-9. Inspect the result and activity log.
+2. Open `/` (or `/setup`) and approve the browser with the command shown.
+3. The first-run wizard opens: link WhatsApp with the built-in local bridge
+   (optional), sign Codex in with a device code (or pick Claude Code), then
+   name and start the first coding thread. Orkestr prepares its desktop.
+4. Send a task from the web UI, CLI, or WhatsApp.
+5. Inspect the Codex status, history, and activity log from the web cockpit.
+6. Inspect the result and activity log.
 
 Codex must pass `codex login status` before Orkestr wakes a coding thread. If
-the runtime is not signed in, setup stays in `/setup/codex` rather than exposing
+the runtime is not signed in, sign-in happens in the wizard or `/setup/codex` rather than exposing
 the raw Codex login menu inside a thread.
 New coding threads are controlled through `codex app-server`. Older Orkestr
 Codex threads must be migrated once with `orkestr codex migrate`; Orkestr does

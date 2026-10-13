@@ -133,3 +133,77 @@ test("fresh install: / and bare /setup show the wizard, /setup/<section> stays S
     await fs.rm(home, { recursive: true, force: true });
   }
 });
+
+test("Setup keeps the compact Codex link working through the shared panel and shows the timezone in Connections", { timeout: 150_000 }, async (t) => {
+  let puppeteer;
+  try {
+    puppeteer = (await import("puppeteer")).default;
+  } catch {
+    return t.skip("Puppeteer is not installed for browser e2e.");
+  }
+  const chrome = await findChrome();
+  if (!chrome) return t.skip("No Chrome or Chromium executable available for browser e2e.");
+  try {
+    await fs.access("dist/web/browser/index.html");
+  } catch {
+    return t.skip("Web bundle not built (npm run web:build).");
+  }
+  const keys = ["ORKESTR_HOME", "ORKESTR_RECOVER_RUNNING_ON_START", "ORKESTR_AUTH_REQUIRED", "ORKESTR_ONBOARDING_AUTO_OPEN"];
+  const prior = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-setup-compact-e2e-"));
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const fake = { codex: "partial", deviceAuthCalls: 0 };
+  let browser;
+  try {
+    browser = await puppeteer.launch({ headless: "new", executablePath: chrome, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+    await page.evaluateOnNewDocument(() => { window.open = () => null; });
+    await page.setRequestInterception(true);
+    page.on("request", async (request) => {
+      const url = new URL(request.url());
+      try {
+        if (url.origin !== origin && !url.protocol.startsWith("data")) return request.abort();
+        if (request.method() === "GET" && url.pathname === "/api/setup/status") {
+          const real = await (await fetch(`${origin}/api/setup/status`)).json();
+          real.connectors = (real.connectors || []).filter((item) => item.id !== "codex")
+            .concat([{ id: "codex", label: "Codex", state: fake.codex, summary: "", details: { command: "codex" } }]);
+          return request.respond(json(real));
+        }
+        if (request.method() === "POST" && url.pathname === "/api/connectors/codex/device-auth") {
+          fake.deviceAuthCalls += 1;
+          return request.respond(json({ ok: true, state: "pending", code: "WXYZ-9876", authUrl: "https://auth.example.test/codex/device", expiresAt: new Date(Date.now() + 600_000).toISOString() }));
+        }
+        return request.continue();
+      } catch {
+        return request.abort();
+      }
+    });
+
+    await page.goto(`${origin}/setup/system`, { waitUntil: "networkidle2" });
+    await page.waitForSelector(".onboarding-shell", { timeout: 30_000 });
+    await page.waitForFunction(() => document.body.innerText.includes("Your timezone"), { timeout: 15_000 });
+    assert.ok(await page.$("input[name='onboarding-timezone']"), "timezone form is in Connections");
+    const text = await page.evaluate(() => document.body.innerText);
+    assert.doesNotMatch(text, /Start with one capability|Ready to run|Step \d+ of \d+/);
+
+    await page.goto(`${origin}/setup/codex?compact=1`, { waitUntil: "networkidle2" });
+    await page.waitForFunction(() => document.querySelector(".codex-device-code")?.textContent.includes("WXYZ-9876"), { timeout: 15_000 });
+    assert.equal(fake.deviceAuthCalls, 1, "the compact link starts sign-in by itself, once");
+    fake.codex = "connected";
+    await page.waitForFunction(() => !document.querySelector(".onboarding-shell"), { timeout: 20_000 });
+    assert.equal(new URL(page.url()).pathname, "/", "the compact page opens the app once Codex is connected");
+  } finally {
+    await browser?.close();
+    await new Promise((resolve) => server.close(resolve));
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});

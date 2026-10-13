@@ -1,7 +1,9 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, BackupRestorePlanResponse, BackupStatusResponse, BrowserSession, CodexAppServerStatus, CodexMigrationResponse, CodexStoredThread, ConnectorStatus, OnboardingProfile, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecureSecretMetadata, SetupStatus, StateBackupRecord, SystemDoctorResponse, ThreadSummary, UserOnboardingState, VersionResponse } from "./api.service";
+import { CodexSignInPanelComponent } from "./codex-sign-in-panel.component";
+import { codexCommandAvailable, codexCommandUnavailableHint, codexStateLabel, codexUnavailableReason } from "./codex-runtime-status";
+import { ApiService, BackupRestorePlanResponse, BackupStatusResponse, BrowserSession, CodexAppServerStatus, CodexMigrationResponse, CodexStoredThread, ConnectorStatus, OnboardingProfile, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecureSecretMetadata, SetupStatus, StateBackupRecord, SystemDoctorResponse, UserOnboardingState, VersionResponse } from "./api.service";
 import { SecurityChallengesPanelComponent } from "./security-challenges-panel.component";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
@@ -9,9 +11,7 @@ type MarketingStep = "google-marketing";
 type MaintenanceStep = "maintenance";
 type SecureInputStep = "secrets";
 type SecureSecretScope = "user" | "global";
-type OnboardingStep = "goal" | "profile" | "system" | "security" | MaintenanceStep | SecureInputStep | MarketingStep | ConnectorStep | "finish";
-type OnboardingGoalId = "whatsapp-codex" | "virtual-desktop" | "inbox-summary";
-type SetupPageMode = "setup" | "onboarding";
+type OnboardingStep = "system" | "security" | MaintenanceStep | SecureInputStep | MarketingStep | ConnectorStep;
 type MailProvider = "gmail" | "outlook";
 
 interface BrowserActionOptions {
@@ -28,35 +28,21 @@ interface MailAccountRow {
   summary: string;
 }
 
-interface OnboardingGoal {
-  id: OnboardingGoalId;
-  label: string;
-  eyebrow: string;
-  summary: string;
-  recommended?: boolean;
-  requiredSteps: ConnectorStep[];
-}
-
 @Component({
   selector: "ork-onboarding-page",
-  imports: [FormsModule, SecurityChallengesPanelComponent],
+  imports: [CodexSignInPanelComponent, FormsModule, SecurityChallengesPanelComponent],
   templateUrl: "./onboarding-page.component.html",
   styleUrls: ["./onboarding-page.component.css"],
 })
 export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private readonly api = inject(ApiService);
   private readonly cdr = inject(ChangeDetectorRef);
-  private readonly storageKey = "orkestr:onboarding";
   private poller?: ReturnType<typeof setInterval>;
   private outlookPoller?: ReturnType<typeof setInterval>;
-  private codexAuthPoller?: ReturnType<typeof setInterval>;
   private compactCodexOpenTimer?: ReturnType<typeof setTimeout>;
-  private compactCodexDeviceAuthStarted = false;
 
-  @Input() mode: SetupPageMode = "onboarding";
   @Input() setupSection = "";
   @Output() skip = new EventEmitter<void>();
-  @Output() complete = new EventEmitter<void>();
   @Output() openAppRequested = new EventEmitter<void>();
   @Output() setupSectionChange = new EventEmitter<string>();
   @Output() paired = new EventEmitter<void>();
@@ -67,21 +53,12 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   busy = false;
   error = "";
   notice = "";
-  activeStep: OnboardingStep = "goal";
-  selectedGoal: OnboardingGoalId = "whatsapp-codex";
+  activeStep: OnboardingStep = "system";
   onboardingProfile: OnboardingProfile | null = null;
   timezone = "";
   detectedTimezone = "";
   timezoneLoaded = false;
   timezoneSaving = false;
-  firstThread: ThreadSummary | null = null;
-  whatsappChatId = "";
-  whatsappChatName = "";
-  testMessage = "Hello from Orkestr onboarding.";
-  codexDeviceCode = "";
-  codexAuthUrl = "";
-  codexAuthExpiresAt = "";
-  codexDeviceCodeCopied = false;
   codexApiKey = "";
   codexAppServer: CodexAppServerStatus | null = null;
   codexStoredThreads: CodexStoredThread[] = [];
@@ -113,36 +90,10 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   outlookScopes = "offline_access User.Read Mail.Read";
   outlookDevice: OutlookOAuthStartResponse | OutlookOAuthPollResponse | null = null;
   private formHydrated = false;
-  private stepInitialized = false;
 
   readonly whatsappAccounts = [
     { id: "account-1", label: "WhatsApp sender" },
     { id: "account-2", label: "WhatsApp receiver" },
-  ];
-
-  readonly goals: OnboardingGoal[] = [
-    {
-      id: "whatsapp-codex",
-      label: "Codex from WhatsApp",
-      eyebrow: "Recommended",
-      summary: "Send work from WhatsApp and mirror Codex replies back to the chat.",
-      recommended: true,
-      requiredSteps: ["codex", "whatsapp"],
-    },
-    {
-      id: "virtual-desktop",
-      label: "Managed browser desktop",
-      eyebrow: "Browser work",
-      summary: "Prepare a leased Chrome desktop for agent web work and sign-in state.",
-      requiredSteps: ["codex", "browsers", "whatsapp"],
-    },
-    {
-      id: "inbox-summary",
-      label: "Optional mail summaries",
-      eyebrow: "Optional",
-      summary: "Connect Gmail or Outlook only if you want inbox summaries sent back to WhatsApp.",
-      requiredSteps: ["openai", "gmail", "whatsapp"],
-    },
   ];
 
   readonly connectorSteps: Array<{ id: ConnectorStep; label: string; eyebrow: string }> = [
@@ -158,14 +109,13 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   ngOnInit(): void {
     this.detectedTimezone = this.browserTimezone();
     if (!this.timezone) this.timezone = this.detectedTimezone;
-    this.restoreProgress();
     this.applySetupSectionFromInput();
     void this.load();
     this.poller = setInterval(() => void this.load(false), 30_000);
   }
 
   ngOnChanges(changes: SimpleChanges): void {
-    if (changes["mode"] || changes["setupSection"]) {
+    if (changes["setupSection"]) {
       this.applySetupSectionFromInput();
       this.ensureActiveStepAvailable();
     }
@@ -174,7 +124,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   ngOnDestroy(): void {
     if (this.poller) clearInterval(this.poller);
     if (this.outlookPoller) clearInterval(this.outlookPoller);
-    if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
     if (this.compactCodexOpenTimer) clearTimeout(this.compactCodexOpenTimer);
   }
 
@@ -198,12 +147,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.hydrateForms(setup);
       if (this.activeStep === "codex") await this.loadCodexAppServer(false);
       this.applySetupSectionFromInput();
-      if (!this.stepInitialized) {
-        this.activeStep = this.firstOpenStep();
-        this.stepInitialized = true;
-      }
       this.maybeLeaveCompletedCompactSetup();
-      this.maybeStartCompactCodexDeviceAuth();
       this.error = "";
     } catch (error) {
       this.error = this.errorText(error);
@@ -361,23 +305,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     const intervalMs = Math.max(5, Number(intervalSeconds) || 5) * 1000;
     this.outlookPoller = setInterval(() => void this.pollOutlookOAuth(), intervalMs);
     void this.pollOutlookOAuth();
-  }
-
-  private startCodexAuthPolling(expiresAt = ""): void {
-    if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
-    const expiresAtMs = Date.parse(expiresAt || "") || Date.now() + 15 * 60_000;
-    const poll = (): void => {
-      if (Date.now() > expiresAtMs) {
-        if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
-        this.codexAuthPoller = undefined;
-        this.notice = "Sign-in expired. Open Codex sign-in again.";
-        this.renderNow();
-        return;
-      }
-      void this.pollCodexAuth();
-    };
-    this.codexAuthPoller = setInterval(poll, 5_000);
-    poll();
   }
 
   async prepareLinkedIn(): Promise<void> {
@@ -626,37 +553,28 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   stepStateLabel(id: OnboardingStep): string {
-    if (id === "goal") return this.selectedGoal ? "selected" : "choose";
-    if (id === "profile") return this.timezoneDone() ? "saved" : "needed";
     if (id === "system") return this.setup ? "checked" : "checking";
     if (id === "security") return this.securityStepLabel();
     if (id === "maintenance") return this.maintenanceStepLabel();
     if (id === "secrets") return this.secureSecretsLabel();
-    if (id === "finish") return this.requiredConnectorSteps().every((step) => this.stepDone(step)) ? "ready" : "review";
     if (id === "gmail") return this.mailStatusLabel();
     return this.stateLabel(id);
   }
 
   stepStateClass(id: OnboardingStep): string {
-    if (id === "goal") return this.selectedGoal ? "ready" : "idle";
-    if (id === "profile") return this.timezoneDone() ? "ready" : "partial";
     if (id === "system") return this.setup ? "ready" : "idle";
     if (id === "security") return this.securityStepClass();
     if (id === "maintenance") return this.backupStatus?.latestBackup ? "ready" : "partial";
     if (id === "secrets") return this.secureSecrets.length ? "ready" : "idle";
-    if (id === "finish") return this.requiredConnectorSteps().every((step) => this.stepDone(step)) ? "ready" : "partial";
     if (id === "gmail") return this.mailStatusClass();
     return this.stateClass(id);
   }
 
   stepDone(id: OnboardingStep): boolean {
-    if (id === "goal") return Boolean(this.selectedGoal);
-    if (id === "profile") return this.timezoneDone();
     if (id === "system") return Boolean(this.setup);
     if (id === "security") return this.securityDone();
     if (id === "maintenance") return Boolean(this.backupStatus?.latestBackup);
     if (id === "secrets") return this.secureSecrets.length > 0;
-    if (id === "finish") return this.requiredConnectorSteps().every((step) => this.stepDone(step));
     if (id === "gmail") return this.mailDone();
     if (id === "codex") return this.agentRuntimeReady();
     const state = this.connector(id)?.state;
@@ -672,15 +590,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   agentRuntimeStateLabel(): string {
-    const connector = this.connector("codex");
-    const state = String(connector?.state || "checking").toLowerCase();
-    const reason = String(connector?.details?.["reason"] || "").toLowerCase();
-    if (state === "connected") return "connected";
-    if (state === "partial") return "sign-in required";
-    if (state === "not_connected" && reason === "codex_missing") return "runtime missing";
-    if (state === "not_connected" && reason.includes("disabled")) return "disabled";
-    if (state === "not_connected") return "runtime unavailable";
-    return state.replace(/_/g, " ");
+    return codexStateLabel(this.connector("codex"));
   }
 
   codexRuntimeDetail(): string {
@@ -688,83 +598,56 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (version) return version;
     const command = this.connectorDetail("codex", "command");
     if (command) return command;
-    const reason = this.codexUnavailableReason();
+    const reason = codexUnavailableReason(this.connector("codex"));
     if (reason === "codex_disabled_on_macos") return "Host Codex is disabled for this macOS local install.";
     if (reason === "codex_missing") return "Codex command is not installed in this runtime.";
     return "Waiting for the bundled Codex command";
   }
 
   codexCommandAvailable(): boolean {
-    const connector = this.connector("codex");
-    if (!connector) return false;
-    const details = connector.details || {};
-    if (details["disabled"] === true) return false;
-    if (this.codexUnavailableReason()) return false;
-    return Boolean(this.connectorDetail("codex", "command") || this.connectorDetail("codex", "version") || connector.state === "connected" || connector.state === "partial");
+    return codexCommandAvailable(this.connector("codex"));
   }
 
   codexCommandUnavailableHint(): string {
-    if (this.codexCommandAvailable()) return "";
-    const summary = String(this.connector("codex")?.summary || "").trim();
-    if (this.codexUnavailableReason() === "codex_disabled_on_macos") {
-      return summary || "Codex host binary is disabled for this macOS local install. Verify Codex manually, then rerun the installer with ORKESTR_ENABLE_HOST_CODEX=1.";
+    return codexCommandUnavailableHint(this.connector("codex"));
+  }
+
+  // Codex signed in through the shared panel. The compact connect page opens
+  // the app right away; the full Setup page refreshes its checks.
+  onCodexConnected(setup: SetupStatus): void {
+    this.setup = setup;
+    this.notice = this.compactSetupMode() ? "Codex connected. Opening Orkestr." : "Codex connected.";
+    this.error = "";
+    if (this.compactSetupMode()) {
+      if (!this.compactCodexOpenTimer) {
+        this.compactCodexOpenTimer = setTimeout(() => {
+          this.compactCodexOpenTimer = undefined;
+          this.openApp();
+        }, 600);
+      }
+    } else {
+      void this.loadCodexAppServer(false);
     }
-    if (this.codexUnavailableReason() === "codex_missing") {
-      return summary || "Codex Agent runtime is missing. Install Codex in the Orkestr runtime, then refresh this page.";
-    }
-    return summary || "Codex command is not available yet. Refresh after the runtime is installed.";
-  }
-
-  private codexUnavailableReason(): string {
-    const connector = this.connector("codex");
-    const reason = String(connector?.details?.["reason"] || "").toLowerCase();
-    if (reason === "codex_disabled_on_macos" || reason === "codex_missing") return reason;
-    if (String(connector?.state || "").toLowerCase() === "not_connected" && reason.includes("disabled")) return "codex_disabled_on_macos";
-    return "";
-  }
-
-  canOpenApp(): boolean {
-    return true;
-  }
-
-  runtimeBlockTitle(): string {
-    return `Codex Agent ${this.agentRuntimeStateLabel()}`;
-  }
-
-  openAppBlockReason(): string {
-    if (this.canOpenApp()) return "";
-    const summary = String(this.connector("codex")?.summary || "").trim();
-    const base = summary || "Codex Agent is required before starting coding agents.";
-    return `${base} Connect Codex Agent before starting coding-agent work.`;
-  }
-
-  isSetupMode(): boolean {
-    return this.mode === "setup";
+    this.renderNow();
   }
 
   compactSetupMode(): boolean {
-    return this.isSetupMode() && new URLSearchParams(globalThis.location?.search || "").get("compact") === "1";
-  }
-
-  isOnboardingMode(): boolean {
-    return this.mode === "onboarding";
+    return new URLSearchParams(globalThis.location?.search || "").get("compact") === "1";
   }
 
   pageTitle(): string {
     if (this.compactSetupMode()) return "Sign in to Codex";
-    return this.isSetupMode() ? "Setup" : "Set up Orkestr";
+    return "Setup";
   }
 
   pageSummary(): string {
     if (this.compactSetupMode()) return "This Orkestr instance needs a Codex login before it can start coding threads.";
-    return this.isSetupMode()
-      ? "Check secure access, accounts, runtimes, and optional connectors after the installer has prepared the local Orkestr runtime."
-      : "Start with Codex and WhatsApp. Add mail, timers, and managed browser desktops only when you need those capabilities.";
+    return "Optional connections and server settings: Codex, WhatsApp, Gmail, browsers, security, secrets and backups. First-time setup happens in the three-step wizard.";
   }
 
   pageEyebrow(): string {
     if (this.compactSetupMode()) return "Orkestr connect";
-    return this.isSetupMode() ? "Orkestr setup" : "Self-hosted agent cockpit";
+    return "Orkestr setup";
   }
 
   buildStamp(): string {
@@ -777,25 +660,12 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   closeLabel(): string {
     if (this.compactSetupMode()) return "Open Orkestr";
-    return this.isSetupMode() ? "Back to Orkestr" : "Open Orkestr";
+    return "Back to Orkestr";
   }
 
   compactCodexTitle(): string {
     if (this.agentRuntimeReady()) return "Codex is signed in";
     return "Connect Codex to this VM";
-  }
-
-  compactCodexSummary(): string {
-    if (this.agentRuntimeReady()) return "Opening Orkestr.";
-    if (!this.codexCommandAvailable()) return "Codex is not ready in this runtime yet.";
-    if (this.codexDeviceCode) return "Copy the code first, then open the Codex sign-in page and paste it there.";
-    return "Creating a Codex device code. Device-code login must be enabled in ChatGPT security settings.";
-  }
-
-  codexAuthStatusText(): string {
-    if (this.agentRuntimeReady()) return "Codex connected. Opening Orkestr.";
-    if (this.codexDeviceCode) return this.codexDeviceCodeCopied ? "Code copied. Open the sign-in page and paste it there." : "Click the code to copy it before opening the sign-in page.";
-    return "";
   }
 
   private maybeLeaveCompletedCompactSetup(): void {
@@ -805,13 +675,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.compactCodexOpenTimer = undefined;
       this.openApp();
     }, 400);
-  }
-
-  private maybeStartCompactCodexDeviceAuth(): void {
-    if (!this.compactSetupMode() || this.agentRuntimeReady() || !this.codexCommandAvailable()) return;
-    if (this.compactCodexDeviceAuthStarted || this.codexDeviceCode) return;
-    this.compactCodexDeviceAuthStarted = true;
-    void this.startCodexDeviceAuth(false);
   }
 
   timezoneDone(): boolean {
@@ -829,39 +692,11 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   activeStepIndex(): number {
-    return Math.max(0, this.pageSections().findIndex((step) => step.id === this.activeStep));
+    return Math.max(0, this.setupSections().findIndex((step) => step.id === this.activeStep));
   }
 
   activeStepLabel(): string {
-    return this.pageSections()[this.activeStepIndex()]?.label || "";
-  }
-
-  progressPercent(): number {
-    return ((this.activeStepIndex() + 1) / this.activeSteps().length) * 100;
-  }
-
-  completedStepCount(): number {
-    return this.pageSections().filter((step) => this.stepDone(step.id)).length;
-  }
-
-  isFirstStep(): boolean {
-    return this.activeStepIndex() === 0;
-  }
-
-  isLastStep(): boolean {
-    return this.activeStepIndex() === this.pageSections().length - 1;
-  }
-
-  activeSteps(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
-    const byId = Object.fromEntries(this.connectorSteps.map((step) => [step.id, step]));
-    return [
-      { id: "goal", label: "Start with one capability", eyebrow: "Start here" },
-      { id: "profile", label: "Timezone", eyebrow: "Profile" },
-      { id: "system", label: "Connections", eyebrow: "Runtime" },
-      { id: "security", label: "Secure access", eyebrow: "Remote safety" },
-      ...this.requiredConnectorSteps().map((id) => byId[id]),
-      { id: "finish", label: "Ready to run", eyebrow: "Starter thread" },
-    ];
+    return this.setupSections()[this.activeStepIndex()]?.label || "";
   }
 
   setupSections(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
@@ -874,32 +709,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       { id: "maintenance", label: "Maintenance", eyebrow: "Backups" },
       ...setupConnectors,
     ];
-  }
-
-  pageSections(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
-    return this.isSetupMode() ? this.setupSections() : this.activeSteps();
-  }
-
-  activeGoal(): OnboardingGoal {
-    return this.goals.find((goal) => goal.id === this.selectedGoal) || this.goals[0];
-  }
-
-  goalRequiredSteps(): ConnectorStep[] {
-    return this.activeGoal().requiredSteps;
-  }
-
-  requiredConnectorSteps(): ConnectorStep[] {
-    return Array.from(new Set<ConnectorStep>(["codex", ...this.goalRequiredSteps()]));
-  }
-
-  goToCodexSetup(): void {
-    this.selectStep("codex");
-  }
-
-  selectGoal(goalId: OnboardingGoalId): void {
-    this.selectedGoal = goalId;
-    if (!this.pageSections().some((step) => step.id === this.activeStep)) this.activeStep = this.isSetupMode() ? "system" : "goal";
-    this.persistProgress();
   }
 
   systemChecks(): Array<{ label: string; state: string; summary: string; className: string }> {
@@ -1232,81 +1041,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     await this.loadSecureSecrets();
   }
 
-  async startCodexDeviceAuth(openAuthPage = true): Promise<void> {
-    if (!this.codexCommandAvailable()) {
-      this.error = this.codexCommandUnavailableHint();
-      this.notice = "";
-      return;
-    }
-    this.busy = true;
-    try {
-      const result = await firstValueFrom(this.api.startCodexDeviceAuth());
-      this.codexDeviceCode = result.code || "";
-      this.codexDeviceCodeCopied = false;
-      this.codexAuthUrl = result.authUrl || "";
-      this.codexAuthExpiresAt = result.expiresAt || "";
-      if (openAuthPage && this.codexAuthUrl) globalThis.open?.(this.codexAuthUrl, "_blank", "noopener,noreferrer");
-      this.notice = this.compactSetupMode()
-        ? ""
-        : this.codexDeviceCode ? "Codex sign-in opened. Enter the device code in the browser." : "Codex sign-in started.";
-      this.error = "";
-      await this.load(false);
-      this.startCodexAuthPolling(this.codexAuthExpiresAt);
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  async pollCodexAuth(): Promise<void> {
-    try {
-      const setup = await firstValueFrom(this.api.setupStatus());
-      this.setup = setup;
-      this.hydrateForms(setup);
-      if (this.connector("codex")?.state !== "connected") return;
-      if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
-      this.codexAuthPoller = undefined;
-      this.codexDeviceCode = "";
-      this.codexDeviceCodeCopied = false;
-      this.codexAuthUrl = "";
-      this.codexAuthExpiresAt = "";
-      this.notice = this.compactSetupMode()
-        ? "Codex connected. Opening Orkestr."
-        : this.isSetupMode() ? "Codex connected. You can open Orkestr when ready." : "Codex connected. Continue setup.";
-      this.error = "";
-      if (this.activeStep === "codex") await this.loadCodexAppServer(false);
-      if (this.compactSetupMode()) {
-        if (!this.compactCodexOpenTimer) {
-          this.compactCodexOpenTimer = setTimeout(() => {
-            this.compactCodexOpenTimer = undefined;
-            this.openApp();
-          }, 600);
-        }
-        return;
-      }
-      if (!this.isSetupMode() && !this.isLastStep()) this.nextStep();
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.renderNow();
-    }
-  }
-
-  async copyCodexDeviceCode(showNotice = true): Promise<void> {
-    if (!this.codexDeviceCode) return;
-    try {
-      await globalThis.navigator?.clipboard?.writeText(this.codexDeviceCode);
-      this.codexDeviceCodeCopied = true;
-      if (showNotice) this.notice = "Code copied.";
-    } catch {
-      this.codexDeviceCodeCopied = false;
-      if (showNotice) this.notice = "Select and copy the code.";
-    } finally {
-      this.renderNow();
-    }
-  }
-
   async connectCodexApiKey(): Promise<void> {
     if (!this.codexCommandAvailable()) {
       this.error = this.codexCommandUnavailableHint();
@@ -1455,139 +1189,13 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     }
   }
 
-  async createFirstThread(): Promise<void> {
-    this.busy = true;
-    try {
-      const thread = await this.ensureFirstThread();
-      this.notice = `${thread.name || thread.id} is ready.`;
-      this.error = "";
-      await this.load(false);
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  async prepareFirstLoop(): Promise<void> {
-    await this.prepareStarterThread();
-  }
-
-  async prepareStarterThread(): Promise<void> {
-    this.busy = true;
-    try {
-      const thread = await this.ensureFirstThread();
-      const actions = ["thread"];
-      if (this.goalRequiredSteps().includes("browsers")) {
-        await firstValueFrom(this.api.browserAction("desktop", "prepare"));
-        actions.push("desktop");
-      }
-      if (this.goalRequiredSteps().includes("whatsapp")) {
-        if (this.isSelfHostedWhatsApp()) {
-          await firstValueFrom(this.api.startWhatsAppAccount("account-1"));
-          actions.push("WhatsApp sender");
-        } else {
-          actions.push("managed WhatsApp relay");
-        }
-      }
-      this.notice = `${thread.name || thread.id} starter thread prepared: ${actions.join(", ")}.`;
-      this.error = "";
-      await this.load(false);
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  async bindFirstThread(): Promise<void> {
-    const chatId = this.whatsappChatId.trim();
-    if (!chatId) {
-      this.error = "Enter a WhatsApp chat ID before binding.";
-      return;
-    }
-    this.busy = true;
-    try {
-      const thread = await this.ensureFirstThread();
-      const result = await firstValueFrom(
-        this.api.updateThreadBinding(thread.id, {
-          connector: "whatsapp",
-          chatId,
-          displayName: this.whatsappChatName.trim() || this.firstThreadName(),
-          enabled: true,
-          allowOtherPeople: true,
-          mirrorToWhatsApp: true,
-          outboundAccountId: "account-1",
-          replyPrefix: "orkestr:",
-        }),
-      );
-      this.firstThread = result.thread;
-      this.notice = `${this.firstThread.name || this.firstThread.id} is bound to WhatsApp.`;
-      this.error = "";
-      await this.load(false);
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  async sendFirstTestMessage(): Promise<void> {
-    const text = this.testMessage.trim();
-    if (!text) {
-      this.error = "Enter a test message before sending.";
-      return;
-    }
-    this.busy = true;
-    try {
-      const thread = await this.ensureFirstThread();
-      await firstValueFrom(this.api.sendThreadInput(thread.id, text));
-      this.notice = `Queued a test message for ${thread.name || thread.id}.`;
-      this.error = "";
-      await this.load(false);
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  firstThreadName(): string {
-    return `${this.activeGoal().label}`;
-  }
-
-  firstThreadId(): string {
-    return `onboarding-${this.selectedGoal}`;
-  }
-
-  firstThreadBindingSummary(): string {
-    const binding = this.firstThread?.binding;
-    if (!binding?.chatId) return "No WhatsApp chat bound yet.";
-    return `${binding.displayName || this.firstThread?.name || this.firstThread?.id} -> ${binding.chatId}`;
-  }
-
   selectStep(id: OnboardingStep): void {
-    if (!this.pageSections().some((step) => step.id === id)) return;
+    if (!this.setupSections().some((step) => step.id === id)) return;
     this.activeStep = id;
-    this.stepInitialized = true;
-    this.persistProgress();
-    if (this.isSetupMode()) this.setupSectionChange.emit(id);
+    this.setupSectionChange.emit(id);
     if (id === "codex") void this.loadCodexAppServer(false);
     if (id === "maintenance") void this.loadBackupStatus(false);
     if (id === "secrets") void this.loadSecureSecrets(false);
-  }
-
-  previousStep(): void {
-    const index = this.activeStepIndex();
-    const steps = this.pageSections();
-    if (index > 0) this.selectStep(steps[index - 1].id);
-  }
-
-  nextStep(): void {
-    const index = this.activeStepIndex();
-    const steps = this.pageSections();
-    if (index < steps.length - 1) this.selectStep(steps[index + 1].id);
-    else this.openApp();
   }
 
   openApp(): void {
@@ -1595,11 +1203,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.openAppRequested.emit();
       return;
     }
-    if (this.isSetupMode()) {
-      this.skip.emit();
-      return;
-    }
-    this.complete.emit();
+    this.skip.emit();
   }
 
   private async saveConnector(id: string, body: Record<string, string>, message: string): Promise<void> {
@@ -1683,22 +1287,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     }
   }
 
-  private async ensureFirstThread(): Promise<ThreadSummary> {
-    const response = await firstValueFrom(
-      this.api.createThread({
-        id: this.firstThreadId(),
-        name: this.firstThreadName(),
-        title: this.firstThreadName(),
-        bindingName: this.firstThreadName(),
-        wakePolicy: "wake-on-message",
-        executorId: "codex",
-        codexMode: "code",
-      }),
-    );
-    this.firstThread = response.thread;
-    return response.thread;
-  }
-
   private hydrateForms(setup: SetupStatus): void {
     if (this.formHydrated) return;
     const config = setup.config || {};
@@ -1760,53 +1348,15 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     return this.whatsappAccounts.find((account) => account.id === accountId)?.label || accountId;
   }
 
-  private firstOpenStep(): OnboardingStep {
-    const steps = this.pageSections();
-    const storedStep = steps.find((step) => step.id === this.activeStep)?.id;
-    if (this.isSetupMode()) return storedStep || steps[0]?.id || "system";
-    return storedStep || "goal";
-  }
-
   private ensureActiveStepAvailable(): void {
-    if (this.pageSections().some((step) => step.id === this.activeStep)) return;
-    this.activeStep = this.isSetupMode() ? this.pageSections()[0]?.id || "system" : "goal";
+    if (this.setupSections().some((step) => step.id === this.activeStep)) return;
+    this.activeStep = this.setupSections()[0]?.id || "system";
   }
 
   private applySetupSectionFromInput(): void {
-    if (!this.isSetupMode()) return;
     const section = String(this.setupSection || "").trim().toLowerCase();
     const match = this.setupSections().find((step) => step.id === section);
     this.activeStep = match?.id || this.setupSections()[0]?.id || "system";
-    this.stepInitialized = true;
-  }
-
-  private restoreProgress(): void {
-    try {
-      const raw = globalThis.localStorage?.getItem(this.storageKey);
-      if (!raw) return;
-      const saved = JSON.parse(raw) as { goal?: OnboardingGoalId; activeStep?: OnboardingStep };
-      if (saved.goal && this.goals.some((goal) => goal.id === saved.goal)) this.selectedGoal = saved.goal;
-      if (!this.isSetupMode() && saved.activeStep && this.pageSections().some((step) => step.id === saved.activeStep)) {
-        this.activeStep = saved.activeStep;
-        this.stepInitialized = true;
-      }
-    } catch {
-      // Ignore corrupt browser-local onboarding state.
-    }
-  }
-
-  private persistProgress(): void {
-    try {
-      globalThis.localStorage?.setItem(
-        this.storageKey,
-        JSON.stringify({
-          goal: this.selectedGoal,
-          activeStep: this.activeStep,
-        }),
-      );
-    } catch {
-      // Storage is optional; onboarding still works without it.
-    }
   }
 
   private renderNow(): void {

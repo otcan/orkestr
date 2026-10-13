@@ -9,11 +9,9 @@
   <ork-public-apps-page></ork-public-apps-page>
 } @else if (onboardingActive) {
   <ork-onboarding-page
-    [mode]="setupPageMode"
     [setupSection]="setupSection"
     (setupSectionChange)="handleSetupSectionChange($event)"
-    (skip)="leaveOnboarding(false)"
-    (complete)="leaveOnboarding(true)"
+    (skip)="leaveOnboarding()"
     (openAppRequested)="leaveCompactSetup()"
   ></ork-onboarding-page>
 } @else if (connectorLoginActive()) {

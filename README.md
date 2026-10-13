@@ -176,10 +176,11 @@ docker run --name orkestr -p 3000:3000 -v orkestr-data:/data ghcr.io/otcan/orkes
 Then open:
 
 ```text
-http://127.0.0.1:3000/setup
+http://127.0.0.1:3000/
 ```
 
-The setup page shows a pairing code for this browser. Approve it from the host:
+The first page asks you to approve this browser and shows the exact command
+for a Docker install. Run it on the host:
 
 ```bash
 docker exec orkestr orkestr connect approve <code shown on the page>
@@ -191,22 +192,29 @@ releases, `main` and `sha-<commit>` for the current `main` branch.
 The container stores Orkestr state in `/data`, including workspaces, browser
 profiles, secrets, and `CODEX_HOME=/data/codex`.
 
-First run:
+First run is a three-step wizard (it opens by itself at `/` and at a bare
+`/setup`):
 
-1. Connect Codex (or a Claude Code account, if enabled).
-2. Choose WhatsApp access. Without a configured broker the default is
+1. **Link WhatsApp** (can be skipped). Without a configured broker the default is
    **Use my own WhatsApp**: the wizard shows a QR code, you link WhatsApp on
    your phone (Settings → Linked devices), and the session is stored only in
    the `/data` volume. After a container restart the linked account
    reconnects without a new QR (set `ORKESTR_WHATSAPP_AUTOSTART=0` to turn
    that off). The Orkestr relay is invitation-only and needs a broker.
-3. Start the default `orkest` thread. With WhatsApp linked, the wizard binds
+2. **Choose the AI**: sign Codex in right in the wizard with a one-time
+   ChatGPT device code (allow device-code sign-in in ChatGPT → Settings →
+   Security first), or pick a Claude Code account if enabled.
+3. **Name and start**: Start the default `orkest` thread. With WhatsApp linked, the wizard binds
    the thread to your own WhatsApp chat ("Message yourself") on exactly the
    account you just linked. Nobody else is added, even if default
    participants are configured, and the step is refused if that account is
    no longer linked. It then waits for you to send a message there and for
    the thread's reply.
 4. Orkestr starts Virtual Desk for that thread.
+
+Everything optional (Gmail, browsers, security, secrets, backups, your
+timezone) lives in Setup at `/setup/<section>`. Leaving Setup from the wizard
+("More … options", then "Back to Orkestr") returns to the same wizard step.
 
 The built-in bridge uses WhatsApp Web through the bundled Chromium. WhatsApp
 does not officially support automating WhatsApp Web, so use an account you

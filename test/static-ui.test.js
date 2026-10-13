@@ -1288,12 +1288,12 @@ test("pairing return stays same-origin and Codex warnings stay non-blocking", as
   assert.doesNotMatch(template, /Codex Agent broken/);
 });
 
-test("global shell keeps onboarding footer reachable", async () => {
+test("setup page has no first-run step footer and the page body still scrolls", async () => {
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
   const onboardingTemplate = await fs.readFile("apps/web/src/app/onboarding-page.component.html", "utf8");
   const bodyBlock = styles.match(/body\s*{[^}]*}/)?.[0] || "";
 
-  assert.match(onboardingTemplate, /<footer class="setup-nav">/);
+  assert.doesNotMatch(onboardingTemplate, /<footer class="setup-nav">/);
   assert.doesNotMatch(bodyBlock, /overflow:\s*hidden/);
   assert.match(styles, /\.app-shell\s*{[^}]*overflow:\s*hidden/s);
 });
