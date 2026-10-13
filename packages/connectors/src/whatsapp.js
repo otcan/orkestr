@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { withInboundRouteLock } from "./whatsapp-inbound-route-lock.js";
 import { dispatchWhatsAppJobTriggers } from "./whatsapp-job-triggers.js";
 import { runtimeOutputMetadata } from "../../shared/src/runtime-output-identity.js";
 import fs from "node:fs/promises";
@@ -4341,7 +4342,15 @@ async function recordWhatsAppTransformedMediaEchoCycleSignal({
   }, env).catch(() => {});
 }
 
+// Routes for one WhatsApp event run in sequence: a concurrent redelivery then
+// sees the first copy's inbound event and is skipped as a duplicate.
 export async function routeWhatsAppInbound(input = {}, env = process.env, fetchImpl = fetch) {
+  const eventId = pickString(input.eventId, input.id, input.messageId);
+  const key = eventId ? `${pickString(env.ORKESTR_HOME)}\n${canonicalWhatsAppEventId(eventId) || eventId}` : "";
+  return withInboundRouteLock(key, () => routeWhatsAppInboundUnlocked(input, env, fetchImpl));
+}
+
+async function routeWhatsAppInboundUnlocked(input = {}, env = process.env, fetchImpl = fetch) {
   const config = await readConnectorConfig("whatsapp", env);
   const eventId = pickString(input.eventId, input.id, input.messageId);
   const canonicalEventId = canonicalWhatsAppEventId(eventId);
