@@ -214,6 +214,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   sendingNow = false;
   implementingPlan = false;
   threadWizardOpen = false;
+  private resumeWizardAfterSetup = false;
   onboardingActive = false;
   setupPageMode: SetupPageMode = "setup";
   setupSection: SetupSection = "system";
@@ -459,11 +460,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (this.canonicalizeCurrentThreadRoute()) return;
       this.seedReadStateIfNeeded(this.threads);
       if (this.normalizeUserModeView()) return;
-      if (this.shouldAutoOpenOnboarding()) {
-        this.onboardingActive = true;
-        this.setupPageMode = "setup";
-        this.replaceSetupPath(this.setupSection || "system");
-      }
+      if (this.shouldAutoOpenFirstRunWizard()) this.openFirstRunWizard();
       if (this.onboardingActive && this.setupStatus?.setupState === "ready" && this.codexAgentReady()) {
         this.onboardingActive = false;
         this.activePanel = "instanceSettings";
@@ -1151,6 +1148,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.renderNow();
   }
 
+  // The wizard asked for a Setup section (e.g. more Codex or WhatsApp options).
+  // Leaving Setup returns to the wizard, which restores its own step.
+  openSetupFromWizard(section: SetupSection): void {
+    this.resumeWizardAfterSetup = true;
+    this.openSetup(section, false);
+  }
+
   handleSetupSectionChange(section: string): void {
     this.openSetup(this.normalizeSetupSection(section));
   }
@@ -1177,7 +1181,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.setupPageMode === "setup") {
       this.onboardingActive = false;
       this.threadWizardOpen = false;
-      if (this.selectedThread()) {
+      if (this.resumeWizardAfterSetup && this.canCreateThreadFromSidebar()) {
+        this.resumeWizardAfterSetup = false;
+        this.threadWizardOpen = true;
+        this.activePanel = "chat";
+        globalThis.history?.pushState({}, "", this.appPath("/"));
+      } else if (this.selectedThread()) {
         this.activePanel = "chat";
         if (this.pushPath(this.selectedId, "chat")) return;
       } else {
@@ -1305,6 +1314,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   closeThreadWizard(): void {
     if (!this.threads.length) return;
+    this.writeOnboardingFlag("skipped");
+    this.resumeWizardAfterSetup = false;
     this.threadWizardOpen = false;
     this.updateDocumentTitle();
     this.renderNow();
@@ -1322,6 +1333,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async handleThreadWizardCreated(thread: ThreadSummary): Promise<void> {
+    this.writeOnboardingFlag("completed");
+    this.resumeWizardAfterSetup = false;
     this.threadWizardOpen = false;
     await this.refresh(false);
     const created = this.threads.find((candidate) => candidate.id === thread.id) || thread;
@@ -5464,13 +5477,25 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }).crossOrigin;
   }
 
-  private shouldAutoOpenOnboarding(): boolean {
-    if (this.isUserMode()) return false;
-    if (this.onboardingActive || !this.setupStatus || !this.codexStatusAuthoritative() || this.codexAgentReady()) return false;
+  // First run (admin, Codex not signed in yet, not skipped or finished before)
+  // opens the three-step wizard at "/" or a bare "/setup", not the setup page.
+  private shouldAutoOpenFirstRunWizard(): boolean {
+    if (this.isUserMode() || this.threadWizardOpen || !this.canCreateThreadFromSidebar()) return false;
+    if (!this.setupStatus || !this.codexStatusAuthoritative() || this.codexAgentReady()) return false;
     if (this.setupStatus.onboarding?.autoOpen === false) return false;
     if (this.readOnboardingFlag("skipped") || this.readOnboardingFlag("completed")) return false;
     const parts = this.locationPathParts();
-    return parts.length === 0 || (parts.length === 1 && parts[0] === "ng");
+    if (parts.length === 1 && parts[0] === "setup") return !globalThis.location?.search;
+    return !this.onboardingActive && (parts.length === 0 || (parts.length === 1 && parts[0] === "ng"));
+  }
+
+  private openFirstRunWizard(): void {
+    const fromSetup = this.onboardingActive;
+    this.onboardingActive = false;
+    this.threadWizardOpen = true;
+    this.activePanel = "chat";
+    if (fromSetup) globalThis.history?.replaceState({}, "", this.appPath("/"));
+    this.updateDocumentTitle();
   }
 
   private readOnboardingFlag(name: "skipped" | "completed"): boolean {

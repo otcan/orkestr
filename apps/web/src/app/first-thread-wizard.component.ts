@@ -4,6 +4,7 @@ import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadMessage, ThreadSummary } from "./api.service";
 import { CodexSignInPanelComponent } from "./codex-sign-in-panel.component";
 import { codexStateLabel } from "./codex-runtime-status";
+import { clearWizardProgress, loadWizardProgress, saveWizardProgress } from "./first-thread-wizard-progress";
 import { WhatsAppPairPanelComponent } from "./whatsapp-pair-panel.component";
 
 type WizardStepId = "whatsapp" | "codex" | "review";
@@ -61,8 +62,41 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   private whatsappModeTouched = false;
 
   ngOnInit(): void {
+    this.restoreProgress();
     this.syncWhatsAppAccessMode();
-    void this.loadClaudeAccounts();
+    void this.loadClaudeAccounts().then(() => this.clampRestoredStep());
+  }
+
+  // Coming back from Setup restores the step and answers; a step past the AI
+  // choice is only kept while that AI is still ready.
+  private restoreProgress(): void {
+    const saved = loadWizardProgress();
+    if (!saved) return;
+    this.stepIndex = Math.min(saved.stepIndex, this.steps.length - 1);
+    this.threadName = saved.threadName || this.threadName;
+    this.repoUrl = saved.repoUrl;
+    this.runtimeProvider = saved.runtimeProvider;
+    this.whatsappModeTouched = saved.whatsappModeTouched;
+    if (saved.whatsappModeTouched) this.whatsappAccessMode = saved.whatsappAccessMode;
+    if (this.runtimeProvider === "codex") this.clampRestoredStep();
+  }
+
+  private clampRestoredStep(): void {
+    const aiStep = this.steps.findIndex((step) => step.id === "codex");
+    if (this.stepIndex > aiStep && this.setupStatus && !this.agentReady()) this.stepIndex = aiStep;
+    this.cdr.markForCheck();
+  }
+
+  private saveProgress(): void {
+    if (this.createdThread) return;
+    saveWizardProgress({
+      stepIndex: this.stepIndex,
+      threadName: this.threadName,
+      repoUrl: this.repoUrl,
+      runtimeProvider: this.runtimeProvider,
+      whatsappAccessMode: this.whatsappAccessMode,
+      whatsappModeTouched: this.whatsappModeTouched,
+    });
   }
 
   ngOnChanges(_changes: SimpleChanges): void {
@@ -79,6 +113,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
 
   ngOnDestroy(): void {
     this.stopProofCheck();
+    this.saveProgress();
   }
 
   private stopProofCheck(): void {
@@ -114,11 +149,13 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   next(): void {
     if (!this.canContinue() || this.stepIndex >= this.steps.length - 1) return;
     this.stepIndex += 1;
+    this.saveProgress();
   }
 
   previous(): void {
     if (this.stepIndex <= 0 || this.busy) return;
     this.stepIndex -= 1;
+    this.saveProgress();
   }
 
   canSelectStep(index: number): boolean {
@@ -328,6 +365,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
           this.boundChatName = group.chat?.name || name;
           this.creationStage = "";
           this.createdThread = thread;
+          clearWizardProgress();
           this.startProofCheck(thread.id);
           return;
         } catch (error) {
@@ -336,6 +374,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       }
       this.creationStage = "";
       this.createdThread = thread;
+      clearWizardProgress();
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
