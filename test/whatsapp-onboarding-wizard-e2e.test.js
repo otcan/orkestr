@@ -155,9 +155,9 @@ test("wizard links WhatsApp by QR, binds only the paired owner's private chat, a
       await page.evaluate((text) => [...document.querySelectorAll(".first-thread-wizard button")].find((button) => button.textContent.trim() === text && !button.disabled).click(), label);
     };
 
-    await clickButton("Next"); // welcome
-    await clickButton("Next"); // coding agent (synthetic Codex connected)
+    // WhatsApp is the first step; until linked, the step can be skipped.
     await page.waitForSelector("ork-whatsapp-pair-panel");
+    await page.waitForFunction(() => [...document.querySelectorAll(".first-thread-wizard button")].some((button) => button.textContent.trim() === "Skip for now"));
     assert.match(await page.$eval(".wizard-choice-grid .choice-card.active", (node) => node.textContent), /Use my own WhatsApp/, "self-hosted is the default without a broker");
     await clickButton("Show QR code");
     await page.waitForSelector("img.whatsapp-pair-qr", { timeout: 10_000 });
@@ -170,9 +170,10 @@ test("wizard links WhatsApp by QR, binds only the paired owner's private chat, a
     await page.waitForFunction(() => document.querySelector(".whatsapp-pair-panel")?.textContent.includes("linked and ready"), { timeout: 10_000 });
     assert.equal(await page.$("img.whatsapp-pair-qr"), null, "the QR disappears once linked");
 
-    await clickButton("Next"); // review
+    await clickButton("Next"); // AI (synthetic Codex connected)
+    await clickButton("Next"); // name and start
     await page.waitForFunction(() => document.querySelector(".wizard-review")?.textContent.includes("Own WhatsApp (linked)"));
-    await clickButton("Create workspace");
+    await clickButton("Create and start");
     await page.waitForSelector(".wizard-proof", { timeout: 20_000 });
     const group = fake.calls.find((call) => call[0] === "thread-group");
     assert.deepEqual(group[1], {
@@ -188,7 +189,7 @@ test("wizard links WhatsApp by QR, binds only the paired owner's private chat, a
     fake.inbound = true;
     await page.waitForFunction(() => /✔\s*orkest replied/.test(document.querySelector(".wizard-proof")?.textContent || ""), { timeout: 15_000 });
     assert.match(await page.$eval(".wizard-proof", (node) => node.textContent), /✔\s*Message received from WhatsApp/);
-    await clickButton("Open thread");
+    await clickButton("Open the conversation");
     await page.waitForFunction(() => !document.querySelector(".wizard-proof"), { timeout: 10_000 });
     assert.deepEqual(fake.external, [], "self-hosted onboarding makes no requests to other hosts");
   } finally {

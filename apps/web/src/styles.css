@@ -1381,6 +1381,17 @@ ork-first-thread-wizard.first-thread-host {
   text-transform: uppercase;
 }
 
+details.wizard-field summary {
+  cursor: pointer;
+}
+
+.wizard-field small {
+  color: #b7c6b3;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: none;
+}
+
 .wizard-field .field-error {
   color: #ff9a9a;
   font-size: 0.72rem;

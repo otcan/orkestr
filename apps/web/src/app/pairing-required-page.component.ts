@@ -18,6 +18,7 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
 
   challenge: SecurityChallenge | null = null;
   busy = false;
+  copied = false;
   error = "";
   notice = "";
 
@@ -49,7 +50,8 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
         expiresAt: result.expiresAt,
         instanceId: this.instanceId(),
       };
-      this.notice = this.defaultApprovalNotice();
+      this.notice = "";
+      this.copied = false;
       this.startPolling();
     } catch (error) {
       this.error = this.errorText(error);
@@ -66,7 +68,7 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
     try {
       const result = await firstValueFrom(this.api.securityChallenge(challengeId));
       this.challenge = result.challenge;
-      this.notice = this.defaultApprovalNotice();
+      this.notice = "";
       if (this.challenge.status === "approved") await this.consumeChallenge();
       else this.startPolling();
     } catch (error) {
@@ -84,7 +86,7 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
       this.challenge = result.challenge;
       this.error = "";
       if (this.challenge.status === "approved") await this.consumeChallenge();
-      if (["consumed", "expired", "rejected"].includes(this.challenge.status)) this.stopPolling();
+      if (["consumed", "expired", "rejected"].includes(this.challenge.status) || this.isExpired()) this.stopPolling();
     } catch (error) {
       this.error = this.errorText(error);
       this.stopPolling();
@@ -95,7 +97,32 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
 
   approveCommand(): string {
     const code = this.challenge?.approveCode || this.challenge?.id || "<code>";
-    return `orkestr connect approve ${code}`;
+    const command = `orkestr connect approve ${code}`;
+    return this.isDocker() ? `docker exec orkestr ${command}` : command;
+  }
+
+  isDocker(): boolean {
+    return this.setupStatus?.install?.docker === true;
+  }
+
+  commandWhere(): string {
+    if (this.challenge?.authIntent) return "Open a terminal on the Orkestr server, or your Orkestr WhatsApp chat.";
+    return this.isDocker()
+      ? "Open a terminal on the computer where the Docker container runs."
+      : "Open a terminal on the Orkestr server. If WhatsApp is already linked, you can send the command to your Orkestr chat instead.";
+  }
+
+  isExpired(): boolean {
+    if (this.challenge?.status === "expired") return true;
+    const timestamp = Date.parse(this.challenge?.expiresAt || "");
+    return this.challenge?.status === "pending" && Number.isFinite(timestamp) && timestamp <= Date.now();
+  }
+
+  statusLabel(): string {
+    const status = String(this.challenge?.status || "");
+    if (status === "pending") return "Waiting for approval";
+    if (status === "approved" || status === "consumed") return "Approved";
+    return status || "Checking";
   }
 
   approvalEyebrow(): string {
@@ -137,15 +164,20 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
 
   expiryLabel(): string {
     const timestamp = Date.parse(this.challenge?.expiresAt || "");
-    return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "unknown";
+    if (!Number.isFinite(timestamp)) return "";
+    const minutes = Math.ceil((timestamp - Date.now()) / 60_000);
+    if (minutes <= 1) return "Code expires in under a minute";
+    return `Code expires in ${minutes} minutes`;
   }
 
   async copyCommand(): Promise<void> {
     try {
       await globalThis.navigator?.clipboard?.writeText(this.approveCommand());
-      this.notice = "Copied.";
+      this.copied = true;
+      this.notice = "";
     } catch {
-      this.notice = "Select and copy the command.";
+      this.copied = false;
+      this.notice = "Copying is blocked in this browser. Select the command and copy it by hand.";
     }
     this.renderNow();
   }
@@ -212,12 +244,6 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
   private renderNow(): void {
     if (this.destroyed) return;
     this.cdr.detectChanges();
-  }
-
-  private defaultApprovalNotice(): string {
-    return this.challenge?.authIntent
-      ? "Paste the command below to approve this exact connection."
-      : "Paste the command below into WhatsApp or a trusted terminal.";
   }
 
   private errorText(error: unknown): string {

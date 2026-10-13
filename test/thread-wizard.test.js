@@ -41,8 +41,8 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("generatedWorkspaceName"));
   assert.ok(sources.includes("autoWorkspace"));
   assert.ok(sources.includes("initGit"));
-  assert.ok(sources.includes("Create workspace"));
-  assert.ok(sources.includes('type WizardStepId = "welcome" | "codex" | "whatsapp" | "review"'));
+  assert.ok(sources.includes("Create and start"));
+  assert.ok(sources.includes('type WizardStepId = "whatsapp" | "codex" | "review"'));
   assert.ok(sources.includes('threadName = "orkest"'));
   assert.ok(sources.includes('type WhatsAppAccessMode = "managed" | "self_hosted"'));
   assert.ok(sources.includes("Use managed WhatsApp"));
@@ -58,7 +58,7 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes('browserAction(slug, "start"'));
   assert.ok(sources.includes("repoRemoteUrl"));
   assert.ok(sources.includes("cloneRepo"));
-  assert.ok(sources.includes("Codex Agent required."));
+  assert.ok(sources.includes("Codex is not signed in yet."));
   assert.ok(!sources.includes("codex-required-shell"));
   assert.ok(!sources.includes("Orkestr is locked until the Codex Agent runtime is connected."));
   assert.ok(!sources.includes("Connect Codex Agent before creating, opening, or inspecting workspaces."));

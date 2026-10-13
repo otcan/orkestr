@@ -45,6 +45,7 @@ export async function getSetupStatus({ env = process.env, home, principal = null
     onboarding: {
       autoOpen: onboardingAutoOpenEnabled(env),
     },
+    install: installStatus(env),
     settings,
     whatsappOnboarding,
     overlay,
@@ -55,6 +56,12 @@ export async function getSetupStatus({ env = process.env, home, principal = null
   };
 }
 
+// Lets the setup UI show commands in the form this install needs (for
+// example `docker exec` in front of the CLI). Not sensitive.
+function installStatus(env = process.env) {
+  return { docker: String(env.ORKESTR_DOCKER || "").trim() === "1" };
+}
+
 export function publicSetupStatus(status = {}) {
   return {
     generatedAt: status.generatedAt || new Date().toISOString(),
@@ -63,6 +70,7 @@ export function publicSetupStatus(status = {}) {
     onboarding: {
       autoOpen: status.onboarding?.autoOpen !== false,
     },
+    install: { docker: status.install?.docker === true },
     overlay: publicOverlayStatus(status.overlay),
     security: publicSetupSecurityStatus(status.security),
     auth: publicSetupAuthStatus(status.auth),
