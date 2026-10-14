@@ -72,7 +72,7 @@ test("owner login over HTTP: first visit creates it, then the app needs the cook
     const cookie = String(setup.headers.get("set-cookie") || "").split(";")[0];
     assert.match(cookie, /^orkestr_owner=/);
     assert.match(String(setup.headers.get("set-cookie")), /HttpOnly; SameSite=Lax/);
-    assert.equal((await post("/api/auth/owner/setup", { username: "someone", password: "takeover-pass" })).status, 409, "only the first visitor picks the login");
+    assert.equal((await post("/api/auth/owner/setup", { username: "someone", password: "takeover-pass" })).status, 403, "only the first visitor picks the login");
     assert.equal((await fetch(`${base}/api/threads`, { headers: { cookie } })).status, 200);
     const status = await (await fetch(`${base}/api/auth/owner`, { headers: { cookie } })).json();
     assert.equal(status.signedIn, true);
@@ -172,6 +172,42 @@ test("first visit in a browser: create the login, then Orkestr opens", { timeout
     assert.ok(cookies.some((cookie) => cookie.name === "orkestr_owner" && cookie.httpOnly), "signed in with the owner cookie");
   } finally {
     await browser?.close();
+    await new Promise((resolve) => server.close(resolve));
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("existing installs cannot be claimed anonymously; a signed-in admin can create the login", async () => {
+  const { approvePairingChallenge, createPairingChallenge, pairBrowser, securityCookieName, ownerSetupOpenToAnonymous } = await import("../packages/core/src/security.js");
+  const keys = ["ORKESTR_HOME", "ORKESTR_AUTH_REQUIRED", "ORKESTR_OWNER_LOGIN_PROMPT", "ORKESTR_RECOVER_RUNNING_ON_START", "ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED", "ORKESTR_AUTH_PROVIDER", "ORKESTR_KEYCLOAK_ISSUER"];
+  const prior = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+  process.env.ORKESTR_HOME = await home("orkestr-owner-existing-");
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  // An install that already has a paired browser (like any pre-owner-login install).
+  const challenge = await createPairingChallenge({ env: process.env, userId: "admin", role: "admin" });
+  await approvePairingChallenge(challenge.challengeId, { env: process.env });
+  const paired = await pairBrowser({ challengeId: challenge.challengeId, env: process.env });
+  assert.equal(await ownerSetupOpenToAnonymous(process.env), false);
+  assert.equal(await ownerSetupOpenToAnonymous({ ORKESTR_HOME: await home(), ORKESTR_KEYCLOAK_ISSUER: "https://id.example.test/realms/x" }), false, "identity-provider installs are never open");
+  assert.equal(await ownerSetupOpenToAnonymous({ ORKESTR_HOME: await home() }), true, "a fresh install is open (owner's choice)");
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (url, body, cookie = "") => fetch(`${base}${url}`, { method: "POST", headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) });
+  try {
+    const anonymous = await post("/api/auth/owner/setup", { username: "attacker", password: "takeover-pass" });
+    assert.equal(anonymous.status, 403);
+    assert.equal((await anonymous.json()).error, "owner_setup_closed");
+    assert.equal((await (await fetch(`${base}/api/auth/owner`)).json()).prompt, false, "no setup form for anonymous visitors");
+    const cookie = `${securityCookieName()}=${paired.token}`;
+    assert.equal((await (await fetch(`${base}/api/auth/owner`, { headers: { cookie } })).json()).prompt, true);
+    const owner = await post("/api/auth/owner/setup", { username: "can", password: "first-password" }, cookie);
+    assert.equal(owner.status, 200, "the signed-in admin creates the login");
+  } finally {
     await new Promise((resolve) => server.close(resolve));
     for (const [key, value] of Object.entries(prior)) {
       if (value === undefined) delete process.env[key];

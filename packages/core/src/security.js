@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { authProvider } from "./auth-config.js";
 import { ownerCookieName, ownerLoginStatus, verifyOwnerToken } from "./owner-login.js";
 import { authorizeAgentJobTriggerRequest } from "./agent-job-trigger-auth.js";
 import { execFile } from "node:child_process";
@@ -145,6 +146,20 @@ function approvalInstructions(env = process.env) {
     approveCommand: String(env.ORKESTR_SECURITY_APPROVE_COMMAND || "").trim(),
     sudoApproveCommand: String(env.ORKESTR_SECURITY_APPROVE_SUDO_COMMAND || "").trim(),
   };
+}
+
+// Anonymous first-visit owner setup is only for a fresh install: no owner yet,
+// no stored browser session ever, and no identity provider. Existing installs
+// (paired browsers, Keycloak) must never be claimable by an unauthenticated
+// request; there a signed-in admin creates the login from inside the app.
+export async function ownerSetupOpenToAnonymous(env = process.env) {
+  if (String(env.ORKESTR_OWNER_LOGIN_PROMPT || "").trim() === "0") return false;
+  if (authProvider(env) !== "browser_pairing") return false;
+  const status = await ownerLoginStatus(env).catch(() => ({ configured: true }));
+  if (status.configured) return false;
+  const config = await readSecurityConfig(env).catch(() => null);
+  if (!config) return false;
+  return !(config.sessions || []).length;
 }
 
 async function readSecurityConfig(env = process.env) {
