@@ -14,9 +14,9 @@ test("picture audit returns present when getProfilePicUrl returns a url", async 
   };
   const results = await auditLocalWhatsAppGroupPictures({
     client,
-    chatIds: ["120363429022300057@g.us"],
+    chatIds: ["120363000000000001@g.us"],
   });
-  assert.deepEqual(results, [{ chatId: "120363429022300057@g.us", status: "present" }]);
+  assert.deepEqual(results, [{ chatId: "120363000000000001@g.us", status: "present" }]);
 });
 
 test("picture audit returns missing when getProfilePicUrl returns undefined", async () => {
@@ -27,9 +27,9 @@ test("picture audit returns missing when getProfilePicUrl returns undefined", as
   };
   const results = await auditLocalWhatsAppGroupPictures({
     client,
-    chatIds: ["120363429022300057@g.us"],
+    chatIds: ["120363000000000001@g.us"],
   });
-  assert.deepEqual(results, [{ chatId: "120363429022300057@g.us", status: "missing" }]);
+  assert.deepEqual(results, [{ chatId: "120363000000000001@g.us", status: "missing" }]);
 });
 
 test("picture audit returns missing when getProfilePicUrl returns null", async () => {
@@ -40,9 +40,9 @@ test("picture audit returns missing when getProfilePicUrl returns null", async (
   };
   const results = await auditLocalWhatsAppGroupPictures({
     client,
-    chatIds: ["120363429022300057@g.us"],
+    chatIds: ["120363000000000001@g.us"],
   });
-  assert.deepEqual(results, [{ chatId: "120363429022300057@g.us", status: "missing" }]);
+  assert.deepEqual(results, [{ chatId: "120363000000000001@g.us", status: "missing" }]);
 });
 
 test("picture audit returns unknown when getProfilePicUrl throws", async () => {
@@ -53,9 +53,9 @@ test("picture audit returns unknown when getProfilePicUrl throws", async () => {
   };
   const results = await auditLocalWhatsAppGroupPictures({
     client,
-    chatIds: ["120363429022300057@g.us"],
+    chatIds: ["120363000000000001@g.us"],
   });
-  assert.deepEqual(results, [{ chatId: "120363429022300057@g.us", status: "unknown" }]);
+  assert.deepEqual(results, [{ chatId: "120363000000000001@g.us", status: "unknown" }]);
 });
 
 test("picture audit excludes non-group chats from results", async () => {
@@ -68,11 +68,11 @@ test("picture audit excludes non-group chats from results", async () => {
   };
   const results = await auditLocalWhatsAppGroupPictures({
     client,
-    chatIds: ["1234567890@c.us", "120363429022300057@g.us", "9876543210@c.us"],
+    chatIds: ["1234567890@c.us", "120363000000000001@g.us", "9876543210@c.us"],
   });
   assert.equal(results.length, 1);
-  assert.equal(results[0].chatId, "120363429022300057@g.us");
-  assert.deepEqual(visited, ["120363429022300057@g.us"]);
+  assert.equal(results[0].chatId, "120363000000000001@g.us");
+  assert.deepEqual(visited, ["120363000000000001@g.us"]);
 });
 
 test("picture audit returns empty array when all chatIds are non-groups", async () => {
