@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { getExecutorAdapter } from "../../../../../packages/core/src/executors.js";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -417,6 +418,19 @@ async function prepareThreadCreateBody(body: Record<string, unknown> = {}, princ
   };
 }
 
+// No conversations without a real agent. A thread without a runtime kind or a
+// terminal command runs through an executor adapter, and unknown ids fall back
+// to the no-op adapter; the no-op and simulated adapters are test fixtures that
+// only the test runner (ORKESTR_ALLOW_TEST_EXECUTORS=1) may use.
+function assertRealThreadExecutor(input: Record<string, any>) {
+  if (process.env.ORKESTR_ALLOW_TEST_EXECUTORS === "1") return;
+  if (String(input.runtimeKind || "").trim() || String(input.command || input.cmd || "").trim()) return;
+  const executor = input.executor && typeof input.executor === "object" ? input.executor : {};
+  const ids = [input.executorId, executor.id, executor.type].map((value) => String(value || "").trim()).filter(Boolean);
+  const resolved = ids.length ? ids.map((id) => getExecutorAdapter(id).id) : [getExecutorAdapter("").id];
+  if (resolved.some((id) => id === "noop" || id === "simulated")) throw httpError("executor_not_available", 400);
+}
+
 @Controller("api/threads")
 export class ThreadsController {
   constructor(
@@ -665,11 +679,6 @@ export class ThreadsController {
     const prepared = await prepareThreadCreateBody(body, principal);
     const preparedExecutor = typeof prepared.executor === "object" && prepared.executor ? prepared.executor as Record<string, unknown> : {};
     const requestedExecutorId = String(prepared.executorId || preparedExecutor.id || preparedExecutor.type || "codex").trim() || "codex";
-    // No conversations without a real agent: the no-op and simulated executors
-    // are test fixtures and only the test runner may create threads on them.
-    if (["noop", "simulated"].includes(requestedExecutorId) && process.env.ORKESTR_ALLOW_TEST_EXECUTORS !== "1") {
-      throw httpError("executor_not_available", 400);
-    }
     const defaultRuntime = defaultTenantThreadRuntime(prepared, principal, process.env);
     const usesApiAgentRuntime = String(prepared.runtimeKind || defaultRuntime || "").trim() === API_AGENT_RUNTIME_KIND;
     const usesClaudeRuntime = !usesApiAgentRuntime && (requestedExecutorId === "claude-code" || String(preparedExecutor.type || "").trim() === "claude-code");
@@ -717,6 +726,7 @@ export class ThreadsController {
         },
       };
     }
+    assertRealThreadExecutor(createInput);
     let thread = await createThreadForPrincipal(createInput, principal);
     if (usesCodexRuntime && !codexThreadId(thread)) {
       const started = await startCodexAppServerThread(thread);

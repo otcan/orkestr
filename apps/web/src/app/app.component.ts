@@ -622,7 +622,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   // wizard (admins) or an explanation (other users) is shown. Setup, pairing
   // and connector sign-in pages come earlier in the template and stay reachable.
   runtimeGateActive(): boolean {
-    return this.appReady && this.claudeRuntimeChecked && this.codexStatusAuthoritative() && !this.agentRuntimeReady();
+    if (!this.appReady || !this.setupStatus || this.pairingRequired) return false;
+    // The server reports readiness to everyone, including non-admins whose
+    // setup status is otherwise redacted.
+    const serverReady = this.setupStatus.agentRuntime?.ready;
+    if (typeof serverReady === "boolean") return !serverReady && !this.agentRuntimeReady();
+    return this.claudeRuntimeChecked && this.codexStatusAuthoritative() && !this.agentRuntimeReady();
   }
 
   private async refreshClaudeRuntimeReady(): Promise<void> {

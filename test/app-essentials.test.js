@@ -23,10 +23,17 @@ test("the thread API refuses the no-op and simulated executors outside the test 
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   try {
     const base = `http://127.0.0.1:${server.address().port}`;
-    for (const executorId of ["noop", "simulated"]) {
-      const response = await fetch(`${base}/api/threads`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: `fake-${executorId}`, executorId }) });
-      assert.equal(response.status, 400, executorId);
-      assert.equal((await response.json()).error, "executor_not_available");
+    const attempts = [
+      { name: "fake-noop", executorId: "noop" },
+      { name: "fake-simulated", executorId: "simulated" },
+      { name: "fake-nested", executorId: "custom", executor: { type: "noop" } },
+      { name: "fake-unknown", executorId: "no-such-executor" },
+      { name: "fake-nested-id", executor: { id: "simulated", type: "simulated" }, executorId: "custom" },
+    ];
+    for (const body of attempts) {
+      const response = await fetch(`${base}/api/threads`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      assert.equal(response.status, 400, body.name);
+      assert.equal((await response.json()).error, "executor_not_available", body.name);
     }
     assert.deepEqual((await listThreads(process.env)).map((thread) => thread.name), [], "no fake conversation was created");
   } finally {
@@ -73,6 +80,20 @@ test("shell: agent gate, login-aware Log out, Vault sign-in notice, no Copy link
   assert.doesNotMatch(html, /Copy link|>Connections<\/button>/);
   assert.match(vaultTs, /vault_owner_session_required"\) \{\s*this\.ownerSessionMissing = true;/);
   assert.match(vaultHtml, /The vault needs sign-in\./);
+});
+
+test("setup status tells everyone, also non-admins, whether a coding agent is ready", async () => {
+  const { getSetupStatus, publicSetupStatus } = await import("../packages/core/src/setup.js");
+  const env = { ...process.env, ORKESTR_HOME: await tempHome("orkestr-agent-runtime-") };
+  const full = await getSetupStatus({ env });
+  assert.equal(typeof full.agentRuntime.ready, "boolean");
+  assert.deepEqual(publicSetupStatus({ ...full, agentRuntime: { ready: false, codex: false, claude: false } }).agentRuntime, { ready: false });
+  assert.deepEqual(publicSetupStatus({ ...full, agentRuntime: { ready: true, codex: true, claude: false } }).agentRuntime, { ready: true });
+  const ts = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  assert.match(ts, /const serverReady = this\.setupStatus\.agentRuntime\?\.ready;\s*if \(typeof serverReady === "boolean"\) return !serverReady && !this\.agentRuntimeReady\(\);/);
+  const wizard = await fs.readFile("apps/web/src/app/first-thread-wizard.component.html", "utf8");
+  assert.match(wizard, /@if \(canManageSetup && !agentReady\(\)\) \{[\s\S]*<app-llm-accounts \/>/, "Claude accounts can be added inside the gate");
+  assert.doesNotMatch(wizard, /Tools → Models/);
 });
 
 test("orkestr demo is gone", () => {
