@@ -1,4 +1,5 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
+import { copyText } from "./browser-compat";
 import { firstValueFrom } from "rxjs";
 import { ApiService, SecurityChallenge, SetupStatus } from "./api.service";
 
@@ -171,14 +172,8 @@ export class PairingRequiredPageComponent implements OnInit, OnDestroy {
   }
 
   async copyCommand(): Promise<void> {
-    try {
-      await globalThis.navigator?.clipboard?.writeText(this.approveCommand());
-      this.copied = true;
-      this.notice = "";
-    } catch {
-      this.copied = false;
-      this.notice = "Copying is blocked in this browser. Select the command and copy it by hand.";
-    }
+    this.copied = await copyText(this.approveCommand());
+    this.notice = this.copied ? "" : "Copying is blocked in this browser. Select the command and copy it by hand.";
     this.renderNow();
   }
 

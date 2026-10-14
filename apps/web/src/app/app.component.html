@@ -1,8 +1,25 @@
 @if (pairingRequired) {
-  <ork-pairing-required-page
-    [setupStatus]="setupStatus"
-    (paired)="handleBrowserPaired($event)"
-  ></ork-pairing-required-page>
+  @if (!ownerLoginChecked) {
+    <main class="boot-shell"><p>Loading…</p></main>
+  } @else if (ownerLoginPageActive()) {
+    <ork-owner-login-page
+      [canSkip]="false"
+      (signedIn)="handleOwnerSignedIn()"
+      (pairingRequested)="usePairingInstead = true"
+    ></ork-owner-login-page>
+  } @else {
+    <ork-pairing-required-page
+      [setupStatus]="setupStatus"
+      (paired)="handleBrowserPaired($event)"
+    ></ork-pairing-required-page>
+  }
+} @else if (ownerSetupPromptActive()) {
+  <ork-owner-login-page
+    [canSkip]="true"
+    [allowPairing]="false"
+    (signedIn)="handleOwnerSignedIn()"
+    (skipped)="skipOwnerSetup()"
+  ></ork-owner-login-page>
 } @else if (sharedAppActive()) {
   <ork-shared-app-page></ork-shared-app-page>
 } @else if (publicAppsActive()) {

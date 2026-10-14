@@ -112,7 +112,9 @@ function catalog(options = {}) {
   const visible = options.includeHidden === true ? null : visibleDesktopSlugs();
   const visibleRows = visible ? [...visible].map((slug) => ({ slug, label: titleFromSlug(slug) })) : [];
   const merged = new Map();
-  for (const row of normalizeCatalogRows([...defaultCatalog, ...visibleRows, ...configured])) {
+  // Docker installs start with one general desktop (same rule as runtime-settings.js).
+  const defaults = flagEnabled("ORKESTR_DOCKER") ? defaultCatalog.slice(0, 1) : defaultCatalog;
+  for (const row of normalizeCatalogRows([...defaults, ...visibleRows, ...configured])) {
     if (row.enabled === false) continue;
     if (visible && !visible.has(row.slug)) continue;
     merged.set(row.slug, { ...(merged.get(row.slug) || {}), ...row });

@@ -2,6 +2,7 @@ import { bootstrapApplication } from "@angular/platform-browser";
 import { provideHttpClient } from "@angular/common/http";
 import { ErrorHandler, Injectable } from "@angular/core";
 import { AppComponent } from "./app/app.component";
+import { installWebCryptoFallbackShim, redirectZeroHostToLocalhost } from "./app/browser-compat";
 
 @Injectable()
 class OrkestrErrorHandler implements ErrorHandler {
@@ -37,7 +38,10 @@ function escapeHtml(value: string): string {
   })[char] || char);
 }
 
-bootstrapApplication(AppComponent, {
+const redirecting = redirectZeroHostToLocalhost();
+installWebCryptoFallbackShim();
+
+if (!redirecting) bootstrapApplication(AppComponent, {
   providers: [
     provideHttpClient(),
     { provide: ErrorHandler, useClass: OrkestrErrorHandler },

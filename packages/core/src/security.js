@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { ownerCookieName, ownerLoginStatus, verifyOwnerToken } from "./owner-login.js";
 import { authorizeAgentJobTriggerRequest } from "./agent-job-trigger-auth.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -1230,7 +1231,10 @@ export async function securityStatus(env = process.env) {
   const proxyLocalBindSetting = String(env.ORKESTR_REVERSE_PROXY_LOCAL_BIND || "").trim();
   const proxyLocalBind = proxyLocalBindSetting === "1";
   const authRequired = effectiveAuthRequired(env, urls, host);
-  const authEnabled = Boolean(authRequired || config.enabled || (config.sessions || []).length);
+  // An error reading the owner login keeps sign-in on (fail closed).
+  const ownerLogin = await ownerLoginStatus(env).catch(() => ({ configured: true }));
+  // Once the owner picked a login, sign-in is on, also for a local install.
+  const authEnabled = Boolean(authRequired || config.enabled || (config.sessions || []).length || ownerLogin.configured);
   const sessionCount = (config.sessions || []).filter((session) => Date.parse(session.expiresAt || "") > Date.now()).length;
   const pendingChallenges = activePendingChallenges(config);
   const challengeActive = pendingChallenges.length > 0;
@@ -1247,6 +1251,7 @@ export async function securityStatus(env = process.env) {
     proxyLocalBind,
     externallyLocal,
     authEnabled,
+    ownerLogin: { configured: Boolean(ownerLogin.configured) },
     authRequired,
     paired: sessionCount > 0,
     sessionCount,
@@ -2064,7 +2069,7 @@ async function securitySessionForRequest(request, env = process.env) {
     ...cookieValues(cookieHeader, oidcCookieName),
     ...cookieValues(cookieHeader, cookieName),
   ])];
-  if (!tokens.length) return null;
+  if (!tokens.length) return ownerSessionForRequest(request, env);
   const route = sharedAppRequestRoute(request);
   const brokerRoute = brokerAppRequestRoute(request);
   const candidates = [];
@@ -2072,7 +2077,7 @@ async function securitySessionForRequest(request, env = process.env) {
     const session = await securitySessionForToken(token, env, { request, touch: false }).catch(() => null);
     if (session) candidates.push({ token, session });
   }
-  if (!candidates.length) return null;
+  if (!candidates.length) return ownerSessionForRequest(request, env);
   let selected = null;
   if (route) {
     selected = candidates
@@ -2088,6 +2093,25 @@ async function securitySessionForRequest(request, env = process.env) {
   }
   selected ||= newestSessionCandidate(candidates.filter(({ session }) => !session.shareId)) || candidates[0];
   return await securitySessionForToken(selected.token, env, { request }).catch(() => null) || selected.session;
+}
+
+// The owner's own login (owner-login.js): a signed JWT cookie that maps to an
+// admin session. Used when the browser has no other valid session.
+async function ownerSessionForRequest(request, env = process.env) {
+  const token = cookieValue(request?.headers?.cookie || "", ownerCookieName);
+  if (!token) return null;
+  const claims = await verifyOwnerToken(token, env);
+  if (!claims) return null;
+  const admin = defaultAdminUser(env);
+  return {
+    id: `owner-${claims.jti}`,
+    userId: admin.id,
+    role: "admin",
+    displayName: claims.sub,
+    authProvider: "owner-password",
+    createdAt: new Date(Number(claims.iat) * 1000).toISOString(),
+    expiresAt: new Date(Number(claims.exp) * 1000).toISOString(),
+  };
 }
 
 function isAllowedBeforePairing(request) {
@@ -2138,6 +2162,9 @@ function isAllowedBeforePairing(request) {
   // Logout must remain reachable when the browser presents an expired or
   // already-revoked cookie so the response can remove every cookie variant.
   if (method === "POST" && url === "/api/setup/security/logout") return true;
+  // Owner login: status, first-time setup (only while no owner exists) and sign-in.
+  if (method === "GET" && url === "/api/auth/owner") return true;
+  if (method === "POST" && (url === "/api/auth/owner/setup" || url === "/api/auth/owner/login")) return true;
   return false;
 }
 
@@ -2172,7 +2199,7 @@ export async function authorizeHttpRequest(request, env = process.env) {
     let shareSession = null;
     if (shareAuth.oidcSessionId) {
       shareSession = await securitySessionForRequest(request, env);
-      if (shareSession?.authProvider !== "oidc" || String(shareSession.id || "") !== shareAuth.oidcSessionId) {
+      if (!["oidc", "owner-password"].includes(String(shareSession?.authProvider || "")) || String(shareSession.id || "") !== shareAuth.oidcSessionId) {
         return { ok: false, status, statusCode: 401, error: "oidc_desktop_session_required" };
       }
       const shareUser = await getUser(shareSession.userId, env);

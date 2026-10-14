@@ -28,10 +28,11 @@ Guarantees: [docs/spec/runtime-guarantees.md](docs/spec/runtime-guarantees.md).
 With Docker, nothing else to install:
 
 ```bash
-docker run --name orkestr -p 3000:3000 -v orkestr-data:/data ghcr.io/otcan/orkestr:latest
+docker run --name orkestr -p 127.0.0.1:3000:3000 -v orkestr-data:/data ghcr.io/otcan/orkestr:latest
 ```
 
-Then open http://127.0.0.1:3000/ and follow the setup.
+Then open http://localhost:3000/. The first visit asks you to pick a username
+and password; that is your login from then on.
 
 From source (Node.js 22 or newer):
 
@@ -182,21 +183,25 @@ See [Start Orkestr](#start-orkestr) and [docs/quickstart.md](docs/quickstart.md)
 ### Docker
 
 ```bash
-docker run --name orkestr -p 3000:3000 -v orkestr-data:/data ghcr.io/otcan/orkestr:latest
+docker run --name orkestr -p 127.0.0.1:3000:3000 -v orkestr-data:/data ghcr.io/otcan/orkestr:latest
 ```
 
 Then open:
 
 ```text
-http://127.0.0.1:3000/
+http://localhost:3000/
 ```
 
-The first page asks you to approve this browser and shows the exact command
-for a Docker install. Run it on the host:
+The first visit asks you to create your login (username and password); after
+that you sign in with it. Use `localhost`, not `0.0.0.0` (Orkestr redirects
+`0.0.0.0` there): browsers treat `localhost` as secure, so copying and
+encrypted attachments work. `-p 127.0.0.1:3000:3000` keeps Orkestr reachable
+only from your computer; the first person to open a fresh install picks the
+login, so do not publish the port to a network before you have created it.
+Approving a browser with a command still works:
+`docker exec orkestr orkestr connect approve <code shown on the page>`.
 
-```bash
-docker exec orkestr orkestr connect approve <code shown on the page>
-```
+Images are published for amd64 and arm64 (Apple Silicon).
 
 Images are published to `ghcr.io/otcan/orkestr`: `latest` and `vX.Y.Z` for
 releases, `main` and `sha-<commit>` for the current `main` branch.

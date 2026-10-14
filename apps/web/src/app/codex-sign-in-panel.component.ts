@@ -1,4 +1,5 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
+import { copyText } from "./browser-compat";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, SetupStatus } from "./api.service";
 import { codexCommandAvailable, codexCommandUnavailableHint } from "./codex-runtime-status";
@@ -92,13 +93,8 @@ export class CodexSignInPanelComponent implements OnInit, OnDestroy {
   }
 
   async copyCode(): Promise<void> {
-    try {
-      await globalThis.navigator?.clipboard?.writeText(this.deviceCode);
-      this.copied = true;
-    } catch {
-      this.copied = false;
-      this.error = "Copying is blocked in this browser. Select the code and copy it by hand.";
-    }
+    this.copied = await copyText(this.deviceCode);
+    if (!this.copied) this.error = "Copying is blocked in this browser. Select the code and copy it by hand.";
     this.render();
   }
 

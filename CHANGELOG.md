@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Owner login: the first visit asks for a username and password (no `docker exec … approve`); the browser then holds a signed JWT (HS256, random per-install key in `ORKESTR_HOME`, HttpOnly cookie, 30 days). Once a login exists, sign-in is required; local installs can choose "Later". Wrong passwords are limited to 10 per 15 minutes; changing the password signs out old tokens. The vault, Log out and opening desktops work with this login. Browser pairing remains for approval links and as "Approve this browser with a command instead"; `ORKESTR_OWNER_LOGIN_PROMPT=0` keeps the old pairing-first flow.
+- `http://0.0.0.0:…` redirects to `http://localhost:…` (a secure page for browsers); README uses `-p 127.0.0.1:3000:3000` and `http://localhost:3000`.
+- Copy buttons work on any page (fallback when the Clipboard API is unavailable).
+- Encrypted attachments work on insecure pages (age-encryption uses its pure-JS fallback instead of failing with "Protected attachment setup is retrying").
+- Desktops page answers from the last known list and refreshes in the background.
+- Docker starts with one desktop instead of three; desktops open with the owner login (no `oidc_desktop_session_required`).
+- Images for amd64 and arm64 (Apple Silicon) under one tag.
+
 ## 0.1.0-alpha.199
 
 - Fast start from a fresh clone: `npm ci` no longer downloads puppeteer's ~650 MB Chrome (WhatsApp uses the installed Chrome or Chromium, or `WA_CHROME_PATH`; `ORKESTR_DOWNLOAD_CHROME=1` restores the download), and `npm start` builds the server once if needed. README starts with the real app; shell blocks have no `#` comments.

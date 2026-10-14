@@ -489,6 +489,11 @@ function shouldRedactSetupStatus(request: any, status: any): boolean {
 }
 
 function setupStatusForRequest(request: any, status: any): any {
+  // A browser that came in with a valid session (paired, OIDC or the owner's
+  // own login) is signed in, whether or not a stored pairing session exists.
+  if (request?.orkestrSecuritySession && request?.orkestrMachineAuth !== "broker_proxy") {
+    return { ...status, security: { ...(status?.security || {}), paired: true } };
+  }
   if (request?.orkestrMachineAuth !== "broker_proxy") return status;
   return {
     ...status,
