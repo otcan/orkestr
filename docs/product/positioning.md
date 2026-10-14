@@ -54,8 +54,7 @@ governed, easier to trigger, or easier to inspect, it is peripheral (see
 
 ## The defining demo
 
-One scenario, about 3 minutes, runnable without credentials using the
-`simulated` provider (`orkestr demo`), and repeatable with Codex or Claude.
+One scenario, about 3 minutes, run with Codex or Claude.
 
 1. **Event.** A webhook delivers "issue opened" to the `repository-maintainer`
    job ([example](../../examples/jobs/repository-maintainer.yaml)). A run is
@@ -85,7 +84,6 @@ Week 8 milestones exist to make each step real
 ## First five minutes
 
 ```sh
-npx orkestr demo                          # simulated provider, no credentials
 orkestr init                              # writes orkestr.yaml + examples/
 orkestr run examples/repository-maintainer
 ```

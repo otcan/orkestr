@@ -183,6 +183,21 @@ test("mobile thread routes keep the selected conversation visible and open threa
     const page = await browser.newPage();
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message || String(error)));
+    // The app opens only with a connected coding agent; simulate a signed-in Codex.
+    await page.setRequestInterception(true);
+    page.on("request", async (request) => {
+      const url = new URL(request.url());
+      if (request.method() !== "GET" || !url.pathname.endsWith("/api/setup/status")) return request.continue();
+      try {
+        const response = await fetch(request.url(), { headers: request.headers() });
+        const status = await response.json();
+        status.connectors = (status.connectors || []).filter((item) => item.id !== "codex")
+          .concat([{ id: "codex", label: "Codex", state: "connected", summary: "" }]);
+        return request.respond({ status: response.status, contentType: "application/json", body: JSON.stringify(status) });
+      } catch {
+        return request.continue();
+      }
+    });
     const canonicalUrl = `${baseUrl}/instance/${instanceRef}/thread/${thread.publicRef}`;
     const widths = [320, 375, 390, 768, 860];
     await page.setViewport({ width: widths[0], height: 844, deviceScaleFactor: 1 });

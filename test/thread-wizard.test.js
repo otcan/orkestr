@@ -31,7 +31,7 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("agent, project, thread"));
   assert.ok(sources.includes("sidebar-new-thread"));
   assert.ok(sources.includes("openPanel('instanceDesktops')"));
-  assert.ok(sources.includes("copyCurrentViewLink"));
+  assert.ok(!sources.includes("copyCurrentViewLink"));
   assert.ok(sources.includes("[setupSection]=\"setupSection\""));
   assert.ok(sources.includes("handleSetupSectionChange"));
   assert.ok(sources.includes("Name your first conversation"));
@@ -385,12 +385,9 @@ test("canonical thread links drive history, current-view copy, and notification 
   assert.match(component, /navigateCanonicalThreadTarget\(target/);
   assert.match(component, /navigateLegacyThreadPath\(next/);
   assert.match(component, /private canonicalPanelUrl/);
-  assert.match(component, /currentViewLinkAvailable\(\): boolean/);
-  assert.match(component, /copyCurrentViewLink\(\): Promise<void>/);
-  assert.match(component, /private currentViewUrl\(\): string/);
+  assert.doesNotMatch(component, /currentViewLinkAvailable|copyCurrentViewLink|currentViewUrl/);
   assert.match(component, /this\.canonicalPanelUrl\(thread, this\.activePanel, true\)/);
-  assert.match(template, /currentViewLinkAvailable\(\)/);
-  assert.match(template, /copyCurrentViewLink\(\)/);
+  assert.doesNotMatch(template, /currentViewLinkAvailable|copyCurrentViewLink/);
   assert.doesNotMatch(template, /\[href\]="selectedThreadUrl\(thread\)"|>OPEN<\/a>/);
   assert.match(gmailNotifications, /resolveThreadLink\(this\.threadLinks, rule\.target\) \|\| this\.appPath/);
 });

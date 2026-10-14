@@ -23,6 +23,8 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   @Input() canManageSetup = false;
   @Input() setupStatus: SetupStatus | null = null;
   @Input() progressScope = "";
+  // "codex": open on the AI step (an agent must be connected before entering).
+  @Input() startStep: "" | "codex" = "";
   @Output() cancel = new EventEmitter<void>();
   @Output() created = new EventEmitter<ThreadSummary>();
   @Output() setupRequested = new EventEmitter<"codex" | "whatsapp">();
@@ -72,7 +74,10 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   // choice is only kept while that AI is still ready.
   private restoreProgress(): void {
     const saved = loadWizardProgress(this.progressScope);
-    if (!saved) return;
+    if (!saved) {
+      if (this.startStep === "codex") this.stepIndex = this.steps.findIndex((step) => step.id === "codex");
+      return;
+    }
     this.stepIndex = Math.min(saved.stepIndex, this.steps.length - 1);
     this.threadName = saved.threadName || this.threadName;
     this.repoUrl = saved.repoUrl;

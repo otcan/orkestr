@@ -2,10 +2,8 @@
   <header class="files-head">
     <div>
       <p class="eyebrow">Files</p>
-      <h2>My files</h2>
-      <p class="subline">
-        <span class="status-pill">{{ busy ? "loading" : "instance scoped" }}</span>
-      </p>
+      <h2>{{ currentMountName() || "Files" }}</h2>
+      <p class="subline">{{ mountDescription() }}</p>
     </div>
     <button class="secondary" type="button" (click)="loadFiles()" [disabled]="busy">Reload</button>
   </header>
@@ -16,7 +14,7 @@
     <div class="notice">{{ notice }}</div>
   }
 
-  <nav class="file-root-row" aria-label="File mounts">
+  <nav class="file-root-row" aria-label="Folders">
     @for (mount of mounts; track mount.id) {
       <button type="button" [class.active]="currentMount === mount.id" (click)="openPath('', mount.id)">
         {{ mount.name }}
@@ -56,7 +54,7 @@
         }
       </article>
     } @empty {
-      <p class="empty">{{ busy ? "Loading files…" : "No files here." }}</p>
+      <p class="empty">{{ emptyText() }}</p>
     }
   </div>
 

@@ -1809,11 +1809,11 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(template, /openPanel\('instanceDesktops'\)">Desktops<\/button>/);
   assert.match(template, /openPanel\('instanceTimers'\)">Timers<\/button>/);
   assert.doesNotMatch(template, /\(click\)="openPanel\('instanceSettings'\)">Settings<\/button>/);
-  assert.match(template, /\(click\)="copyCurrentViewLink\(\)"/);
+  assert.doesNotMatch(template, /copyCurrentViewLink/);
   assert.doesNotMatch(template, />OPEN<\/a>|OPEN LINK/);
   assert.doesNotMatch(template, /openPanel\('userJobs'\)/);
   assert.doesNotMatch(template, />Jobs<\/button>/);
-  assert.match(template, /openPanel\('userConnectors'\)">Connections<\/button>/);
+  assert.doesNotMatch(template, />Connections<\/button>/);
   assert.doesNotMatch(template, /\(click\)="openPanel\('userSkills'\)">Skills<\/button>/);
   assert.match(template, /\[placeholder\]="sidebarSearchPlaceholder\(\)"/);
   assert.match(template, /@if \(isAdminMode\(\) && visibleChildWorkers\(thread\)\.length > 0\)/);
@@ -1952,7 +1952,7 @@ test("web shell exposes an instance-scoped desktop page", async () => {
   assert.match(styles, /\.desktop-lease-list/);
 });
 
-test("web shell exposes a user connector management page", async () => {
+test("connector sign-in links keep their page; the navigation sends connectors to Setup", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
   const connectorsComponent = await fs.readFile("apps/web/src/app/user-connectors-page.component.ts", "utf8");
@@ -1972,7 +1972,8 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(template, /@else if \(connectorLoginActive\(\)\)/);
   assert.match(template, /class="connector-login-shell"/);
   assert.match(template, /<ork-user-connectors-page><\/ork-user-connectors-page>/);
-  assert.match(template, /openPanel\('userConnectors'\)">Connections<\/button>/);
+  assert.doesNotMatch(template, />Connections<\/button>/);
+  assert.match(component, /if \(panel === "userConnectors"\) \{\s*this\.openSetup\("system"\);/);
   assert.match(connectorsComponent, /selector: "ork-user-connectors-page"/);
   assert.match(connectorsComponent, /imports: \[FormsModule, GmailNotificationsPanelComponent, GoogleWorkspaceAccessPanelComponent\]/);
   assert.match(connectorsComponent, /import \{ GoogleWorkspaceAccessPanelComponent \}/);

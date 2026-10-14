@@ -71,10 +71,9 @@ The three open questions are decided. Recorded in
    connected (detection is honest: a login without a real job executor does
    not count; refusals are audited). The simulated adapter stays a test fixture (conformance/CI) and
    is not selectable in job specs outside tests.
-   **`orkestr demo` is kept** (decided 2026-10-10) as an explicitly labelled
-   simulation for newcomers that needs no account. It says it uses a
-   simulated AI, runs in a throwaway home, and never creates or runs user
-   jobs.
+   ~~`orkestr demo` is kept (decided 2026-10-10)~~ **Removed 2026-10-14**
+   (owner): no simulated conversations; Orkestr starts only with a connected
+   Codex or Claude Code.
 3. **Telemetry.** ~~Is opt-in usage pinging acceptable?~~ **Decided:** no
    usage telemetry or pings of any kind. Adoption is measured only through
    issues and conversations.

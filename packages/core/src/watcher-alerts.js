@@ -24,8 +24,11 @@ function watcherThreadTarget(env = process.env) {
   return clean(env.ORKESTR_WATCHER_THREAD_ID || env.ORKESTR_WATCHER_THREAD_NAME || env.ORKESTR_WATCHER_CHAT || "orkestr-watcher");
 }
 
+// The watcher thread is an operator alert inbox. It is not created on its own:
+// a fresh install would otherwise show it as a conversation nobody started.
+// Alerts are always recorded; an existing watcher thread keeps receiving them.
 function watcherAutoCreate(env = process.env) {
-  return env.ORKESTR_WATCHER_AUTO_CREATE !== "0";
+  return env.ORKESTR_WATCHER_AUTO_CREATE === "1";
 }
 
 function watcherDedupeWindowMs(env = process.env) {

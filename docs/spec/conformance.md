@@ -226,6 +226,6 @@ spec settles on different ones:
   `tool`.
 - Event types: `progress`, `final`.
 - `ReferenceAdapter` is a candidate backing for the simulated provider used
-  by `orkestr demo`. If the simulated provider implements the adapter
+  by the tests. If the simulated provider implements the adapter
   interface directly, its harness should be a thin pass-through like
   `referenceConformance`.

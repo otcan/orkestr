@@ -25,7 +25,6 @@ import { closeThreadRegistryCache } from "../../../packages/storage/src/thread-r
 import { rawAttachWatchText } from "../../../packages/core/src/raw-terminal-watch.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
 import { createCommand } from "./create-command.js";
-import { demoCommand, demoUsage } from "./demo-command.js";
 import { agentJobSubcommands, agentJobUsage, agentJobsCommand, initCommand, runJobCommand } from "./agent-job-command.js";
 import { desktopCommand } from "./desktop-command.js";
 import { setupCommand } from "./setup-command.js";
@@ -72,7 +71,6 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "list") return await list(args, ctx);
     if (command === "status") return await statusCommand(args, ctx);
     if (command === "version") return await versionCommand(args, ctx);
-    if (command === "demo") return await demoCommand(args, ctx);
     if (command === "init") return await initCommand(args, ctx);
     if (command === "run") return await runJobCommand(args, ctx);
     if (command === "instance" && ["config", "status"].includes(args[0])) return await instanceConfigCommand(args, ctx);
@@ -2247,7 +2245,6 @@ function writeUsage(stream) {
   orkestr [serve] [--open] [--host 127.0.0.1] [--port 19812]
   orkestr status [--json]
   orkestr version [--json]
-${demoUsage}
 ${agentJobUsage}
   orkestr instances [--probe] [--json]
   orkestr instance config [get|status|patch] [--generation N] [--patch json] [--json]

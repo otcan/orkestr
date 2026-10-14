@@ -11,19 +11,19 @@ test("instance shell uses one lean navigation and canonical desktop and timer ro
 
   assert.match(template, /<nav class="instance-topbar-nav" aria-label="Primary navigation">/);
   assert.equal((template.match(/<nav\b/g) || []).length, 1);
-  for (const destination of ["Conversations", "Desktops", "Connections", "Timers", "Files"]) {
+  for (const destination of ["Conversations", "Desktops", "Setup", "Timers", "Files"]) {
     assert.match(template, new RegExp(`>${destination}<\\/button>`));
   }
   const instanceNavigation = template.match(/<nav class="instance-topbar-nav"[\s\S]*?<\/nav>/)?.[0] || "";
   assert.doesNotMatch(instanceNavigation, />Settings<|>OPEN<|OPEN LINK/);
-  assert.match(instanceNavigation, /copyCurrentViewLink\(\)/);
+  assert.doesNotMatch(instanceNavigation, /copyCurrentViewLink|Copy link/);
   assert.match(instanceNavigation, /@if \(accountSwitcherEnabled\(\)\)/);
   assert.match(instanceNavigation, /class="instance-account-menu"/);
   assert.match(instanceNavigation, /openInstanceAccount\(account\)/);
   assert.match(instanceNavigation, /aria-label.*in a new tab/);
   assert.match(instanceNavigation, /Log in to another instance/);
   assert.match(instanceNavigation, /<form method="post" target="_blank"/);
-  assert.match(instanceNavigation, /logoutBrowser\(\)/);
+  assert.match(instanceNavigation, /@if \(loginEnabled\(\)\) \{[\s\S]*logoutBrowser\(\)[\s\S]*No sign-in on this install/);
   assert.match(component, /globalThis\.open\?\.\("about:blank", "_blank"\)/);
   assert.match(component, /accountTab\.location\.replace\(result\.url \|\| account\.canonicalPath\)/);
   assert.match(component, /finally\s*\{\s*this\.accountSwitchBusyRef = "";/);

@@ -665,6 +665,11 @@ export class ThreadsController {
     const prepared = await prepareThreadCreateBody(body, principal);
     const preparedExecutor = typeof prepared.executor === "object" && prepared.executor ? prepared.executor as Record<string, unknown> : {};
     const requestedExecutorId = String(prepared.executorId || preparedExecutor.id || preparedExecutor.type || "codex").trim() || "codex";
+    // No conversations without a real agent: the no-op and simulated executors
+    // are test fixtures and only the test runner may create threads on them.
+    if (["noop", "simulated"].includes(requestedExecutorId) && process.env.ORKESTR_ALLOW_TEST_EXECUTORS !== "1") {
+      throw httpError("executor_not_available", 400);
+    }
     const defaultRuntime = defaultTenantThreadRuntime(prepared, principal, process.env);
     const usesApiAgentRuntime = String(prepared.runtimeKind || defaultRuntime || "").trim() === API_AGENT_RUNTIME_KIND;
     const usesClaudeRuntime = !usesApiAgentRuntime && (requestedExecutorId === "claude-code" || String(preparedExecutor.type || "").trim() === "claude-code");

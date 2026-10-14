@@ -260,9 +260,13 @@ textarea:focus {
   color: #edffef;
 }
 
-.instance-topbar-nav .copy-link-action {
-  border-color: rgba(99, 212, 113, 0.72);
-  color: #9affaa;
+.instance-no-login-note {
+  display: block;
+  max-width: 260px;
+  padding: 6px 4px 2px;
+  color: #9fb19c;
+  font-size: 0.74rem;
+  line-height: 1.4;
 }
 
 .instance-account-menu {
@@ -1214,6 +1218,25 @@ textarea:focus {
   height: auto;
   max-height: none;
   overflow: visible;
+}
+
+.runtime-gate-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: start center;
+  padding: 24px 16px;
+  background: #151c1f;
+}
+
+.runtime-gate-shell ork-first-thread-wizard.first-thread-host {
+  width: min(920px, 100%);
+}
+
+.runtime-gate-panel {
+  max-width: 520px;
+  margin-top: 12vh;
+  color: #e8efe6;
+  line-height: 1.5;
 }
 
 ork-first-thread-wizard.first-thread-host {

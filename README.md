@@ -47,9 +47,9 @@ once (about 15 seconds); after that Orkestr starts in about a second. `npm ci`
 does not download a separate Chrome (about 650 MB): linking WhatsApp uses the
 Google Chrome or Chromium installed on your computer (or `WA_CHROME_PATH`).
 
-Only want to see crash recovery without any account? `npx orkestr demo --yes`
-(from the clone) runs a **simulation** with a simulated AI and a fake code host
-in a throwaway `ORKESTR_HOME`. It does not call a real model.
+Orkestr needs a coding agent: the app opens only after Codex (your ChatGPT
+subscription) or Claude Code is connected. The first-run wizard walks you
+through it.
 
 ### Your first real job
 
@@ -79,7 +79,6 @@ only), **offline-tested** (automated tests, no live service), **live-verified**
 | WhatsApp/email notifications | built, not live-verified | offline-tested |
 | Webhooks (HMAC) | built and tested offline | offline-tested |
 | Guarantees G1-G11 | tested with simulated/fake providers | simulation |
-| orkestr demo | simulation by design | simulation |
 <!-- status:end -->
 
 Codex jobs, tested configuration: Codex CLI 0.157.1 job, approval-gated file
@@ -178,9 +177,7 @@ Tailscale, Caddy/TLS, or a VPN.
 
 ## Quickstart
 
-No credentials yet? Run `orkestr demo --yes` to see a durable agent job survive
-a crash without duplicating its side effects. See
-[Try it in one minute](docs/quickstart.md#try-it-in-one-minute).
+See [Start Orkestr](#start-orkestr) and [docs/quickstart.md](docs/quickstart.md).
 
 ### Docker
 

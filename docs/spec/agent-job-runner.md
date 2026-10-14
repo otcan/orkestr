@@ -363,11 +363,10 @@ app-server the command started is stopped before it exits.
 `orkestr init` writes `jobs/hello-job.yaml` for the first connected provider
 (the second becomes the fallback) and, like `orkestr run`, refuses with
 "connect Codex or Claude first: ..." when none is connected. The legacy
-`orkestr jobs run|poll` (job alerts) is unchanged. `orkestr demo` is kept as an
-explicitly labelled simulation for newcomers (owner decision 2026-10-10): it
-announces that it uses a simulated AI, runs the thread-level simulated
-executor in a throwaway `ORKESTR_HOME`, and never touches the Agent Job store
-or creates user jobs (`test/simulated-provider.test.js`).
+`orkestr jobs run|poll` (job alerts) is unchanged. The `orkestr demo`
+simulation was removed (owner decision 2026-10-14): Orkestr only runs with a
+connected Codex or Claude Code. The simulated executor remains a test fixture
+(`test/simulated-provider.test.js`).
 
 ## Guarantee tests
 

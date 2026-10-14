@@ -44,7 +44,7 @@ async function findChrome() {
 
 const json = (body, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
 
-test("wizard signs Codex in on the AI step without leaving the wizard", { timeout: 120_000 }, async (t) => {
+test("without an agent only the wizard shows; signing Codex in there opens the app on the same step", { timeout: 120_000 }, async (t) => {
   let puppeteer;
   try {
     puppeteer = (await import("puppeteer")).default;
@@ -108,9 +108,10 @@ test("wizard signs Codex in on the AI step without leaving the wizard", { timeou
     };
 
     await page.goto(`${origin}/`, { waitUntil: "networkidle2" });
-    await page.waitForFunction(() => [...document.querySelectorAll("button, a")].some((n) => n.textContent.trim() === "New Coding Agent"), { timeout: 30_000 });
-    await page.evaluate(() => [...document.querySelectorAll("button, a")].find((n) => n.textContent.trim() === "New Coding Agent").click());
-    await page.waitForSelector(".first-thread-wizard", { timeout: 30_000 });
+    // No coding agent yet: the app shows only the first-run wizard (no shell, no way around it).
+    await page.waitForSelector(".runtime-gate-shell .first-thread-wizard", { timeout: 30_000 });
+    assert.equal(await page.$(".app-shell"), null, "no entry to the app without Codex or Claude Code");
+    assert.equal(await page.evaluate(() => [...document.querySelectorAll(".first-thread-wizard button")].some((b) => b.textContent.trim() === "Close")), false, "the gate wizard cannot be closed");
     await click("Skip for now");
     await page.waitForSelector("ork-codex-sign-in-panel");
     assert.deepEqual(await buttons("Next"), [false], "Next stays disabled until Codex is signed in");
@@ -121,7 +122,9 @@ test("wizard signs Codex in on the AI step without leaving the wizard", { timeou
 
     fake.codex = "connected";
     await page.waitForFunction(() => !document.querySelector("ork-codex-sign-in-panel"), { timeout: 15_000 });
+    await page.waitForSelector(".app-shell .first-thread-wizard", { timeout: 15_000 });
     assert.deepEqual(await buttons("Next"), [true], "Next unlocks once Codex is connected");
+    assert.equal(await page.$(".runtime-gate-shell"), null, "the gate lifts once an agent is connected");
     assert.equal(new URL(page.url()).pathname, before, "the user never left the wizard");
     assert.ok(await page.$(".first-thread-wizard"));
     assert.deepEqual(fake.external, [], "no requests to other hosts");

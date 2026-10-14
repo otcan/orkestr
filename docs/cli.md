@@ -7,7 +7,6 @@ directly.
 ## Current commands
 
 ```bash
-orkestr demo --yes
 orkestr serve --open
 orkestr status
 orkestr version
