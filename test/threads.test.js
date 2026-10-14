@@ -147,6 +147,7 @@ case "$cmd" in
     exit 0
     ;;
   capture-pane)
+    if [ -n "\${TMUX_CAPTURE_DELAY:-}" ]; then sleep "\${TMUX_CAPTURE_DELAY:-}"; fi
     if [ -n "\${TMUX_CAPTURE_FILE:-}" ] && [ -f "\${TMUX_CAPTURE_FILE:-}" ]; then
       cat "\${TMUX_CAPTURE_FILE:-}"
     else
@@ -4132,6 +4133,65 @@ test("thread input delivery submits a stable exact unsent prompt", async () => {
   }
 });
 
+test("thread input delivery releases its lock when the runtime status probe stalls", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stalled-runtime-probe-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const text = "retry this prompt after a stalled status probe";
+    await fs.writeFile(captureFile, `› ${text}\n  gpt-5.5 xhigh · /workspace/demo\n`, "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_DELIVERY_RUNTIME_STATUS_TIMEOUT_MS: "5",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+      ORKESTR_PANE_PROGRESS_ACTIVE_MS: "0",
+      ORKESTR_PANE_PROGRESS_IDLE_MS: "0",
+    };
+    await createThread({ id: "stalled-runtime-probe-thread", name: "Stalled Runtime Probe Thread" }, env);
+    await wakeThread("stalled-runtime-probe-thread", { reason: "test" }, env);
+    env.TMUX_CAPTURE_DELAY = "0.1";
+    const input = await appendThreadMessage("stalled-runtime-probe-thread", {
+      role: "user",
+      text,
+      state: "awaiting_ack",
+      deliveryState: "awaiting_ack",
+      deliveryAttempt: 1,
+      deliveryFirstAttemptAt: new Date().toISOString(),
+      deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
+    }, env);
+
+    const startedAt = Date.now();
+    assert.deepEqual(await deliverPendingThreadInputs("stalled-runtime-probe-thread", env), []);
+    assert.ok(Date.now() - startedAt < 100, "delivery lock should not wait for the stalled tmux probe");
+    const messages = await listThreadMessages("stalled-runtime-probe-thread", env);
+    const updated = messages.find((message) => message.id === input.id);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(updated.state, "awaiting_ack");
+    assert.equal(updated.deliveryState, "waiting_runtime_probe");
+    assert.ok(Date.parse(updated.deliveryNextAttemptAt) > Date.now());
+    assert.doesNotMatch(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+  } finally {
+    resetThreadInputDeliveryTimersForTest();
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
 test("thread input delivery does not submit an unsent prompt that changes during the stability wait", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stuck-prompt-changing-"));
   const fakeTmux = await createFakeTmux(home);
@@ -4640,6 +4700,74 @@ test("thread input delivery submits queued input when stale working text leaves 
 
     assert.deepEqual(await deliverPendingThreadInputs("stale-working-queued-thread", env), []);
     const messages = await listThreadMessages("stale-working-queued-thread", env);
+    const updated = messages.find((message) => message.id === input.id);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(updated.state, "awaiting_ack");
+    assert.equal(updated.deliveryState, "awaiting_ack");
+    assert.equal(updated.deliveryAttempt, 1);
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
+test("thread input delivery submits queued input when the Codex placeholder follows stale working text", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stale-working-placeholder-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(
+      captureFile,
+      [
+        "◦ Working (24s • esc to interrupt)",
+        "",
+        "› Ask Codex to do anything",
+        "  gpt-5.5 xhigh · /workspace",
+      ].join("\n"),
+      "utf8",
+    );
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+    };
+    await createThread({ id: "stale-working-placeholder-thread", name: "Stale Working Placeholder Thread" }, env);
+    await wakeThread("stale-working-placeholder-thread", { reason: "test" }, env);
+    const statusBefore = await runtimeStatus("stale-working-placeholder-thread", env);
+    assert.equal(statusBefore.working, true);
+    assert.equal(statusBefore.foregroundWorking, false);
+    assert.equal(statusBefore.promptReady, true);
+    assert.equal(statusBefore.progress.staleWorkingPrompt, true);
+
+    const input = await enqueueThreadInput("stale-working-placeholder-thread", {
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-wa",
+      accountId: "main",
+      text: "queued after placeholder prompt",
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("stale-working-placeholder-thread", env), []);
+    const messages = await listThreadMessages("stale-working-placeholder-thread", env);
     const updated = messages.find((message) => message.id === input.id);
     const log = await fs.readFile(fakeTmux.log, "utf8");
 

@@ -88,6 +88,10 @@ test("pane prompt draft detection distinguishes empty and populated prompts", ()
   assert.equal(panePromptHasDraft("Working\n› Write tests\n  gpt-5.5 xhigh · /workspace"), true);
 });
 
+test("pane prompt draft detection treats the Codex placeholder as empty", () => {
+  assert.equal(panePromptHasDraft("◦ Working (2s • esc to interrupt)\n› Ask Codex to do anything\n  gpt-5.5 xhigh · /workspace"), false);
+});
+
 test("pane progress classifies idle Codex skills hint with status footer as ready", () => {
   const progress = paneProgressFromText([
     "• Created Jira task: ORK-331",

@@ -82,6 +82,16 @@ export function panePromptLine(line) {
   return /^(?:›|>)(?:\s|$)/.test(text) && !/^(?:›|>)\s*\d+[.)]/.test(text);
 }
 
+function panePromptDraftText(line) {
+  const text = String(line || "").trim();
+  if (!panePromptLine(text)) return "";
+  return text.replace(/^(?:›|>)\s?/, "").trim();
+}
+
+function panePromptPlaceholderDraft(value) {
+  return /^Ask Codex to do anything\.?$/i.test(String(value || "").trim());
+}
+
 function paneConversationInterruptedLine(line) {
   const text = String(line || "").trim();
   return /Conversation interrupted\s*[-–—]\s*tell the model what to do differently/i.test(text) ||
@@ -192,7 +202,8 @@ export function panePromptReady(text) {
 export function panePromptHasDraft(text) {
   const lines = normalizedLines(text).map((line) => line.trim()).slice(-8);
   const prompt = lines.findLast(panePromptLine) || "";
-  return /^(?:›|>)\s*\S/.test(prompt);
+  const draft = panePromptDraftText(prompt);
+  return Boolean(draft) && !panePromptPlaceholderDraft(draft);
 }
 
 function paneIdleSkillsHintReady(lines = []) {
