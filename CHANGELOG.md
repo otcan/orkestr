@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-alpha.201
+
+- Security fix for 0.1.0-alpha.200: anonymous first-visit owner setup is only open on a fresh install (no owner, never paired or signed in, browser-pairing auth). On existing installs a signed-in admin creates the login. Do not use 0.1.0-alpha.200 on an install that already used browser pairing or an identity provider.
+
 ## 0.1.0-alpha.200
 
 - Owner login: the first visit asks for a username and password (no `docker exec … approve`); the browser then holds a signed JWT (HS256, random per-install key in `ORKESTR_HOME`, HttpOnly cookie, 30 days). Once a login exists, sign-in is required; local installs can choose "Later". Wrong passwords are limited to 10 per 15 minutes; changing the password signs out old tokens. The vault, Log out and opening desktops work with this login. Browser pairing remains for approval links and as "Approve this browser with a command instead"; `ORKESTR_OWNER_LOGIN_PROMPT=0` keeps the old pairing-first flow.
