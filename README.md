@@ -23,27 +23,42 @@ sensitive actions wait for your approval; and every run leaves an audit record.
 Positioning: [docs/product/positioning.md](docs/product/positioning.md).
 Guarantees: [docs/spec/runtime-guarantees.md](docs/spec/runtime-guarantees.md).
 
-### Try it in one minute (simulation)
+### Start Orkestr
+
+With Docker, nothing else to install:
+
+```bash
+docker run --name orkestr -p 3000:3000 -v orkestr-data:/data ghcr.io/otcan/orkestr:latest
+```
+
+Then open http://127.0.0.1:3000/ and follow the setup.
+
+From source (Node.js 22 or newer):
 
 ```bash
 git clone https://github.com/otcan/orkestr.git
 cd orkestr
 npm ci
-# SIMULATION: simulated AI, fake code host, no real job
-node apps/cli/bin/orkestr-oss.js demo --yes   # or: orkestr demo --yes
+npm start
 ```
 
-`orkestr demo` is a **simulation**: it uses a simulated AI and a fake code host
-in a throwaway `ORKESTR_HOME`. It shows crash recovery without a duplicate pull
-request and an approval pause before merging. It does not call a real model.
+Then open http://127.0.0.1:19812/. The first `npm start` builds the server
+once (about 15 seconds); after that Orkestr starts in about a second. `npm ci`
+does not download a separate Chrome (about 650 MB): linking WhatsApp uses the
+Google Chrome or Chromium installed on your computer (or `WA_CHROME_PATH`).
+
+Only want to see crash recovery without any account? `npx orkestr demo --yes`
+(from the clone) runs a **simulation** with a simulated AI and a fake code host
+in a throwaway `ORKESTR_HOME`. It does not call a real model.
 
 ### Your first real job
 
-After `codex login` on the same host:
+After `codex login` on the same host, from the clone (`npx orkestr` runs this
+checkout's CLI, also when an older `orkestr` is installed globally):
 
 ```bash
-orkestr init my-jobs   # or: node apps/cli/bin/orkestr-oss.js init my-jobs
-orkestr run my-jobs
+npx orkestr init my-jobs
+npx orkestr run my-jobs
 ```
 
 Details: [docs/quickstart.md](docs/quickstart.md) and

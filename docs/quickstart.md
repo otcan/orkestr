@@ -9,7 +9,7 @@ cloud account and no network access are needed, and no real job is created:
 git clone https://github.com/otcan/orkestr.git
 cd orkestr
 npm ci
-node apps/cli/bin/orkestr-oss.js demo --yes   # or: orkestr demo --yes
+node apps/cli/bin/orkestr-oss.js demo --yes
 ```
 
 `orkestr demo` runs one durable Agent Job end to end with the built-in
@@ -62,11 +62,14 @@ Agent Jobs run on a real, connected provider (Codex or Claude); the simulated
 provider above is a demo and test fixture only. Once `codex login` or
 `claude auth login` works on this host:
 
+`init` writes `my-jobs/jobs/hello-job.yaml` for your provider. From the clone,
+`npx orkestr` runs this checkout's CLI:
+
 ```bash
-orkestr init my-jobs          # writes my-jobs/jobs/hello-job.yaml for your provider
-orkestr run my-jobs
-orkestr jobs list
-orkestr jobs status <run-id>
+npx orkestr init my-jobs
+npx orkestr run my-jobs
+npx orkestr jobs list
+npx orkestr jobs status <run-id>
 ```
 
 Triggers (API, webhook, schedule, WhatsApp group messages), approvals and

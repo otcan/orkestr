@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { whatsappChromeMissingHint, whatsappChromePath } from "./whatsapp-chrome-path.js";
 import { whatsappQuotedContext } from "./whatsapp-quoted-context.js";
 import path from "node:path";
 import { publicWhatsAppPartialDelivery, whatsappFailureEvidence, whatsappOperatorFailureDiagnostic } from "./whatsapp-delivery-evidence.js";
@@ -2706,7 +2707,7 @@ async function loadBridgeDependencies() {
 }
 
 function puppeteerOptions(env = process.env) {
-  const executablePath = String(env.WA_CHROME_PATH || env.PUPPETEER_EXECUTABLE_PATH || "").trim();
+  const executablePath = whatsappChromePath(env);
   const protocolTimeout = puppeteerProtocolTimeoutMs(env);
   return {
     headless: true,
@@ -6063,18 +6064,20 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
     clearConnectedPageReadyFallbackTimer();
-    const recoverable = recoverableLocalWhatsAppRuntimeError(error);
     const message = error?.message || String(error);
+    // No Chrome on this computer: say what to install instead of a launch trace.
+    const chromeMissing = /Could not find (?:Chrome|Chromium|expected browser)|Browser was not found at the configured executablePath/i.test(message);
+    const recoverable = !chromeMissing && recoverableLocalWhatsAppRuntimeError(error);
     const current = accountStates.get(normalized) || defaultAccountState(normalized);
     setAccountState(normalized, {
-      state: recoverable ? "disconnected" : "failed",
+      state: chromeMissing ? "dependency_missing" : recoverable ? "disconnected" : "failed",
       ready: false,
       authenticated: recoverable ? Boolean(current.authenticated) : false,
       started: false,
       qrAvailable: false,
       pairingCode: "",
       pairingCodeUpdatedAt: null,
-      error: message,
+      error: chromeMissing ? whatsappChromeMissingHint : message,
       ...(recoverable
         ? {
             lastRecoveryReason: "runtime_closed",
