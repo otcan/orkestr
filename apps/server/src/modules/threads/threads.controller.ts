@@ -672,7 +672,10 @@ export class ThreadsController {
     validateRequestSchema(threadCreateSchema, { body });
     const principal = requestPrincipal(request);
     const requestedExecutor: any = body.executor || {};
-    if ([body.executorId, body.runtimeKind, requestedExecutor.id, requestedExecutor.type, requestedExecutor.metadata?.runtimeKind].includes("claude-code")) {
+    // Same normalization as the runtime selection below, so the admin check
+    // always runs before anything is created.
+    if ([body.executorId, body.runtimeKind, requestedExecutor.id, requestedExecutor.type, requestedExecutor.metadata?.runtimeKind]
+      .map((value) => String(value || "").trim().toLowerCase()).includes("claude-code")) {
       if (!isAdminPrincipal(principal)) throw httpError("claude_code_admin_runtime_required", 403);
       assertClaudeCodeHostOwner({ ...body, ownerUserId: body.ownerUserId || body.userId || process.env.ORKESTR_ADMIN_USER_ID || adminUserId });
     }
@@ -687,7 +690,8 @@ export class ThreadsController {
     const defaultRuntime = defaultTenantThreadRuntime(prepared, principal, process.env);
     const usesApiAgentRuntime = String(prepared.runtimeKind || defaultRuntime || "").trim() === API_AGENT_RUNTIME_KIND;
     // Asking for the Claude runtime kind goes through the same checks as the executor.
-    const usesClaudeRuntime = !usesApiAgentRuntime && (requestedExecutorId === "claude-code" || String(preparedExecutor.type || "").trim() === "claude-code" || String(prepared.runtimeKind || "").trim().toLowerCase() === "claude-code");
+    const usesClaudeRuntime = !usesApiAgentRuntime && [requestedExecutorId, preparedExecutor.type, prepared.runtimeKind]
+      .map((value) => String(value || "").trim().toLowerCase()).includes("claude-code");
     const usesCodexRuntime = !usesApiAgentRuntime && !usesClaudeRuntime && (requestedExecutorId === "codex" || String(preparedExecutor.type || "").trim() === "codex");
     if (usesClaudeRuntime) {
       if (!claudeCodeEnabled(process.env)) throw httpError("claude_code_disabled", 409);

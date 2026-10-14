@@ -31,6 +31,7 @@ test("the thread API refuses the no-op and simulated executors outside the test 
       { name: "fake-nested-id", executor: { id: "simulated", type: "simulated" }, executorId: "custom" },
       { name: "fake-runtime-kind", executorId: "noop", runtimeKind: "synthetic-unknown" },
       { name: "fake-claude-kind", executorId: "noop", runtimeKind: "claude-code" },
+      { name: "mixed-case-claude-kind", runtimeKind: "CLAUDE-CODE" },
       { name: "fake-codex-kind", executorId: "noop", runtimeKind: "codex-app-server" },
       { name: "fake-nested-codex-kind", runtimeKind: "codex-app-server", executor: { type: "simulated" } },
     ];
