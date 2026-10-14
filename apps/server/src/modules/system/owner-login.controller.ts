@@ -8,7 +8,7 @@ import {
 } from "../../../../../packages/core/src/owner-login.js";
 import { httpError } from "../../common/http.js";
 import { requestSourceKey } from "../../request-security.js";
-import { ownerSetupOpenToAnonymous } from "../../../../../packages/core/src/security.js";
+import { ownerSetupOpenToAnonymous, securityStatus } from "../../../../../packages/core/src/security.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 
@@ -51,6 +51,8 @@ export class OwnerLoginController {
   private async setupAllowed(request: any): Promise<boolean> {
     if (String(process.env.ORKESTR_OWNER_LOGIN_PROMPT || "").trim() === "0") return false;
     if (await ownerSetupOpenToAnonymous(process.env)) return true;
+    // Without any sign-in (local install) every visitor is already the admin.
+    if (!(await securityStatus(process.env)).authEnabled) return true;
     const session = request?.orkestrSecuritySession;
     return Boolean(session?.id) && !request?.orkestrAnonymous && isAdminPrincipal(requestPrincipal(request));
   }

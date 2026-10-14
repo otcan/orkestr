@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import { authProvider } from "./auth-config.js";
 import { ownerCookieName, ownerLoginStatus, verifyOwnerToken } from "./owner-login.js";
@@ -157,9 +158,15 @@ export async function ownerSetupOpenToAnonymous(env = process.env) {
   if (authProvider(env) !== "browser_pairing") return false;
   const status = await ownerLoginStatus(env).catch(() => ({ configured: true }));
   if (status.configured) return false;
-  const config = await readSecurityConfig(env).catch(() => null);
-  if (!config) return false;
-  return !(config.sessions || []).length;
+  // Durable boundary: the security file is written the first time anything
+  // is paired or signed in (sessions, challenges, OIDC) and is never deleted.
+  // Revoked or expired sessions therefore do not reopen anonymous setup.
+  try {
+    await fs.access(secretPath(env));
+    return false;
+  } catch (error) {
+    return error?.code === "ENOENT";
+  }
 }
 
 async function readSecurityConfig(env = process.env) {

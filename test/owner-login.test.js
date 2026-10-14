@@ -205,7 +205,15 @@ test("existing installs cannot be claimed anonymously; a signed-in admin can cre
     assert.equal((await (await fetch(`${base}/api/auth/owner`)).json()).prompt, false, "no setup form for anonymous visitors");
     const cookie = `${securityCookieName()}=${paired.token}`;
     assert.equal((await (await fetch(`${base}/api/auth/owner`, { headers: { cookie } })).json()).prompt, true);
-    const owner = await post("/api/auth/owner/setup", { username: "can", password: "first-password" }, cookie);
+    // Revoking every session must not reopen anonymous setup.
+    const { revokeSecuritySession } = await import("../packages/core/src/security.js");
+    await revokeSecuritySession(paired.session.id, { env: process.env, revokedBy: "test" });
+    assert.equal(await ownerSetupOpenToAnonymous(process.env), false, "revoked sessions keep setup closed");
+    assert.equal((await post("/api/auth/owner/setup", { username: "attacker", password: "takeover-pass" })).status, 403);
+    const second = await createPairingChallenge({ env: process.env, userId: "admin", role: "admin" });
+    await approvePairingChallenge(second.challengeId, { env: process.env });
+    const repaired = await pairBrowser({ challengeId: second.challengeId, env: process.env });
+    const owner = await post("/api/auth/owner/setup", { username: "can", password: "first-password" }, `${securityCookieName()}=${repaired.token}`);
     assert.equal(owner.status, 200, "the signed-in admin creates the login");
   } finally {
     await new Promise((resolve) => server.close(resolve));
