@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-alpha.202
+
+- First run: no "Name and start" step. As soon as Codex or Claude Code is signed in, Orkestr creates the first conversation `orkestr` and opens it.
+- Identity-provider installs (Keycloak) never ask for an owner username/password.
+- First-visit owner setup stays open until a pairing challenge is approved or a browser session exists; an unused challenge (for example from a stale tab) no longer closes it.
+- WhatsApp setup works with the owner login (fixes "whatsapp_bridge_token_unconfigured"); browser access to the WhatsApp bridge is admin-only.
+- Desktop viewer opens in Docker (fixes `unsupported_browserctl_command`).
+- Settings works on standalone installs (a local instance identity is created on first use; fixes `instance_identity_required`).
+- Replies show up faster: a busy open conversation refreshes every 1.5 seconds.
+- Desktops page copy no longer mentions LinkedIn.
+
 ## 0.1.0-alpha.201
 
 - Security fix for 0.1.0-alpha.200: anonymous first-visit owner setup is only open on a fresh install (no owner, never paired or signed in, browser-pairing auth). On existing installs a signed-in admin creates the login. Do not use 0.1.0-alpha.200 on an install that already used browser pairing or an identity provider.
