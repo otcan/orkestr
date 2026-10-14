@@ -10,6 +10,7 @@ test("main UI exposes a guided first thread generation flow", async () => {
   const wizardSources = await read([
     "apps/web/src/app/first-thread-wizard.component.ts",
     "apps/web/src/app/first-thread-wizard.component.html",
+    "apps/web/src/app/first-thread-wizard-helpers.ts",
   ]);
   const sources = await read([
     "apps/web/src/app/app.component.ts",
@@ -20,6 +21,7 @@ test("main UI exposes a guided first thread generation flow", async () => {
     "apps/web/src/app/pairing-required-page.component.html",
     "apps/web/src/app/first-thread-wizard.component.ts",
     "apps/web/src/app/first-thread-wizard.component.html",
+    "apps/web/src/app/first-thread-wizard-helpers.ts",
     "apps/web/src/app/api.service.ts",
     "apps/server/src/modules/threads/threads.controller.ts",
     "apps/server/src/modules/connectors/connectors.controller.ts",
@@ -121,8 +123,9 @@ test("WhatsApp wizard maps relay modes, pins self-hosted pairing, and cleans up 
   const pairPanel = await fs.readFile("apps/web/src/app/whatsapp-pair-panel.component.ts", "utf8");
   const create = wizard.slice(wizard.indexOf("async createAndStart()"), wizard.indexOf("private threadId("));
 
-  assert.match(wizard, /normalizeWhatsAppAccessMode[\s\S]*\["managed", "relay", "external"\]/);
-  assert.match(wizard, /normalizeWhatsAppAccessMode[\s\S]*\["self_hosted", "own", "local"\]/);
+  const helpers = await fs.readFile("apps/web/src/app/first-thread-wizard-helpers.ts", "utf8");
+  assert.match(helpers, /normalizeWhatsAppAccessMode[\s\S]*\["managed", "relay", "external"\]/);
+  assert.match(helpers, /normalizeWhatsAppAccessMode[\s\S]*\["self_hosted", "own", "local"\]/);
   assert.match(template, /availableWhatsAppModes\(\)\.includes\('managed'\)/);
   assert.match(template, /whatsappAccessMode === 'self_hosted'[\s\S]*ork-whatsapp-pair-panel/);
   assert.match(template, /\(pairedAccount\)="onWhatsAppPaired\(\$event\)"/);
@@ -130,7 +133,7 @@ test("WhatsApp wizard maps relay modes, pins self-hosted pairing, and cleans up 
   assert.match(create, /whatsappAccessMode === "self_hosted" && this\.whatsappReady && this\.pairedWhatsAppAccount/);
   assert.match(create, /connectWhatsAppPrivateChat\([\s\S]*pairedAccountId:[\s\S]*pairedContactId:/);
   assert.match(create, /whatsappAccessMode: this\.whatsappAccessMode/);
-  assert.match(wizard, /ngOnDestroy\(\): void \{\s*this\.stopProofCheck\(\);/);
+  assert.match(wizard, /ngOnDestroy\(\): void \{\s*this\.destroyed = true;\s*this\.stopProofCheck\(\);/);
   assert.match(wizard, /stopProofCheck\(\): void \{\s*if \(this\.proofTimer\) clearInterval\(this\.proofTimer\);/);
   assert.match(create, /availableModes\.includes\(this\.whatsappAccessMode\)/);
   assert.match(create, /this\.canManageSetup && this\.whatsappModeTouched/);

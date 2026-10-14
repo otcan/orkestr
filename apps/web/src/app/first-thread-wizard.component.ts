@@ -1,15 +1,15 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadMessage, ThreadSummary } from "./api.service";
+import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadSummary } from "./api.service";
 import { CodexSignInPanelComponent } from "./codex-sign-in-panel.component";
 import { LlmAccountsComponent } from "./llm-accounts.component";
 import { codexStateLabel } from "./codex-runtime-status";
 import { clearWizardProgress, loadWizardProgress, saveWizardProgress } from "./first-thread-wizard-progress";
 import { WhatsAppPairPanelComponent } from "./whatsapp-pair-panel.component";
+import { WhatsAppAccessMode, configuredWhatsAppAccessMode, normalizeWhatsAppAccessMode, whatsappRoundTrip } from "./first-thread-wizard-helpers";
 
 type WizardStepId = "whatsapp" | "codex";
-type WhatsAppAccessMode = "managed" | "self_hosted";
 
 @Component({
   selector: "ork-first-thread-wizard",
@@ -66,10 +66,13 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   private draftName = "";
   private draftThreadId = "";
   private whatsappModeTouched = false;
+  private autoStartPending = false;
+  private destroyed = false;
 
   ngOnInit(): void {
     this.restoreProgress();
     this.syncWhatsAppAccessMode();
+    this.runPendingAutoStart();
     void this.loadClaudeAccounts().then(() => this.clampRestoredStep());
     // While Claude Code is chosen but not ready, pick up an account added below.
     this.claudePoller = setInterval(() => {
@@ -89,6 +92,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
     this.repoUrl = saved.repoUrl;
     this.runtimeProvider = saved.runtimeProvider;
     this.whatsappModeTouched = saved.whatsappModeTouched;
+    this.autoStartPending = saved.autoStart === true;
     if (saved.whatsappModeTouched) this.whatsappAccessMode = saved.whatsappAccessMode;
     if (this.runtimeProvider === "codex") this.clampRestoredStep();
   }
@@ -108,18 +112,30 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       runtimeProvider: this.runtimeProvider,
       whatsappAccessMode: this.whatsappAccessMode,
       whatsappModeTouched: this.whatsappModeTouched,
+      ...(this.autoStartPending ? { autoStart: true } : {}),
       scope: this.progressScope,
     });
   }
 
   ngOnChanges(_changes: SimpleChanges): void {
     this.syncWhatsAppAccessMode();
+    this.runPendingAutoStart();
   }
 
   // The AI just became ready on its step (Codex sign-in finished, or a Claude
-  // account turned ready): create the first conversation right away.
+  // account turned ready): create the first conversation right away. Signing
+  // in can lift the app's runtime gate, which re-creates this wizard, so the
+  // intent is saved and whichever instance is still alive picks it up.
   private startWhenAgentBecomesReady(wasReady: boolean): void {
-    if (wasReady || this.activeStep() !== "codex" || !this.canCreate()) return;
+    if (wasReady || this.activeStep() !== "codex") return;
+    this.autoStartPending = true;
+    this.saveProgress();
+    setTimeout(() => this.runPendingAutoStart(), 300);
+  }
+
+  private runPendingAutoStart(): void {
+    if (this.destroyed || !this.autoStartPending || this.activeStep() !== "codex" || !this.canCreate()) return;
+    this.autoStartPending = false;
     void this.createAndStart();
   }
 
@@ -132,6 +148,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   }
 
   ngOnDestroy(): void {
+    this.destroyed = true;
     this.stopProofCheck();
     if (this.claudePoller) clearInterval(this.claudePoller);
     this.saveProgress();
@@ -155,6 +172,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       this.claudeAccounts = [];
     }
     if (this.runtimeProvider === "claude-code") this.startWhenAgentBecomesReady(wasReady);
+    this.runPendingAutoStart();
   }
 
   activeStep(): WizardStepId {
@@ -213,13 +231,6 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
     return this.repoUrl.trim();
   }
 
-  usesRemoteRepo(): boolean {
-    return Boolean(this.repoUrlValue());
-  }
-
-  codebaseLabel(): string {
-    return this.usesRemoteRepo() ? "Copy of your Git repository" : "New empty project folder";
-  }
 
   desktopSlug(): string {
     const settings = this.setupStatus?.settings || {};
@@ -227,13 +238,6 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       ? settings["desktops"] as Record<string, unknown>
       : {};
     return String(desktops["default"] || desktops["manualIntervention"] || "desktop").trim() || "desktop";
-  }
-
-  whatsappAccessLabel(): string {
-    if (this.whatsappAccessMode !== "self_hosted") return "WhatsApp provided by this server's operator";
-    return this.whatsappReady && this.pairedWhatsAppAccount
-      ? "Own WhatsApp (linked) · your \"Message yourself\" chat will talk to the agent"
-      : "Not linked yet · you can link it later in Setup";
   }
 
   availableWhatsAppModes(): WhatsAppAccessMode[] {
@@ -476,27 +480,4 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
     const value = error as { error?: { message?: string; error?: string }; message?: string };
     return value?.error?.message || value?.error?.error || value?.message || String(error);
   }
-}
-
-function configuredWhatsAppAccessMode(status: SetupStatus | null): WhatsAppAccessMode {
-  const settings = (status?.settings || {}) as Record<string, unknown>;
-  const connectors = (settings["connectors"] || {}) as Record<string, Record<string, unknown>>;
-  const mode = String(connectors["whatsapp"]?.["accessMode"] || "").toLowerCase();
-  return normalizeWhatsAppAccessMode(mode) || "self_hosted";
-}
-
-function normalizeWhatsAppAccessMode(value: unknown): WhatsAppAccessMode | null {
-  const mode = String(value || "").toLowerCase();
-  if (["self_hosted", "own", "local"].includes(mode)) return "self_hosted";
-  if (["managed", "relay", "external"].includes(mode)) return "managed";
-  return null;
-}
-
-// True once a message that arrived from WhatsApp is followed by an assistant reply.
-export function whatsappRoundTrip(messages: ThreadMessage[]): { inbound: boolean; reply: boolean } {
-  const index = messages.findIndex((message) => message.role === "user" &&
-    (String(message.source || "").startsWith("whatsapp") || message["originSurface"] === "whatsapp"));
-  if (index < 0) return { inbound: false, reply: false };
-  const reply = messages.slice(index + 1).some((message) => message.role === "assistant" && Boolean(String(message.text || "").trim()));
-  return { inbound: true, reply };
 }
