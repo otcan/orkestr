@@ -49,9 +49,24 @@ async function readOwner(env = process.env) {
 async function writeOwner(owner, env = process.env) {
   const file = files(env).owner;
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
   await fs.writeFile(temporary, `${JSON.stringify(owner, null, 2)}\n`, { mode: 0o600 });
   await fs.rename(temporary, file);
+}
+
+// Read-modify-write of the owner record runs one at a time, so concurrent
+// logouts or a password change cannot drop each other's update.
+let ownerUpdateChain = Promise.resolve();
+function updateOwner(change, env = process.env) {
+  const run = ownerUpdateChain.then(async () => {
+    const owner = await readOwner(env);
+    if (!owner) return null;
+    const next = await change(owner);
+    if (next) await writeOwner(next, env);
+    return next;
+  });
+  ownerUpdateChain = run.catch(() => {});
+  return run;
 }
 
 async function signingKey(env = process.env) {
@@ -110,12 +125,13 @@ export async function createOwnerLogin({ username = "", password = "" } = {}, en
 }
 
 export async function changeOwnerPassword({ currentPassword = "", newPassword = "" } = {}, env = process.env) {
-  const owner = await readOwner(env);
-  if (!owner) throw loginError("owner_login_missing", 404);
-  if (!(await passwordMatches(owner, currentPassword))) throw loginError("owner_login_invalid", 401);
+  if (!(await readOwner(env))) throw loginError("owner_login_missing", 404);
   if (String(newPassword || "").length < minPasswordLength) throw loginError("owner_password_too_short");
-  const salt = crypto.randomBytes(16).toString("base64url");
-  await writeOwner({ ...owner, salt, passwordHash: await hashPassword(newPassword, salt), tokenVersion: Number(owner.tokenVersion || 1) + 1, updatedAt: new Date().toISOString() }, env);
+  await updateOwner(async (owner) => {
+    if (!(await passwordMatches(owner, currentPassword))) throw loginError("owner_login_invalid", 401);
+    const salt = crypto.randomBytes(16).toString("base64url");
+    return { ...owner, salt, passwordHash: await hashPassword(newPassword, salt), tokenVersion: Number(owner.tokenVersion || 1) + 1, revoked: [], updatedAt: new Date().toISOString() };
+  }, env);
 }
 
 async function passwordMatches(owner, password) {
@@ -193,13 +209,13 @@ export async function verifyOwnerToken(token = "", env = process.env) {
 export async function revokeOwnerToken(jti = "", expiresAt = "", env = process.env) {
   const id = String(jti || "").trim();
   if (!id) return false;
-  const owner = await readOwner(env);
-  if (!owner) return false;
-  const now = Date.now();
-  const revoked = (owner.revoked || []).filter((entry) => Date.parse(entry?.expiresAt || "") > now);
-  if (!revoked.some((entry) => entry.jti === id)) revoked.push({ jti: id, expiresAt: String(expiresAt || new Date(now + tokenTtlSeconds * 1000).toISOString()) });
-  await writeOwner({ ...owner, revoked }, env);
-  return true;
+  const updated = await updateOwner((owner) => {
+    const now = Date.now();
+    const revoked = (owner.revoked || []).filter((entry) => Date.parse(entry?.expiresAt || "") > now);
+    if (!revoked.some((entry) => entry.jti === id)) revoked.push({ jti: id, expiresAt: String(expiresAt || new Date(now + tokenTtlSeconds * 1000).toISOString()) });
+    return { ...owner, revoked };
+  }, env);
+  return Boolean(updated);
 }
 
 export function ownerCookieHeader(token, { secure = false, maxAgeSeconds = tokenTtlSeconds } = {}) {

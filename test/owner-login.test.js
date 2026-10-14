@@ -36,6 +36,13 @@ test("owner login: first password, signed token, wrong password, limits and revo
   for (let i = 0; i < 9; i += 1) await verifyOwnerLogin({ username: "can", password: "nope-nope", clientKey: "b" }, env).catch(() => {});
   await assert.rejects(verifyOwnerLogin({ username: "can", password: "first-password", clientKey: "b" }, env), /owner_login_rate_limited/);
 
+  // Concurrent logouts all stick.
+  const tokens = await Promise.all([1, 2, 3, 4, 5].map(() => verifyOwnerLogin({ username: "can", password: "first-password", clientKey: "c" }, env)));
+  const { revokeOwnerToken } = await import("../packages/core/src/owner-login.js");
+  await Promise.all(tokens.map(({ payload }) => revokeOwnerToken(payload.jti, "", env)));
+  for (const { token: revokedToken } of tokens) assert.equal(await verifyOwnerToken(revokedToken, env), null, "every concurrent logout revoked its token");
+  assert.ok(await verifyOwnerToken(token, env), "untouched sign-ins stay valid");
+
   await changeOwnerPassword({ currentPassword: "first-password", newPassword: "second-password" }, env);
   assert.equal(await verifyOwnerToken(token, env), null, "changing the password signs out old tokens");
 
@@ -87,6 +94,11 @@ test("owner login over HTTP: first visit creates it, then the app needs the cook
       else process.env[key] = value;
     }
   }
+});
+
+test("owner login throttling uses the trusted-proxy source, not client-supplied X-Forwarded-For", async () => {
+  const controller = await fs.readFile("apps/server/src/modules/system/owner-login.controller.ts", "utf8");
+  assert.match(controller, /return requestSourceKey\(request, process\.env\);/);
 });
 
 test("the owner login opens desktops; other browser sessions still do not", () => {
