@@ -100,7 +100,7 @@ test("pictures audit: --chat-ids parses comma-separated list", async () => {
   assert.deepEqual(seen[0].body.chatIds, ["a@g.us", "b@g.us", "c@g.us"]);
 });
 
-test("pictures audit: empty chatIds body when --chat-ids not provided", async () => {
+test("pictures audit: without --chat-ids it asks explicitly for all groups", async () => {
   const seen = [];
   const stdout = capture();
   await whatsappPictureAuditCommand(["--account", "sender"], {
@@ -111,7 +111,18 @@ test("pictures audit: empty chatIds body when --chat-ids not provided", async ()
       "POST /api/connectors/whatsapp/bridge/accounts/sender/chats/picture-audit": { ok: true, accountId: "sender", results: [] },
     }, seen),
   });
-  assert.deepEqual(seen[0].body.chatIds, []);
+  assert.deepEqual(seen[0].body, { chatIds: [], allGroups: true });
+});
+
+test("pictures audit: malformed flags are refused instead of widening the audit", async () => {
+  const { parsePictureAuditArgs } = await import("../apps/cli/src/whatsapp-picture-audit-command.js");
+  assert.throws(() => parsePictureAuditArgs(["--account", "sender", "--chat-ids"]), /--chat-ids needs a value/);
+  assert.throws(() => parsePictureAuditArgs(["sender", "--chat-ids", ","]), /at least one chat id/);
+  assert.throws(() => parsePictureAuditArgs(["--account", "--json"]), /--account needs a value/);
+  assert.deepEqual(parsePictureAuditArgs(["--chat-ids", "fake-group@g.us", "sender"]), { accountId: "sender", chatIds: ["fake-group@g.us"] });
+  assert.deepEqual(parsePictureAuditArgs(["sender"]), { accountId: "sender", chatIds: [] });
+  const controller = await (await import("node:fs/promises")).readFile("apps/server/src/modules/connectors/connectors.controller.ts", "utf8");
+  assert.match(controller, /if \(!chatIds\.length && body\.allGroups !== true\) throw httpError\("picture_audit_targets_required", 400\);/);
 });
 
 test("pictures audit: url-encodes account id with spaces", async () => {

@@ -937,6 +937,9 @@ export class ConnectorsController {
     assertBridgeAccountScope("read", { accountId }, request.orkestrMachineAuthContext);
     const runtimeAccountId = await resolveLocalWhatsAppRuntimeAccountId(accountId);
     const chatIds = bodyStringArray(body, "chatIds");
+    // Auditing every group must be asked for explicitly; an empty or malformed
+    // target list is refused instead of widening to all groups.
+    if (!chatIds.length && body.allGroups !== true) throw httpError("picture_audit_targets_required", 400);
     try {
       return await whatsappWorkerGroupPictureAudit(runtimeAccountId, chatIds, process.env);
     } catch (error: any) {
