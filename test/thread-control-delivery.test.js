@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { deliverPendingThreadInputs, runtimeStatus, setThreadInputDeliveryFailureHandler, sleepThread, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import {
   appendThreadMessage,
   createThread,
@@ -410,6 +411,11 @@ test("thread input delivery fails stale ack after recovery is exhausted", async 
     await wakeThread("stale-ack-exhaust-thread", { reason: "test" }, env);
     const input = await appendThreadMessage("stale-ack-exhaust-thread", {
       role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-stale-ack-exhaust",
+      accountId: "main",
+      routerTraceId: "rt_stale_ack_exhaust",
       text: "old invisible input",
       state: "awaiting_ack",
       deliveryState: "awaiting_ack",
@@ -423,10 +429,14 @@ test("thread input delivery fails stale ack after recovery is exhausted", async 
 
     assert.deepEqual(await deliverPendingThreadInputs("stale-ack-exhaust-thread", env), []);
     const messages = await listThreadMessages("stale-ack-exhaust-thread", env);
+    const traces = await listRouterTraces({ routerTraceId: "rt_stale_ack_exhaust" }, env);
     const log = await fs.readFile(fakeTmux.log, "utf8");
 
     assert.equal(messages.find((message) => message.id === input.id)?.state, "failed");
     assert.equal(messages.find((message) => message.id === input.id)?.observedVia, "stale_ack_recovery_exhausted");
+    assert.equal(traces[0]?.currentPhase, "runtime_failed");
+    assert.equal(traces[0]?.terminal, true);
+    assert.equal(traces[0]?.retryable, false);
     assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-stale-ack-exhaust-thread/);
   });
 });

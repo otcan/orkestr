@@ -199,6 +199,8 @@ async function recordMessageRouterTrace(message = {}, phase, context = {}, env =
     reason: context.reason || "",
     error: context.error || "",
     attempt: context.attempt,
+    retryable: context.retryable,
+    terminal: context.terminal,
     ownerProcess: context.ownerProcess || "",
   }, env).catch(() => null);
 }
@@ -3060,6 +3062,31 @@ function deliveryAckWaitMs(env = process.env) {
   return Math.max(0, Number(env.ORKESTR_DELIVERY_ACK_WAIT_MS ?? 2500) || 0);
 }
 
+function deliveryRuntimeStatusTimeoutMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_DELIVERY_RUNTIME_STATUS_TIMEOUT_MS ?? 2000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 2000;
+}
+
+async function deliveryRuntimeStatus(threadId, env = process.env) {
+  const timeoutMs = deliveryRuntimeStatusTimeoutMs(env);
+  const statusPromise = runtimeStatus(threadId, env).then(
+    (status) => ({ status, timedOut: false, error: null }),
+    (error) => ({ status: null, timedOut: false, error }),
+  );
+  if (timeoutMs <= 0) return statusPromise;
+
+  let timeoutId;
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutId = setTimeout(() => resolve({ status: null, timedOut: true, error: null }), timeoutMs);
+    timeoutId.unref?.();
+  });
+  try {
+    return await Promise.race([statusPromise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function stuckPromptFailAfterMs(env = process.env) {
   const parsed = Number(env.ORKESTR_STUCK_PROMPT_FAIL_AFTER_MS ?? 30_000);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 30_000;
@@ -3324,14 +3351,20 @@ async function rejectedCommandDeliveryEvidence(message, status) {
 async function failThreadInputDelivery(thread, message, evidence, status, env = process.env) {
   if (!evidence) return null;
   const errorText = evidence.error || "Thread input delivery failed.";
-  await updateThreadMessage(thread.id, message.id, {
+  const failed = await updateThreadMessage(thread.id, message.id, {
     state: "failed",
     deliveryState: "failed",
     deliveryFailedAt: nowIso(),
     observedVia: evidence.observedVia || "delivery_failed",
     error: errorText,
   }, env);
-  markConnectorDeliverySignal(message);
+  markConnectorDeliverySignal(failed);
+  await recordMessageRouterTrace(failed, "runtime_failed", {
+    threadId: thread.id,
+    reason: evidence.observedVia || "delivery_failed",
+    error: errorText,
+    retryable: false,
+  }, env);
   await updateThread(thread.id, {
     state: status?.state || "ready",
     lastError: errorText,
@@ -3346,7 +3379,7 @@ async function failThreadInputDelivery(thread, message, evidence, status, env = 
   }, env);
   notifyThreadInputDeliveryFailure({
     thread,
-    message,
+    message: failed,
     reason: errorText,
     observedVia: evidence.observedVia || "delivery_failed",
     env,
@@ -3541,14 +3574,21 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
   const maxRecoveries = staleAckRecoveryMax(env);
   if (recoveryCount >= maxRecoveries || recoveryProgress > threshold + maxRecoveries) {
     const errorText = "Thread input was not observed after stale-ack recovery; failing it to unblock later input.";
-    await updateThreadMessage(thread.id, message.id, {
+    const failed = await updateThreadMessage(thread.id, message.id, {
       state: "failed",
       deliveryState: "failed",
       deliveryFailedAt: nowIso(),
       observedVia: "stale_ack_recovery_exhausted",
       error: errorText,
     }, env);
-    markConnectorDeliverySignal(message);
+    markConnectorDeliverySignal(failed);
+    await recordMessageRouterTrace(failed, "runtime_failed", {
+      threadId: thread.id,
+      reason: "stale_ack_recovery_exhausted",
+      error: errorText,
+      attempt: recoveryProgress,
+      retryable: false,
+    }, env);
     await appendEvent({
       type: "thread_input_stale_ack_recovery_exhausted",
       threadId: thread.id,
@@ -3560,7 +3600,7 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
     }, env).catch(() => {});
     notifyThreadInputDeliveryFailure({
       thread,
-      message,
+      message: failed,
       reason: errorText,
       observedVia: "stale_ack_recovery_exhausted",
       env,
@@ -3617,7 +3657,7 @@ async function waitForThreadInputAck(thread, messageId, env = process.env) {
   do {
     const message = await getThreadMessage(thread.id, messageId, env);
     if (!message || message.state !== "awaiting_ack") return message?.state === "completed" ? message.id : null;
-    const status = await runtimeStatus(thread.id, env).catch(() => null);
+    const { status } = await deliveryRuntimeStatus(thread.id, env);
     const acknowledged = await acknowledgeThreadInputDelivery(thread, message, status, env);
     if (acknowledged) return acknowledged;
     if (await failRejectedThreadInputDelivery(thread, message, status, env)) return null;
@@ -3977,7 +4017,8 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
       if (awaitingAck) {
         awaitingAck = await reconcileAttemptedDeliveryState(thread, awaitingAck, env);
         if (!awaitingAck) continue;
-        const status = await runtimeStatus(thread.id, env).catch(() => null);
+        const statusProbe = await deliveryRuntimeStatus(thread.id, env);
+        const status = statusProbe.status;
         const acknowledged = await acknowledgeThreadInputDelivery(thread, awaitingAck, status, env);
         if (acknowledged) {
           delivered.push(acknowledged);
@@ -3987,6 +4028,24 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
         const dueInMs = deliveryDueInMs(awaitingAck);
         if (dueInMs > 0) {
           scheduleThreadInputDelivery(thread.id, env, dueInMs);
+          break;
+        }
+        if (!status) {
+          const attempt = Math.max(1, deliveryAttempt(awaitingAck));
+          const nextAttemptAt = isoAfter(deliveryRetryBackoffMs(attempt, env));
+          await updateThreadMessage(thread.id, awaitingAck.id, {
+            deliveryState: "waiting_runtime_probe",
+            deliveryNextAttemptAt: nextAttemptAt,
+          }, env).catch(() => {});
+          await appendEvent({
+            type: "thread_input_delivery_probe_unavailable",
+            threadId: thread.id,
+            messageId: awaitingAck.id,
+            timedOut: statusProbe.timedOut,
+            error: statusProbe.error instanceof Error ? statusProbe.error.message : String(statusProbe.error || ""),
+            nextAttemptAt,
+          }, env).catch(() => {});
+          scheduleThreadInputDelivery(thread.id, env, deliveryDueInMs({ deliveryNextAttemptAt: nextAttemptAt }));
           break;
         }
         if (await submitStableUnsentPromptDelivery(thread, awaitingAck, status, env)) continue;

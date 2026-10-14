@@ -183,6 +183,19 @@ export function whatsappWorkerConversation(accountId = "", conversationId = "", 
   throw Object.assign(new Error("whatsapp_worker_conversation_action_unsupported"), { statusCode: 400 });
 }
 
+/**
+ * @param {string} accountId
+ * @param {string[]} chatIds
+ * @param {NodeJS.ProcessEnv} env
+ */
+export function whatsappWorkerGroupPictureAudit(accountId = "", chatIds = [], env = process.env) {
+  const account = encodeURIComponent(clean(accountId || "sender"));
+  return requestWhatsAppWorker(`/accounts/${account}/chats/picture-audit`, {
+    method: "POST",
+    body: { chatIds: Array.isArray(chatIds) ? chatIds : [] },
+  }, env);
+}
+
 export function whatsappWorkerSend({ accountId = "", conversationId = "", text = "", attachmentPaths = [] } = {}, env = process.env) {
   return requestWhatsAppWorker(attachmentPaths.length ? "/send-media" : "/send-text", {
     method: "POST",
