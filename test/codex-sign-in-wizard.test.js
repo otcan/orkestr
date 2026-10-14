@@ -67,7 +67,7 @@ test("without an agent only the wizard shows; signing Codex in there opens the a
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const fake = { codex: "partial", deviceAuthCalls: 0, external: [] };
+  const fake = { codex: "partial", deviceAuthCalls: 0, external: [], created: [] };
   let browser;
   try {
     browser = await puppeteer.launch({ headless: "new", executablePath: chrome, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
@@ -90,7 +90,15 @@ test("without an agent only the wizard shows; signing Codex in there opens the a
             .concat([{ id: "codex", label: "Codex", state: fake.codex, summary: "", details: { command: "codex" } }]);
           return request.respond(json(real));
         }
-        if (route === "GET /api/threads") return request.respond(json({ threads: [] }));
+        if (route === "GET /api/threads") return request.respond(json({ threads: fake.created.map((body) => ({ id: body.id, name: body.name, title: body.name, status: "idle" })) }));
+        if (route === "POST /api/threads") {
+          const body = JSON.parse(request.postData() || "{}");
+          fake.created.push(body);
+          return request.respond(json({ thread: { id: body.id, name: body.name, title: body.name } }));
+        }
+        if (url.pathname.startsWith("/api/threads/orkestr") || url.pathname.startsWith("/api/desktops/") || url.pathname.startsWith("/api/browser-sessions/")) {
+          return request.respond(json({ ok: true, lease: { fencingToken: "1" }, browser: { slug: "desktop" }, messages: [] }));
+        }
         if (route === "GET /api/connectors/whatsapp/status") return request.respond(json({ state: "unpaired", mode: "local", accounts: [] }));
         if (route === "POST /api/connectors/codex/device-auth") {
           fake.deviceAuthCalls += 1;
@@ -114,19 +122,18 @@ test("without an agent only the wizard shows; signing Codex in there opens the a
     assert.equal(await page.evaluate(() => [...document.querySelectorAll(".first-thread-wizard button")].some((b) => b.textContent.trim() === "Close")), false, "the gate wizard cannot be closed");
     await click("Skip for now");
     await page.waitForSelector("ork-codex-sign-in-panel");
-    assert.deepEqual(await buttons("Next"), [false], "Next stays disabled until Codex is signed in");
+    assert.deepEqual(await buttons("Start"), [false], "Start stays disabled until Codex is signed in");
     await click("Open Codex sign-in");
     await page.waitForFunction(() => document.querySelector(".codex-device-code")?.textContent.includes("ABCD-1234"), { timeout: 10_000 });
     assert.equal(fake.deviceAuthCalls, 1);
-    const before = new URL(page.url()).pathname;
 
     fake.codex = "connected";
     await page.waitForFunction(() => !document.querySelector("ork-codex-sign-in-panel"), { timeout: 15_000 });
-    await page.waitForSelector(".app-shell .first-thread-wizard", { timeout: 15_000 });
-    assert.deepEqual(await buttons("Next"), [true], "Next unlocks once Codex is connected");
+    // Signing in creates the first conversation "orkestr" right away (no naming step), once.
+    await page.waitForFunction(() => !document.querySelector(".first-thread-wizard"), { timeout: 20_000 });
+    assert.deepEqual(fake.created.map((body) => [body.id, body.name]), [["orkestr", "orkestr"]]);
     assert.equal(await page.$(".runtime-gate-shell"), null, "the gate lifts once an agent is connected");
-    assert.equal(new URL(page.url()).pathname, before, "the user never left the wizard");
-    assert.ok(await page.$(".first-thread-wizard"));
+    assert.equal(new URL(page.url()).pathname, "/thread/orkestr", "the new conversation opens");
     assert.deepEqual(fake.external, [], "no requests to other hosts");
   } finally {
     await browser?.close();

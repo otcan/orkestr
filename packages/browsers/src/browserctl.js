@@ -392,7 +392,7 @@ async function readBrowserctlTarget(slug, env, options) {
     });
   } catch (error) {
     const detail = String(error?.message || "");
-    if (error?.cause?.code === 2 && /invalid choice/i.test(detail)) {
+    if (error?.cause?.code === 2 && /invalid choice|unsupported_browserctl_command/i.test(detail)) {
       targetReadUnsupported.add(command);
       return null;
     }

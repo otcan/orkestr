@@ -8,7 +8,7 @@ import {
   writeInstanceStatus,
 } from "../../storage/src/instance-config-repository.js";
 import { appendEvent } from "../../storage/src/store.js";
-import { readInstanceIdentity } from "./instance-identity.js";
+import { ensureLocalInstanceIdentity } from "./instance-identity.js";
 import { readRuntimeSettings, writeRuntimeSettings } from "./runtime-settings.js";
 
 function clean(value = "") {
@@ -24,7 +24,7 @@ function nonEmptyObject(value) {
 }
 
 async function localIdentity(env = process.env) {
-  const identity = await readInstanceIdentity(env);
+  const identity = await ensureLocalInstanceIdentity(env);
   if (!identity?.internalInstanceId) {
     throw Object.assign(new Error("instance_identity_required"), { statusCode: 503 });
   }

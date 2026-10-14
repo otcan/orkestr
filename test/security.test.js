@@ -787,9 +787,9 @@ test("whatsapp bridge machine token bypasses browser pairing only for bridge rou
     headers: { authorization: "Bearer wa-bridge-secret" },
   }, env);
 
+  // Without a bearer token the bridge route falls back to browser auth.
   assert.equal(blocked.ok, false);
-  assert.equal(blocked.error, "whatsapp_bridge_token_required");
-  assert.equal(blocked.routingFailure.code, "whatsapp_bridge_token_required");
+  assert.equal(blocked.error, "browser_pairing_required");
   // ORK-513: the repair link stays reachable before pairing, but the request is
   // marked anonymous so the handler demands an admin session or signed intent.
   assert.equal(repairPage.ok, true);
@@ -1600,4 +1600,29 @@ test("browser break-glass routes require an exact reference and use the paired s
     if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     restoreEnv(prior);
   }
+});
+
+test("whatsapp bridge routes accept an admin browser session without a machine token, never a regular user", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-wa-bridge-session-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_AUTH_REQUIRED: "1" };
+  await createUser({ id: "casey", role: "user", displayName: "Casey" }, env);
+  const pair = async (options = {}) => {
+    const challenge = await createPairingChallenge({ env, ...options });
+    await approvePairingChallenge(challenge.challengeId, { env });
+    return pairBrowser({ challengeId: challenge.challengeId, env });
+  };
+  const admin = await pair();
+  const user = await pair({ userId: "casey", role: "user" });
+  const start = (token) => authorizeHttpRequest({
+    method: "POST",
+    url: "/api/connectors/whatsapp/bridge/accounts/account-1/start",
+    headers: { cookie: `orkestr_session=${encodeURIComponent(token)}` },
+  }, env);
+  const allowed = await start(admin.token);
+  const denied = await start(user.token);
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.principal.userId, "admin");
+  assert.equal(denied.ok, false);
+  assert.equal(denied.statusCode, 403);
+  assert.equal(denied.error, "whatsapp_bridge_admin_required");
 });

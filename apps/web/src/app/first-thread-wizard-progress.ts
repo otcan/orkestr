@@ -10,6 +10,8 @@ export interface WizardProgress {
   runtimeProvider: "codex" | "claude-code";
   whatsappAccessMode: "managed" | "self_hosted";
   whatsappModeTouched: boolean;
+  // The AI just signed in: the (re-created) wizard starts the first conversation.
+  autoStart?: boolean;
   scope: string;
   savedAt: number;
 }
@@ -40,6 +42,7 @@ export function loadWizardProgress(scope: string, store: StorageLike | null = st
       runtimeProvider: value.runtimeProvider === "claude-code" ? "claude-code" : "codex",
       whatsappAccessMode: value.whatsappAccessMode === "managed" ? "managed" : "self_hosted",
       whatsappModeTouched: value.whatsappModeTouched === true,
+      ...(value.autoStart === true ? { autoStart: true } : {}),
       scope: String(value.scope ?? ""),
       savedAt: value.savedAt,
     };

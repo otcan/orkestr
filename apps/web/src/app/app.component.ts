@@ -52,6 +52,7 @@ import { canonicalThreadPanelUrl, navigateCanonicalThreadTarget, navigateLegacyT
 import { describeUiSendFailure, UiSendFailureDescription } from "./ui-send-failure.js";
 import { ProviderQuotaIndicatorComponent } from "./provider-quota-indicator.component";
 import { ExecutorSwitcherComponent } from "./executor-switcher.component";
+import { ActiveThreadRefresh } from "./active-thread-refresh";
 import { QuotaProvider, claudeEffortLabel, claudeModelName, executorLabel, threadExecutorProvider } from "./provider-quota";
 
 type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "instanceVault" | "userConnectors";
@@ -282,6 +283,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private summarySocket?: WebSocket;
   private destroyed = false;
   private applyingSummary = false;
+  private pendingSummaryThreads: ThreadSummary[] | null = null;
+  private readonly activeThreadRefresh = new ActiveThreadRefresh(
+    () => this.loadSelectedThread(false),
+    () => this.selectedThreadBusy(),
+  );
   private readonly rawTerminal = new RawTerminalController({
     host: () => this.rawTerminalHost?.nativeElement || null,
     isActive: () => this.activePanel === "raw",
@@ -348,11 +354,21 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!this.sharedAppActive() && !this.publicAppsActive() && !this.pairingRequired) {
       this.connectSummaryStream();
       this.systemPoller = setInterval(() => void this.loadSystemSummarySilent(), 30_000);
+      this.activeThreadRefresh.start();
     }
+  }
+
+  // The open conversation is busy: a message was just sent or replies are
+  // still arriving (see markThreadActive).
+  private selectedThreadBusy(): boolean {
+    if (this.destroyed || this.pairingRequired || !this.uiRuntimeReady() || this.isRouteLevelUserPanel(this.activePanel)) return false;
+    const thread = this.selectedThread();
+    return Boolean(thread) && Number(this.activeThreadIds()[thread!.id] || 0) > Date.now();
   }
 
   ngOnDestroy(): void {
     this.destroyed = true;
+    this.activeThreadRefresh.stop();
     this.stopFallbackPolling();
     if (this.systemPoller) clearInterval(this.systemPoller);
     if (this.summaryReconnectTimer) clearTimeout(this.summaryReconnectTimer);
@@ -943,7 +959,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private async applyThreadSummaryStream(threads: ThreadSummary[]): Promise<void> {
     if (this.sharedAppActive() || this.publicAppsActive()) return;
     if (this.pairingRequired || !this.uiRuntimeReady()) return;
-    if (this.applyingSummary) return;
+    // A push that lands mid-reload is applied right after it, not dropped.
+    if (this.applyingSummary) {
+      this.pendingSummaryThreads = threads;
+      return;
+    }
     this.applyingSummary = true;
     try {
       const previousSelected = this.selectedThread();
@@ -972,6 +992,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.renderNow();
     } finally {
       this.applyingSummary = false;
+      const pending = this.pendingSummaryThreads;
+      this.pendingSummaryThreads = null;
+      if (pending) void this.applyThreadSummaryStream(pending);
     }
   }
 

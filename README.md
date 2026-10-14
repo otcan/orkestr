@@ -218,10 +218,10 @@ First run is a three-step wizard (it opens by itself at `/` and at a bare
    the `/data` volume. After a container restart the linked account
    reconnects without a new QR (set `ORKESTR_WHATSAPP_AUTOSTART=0` to turn
    that off). The Orkestr relay is invitation-only and needs a broker.
-2. **Choose the AI**: sign Codex in right in the wizard with a one-time
+2. **Connect the AI**: sign Codex in right in the wizard with a one-time
    ChatGPT device code (allow device-code sign-in in ChatGPT → Settings →
    Security first), or pick a Claude Code account if enabled.
-3. **Name and start**: Start the default `orkest` thread. With WhatsApp linked, the wizard binds
+3. As soon as the AI is signed in, Orkestr starts the default `orkestr` thread. With WhatsApp linked, the wizard binds
    the thread to your own WhatsApp chat ("Message yourself") on exactly the
    account you just linked. Nobody else is added, even if default
    participants are configured, and the step is refused if that account is
@@ -263,7 +263,7 @@ sends a challenge-gated `/i/<broker-uuid>/setup` link on that host. That path is
 the instance identity boundary: it redirects into browser pairing with the
 broker UUID attached before setup opens. The setup flow then lets you connect
 Codex, use the broker-provided WhatsApp relay or connect your own WhatsApp later,
-and start the default `orkest` thread.
+and start the default `orkestr` thread.
 
 Operators can pre-provision these broker values in the VM image, Helm release,
 or secret manager so evaluators only edit the WhatsApp number:
@@ -339,7 +339,7 @@ Run the OSS demo contract smoke:
 npm run smoke:k3s:oss-demo
 ```
 
-It checks the Docker contract, Helm chart, first-run `orkest` path, WhatsApp
+It checks the Docker contract, Helm chart, first-run `orkestr` path, WhatsApp
 trust choice, Virtual Desk startup wiring, and verifies the demo path is not
 using the noop executor.
 

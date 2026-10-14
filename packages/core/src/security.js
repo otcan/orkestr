@@ -1,3 +1,4 @@
+import { isAdminPrincipal } from "./policy.js";
 import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import { authProvider } from "./auth-config.js";
@@ -158,21 +159,35 @@ export async function ownerSetupOpenToAnonymous(env = process.env) {
   if (authProvider(env) !== "browser_pairing") return false;
   const status = await ownerLoginStatus(env).catch(() => ({ configured: true }));
   if (status.configured) return false;
-  // Durable boundary: the security file is written the first time anything
-  // is paired or signed in (sessions, challenges, OIDC) and is never deleted.
-  // Revoked or expired sessions therefore do not reopen anonymous setup.
+  // Durable boundary: the security file records `claimed` the first time a
+  // challenge is approved or a browser session exists, and never clears it, so revoked or expired sessions
+  // do not reopen anonymous setup. An unused pairing challenge alone (for
+  // example a stale tab) does not claim the install. Files written before this
+  // flag existed count as claimed.
+  // Empty, unreadable or corrupt files count as claimed (fail closed).
+  let raw;
   try {
-    await fs.access(secretPath(env));
-    return false;
+    raw = await fs.readFile(secretPath(env), "utf8");
   } catch (error) {
     return error?.code === "ENOENT";
   }
+  let config;
+  try {
+    config = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (!config || typeof config !== "object" || Array.isArray(config)) return false;
+  const sessions = Array.isArray(config.sessions) ? config.sessions : null;
+  return config.claimed === false && config.enabled !== true && sessions !== null && sessions.length === 0;
 }
 
 async function readSecurityConfig(env = process.env) {
-  const config = await readJson(secretPath(env), { enabled: false, sessions: [], challenges: [], oidcRevocations: [] });
+  const config = await readJson(secretPath(env), { enabled: false, claimed: false, sessions: [], challenges: [], oidcRevocations: [] });
   return {
     enabled: config.enabled === true,
+    // undefined = file from before the flag existed; treated as claimed.
+    claimed: typeof config.claimed === "boolean" ? config.claimed : undefined,
     sessions: Array.isArray(config.sessions) ? config.sessions : [],
     challenges: Array.isArray(config.challenges) ? config.challenges : [],
     oidcRevocations: Array.isArray(config.oidcRevocations) ? config.oidcRevocations : [],
@@ -191,6 +206,8 @@ async function writeSecurityConfig(config, env = process.env) {
     oidcRevocations: (config.oidcRevocations || []).filter((revocation) => Date.parse(revocation.expiresAt || "") > now),
     updatedAt: nowIso(),
   };
+  // Approval (enabled) or any session claims the install for good.
+  next.claimed = config.claimed !== false || config.enabled === true || (config.sessions || []).length > 0;
   await writeSecretJson(secretPath(env), next);
   return next;
 }
@@ -1018,6 +1035,9 @@ async function authorizeWhatsAppMachineRequest(request, env = process.env) {
   const route = isWhatsAppMachineRoute(request);
   if (!route) return null;
   const token = bearerToken(request?.headers?.authorization || request?.headers?.Authorization || "");
+  // Bridge routes also serve the signed-in owner's browser: without a bearer
+  // token, fall through to normal session auth instead of demanding one.
+  if (!token && route.kind === "whatsapp_bridge") return null;
   const tokens = route.tokens(env);
   const scopedTokens = await scopedWhatsAppTokens(env, route.kind);
   if (!tokens.length && !scopedTokens.length) return whatsappMachineAuthFailure(route, "unconfigured", 503);
@@ -2349,6 +2369,11 @@ export async function authorizeHttpRequest(request, env = process.env) {
       role: user?.role || session.role,
       displayName: user?.displayName || session.displayName,
     }, env);
+    // Bridge routes reached by browser session (no machine token) manage the
+    // owner's WhatsApp accounts: admins only.
+    if (isWhatsAppMachineRoute(request)?.kind === "whatsapp_bridge" && !isAdminPrincipal(principal)) {
+      return { ok: false, status, statusCode: 403, error: "whatsapp_bridge_admin_required" };
+    }
     return { ok: true, status, principal, session };
   }
   // Routes reachable before pairing run with the legacy admin principal for
