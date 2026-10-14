@@ -29,6 +29,7 @@ test("the thread API refuses the no-op and simulated executors outside the test 
       { name: "fake-nested", executorId: "custom", executor: { type: "noop" } },
       { name: "fake-unknown", executorId: "no-such-executor" },
       { name: "fake-nested-id", executor: { id: "simulated", type: "simulated" }, executorId: "custom" },
+      { name: "fake-runtime-kind", executorId: "noop", runtimeKind: "synthetic-unknown" },
     ];
     for (const body of attempts) {
       const response = await fetch(`${base}/api/threads`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -86,6 +87,15 @@ test("setup status tells everyone, also non-admins, whether a coding agent is re
   const { getSetupStatus, publicSetupStatus } = await import("../packages/core/src/setup.js");
   const env = { ...process.env, ORKESTR_HOME: await tempHome("orkestr-agent-runtime-") };
   const full = await getSetupStatus({ env });
+  // Claude Code is admin-only: a non-admin never counts the admin's Claude account.
+  const { createLlmAccountProfile, updateLlmAccountProfileState } = await import("../packages/core/src/llm-account-profiles.js");
+  const claudeEnv = { ...env, ORKESTR_CLAUDE_CODE_ENABLED: "1" };
+  const profile = await createLlmAccountProfile("admin", { provider: "claude-code", label: "Synthetic Claude" }, claudeEnv).catch(() => null);
+  if (profile?.id) {
+    await updateLlmAccountProfileState("admin", profile.id, "ready", {}, claudeEnv).catch(() => {});
+    const asUser = await getSetupStatus({ env: claudeEnv, principal: { type: "user", role: "user", userId: "someone" } });
+    assert.equal(asUser.agentRuntime.claude, false, "a non-admin does not get the admin's Claude account");
+  }
   assert.equal(typeof full.agentRuntime.ready, "boolean");
   assert.deepEqual(publicSetupStatus({ ...full, agentRuntime: { ready: false, codex: false, claude: false } }).agentRuntime, { ready: false });
   assert.deepEqual(publicSetupStatus({ ...full, agentRuntime: { ready: true, codex: true, claude: false } }).agentRuntime, { ready: true });

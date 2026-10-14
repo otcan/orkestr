@@ -8,6 +8,7 @@ import { securityStatus } from "./security.js";
 import { whatsappOnboardingStatus } from "../../connectors/src/whatsapp-onboarding.js";
 import { claudeCodeEnabled } from "./claude-code-client.js";
 import { listLlmAccountProfiles } from "./llm-account-profiles.js";
+import { isAdminPrincipal } from "./policy.js";
 
 export { connectorOrder };
 
@@ -40,7 +41,7 @@ export async function getSetupStatus({ env = process.env, home, principal = null
   const urls = publicUrlConfig(env);
   const settings = await readRuntimeSettings(env);
   const whatsappOnboarding = await whatsappOnboardingStatus({ env, settings, connectors });
-  const agentRuntime = await agentRuntimeStatus(connectors, env);
+  const agentRuntime = await agentRuntimeStatus(connectors, env, principal);
   return {
     generatedAt: new Date().toISOString(),
     home: paths.home,
@@ -63,11 +64,14 @@ export async function getSetupStatus({ env = process.env, home, principal = null
 // Orkestr only opens with a coding agent: Codex signed in, or a ready Claude
 // Code account. Exposed as a plain flag (also to non-admins) so the UI can
 // gate entry without seeing connector details.
-async function agentRuntimeStatus(connectors = [], env = process.env) {
+// Claude Code threads are admin-only (claude_code_admin_runtime_required), so a
+// Claude account only counts for the admin, and only the admin's own profiles.
+async function agentRuntimeStatus(connectors = [], env = process.env, principal = null) {
   const codex = connectors.find((connector) => connector.id === "codex")?.state === "connected";
   let claude = false;
-  if (!codex && claudeCodeEnabled(env)) {
-    const owner = String(env.ORKESTR_ADMIN_USER_ID || "admin").trim() || "admin";
+  const admin = !principal || isAdminPrincipal(principal);
+  if (!codex && admin && claudeCodeEnabled(env)) {
+    const owner = String(principal?.userId || env.ORKESTR_ADMIN_USER_ID || "admin").trim() || "admin";
     claude = await listLlmAccountProfiles(owner, { provider: "claude-code" }, env)
       .then((profiles) => profiles.some((profile) => profile.state === "ready"))
       .catch(() => false);

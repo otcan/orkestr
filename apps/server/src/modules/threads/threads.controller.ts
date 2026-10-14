@@ -422,9 +422,12 @@ async function prepareThreadCreateBody(body: Record<string, unknown> = {}, princ
 // terminal command runs through an executor adapter, and unknown ids fall back
 // to the no-op adapter; the no-op and simulated adapters are test fixtures that
 // only the test runner (ORKESTR_ALLOW_TEST_EXECUTORS=1) may use.
+const realThreadRuntimeKinds = new Set(["codex-app-server", "app-server", "claude-code", API_AGENT_RUNTIME_KIND, "raw-terminal", "codex-tmux", "tmux"]);
+
 function assertRealThreadExecutor(input: Record<string, any>) {
   if (process.env.ORKESTR_ALLOW_TEST_EXECUTORS === "1") return;
-  if (String(input.runtimeKind || "").trim() || String(input.command || input.cmd || "").trim()) return;
+  // Only known runtimes or a terminal command run without an executor adapter.
+  if (realThreadRuntimeKinds.has(String(input.runtimeKind || "").trim().toLowerCase()) || String(input.command || input.cmd || "").trim()) return;
   const executor = input.executor && typeof input.executor === "object" ? input.executor : {};
   const ids = [input.executorId, executor.id, executor.type].map((value) => String(value || "").trim()).filter(Boolean);
   const resolved = ids.length ? ids.map((id) => getExecutorAdapter(id).id) : [getExecutorAdapter("").id];
