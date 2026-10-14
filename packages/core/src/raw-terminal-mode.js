@@ -28,8 +28,13 @@ export function rawTerminalTtlMs(env = process.env) {
 }
 
 export function threadUsesRawTerminalMode(thread = {}) {
+  // Entering raw-terminal mode always sets the top-level runtimeKind
+  // (rawTerminalModePatch), so a configured top-level kind decides; nested
+  // raw-terminal markers left behind after leaving the mode do not.
+  const configuredRuntimeKind = clean(thread?.runtimeKind).toLowerCase();
+  if (configuredRuntimeKind) return configuredRuntimeKind === RAW_TERMINAL_RUNTIME_KIND;
   const transport = clean(thread?.executor?.transport || thread?.executor?.metadata?.transport).toLowerCase();
-  const runtimeKind = clean(thread?.runtimeKind || thread?.runtime?.runtimeKind || thread?.executor?.metadata?.runtimeKind).toLowerCase();
+  const runtimeKind = clean(thread?.runtime?.runtimeKind || thread?.executor?.metadata?.runtimeKind).toLowerCase();
   const terminalMode = clean(thread?.terminalMode || thread?.runtime?.terminalMode || thread?.executor?.metadata?.terminalMode).toLowerCase();
   return transport === RAW_TERMINAL_TRANSPORT ||
     runtimeKind === RAW_TERMINAL_RUNTIME_KIND ||
