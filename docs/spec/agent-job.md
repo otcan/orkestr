@@ -268,7 +268,6 @@ are decided:
    provider is connected, and runs are neither admitted nor started on a
    provider that is not connected *and* runnable (has a real job executor);
    refusals are audited. See [what works today](agent-job-runner.md#what-works-today-2026-10-10). `simulated` exists only as a test fixture
-   and is never selectable in user job specs. `orkestr demo` stays as an
-   explicitly labelled simulation for newcomers (simulated AI, throwaway
-   `ORKESTR_HOME`); it never creates or runs user jobs.
+   and is never selectable in user job specs. The `orkestr demo` simulation was
+   removed on 2026-10-14.
 3. **Telemetry:** Orkestr sends no usage telemetry or pings of any kind.

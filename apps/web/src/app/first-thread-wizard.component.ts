@@ -3,6 +3,7 @@ import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, LlmAccountProfile, SetupStatus, ThreadMessage, ThreadSummary } from "./api.service";
 import { CodexSignInPanelComponent } from "./codex-sign-in-panel.component";
+import { LlmAccountsComponent } from "./llm-accounts.component";
 import { codexStateLabel } from "./codex-runtime-status";
 import { clearWizardProgress, loadWizardProgress, saveWizardProgress } from "./first-thread-wizard-progress";
 import { WhatsAppPairPanelComponent } from "./whatsapp-pair-panel.component";
@@ -12,7 +13,7 @@ type WhatsAppAccessMode = "managed" | "self_hosted";
 
 @Component({
   selector: "ork-first-thread-wizard",
-  imports: [CodexSignInPanelComponent, FormsModule, WhatsAppPairPanelComponent],
+  imports: [CodexSignInPanelComponent, FormsModule, LlmAccountsComponent, WhatsAppPairPanelComponent],
   templateUrl: "./first-thread-wizard.component.html",
 })
 export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit {
@@ -23,6 +24,8 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   @Input() canManageSetup = false;
   @Input() setupStatus: SetupStatus | null = null;
   @Input() progressScope = "";
+  // "codex": open on the AI step (an agent must be connected before entering).
+  @Input() startStep: "" | "codex" = "";
   @Output() cancel = new EventEmitter<void>();
   @Output() created = new EventEmitter<ThreadSummary>();
   @Output() setupRequested = new EventEmitter<"codex" | "whatsapp">();
@@ -50,6 +53,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   private proofStartedAt = 0;
   private inboundAt = 0;
   private proofTimer: ReturnType<typeof setInterval> | null = null;
+  private claudePoller: ReturnType<typeof setInterval> | null = null;
   runtimeProvider: "codex" | "claude-code" = "codex";
   claudeAccounts: LlmAccountProfile[] = [];
   claudeEnabled = false;
@@ -66,13 +70,20 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
     this.restoreProgress();
     this.syncWhatsAppAccessMode();
     void this.loadClaudeAccounts().then(() => this.clampRestoredStep());
+    // While Claude Code is chosen but not ready, pick up an account added below.
+    this.claudePoller = setInterval(() => {
+      if (this.runtimeProvider === "claude-code" && !this.agentReady()) void this.loadClaudeAccounts();
+    }, 5000);
   }
 
   // Coming back from Setup restores the step and answers; a step past the AI
   // choice is only kept while that AI is still ready.
   private restoreProgress(): void {
     const saved = loadWizardProgress(this.progressScope);
-    if (!saved) return;
+    if (!saved) {
+      if (this.startStep === "codex") this.stepIndex = this.steps.findIndex((step) => step.id === "codex");
+      return;
+    }
     this.stepIndex = Math.min(saved.stepIndex, this.steps.length - 1);
     this.threadName = saved.threadName || this.threadName;
     this.repoUrl = saved.repoUrl;
@@ -115,6 +126,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
 
   ngOnDestroy(): void {
     this.stopProofCheck();
+    if (this.claudePoller) clearInterval(this.claudePoller);
     this.saveProgress();
   }
 
@@ -257,8 +269,8 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   agentSummary(): string {
     if (this.runtimeProvider === "codex") return this.codexSummary();
     const account = this.selectedClaudeAccount();
-    if (!account) return "Add your Claude subscription under Tools → Models first.";
-    return account.state === "ready" ? `${account.label} is ready.` : `${account.label} is ${account.state.replace(/_/g, " ")}. Sign in again under Tools → Models.`;
+    if (!account) return "Add your Claude subscription below.";
+    return account.state === "ready" ? `${account.label} is ready.` : `${account.label} is ${account.state.replace(/_/g, " ")}. Sign in again below.`;
   }
 
   codexBlocked(): boolean {

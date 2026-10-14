@@ -121,8 +121,8 @@ async function ensureUserWorkspaceRoot(userId, env = process.env) {
 }
 
 function rootLabel(root, pathsHome, env = process.env) {
-  if (root === path.join(pathsHome, "files")) return "Orkestr files";
-  if (root === path.join(pathsHome, "workspaces")) return "Orkestr workspaces";
+  if (root === path.join(pathsHome, "files")) return "Shared files";
+  if (root === path.join(pathsHome, "workspaces")) return "Agent workspaces";
   if (root === env.ORKESTR_RUNTIME_WORKSPACE_ROOT) return "Runtime workspace root";
   if (root === env.ORKESTR_CLONE_ROOT) return "Clone root";
   if (root === process.cwd()) return "Orkestr checkout";
@@ -215,7 +215,7 @@ export async function workspaceFolderRootsForPrincipal(principal = {}, env = pro
   for (const candidate of candidates) {
     if (await directoryExists(candidate)) roots.push({ name: rootLabel(candidate, paths.home, env), path: candidate });
   }
-  return roots.length ? roots : [{ name: "Orkestr workspaces", path: paths.workspaces }];
+  return roots.length ? roots : [{ name: "Agent workspaces", path: paths.workspaces }];
 }
 
 export async function fileBrowserRootsForPrincipal(principal = {}, env = process.env) {
@@ -231,6 +231,8 @@ export async function fileBrowserRootsForPrincipal(principal = {}, env = process
 
   const paths = await ensureDataDirs(env);
   await fs.mkdir(paths.files, { recursive: true });
+  // Conversations keep their code here; show it even before the first one.
+  await fs.mkdir(paths.workspaces, { recursive: true });
   const candidates = uniqueResolvedPaths([
     paths.files,
     env.ORKESTR_RUNTIME_WORKSPACE_ROOT || "",
@@ -241,7 +243,7 @@ export async function fileBrowserRootsForPrincipal(principal = {}, env = process
   for (const candidate of candidates) {
     if (await directoryExists(candidate)) roots.push({ name: rootLabel(candidate, paths.home, env), path: candidate });
   }
-  return roots.length ? roots : [{ name: "Orkestr files", path: paths.files }];
+  return roots.length ? roots : [{ name: "Shared files", path: paths.files }];
 }
 
 export async function assertWorkspacePathForPrincipal(candidate, principal = {}, env = process.env) {

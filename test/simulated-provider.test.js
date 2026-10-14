@@ -1,16 +1,13 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { listExecutorAdapters, runNextThreadMessage } from "../packages/core/src/executors.js";
 import { decideEffectApproval } from "../packages/core/src/effect-ledger.js";
 import { listSimulatedPullRequests } from "../packages/core/src/simulated-pr-sink.js";
 import { appendThreadMessage, createThread, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("simulated provider is registered with offline capabilities", () => {
   const adapter = listExecutorAdapters().find((item) => item.id === "simulated");
@@ -60,60 +57,3 @@ test("simulated provider pauses approval-required tools until approved", async (
   assert.equal((await listSimulatedPullRequests(env))[0].state, "merged");
 });
 
-test("orkestr demo proves crash recovery offline and exits zero", async () => {
-  const result = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(root, "apps/cli/bin/orkestr-oss.js"), "demo", "--yes", "--json"], {
-      cwd: root,
-      env: {
-        PATH: process.env.PATH,
-        TMPDIR: os.tmpdir(),
-        NODE_OPTIONS: `--import=${path.join(root, "test/fixtures/deny-network.mjs")} --disable-warning=ExperimentalWarning`,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", reject);
-    child.on("exit", (code) => resolve({ code, stdout, stderr }));
-  });
-  assert.equal(result.code, 0, `${result.stderr}\n${result.stdout}`);
-  const report = JSON.parse(result.stdout);
-  assert.equal(report.ok, true);
-  assert.equal(report.pullRequests.length, 1);
-  assert.equal(report.attempts[0].signal, "SIGKILL");
-  assert.ok(report.checks.every((check) => check.ok));
-  assert.ok(report.audit.some((event) => event.type === "effect_reconciled"));
-  assert.equal(report.simulation, true);
-  assert.equal(report.provider, "simulated");
-  assert.match(report.notice, /simulated AI/);
-});
-
-test("orkestr demo is labelled as a simulation and never creates user Agent Jobs", async () => {
-  const userHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-demo-user-home-"));
-  const result = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(root, "apps/cli/bin/orkestr-oss.js"), "demo", "--yes", "--no-crash", "--keep"], {
-      cwd: root,
-      env: {
-        PATH: process.env.PATH,
-        TMPDIR: os.tmpdir(),
-        ORKESTR_HOME: userHome,
-        NODE_OPTIONS: `--import=${path.join(root, "test/fixtures/deny-network.mjs")} --disable-warning=ExperimentalWarning`,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.on("error", reject);
-    child.on("exit", (code) => resolve({ code, stdout }));
-  });
-  assert.equal(result.code, 0, result.stdout);
-  assert.match(result.stdout, /^SIMULATION - this demo uses a simulated AI/);
-  assert.match(result.stdout, /No real AI or account was used/);
-  const kept = result.stdout.match(/State kept in (\S+)/)?.[1];
-  assert.ok(kept);
-  assert.equal(await fs.stat(path.join(kept, "agent-jobs.sqlite")).catch(() => null), null, "the demo must not use the Agent Job store");
-  assert.deepEqual(await fs.readdir(userHome), [], "the demo must not touch the user's ORKESTR_HOME");
-  await fs.rm(kept, { recursive: true, force: true });
-});

@@ -149,7 +149,7 @@ A deterministic, scripted adapter with no network and no credentials. A
 script is a list of steps (`say`, `tool`, `crash_after`, `ask_approval`,
 `output`). It declares the full capability set, `toolLoop: "orkestr"` and
 `resume: "transcript"`, so the runtime's own loop, checkpointing and fault
-injection are exercised in CI. It is used by `orkestr demo` and as the
+injection are exercised in CI. It is used by the tests and as the
 reference implementation for the conformance suite. Today's `noop` executor
 in `executors.js` is its ancestor.
 

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { getExecutorAdapter } from "../../../../../packages/core/src/executors.js";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -417,6 +418,24 @@ async function prepareThreadCreateBody(body: Record<string, unknown> = {}, princ
   };
 }
 
+// No conversations without a real agent. A thread without a runtime kind or a
+// terminal command runs through an executor adapter, and unknown ids fall back
+// to the no-op adapter; the no-op and simulated adapters are test fixtures that
+// only the test runner (ORKESTR_ALLOW_TEST_EXECUTORS=1) may use.
+const realThreadRuntimeKinds = new Set(["codex-app-server", "app-server", "claude-code", API_AGENT_RUNTIME_KIND, "raw-terminal", "codex-tmux", "tmux"]);
+
+function assertRealThreadExecutor(input: Record<string, any>) {
+  if (process.env.ORKESTR_ALLOW_TEST_EXECUTORS === "1") return;
+  const executor = input.executor && typeof input.executor === "object" ? input.executor : {};
+  const ids = [input.executorId, executor.id, executor.type].map((value) => String(value || "").trim()).filter(Boolean);
+  // A fake executor is refused whatever runtime kind the request names.
+  if (ids.some((id) => ["noop", "simulated"].includes(id.toLowerCase()))) throw httpError("executor_not_available", 400);
+  // Only known runtimes or a terminal command run without an executor adapter.
+  if (realThreadRuntimeKinds.has(String(input.runtimeKind || "").trim().toLowerCase()) || String(input.command || input.cmd || "").trim()) return;
+  const resolved = ids.length ? ids.map((id) => getExecutorAdapter(id).id) : [getExecutorAdapter("").id];
+  if (resolved.some((id) => id === "noop" || id === "simulated")) throw httpError("executor_not_available", 400);
+}
+
 @Controller("api/threads")
 export class ThreadsController {
   constructor(
@@ -653,7 +672,10 @@ export class ThreadsController {
     validateRequestSchema(threadCreateSchema, { body });
     const principal = requestPrincipal(request);
     const requestedExecutor: any = body.executor || {};
-    if ([body.executorId, body.runtimeKind, requestedExecutor.id, requestedExecutor.type, requestedExecutor.metadata?.runtimeKind].includes("claude-code")) {
+    // Same normalization as the runtime selection below, so the admin check
+    // always runs before anything is created.
+    if ([body.executorId, body.runtimeKind, requestedExecutor.id, requestedExecutor.type, requestedExecutor.metadata?.runtimeKind]
+      .map((value) => String(value || "").trim().toLowerCase()).includes("claude-code")) {
       if (!isAdminPrincipal(principal)) throw httpError("claude_code_admin_runtime_required", 403);
       assertClaudeCodeHostOwner({ ...body, ownerUserId: body.ownerUserId || body.userId || process.env.ORKESTR_ADMIN_USER_ID || adminUserId });
     }
@@ -667,7 +689,9 @@ export class ThreadsController {
     const requestedExecutorId = String(prepared.executorId || preparedExecutor.id || preparedExecutor.type || "codex").trim() || "codex";
     const defaultRuntime = defaultTenantThreadRuntime(prepared, principal, process.env);
     const usesApiAgentRuntime = String(prepared.runtimeKind || defaultRuntime || "").trim() === API_AGENT_RUNTIME_KIND;
-    const usesClaudeRuntime = !usesApiAgentRuntime && (requestedExecutorId === "claude-code" || String(preparedExecutor.type || "").trim() === "claude-code");
+    // Asking for the Claude runtime kind goes through the same checks as the executor.
+    const usesClaudeRuntime = !usesApiAgentRuntime && [requestedExecutorId, preparedExecutor.type, prepared.runtimeKind]
+      .map((value) => String(value || "").trim().toLowerCase()).includes("claude-code");
     const usesCodexRuntime = !usesApiAgentRuntime && !usesClaudeRuntime && (requestedExecutorId === "codex" || String(preparedExecutor.type || "").trim() === "codex");
     if (usesClaudeRuntime) {
       if (!claudeCodeEnabled(process.env)) throw httpError("claude_code_disabled", 409);
@@ -712,6 +736,7 @@ export class ThreadsController {
         },
       };
     }
+    assertRealThreadExecutor(createInput);
     let thread = await createThreadForPrincipal(createInput, principal);
     if (usesCodexRuntime && !codexThreadId(thread)) {
       const started = await startCodexAppServerThread(thread);

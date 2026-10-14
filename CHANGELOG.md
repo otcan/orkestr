@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-alpha.199
+
+- Fast start from a fresh clone: `npm ci` no longer downloads puppeteer's ~650 MB Chrome (WhatsApp uses the installed Chrome or Chromium, or `WA_CHROME_PATH`; `ORKESTR_DOWNLOAD_CHROME=1` restores the download), and `npm start` builds the server once if needed. README starts with the real app; shell blocks have no `#` comments.
+- No entry without a coding agent: until Codex or a Claude Code account is ready, the app shows only the first-run wizard (no Close); non-admins see an explanation. Setup, pairing and connector sign-in pages stay reachable.
+- No demo conversations: the `orkestr demo` simulation is removed, the thread API refuses the no-op/simulated test executors (`ORKESTR_ALLOW_TEST_EXECUTORS=1` for the test runner), and the "orkestr-watcher" alert thread is no longer created on its own (`ORKESTR_WATCHER_AUTO_CREATE=1` to opt in; alerts are still recorded).
+- The Connections page is gone from the navigation: connectors are enabled in Setup (top bar "Setup"); `/connectors/<id>` sign-in links keep working.
+- Files opens on "Agent workspaces" (each conversation's folder) next to "Shared files", with explanations and useful empty states.
+- Vault on an install without sign-in explains why it is locked and links to Setup → Security instead of showing `vault_owner_session_required`.
+- "Copy link" removed. "Log out" only appears when the install has a sign-in; otherwise the menu says why there is none.
+- WhatsApp group picture audit: strict CLI parsing and an explicit `allGroups` request (from the stale-branch integration).
+
 ## 0.1.0-alpha.198
 
 - One first-run path: a new install opens a three-step wizard (Link WhatsApp → Choose the AI → Name and start) at `/` and at a bare `/setup`. The long setup page is now Setup only (no goals, step tabs or starter thread); the timezone moved into Setup → Connections.

@@ -29,11 +29,13 @@ test("application navigation keeps core destinations, existing route handlers an
   assert.match(template, /id="main-content" class="chat" tabindex="-1"/);
   assert.match(template, /aria-label="Primary navigation"/);
   for (const [label, panel] of [
-    ["Conversations", "chat"], ["Desktops", "instanceDesktops"],
-    ["Connections", "userConnectors"], ["Timers", "instanceTimers"],
+    ["Conversations", "chat"], ["Desktops", "instanceDesktops"], ["Timers", "instanceTimers"],
   ]) {
     assert.ok(template.includes(`openPanel('${panel}')">${label}</button>`), `${label} route`);
   }
+  // Connectors are enabled in Setup; the old Connections page is not in the navigation.
+  assert.ok(template.includes(`openSetup('system')">Setup</button>`), "Setup route");
+  assert.ok(!template.includes(">Connections</button>"), "no Connections page");
   for (const panel of ["files", "instanceApps", "instanceVault", "instanceSettings"]) {
     assert.ok(template.includes(`openPanel('${panel}')`), `${panel} remains reachable`);
   }

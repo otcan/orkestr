@@ -1,4 +1,4 @@
-import { Component, Input, OnDestroy, OnInit, ViewChild, inject } from "@angular/core";
+import { Component, EventEmitter, Input, OnDestroy, OnInit, Output, ViewChild, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import type { ThreadSummary } from "./api.service";
 import { VaultApiService, VaultApproval, VaultItem, VaultItemInput, VaultStatus } from "./vault-api.service";
@@ -32,6 +32,9 @@ interface RevealedSecret {
 export class VaultPageComponent implements OnInit, OnDestroy {
   private readonly api = inject(VaultApiService);
   @Input() threads: ThreadSummary[] = [];
+  @Output() securitySetupRequested = new EventEmitter<void>();
+  // The vault only opens for a signed-in owner; an install without sign-in has none.
+  ownerSessionMissing = false;
 
   items: VaultItem[] = [];
   status: VaultStatus | null = null;
@@ -94,7 +97,11 @@ export class VaultPageComponent implements OnInit, OnDestroy {
       this.status = status;
       this.loaded = true;
     } catch (error) {
-      this.error = vaultErrorMessage(error, "Vault is unavailable.");
+      if (vaultErrorMessage(error, "") === "vault_owner_session_required") {
+        this.ownerSessionMissing = true;
+      } else {
+        this.error = vaultErrorMessage(error, "Vault is unavailable.");
+      }
     } finally {
       this.loading = false;
     }

@@ -23,27 +23,42 @@ sensitive actions wait for your approval; and every run leaves an audit record.
 Positioning: [docs/product/positioning.md](docs/product/positioning.md).
 Guarantees: [docs/spec/runtime-guarantees.md](docs/spec/runtime-guarantees.md).
 
-### Try it in one minute (simulation)
+### Start Orkestr
+
+With Docker, nothing else to install:
+
+```bash
+docker run --name orkestr -p 3000:3000 -v orkestr-data:/data ghcr.io/otcan/orkestr:latest
+```
+
+Then open http://127.0.0.1:3000/ and follow the setup.
+
+From source (Node.js 22 or newer):
 
 ```bash
 git clone https://github.com/otcan/orkestr.git
 cd orkestr
 npm ci
-# SIMULATION: simulated AI, fake code host, no real job
-node apps/cli/bin/orkestr-oss.js demo --yes   # or: orkestr demo --yes
+npm start
 ```
 
-`orkestr demo` is a **simulation**: it uses a simulated AI and a fake code host
-in a throwaway `ORKESTR_HOME`. It shows crash recovery without a duplicate pull
-request and an approval pause before merging. It does not call a real model.
+Then open http://127.0.0.1:19812/. The first `npm start` builds the server
+once (about 15 seconds); after that Orkestr starts in about a second. `npm ci`
+does not download a separate Chrome (about 650 MB): linking WhatsApp uses the
+Google Chrome or Chromium installed on your computer (or `WA_CHROME_PATH`).
+
+Orkestr needs a coding agent: the app opens only after Codex (your ChatGPT
+subscription) or Claude Code is connected. The first-run wizard walks you
+through it.
 
 ### Your first real job
 
-After `codex login` on the same host:
+After `codex login` on the same host, from the clone (`npx orkestr` runs this
+checkout's CLI, also when an older `orkestr` is installed globally):
 
 ```bash
-orkestr init my-jobs   # or: node apps/cli/bin/orkestr-oss.js init my-jobs
-orkestr run my-jobs
+npx orkestr init my-jobs
+npx orkestr run my-jobs
 ```
 
 Details: [docs/quickstart.md](docs/quickstart.md) and
@@ -64,7 +79,6 @@ only), **offline-tested** (automated tests, no live service), **live-verified**
 | WhatsApp/email notifications | built, not live-verified | offline-tested |
 | Webhooks (HMAC) | built and tested offline | offline-tested |
 | Guarantees G1-G11 | tested with simulated/fake providers | simulation |
-| orkestr demo | simulation by design | simulation |
 <!-- status:end -->
 
 Codex jobs, tested configuration: Codex CLI 0.157.1 job, approval-gated file
@@ -163,9 +177,7 @@ Tailscale, Caddy/TLS, or a VPN.
 
 ## Quickstart
 
-No credentials yet? Run `orkestr demo --yes` to see a durable agent job survive
-a crash without duplicating its side effects. See
-[Try it in one minute](docs/quickstart.md#try-it-in-one-minute).
+See [Start Orkestr](#start-orkestr) and [docs/quickstart.md](docs/quickstart.md).
 
 ### Docker
 

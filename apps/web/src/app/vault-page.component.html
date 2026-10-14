@@ -24,12 +24,22 @@
       <input class="vault-search" type="search" placeholder="Search vault" aria-label="Search vault" autocomplete="off"
         data-analytics-ignore data-private [value]="query" (input)="query = $any($event.target).value">
     }
+    @if (!ownerSessionMissing) {
     <div class="vault-header-actions">
       <button type="button" (click)="openAdd()">+ Add</button>
       <button class="secondary" type="button" (click)="importOpen = true">Import</button>
       <button class="secondary" type="button" (click)="openOutside(null)">Request from someone…</button>
     </div>
+    }
   </header>
+
+  @if (ownerSessionMissing) {
+    <section class="vault-notice" role="status">
+      <strong>The vault needs sign-in.</strong>
+      <p>It keeps passwords and codes for your agents, so it only opens for a signed-in owner. This install has no sign-in yet: it only answers on this computer. Turn on browser sign-in under Setup → Security, approve this browser once, and the vault opens.</p>
+      <button type="button" (click)="securitySetupRequested.emit()">Open Setup → Security</button>
+    </section>
+  }
 
   @if (reauthNeeded) {
     <p class="vault-notice warn" role="alert">

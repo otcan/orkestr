@@ -9,6 +9,7 @@
   },
   "scripts": {
     "postinstall": "node scripts/patch-whatsapp-media-id.mjs",
+    "prestart": "node scripts/ensure-server-build.mjs",
     "start": "node dist/server/apps/server/src/server.js",
     "dev": "npm run build && node dist/server/apps/server/src/server.js --open",
     "build:server": "tsc -p tsconfig.server.json",

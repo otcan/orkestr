@@ -26,7 +26,37 @@ export class FilesPageComponent implements OnInit {
   newFolderName = "";
 
   ngOnInit(): void {
-    void this.loadFiles();
+    void this.openDefaultMount();
+  }
+
+  // Open on the agents' workspaces (where conversations keep their code) when
+  // this account has them; otherwise on the first folder the server offers.
+  private async openDefaultMount(): Promise<void> {
+    await this.loadFiles();
+    const workspaces = this.mounts.find((mount) => mount.id === "workspaces" || mount.id.startsWith("workspaces-"));
+    if (workspaces && this.currentMount !== workspaces.id) await this.loadFiles("", workspaces.id);
+  }
+
+  currentMountName(): string {
+    return this.mounts.find((mount) => mount.id === this.currentMount)?.name || "";
+  }
+
+  isWorkspaceMount(): boolean {
+    return this.currentMount.startsWith("workspaces");
+  }
+
+  mountDescription(): string {
+    return this.isWorkspaceMount()
+      ? "Each conversation works in its own folder here. Open one to see the code and files the agent created."
+      : "Files you put here can be used by your agents. Upload documents, data or anything an agent should work with.";
+  }
+
+  emptyText(): string {
+    if (this.busy) return "Loading files…";
+    if (this.currentPath) return "This folder is empty.";
+    return this.isWorkspaceMount()
+      ? "No agent workspaces yet. A folder appears here when a conversation starts working."
+      : "Nothing here yet. Use Upload to add files for your agents.";
   }
 
   async loadFiles(path = this.currentPath, mount = this.currentMount): Promise<void> {

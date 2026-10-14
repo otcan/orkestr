@@ -95,18 +95,24 @@
         <button type="button" class="choice-card" [class.active]="runtimeProvider === 'codex'" (click)="runtimeProvider = 'codex'" [disabled]="busy">
           <strong>OpenAI Codex</strong><span>Uses your ChatGPT subscription.</span>
         </button>
-        <button type="button" class="choice-card" [class.active]="runtimeProvider === 'claude-code'" (click)="runtimeProvider = 'claude-code'" [disabled]="busy || !claudeEnabled || !claudeAccounts.length">
-          <strong>Claude Code</strong><span>Uses your Claude subscription.@if (!claudeEnabled || !claudeAccounts.length) { Add it first under Tools → Models.}</span>
+        <button type="button" class="choice-card" [class.active]="runtimeProvider === 'claude-code'" (click)="runtimeProvider = 'claude-code'" [disabled]="busy || !claudeEnabled">
+          <strong>Claude Code</strong><span>Uses your Claude subscription.@if (!claudeEnabled) { Not enabled on this server.}</span>
         </button>
       </div>
       @if (runtimeProvider === 'claude-code') {
-        <label class="wizard-field">
-          <span>Claude account</span>
-          <select name="claude-account-profile" [(ngModel)]="claudeAccountProfileId" [disabled]="busy">
-            @for (account of claudeAccounts; track account.id) { <option [value]="account.id" [disabled]="account.state !== 'ready'">{{ account.label }} · {{ account.state }}</option> }
-          </select>
-          <small>Add or sign in again under Tools → Models. Your login stays on this server.</small>
-        </label>
+        @if (claudeAccounts.length) {
+          <label class="wizard-field">
+            <span>Claude account</span>
+            <select name="claude-account-profile" [(ngModel)]="claudeAccountProfileId" [disabled]="busy">
+              @for (account of claudeAccounts; track account.id) { <option [value]="account.id" [disabled]="account.state !== 'ready'">{{ account.label }} · {{ account.state }}</option> }
+            </select>
+            <small>Your login stays on this server.</small>
+          </label>
+        }
+        @if (canManageSetup && !agentReady()) {
+          <!-- Add or sign in a Claude account here; the wizard picks it up when it is ready. -->
+          <app-llm-accounts />
+        }
       }
       @if (runtimeProvider === 'codex' && codexBlocked()) {
         <div class="notice">

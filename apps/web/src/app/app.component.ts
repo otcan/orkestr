@@ -207,7 +207,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   error = "";
   settingsCommandReplies: Record<string, string> = {};
   attachmentEncryptionError = "";
-  linkNotice = "";
   logoutBusy = false;
   accountSwitchBusyRef = "";
   apiOnline = false;
@@ -218,6 +217,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   sendingNow = false;
   implementingPlan = false;
   threadWizardOpen = false;
+  claudeRuntimeReady = false;
+  private claudeRuntimeChecked = false;
+  private claudeRuntimeCheckedAt = 0;
   private resumeWizardAfterSetup = false;
   onboardingActive = false;
   setupSection: SetupSection = "system";
@@ -415,9 +417,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       ]);
       if (systemResult.status === "fulfilled") this.opsSystem = systemResult.value;
       if (setupResult.status === "fulfilled") this.setupStatus = setupResult.value;
+      if (userResult.status === "fulfilled") this.currentUser = userResult.value.user;
+      await this.refreshClaudeRuntimeReady();
+      if (this.runtimeGateActive() && this.canCreateThreadFromSidebar()) this.threadWizardOpen = true;
       if (timersResult.status === "fulfilled") this.allTimers = timersResult.value.timers || [];
       if (whatsappResult.status === "fulfilled") this.whatsappStatusDetails = whatsappResult.value;
-      if (userResult.status === "fulfilled") this.currentUser = userResult.value.user;
       if (versionResult.status === "fulfilled") this.versionInfo = versionResult.value;
       if (instanceContextResult.status === "fulfilled") {
         this.instanceContext = instanceContextResult.value.instance;
@@ -599,8 +603,47 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.setupStatus?.connectors?.find((connector) => connector.id === "codex") || null;
   }
 
+  // There is a login only when browser pairing or an identity provider is on.
+  // A loopback-only install has none, so "Log out" would do nothing there.
+  loginEnabled(): boolean {
+    return this.setupStatus?.security?.authEnabled === true;
+  }
+
   codexAgentReady(): boolean {
     return this.codexConnector()?.state === "connected";
+  }
+
+  // Orkestr needs a coding agent: Codex signed in, or a ready Claude Code account.
+  agentRuntimeReady(): boolean {
+    return this.codexAgentReady() || this.claudeRuntimeReady;
+  }
+
+  // No entry without an agent: until one is connected, only the first-run
+  // wizard (admins) or an explanation (other users) is shown. Setup, pairing
+  // and connector sign-in pages come earlier in the template and stay reachable.
+  runtimeGateActive(): boolean {
+    if (!this.appReady || !this.setupStatus || this.pairingRequired) return false;
+    // The server reports readiness to everyone, including non-admins whose
+    // setup status is otherwise redacted.
+    const serverReady = this.setupStatus.agentRuntime?.ready;
+    if (typeof serverReady === "boolean") return !serverReady && !this.agentRuntimeReady();
+    return this.claudeRuntimeChecked && this.codexStatusAuthoritative() && !this.agentRuntimeReady();
+  }
+
+  private async refreshClaudeRuntimeReady(): Promise<void> {
+    if (this.codexAgentReady() || !this.isAdminMode()) {
+      this.claudeRuntimeChecked = true;
+      return;
+    }
+    if (Date.now() - this.claudeRuntimeCheckedAt < 15_000 && this.claudeRuntimeChecked) return;
+    try {
+      const result = await firstValueFrom(this.api.llmAccounts("claude-code"));
+      this.claudeRuntimeReady = result.enabled === true && (result.accounts || []).some((account) => account.state === "ready");
+    } catch {
+      this.claudeRuntimeReady = false;
+    }
+    this.claudeRuntimeCheckedAt = Date.now();
+    this.claudeRuntimeChecked = true;
   }
 
   private codexConnectorReason(): string {
@@ -1063,16 +1106,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.renderNow();
       return;
     }
+    // Connectors are enabled in Setup; the old Connections page is gone.
     if (panel === "userConnectors") {
-      this.modelDetailsOpen = false;
-      this.slashHelpOpen = false;
-      this.gitDetailsThreadId = "";
-      this.threadWizardOpen = false;
-      if (this.activePanel === "raw") this.closeRawStream();
-      this.activePanel = "userConnectors";
-      this.pushPath("", "userConnectors");
-      this.updateDocumentTitle();
-      this.renderNow();
+      this.openSetup("system");
       return;
     }
     if ((panel === "raw" || panel === "runtime") && !this.guardCodexRuntime()) return;
@@ -3916,26 +3952,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return `/ng/thread/${encodeURIComponent(this.threadSlug(thread))}/raw`;
   }
 
-  currentViewLinkAvailable(): boolean {
-    return Boolean(this.currentViewUrl());
-  }
-
-  async copyCurrentViewLink(): Promise<void> {
-    const target = this.currentViewUrl();
-    if (!target) return;
-    try {
-      await globalThis.navigator?.clipboard?.writeText(target);
-      this.linkNotice = "Link copied";
-      globalThis.setTimeout(() => {
-        if (this.linkNotice === "Link copied") this.linkNotice = "";
-        this.renderNow();
-      }, 1500);
-    } catch (error) {
-      this.error = this.errorText(error);
-    }
-    this.renderNow();
-  }
-
   instanceChooserUrl(): string {
     const appUrl = String(this.setupStatus?.urls?.appUrl || globalThis.location?.origin || "").trim();
     try {
@@ -4003,19 +4019,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       // Safari's back/forward cache from restoring the pre-logout screen.
       globalThis.location?.replace(this.instanceChooserUrl());
     }
-  }
-
-  private currentViewUrl(): string {
-    if (["files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "instanceVault"].includes(this.activePanel)) {
-      const target = this.pathForPanel("", this.activePanel);
-      try {
-        return new URL(target, globalThis.location?.href || "http://localhost/").toString();
-      } catch {
-        return "";
-      }
-    }
-    const thread = this.selectedThread();
-    return thread ? this.canonicalPanelUrl(thread, this.activePanel, true) : "";
   }
 
   messageKey(message: ThreadMessage): string {
@@ -5465,7 +5468,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   // opens the three-step wizard at "/" or a bare "/setup", not the setup page.
   private shouldAutoOpenFirstRunWizard(): boolean {
     if (this.isUserMode() || this.threadWizardOpen || !this.canCreateThreadFromSidebar()) return false;
-    if (!this.setupStatus || !this.codexStatusAuthoritative() || this.codexAgentReady()) return false;
+    if (!this.setupStatus || !this.codexStatusAuthoritative() || this.agentRuntimeReady()) return false;
     if (this.setupStatus.onboarding?.autoOpen === false) return false;
     if (this.readOnboardingFlag("skipped") || this.readOnboardingFlag("completed")) return false;
     const parts = this.locationPathParts();

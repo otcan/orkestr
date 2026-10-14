@@ -586,6 +586,9 @@ export interface SetupStatus {
   install?: {
     docker?: boolean;
   };
+  agentRuntime?: {
+    ready?: boolean;
+  };
   whatsappOnboarding?: {
     availableModes?: Array<"self_hosted" | "managed">;
     selectedMode?: "self_hosted" | "managed" | null;
