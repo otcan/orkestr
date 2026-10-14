@@ -164,13 +164,22 @@ export async function ownerSetupOpenToAnonymous(env = process.env) {
   // do not reopen anonymous setup. An unused pairing challenge alone (for
   // example a stale tab) does not claim the install. Files written before this
   // flag existed count as claimed.
+  // Empty, unreadable or corrupt files count as claimed (fail closed).
+  let raw;
   try {
-    await fs.access(secretPath(env));
+    raw = await fs.readFile(secretPath(env), "utf8");
   } catch (error) {
     return error?.code === "ENOENT";
   }
-  const config = await readSecurityConfig(env).catch(() => ({ claimed: true }));
-  return config.claimed === false && !config.enabled && config.sessions.length === 0;
+  let config;
+  try {
+    config = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (!config || typeof config !== "object" || Array.isArray(config)) return false;
+  const sessions = Array.isArray(config.sessions) ? config.sessions : null;
+  return config.claimed === false && config.enabled !== true && sessions !== null && sessions.length === 0;
 }
 
 async function readSecurityConfig(env = process.env) {

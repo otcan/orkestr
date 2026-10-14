@@ -243,6 +243,10 @@ test("owner setup: an unused pairing challenge keeps first-visit setup open; app
   await fs.mkdir(path.join(legacy.ORKESTR_HOME, "secrets"), { recursive: true });
   await fs.writeFile(path.join(legacy.ORKESTR_HOME, "secrets", "security.json"), JSON.stringify({ enabled: false, sessions: [], challenges: [] }));
   assert.equal(await ownerSetupOpenToAnonymous(legacy), false, "files from before the flag stay closed");
+  for (const body of ["", "{not json", "[]", JSON.stringify({ claimed: false })]) {
+    await fs.writeFile(path.join(legacy.ORKESTR_HOME, "secrets", "security.json"), body);
+    assert.equal(await ownerSetupOpenToAnonymous(legacy), false, `fails closed for ${JSON.stringify(body)}`);
+  }
   const controller = await fs.readFile("apps/server/src/modules/system/owner-login.controller.ts", "utf8");
   assert.match(controller, /authProvider\(process\.env\) !== "browser_pairing"\) return false/);
   assert.match(controller, /&& authProvider\(process\.env\) === "browser_pairing"/);
