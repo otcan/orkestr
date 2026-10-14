@@ -269,21 +269,21 @@ function loadDebugPercent() {
   return Math.max(0, Math.min(999, percent));
 }
 
-function processCpuDebugPercent() {
+function processCpuDebugCores() {
   const current = {
     usage: process.cpuUsage(),
     sampledAtMs: Date.now(),
   };
   const previous = lastProcessCpuSample;
   lastProcessCpuSample = current;
-  if (!previous) return 0;
+  if (!previous) return "0";
   const elapsedMs = Math.max(1, current.sampledAtMs - previous.sampledAtMs);
   const usedMicros =
     (current.usage.user - previous.usage.user) +
     (current.usage.system - previous.usage.system);
-  const percent = Math.round(usedMicros / (elapsedMs * 1000) * 100);
-  if (!Number.isFinite(percent)) return 0;
-  return Math.max(0, Math.min(999, percent));
+  const cores = usedMicros / (elapsedMs * 1000);
+  if (!Number.isFinite(cores)) return "0";
+  return Math.max(0, Math.min(999, cores)).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
 }
 
 export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "", thread = null) {
@@ -322,7 +322,7 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
       ? [`queue:${queueNoticeDebugCount(messages, message)}`, `reason:${queueNoticeDebugReason(message)}`]
       : [`q:${queueDebugCount(messages, message)}`]),
     `load:${loadDebugPercent()}%`,
-    `api:${processCpuDebugPercent()}%`,
+    `api-cpu:${processCpuDebugCores()}c`,
     "help:/help",
   ];
   return [identity.join(" · "), ...dualProviderQuotaLines(thread, env), load.join(" · ")].join("\n");

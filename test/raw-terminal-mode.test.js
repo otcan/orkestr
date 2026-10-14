@@ -49,6 +49,31 @@ test("raw terminal mode uses canonical thread tmux names and bypasses app-server
   assert.equal(patched.runtime.runtimeKind, "raw-terminal");
 });
 
+test("configured app-server transport overrides stale raw-terminal markers", () => {
+  const thread = {
+    runtimeKind: "codex-app-server",
+    terminalMode: "raw-terminal",
+    executor: {
+      id: "codex",
+      type: "codex",
+      transport: "app-server",
+      metadata: {
+        transport: "app-server",
+        runtimeKind: "codex-app-server",
+        terminalMode: "raw-terminal",
+      },
+    },
+    runtime: {
+      runtimeKind: "raw-terminal",
+      terminalMode: "raw-terminal",
+    },
+  };
+
+  assert.equal(threadUsesRawTerminalMode(thread), false);
+  assert.equal(threadUsesCodexAppServer(thread), true);
+  assert.equal(threadNeedsCodexAppServerMigration(thread), false);
+});
+
 test("raw terminal ttl defaults to fifteen minutes and can be disabled explicitly", () => {
   assert.equal(rawTerminalTtlMs({}), 15 * 60_000);
   assert.equal(rawTerminalTtlMs({ ORKESTR_RAW_TERMINAL_TTL_MS: "1000" }), 1000);

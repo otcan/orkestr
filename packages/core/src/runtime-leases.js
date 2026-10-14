@@ -199,6 +199,8 @@ async function recordMessageRouterTrace(message = {}, phase, context = {}, env =
     reason: context.reason || "",
     error: context.error || "",
     attempt: context.attempt,
+    retryable: context.retryable,
+    terminal: context.terminal,
     ownerProcess: context.ownerProcess || "",
   }, env).catch(() => null);
 }
@@ -3349,14 +3351,20 @@ async function rejectedCommandDeliveryEvidence(message, status) {
 async function failThreadInputDelivery(thread, message, evidence, status, env = process.env) {
   if (!evidence) return null;
   const errorText = evidence.error || "Thread input delivery failed.";
-  await updateThreadMessage(thread.id, message.id, {
+  const failed = await updateThreadMessage(thread.id, message.id, {
     state: "failed",
     deliveryState: "failed",
     deliveryFailedAt: nowIso(),
     observedVia: evidence.observedVia || "delivery_failed",
     error: errorText,
   }, env);
-  markConnectorDeliverySignal(message);
+  markConnectorDeliverySignal(failed);
+  await recordMessageRouterTrace(failed, "runtime_failed", {
+    threadId: thread.id,
+    reason: evidence.observedVia || "delivery_failed",
+    error: errorText,
+    retryable: false,
+  }, env);
   await updateThread(thread.id, {
     state: status?.state || "ready",
     lastError: errorText,
@@ -3371,7 +3379,7 @@ async function failThreadInputDelivery(thread, message, evidence, status, env = 
   }, env);
   notifyThreadInputDeliveryFailure({
     thread,
-    message,
+    message: failed,
     reason: errorText,
     observedVia: evidence.observedVia || "delivery_failed",
     env,
@@ -3566,14 +3574,21 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
   const maxRecoveries = staleAckRecoveryMax(env);
   if (recoveryCount >= maxRecoveries || recoveryProgress > threshold + maxRecoveries) {
     const errorText = "Thread input was not observed after stale-ack recovery; failing it to unblock later input.";
-    await updateThreadMessage(thread.id, message.id, {
+    const failed = await updateThreadMessage(thread.id, message.id, {
       state: "failed",
       deliveryState: "failed",
       deliveryFailedAt: nowIso(),
       observedVia: "stale_ack_recovery_exhausted",
       error: errorText,
     }, env);
-    markConnectorDeliverySignal(message);
+    markConnectorDeliverySignal(failed);
+    await recordMessageRouterTrace(failed, "runtime_failed", {
+      threadId: thread.id,
+      reason: "stale_ack_recovery_exhausted",
+      error: errorText,
+      attempt: recoveryProgress,
+      retryable: false,
+    }, env);
     await appendEvent({
       type: "thread_input_stale_ack_recovery_exhausted",
       threadId: thread.id,
@@ -3585,7 +3600,7 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
     }, env).catch(() => {});
     notifyThreadInputDeliveryFailure({
       thread,
-      message,
+      message: failed,
       reason: errorText,
       observedVia: "stale_ack_recovery_exhausted",
       env,
