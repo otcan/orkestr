@@ -7,13 +7,19 @@ import {
   verifyOwnerLogin,
 } from "../../../../../packages/core/src/owner-login.js";
 import { httpError } from "../../common/http.js";
+import { trustedProxy } from "../../host-boundaries.js";
 
 function secureRequest(request: any): boolean {
   return Boolean(request?.secure) || String(request?.headers?.["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
 }
 
+// The connecting address, or the client a trusted proxy (ORKESTR_TRUSTED_PROXY_IPS)
+// forwarded for, so one client behind a shared proxy cannot lock out the others.
 function clientKey(request: any): string {
-  return String(request?.ip || request?.socket?.remoteAddress || "unknown");
+  const direct = String(request?.socket?.remoteAddress || request?.ip || "unknown").replace(/^::ffff:/, "");
+  if (!trustedProxy(request, process.env)) return direct;
+  const forwarded = String(request?.headers?.["x-forwarded-for"] || "").split(",").map((item) => item.trim()).filter(Boolean);
+  return forwarded[0] ? `${direct}>${forwarded[0]}` : direct;
 }
 
 function sendJson(response: any, status: number, body: unknown, cookie = "") {

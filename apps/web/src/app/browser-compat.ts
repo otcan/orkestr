@@ -5,16 +5,22 @@
 // to selecting a hidden textarea and execCommand("copy"). Returns false if
 // both fail, so the caller can show the text for manual copying.
 export async function copyText(text: string): Promise<boolean> {
+  return (await copyTextWith(text)) !== "";
+}
+
+// Which way the copy went: "clipboard-api" (can be read back and cleared
+// later), "fallback" (copied, but cannot be cleared by the page) or "" (failed).
+export async function copyTextWith(text: string): Promise<"clipboard-api" | "fallback" | ""> {
   try {
     if (globalThis.navigator?.clipboard?.writeText && globalThis.isSecureContext !== false) {
       await globalThis.navigator.clipboard.writeText(text);
-      return true;
+      return "clipboard-api";
     }
   } catch {
     // Fall through to the textarea fallback.
   }
   const doc = globalThis.document;
-  if (!doc?.body) return false;
+  if (!doc?.body) return "";
   const area = doc.createElement("textarea");
   area.value = text;
   area.setAttribute("readonly", "");
@@ -30,7 +36,7 @@ export async function copyText(text: string): Promise<boolean> {
     copied = false;
   }
   area.remove();
-  return copied;
+  return copied ? "fallback" : "";
 }
 
 const unavailableMarker = "__orkestrWebCryptoUnavailable";

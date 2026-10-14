@@ -269,7 +269,9 @@ export class VaultPageComponent implements OnInit, OnDestroy {
   private async copy(value: string, message: string): Promise<void> {
     try {
       const copied = await copySecret(value);
-      this.flash(copied ? message : "Clipboard is unavailable in this browser.");
+      this.flash(copied === "auto-clear" ? message
+        : copied === "manual" ? "Copied. This page cannot clear the clipboard later, so clear it yourself when you are done."
+          : "Clipboard is unavailable in this browser.");
     } catch {
       this.flash("Clipboard access was denied.");
     }

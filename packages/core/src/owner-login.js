@@ -24,15 +24,26 @@ function loginError(code, statusCode = 400) {
   return Object.assign(new Error(code), { statusCode });
 }
 
-async function readOwner(env = process.env) {
-  const raw = await fs.readFile(files(env).owner, "utf8").catch(() => "");
-  if (!raw) return null;
+// "missing" only when there is no owner file at all. A file that cannot be
+// read or parsed counts as an owner that nobody can sign in as: sign-in stays
+// on (fail closed) and setup stays closed.
+async function readOwnerRecord(env = process.env) {
+  let raw;
+  try {
+    raw = await fs.readFile(files(env).owner, "utf8");
+  } catch (error) {
+    return error?.code === "ENOENT" ? { state: "missing", owner: null } : { state: "invalid", owner: null };
+  }
   try {
     const owner = JSON.parse(raw);
-    return owner?.username && owner?.passwordHash && owner?.salt ? owner : null;
+    return owner?.username && owner?.passwordHash && owner?.salt ? { state: "valid", owner } : { state: "invalid", owner: null };
   } catch {
-    return null;
+    return { state: "invalid", owner: null };
   }
+}
+
+async function readOwner(env = process.env) {
+  return (await readOwnerRecord(env)).owner;
 }
 
 async function writeOwner(owner, env = process.env) {
@@ -64,12 +75,12 @@ function hashPassword(password, salt) {
 }
 
 export async function ownerLoginStatus(env = process.env) {
-  const owner = await readOwner(env);
-  return { configured: Boolean(owner), username: owner?.username || "" };
+  const record = await readOwnerRecord(env);
+  return { configured: record.state !== "missing", username: record.owner?.username || "", ...(record.state === "invalid" ? { invalid: true } : {}) };
 }
 
 export async function ownerLoginConfigured(env = process.env) {
-  return Boolean(await readOwner(env));
+  return (await readOwnerRecord(env)).state !== "missing";
 }
 
 // Only while no owner exists. The record is created exclusively so a second
@@ -78,7 +89,7 @@ export async function createOwnerLogin({ username = "", password = "" } = {}, en
   const name = String(username || "").trim();
   if (!usernamePattern.test(name)) throw loginError("owner_username_invalid");
   if (String(password || "").length < minPasswordLength) throw loginError("owner_password_too_short");
-  if (await readOwner(env)) throw loginError("owner_login_exists", 409);
+  if ((await readOwnerRecord(env)).state !== "missing") throw loginError("owner_login_exists", 409);
   const salt = crypto.randomBytes(16).toString("base64url");
   const owner = {
     username: name,
@@ -170,10 +181,25 @@ export async function verifyOwnerToken(token = "", env = process.env) {
     if (!claims || Number(claims.exp || 0) <= Math.floor(Date.now() / 1000)) return null;
     const owner = await readOwner(env);
     if (!owner || claims.sub !== owner.username || Number(claims.ver) !== Number(owner.tokenVersion || 1)) return null;
+    if ((owner.revoked || []).some((entry) => entry?.jti === claims.jti)) return null;
     return claims;
   } catch {
     return null;
   }
+}
+
+// Logout revokes this one token (other browsers stay signed in). Expired
+// entries are dropped so the list stays small.
+export async function revokeOwnerToken(jti = "", expiresAt = "", env = process.env) {
+  const id = String(jti || "").trim();
+  if (!id) return false;
+  const owner = await readOwner(env);
+  if (!owner) return false;
+  const now = Date.now();
+  const revoked = (owner.revoked || []).filter((entry) => Date.parse(entry?.expiresAt || "") > now);
+  if (!revoked.some((entry) => entry.jti === id)) revoked.push({ jti: id, expiresAt: String(expiresAt || new Date(now + tokenTtlSeconds * 1000).toISOString()) });
+  await writeOwner({ ...owner, revoked }, env);
+  return true;
 }
 
 export function ownerCookieHeader(token, { secure = false, maxAgeSeconds = tokenTtlSeconds } = {}) {

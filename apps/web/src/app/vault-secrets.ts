@@ -1,4 +1,4 @@
-import { copyText } from "./browser-compat";
+import { copyTextWith } from "./browser-compat";
 // Client-side helpers for the Vault page. Nothing in here logs or persists
 // secret values; callers hold them only as long as the UI needs them.
 
@@ -75,12 +75,16 @@ export function vaultErrorMessage(error: unknown, fallback = "Vault request fail
 
 // Copies a value and, after the TTL, clears the clipboard if it still holds
 // the same value. Reading the clipboard can be denied; that is best effort.
-export async function copySecret(value: string, clearAfterMs = vaultSecretTtlMs): Promise<boolean> {
-  if (!(await copyText(value))) return false;
+// Returns "auto-clear" when the clipboard is cleared after the TTL, "manual" when
+// the copy worked but the page cannot clear it, or "" when copying failed.
+export async function copySecret(value: string, clearAfterMs = vaultSecretTtlMs): Promise<"auto-clear" | "manual" | ""> {
+  const how = await copyTextWith(value);
+  if (!how) return "";
+  if (how === "fallback") return "manual";
   if (clearAfterMs > 0) {
     globalThis.setTimeout(() => void clearClipboardIfUnchanged(value), clearAfterMs);
   }
-  return true;
+  return "auto-clear";
 }
 
 export async function clearClipboardIfUnchanged(value: string): Promise<boolean> {

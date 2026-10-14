@@ -1231,7 +1231,8 @@ export async function securityStatus(env = process.env) {
   const proxyLocalBindSetting = String(env.ORKESTR_REVERSE_PROXY_LOCAL_BIND || "").trim();
   const proxyLocalBind = proxyLocalBindSetting === "1";
   const authRequired = effectiveAuthRequired(env, urls, host);
-  const ownerLogin = await ownerLoginStatus(env).catch(() => ({ configured: false }));
+  // An error reading the owner login keeps sign-in on (fail closed).
+  const ownerLogin = await ownerLoginStatus(env).catch(() => ({ configured: true }));
   // Once the owner picked a login, sign-in is on, also for a local install.
   const authEnabled = Boolean(authRequired || config.enabled || (config.sessions || []).length || ownerLogin.configured);
   const sessionCount = (config.sessions || []).filter((session) => Date.parse(session.expiresAt || "") > Date.now()).length;

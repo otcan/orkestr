@@ -1,4 +1,4 @@
-import { clearOwnerCookieHeader } from "../../../packages/core/src/owner-login.js";
+import { clearOwnerCookieHeader, revokeOwnerToken } from "../../../packages/core/src/owner-login.js";
 import {
   canonicalInstanceAppSessionCookiePath,
   clearSessionCookieHeaders,
@@ -30,6 +30,11 @@ export async function logoutBrowserSession(
     }),
     clearOwnerCookieHeader(),
   ]);
+  if (session?.authProvider === "owner-password") {
+    await revokeOwnerToken(String(session.id).replace(/^owner-/, ""), String(session.expiresAt || ""), process.env);
+    response.status(200).type("application/json; charset=utf-8").send(JSON.stringify({ ok: true }));
+    return;
+  }
   if (!session?.id) {
     response.status(200).type("application/json; charset=utf-8").send(JSON.stringify({ ok: true }));
     return;

@@ -50,6 +50,22 @@ const publishCommands = new Set(["docker", "echo", "set", "test", "[["]);
 const publishDockerCommands = new Set(["load", "login", "logout", "tag", "push"]);
 // GitHub-hosted runners only; the arm64 runner builds the Apple Silicon image.
 const githubHostedRunners = new Set(["ubuntu-latest", "ubuntu-24.04-arm"]);
+const ownImageRef = /^"\$IMAGE:[A-Za-z0-9._{}:$-]+"$/;
+function imagetoolsArgsAllowed(args) {
+  let sources = 0;
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "--tag") {
+      if (!ownImageRef.test(args[index + 1] || "")) return false;
+      index += 1;
+    } else if (ownImageRef.test(args[index])) {
+      sources += 1;
+    } else {
+      return false;
+    }
+  }
+  return sources > 0;
+}
+
 export function publishRunAllowed(run) {
   if (typeof run !== "string" || /[`<>]|\$\(|\b(?:npm|npx|node|eval|exec|source)\b/.test(run)) return false;
   return run.split(/\n|&&|\|\||;|\|/).every(segment => {
@@ -58,8 +74,10 @@ export function publishRunAllowed(run) {
     if (!words.length || words[0].startsWith("#")) return true;
     if (!publishCommands.has(words[0])) return false;
     if (words[0] !== "docker") return true;
-    // Combining already pushed per-architecture images into one tag runs no candidate code.
-    if (words[1] === "buildx") return words[2] === "imagetools" && words[3] === "create";
+    // Combining already pushed per-architecture images into one tag runs no
+    // candidate code. Every tag and source must be this repository's image
+    // ("$IMAGE:..."), so no outside image can be published under its name.
+    if (words[1] === "buildx") return words[2] === "imagetools" && words[3] === "create" && imagetoolsArgsAllowed(words.slice(4));
     return publishDockerCommands.has(words[1]);
   });
 }

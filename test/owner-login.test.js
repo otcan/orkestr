@@ -38,6 +38,13 @@ test("owner login: first password, signed token, wrong password, limits and revo
 
   await changeOwnerPassword({ currentPassword: "first-password", newPassword: "second-password" }, env);
   assert.equal(await verifyOwnerToken(token, env), null, "changing the password signs out old tokens");
+
+  // A damaged owner record fails closed: still "configured", nobody can sign in, setup stays shut.
+  await fs.writeFile(path.join(env.ORKESTR_HOME, "owner-login.json"), "{not json");
+  assert.equal((await ownerLoginStatus(env)).configured, true);
+  await assert.rejects(createOwnerLogin({ username: "attacker", password: "takeover-pass" }, env), /owner_login_exists/);
+  const { securityStatus } = await import("../packages/core/src/security.js");
+  assert.equal((await securityStatus({ ...env, ORKESTR_HOST: "127.0.0.1" })).authEnabled, true, "sign-in stays on");
 });
 
 test("owner login over HTTP: first visit creates it, then the app needs the cookie", async () => {
@@ -68,7 +75,11 @@ test("owner login over HTTP: first visit creates it, then the app needs the cook
     const login = await post("/api/auth/owner/login", { username: "can", password: "first-password" });
     assert.equal(login.status, 200);
     const logout = await post("/api/setup/security/logout", {}, cookie);
+    assert.equal(logout.status, 200);
     assert.match(String(logout.headers.get("set-cookie")), /orkestr_owner=; Path=\/; HttpOnly; SameSite=Lax; Max-Age=0/);
+    assert.equal((await fetch(`${base}/api/threads`, { headers: { cookie } })).status, 401, "a copied token is useless after logout");
+    const relogin = String(login.headers.get("set-cookie") || "").split(";")[0];
+    assert.equal((await fetch(`${base}/api/threads`, { headers: { cookie: relogin } })).status, 200, "other sign-ins stay valid");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     for (const [key, value] of Object.entries(prior)) {
@@ -90,8 +101,10 @@ test("the owner login opens desktops; other browser sessions still do not", () =
 test("Docker starts with one desktop; the publish job may only combine images with buildx", () => {
   assert.deepEqual(desktopCatalogFromEnv({ ORKESTR_DOCKER: "1" }).map((row) => row.slug), ["desktop"]);
   assert.deepEqual(desktopCatalogFromEnv({}).map((row) => row.slug), ["desktop", "linkedin", "gmail"]);
-  assert.equal(publishRunAllowed('docker buildx imagetools create --tag "$IMAGE:latest" "$A" "$B"'), true);
+  assert.equal(publishRunAllowed('docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:v1-amd64" "$IMAGE:v1-arm64"'), true);
   assert.equal(publishRunAllowed("docker buildx build ."), false);
+  assert.equal(publishRunAllowed('docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:v1-amd64" ghcr.io/attacker/unreviewed:latest'), false, "outside images cannot be published");
+  assert.equal(publishRunAllowed('docker buildx imagetools create --tag ghcr.io/attacker/x:latest "$IMAGE:v1-amd64"'), false);
   assert.equal(publishRunAllowed("docker run evil"), false);
 });
 
@@ -102,9 +115,11 @@ test("browser helpers: copy fallback, WebCrypto stand-in, 0.0.0.0 redirect", asy
   assert.match(compat, /location\.hostname !== "0\.0\.0\.0"/);
   const main = await fs.readFile("apps/web/src/main.ts", "utf8");
   assert.match(main, /const redirecting = redirectZeroHostToLocalhost\(\);\s*installWebCryptoFallbackShim\(\);/);
+  const vault = await fs.readFile("apps/web/src/app/vault-page.component.ts", "utf8");
+  assert.match(vault, /This page cannot clear the clipboard later/);
   for (const file of ["pairing-required-page.component.ts", "shared-app-page.component.ts", "codex-sign-in-panel.component.ts", "ops-page.component.ts", "vault-secrets.ts"]) {
     const source = await fs.readFile(`apps/web/src/app/${file}`, "utf8");
-    assert.match(source, /copyText\(/, file);
+    assert.match(source, /copyText(?:With)?\(/, file);
     assert.doesNotMatch(source, /clipboard\?\.writeText\(/, file);
   }
 });
