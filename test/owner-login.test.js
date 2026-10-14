@@ -237,7 +237,7 @@ test("owner setup: an unused pairing challenge keeps first-visit setup open; app
   assert.equal(await ownerSetupOpenToAnonymous(env), true);
   const created = await createPairingChallenge({ request, env });
   assert.equal(await ownerSetupOpenToAnonymous(env), true, "a stale tab's challenge does not claim the install");
-  await approvePairingChallenge(created.challenge?.id || created.id, { env });
+  await approvePairingChallenge(created.challengeId, { env });
   assert.equal(await ownerSetupOpenToAnonymous(env), false, "an approved challenge claims it");
   const legacy = { ORKESTR_HOME: await home("orkestr-owner-legacy-") };
   await fs.mkdir(path.join(legacy.ORKESTR_HOME, "secrets"), { recursive: true });

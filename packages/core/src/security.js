@@ -1,3 +1,4 @@
+import { isAdminPrincipal } from "./policy.js";
 import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import { authProvider } from "./auth-config.js";
@@ -2359,6 +2360,11 @@ export async function authorizeHttpRequest(request, env = process.env) {
       role: user?.role || session.role,
       displayName: user?.displayName || session.displayName,
     }, env);
+    // Bridge routes reached by browser session (no machine token) manage the
+    // owner's WhatsApp accounts: admins only.
+    if (isWhatsAppMachineRoute(request)?.kind === "whatsapp_bridge" && !isAdminPrincipal(principal)) {
+      return { ok: false, status, statusCode: 403, error: "whatsapp_bridge_admin_required" };
+    }
     return { ok: true, status, principal, session };
   }
   // Routes reachable before pairing run with the legacy admin principal for
