@@ -426,10 +426,12 @@ const realThreadRuntimeKinds = new Set(["codex-app-server", "app-server", "claud
 
 function assertRealThreadExecutor(input: Record<string, any>) {
   if (process.env.ORKESTR_ALLOW_TEST_EXECUTORS === "1") return;
-  // Only known runtimes or a terminal command run without an executor adapter.
-  if (realThreadRuntimeKinds.has(String(input.runtimeKind || "").trim().toLowerCase()) || String(input.command || input.cmd || "").trim()) return;
   const executor = input.executor && typeof input.executor === "object" ? input.executor : {};
   const ids = [input.executorId, executor.id, executor.type].map((value) => String(value || "").trim()).filter(Boolean);
+  // A fake executor is refused whatever runtime kind the request names.
+  if (ids.some((id) => ["noop", "simulated"].includes(id.toLowerCase()))) throw httpError("executor_not_available", 400);
+  // Only known runtimes or a terminal command run without an executor adapter.
+  if (realThreadRuntimeKinds.has(String(input.runtimeKind || "").trim().toLowerCase()) || String(input.command || input.cmd || "").trim()) return;
   const resolved = ids.length ? ids.map((id) => getExecutorAdapter(id).id) : [getExecutorAdapter("").id];
   if (resolved.some((id) => id === "noop" || id === "simulated")) throw httpError("executor_not_available", 400);
 }
@@ -684,7 +686,8 @@ export class ThreadsController {
     const requestedExecutorId = String(prepared.executorId || preparedExecutor.id || preparedExecutor.type || "codex").trim() || "codex";
     const defaultRuntime = defaultTenantThreadRuntime(prepared, principal, process.env);
     const usesApiAgentRuntime = String(prepared.runtimeKind || defaultRuntime || "").trim() === API_AGENT_RUNTIME_KIND;
-    const usesClaudeRuntime = !usesApiAgentRuntime && (requestedExecutorId === "claude-code" || String(preparedExecutor.type || "").trim() === "claude-code");
+    // Asking for the Claude runtime kind goes through the same checks as the executor.
+    const usesClaudeRuntime = !usesApiAgentRuntime && (requestedExecutorId === "claude-code" || String(preparedExecutor.type || "").trim() === "claude-code" || String(prepared.runtimeKind || "").trim().toLowerCase() === "claude-code");
     const usesCodexRuntime = !usesApiAgentRuntime && !usesClaudeRuntime && (requestedExecutorId === "codex" || String(preparedExecutor.type || "").trim() === "codex");
     if (usesClaudeRuntime) {
       if (!claudeCodeEnabled(process.env)) throw httpError("claude_code_disabled", 409);

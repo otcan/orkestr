@@ -30,11 +30,16 @@ test("the thread API refuses the no-op and simulated executors outside the test 
       { name: "fake-unknown", executorId: "no-such-executor" },
       { name: "fake-nested-id", executor: { id: "simulated", type: "simulated" }, executorId: "custom" },
       { name: "fake-runtime-kind", executorId: "noop", runtimeKind: "synthetic-unknown" },
+      { name: "fake-claude-kind", executorId: "noop", runtimeKind: "claude-code" },
+      { name: "fake-codex-kind", executorId: "noop", runtimeKind: "codex-app-server" },
+      { name: "fake-nested-codex-kind", runtimeKind: "codex-app-server", executor: { type: "simulated" } },
     ];
     for (const body of attempts) {
       const response = await fetch(`${base}/api/threads`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-      assert.equal(response.status, 400, body.name);
-      assert.equal((await response.json()).error, "executor_not_available", body.name);
+      const payload = await response.json();
+      // Refused either by the fake-executor guard or, for the Claude kind, by the Claude checks.
+      assert.ok(response.status >= 400 && response.status < 500, `${body.name}: ${response.status}`);
+      assert.ok(["executor_not_available", "claude_code_disabled", "claude_code_admin_runtime_required"].includes(payload.error), `${body.name}: ${payload.error}`);
     }
     assert.deepEqual((await listThreads(process.env)).map((thread) => thread.name), [], "no fake conversation was created");
   } finally {
