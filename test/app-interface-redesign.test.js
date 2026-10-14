@@ -65,13 +65,13 @@ test("self-hosted first run offers owner pairing without claiming an unpaired ch
   assert.match(template, /\(pairedAccount\)="onWhatsAppPaired\(\$event\)"/);
   assert.match(template, /You can link WhatsApp, Gmail and timers later in Setup/);
   assert.match(template, /setupRequested\.emit\('whatsapp'\)/);
-  assert.match(template, /runtimeProvider === 'claude-code' \? 'Claude Code/);
+  assert.match(template, /runtimeProvider === 'claude-code'/);
   assert.match(template, /role="alert"/);
   assert.match(template, /role="status" aria-live="polite"/);
   assert.match(template, /openCreatedThread\(\)/);
   assert.match(template, /@if \(desktopWarning\)/);
   assert.match(emptyMessages, /Ready for your first message/);
-  assert.match(desk, /does not connect a LinkedIn API/);
+  assert.doesNotMatch(desk, /LinkedIn/);
   assert.doesNotMatch(template, /Orkestr relay.*Default\./);
 });
 

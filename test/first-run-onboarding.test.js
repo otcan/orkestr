@@ -129,7 +129,7 @@ test("fresh install: / and bare /setup show the wizard, /setup/<section> stays S
     await shows(".onboarding-shell");
     await click("Back to Orkestr");
     await shows(".first-thread-wizard");
-    await page.waitForFunction(() => document.querySelector(".first-thread-wizard")?.textContent.includes("Step 2 of 3"), { timeout: 15_000 });
+    await page.waitForFunction(() => document.querySelector(".first-thread-wizard")?.textContent.includes("Step 2 of 2"), { timeout: 15_000 });
     assert.ok(await page.$("ork-codex-sign-in-panel"), "the wizard is back on the AI step");
 
     // The browser Back button from a Setup page the wizard opened does the same.
@@ -137,7 +137,7 @@ test("fresh install: / and bare /setup show the wizard, /setup/<section> stays S
     await shows(".onboarding-shell");
     await page.goBack();
     await shows(".first-thread-wizard");
-    await page.waitForFunction(() => document.querySelector(".first-thread-wizard")?.textContent.includes("Step 2 of 3"), { timeout: 15_000 });
+    await page.waitForFunction(() => document.querySelector(".first-thread-wizard")?.textContent.includes("Step 2 of 2"), { timeout: 15_000 });
   } finally {
     await browser?.close();
     await new Promise((resolve) => server.close(resolve));

@@ -407,3 +407,17 @@ function isAlive(pid) {
     return error?.code === "EPERM";
   }
 }
+
+test("browserctl target reads one desktop for the viewer proxy (null for unknown slugs)", async () => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browserctl-target-"));
+  const env = { ...process.env, ORKESTR_HOME: home, ORKESTR_DESKTOP_VISUAL_PROBE_TIMEOUT_MS: "500" };
+  const script = path.resolve("scripts/browserctl.mjs");
+  const known = JSON.parse((await execFileAsync(process.execPath, [script, "target", "desktop"], { env })).stdout);
+  assert.equal(known.ok, true);
+  assert.equal(known.session.slug, "desktop");
+  assert.equal(known.session.status, "not_prepared");
+  const unknown = JSON.parse((await execFileAsync(process.execPath, [script, "target", "no-such-desktop"], { env })).stdout);
+  assert.deepEqual([unknown.ok, unknown.session], [true, null]);
+});

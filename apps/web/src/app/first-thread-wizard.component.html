@@ -182,48 +182,12 @@
       }
     }
 
-    @if (activeStep() === "review") {
-      <div class="wizard-section-title">
-        <p class="eyebrow">Start</p>
-        <h3>Name your first conversation</h3>
-      </div>
-      <label class="wizard-field">
-        <span>Name</span>
-        <input
-          name="first-thread-name"
-          [(ngModel)]="threadName"
-          placeholder="orkest"
-          autocomplete="off"
-          [disabled]="busy"
-        />
-        <small>This is also the name the agent answers to. You can change it later.</small>
-      </label>
-      <details class="wizard-field">
-        <summary>Work on an existing Git project (optional)</summary>
-        <input
-          name="first-thread-repo-url"
-          [(ngModel)]="repoUrl"
-          placeholder="https://github.com/example/repo.git"
-          [disabled]="busy"
-        />
-        <small>Leave blank to start with a new local git repository.</small>
-      </details>
-      <dl class="wizard-review">
-        <dt>AI</dt>
-        <dd>{{ runtimeProvider === 'claude-code' ? 'Claude Code · ' + (selectedClaudeAccount()?.label || 'not set up') : 'Codex · ' + codexStateLabel() }}</dd>
-        <dt>Project</dt>
-        <dd>{{ codebaseLabel() }}@if (usesRemoteRepo()) { · {{ repoUrlValue() }} }</dd>
-        <dt>WhatsApp</dt>
-        <dd>{{ canManageSetup ? whatsappAccessLabel() : 'Set up by the server owner' }}</dd>
-      </dl>
-    }
-
     <div class="wizard-actions">
       <button class="secondary" type="button" (click)="previous()" [disabled]="busy || stepIndex === 0">Back</button>
-      @if (activeStep() !== "review") {
+      @if (activeStep() !== "codex") {
         <button type="button" (click)="next()" [disabled]="busy || !canContinue()">{{ nextLabel() }}</button>
       } @else {
-        <button type="submit" [disabled]="!canCreate()">{{ busy ? "Starting" : "Create and start" }}</button>
+        <button type="submit" [disabled]="!canCreate()">{{ busy ? "Starting" : "Start" }}</button>
       }
     </div>
   </form>

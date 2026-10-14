@@ -55,6 +55,17 @@ async function writeInstanceIdentityLocked(identity, env = process.env) {
   return next;
 }
 
+// A standalone install (no broker assigning ids) gets a local identity the
+// first time something needs one, so instance settings work out of the box.
+export async function ensureLocalInstanceIdentity(env = process.env) {
+  return withCanonicalPublicReferenceLock(async () => {
+    const current = await readInstanceIdentity(env);
+    if (current?.internalInstanceId) return current;
+    if (clean(env.ORKESTR_BROKER_BASE_URL || env.ORKESTR_DEMO_BROKER_BASE_URL)) return current;
+    return writeInstanceIdentityLocked({ internalInstanceId: configuredInstanceId(env) }, env);
+  }, env);
+}
+
 export async function ensureInstanceIdentity(env = process.env, options = {}) {
   return withCanonicalPublicReferenceLock(() => ensureInstanceIdentityLocked(env, options), env);
 }

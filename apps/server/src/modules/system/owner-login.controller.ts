@@ -9,6 +9,7 @@ import {
 import { httpError } from "../../common/http.js";
 import { requestSourceKey } from "../../request-security.js";
 import { ownerSetupOpenToAnonymous, securityStatus } from "../../../../../packages/core/src/security.js";
+import { authProvider } from "../../../../../packages/core/src/auth-config.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 
@@ -39,7 +40,9 @@ export class OwnerLoginController {
   async status(@Req() request: any) {
     const status = await ownerLoginStatus(process.env);
     const signedIn = request?.orkestrSecuritySession?.authProvider === "owner-password";
-    const enabled = String(process.env.ORKESTR_OWNER_LOGIN_PROMPT || "").trim() !== "0";
+    // Identity-provider installs (Keycloak) sign in there; never offer or
+    // demand an owner password on them.
+    const enabled = String(process.env.ORKESTR_OWNER_LOGIN_PROMPT || "").trim() !== "0" && authProvider(process.env) === "browser_pairing";
     // prompt: show the login page (sign in) or offer to create one. Creating is
     // only offered where setup() would accept it.
     const prompt = enabled && (status.configured || await this.setupAllowed(request));
@@ -47,9 +50,11 @@ export class OwnerLoginController {
   }
 
   // Fresh install: anyone may create the first login (owner's choice). Existing
-  // installs: only a signed-in admin (paired browser or identity provider).
+  // installs: only a signed-in admin of a paired browser. Identity-provider
+  // installs never get an owner password.
   private async setupAllowed(request: any): Promise<boolean> {
     if (String(process.env.ORKESTR_OWNER_LOGIN_PROMPT || "").trim() === "0") return false;
+    if (authProvider(process.env) !== "browser_pairing") return false;
     if (await ownerSetupOpenToAnonymous(process.env)) return true;
     // Without any sign-in (local install) every visitor is already the admin.
     if (!(await securityStatus(process.env)).authEnabled) return true;

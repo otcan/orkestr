@@ -74,6 +74,12 @@ test("owner login over HTTP: first visit creates it, then the app needs the cook
     assert.match(String(setup.headers.get("set-cookie")), /HttpOnly; SameSite=Lax/);
     assert.equal((await post("/api/auth/owner/setup", { username: "someone", password: "takeover-pass" })).status, 403, "only the first visitor picks the login");
     assert.equal((await fetch(`${base}/api/threads`, { headers: { cookie } })).status, 200);
+    // The owner's browser manages WhatsApp without a bridge machine token.
+    assert.equal((await fetch(`${base}/api/connectors/whatsapp/bridge/accounts`, { headers: { cookie } })).status, 200);
+    assert.equal((await fetch(`${base}/api/connectors/whatsapp/bridge/accounts`)).status, 401);
+    // A fresh install gets a local instance identity, so Settings loads.
+    const config = await fetch(`${base}/api/instance/config`, { headers: { cookie } });
+    assert.notEqual((await config.json().catch(() => ({}))).error, "instance_identity_required");
     const status = await (await fetch(`${base}/api/auth/owner`, { headers: { cookie } })).json();
     assert.equal(status.signedIn, true);
     const vault = await fetch(`${base}/api/vault/status`, { headers: { cookie } });
@@ -222,4 +228,22 @@ test("existing installs cannot be claimed anonymously; a signed-in admin can cre
       else process.env[key] = value;
     }
   }
+});
+
+test("owner setup: an unused pairing challenge keeps first-visit setup open; approval, legacy files and Keycloak close it", async () => {
+  const { approvePairingChallenge, createPairingChallenge, ownerSetupOpenToAnonymous } = await import("../packages/core/src/security.js");
+  const env = { ORKESTR_HOME: await home("orkestr-owner-challenge-") };
+  const request = { headers: { host: "localhost:3000" }, socket: { remoteAddress: "127.0.0.1" } };
+  assert.equal(await ownerSetupOpenToAnonymous(env), true);
+  const created = await createPairingChallenge({ request, env });
+  assert.equal(await ownerSetupOpenToAnonymous(env), true, "a stale tab's challenge does not claim the install");
+  await approvePairingChallenge(created.challenge?.id || created.id, { env });
+  assert.equal(await ownerSetupOpenToAnonymous(env), false, "an approved challenge claims it");
+  const legacy = { ORKESTR_HOME: await home("orkestr-owner-legacy-") };
+  await fs.mkdir(path.join(legacy.ORKESTR_HOME, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(legacy.ORKESTR_HOME, "secrets", "security.json"), JSON.stringify({ enabled: false, sessions: [], challenges: [] }));
+  assert.equal(await ownerSetupOpenToAnonymous(legacy), false, "files from before the flag stay closed");
+  const controller = await fs.readFile("apps/server/src/modules/system/owner-login.controller.ts", "utf8");
+  assert.match(controller, /authProvider\(process\.env\) !== "browser_pairing"\) return false/);
+  assert.match(controller, /&& authProvider\(process\.env\) === "browser_pairing"/);
 });

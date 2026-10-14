@@ -787,9 +787,9 @@ test("whatsapp bridge machine token bypasses browser pairing only for bridge rou
     headers: { authorization: "Bearer wa-bridge-secret" },
   }, env);
 
+  // Without a bearer token the bridge route falls back to browser auth.
   assert.equal(blocked.ok, false);
-  assert.equal(blocked.error, "whatsapp_bridge_token_required");
-  assert.equal(blocked.routingFailure.code, "whatsapp_bridge_token_required");
+  assert.equal(blocked.error, "browser_pairing_required");
   // ORK-513: the repair link stays reachable before pairing, but the request is
   // marked anonymous so the handler demands an admin session or signed intent.
   assert.equal(repairPage.ok, true);

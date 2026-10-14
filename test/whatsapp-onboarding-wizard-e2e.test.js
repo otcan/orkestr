@@ -74,7 +74,7 @@ test("wizard links WhatsApp by QR, binds only the paired owner's private chat, a
     qrUrl: fake.started && !fake.linked ? "/__fake/qr.svg" : "",
     updatedAt: "2026-10-11T12:00:00.000Z",
   });
-  const thread = { id: "orkest", name: "orkest", title: "orkest" };
+  const thread = { id: "orkestr", name: "orkestr", title: "orkestr" };
 
   let browser;
   try {
@@ -121,7 +121,7 @@ test("wizard links WhatsApp by QR, binds only the paired owner's private chat, a
           fake.calls.push(["create-thread"]);
           return request.respond(json({ thread }));
         }
-        if (url.pathname.startsWith("/api/threads/orkest/desktop") || url.pathname.startsWith("/api/desktops/") || url.pathname.startsWith("/api/browsers/")) {
+        if (url.pathname.startsWith("/api/threads/orkestr/desktop") || url.pathname.startsWith("/api/desktops/") || url.pathname.startsWith("/api/browsers/")) {
           fake.calls.push(["desktop", route]);
           return request.respond(json({ ok: true, lease: { fencingToken: "synthetic" } }));
         }
@@ -131,11 +131,11 @@ test("wizard links WhatsApp by QR, binds only the paired owner's private chat, a
         }
         if (route === "POST /api/connectors/whatsapp/onboarding/private-chat") {
           fake.calls.push(["thread-group", JSON.parse(request.postData() || "{}")]);
-          return request.respond(json({ ok: true, created: false, privateOwnerChat: true, chat: { id: "15550000001@c.us", name: "orkest", isGroup: false } }));
+          return request.respond(json({ ok: true, created: false, privateOwnerChat: true, chat: { id: "15550000001@c.us", name: "orkestr", isGroup: false } }));
         }
-        if (route === "GET /api/threads/orkest/messages") {
+        if (route === "GET /api/threads/orkestr/messages") {
           const messages = fake.inbound
-            ? [{ id: "m1", role: "user", source: "whatsapp_inbound", originSurface: "whatsapp", text: "hi" }, { id: "m2", role: "assistant", text: "Hello from orkest" }]
+            ? [{ id: "m1", role: "user", source: "whatsapp_inbound", originSurface: "whatsapp", text: "hi" }, { id: "m2", role: "assistant", text: "Hello from orkestr" }]
             : [];
           return request.respond(json({ messages }));
         }
@@ -170,15 +170,13 @@ test("wizard links WhatsApp by QR, binds only the paired owner's private chat, a
     await page.waitForFunction(() => document.querySelector(".whatsapp-pair-panel")?.textContent.includes("linked and ready"), { timeout: 10_000 });
     assert.equal(await page.$("img.whatsapp-pair-qr"), null, "the QR disappears once linked");
 
-    await clickButton("Next"); // AI (synthetic Codex connected)
-    await clickButton("Next"); // name and start
-    await page.waitForFunction(() => document.querySelector(".wizard-review")?.textContent.includes("Own WhatsApp (linked)"));
-    await clickButton("Create and start");
+    await clickButton("Next"); // AI (synthetic Codex connected); no naming step
+    await clickButton("Start");
     await page.waitForSelector(".wizard-proof", { timeout: 20_000 });
     const group = fake.calls.find((call) => call[0] === "thread-group");
     assert.deepEqual(group[1], {
-      threadId: "orkest",
-      name: "orkest",
+      threadId: "orkestr",
+      name: "orkestr",
       pairedAccountId: "account-1",
       pairedContactId: "15550000001@c.us",
     }, "the wizard requests only the paired account's own chat and adds nobody");
@@ -187,7 +185,7 @@ test("wizard links WhatsApp by QR, binds only the paired owner's private chat, a
     assert.match(await page.$eval(".wizard-proof", (node) => node.textContent), /…\s*Message received from WhatsApp/);
 
     fake.inbound = true;
-    await page.waitForFunction(() => /✔\s*orkest replied/.test(document.querySelector(".wizard-proof")?.textContent || ""), { timeout: 15_000 });
+    await page.waitForFunction(() => /✔\s*orkestr replied/.test(document.querySelector(".wizard-proof")?.textContent || ""), { timeout: 15_000 });
     assert.match(await page.$eval(".wizard-proof", (node) => node.textContent), /✔\s*Message received from WhatsApp/);
     await clickButton("Open the conversation");
     await page.waitForFunction(() => !document.querySelector(".wizard-proof"), { timeout: 10_000 });

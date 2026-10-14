@@ -8,7 +8,7 @@ import { codexStateLabel } from "./codex-runtime-status";
 import { clearWizardProgress, loadWizardProgress, saveWizardProgress } from "./first-thread-wizard-progress";
 import { WhatsAppPairPanelComponent } from "./whatsapp-pair-panel.component";
 
-type WizardStepId = "whatsapp" | "codex" | "review";
+type WizardStepId = "whatsapp" | "codex";
 type WhatsAppAccessMode = "managed" | "self_hosted";
 
 @Component({
@@ -32,14 +32,15 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   @Output() setupStatusChange = new EventEmitter<SetupStatus>();
 
   // WhatsApp first: it is the step users came for, and it can be skipped.
+  // There is no naming step: the first conversation "orkestr" is created as
+  // soon as the AI is signed in.
   readonly steps: Array<{ id: WizardStepId; label: string }> = [
     { id: "whatsapp", label: "Link WhatsApp" },
-    { id: "codex", label: "Choose the AI" },
-    { id: "review", label: "Name and start" },
+    { id: "codex", label: "Connect the AI" },
   ];
 
   stepIndex = 0;
-  threadName = "orkest";
+  threadName = "orkestr";
   repoUrl = "";
   whatsappAccessMode: WhatsAppAccessMode = "self_hosted";
   readonly whatsappAccountId = "account-1";
@@ -85,7 +86,6 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       return;
     }
     this.stepIndex = Math.min(saved.stepIndex, this.steps.length - 1);
-    this.threadName = saved.threadName || this.threadName;
     this.repoUrl = saved.repoUrl;
     this.runtimeProvider = saved.runtimeProvider;
     this.whatsappModeTouched = saved.whatsappModeTouched;
@@ -116,6 +116,13 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
     this.syncWhatsAppAccessMode();
   }
 
+  // The AI just became ready on its step (Codex sign-in finished, or a Claude
+  // account turned ready): create the first conversation right away.
+  private startWhenAgentBecomesReady(wasReady: boolean): void {
+    if (wasReady || this.activeStep() !== "codex" || !this.canCreate()) return;
+    void this.createAndStart();
+  }
+
   private syncWhatsAppAccessMode(): void {
     if (this.whatsappModeTouched || !this.setupStatus) return;
     const available = this.availableWhatsAppModes();
@@ -136,6 +143,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   }
 
   private async loadClaudeAccounts(): Promise<void> {
+    const wasReady = this.agentReady();
     try {
       const result = await firstValueFrom(this.api.llmAccounts("claude-code"));
       this.claudeEnabled = result.enabled === true;
@@ -146,6 +154,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       this.claudeEnabled = false;
       this.claudeAccounts = [];
     }
+    if (this.runtimeProvider === "claude-code") this.startWhenAgentBecomesReady(wasReady);
   }
 
   activeStep(): WizardStepId {
@@ -184,8 +193,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
   canContinue(): boolean {
     const step = this.activeStep();
     if (step === "codex") return this.agentReady();
-    if (step === "whatsapp") return this.availableWhatsAppModes().includes(this.whatsappAccessMode);
-    return true;
+    return this.availableWhatsAppModes().includes(this.whatsappAccessMode);
   }
 
   nextLabel(): string {
@@ -289,9 +297,11 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
 
   // Codex signed in from the inline panel: continue without reloading the app.
   onCodexConnected(setup: SetupStatus): void {
+    const wasReady = this.agentReady();
     this.setupStatus = setup;
     this.setupStatusChange.emit(setup);
     this.cdr.markForCheck();
+    this.startWhenAgentBecomesReady(wasReady);
   }
 
   openCodexSetup(): void {
@@ -389,6 +399,8 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       this.creationStage = "";
       this.createdThread = thread;
       clearWizardProgress();
+      // Nothing to try on WhatsApp: go straight into the conversation.
+      if (!this.whatsappWarning && !this.desktopWarning) this.openCreatedThread();
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
@@ -439,7 +451,7 @@ export class FirstThreadWizardComponent implements OnChanges, OnDestroy, OnInit 
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "")
-      .slice(0, 48) || "orkest";
+      .slice(0, 48) || "orkestr";
     return slug;
   }
 

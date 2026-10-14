@@ -963,6 +963,12 @@ async function main() {
   const slug = cleanSlug(rawSlug);
   if (!slug) throw Object.assign(new Error("browser_slug_required"), { statusCode: 400 });
   let session;
+  // Exact read of one desktop for routing (the /desktop/<slug>/ viewer proxy).
+  if (command === "target") {
+    const known = catalog({ includeHidden: true }).some((item) => item.slug === slug);
+    console.log(JSON.stringify({ ok: true, source: "orkestr-browserctl", session: known ? await sessionRecord(slug) : null }));
+    return;
+  }
   if (command === "health") session = await ensurePrepared(slug).then(() => sessionRecord(slug));
   else if (command === "start") session = await startDesktop(slug);
   else if (command === "stop") session = await stopDesktop(slug);

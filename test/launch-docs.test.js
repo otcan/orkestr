@@ -46,7 +46,7 @@ test("public launch docs expose the minimum launch surface", async () => {
   assert.match(architecture, /Legacy `\/ng\/\*` paths/);
   assert.match(demoLog, /Coding-agent demo passed/);
   assert.match(readme, /smoke:k3s:oss-demo/);
-  assert.match(readme, /Start the default `orkest` thread/);
+  assert.match(readme, /Orkestr starts the default `orkestr` thread/);
   assert.match(readme, /\*\*Use my own WhatsApp\*\*: the wizard shows a QR code/);
   assert.match(readme, /The Orkestr relay is invitation-only and needs a broker/);
   assert.match(readme, /Virtual Desk startup wiring/);
