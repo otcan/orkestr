@@ -24,6 +24,7 @@ import {
 import { closeThreadRegistryCache } from "../../../packages/storage/src/thread-registry.js";
 import { rawAttachWatchText } from "../../../packages/core/src/raw-terminal-watch.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
+import { whatsappPictureAuditCommand } from "./whatsapp-picture-audit-command.js";
 import { createCommand } from "./create-command.js";
 import { demoCommand, demoUsage } from "./demo-command.js";
 import { agentJobSubcommands, agentJobUsage, agentJobsCommand, initCommand, runJobCommand } from "./agent-job-command.js";
@@ -768,6 +769,8 @@ async function whatsappCommand(argv, ctx) {
   if (subcommand === "migrate") return whatsappMigrateCommand(rest, ctx);
   if (subcommand === "doctor") return whatsappAccountsCommand(["doctor", ...rest], ctx);
   if (subcommand === "bind-thread" || subcommand === "thread-group") return whatsappBindThreadCommand(rest, ctx);
+  if (subcommand === "pictures") return whatsappPicturesCommand(rest, ctx);
+  if (subcommand === "audit-pictures" || subcommand === "picture-audit") return whatsappPictureAuditCommand(rest, ctx);
   throw new Error(whatsappUsage());
 }
 
@@ -796,6 +799,8 @@ function whatsappUsage() {
     "  orkestr whatsapp codex connect --thread <thread> --account <account-id> [--chat-id id] [--json]",
     "  orkestr whatsapp codex status --thread <thread> [--chat-id id] [--json]",
     "  orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--receiving-account id] [--reply-account id] [--force-new] [--json]",
+  "  orkestr whatsapp pictures audit --account <id> [--chat-ids id,...] [--json]",
+  "  orkestr whatsapp audit-pictures <account-id> [--chat-ids id,...] [--json]",
   ].join("\n");
 }
 
@@ -810,6 +815,12 @@ async function whatsappMigrateCommand(argv, ctx) {
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(formatWhatsAppMigration(payload));
   return payload.ok === false ? 1 : 0;
+}
+
+async function whatsappPicturesCommand(argv, ctx) {
+  const sub = argv[0] || "audit";
+  if (sub === "audit") return whatsappPictureAuditCommand(argv.slice(1), ctx);
+  throw new Error("Usage: orkestr whatsapp pictures audit --account <id> [--chat-ids id,...] [--json]");
 }
 
 async function whatsappAccountsCommand(argv, ctx) {
