@@ -8,6 +8,9 @@ import {
 } from "../../../../../packages/core/src/owner-login.js";
 import { httpError } from "../../common/http.js";
 import { requestSourceKey } from "../../request-security.js";
+import { ownerSetupOpenToAnonymous, securityStatus } from "../../../../../packages/core/src/security.js";
+import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
+import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 
 function secureRequest(request: any): boolean {
   return Boolean(request?.secure) || String(request?.headers?.["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
@@ -36,9 +39,22 @@ export class OwnerLoginController {
   async status(@Req() request: any) {
     const status = await ownerLoginStatus(process.env);
     const signedIn = request?.orkestrSecuritySession?.authProvider === "owner-password";
-    // prompt=false keeps the older browser-pairing flow (tests, operators who opt out).
-    const prompt = String(process.env.ORKESTR_OWNER_LOGIN_PROMPT || "").trim() !== "0";
+    const enabled = String(process.env.ORKESTR_OWNER_LOGIN_PROMPT || "").trim() !== "0";
+    // prompt: show the login page (sign in) or offer to create one. Creating is
+    // only offered where setup() would accept it.
+    const prompt = enabled && (status.configured || await this.setupAllowed(request));
     return { configured: status.configured, signedIn, prompt, ...(signedIn ? { username: status.username } : {}) };
+  }
+
+  // Fresh install: anyone may create the first login (owner's choice). Existing
+  // installs: only a signed-in admin (paired browser or identity provider).
+  private async setupAllowed(request: any): Promise<boolean> {
+    if (String(process.env.ORKESTR_OWNER_LOGIN_PROMPT || "").trim() === "0") return false;
+    if (await ownerSetupOpenToAnonymous(process.env)) return true;
+    // Without any sign-in (local install) every visitor is already the admin.
+    if (!(await securityStatus(process.env)).authEnabled) return true;
+    const session = request?.orkestrSecuritySession;
+    return Boolean(session?.id) && !request?.orkestrAnonymous && isAdminPrincipal(requestPrincipal(request));
   }
 
   @Post("setup")
@@ -47,6 +63,7 @@ export class OwnerLoginController {
     try {
       const username = String(body.username || "");
       const password = String(body.password || "");
+      if (!(await this.setupAllowed(request))) throw Object.assign(new Error("owner_setup_closed"), { statusCode: 403 });
       await createOwnerLogin({ username, password }, process.env);
       const { token } = await verifyOwnerLogin({ username, password, clientKey: clientKey(request) }, process.env);
       sendJson(response, 200, { ok: true, username: username.trim() }, ownerCookieHeader(token, { secure: secureRequest(request) }));
