@@ -35,7 +35,10 @@ async function aesKeyBytes(fragmentKey: Bytes, passphrase: string, salt: Bytes):
 }
 
 export function shareCryptoSupported(): boolean {
-  return Boolean(globalThis.crypto?.subtle);
+  // Self-contained (tests load this file alone): browser-compat.ts may install
+  // a WebCrypto stand-in on insecure pages that only makes age-encryption fall back.
+  const subtle = globalThis.crypto?.subtle as unknown as Record<string, unknown> | undefined;
+  return Boolean(subtle) && subtle?.["__orkestrWebCryptoUnavailable"] !== true;
 }
 
 export async function encryptVaultShare(value: string, passphrase = ""): Promise<{ envelope: VaultShareEnvelope; key: string }> {

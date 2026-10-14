@@ -1,4 +1,5 @@
 import { ChangeDetectorRef, Component, OnDestroy, OnInit, inject } from "@angular/core";
+import { copyText } from "./browser-compat";
 import { DatePipe } from "@angular/common";
 import { firstValueFrom } from "rxjs";
 import { ApiService, SecurityChallenge, SharedAppPayload, SharedAppPerson } from "./api.service";
@@ -217,12 +218,7 @@ export class SharedAppPageComponent implements OnInit, OnDestroy {
   }
 
   async copyCommand(): Promise<void> {
-    try {
-      await globalThis.navigator?.clipboard?.writeText(this.approveCommand());
-      this.pairingNotice = "Copied.";
-    } catch {
-      this.pairingNotice = "Select and copy the command.";
-    }
+    this.pairingNotice = (await copyText(this.approveCommand())) ? "Copied." : "Select and copy the command.";
     this.renderNow();
   }
 

@@ -12,6 +12,7 @@ import { FirstThreadWizardComponent } from "./first-thread-wizard.component";
 import { FilesPageComponent } from "./files-page.component";
 import { InstanceSettingsPageComponent } from "./instance-settings-page.component";
 import { OnboardingPageComponent } from "./onboarding-page.component";
+import { OwnerLoginPageComponent } from "./owner-login-page.component";
 import { PairingRequiredPageComponent } from "./pairing-required-page.component";
 import { PublicAppsPageComponent } from "./public-apps-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
@@ -35,29 +36,7 @@ import {
   updateOptimisticThreadMessage,
 } from "./optimistic-thread-messages";
 import { SLASH_COMMANDS, SlashCommandInfo } from "./slash-commands";
-import {
-  ApiService,
-  ConnectorStatus,
-  CreditUsageSummary,
-  InstanceAccount,
-  InstanceContextResponse,
-  RouterTraceRecord,
-  SetupStatus,
-  ThreadAttachResponse,
-  ThreadListResponse,
-  ThreadMessage,
-  ThreadMessagesResponse,
-  ThreadWorkerRetireResponse,
-  ThreadSummary,
-  TimerRecord,
-  OrkestrUser,
-  VersionResponse,
-  WhatsAppAccount,
-  WhatsAppChat,
-  WhatsAppOutboxJob,
-  WhatsAppParticipant,
-  WhatsAppStatusResponse,
-} from "./api.service";
+import { ApiService, ConnectorStatus, CreditUsageSummary, InstanceAccount, InstanceContextResponse, RouterTraceRecord, SetupStatus, ThreadAttachResponse, ThreadListResponse, ThreadMessage, ThreadMessagesResponse, ThreadWorkerRetireResponse, ThreadSummary, TimerRecord, OrkestrUser, VersionResponse, WhatsAppAccount, WhatsAppChat, WhatsAppOutboxJob, WhatsAppParticipant, WhatsAppStatusResponse, OwnerLoginStatus } from "./api.service";
 import {
   appendPendingFiles,
   clearInboundUploadDraft,
@@ -109,7 +88,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, VaultPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent],
+  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, OwnerLoginPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, VaultPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -218,6 +197,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   implementingPlan = false;
   threadWizardOpen = false;
   claudeRuntimeReady = false;
+  ownerLogin: OwnerLoginStatus | null = null;
+  ownerLoginChecked = false;
+  usePairingInstead = false;
+  private ownerSetupLater = false;
   private claudeRuntimeChecked = false;
   private claudeRuntimeCheckedAt = 0;
   private resumeWizardAfterSetup = false;
@@ -419,6 +402,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (setupResult.status === "fulfilled") this.setupStatus = setupResult.value;
       if (userResult.status === "fulfilled") this.currentUser = userResult.value.user;
       await this.refreshClaudeRuntimeReady();
+      if (!this.ownerLoginChecked) await this.loadOwnerLoginStatus();
       if (this.runtimeGateActive() && this.canCreateThreadFromSidebar()) this.threadWizardOpen = true;
       if (timersResult.status === "fulfilled") this.allTimers = timersResult.value.timers || [];
       if (whatsappResult.status === "fulfilled") this.whatsappStatusDetails = whatsappResult.value;
@@ -579,6 +563,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private enterPairingRequired(setup: SetupStatus | null = this.setupStatus): void {
+    if (!this.ownerLoginChecked) void this.loadOwnerLoginStatus();
     this.attachmentPreview.close(); this.draftUploads.dispose(); this.pendingFiles = [];
     if (setup) this.setupStatus = setup;
     this.apiOnline = true;
@@ -601,6 +586,49 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   codexConnector(): ConnectorStatus | null {
     return this.setupStatus?.connectors?.find((connector) => connector.id === "codex") || null;
+  }
+
+  // Owner login: the first visit asks for a username and password; when sign-in
+  // is required, the login page replaces browser pairing. An approval link with
+  // a challenge (e.g. Gmail) still uses the pairing page.
+  ownerLoginPageActive(): boolean {
+    if (this.usePairingInstead || this.ownerLogin?.prompt === false) return false;
+    const params = new URLSearchParams(globalThis.location?.search || "");
+    return !params.get("challengeId") && !params.get("challenge");
+  }
+
+  ownerSetupPromptActive(): boolean {
+    return this.appReady && !this.pairingRequired && this.isAdminMode() && this.ownerLogin?.prompt === true &&
+      this.ownerLogin.configured === false && !this.ownerSetupSkipped();
+  }
+
+  skipOwnerSetup(): void {
+    try {
+      globalThis.localStorage?.setItem("orkestr:owner-login:later", "1");
+    } catch {
+      // Without storage the prompt shows again next time; that is fine.
+    }
+    this.ownerSetupLater = true;
+    this.renderNow();
+  }
+
+  handleOwnerSignedIn(): void {
+    globalThis.location?.replace(this.appPath("/"));
+  }
+
+  private ownerSetupSkipped(): boolean {
+    if (this.ownerSetupLater) return true;
+    try {
+      return globalThis.localStorage?.getItem("orkestr:owner-login:later") === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  private async loadOwnerLoginStatus(): Promise<void> {
+    this.ownerLogin = await firstValueFrom(this.api.ownerLoginStatus()).catch(() => null);
+    this.ownerLoginChecked = true;
+    this.renderNow();
   }
 
   // There is a login only when browser pairing or an identity provider is on.

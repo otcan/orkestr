@@ -1,3 +1,4 @@
+import { copyText } from "./browser-compat";
 // Client-side helpers for the Vault page. Nothing in here logs or persists
 // secret values; callers hold them only as long as the UI needs them.
 
@@ -75,9 +76,7 @@ export function vaultErrorMessage(error: unknown, fallback = "Vault request fail
 // Copies a value and, after the TTL, clears the clipboard if it still holds
 // the same value. Reading the clipboard can be denied; that is best effort.
 export async function copySecret(value: string, clearAfterMs = vaultSecretTtlMs): Promise<boolean> {
-  const clipboard = globalThis.navigator?.clipboard;
-  if (!clipboard?.writeText) return false;
-  await clipboard.writeText(value);
+  if (!(await copyText(value))) return false;
   if (clearAfterMs > 0) {
     globalThis.setTimeout(() => void clearClipboardIfUnchanged(value), clearAfterMs);
   }

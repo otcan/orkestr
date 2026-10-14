@@ -146,6 +146,9 @@ export function desktopCatalogFromEnv(env = process.env, defaults = {}, options 
       startUrl: "https://mail.google.com/",
     },
   ];
+  // Docker installs start with one general desktop; LinkedIn and Gmail desktops
+  // appear only when configured (catalog env or visible slugs).
+  if (String(env.ORKESTR_DOCKER || "").trim() === "1") baseRows.splice(1);
   if (manualSlug && manualSlug !== defaultSlug) {
     baseRows.push({
       slug: manualSlug,

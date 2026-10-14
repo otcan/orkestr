@@ -13,13 +13,19 @@ function desktopSessionError(message, statusCode = 403) {
 }
 
 /** @param {any} principal @param {any} securitySession */
+// A desktop opens for a signed-in person: an OIDC session, or the owner's own
+// login (owner-login.js) on installs without an identity provider.
+const desktopSessionSources = { oidc: "oidc-session", "owner-password": "owner-session" };
+
 export function assertOidcDesktopSession(principal = null, securitySession = null) {
   const principalUserId = String(principal?.userId || "").trim();
   const sessionUserId = String(securitySession?.userId || "").trim();
+  const expectedSource = desktopSessionSources[String(securitySession?.authProvider || "")];
   if (
-    securitySession?.authProvider !== "oidc" ||
+    !expectedSource ||
+    (securitySession?.authProvider === "owner-password" && !isAdminPrincipal(principal)) ||
     !String(securitySession?.id || "").trim() ||
-    principal?.source !== "oidc-session" ||
+    principal?.source !== expectedSource ||
     String(principal?.sessionId || "").trim() !== String(securitySession.id).trim() ||
     !principalUserId ||
     !sessionUserId ||

@@ -1,4 +1,5 @@
 import { DatePipe } from "@angular/common";
+import { copyText } from "./browser-compat";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
@@ -718,9 +719,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     this.activeBrowserActionSlug = slug;
     try {
       const result = await firstValueFrom(this.api.createDesktopShare(slug, request));
-      if (navigator?.clipboard && result.url) {
-        await navigator.clipboard.writeText(result.url).catch(() => undefined);
-      }
+      if (result.url) await copyText(result.url);
       this.error = "";
       this.notice = result.url
         ? `Desktop share link copied: ${result.url}`

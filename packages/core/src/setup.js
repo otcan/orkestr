@@ -118,6 +118,7 @@ function publicSetupSecurityStatus(security = {}) {
     generatedAt: security?.generatedAt || null,
     authEnabled: Boolean(security?.authEnabled),
     authRequired: Boolean(security?.authRequired),
+    ownerLogin: { configured: Boolean(security?.ownerLogin?.configured) },
     paired: false,
     challengeActive: Boolean(security?.challengeActive),
     pendingChallengeCount: Number(security?.pendingChallengeCount || 0),

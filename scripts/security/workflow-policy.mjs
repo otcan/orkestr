@@ -48,6 +48,8 @@ const publishJobActions = new Set(["actions/download-artifact"]);
 const publishDownloadInputs = new Set(["name", "path"]);
 const publishCommands = new Set(["docker", "echo", "set", "test", "[["]);
 const publishDockerCommands = new Set(["load", "login", "logout", "tag", "push"]);
+// GitHub-hosted runners only; the arm64 runner builds the Apple Silicon image.
+const githubHostedRunners = new Set(["ubuntu-latest", "ubuntu-24.04-arm"]);
 export function publishRunAllowed(run) {
   if (typeof run !== "string" || /[`<>]|\$\(|\b(?:npm|npx|node|eval|exec|source)\b/.test(run)) return false;
   return run.split(/\n|&&|\|\||;|\|/).every(segment => {
@@ -55,7 +57,10 @@ export function publishRunAllowed(run) {
     while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words.shift();
     if (!words.length || words[0].startsWith("#")) return true;
     if (!publishCommands.has(words[0])) return false;
-    return words[0] !== "docker" || publishDockerCommands.has(words[1]);
+    if (words[0] !== "docker") return true;
+    // Combining already pushed per-architecture images into one tag runs no candidate code.
+    if (words[1] === "buildx") return words[2] === "imagetools" && words[3] === "create";
+    return publishDockerCommands.has(words[1]);
   });
 }
 function publishJob(job) {
@@ -88,7 +93,7 @@ export function validateWorkflow(source) {
   requirePolicy(record(workflow.jobs) && Object.keys(workflow.jobs).length > 0, "workflow_jobs");
   let actions = 0;
   for (const job of Object.values(workflow.jobs)) {
-    requirePolicy(record(job) && job["runs-on"] === "ubuntu-latest", "workflow_runner");
+    requirePolicy(record(job) && githubHostedRunners.has(job["runs-on"]), "workflow_runner");
     requirePolicy(!["uses", "secrets", "container", "services", "environment"].some(key => key in job), "workflow_privileged_job");
     if ("permissions" in job && !attestationJob(job) && !publishJob(job)) permissions(job.permissions);
     requirePolicy(!job["continue-on-error"], "workflow_ignored_failure");

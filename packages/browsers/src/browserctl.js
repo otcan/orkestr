@@ -123,16 +123,30 @@ async function listLocalDesktopInventory(env = process.env, options = {}) {
   const now = Date.now();
   const cached = localInventoryCache.get(key);
   if (cached?.payload && cached.expiresAt > now) return cached.payload;
+  // Stale while revalidate: listing runs a browserctl process and probes each
+  // desktop (seconds, more under emulation). Answer with the last list at once
+  // and refresh it in the background; only a cold cache waits.
+  if (cached?.payload) {
+    if (!cached.inFlight) refreshLocalInventory(key, cached, scopedEnv, timeoutMs, ttlMs);
+    return cached.payload;
+  }
   if (cached?.inFlight) return cached.inFlight;
+  return refreshLocalInventory(key, cached, scopedEnv, timeoutMs, ttlMs);
+}
+
+function refreshLocalInventory(key, cached, scopedEnv, timeoutMs, ttlMs) {
   const inFlight = runBrowserctl(["list", "--json"], scopedEnv, { timeoutMs })
     .then((payload) => {
       localInventoryCache.set(key, { payload, expiresAt: Date.now() + ttlMs, inFlight: null });
       return payload;
     })
     .catch((error) => {
-      localInventoryCache.delete(key);
+      // Keep serving the last good list if a background refresh fails.
+      if (cached?.payload) localInventoryCache.set(key, { payload: cached.payload, expiresAt: 0, inFlight: null });
+      else localInventoryCache.delete(key);
       throw error;
     });
+  if (cached?.payload) inFlight.catch(() => {});
   localInventoryCache.set(key, { payload: cached?.payload || null, expiresAt: cached?.expiresAt || 0, inFlight });
   return inFlight;
 }

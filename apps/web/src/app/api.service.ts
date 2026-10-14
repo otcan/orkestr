@@ -1074,6 +1074,13 @@ export interface GmailNotificationRunResponse {
   failed?: unknown[];
 }
 
+export interface OwnerLoginStatus {
+  configured: boolean;
+  signedIn: boolean;
+  prompt: boolean;
+  username?: string;
+}
+
 export interface CodexDeviceAuthResponse {
   ok: boolean;
   state: string;
@@ -2742,6 +2749,18 @@ export class ApiService {
       this.api(`/gmail-notifications/${encodeURIComponent(id)}/run`),
       {},
     );
+  }
+
+  ownerLoginStatus(): Observable<OwnerLoginStatus> {
+    return this.http.get<OwnerLoginStatus>(this.api("/auth/owner"));
+  }
+
+  ownerLoginSetup(username: string, password: string): Observable<{ ok: boolean; username: string }> {
+    return this.http.post<{ ok: boolean; username: string }>(this.api("/auth/owner/setup"), { username, password });
+  }
+
+  ownerLogin(username: string, password: string): Observable<{ ok: boolean; username: string }> {
+    return this.http.post<{ ok: boolean; username: string }>(this.api("/auth/owner/login"), { username, password });
   }
 
   startCodexDeviceAuth(): Observable<CodexDeviceAuthResponse> {
