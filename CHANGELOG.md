@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.204
+
+- Web chat updates live: a new or changed message (for example from WhatsApp) reaches open browsers within about a second; the server no longer serves a 15-second-old thread summary.
+- Cleaner thread header: the Codex/Claude switch only appears when Claude Code is enabled on this server, usage pills only for agents with real data (no "5h ?"), "Default model" instead of "Syncing model", and less vertical space above the messages.
+- WhatsApp reconnects after recreating the Docker container (a Chrome lock left by the old container no longer blocks Chrome: "Target closed"), and Connect after a logout shows a fresh QR instead of "auth failure". A QR from a failed or replaced runtime is never shown.
+- Setup → WhatsApp: the page and the Message yourself panel refresh while you scan; a linked number shows only Unlink; the second number is optional and tucked away.
+- Thread settings → WhatsApp: "Use my Message yourself chat" in one click, or how to reach the thread from it (`@name`, one word).
+- WhatsApp routing: deleting a chat-level binding retires that binding (before, only its thread was retired and the route stayed live); disabled bindings route nothing.
+
 ## 0.1.0-alpha.203
 
 - Phones: the conversation view gives the screen to the messages (on an iPhone it showed one line). One-row top bar with every item visible down to 320px, one-line thread header, compact tool tabs, and a composer with the text field on top and one button row.
