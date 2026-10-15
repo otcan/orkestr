@@ -1,3 +1,4 @@
+import { chromeLockFromOtherHost, chromeLockHost, retireLoggedOutSession } from "./whatsapp-session-recovery.js";
 import fs from "node:fs/promises";
 import { whatsappChromeMissingHint, whatsappChromePath } from "./whatsapp-chrome-path.js";
 import { whatsappQuotedContext } from "./whatsapp-quoted-context.js";
@@ -5702,7 +5703,8 @@ export async function cleanupLocalWhatsAppChromeLocks(accountId = "", env = proc
     const staleLocks = [];
     for (const filePath of lockPaths) {
       const pid = await chromeLockPid(filePath);
-      if (!pid || pidAlive(pid)) continue;
+      const otherHost = chromeLockFromOtherHost(await chromeLockHost(filePath));
+      if (!otherHost && (!pid || pidAlive(pid))) continue;
       staleLocks.push({ filePath, pid });
       stalePids.add(pid);
     }
@@ -5943,6 +5945,13 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   await ensureBridgeDirs(env);
   const orphanCleanup = await cleanupLocalWhatsAppOrphanChromeProcesses(normalized, env, options);
   const staleLockCleanup = await cleanupLocalWhatsAppChromeLocks(normalized, env);
+  // Connect after a verified logout: the saved session would only fail again.
+  const previousState = accountStates.get(normalized) || {};
+  if (previousState.verifiedLogoutAt || previousState.state === "auth_failure") {
+    const retired = await retireLoggedOutSession(localAuthSessionDirForAccount(normalized, env)).catch(() => "");
+    setAccountState(normalized, { verifiedLogoutAt: null });
+    if (retired) await appendEvent({ type: "whatsapp_local_logged_out_session_retired", accountId: normalized }, env).catch(() => {});
+  }
   setAccountState(normalized, {
     state: "starting",
     started: true,
@@ -6324,6 +6333,8 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
         authenticated: false,
         started: true,
         qrAvailable: true,
+        // A new QR is a new pairing; the earlier logout no longer applies.
+        verifiedLogoutAt: null,
         pairingCode: "",
         pairingCodeUpdatedAt: null,
         error: "",
