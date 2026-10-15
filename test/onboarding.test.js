@@ -129,8 +129,8 @@ test("setup page is Setup only; first-run framing lives in the wizard", async ()
   assert.ok(onboarding.includes("openReturnedUrl: true"));
   assert.ok(onboarding.includes("browserOpenUrl(response.browser)"));
   assert.ok(onboarding.includes("Desktop started, but no remote desktop URL is configured."));
-  assert.ok(onboarding.includes("WhatsApp sender"));
-  assert.ok(onboarding.includes("WhatsApp receiver"));
+  assert.ok(onboarding.includes('label: "WhatsApp 1"'));
+  assert.ok(onboarding.includes('label: "WhatsApp 2"'));
   assert.ok(onboarding.includes("whatsappAccountPurpose"));
   assert.ok(browsers.includes("visibleBrowserCatalog"));
   assert.equal(desktopCatalogFromEnv({}).some((desktop) => desktop.slug === "desktop"), true);

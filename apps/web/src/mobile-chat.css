@@ -25,38 +25,50 @@
     right: 8px;
   }
 
-  /* The brand row is dropped; the navigation sits next to the Menu button
-     and scrolls sideways if it does not fit. */
+  /* The brand row is dropped; all navigation items sit next to a compact
+     Menu button and always fit, down to 320px wide. */
   .instance-topbar-brand {
     display: none;
   }
 
-  .instance-topbar-nav {
-    display: flex;
-    flex: 1 1 auto;
-    gap: 4px;
-    justify-content: flex-start;
-    margin-left: 70px;
-    overflow-x: auto;
-    scrollbar-width: none;
+  .mobile-instance-menu {
+    width: 40px;
+    min-height: 34px;
+    padding: 0;
+    font-size: 0; /* the accessible name stays "Menu" */
   }
 
-  .mobile-instance-menu {
-    min-height: 34px;
-    padding: 4px 12px;
+  .mobile-instance-menu::before {
+    content: "\2630";
+    font-size: 18px;
+    line-height: 1;
+  }
+
+  .instance-topbar-nav {
+    display: grid;
+    flex: 1 1 auto;
+    grid-auto-columns: auto;
+    grid-auto-flow: column;
+    grid-template-columns: none;
+    justify-content: space-between;
+    gap: 2px;
+    min-width: 0;
+    margin-left: 48px;
+    overflow: visible;
   }
 
   .instance-topbar-nav > * {
-    flex: 0 0 auto;
     width: auto;
+    min-width: 0;
   }
 
-  .instance-topbar-nav button,
-  .instance-utility-menu > summary,
-  .instance-account-menu > summary {
+  .instance-topbar-nav > button,
+  .instance-utility-menu > summary {
     width: auto;
     min-height: 34px;
-    padding: 4px 10px;
+    padding: 4px 5px;
+    font-size: clamp(0.6rem, 2.8vw, 0.8rem);
+    white-space: nowrap;
   }
 
   /* The conversation column is a vertical stack; only the messages grow. */
