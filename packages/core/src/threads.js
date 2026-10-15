@@ -77,6 +77,7 @@ const messageStringFields = [
   "previousRecoveryNoticeId",
   "runtimeCheckpointId",
   "originSurface",
+  "homeChatRouted",
   "originTransport",
   "senderParticipantId",
   "senderTrustLevel",

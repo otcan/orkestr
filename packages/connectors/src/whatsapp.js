@@ -23,6 +23,7 @@ import {
   recordRuntimeFinalDeliveryFailure,
 } from "../../core/src/runtime-final-delivery.js";
 import { appendLocalAttachmentFailureNotes, prepareWhatsAppOutboundAttachments } from "./whatsapp-outbound-attachments.js";
+import { homeChatReplyText, recordHomeChatReply, resolveHomeChatRoute } from "./whatsapp-home-chat.js";
 import {
   connectorOutboxJobDeliveryMatches,
   connectorOutboxJobIntentMatches,
@@ -3315,6 +3316,7 @@ async function sendClaimedWhatsAppText({
         },
         env,
       });
+      if (kind === "thread") await recordHomeChatReply({ chatId, threadId, messageIds: ackIds }, env).catch(() => {});
       await patchUiReplyDeliveryParent({
         kind,
         threadId,
@@ -3790,6 +3792,7 @@ async function sendClaimedWhatsAppText({
       },
       env,
     });
+    if (kind === "thread") await recordHomeChatReply({ chatId, threadId, messageIds: ackIds }, env).catch(() => {});
     await patchUiReplyDeliveryParent({
       kind,
       threadId,
@@ -4153,6 +4156,7 @@ function formatWhatsAppRouterStatus({ thread = {}, status = {}, messages = [], n
 
 async function handleWhatsAppRouterStatusCommand({
   help = false,
+  replyTextOverride = "",
   input = {},
   thread,
   messageInput,
@@ -4181,7 +4185,7 @@ async function handleWhatsAppRouterStatusCommand({
     error: String(error?.message || error || "status_unavailable").slice(0, 200),
   }));
   const statusText = formatWhatsAppRouterStatus({ thread, status, messages });
-  const replyText = help ? formatWhatsAppHelp({ thread, statusText, env }) : statusText;
+  const replyText = replyTextOverride || (help ? formatWhatsAppHelp({ thread, statusText, env }) : statusText);
   const message = await appendThreadMessage(thread.id, {
     ...messageInput,
     role: "user",
@@ -4457,6 +4461,21 @@ async function routeWhatsAppInboundUnlocked(input = {}, env = process.env, fetch
       threadId: null,
       messageId: null,
     };
+  }
+  // "Message yourself" home chat: @name, quote-reply and /switch pick the
+  // thread. The home chat's binding stays the security context.
+  const homeChat = await resolveHomeChatRoute({ input, threadRoute, threads: await listThreads(env) }, env).catch(() => null);
+  if (homeChat?.reply) input = { ...input, homeChatCommandReply: homeChat.reply };
+  else if (homeChat?.threadId) {
+    const homeThreadId = threadRoute.threadId;
+    if (homeChat.threadId !== homeThreadId) threadRoute = { ...threadRoute, threadId: homeChat.threadId };
+    input = { ...input, text: homeChat.text, ...(homeChat.routed ? { homeChatRouted: true } : {}) };
+    // Mark the addressed thread so its replies are scanned for the home chat.
+    if (homeChat.routed) {
+      await updateThread(homeChat.threadId, (thread) => thread.whatsappHomeChat?.chatId === initialChatId
+        ? null
+        : { whatsappHomeChat: { chatId: initialChatId, homeThreadId } }, env).catch(() => null);
+    }
   }
   const incomingEventIdentity = { eventId, canonicalEventId, chatId: initialChatId };
   const existing = (state.inboundEvents || []).find((event) =>
@@ -5093,6 +5112,7 @@ async function routeWhatsAppInboundUnlocked(input = {}, env = process.env, fetch
     senderEffectiveRole: inboundSecurity.effectiveRole || inboundSecurity.trustLevel || "unknown",
     senderPolicyMode: inboundSecurity.policyMode || "",
     securityClassification: inboundSecurity.classified || null,
+    ...(input.homeChatRouted ? { homeChatRouted: true } : {}),
   };
   await ensureRouterTurn({
     routerTraceId,
@@ -5105,9 +5125,10 @@ async function routeWhatsAppInboundUnlocked(input = {}, env = process.env, fetch
     state: "received",
     mirrorPolicy: "reply_to_source",
   }, env).catch(() => null);
-  if (threadId && thread && (whatsappRouterStatusCommand(text) || whatsappHelpCommand(text))) {
+  if (threadId && thread && (input.homeChatCommandReply || whatsappRouterStatusCommand(text) || whatsappHelpCommand(text))) {
     return handleWhatsAppRouterStatusCommand({
       help: whatsappHelpCommand(text),
+      replyTextOverride: pickString(input.homeChatCommandReply),
       input,
       thread,
       messageInput,
@@ -5778,6 +5799,7 @@ function threadConfiguredForWhatsAppRoute(thread = {}, config = {}) {
 
 function threadEligibleForWhatsAppMirrorScan(thread = {}, config = {}) {
   if (thread?.binding?.chatId || String(thread?.binding?.connector || "").trim().toLowerCase() === "whatsapp") return true;
+  if (thread?.whatsappHomeChat?.chatId) return true;
   return threadConfiguredForWhatsAppRoute(thread, config);
 }
 
@@ -7296,7 +7318,9 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       const { text: preparedText, attachments, sourceMessageAttachments } = await prepareWhatsAppOutboundAttachments({
         thread, message, principal: await principalForThread(thread || {}, env), env, fetchImpl,
       });
-      const text = appendWhatsAppDebugFooter(preparedText, {
+      // Replies to a message routed from the home chat say which thread speaks.
+      const labelledText = kind === "thread" && String(parent?.homeChatRouted) === "true" ? homeChatReplyText(preparedText, thread || {}) : preparedText;
+      const text = appendWhatsAppDebugFooter(labelledText, {
         message,
         thread: await debugThread(),
         messages,
