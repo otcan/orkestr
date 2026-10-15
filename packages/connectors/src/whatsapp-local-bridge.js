@@ -2147,12 +2147,13 @@ function addChat(target, chat) {
   });
 }
 
-// The unique last part of "true_<chat>_<id>": the same message can come back
-// on another id for the same chat (phone id vs. hidden @lid id).
+// The message's own id in "<true|false>_<chat>_<id>[_<suffix>]" (suffixes such
+// as "_out" or a group participant follow it): the same message can come back
+// on another chat id (phone id vs. hidden @lid id).
 function messageLocalId(messageId = "") {
-  const id = String(messageId || "").trim();
-  const index = id.lastIndexOf("_");
-  return index > 0 ? id.slice(index + 1) : "";
+  const parts = String(messageId || "").trim().split("_");
+  if (parts.length < 3 || !["true", "false"].includes(parts[0])) return "";
+  return parts[2] || "";
 }
 
 function isOutboundMessageId(messageId = "") {

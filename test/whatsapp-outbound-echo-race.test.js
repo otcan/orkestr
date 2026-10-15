@@ -301,7 +301,7 @@ test("own reply echoed on the @lid id of Message yourself is recognised as an ec
       info: { wid: { _serialized: phone } },
       getContactLidAndPhone: async (ids) => ids.map((id) => ({ lid: id, pn: phone })),
       async sendMessage(to) {
-        return { id: { _serialized: `true_${to}_3EB0SELF1`, id: "3EB0SELF1" } };
+        return { id: { _serialized: `true_${to}_3EB0SELF1_out`, id: "3EB0SELF1" } };
       },
     },
   };
@@ -313,7 +313,15 @@ test("own reply echoed on the @lid id of Message yourself is recognised as an ec
       from: phone, to: lid, fromMe: true, body: "Hello from the agent", timestamp: 1_780_000_100, _data: {},
     }, env, { client: runtime.client });
     assert.equal(echo.skipped, "outbound_echo_id");
-    assert.deepEqual((await listThreadMessages("self-thread", env)).filter((message) => message.role === "user"), [], "the agent's reply never becomes owner input");
+    // A different message from the owner is not an echo, even with an "_out" suffix.
+    const own = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${lid}_3EB0OWNER2_out`, id: "3EB0OWNER2", remote: lid },
+      from: phone, to: lid, fromMe: true, body: "a real message from me", timestamp: 1_780_000_200, _data: {},
+    }, env, { client: runtime.client });
+    assert.notEqual(own.skipped, "outbound_echo_id", "only our own sent id counts as an echo");
+    const userTexts = (await listThreadMessages("self-thread", env)).filter((message) => message.role === "user").map((message) => message.text);
+    assert.ok(!userTexts.includes("Hello from the agent"), "the agent's reply never becomes owner input");
+    assert.ok(userTexts.includes("a real message from me"), "the owner's own message is read");
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
