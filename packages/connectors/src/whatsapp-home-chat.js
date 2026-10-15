@@ -8,7 +8,7 @@
 //   /threads        list the threads you can address
 // Replies from another thread come back to the home chat as "[name] text".
 // Only the owner's own messages (fromMe) are routed; targets must belong to
-// the same owner and be unbound or bound to this chat.
+// the same owner and be unbound (or the home thread itself).
 import { dataPaths } from "../../storage/src/paths.js";
 import { readJson, writeJson } from "../../storage/src/store.js";
 import { isThreadRetired } from "../../core/src/threads.js";
@@ -69,10 +69,11 @@ export function homeChatTargets(threads = [], homeThread = {}, chatId = "", env 
   return threads.filter((thread) => {
     if (!thread?.id || isThreadRetired(thread)) return false;
     if (resourceOwnerUserId(thread, env) !== owner) return false;
+    // Threads with their own WhatsApp chat (any other binding, enabled or
+    // not) are only reachable there; the home chat addresses unbound threads.
     const binding = thread.binding || {};
     if (!clean(binding.chatId)) return true;
-    if (clean(binding.chatId) === clean(chatId)) return true;
-    return (binding.ownerParticipantIds || []).map(clean).includes(clean(chatId));
+    return clean(binding.chatId) === clean(chatId) && binding.enabled !== false;
   });
 }
 

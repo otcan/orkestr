@@ -32,6 +32,9 @@ async function fixture(t) {
   await createThread({ id: "elsewhere", name: "elsewhere", ownerUserId: "admin", executorId: "noop",
     binding: { connector: "whatsapp", chatId: "someone-else@g.us", enabled: true, ownerParticipantIds: ["15559990000@c.us"] } }, env);
   await createThread({ id: "theirs", name: "theirs", ownerUserId: "casey", executorId: "noop" }, env);
+  // Same owner, own (disabled) group whose binding lists the owner: still not addressable.
+  await createThread({ id: "grouped", name: "grouped", ownerUserId: "admin", executorId: "noop",
+    binding: { connector: "whatsapp", chatId: "different-group@g.us", enabled: false, ownerParticipantIds: [self] } }, env);
   let counter = 0;
   const send = (text, extra = {}) => routeWhatsAppInbound({
     eventId: `evt-${++counter}`, chatId: self, from: self, fromMe: true, accountId: "account-1", text, ...extra,
@@ -67,10 +70,13 @@ test("Message yourself routes to the home thread, @name and /switch reach other 
   const list = await f.lastReply("orkestr");
   assert.match(list, /orkestr \(home\)/);
   assert.match(list, /projectx/);
-  assert.doesNotMatch(list, /elsewhere|theirs/, "threads bound to other chats or other owners are not offered");
+  assert.doesNotMatch(list, /elsewhere|theirs|grouped/, "threads bound to other chats or other owners are not offered");
 
   await f.send("@elsewhere hi");
   assert.match(await f.lastReply("orkestr"), /No thread called "elsewhere"/);
+  await f.send("@grouped run this");
+  assert.deepEqual(await f.userTexts("grouped"), [], "a thread with its own chat is not reachable from the home chat");
+  assert.match(await f.lastReply("orkestr"), /No thread called "grouped"/);
   await f.send("@theirs hi");
   assert.deepEqual(await f.userTexts("theirs"), [], "another user's thread is never reachable");
 });

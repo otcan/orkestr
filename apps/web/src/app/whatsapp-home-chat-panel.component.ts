@@ -38,7 +38,7 @@ function errorText(error: unknown): string {
       }
       @if (homeThread() && secondAccount()) {
         <div class="whatsapp-own-chat">
-          <p>Give a busy thread its own WhatsApp chat: a group with you and your second number ({{ secondAccount()?.phoneNumber || "WhatsApp 2" }}).</p>
+          <p>Give a busy thread its own WhatsApp chat: a group with you and your second number ({{ secondAccount()?.phoneNumber || "WhatsApp 2" }}). That thread then talks only in its own chat.</p>
           <div class="button-row">
             <select name="own-chat-thread" [(ngModel)]="ownChatThreadId" [disabled]="busy" aria-label="Thread for its own chat">
               @for (thread of ownChatCandidates(); track thread.id) { <option [value]="thread.id">{{ label(thread) }}</option> }
