@@ -1037,6 +1037,10 @@
                 </button>
               </div>
 
+              @if (!whatsappChatConnected(thread) || thread.binding?.privateOwnerChat) {
+                <ork-whatsapp-self-chat-card [thread]="thread" [threads]="threads" (connected)="refresh(false)" />
+              }
+
               <div class="wa-summary-strip" aria-label="WhatsApp connection summary">
                 <div>
                   <span>Receiving account</span>

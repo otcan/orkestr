@@ -53,6 +53,7 @@ import { describeUiSendFailure, UiSendFailureDescription } from "./ui-send-failu
 import { ProviderQuotaIndicatorComponent } from "./provider-quota-indicator.component";
 import { ExecutorSwitcherComponent } from "./executor-switcher.component";
 import { ActiveThreadRefresh } from "./active-thread-refresh";
+import { WhatsAppSelfChatCardComponent } from "./whatsapp-self-chat-card.component";
 import { QuotaProvider, claudeEffortLabel, claudeModelName, executorLabel, threadExecutorProvider } from "./provider-quota";
 
 type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "instanceVault" | "userConnectors";
@@ -89,7 +90,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, OwnerLoginPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, VaultPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent],
+  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, OwnerLoginPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, VaultPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent, WhatsAppSelfChatCardComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -4205,7 +4206,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   debugModelLabel(thread: ThreadSummary | null): string {
-    const model = this.codexModelName(thread).replace(/^Syncing model$/i, "unknown");
+    const model = this.codexModelName(thread).replace(/^Default model$/i, "default");
     const effort = this.shortReasoningEffort(thread);
     return effort ? `${model}/${effort}` : model;
   }
@@ -4374,7 +4375,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       thread?.codexModel ||
       this.objectValue(thread?.runtime, "codexModel") ||
       this.objectValue(thread?.["executor"], "codexModel") ||
-      "Syncing model",
+      "Default model",
     );
   }
 

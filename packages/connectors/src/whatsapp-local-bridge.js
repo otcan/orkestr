@@ -1,4 +1,6 @@
+import { chromeLockFromOtherHost, chromeLockHost, retireLoggedOutSession } from "./whatsapp-session-recovery.js";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import { whatsappChromeMissingHint, whatsappChromePath } from "./whatsapp-chrome-path.js";
 import { whatsappQuotedContext } from "./whatsapp-quoted-context.js";
 import path from "node:path";
@@ -2068,7 +2070,8 @@ async function accountSnapshot(accountId, env = process.env, options = {}) {
       : diagnosticProbeFailed && effectiveState.state === "ready"
         ? "degraded"
         : effectiveState.state;
-  const qrAvailable = Boolean(state.qrAvailable || (await exists(qrPath(accountId, env))));
+  // After a verified logout no QR is offered until a new pairing starts.
+  const qrAvailable = !verifiedLogoutIsNewer && Boolean(state.qrAvailable || (await exists(qrPath(accountId, env))));
   return {
     ...effectiveState,
     state: accountState,
@@ -4176,15 +4179,35 @@ async function clearQr(accountId, env = process.env) {
   await fs.unlink(qrRawPath(accountId, env)).catch(() => {});
 }
 
-async function writeQr(accountId, qr, qrcode, env = process.env) {
+// Renders the QR files under temporary names and publishes them only if
+// `shouldPublish()` still holds afterwards (the runtime still owns the
+// account), so a slow write from a failed or replaced runtime never
+// overwrites a newer QR. Returns whether the QR was published.
+async function writeQr(accountId, qr, qrcode, env = process.env, shouldPublish = () => true) {
   await ensureBridgeDirs(env);
-  const svg = await qrcode.toString(qr, { type: "svg", margin: 1, width: 320 });
-  await fs.writeFile(qrPath(accountId, env), svg);
-  await fs.writeFile(qrRawPath(accountId, env), String(qr || ""), "utf8");
-  if (typeof qrcode.toFile === "function") {
-    await qrcode.toFile(qrPngPath(accountId, env), qr, { type: "png", margin: 1, width: 512 });
-  } else if (typeof qrcode.toBuffer === "function") {
-    await fs.writeFile(qrPngPath(accountId, env), await qrcode.toBuffer(qr, { type: "png", margin: 1, width: 512 }));
+  const suffix = `.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const files = [];
+  try {
+    const svg = await qrcode.toString(qr, { type: "svg", margin: 1, width: 320 });
+    files.push([`${qrPath(accountId, env)}${suffix}`, qrPath(accountId, env)]);
+    await fs.writeFile(files.at(-1)[0], svg);
+    files.push([`${qrRawPath(accountId, env)}${suffix}`, qrRawPath(accountId, env)]);
+    await fs.writeFile(files.at(-1)[0], String(qr || ""), "utf8");
+    const pngTemp = `${qrPngPath(accountId, env)}${suffix}`;
+    if (typeof qrcode.toFile === "function") {
+      files.push([pngTemp, qrPngPath(accountId, env)]);
+      await qrcode.toFile(pngTemp, qr, { type: "png", margin: 1, width: 512 });
+    } else if (typeof qrcode.toBuffer === "function") {
+      files.push([pngTemp, qrPngPath(accountId, env)]);
+      await fs.writeFile(pngTemp, await qrcode.toBuffer(qr, { type: "png", margin: 1, width: 512 }));
+    }
+    if (!shouldPublish()) return false;
+    // Synchronous renames: nothing else runs between the check and publish.
+    for (const [temp, target] of files) fsSync.renameSync(temp, target);
+    files.length = 0;
+    return true;
+  } finally {
+    for (const [temp] of files) await fs.rm(temp, { force: true }).catch(() => {});
   }
 }
 
@@ -5702,7 +5725,8 @@ export async function cleanupLocalWhatsAppChromeLocks(accountId = "", env = proc
     const staleLocks = [];
     for (const filePath of lockPaths) {
       const pid = await chromeLockPid(filePath);
-      if (!pid || pidAlive(pid)) continue;
+      const otherHost = chromeLockFromOtherHost(await chromeLockHost(filePath));
+      if (!otherHost && (!pid || pidAlive(pid))) continue;
       staleLocks.push({ filePath, pid });
       stalePids.add(pid);
     }
@@ -5943,6 +5967,13 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   await ensureBridgeDirs(env);
   const orphanCleanup = await cleanupLocalWhatsAppOrphanChromeProcesses(normalized, env, options);
   const staleLockCleanup = await cleanupLocalWhatsAppChromeLocks(normalized, env);
+  // Connect after a verified logout: the saved session would only fail again.
+  const previousState = accountStates.get(normalized) || {};
+  if (previousState.verifiedLogoutAt || previousState.state === "auth_failure") {
+    const retired = await retireLoggedOutSession(localAuthSessionDirForAccount(normalized, env)).catch(() => "");
+    setAccountState(normalized, { verifiedLogoutAt: null });
+    if (retired) await appendEvent({ type: "whatsapp_local_logged_out_session_retired", accountId: normalized }, env).catch(() => {});
+  }
   setAccountState(normalized, {
     state: "starting",
     started: true,
@@ -6317,13 +6348,19 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     try {
       startupSettled = true;
       clearStartupTimer();
-      await writeQr(normalized, qr, dependencies.qrcode, env);
+      // An auth failure (or a newer runtime) may land while the QR is
+      // written; such a late QR is never published and changes no state.
+      const published = await writeQr(normalized, qr, dependencies.qrcode, env, () =>
+        ownsRuntime() && (accountStates.get(normalized) || {}).state !== "auth_failure");
+      if (!published) return;
       setAccountState(normalized, {
         state: "qr_needed",
         ready: false,
         authenticated: false,
         started: true,
         qrAvailable: true,
+        // A new QR is a new pairing; the earlier logout no longer applies.
+        verifiedLogoutAt: null,
         pairingCode: "",
         pairingCodeUpdatedAt: null,
         error: "",

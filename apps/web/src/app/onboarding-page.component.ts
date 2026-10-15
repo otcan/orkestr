@@ -112,7 +112,13 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (!this.timezone) this.timezone = this.detectedTimezone;
     this.applySetupSectionFromInput();
     void this.load();
-    this.poller = setInterval(() => void this.load(false), 30_000);
+    // Every 30s; every 3s while a WhatsApp QR is being scanned (it rotates).
+    let lastLoad = Date.now();
+    this.poller = setInterval(() => {
+      if (Date.now() - lastLoad < 30_000 && !this.whatsappLinking()) return;
+      lastLoad = Date.now();
+      void this.load(false);
+    }, 3_000);
   }
 
   ngOnChanges(changes: SimpleChanges): void {
@@ -1109,6 +1115,24 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       (Array.isArray(account["legacyRoleAliases"]) && (account["legacyRoleAliases"] as unknown[]).map(String).includes(id))) || {};
   }
 
+  showSecondWhatsApp = false;
+
+  whatsappLinking(): boolean {
+    return this.activeStep === "whatsapp" && this.whatsappAccounts.some((account) =>
+      ["starting", "qr_needed", "authenticated", "pairing_code"].includes(String(this.whatsappAccount(account.id)["state"] || "")));
+  }
+
+  whatsappAccountReady(id: string): boolean {
+    const account = this.whatsappAccount(id);
+    return account["ready"] === true || String(account["state"] || "") === "ready";
+  }
+
+  // Linked, linking or failed: anything but a never-used slot.
+  whatsappAccountInUse(id: string): boolean {
+    const state = String(this.whatsappAccount(id)["state"] || "idle");
+    return state !== "idle" || this.whatsappQrAvailable(id);
+  }
+
   whatsappAccountState(id: string): string {
     return String(this.whatsappAccount(id)["state"] || "idle").replace(/_/g, " ");
   }
@@ -1155,7 +1179,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       return "No WhatsApp onboarding mode is available. Ask this instance's operator to repair its configured bridge.";
     }
     return this.isSelfHostedWhatsApp()
-      ? "Your WhatsApp device is paired to this instance's local bridge. Session data stays in this instance's data volume."
+      ? "Link your WhatsApp like WhatsApp Web. The session stays on this server, in its data volume."
       : "This instance uses its server-configured managed WhatsApp relay. Pairing and transport are managed by the instance operator.";
   }
 

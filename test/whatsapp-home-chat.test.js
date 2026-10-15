@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { createThread, getThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { bindThreadToPrivateOwnerChat } from "../packages/connectors/src/whatsapp-onboarding-private-chat.js";
-import { homeChatReplyText, parseHomeChatDirective, recordHomeChatReply } from "../packages/connectors/src/whatsapp-home-chat.js";
+import { formatHomeChatThreadList, homeChatAddress, homeChatReplyText, parseHomeChatDirective, recordHomeChatReply } from "../packages/connectors/src/whatsapp-home-chat.js";
 import { routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 
 const self = "15550000001@c.us";
@@ -20,6 +20,10 @@ test("home chat directives: @name, /switch, /threads; ordinary text is untouched
   assert.equal(parseHomeChatDirective("@projectx"), null, "a bare mention is not a message");
   assert.equal(homeChatReplyText("Done.", { name: "projectx" }), "[projectx] Done.");
   assert.equal(homeChatReplyText("[projectx] Done.", { name: "projectx" }), "[projectx] Done.");
+  // A name with spaces cannot follow @ or /switch; the one-word id is shown.
+  assert.equal(homeChatAddress({ id: "p-alpha", name: "Project Alpha" }), "p-alpha");
+  assert.equal(homeChatAddress({ id: "x1", name: "projectx" }), "projectx");
+  assert.match(formatHomeChatThreadList([{ id: "p-alpha", name: "Project Alpha" }], {}), /Project Alpha \(@p-alpha\)/);
 });
 
 async function fixture(t) {
@@ -117,4 +121,15 @@ test("a reply from an addressed thread comes back to the home chat as [name], an
 
   const quoted = await f.send("great, deploy it", { quoted: { messageId: "wa-sent-7", from: self, text: reply.text } });
   assert.equal(quoted.threadId, "projectx", "quoting the [projectx] reply answers projectx");
+});
+
+test("a disabled binding routes nothing, so its chat gets no 'mirroring is disabled' notice", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-disabled-binding-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin", ORKESTR_CONNECTOR_OUTBOX_STORE: "json", ORKESTR_WHATSAPP_API_AGENT_AUTORUN: "0" };
+  await createThread({ id: "old-e2e", name: "old-e2e", ownerUserId: "admin", executorId: "noop",
+    binding: { connector: "whatsapp", chatId: "51300000000000@lid", enabled: false, mirrorToWhatsApp: true } }, env);
+  const result = await routeWhatsAppInbound({ eventId: "evt-disabled", chatId: "51300000000000@lid", from: "51300000000000@lid", fromMe: true, accountId: "sender", text: "Hiiii" }, env).catch((error) => ({ error }));
+  assert.ok(result.error || result.skipped || result.threadId !== "old-e2e", "the message is not routed");
+  assert.deepEqual(await listThreadMessages("old-e2e", env), [], "nothing is appended to the disabled thread");
 });

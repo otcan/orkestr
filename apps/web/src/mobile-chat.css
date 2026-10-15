@@ -244,3 +244,42 @@
     font-size: 0.72rem;
   }
 }
+
+/* Laptop and desktop: the same idea with more room. The captions above the
+   thread title and tools add height without information. */
+@media (min-width: 761px) {
+  .chat-head .eyebrow,
+  .thread-tools-title {
+    display: none;
+  }
+
+  .chat-head {
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+
+  .chat-head-avatar {
+    width: 48px;
+    height: 48px;
+    min-width: 48px;
+  }
+
+  .chat-head h2 {
+    margin: 0 0 4px;
+    font-size: 1.35rem;
+  }
+
+  .chat-head .title-block {
+    justify-self: start;
+    margin-right: auto;
+    text-align: left;
+  }
+
+  .chat-head .subline {
+    justify-content: flex-start;
+  }
+
+  .thread-tools-popover {
+    margin-top: 0;
+  }
+}

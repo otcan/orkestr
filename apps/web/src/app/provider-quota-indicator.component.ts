@@ -18,7 +18,7 @@ const refreshMs = 60_000;
   standalone: true,
   template: `
     <span class="provider-quota" role="status" aria-label="Remaining Codex and Claude quota">
-      @for (provider of providers; track provider) {
+      @for (provider of visibleProviders(); track provider) {
         <span
           class="provider-quota-chip"
           [class.active]="provider === activeProvider"
@@ -73,6 +73,14 @@ export class ProviderQuotaIndicatorComponent implements OnInit, OnDestroy {
       },
       // Unknown stays unknown: keep the previous snapshot (or "?") on failure.
       error: () => this.detector.markForCheck(),
+    });
+  }
+
+  // Only agents with real usage data; no "5h ? wk ?" placeholders.
+  visibleProviders(): QuotaProvider[] {
+    return this.providers.filter((provider) => {
+      const entry = this.entry(provider);
+      return Boolean(entry) && (this.percent(provider, "fiveHour") !== "?" || this.percent(provider, "weekly") !== "?");
     });
   }
 

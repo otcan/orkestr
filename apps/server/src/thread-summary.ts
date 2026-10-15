@@ -1,3 +1,4 @@
+import { onThreadMessagesChanged } from "../../../packages/storage/src/thread-message-events.js";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { normalizeCodexModel, normalizeCodexServiceTier, normalizeReasoningEffort } from "../../../packages/core/src/codex-app-server-common.js";
@@ -80,6 +81,12 @@ let threadSummaryPayloadCache: {
   payload: null,
   inFlight: null,
 };
+
+// New or changed messages make the cached payload stale at once (its stale
+// copy stays usable as a fallback while the fresh one is computed).
+onThreadMessagesChanged(() => {
+  threadSummaryPayloadCache.expiresAt = 0;
+});
 
 export function resetThreadSummaryCachesForTest(): void {
   threadMetadataCache.clear();

@@ -19,6 +19,6 @@ test("thread header offers an in-place Codex/Claude executor switch", async () =
   assert.doesNotMatch(switcher, /localStorage|sessionStorage|console\.log/);
   assert.match(api, /this\.http\.put<[^>]+>\(this\.api\(`\/threads\/\$\{encodeURIComponent\(id\)\}\/executor`\), body\)/);
   assert.match(api, /this\.http\.get<[^>]+>\(this\.api\(`\/threads\/\$\{encodeURIComponent\(id\)\}\/executor`\)\)/);
-  assert.match(app, /ExecutorSwitcherComponent\]/);
+  assert.match(app, /ExecutorSwitcherComponent[,\]]/);
   assert.match(template, /<ork-executor-switcher \[threadId\]="thread\.id" \[activeProvider\]="activeExecutorProvider\(thread\)" \[working\]="threadIsWorking\(thread\)" \(switched\)="onExecutorSwitched\(\)">/);
 });

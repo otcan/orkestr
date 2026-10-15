@@ -1,5 +1,5 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, Output, inject } from "@angular/core";
-import { Subscription } from "rxjs";
+import { Subscription, firstValueFrom } from "rxjs";
 import { ApiService, ThreadExecutorSummary } from "./api.service";
 import { QuotaProvider, executorLabel } from "./provider-quota";
 
@@ -9,8 +9,9 @@ import { QuotaProvider, executorLabel } from "./provider-quota";
   selector: "ork-executor-switcher",
   standalone: true,
   template: `
+    @if (visibleProviders().length > 1) {
     <span class="executor-switcher" role="group" aria-label="Thread agent">
-      @for (provider of providers; track provider) {
+      @for (provider of visibleProviders(); track provider) {
         <button
           type="button"
           class="executor-switcher-option"
@@ -25,6 +26,7 @@ import { QuotaProvider, executorLabel } from "./provider-quota";
       @if (pendingProvider) { <em class="executor-switcher-note">→ {{ label(pendingProvider) }} after turn</em> }
       @if (error) { <em class="executor-switcher-error" role="alert">{{ error }}</em> }
     </span>
+    }
   `,
   styles: [`
     .executor-switcher { display: inline-flex; gap: 2px; align-items: center; min-width: 0; }
@@ -44,6 +46,8 @@ export class ExecutorSwitcherComponent implements OnChanges, OnDestroy {
   @Input() working = false;
   @Output() switched = new EventEmitter<ThreadExecutorSummary>();
   readonly providers: QuotaProvider[] = ["codex", "claude"];
+  // Claude Code is only offered when this server enables it (shared lookup).
+  claudeEnabled = false;
   pendingProvider: QuotaProvider | "" = "";
   busy = false;
   error = "";
@@ -54,6 +58,15 @@ export class ExecutorSwitcherComponent implements OnChanges, OnDestroy {
   ngOnChanges(): void {
     this.error = "";
     this.loadPending();
+    void claudeEnabledOnServer(this.api).then((enabled) => {
+      this.claudeEnabled = enabled;
+      this.detector.markForCheck();
+    });
+  }
+
+  // Only a real choice is shown: the active agent plus Claude if enabled.
+  visibleProviders(): QuotaProvider[] {
+    return this.providers.filter((provider) => provider === this.activeProvider || provider === "codex" || this.claudeEnabled);
   }
 
   ngOnDestroy(): void {
@@ -111,4 +124,13 @@ function pendingTarget(summary?: ThreadExecutorSummary | null): QuotaProvider | 
   if (target === "claude-code" || target === "claude") return "claude";
   if (target === "codex") return "codex";
   return "";
+}
+
+let claudeEnabledLookup: Promise<boolean> | null = null;
+function claudeEnabledOnServer(api: ApiService): Promise<boolean> {
+  claudeEnabledLookup ||= firstValueFrom(api.llmAccounts("claude-code")).then((result) => result.enabled === true).catch(() => {
+    claudeEnabledLookup = null;
+    return false;
+  });
+  return claudeEnabledLookup;
 }
