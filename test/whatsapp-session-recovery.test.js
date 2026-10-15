@@ -50,7 +50,8 @@ test("Connect after a verified logout starts a fresh pairing", async () => {
   assert.match(bridge, /previousState\.verifiedLogoutAt \|\| previousState\.state === "auth_failure"[\s\S]{0,200}retireLoggedOutSession/);
   assert.match(bridge, /state: "qr_needed",[\s\S]{0,200}verifiedLogoutAt: null/, "a new QR clears the logout mark");
   assert.match(bridge, /const qrAvailable = !verifiedLogoutIsNewer && /, "no QR is offered after a verified logout");
-  assert.match(bridge, /await writeQr\(normalized, qr[^\n]*\n[\s\S]{0,250}if \(!ownsRuntime\(\)\) return;\n\s*if \(\(accountStates\.get\(normalized\) \|\| \{\}\)\.state === "auth_failure"\) \{[\s\S]{0,160}clearQr\(normalized, env\)[\s\S]{0,80}return;\n\s*\}\n\s*setAccountState\(normalized, \{\n\s*state: "qr_needed"/, "a late QR never overrides an auth failure");
+  assert.match(bridge, /const published = await writeQr\(normalized, qr, dependencies\.qrcode, env, \(\) =>\s*ownsRuntime\(\) && \(accountStates\.get\(normalized\) \|\| \{\}\)\.state !== "auth_failure"\);\s*if \(!published\) return;/, "a late QR is never published");
+  assert.match(bridge, /if \(!shouldPublish\(\)\) return false;\s*\/\/[^\n]*\n\s*for \(const \[temp, target\] of files\) fsSync\.renameSync\(temp, target\);/, "publish is checked right before an atomic rename");
 });
 
 test("deleting a chat-level registry binding retires the record, not just its thread", async () => {
