@@ -2069,7 +2069,8 @@ async function accountSnapshot(accountId, env = process.env, options = {}) {
       : diagnosticProbeFailed && effectiveState.state === "ready"
         ? "degraded"
         : effectiveState.state;
-  const qrAvailable = Boolean(state.qrAvailable || (await exists(qrPath(accountId, env))));
+  // After a verified logout no QR is offered until a new pairing starts.
+  const qrAvailable = !verifiedLogoutIsNewer && Boolean(state.qrAvailable || (await exists(qrPath(accountId, env))));
   return {
     ...effectiveState,
     state: accountState,
@@ -6329,7 +6330,12 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
       await writeQr(normalized, qr, dependencies.qrcode, env);
       // An auth failure (or a newer runtime) may have landed while the QR was
       // written; never let a late QR overwrite it or clear its logout mark.
-      if (!ownsRuntime() || (accountStates.get(normalized) || {}).state === "auth_failure") return;
+      if (!ownsRuntime()) return;
+      if ((accountStates.get(normalized) || {}).state === "auth_failure") {
+        // This runtime failed: its QR must not be offered for scanning.
+        await clearQr(normalized, env).catch(() => {});
+        return;
+      }
       setAccountState(normalized, {
         state: "qr_needed",
         ready: false,
