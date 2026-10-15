@@ -26,7 +26,7 @@
               }
             ],
             "polyfills": ["zone.js"],
-            "styles": ["apps/web/src/styles.css", "apps/web/src/app-interface.css"],
+            "styles": ["apps/web/src/styles.css", "apps/web/src/app-interface.css", "apps/web/src/mobile-chat.css"],
             "tsConfig": "apps/web/tsconfig.app.json"
           },
           "configurations": {
