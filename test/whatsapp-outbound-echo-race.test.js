@@ -287,3 +287,34 @@ test("concurrent routes of the same WhatsApp event add one message", async () =>
   assert.equal(results.filter((result) => result.duplicate === false).length, 1);
   assert.equal(results.filter((result) => result.duplicate === true).length, 2);
 });
+
+// "Message yourself": a reply sent to the owner's phone id can come back as
+// the owner's own message on the hidden @lid id. It is still our echo.
+test("own reply echoed on the @lid id of Message yourself is recognised as an echo", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-lid-echo-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder" };
+  const phone = "15550000001@c.us";
+  const lid = "51300000000001@lid";
+  await boundThread(env, "self-thread", phone);
+  const runtime = {
+    client: {
+      info: { wid: { _serialized: phone } },
+      getContactLidAndPhone: async (ids) => ids.map((id) => ({ lid: id, pn: phone })),
+      async sendMessage(to) {
+        return { id: { _serialized: `true_${to}_3EB0SELF1`, id: "3EB0SELF1" } };
+      },
+    },
+  };
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    await sendLocalWhatsAppMessage({ accountId: "responder", chatId: phone, text: "Hello from the agent", env });
+    const echo = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${lid}_3EB0SELF1`, id: "3EB0SELF1", remote: lid },
+      from: phone, to: lid, fromMe: true, body: "Hello from the agent", timestamp: 1_780_000_100, _data: {},
+    }, env, { client: runtime.client });
+    assert.equal(echo.skipped, "outbound_echo_id");
+    assert.deepEqual((await listThreadMessages("self-thread", env)).filter((message) => message.role === "user"), [], "the agent's reply never becomes owner input");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});

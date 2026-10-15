@@ -2147,11 +2147,26 @@ function addChat(target, chat) {
   });
 }
 
+// The unique last part of "true_<chat>_<id>": the same message can come back
+// on another id for the same chat (phone id vs. hidden @lid id).
+function messageLocalId(messageId = "") {
+  const id = String(messageId || "").trim();
+  const index = id.lastIndexOf("_");
+  return index > 0 ? id.slice(index + 1) : "";
+}
+
+function isOutboundMessageId(messageId = "") {
+  const local = messageLocalId(messageId);
+  return outboundMessageIds.has(String(messageId || "").trim()) || Boolean(local && outboundMessageIds.has(`local:${local}`));
+}
+
 function rememberOutboundMessageId(messageId) {
   const id = String(messageId || "").trim();
   if (!id) return;
+  const local = messageLocalId(id);
+  if (local) outboundMessageIds.add(`local:${local}`);
   outboundMessageIds.add(id);
-  if (outboundMessageIds.size > 500) {
+  if (outboundMessageIds.size > 1000) {
     const [oldest] = outboundMessageIds;
     outboundMessageIds.delete(oldest);
   }
@@ -2345,6 +2360,26 @@ function runtimeAccountIdentity(runtime = {}) {
 
 function runtimeIdentity(runtime) {
   return serializedId(runtime?.client?.info?.wid || runtime?.client?.info?.me);
+}
+
+// Newer WhatsApp addresses the owner's own "Message yourself" chat by a
+// hidden @lid id, while the chat is bound by the phone id (@c.us). For the
+// owner's own messages, map an @lid that belongs to the owner's number back
+// to that number so the self-chat binding matches. Cached per LID.
+const ownLidPhoneCache = new Map();
+export async function localWhatsAppSelfChatId(client, chatId = "", fromMe = false) {
+  const id = String(chatId || "").trim();
+  if (!fromMe || !id.endsWith("@lid")) return id;
+  const own = String(client?.info?.wid?._serialized || "").trim();
+  if (!own) return id;
+  if (!ownLidPhoneCache.has(id)) {
+    if (typeof client?.getContactLidAndPhone !== "function") return id;
+    const [contact] = await client.getContactLidAndPhone([id]).catch(() => []) || [];
+    const phone = String(contact?.pn || "").trim();
+    if (!phone) return id;
+    ownLidPhoneCache.set(id, phone);
+  }
+  return ownLidPhoneCache.get(id) === own ? own : id;
 }
 
 export function localWhatsAppMessageRouteFields(message = {}) {
@@ -4234,7 +4269,9 @@ export async function handleInboundMessage(accountId, message, env = process.env
   if (options.ownOnly && !fromMe) return { skipped: "not_own_message" };
   if (message?.isStatus) return { skipped: "status_message" };
   const text = String(message?.body || "").trim();
-  const { chatId, from, fromMe: routeFromMe } = localWhatsAppMessageRouteFields(message);
+  const routeFields = localWhatsAppMessageRouteFields(message);
+  const { from, fromMe: routeFromMe } = routeFields;
+  const chatId = await localWhatsAppSelfChatId(options.client || runtimes.get(String(accountId || "").trim())?.client, routeFields.chatId, routeFromMe);
   const protocolEventId = stableProtocolMessageId(message);
   const eventId = String(serializedMessageId(message) || `${accountId}:${chatId}:${message.timestamp || Date.now()}`).trim();
   setAccountState(String(accountId || "").trim(), { lastInboundAt: nowIso() });
@@ -4300,14 +4337,14 @@ export async function handleInboundMessage(accountId, message, env = process.env
       matchedAttachmentCount: terminalEchoReplay.matchedAttachmentCount || 0,
     };
   }
-  if (fromMe && outboundMessageIds.has(eventId)) return { skipped: "outbound_echo_id", eventId, chatId };
+  if (fromMe && isOutboundMessageId(eventId)) return { skipped: "outbound_echo_id", eventId, chatId };
   // WhatsApp can report our own media before sendMessage returns its id. While
   // own media sends to this chat are in flight, wait for them and compare ids:
   // only an id we delivered is an echo. Anything else is the owner's own
   // message (e.g. a photo in "Message yourself") and is processed as usual.
   if (fromMe && message?.hasMedia && hasPendingOutboundAttachmentEcho(accountId, chatId)) {
     const pending = await waitForPendingOutboundAttachmentEchoes(accountId, chatId, env);
-    if (outboundMessageIds.has(eventId)) {
+    if (isOutboundMessageId(eventId)) {
       await appendEvent({
         type: "whatsapp_outbound_echo_attachment_pending_send",
         accountId,
