@@ -2125,6 +2125,8 @@ async function routeThread(input, config, env) {
         legacyFields: registryBinding.legacyFields,
       }
       : registryBinding;
+    // A disabled binding routes nothing (and must not answer with notices).
+    if (!whatsappBindingIsRouteEligible(binding)) return { threadId: "", binding: null };
     return { threadId: registryBinding.threadId, binding, accountPolicyAccounts: whatsappStatus.accounts || [] };
   }
   if (registryRoute?.error === "wa_binding_ambiguous") {
@@ -2136,7 +2138,7 @@ async function routeThread(input, config, env) {
       safeMessage: "Multiple Orkestr WhatsApp bindings matched this chat. Retire one duplicate binding or create a narrower binding.",
     });
   }
-  const matchedThreads = threads.filter((item) => !isThreadRetired(item) && whatsappInboundThreadMatchesBinding({
+  const matchedThreads = threads.filter((item) => !isThreadRetired(item) && whatsappBindingIsRouteEligible(item?.binding || {}) && whatsappInboundThreadMatchesBinding({
     thread: item,
     chatId,
     accountId,

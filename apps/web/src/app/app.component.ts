@@ -4206,7 +4206,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   debugModelLabel(thread: ThreadSummary | null): string {
-    const model = this.codexModelName(thread).replace(/^Syncing model$/i, "unknown");
+    const model = this.codexModelName(thread).replace(/^Default model$/i, "default");
     const effort = this.shortReasoningEffort(thread);
     return effort ? `${model}/${effort}` : model;
   }
@@ -4375,7 +4375,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       thread?.codexModel ||
       this.objectValue(thread?.runtime, "codexModel") ||
       this.objectValue(thread?.["executor"], "codexModel") ||
-      "Syncing model",
+      "Default model",
     );
   }
 

@@ -118,3 +118,14 @@ test("a reply from an addressed thread comes back to the home chat as [name], an
   const quoted = await f.send("great, deploy it", { quoted: { messageId: "wa-sent-7", from: self, text: reply.text } });
   assert.equal(quoted.threadId, "projectx", "quoting the [projectx] reply answers projectx");
 });
+
+test("a disabled binding routes nothing, so its chat gets no 'mirroring is disabled' notice", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-disabled-binding-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin", ORKESTR_CONNECTOR_OUTBOX_STORE: "json", ORKESTR_WHATSAPP_API_AGENT_AUTORUN: "0" };
+  await createThread({ id: "old-e2e", name: "old-e2e", ownerUserId: "admin", executorId: "noop",
+    binding: { connector: "whatsapp", chatId: "51300000000000@lid", enabled: false, mirrorToWhatsApp: true } }, env);
+  const result = await routeWhatsAppInbound({ eventId: "evt-disabled", chatId: "51300000000000@lid", from: "51300000000000@lid", fromMe: true, accountId: "sender", text: "Hiiii" }, env).catch((error) => ({ error }));
+  assert.ok(result.error || result.skipped || result.threadId !== "old-e2e", "the message is not routed");
+  assert.deepEqual(await listThreadMessages("old-e2e", env), [], "nothing is appended to the disabled thread");
+});

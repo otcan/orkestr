@@ -1,3 +1,4 @@
+import { emitThreadMessagesChanged } from "./thread-message-events.js";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { dataPaths, ensureDataDirs, userDataPaths } from "./paths.js";
@@ -47,6 +48,13 @@ export function createThreadRepository(env = process.env) {
   };
 }
 
+// Open browsers get a fresh thread summary as soon as messages change.
+async function notifyChanged(threadId, write) {
+  const result = await write;
+  emitThreadMessagesChanged(threadId);
+  return result;
+}
+
 export function createThreadMessageRepository(env = process.env) {
   const repositoryEnv = snapshotEnvironment(env);
   return {
@@ -80,16 +88,16 @@ export function createThreadMessageRepository(env = process.env) {
       return nextThreadMessageCursor(threadId, repositoryEnv);
     },
     async append(threadId, message) {
-      return withStorageFileLock(await this.pathForThread(threadId), async () => {
+      return notifyChanged(threadId, withStorageFileLock(await this.pathForThread(threadId), async () => {
         await fenceStagingReferences(threadId, [message], repositoryEnv);
         return appendThreadMessageRecord(threadId, message, repositoryEnv);
-      });
+      }));
     },
     async update(threadId, messageId, message) {
-      return withStorageFileLock(await this.pathForThread(threadId), async () => {
+      return notifyChanged(threadId, withStorageFileLock(await this.pathForThread(threadId), async () => {
         await fenceStagingReferences(threadId, [message], repositoryEnv);
         return updateThreadMessageRecord(threadId, messageId, message, repositoryEnv);
-      });
+      }));
     },
     fingerprint(threadId) {
       return threadMessageStoreFingerprint(threadId, repositoryEnv);
@@ -99,11 +107,11 @@ export function createThreadMessageRepository(env = process.env) {
     },
     async save(threadId, messages) {
       const file = await this.pathForThread(threadId);
-      return withStorageFileLock(file, async () => {
+      return notifyChanged(threadId, withStorageFileLock(file, async () => {
         await fenceStagingReferences(threadId, Array.isArray(messages) ? messages : [], repositoryEnv);
         if (await replaceThreadMessageRecords(threadId, messages, repositoryEnv)) return messages;
         return writeJson(file, Array.isArray(messages) ? messages : []);
-      });
+      }));
     },
     async mutate(threadId, operation) {
       const filePath = await this.pathForThread(threadId);

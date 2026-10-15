@@ -1,3 +1,4 @@
+import { onThreadMessagesChanged } from "../../../packages/storage/src/thread-message-events.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Server } from "node:http";
@@ -473,6 +474,31 @@ export function attachThreadStreamUpgrade(server: Server): void {
       summaryInFlight = false;
     }
   };
+
+  // Push right after a message is written (debounced), not only on the timer,
+  // so WhatsApp and agent messages appear in open browsers at once.
+  // The summary answers with its stale copy while it recomputes, so push a
+  // few times shortly after a change; unchanged summaries are not resent.
+  const changePushTimers = new Set<ReturnType<typeof setTimeout>>();
+  let changePushScheduled = false;
+  const pushAfterMessageChange = () => {
+    if (!summaryClients.size || changePushScheduled) return;
+    changePushScheduled = true;
+    for (const delayMs of [300, 1500, 4000]) {
+      const timer = setTimeout(() => {
+        changePushTimers.delete(timer);
+        if (delayMs === 300) changePushScheduled = false;
+        if (!summaryInFlight) void pushThreadSummary(false);
+      }, delayMs);
+      if (typeof timer.unref === "function") timer.unref();
+      changePushTimers.add(timer);
+    }
+  };
+  const stopMessageChangePush = onThreadMessagesChanged(() => pushAfterMessageChange());
+  server.on("close", () => {
+    stopMessageChangePush();
+    for (const timer of changePushTimers) clearTimeout(timer);
+  });
 
   const ensureSummaryTimer = () => {
     if (summaryTimer) return;

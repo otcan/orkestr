@@ -50,3 +50,21 @@ test("Connect after a verified logout starts a fresh pairing", async () => {
   assert.match(bridge, /previousState\.verifiedLogoutAt \|\| previousState\.state === "auth_failure"[\s\S]{0,200}retireLoggedOutSession/);
   assert.match(bridge, /state: "qr_needed",[\s\S]{0,200}verifiedLogoutAt: null/, "a new QR clears the logout mark");
 });
+
+test("deleting a chat-level registry binding retires the record, not just its thread", async () => {
+  const { createThread } = await import("../packages/core/src/threads.js");
+  const { upsertWhatsAppBindingRecord, readWhatsAppBindingRecords } = await import("../packages/connectors/src/whatsapp-binding-registry.js");
+  const { retireWhatsAppThreadBinding } = await import("../packages/connectors/src/whatsapp-account-bindings.js");
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-retire-record-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin" };
+  await createThread({ id: "old-e2e", name: "old-e2e", ownerUserId: "admin", executorId: "noop",
+    binding: { connector: "whatsapp", chatId: "51300000000000@lid", enabled: false, retired: true } }, env);
+  // Shape seen in production: chat level, a threadId, no source field.
+  await upsertWhatsAppBindingRecord({ id: "chat:51300000000000@lid:whatsapp", level: "chat", threadId: "old-e2e", ownerUserId: "admin",
+    chatId: "51300000000000@lid", accountId: "sender", responderConnectorAccountId: "sender", enabled: true, routeEligible: true }, env);
+  await retireWhatsAppThreadBinding("chat:51300000000000@lid:whatsapp", env);
+  const record = (await readWhatsAppBindingRecords(env)).find((item) => item.id === "chat:51300000000000@lid:whatsapp");
+  assert.equal(record.enabled, false);
+  assert.equal(record.routeEligible, false);
+  assert.equal(record.retired, true);
+});

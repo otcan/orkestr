@@ -26,7 +26,7 @@ export class ThreadManagementPanelComponent {
   @Input() branchLabel = "";
   @Input() workspaceLabel = "";
   @Input() gitLabel = "";
-  @Input() modelName = "Syncing model";
+  @Input() modelName = "Default model";
   @Input() reasoningLabel = "default";
   @Input() modeLabel = "code";
   @Input() primaryRateLabel = "--";

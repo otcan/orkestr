@@ -558,7 +558,11 @@ export async function updateWhatsAppThreadBinding(bindingId, input = {}, env = p
 
 export async function retireWhatsAppThreadBinding(bindingId, env = process.env) {
   const existing = await getWhatsAppBindingStatus(bindingId, { env });
-  if (existing.binding.source === "registry" || !existing.binding.threadId) {
+  // A persisted registry record (chat-level routes may carry a threadId and no
+  // source) is retired itself; retiring only its thread left the route live.
+  const records = await readWhatsAppBindingRecords(env).catch(() => []);
+  const recordIds = new Set(records.map((record) => pickString(record.id, record.bindingId)).filter(Boolean));
+  if (existing.binding.source === "registry" || !existing.binding.threadId || recordIds.has(pickString(bindingId)) || recordIds.has(pickString(existing.binding.id))) {
     const binding = await retireWhatsAppBindingRecord(existing.binding.id, env);
     return { ok: true, thread: null, binding: normalizeWhatsAppBinding(binding, { accounts: [], env, source: "registry" }) };
   }
