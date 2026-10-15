@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnInit, inject } from "@angular/core";
+import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnDestroy, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ThreadSummary, WhatsAppAccount } from "./api.service";
@@ -52,7 +52,7 @@ function errorText(error: unknown): string {
     </section>
   `,
 })
-export class WhatsAppHomeChatPanelComponent implements OnInit {
+export class WhatsAppHomeChatPanelComponent implements OnInit, OnDestroy {
   private readonly api = inject(ApiService);
   private readonly cdr = inject(ChangeDetectorRef);
 
@@ -64,8 +64,18 @@ export class WhatsAppHomeChatPanelComponent implements OnInit {
   notice = "";
   error = "";
 
+  private poller?: ReturnType<typeof setInterval>;
+
+  // Linking happens on the same page (QR above), so keep the view current.
   ngOnInit(): void {
     void this.load();
+    this.poller = setInterval(() => {
+      if (!this.busy && globalThis.document?.visibilityState !== "hidden") void this.load();
+    }, 4000);
+  }
+
+  ngOnDestroy(): void {
+    if (this.poller) clearInterval(this.poller);
   }
 
   label(thread: ThreadSummary): string {

@@ -1533,6 +1533,7 @@ export interface ThreadSummary {
   binding?: {
     connector?: string;
     chatId?: string;
+    privateOwnerChat?: boolean;
     displayName?: string;
     avatarUrl?: string;
     iconUrl?: string;
