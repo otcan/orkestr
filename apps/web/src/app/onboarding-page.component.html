@@ -630,6 +630,9 @@
               </article>
             }
           </div>
+          @if (isSelfHostedWhatsApp()) {
+            <ork-whatsapp-home-chat-panel />
+          }
         </section>
       }
 

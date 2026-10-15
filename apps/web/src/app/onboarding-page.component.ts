@@ -4,6 +4,7 @@ import { firstValueFrom } from "rxjs";
 import { CodexSignInPanelComponent } from "./codex-sign-in-panel.component";
 import { codexCommandAvailable, codexCommandUnavailableHint, codexStateLabel, codexUnavailableReason } from "./codex-runtime-status";
 import { ApiService, BackupRestorePlanResponse, BackupStatusResponse, BrowserSession, CodexAppServerStatus, CodexMigrationResponse, CodexStoredThread, ConnectorStatus, OnboardingProfile, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecureSecretMetadata, SetupStatus, StateBackupRecord, SystemDoctorResponse, UserOnboardingState, VersionResponse } from "./api.service";
+import { WhatsAppHomeChatPanelComponent } from "./whatsapp-home-chat-panel.component";
 import { SecurityChallengesPanelComponent } from "./security-challenges-panel.component";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
@@ -30,7 +31,7 @@ interface MailAccountRow {
 
 @Component({
   selector: "ork-onboarding-page",
-  imports: [CodexSignInPanelComponent, FormsModule, SecurityChallengesPanelComponent],
+  imports: [CodexSignInPanelComponent, FormsModule, SecurityChallengesPanelComponent, WhatsAppHomeChatPanelComponent],
   templateUrl: "./onboarding-page.component.html",
   styleUrls: ["./onboarding-page.component.css"],
 })
@@ -92,8 +93,8 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private formHydrated = false;
 
   readonly whatsappAccounts = [
-    { id: "account-1", label: "WhatsApp sender" },
-    { id: "account-2", label: "WhatsApp receiver" },
+    { id: "account-1", label: "WhatsApp 1" },
+    { id: "account-2", label: "WhatsApp 2" },
   ];
 
   readonly connectorSteps: Array<{ id: ConnectorStep; label: string; eyebrow: string }> = [
@@ -642,7 +643,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   pageSummary(): string {
     if (this.compactSetupMode()) return "This Orkestr instance needs a Codex login before it can start coding threads.";
-    return "Optional connections and server settings: Codex, WhatsApp, Gmail, browsers, security, secrets and backups. First-time setup happens in the three-step wizard.";
+    return "Optional connections and server settings: Codex, WhatsApp, Gmail, browsers, security, secrets and backups. First-time setup happens in the first-run wizard.";
   }
 
   pageEyebrow(): string {
@@ -1102,7 +1103,10 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   whatsappAccount(id: string): Record<string, unknown> {
     const accounts = this.connector("whatsapp")?.details?.["accounts"];
     if (!Array.isArray(accounts)) return {};
-    return (accounts as Array<Record<string, unknown>>).find((account) => String(account["accountId"]) === id) || {};
+    // Once linked, the server reports the phone identity as accountId; the slot id stays in runtimeAccountId.
+    return (accounts as Array<Record<string, unknown>>).find((account) =>
+      [account["runtimeAccountId"], account["accountId"], account["id"]].map(String).includes(id) ||
+      (Array.isArray(account["legacyRoleAliases"]) && (account["legacyRoleAliases"] as unknown[]).map(String).includes(id))) || {};
   }
 
   whatsappAccountState(id: string): string {
@@ -1110,9 +1114,11 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   whatsappAccountPurpose(id: string): string {
-    return id === "account-1"
-      ? "Default outbound account for replies and test messages."
-      : "Optional second account for receiving or isolating another WhatsApp login.";
+    const phone = String(this.whatsappAccount(id)["phoneNumber"] || "");
+    const base = id === "account-1"
+      ? "Your WhatsApp. Its \"Message yourself\" chat talks to your agent."
+      : "Optional second number, used for separate chats per thread.";
+    return phone ? `${base} Linked: ${phone}.` : base;
   }
 
   whatsappAccountClass(id: string): string {
