@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.203
+
+- Phones: the conversation view gives the screen to the messages (on an iPhone it showed one line). One-row top bar with every item visible down to 320px, one-line thread header, compact tool tabs, and a composer with the text field on top and one button row.
+- WhatsApp "Message yourself" is a home chat for several threads: `@name message` sends to another thread, `/switch name` keeps talking to it (`/switch` comes back), `/threads` lists them, and replying to a `[name] …` message answers that thread. Only your own messages are routed, and only to your threads that have no WhatsApp chat of their own.
+- Setup → WhatsApp: connect "Message yourself" to a thread after the first run; with a second linked number, give a thread its own chat.
+- Setup → WhatsApp no longer shows a linked account as "idle"; rows are WhatsApp 1/2 with the linked number.
+
 ## 0.1.0-alpha.202
 
 - First run: no "Name and start" step. As soon as Codex or Claude Code is signed in, Orkestr creates the first conversation `orkestr` and opens it.
