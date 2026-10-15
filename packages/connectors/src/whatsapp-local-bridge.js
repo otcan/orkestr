@@ -6327,6 +6327,9 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
       startupSettled = true;
       clearStartupTimer();
       await writeQr(normalized, qr, dependencies.qrcode, env);
+      // An auth failure (or a newer runtime) may have landed while the QR was
+      // written; never let a late QR overwrite it or clear its logout mark.
+      if (!ownsRuntime() || (accountStates.get(normalized) || {}).state === "auth_failure") return;
       setAccountState(normalized, {
         state: "qr_needed",
         ready: false,

@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { createThread, getThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { bindThreadToPrivateOwnerChat } from "../packages/connectors/src/whatsapp-onboarding-private-chat.js";
-import { homeChatReplyText, parseHomeChatDirective, recordHomeChatReply } from "../packages/connectors/src/whatsapp-home-chat.js";
+import { formatHomeChatThreadList, homeChatAddress, homeChatReplyText, parseHomeChatDirective, recordHomeChatReply } from "../packages/connectors/src/whatsapp-home-chat.js";
 import { routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 
 const self = "15550000001@c.us";
@@ -20,6 +20,10 @@ test("home chat directives: @name, /switch, /threads; ordinary text is untouched
   assert.equal(parseHomeChatDirective("@projectx"), null, "a bare mention is not a message");
   assert.equal(homeChatReplyText("Done.", { name: "projectx" }), "[projectx] Done.");
   assert.equal(homeChatReplyText("[projectx] Done.", { name: "projectx" }), "[projectx] Done.");
+  // A name with spaces cannot follow @ or /switch; the one-word id is shown.
+  assert.equal(homeChatAddress({ id: "p-alpha", name: "Project Alpha" }), "p-alpha");
+  assert.equal(homeChatAddress({ id: "x1", name: "projectx" }), "projectx");
+  assert.match(formatHomeChatThreadList([{ id: "p-alpha", name: "Project Alpha" }], {}), /Project Alpha \(@p-alpha\)/);
 });
 
 async function fixture(t) {

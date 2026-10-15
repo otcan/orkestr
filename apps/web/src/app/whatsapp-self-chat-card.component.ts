@@ -9,21 +9,19 @@ import { ApiService, ThreadSummary, WhatsAppAccount } from "./api.service";
   selector: "ork-whatsapp-self-chat-card",
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    @if (ownerAccount(); as account) {
+    @if (readyAccounts().length) {
       <div class="wa-self-chat notice">
-        @if (homeThread(); as home) {
-          @if (home.id === thread?.id) {
-            <strong>Message yourself talks to this thread.</strong>
-          } @else {
-            <strong>Reach this thread from your Message yourself chat.</strong>
-            <span>That chat talks to {{ home.name || home.id }}. Write <code>&#64;{{ thread?.name || thread?.id }} your message</code> there, or <code>/switch {{ thread?.name || thread?.id }}</code>.</span>
-          }
-        } @else {
+        @if (isHomeThread()) {
+          <strong>Message yourself talks to this thread.</strong>
+        } @else if (freeAccount(); as account) {
           <strong>Talk to this thread in WhatsApp</strong>
           <span>Use your own "Message yourself" chat on {{ account.phoneNumber || "your linked number" }}. Nobody else is added.</span>
           <div class="button-row">
             <button type="button" (click)="connect(account)" [disabled]="busy">{{ busy ? "Connecting" : "Use my Message yourself chat" }}</button>
           </div>
+        } @else if (homeThread(); as home) {
+          <strong>Reach this thread from your Message yourself chat.</strong>
+          <span>That chat talks to {{ home.name || home.id }}. Write <code>&#64;{{ address() }} your message</code> there, or <code>/switch {{ address() }}</code>.</span>
         }
         @if (error) { <small role="alert">{{ error }}</small> }
       </div>
@@ -60,12 +58,36 @@ export class WhatsAppSelfChatCardComponent implements OnChanges {
     return binding && typeof binding === "object" ? binding : {};
   }
 
-  homeThread(): ThreadSummary | null {
-    return this.threads.find((thread) => this.binding(thread)["privateOwnerChat"] === true) || null;
+  readyAccounts(): WhatsAppAccount[] {
+    return this.accounts.filter((account) => (account.ready === true || account.state === "ready") && String(account.contactId || "").endsWith("@c.us"));
   }
 
-  ownerAccount(): WhatsAppAccount | null {
-    return this.accounts.find((account) => (account.ready === true || account.state === "ready") && String(account.contactId || "").endsWith("@c.us")) || null;
+  // The home thread of one linked number: bound to that number's own chat.
+  private homeFor(account: WhatsAppAccount): ThreadSummary | null {
+    return this.threads.find((thread) => this.binding(thread)["privateOwnerChat"] === true && this.binding(thread)["chatId"] === account.contactId) || null;
+  }
+
+  isHomeThread(): boolean {
+    return this.binding(this.thread)["privateOwnerChat"] === true;
+  }
+
+  // A linked number whose Message yourself chat is still free.
+  freeAccount(): WhatsAppAccount | null {
+    return this.readyAccounts().find((account) => !this.homeFor(account)) || null;
+  }
+
+  homeThread(): ThreadSummary | null {
+    for (const account of this.readyAccounts()) {
+      const home = this.homeFor(account);
+      if (home) return home;
+    }
+    return null;
+  }
+
+  // What to type after @ or /switch: the router takes one word (name or id).
+  address(): string {
+    const name = String(this.thread?.name || "").trim();
+    return /^[A-Za-z0-9][\w.-]*$/.test(name) ? name : String(this.thread?.id || "");
   }
 
   async connect(account: WhatsAppAccount): Promise<void> {

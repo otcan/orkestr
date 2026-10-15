@@ -77,10 +77,18 @@ export function homeChatTargets(threads = [], homeThread = {}, chatId = "", env 
   });
 }
 
+// What to type after @ or /switch: one word, the name when it is one word.
+export function homeChatAddress(thread = {}) {
+  const name = clean(thread.name);
+  return /^[A-Za-z0-9][\w.-]*$/.test(name) ? name : clean(thread.id);
+}
+
 export function formatHomeChatThreadList(targets = [], homeThread = {}, focusId = "") {
   const lines = targets.map((thread, index) => {
     const marks = [thread.id === homeThread.id ? "home" : "", thread.id === focusId ? "current" : ""].filter(Boolean);
-    return `${index + 1}. ${threadLabel(thread)}${marks.length ? ` (${marks.join(", ")})` : ""}`;
+    const address = homeChatAddress(thread);
+    const label = threadLabel(thread);
+    return `${index + 1}. ${label}${address !== label ? ` (@${address})` : ""}${marks.length ? ` (${marks.join(", ")})` : ""}`;
   });
   return [
     "Threads you can message from this chat:",

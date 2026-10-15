@@ -49,6 +49,7 @@ test("Connect after a verified logout starts a fresh pairing", async () => {
   const bridge = await fs.readFile("packages/connectors/src/whatsapp-local-bridge.js", "utf8");
   assert.match(bridge, /previousState\.verifiedLogoutAt \|\| previousState\.state === "auth_failure"[\s\S]{0,200}retireLoggedOutSession/);
   assert.match(bridge, /state: "qr_needed",[\s\S]{0,200}verifiedLogoutAt: null/, "a new QR clears the logout mark");
+  assert.match(bridge, /await writeQr\(normalized, qr[^\n]*\n[\s\S]{0,250}if \(!ownsRuntime\(\) \|\| \(accountStates\.get\(normalized\) \|\| \{\}\)\.state === "auth_failure"\) return;\n\s*setAccountState\(normalized, \{\n\s*state: "qr_needed"/, "a late QR never overrides an auth failure");
 });
 
 test("deleting a chat-level registry binding retires the record, not just its thread", async () => {
