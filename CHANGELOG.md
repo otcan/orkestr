@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-alpha.206
+
+- Includes everything from 0.1.0-alpha.205 (WhatsApp self-chat @lid fix and the simple WhatsApp flow), which was tagged but could not be deployed.
+- Deploy: the server build tools (TypeScript and its type packages) install in their own folder, so npm no longer re-resolves every dev dependency from the registry; this works around an npm 10 resolver crash ("reading 'edgesOut'") that blocked deploys.
+
 ## 0.1.0-alpha.205
 
 - WhatsApp "Message yourself" is read again: newer WhatsApp delivers your own self-chat messages on a hidden @lid id; Orkestr now maps it to your number. The agent's own replies echoed on that id are still recognised and never fed back as your input.
