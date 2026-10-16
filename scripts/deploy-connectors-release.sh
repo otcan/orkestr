@@ -114,7 +114,7 @@ npm ci --omit=dev
 node scripts/patch-whatsapp-media-id.mjs
 node --check scripts/orkestr-connectors-mcp.mjs
 node --check scripts/orkestr-wa-worker.mjs
-node --test --test-concurrency=1 test/connectors-mcp.test.js test/orkestr-wa-service.test.js test/whatsapp-media-id-compat.test.js
+node --test --test-concurrency=1 test/connectors-mcp.test.js test/orkestr-wa-service.test.js test/whatsapp-media-id-compat.test.js test/whatsapp-history-id-compat.test.js
 printf '%s\n' "$revision" > "$release_dir/REVISION"
 
 if [ "$activate" -ne 1 ]; then
