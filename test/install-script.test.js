@@ -261,7 +261,9 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.doesNotMatch(runtimeDepsScript, /mapfile|readarray/);
   assert.match(runtimeDepsScript, /server_build_deps=\(\)/);
   assert.match(runtimeDepsScript, /while IFS= read -r dep/);
-  assert.match(runtimeDepsScript, /npm install --include=dev --no-save/);
+  // Build tools install in their own folder, so npm never re-resolves the whole dev tree.
+  assert.match(runtimeDepsScript, /npm install --prefix "\$tools_dir" --no-save --package-lock=false/);
+  assert.match(runtimeDepsScript, /ln -sfn "\$tools_dir\/node_modules\/\.bin\/tsc" node_modules\/\.bin\/tsc/);
   assert.match(runtimeDepsScript, /node_modules\/\.bin\/tsc/);
   assert.match(script, /npm run build:runtime/);
   assert.match(script, /npm prune --omit=dev/);

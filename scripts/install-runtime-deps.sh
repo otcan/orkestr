@@ -32,7 +32,22 @@ NODE
 )
 
 if [ "${#server_build_deps[@]}" -gt 0 ]; then
-  npm install --include=dev --no-save --package-lock=false --ignore-scripts --no-audit --no-fund "${server_build_deps[@]}"
+  # Install only the compiler and its type packages, in a folder without the
+  # project's package.json, so npm resolves just these three packages instead
+  # of re-resolving every devDependency from the registry (which can trip npm
+  # resolver bugs on unrelated newly published peers). Link them in.
+  tools_dir="$PWD/.runtime-build-tools"
+  rm -rf "$tools_dir"
+  mkdir -p "$tools_dir"
+  npm install --prefix "$tools_dir" --no-save --package-lock=false --ignore-scripts --no-audit --no-fund "${server_build_deps[@]}"
+  mkdir -p node_modules/.bin node_modules/@types
+  ln -sfn "$tools_dir/node_modules/typescript" node_modules/typescript
+  ln -sfn "$tools_dir/node_modules/.bin/tsc" node_modules/.bin/tsc
+  for types in node ws; do
+    if [ -d "$tools_dir/node_modules/@types/$types" ]; then
+      ln -sfn "$tools_dir/node_modules/@types/$types" "node_modules/@types/$types"
+    fi
+  done
 fi
 
 if [ ! -x node_modules/.bin/tsc ]; then
