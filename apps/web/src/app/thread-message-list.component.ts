@@ -67,6 +67,15 @@ export class ThreadMessageListComponent {
     return "Update";
   }
 
+  // Where a message crossed WhatsApp: written there, or delivered there.
+  whatsappLabel(message: ThreadMessage): string {
+    const role = String(message.role || "").toLowerCase();
+    const source = String(message.source || "").toLowerCase();
+    if (role === "user" && (source.startsWith("whatsapp") || message["originSurface"] === "whatsapp")) return "from WhatsApp";
+    if (role === "assistant" && (message["whatsappMessageId"] || (Array.isArray(message["whatsappMessageIds"]) && message["whatsappMessageIds"].length))) return "sent to WhatsApp";
+    return "";
+  }
+
   messagePhaseLabel(message: ThreadMessage): string {
     if (String(message.role || "").toLowerCase() !== "assistant") return "";
     const phase = this.messagePhase(message);

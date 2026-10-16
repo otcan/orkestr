@@ -283,3 +283,20 @@
     margin-top: 0;
   }
 }
+
+/* WhatsApp reachability badge in the thread header (all sizes). */
+.wa-reach-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid rgba(37, 211, 102, 0.55);
+  border-radius: 999px;
+  color: #7ee2a8;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.whatsapp-badge {
+  border-color: rgba(37, 211, 102, 0.55);
+  color: #7ee2a8;
+}

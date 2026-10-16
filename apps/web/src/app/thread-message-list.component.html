@@ -16,6 +16,9 @@
     >
       <div class="message-meta">
         <strong>{{ messageRoleLabel(message) }}</strong>
+        @if (whatsappLabel(message)) {
+          <em class="phase-badge whatsapp-badge" [title]="whatsappLabel(message)">{{ whatsappLabel(message) }}</em>
+        }
         @if (messagePhaseLabel(message)) {
           <em class="phase-badge">{{ messagePhaseLabel(message) }}</em>
         }
