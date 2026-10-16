@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-alpha.208
+
+- WhatsApp no longer shows "broken" (and stops refusing replies) when listing chats is slow, for example Docker on a Mac with many chats: a slow chat list falls back to a quick connection check.
+- "Message yourself" messages are recognised even while WhatsApp Web is slow: your own message from your hidden @lid id to the same id is your self-chat, no lookup needed.
+
 ## 0.1.0-alpha.206
 
 - Includes everything from 0.1.0-alpha.205 (WhatsApp self-chat @lid fix and the simple WhatsApp flow), which was tagged but could not be deployed.
