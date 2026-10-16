@@ -58,6 +58,9 @@ test("auto home chat needs a simple single-owner install and an unbound chat", a
   const deps = (extra = {}) => ({ listUsers: async () => [{ id: "admin" }], readAccounts: async () => [], ...extra });
   assert.equal((await autoConnectHomeChat({ accountId: "account-1", contactId: self }, env, deps({ listUsers: async () => [{ id: "admin" }, { id: "casey" }] }))).skipped, "multi_user");
   assert.equal((await autoConnectHomeChat({ accountId: "account-1", contactId: self }, env, deps({ readAccounts: async () => [{ accountId: "15550000001", runtimeAccountId: "account-1", ownerUserId: "casey" }] }))).skipped, "account_owner_mismatch");
+  const failing = async () => { throw new Error("unreadable"); };
+  assert.equal((await autoConnectHomeChat({ accountId: "account-1", contactId: self }, env, deps({ listUsers: failing }))).skipped, "owner_check_unavailable", "unreadable users fail closed");
+  assert.equal((await autoConnectHomeChat({ accountId: "account-1", contactId: self }, env, deps({ readAccounts: failing }))).skipped, "owner_check_unavailable", "unreadable accounts fail closed");
   const bound = { ...(await home()), ORKESTR_DOCKER: "1" };
   await createThread({ id: "orkestr", name: "orkestr", ownerUserId: "admin", executorId: "noop" }, bound);
   await createThread({ id: "legacy", name: "legacy", ownerUserId: "admin", executorId: "noop", binding: { connector: "whatsapp", chatId: self, enabled: true } }, bound);

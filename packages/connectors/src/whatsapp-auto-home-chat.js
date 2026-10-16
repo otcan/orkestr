@@ -50,9 +50,18 @@ export async function autoConnectHomeChat({ accountId = "", contactId = "" } = {
   if (!autoHomeChatEnabled(env)) return { skipped: "disabled" };
   if (!account || !contact.endsWith("@c.us")) return { skipped: "no_owner_contact" };
   const owner = resourceOwnerUserId({}, env);
-  // Single-owner installs only: one user, and the linked account belongs to them.
-  if ((await users(env).catch(() => [])).filter((user) => user?.status !== "disabled").length > 1) return { skipped: "multi_user" };
-  const record = (await accounts(env).catch(() => [])).find((item) =>
+  // Single-owner installs only: one user, and the linked account belongs to
+  // them. An unreadable user or account list fails closed.
+  let userList, accountList;
+  try {
+    userList = await users(env);
+    accountList = await accounts(env);
+  } catch {
+    return { skipped: "owner_check_unavailable" };
+  }
+  if (!Array.isArray(userList) || !Array.isArray(accountList)) return { skipped: "owner_check_unavailable" };
+  if (userList.filter((user) => user?.status !== "disabled").length > 1) return { skipped: "multi_user" };
+  const record = accountList.find((item) =>
     [item?.accountId, item?.id, item?.runtimeAccountId].map(clean).includes(account));
   if (record && clean(record.ownerUserId) && clean(record.ownerUserId) !== owner) return { skipped: "account_owner_mismatch" };
   const threads = await list(env);
