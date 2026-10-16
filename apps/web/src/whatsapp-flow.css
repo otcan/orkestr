@@ -1,0 +1,38 @@
+/* Setup → WhatsApp as two numbered steps, plus a collapsed Advanced area. */
+.wa-steps {
+  display: grid;
+  gap: 14px;
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wa-steps > li {
+  padding: 12px 14px;
+  border: 1px solid rgba(119, 205, 126, 0.22);
+  border-radius: 12px;
+}
+
+.wa-steps > li.done {
+  border-color: rgba(37, 211, 102, 0.55);
+}
+
+.wa-steps h4 {
+  margin: 0 0 8px;
+}
+
+.wa-advanced {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border: 1px dashed rgba(119, 205, 126, 0.22);
+  border-radius: 10px;
+}
+
+.wa-advanced > summary {
+  cursor: pointer;
+  color: var(--ui-muted, #9fb3a1);
+}
+
+.wa-advanced[open] > summary {
+  margin-bottom: 10px;
+}

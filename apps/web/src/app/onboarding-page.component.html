@@ -604,9 +604,7 @@
         <section class="setup-form">
           <h3>WhatsApp</h3>
           <p>{{ whatsappModeSummary() }}</p>
-          <div class="whatsapp-accounts">
-            @for (account of whatsappAccounts; track account.id) {
-              @if (account.id === "account-1" || whatsappAccountInUse(account.id) || showSecondWhatsApp) {
+          <ng-template #waAccountRow let-account>
               <article class="whatsapp-account">
                 <div>
                   <strong>{{ account.label }}</strong>
@@ -635,14 +633,29 @@
                   }
                 }
               </article>
-              }
+          </ng-template>
+          <ol class="wa-steps">
+            <li [class.done]="whatsappAccountReady('account-1')">
+              <h4>1. Link your phone</h4>
+              <div class="whatsapp-accounts">
+                <ng-container *ngTemplateOutlet="waAccountRow; context: { $implicit: whatsappAccounts[0] }"></ng-container>
+              </div>
+            </li>
+            @if (isSelfHostedWhatsApp()) {
+              <li>
+                <h4>2. Chat in "Message yourself"</h4>
+                <ork-whatsapp-home-chat-panel mode="home" />
+              </li>
             }
-          </div>
-          @if (isSelfHostedWhatsApp() && !showSecondWhatsApp && !whatsappAccountInUse("account-2")) {
-            <button class="secondary" type="button" (click)="showSecondWhatsApp = true">Add a second number (optional)</button>
-          }
+          </ol>
           @if (isSelfHostedWhatsApp()) {
-            <ork-whatsapp-home-chat-panel />
+            <details class="wa-advanced" [open]="whatsappAccountInUse('account-2')">
+              <summary>Advanced: a second number and separate chats per thread</summary>
+              <div class="whatsapp-accounts">
+                <ng-container *ngTemplateOutlet="waAccountRow; context: { $implicit: whatsappAccounts[1] }"></ng-container>
+              </div>
+              <ork-whatsapp-home-chat-panel mode="advanced" />
+            </details>
           }
         </section>
       }

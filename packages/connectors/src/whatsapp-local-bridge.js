@@ -1,3 +1,4 @@
+import { autoConnectHomeChat } from "./whatsapp-auto-home-chat.js";
 import { chromeLockFromOtherHost, chromeLockHost, retireLoggedOutSession } from "./whatsapp-session-recovery.js";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
@@ -6464,6 +6465,9 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     await clearQr(normalized, env);
     markLocalWhatsAppAccountReady(normalized, client);
     await appendEvent({ type: "whatsapp_local_ready", accountId: normalized }, env);
+    // First link on a simple install: connect "Message yourself" to the main thread.
+    void autoConnectHomeChat({ accountId: normalized, contactId: client?.info?.wid?._serialized }, env).catch((error) =>
+      appendEvent({ type: "whatsapp_home_chat_auto_connect_failed", accountId: normalized, error: String(error?.message || error) }, env).catch(() => {}));
     void markWhatsAppAccountPaired(normalized, env).catch(() => {});
     void recoverOutboundAfterLocalWhatsAppReady(normalized, env);
     void recoverUnreadLocalWhatsAppMessages(env, {
