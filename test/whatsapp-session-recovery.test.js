@@ -71,3 +71,24 @@ test("deleting a chat-level registry binding retires the record, not just its th
   assert.equal(record.routeEligible, false);
   assert.equal(record.retired, true);
 });
+
+// Newer WhatsApp sends the owner's "Message yourself" messages on a hidden
+// @lid id; the self-chat binding uses the phone id.
+test("the owner's own @lid self-chat id maps to the owner's phone id; others stay as they are", async () => {
+  const { localWhatsAppSelfChatId } = await import("../packages/connectors/src/whatsapp-local-bridge.js");
+  const calls = [];
+  const client = {
+    info: { wid: { _serialized: "15550000001@c.us" } },
+    getContactLidAndPhone: async (ids) => {
+      calls.push(ids);
+      return ids.map((lid) => ({ lid, pn: lid === "51300000000001@lid" ? "15550000001@c.us" : "15559990000@c.us" }));
+    },
+  };
+  assert.equal(await localWhatsAppSelfChatId(client, "51300000000001@lid", true), "15550000001@c.us");
+  assert.equal(await localWhatsAppSelfChatId(client, "51300000000001@lid", true), "15550000001@c.us");
+  assert.equal(calls.length, 1, "the lookup is cached");
+  assert.equal(await localWhatsAppSelfChatId(client, "51300000000002@lid", true), "51300000000002@lid", "someone else's chat keeps its id");
+  assert.equal(await localWhatsAppSelfChatId(client, "51300000000001@lid", false), "51300000000001@lid", "only the owner's own messages are mapped");
+  assert.equal(await localWhatsAppSelfChatId(client, "120363000000000000@g.us", true), "120363000000000000@g.us");
+  assert.equal(await localWhatsAppSelfChatId({}, "51300000000001@lid", true), "51300000000001@lid", "no client, no change");
+});
