@@ -20,3 +20,4 @@ secrets/
 .wwebjs_auth/
 __pycache__/
 *.pyc
+.runtime-build-tools/
