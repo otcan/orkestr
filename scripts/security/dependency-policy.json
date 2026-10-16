@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "root": {
     "scripts": { "postinstall": "node scripts/patch-whatsapp-media-id.mjs" },
-    "patchSha256": "bb24e66cfb659737c144f03f6965cceeca0ed94e4bfeae0895aad6921bc03351"
+    "patchSha256": "a336af7535dfb81994031339b4830f09e529f6ff7815b0b6cd05a5567c668ef2"
   },
   "installScripts": [
     {

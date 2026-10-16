@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import vm from "node:vm";
 import test from "node:test";
 import { mediaIdPatch, messageLookupPatch, originalMessageLookup, patchWhatsAppMediaIdSource } from "../scripts/patch-whatsapp-media-id.mjs";
-import { stripWhatsAppHistoryIdPatch } from "../scripts/whatsapp-history-id-compat.mjs";
+import { stripWhatsAppHistoryIdPatch } from "../scripts/patch-whatsapp-media-id.mjs";
 
 const require = createRequire(import.meta.url);
 const installed = await fs.readFile(require.resolve("whatsapp-web.js/src/util/Injected/Utils.js"), "utf8");

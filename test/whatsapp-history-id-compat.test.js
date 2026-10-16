@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import vm from "node:vm";
 import test from "node:test";
-import { stripWhatsAppHistoryIdPatch } from "../scripts/whatsapp-history-id-compat.mjs";
+import { stripWhatsAppHistoryIdPatch } from "../scripts/patch-whatsapp-media-id.mjs";
 
 const require = createRequire(import.meta.url);
 const Chat = require("whatsapp-web.js/src/structures/Chat.js");
