@@ -2369,11 +2369,18 @@ function runtimeIdentity(runtime) {
 // owner's own messages, map an @lid that belongs to the owner's number back
 // to that number so the self-chat binding matches. Cached per LID.
 const ownLidPhoneCache = new Map();
-export async function localWhatsAppSelfChatId(client, chatId = "", fromMe = false) {
+export async function localWhatsAppSelfChatId(client, chatId = "", fromMe = false, sender = "") {
   const id = String(chatId || "").trim();
   if (!fromMe || !id.endsWith("@lid")) return id;
   const own = String(client?.info?.wid?._serialized || "").trim();
   if (!own) return id;
+  // In "Message yourself" the owner's own message goes from their LID to the
+  // same LID: no lookup needed (lookups can fail while WhatsApp Web is slow).
+  const from = String(sender || "").trim().replace(/:\d+(?=@)/, "");
+  if (from && from === id) {
+    ownLidPhoneCache.set(id, own);
+    return own;
+  }
   if (!ownLidPhoneCache.has(id)) {
     if (typeof client?.getContactLidAndPhone !== "function") return id;
     const [contact] = await client.getContactLidAndPhone([id]).catch(() => []) || [];
@@ -2654,7 +2661,9 @@ async function probeLocalWhatsAppAccountChatOps(accountId = "", env = process.en
     });
     return { ok: true, chatCount: Array.isArray(chats) ? chats.length : 0, sampleChatId: sampleId };
   } catch (error) {
-    const browserStore = localWhatsAppBareRRuntimeError(error)
+    // A slow chat list (many chats, slow host) is not a broken runtime: check
+    // the cheap browser store before marking chat operations unusable.
+    const browserStore = localWhatsAppBareRRuntimeError(error) || /whatsapp_get_chats_timeout/.test(String(error?.message || error))
       ? await probeLocalWhatsAppBrowserStore(runtime.client, env)
       : null;
     if (browserStore?.ok) {
@@ -4273,7 +4282,7 @@ export async function handleInboundMessage(accountId, message, env = process.env
   const text = String(message?.body || "").trim();
   const routeFields = localWhatsAppMessageRouteFields(message);
   const { from, fromMe: routeFromMe } = routeFields;
-  const chatId = await localWhatsAppSelfChatId(options.client || runtimes.get(String(accountId || "").trim())?.client, routeFields.chatId, routeFromMe);
+  const chatId = await localWhatsAppSelfChatId(options.client || runtimes.get(String(accountId || "").trim())?.client, routeFields.chatId, routeFromMe, message?.from);
   const protocolEventId = stableProtocolMessageId(message);
   const eventId = String(serializedMessageId(message) || `${accountId}:${chatId}:${message.timestamp || Date.now()}`).trim();
   setAccountState(String(accountId || "").trim(), { lastInboundAt: nowIso() });
