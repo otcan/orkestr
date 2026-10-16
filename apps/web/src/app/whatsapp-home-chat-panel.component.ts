@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnDestroy, OnInit, inject } from "@angular/core";
+import { ChangeDetectionStrategy, ChangeDetectorRef, Component, Input, OnDestroy, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ThreadSummary, WhatsAppAccount } from "./api.service";
@@ -17,9 +17,9 @@ function errorText(error: unknown): string {
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <section class="whatsapp-home-chat" aria-label="Message yourself">
-      <h4>Chat with your agents in WhatsApp</h4>
+      @if (mode === "home") {
       @if (!ownerAccount()) {
-        <p>Link your WhatsApp above first. Then your own "Message yourself" chat becomes the chat with your agent.</p>
+        <p>Link your phone in step 1 first. Then your own "Message yourself" chat becomes the chat with your agent.</p>
       } @else if (homeThread(); as home) {
         <p><strong>Message yourself → {{ label(home) }}.</strong> Open WhatsApp, tap the new-chat button and pick <em>Message yourself</em> (your own name, marked "You"). What you write there goes to {{ label(home) }}.</p>
         <ul class="whatsapp-home-chat-help">
@@ -36,7 +36,8 @@ function errorText(error: unknown): string {
           <button type="button" (click)="connectHomeChat()" [disabled]="busy || !selectedThreadId">Use Message yourself</button>
         </div>
       }
-      @if (homeThread() && secondAccount()) {
+      }
+      @if (mode === "advanced" && homeThread() && secondAccount()) {
         <div class="whatsapp-own-chat">
           <p>Give a busy thread its own WhatsApp chat: a group with you and your second number ({{ secondAccount()?.phoneNumber || "WhatsApp 2" }}). That thread then talks only in its own chat.</p>
           <div class="button-row">
@@ -53,6 +54,8 @@ function errorText(error: unknown): string {
   `,
 })
 export class WhatsAppHomeChatPanelComponent implements OnInit, OnDestroy {
+  // "home": Message yourself status and how-to. "advanced": separate chats.
+  @Input() mode: "home" | "advanced" = "home";
   private readonly api = inject(ApiService);
   private readonly cdr = inject(ChangeDetectorRef);
 

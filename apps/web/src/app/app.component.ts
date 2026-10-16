@@ -54,6 +54,7 @@ import { ProviderQuotaIndicatorComponent } from "./provider-quota-indicator.comp
 import { ExecutorSwitcherComponent } from "./executor-switcher.component";
 import { ActiveThreadRefresh } from "./active-thread-refresh";
 import { WhatsAppSelfChatCardComponent } from "./whatsapp-self-chat-card.component";
+import { whatsappReachLabel } from "./whatsapp-thread-reach";
 import { QuotaProvider, claudeEffortLabel, claudeModelName, executorLabel, threadExecutorProvider } from "./provider-quota";
 
 type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "instanceVault" | "userConnectors";
@@ -357,6 +358,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.systemPoller = setInterval(() => void this.loadSystemSummarySilent(), 30_000);
       this.activeThreadRefresh.start();
     }
+  }
+
+  whatsappReach(thread: ThreadSummary | null): string {
+    return whatsappReachLabel(thread as never, this.threads as never);
   }
 
   // The open conversation is busy: a message was just sent or replies are

@@ -4,6 +4,7 @@ import { firstValueFrom } from "rxjs";
 import { CodexSignInPanelComponent } from "./codex-sign-in-panel.component";
 import { codexCommandAvailable, codexCommandUnavailableHint, codexStateLabel, codexUnavailableReason } from "./codex-runtime-status";
 import { ApiService, BackupRestorePlanResponse, BackupStatusResponse, BrowserSession, CodexAppServerStatus, CodexMigrationResponse, CodexStoredThread, ConnectorStatus, OnboardingProfile, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecureSecretMetadata, SetupStatus, StateBackupRecord, SystemDoctorResponse, UserOnboardingState, VersionResponse } from "./api.service";
+import { NgTemplateOutlet } from "@angular/common";
 import { WhatsAppHomeChatPanelComponent } from "./whatsapp-home-chat-panel.component";
 import { SecurityChallengesPanelComponent } from "./security-challenges-panel.component";
 
@@ -31,7 +32,7 @@ interface MailAccountRow {
 
 @Component({
   selector: "ork-onboarding-page",
-  imports: [CodexSignInPanelComponent, FormsModule, SecurityChallengesPanelComponent, WhatsAppHomeChatPanelComponent],
+  imports: [CodexSignInPanelComponent, FormsModule, NgTemplateOutlet, SecurityChallengesPanelComponent, WhatsAppHomeChatPanelComponent],
   templateUrl: "./onboarding-page.component.html",
   styleUrls: ["./onboarding-page.component.css"],
 })

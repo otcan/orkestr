@@ -439,6 +439,9 @@
             <span class="status-pill" [class]="statusClass(thread)">{{ statusLabel(thread) }}</span>
             <ork-executor-switcher [threadId]="thread.id" [activeProvider]="activeExecutorProvider(thread)" [working]="threadIsWorking(thread)" (switched)="onExecutorSwitched()"></ork-executor-switcher>
             <ork-provider-quota-indicator [activeProvider]="activeExecutorProvider(thread)"></ork-provider-quota-indicator>
+            @if (whatsappReach(thread)) {
+              <span class="wa-reach-pill" [title]="whatsappReach(thread) + ' — open Settings → WhatsApp for details'">{{ whatsappReach(thread) }}</span>
+            }
             @if (threadBranchLabel(thread)) {
               <span class="branch-pill">{{ threadBranchLabel(thread) }}</span>
             }
@@ -1041,6 +1044,8 @@
                 <ork-whatsapp-self-chat-card [thread]="thread" [threads]="threads" (connected)="refresh(false)" />
               }
 
+              <details class="wa-advanced">
+                <summary>Advanced: accounts, groups and chat settings</summary>
               <div class="wa-summary-strip" aria-label="WhatsApp connection summary">
                 <div>
                   <span>Receiving account</span>
@@ -1251,6 +1256,7 @@
                   </section>
                 </div>
               }
+              </details>
             </section>
 
             <section class="settings-card usage-settings-card">
