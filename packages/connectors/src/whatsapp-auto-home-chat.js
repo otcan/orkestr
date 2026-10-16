@@ -20,7 +20,9 @@ function clean(value = "") {
 // Brokered/tenant instances route WhatsApp through other systems; identity
 // providers mean several people sign in. Neither is a simple personal install.
 function simplePersonalInstall(env = process.env) {
-  const brokered = ["ORKESTR_BROKER_BASE_URL", "ORKESTR_DEMO_BROKER_BASE_URL", "ORKESTR_BROKER_INSTANCE_ID", "ORKESTR_TENANT_VM_ID"]
+  // Any tenant marker (VM, slice, boundary of any kind) or broker link counts.
+  const brokered = ["ORKESTR_BROKER_BASE_URL", "ORKESTR_DEMO_BROKER_BASE_URL", "ORKESTR_BROKER_INSTANCE_ID",
+    "ORKESTR_TENANT_VM_ID", "ORKESTR_TENANT_SLICE_ID", "ORKESTR_TENANT_BOUNDARY"]
     .some((key) => clean(env[key]));
   return !brokered && authProvider(env) === "browser_pairing";
 }

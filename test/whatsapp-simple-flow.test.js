@@ -53,6 +53,9 @@ test("auto home chat leaves ambiguous, bound-only and non-Docker installs alone"
 test("auto home chat needs a simple single-owner install and an unbound chat", async () => {
   assert.equal(autoHomeChatEnabled({ ORKESTR_DOCKER: "1", ORKESTR_BROKER_BASE_URL: "https://broker.example.test" }), false, "brokered/tenant installs are not auto-bound");
   assert.equal(autoHomeChatEnabled({ ORKESTR_DOCKER: "1", ORKESTR_AUTH_PROVIDER: "keycloak" }), false, "identity-provider installs are not auto-bound");
+  for (const marker of [{ ORKESTR_TENANT_SLICE_ID: "slice-1" }, { ORKESTR_TENANT_BOUNDARY: "tenant-vm" }, { ORKESTR_TENANT_VM_ID: "vm-1" }, { ORKESTR_BROKER_INSTANCE_ID: "i-1" }]) {
+    assert.equal(autoHomeChatEnabled({ ORKESTR_DOCKER: "1", ...marker }), false, `tenant marker ${Object.keys(marker)[0]} disables auto-bind`);
+  }
   const env = { ...(await home()), ORKESTR_DOCKER: "1" };
   await createThread({ id: "orkestr", name: "orkestr", ownerUserId: "admin", executorId: "noop" }, env);
   const deps = (extra = {}) => ({ listUsers: async () => [{ id: "admin" }], readAccounts: async () => [], ...extra });
