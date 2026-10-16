@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.205
+
+- WhatsApp "Message yourself" is read again: newer WhatsApp delivers your own self-chat messages on a hidden @lid id; Orkestr now maps it to your number. The agent's own replies echoed on that id are still recognised and never fed back as your input.
+- One simple WhatsApp flow:
+  - Setup → WhatsApp is two steps, "1. Link your phone" and "2. Chat in Message yourself"; a second number and separate chats per thread are under Advanced.
+  - On a personal Docker install, linking WhatsApp connects Message yourself to your main thread automatically (only if the choice is unambiguous and nothing is bound yet; off for multi-user, brokered and tenant installs; `ORKESTR_WHATSAPP_AUTO_HOME_CHAT=1/0` overrides).
+  - Thread settings → WhatsApp keeps the one-click Message yourself card on top; accounts and groups are under Advanced.
+  - The thread header shows how the thread is reachable from WhatsApp, and chat messages are marked "from WhatsApp" / "sent to WhatsApp".
+
 ## 0.1.0-alpha.204
 
 - Web chat updates live: a new or changed message (for example from WhatsApp) reaches open browsers within about a second; the server no longer serves a 15-second-old thread summary.
