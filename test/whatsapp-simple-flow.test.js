@@ -50,6 +50,20 @@ test("auto home chat leaves ambiguous, bound-only and non-Docker installs alone"
   assert.equal((await autoConnectHomeChat({ accountId: "account-1", contactId: "51300000000001@lid" }, { ...production, ORKESTR_DOCKER: "1" })).skipped, "no_owner_contact");
 });
 
+test("auto home chat needs a simple single-owner install and an unbound chat", async () => {
+  assert.equal(autoHomeChatEnabled({ ORKESTR_DOCKER: "1", ORKESTR_BROKER_BASE_URL: "https://broker.example.test" }), false, "brokered/tenant installs are not auto-bound");
+  assert.equal(autoHomeChatEnabled({ ORKESTR_DOCKER: "1", ORKESTR_AUTH_PROVIDER: "keycloak" }), false, "identity-provider installs are not auto-bound");
+  const env = { ...(await home()), ORKESTR_DOCKER: "1" };
+  await createThread({ id: "orkestr", name: "orkestr", ownerUserId: "admin", executorId: "noop" }, env);
+  const deps = (extra = {}) => ({ listUsers: async () => [{ id: "admin" }], readAccounts: async () => [], ...extra });
+  assert.equal((await autoConnectHomeChat({ accountId: "account-1", contactId: self }, env, deps({ listUsers: async () => [{ id: "admin" }, { id: "casey" }] }))).skipped, "multi_user");
+  assert.equal((await autoConnectHomeChat({ accountId: "account-1", contactId: self }, env, deps({ readAccounts: async () => [{ accountId: "15550000001", runtimeAccountId: "account-1", ownerUserId: "casey" }] }))).skipped, "account_owner_mismatch");
+  const bound = { ...(await home()), ORKESTR_DOCKER: "1" };
+  await createThread({ id: "orkestr", name: "orkestr", ownerUserId: "admin", executorId: "noop" }, bound);
+  await createThread({ id: "legacy", name: "legacy", ownerUserId: "admin", executorId: "noop", binding: { connector: "whatsapp", chatId: self, enabled: true } }, bound);
+  assert.equal((await autoConnectHomeChat({ accountId: "account-1", contactId: self }, bound, deps())).skipped, "already_connected", "a binding without the self-chat marker still counts");
+});
+
 test("thread header badge says how a thread is reachable from WhatsApp", () => {
   const homeThread = { id: "orkestr", name: "orkestr", binding: { privateOwnerChat: true, chatId: self } };
   const unbound = { id: "p-alpha", name: "Project Alpha" };

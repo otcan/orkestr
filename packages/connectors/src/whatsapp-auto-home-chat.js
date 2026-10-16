@@ -1,23 +1,35 @@
 // When the owner links WhatsApp and no thread has their "Message yourself"
 // chat yet, connect it to the main thread automatically (the same safe
 // private-chat binding the first-run wizard uses: only the owner's own chat
-// on that account, nobody added). Default on in the Docker image only;
-// ORKESTR_WHATSAPP_AUTO_HOME_CHAT=1/0 forces it on/off. Ambiguous installs
-// (several unbound threads, none named "orkestr") are left alone.
+// on that account, nobody added). Default on only for a simple personal
+// Docker install (no broker/tenant routing, no identity provider, one user,
+// account owned by that user); ORKESTR_WHATSAPP_AUTO_HOME_CHAT=1/0 forces it.
+// Ambiguous installs and chats that are already bound are left alone.
 import { appendEvent } from "../../storage/src/store.js";
 import { isThreadRetired, listThreads } from "../../core/src/threads.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
+import { listUsers } from "../../core/src/users.js";
+import { authProvider } from "../../core/src/auth-config.js";
+import { readWhatsAppConnectorAccounts } from "./whatsapp-account-registry.js";
 import { bindThreadToPrivateOwnerChat } from "./whatsapp-onboarding-private-chat.js";
 
 function clean(value = "") {
   return String(value || "").trim();
 }
 
+// Brokered/tenant instances route WhatsApp through other systems; identity
+// providers mean several people sign in. Neither is a simple personal install.
+function simplePersonalInstall(env = process.env) {
+  const brokered = ["ORKESTR_BROKER_BASE_URL", "ORKESTR_DEMO_BROKER_BASE_URL", "ORKESTR_BROKER_INSTANCE_ID", "ORKESTR_TENANT_VM_ID"]
+    .some((key) => clean(env[key]));
+  return !brokered && authProvider(env) === "browser_pairing";
+}
+
 export function autoHomeChatEnabled(env = process.env) {
   const explicit = clean(env.ORKESTR_WHATSAPP_AUTO_HOME_CHAT).toLowerCase();
   if (["1", "true", "on", "yes"].includes(explicit)) return true;
   if (["0", "false", "off", "no"].includes(explicit)) return false;
-  return clean(env.ORKESTR_DOCKER) === "1";
+  return clean(env.ORKESTR_DOCKER) === "1" && simplePersonalInstall(env);
 }
 
 function isMainThreadCandidate(thread = {}, owner = "", env = process.env) {
@@ -31,15 +43,21 @@ function isMainThreadCandidate(thread = {}, owner = "", env = process.env) {
 export async function autoConnectHomeChat({ accountId = "", contactId = "" } = {}, env = process.env, deps = {}) {
   const list = deps.listThreads || listThreads;
   const bind = deps.bind || bindThreadToPrivateOwnerChat;
+  const users = deps.listUsers || listUsers;
+  const accounts = deps.readAccounts || readWhatsAppConnectorAccounts;
   const account = clean(accountId);
   const contact = clean(contactId);
   if (!autoHomeChatEnabled(env)) return { skipped: "disabled" };
   if (!account || !contact.endsWith("@c.us")) return { skipped: "no_owner_contact" };
-  const threads = await list(env);
-  if (threads.some((thread) => thread?.binding?.privateOwnerChat === true && clean(thread.binding.chatId) === contact)) {
-    return { skipped: "already_connected" };
-  }
   const owner = resourceOwnerUserId({}, env);
+  // Single-owner installs only: one user, and the linked account belongs to them.
+  if ((await users(env).catch(() => [])).filter((user) => user?.status !== "disabled").length > 1) return { skipped: "multi_user" };
+  const record = (await accounts(env).catch(() => [])).find((item) =>
+    [item?.accountId, item?.id, item?.runtimeAccountId].map(clean).includes(account));
+  if (record && clean(record.ownerUserId) && clean(record.ownerUserId) !== owner) return { skipped: "account_owner_mismatch" };
+  const threads = await list(env);
+  // Any thread already bound to this chat (self-chat or not) keeps it.
+  if (threads.some((thread) => clean(thread?.binding?.chatId) === contact)) return { skipped: "already_connected" };
   const candidates = threads.filter((thread) => isMainThreadCandidate(thread, owner, env));
   const named = candidates.find((thread) => clean(thread.id) === "orkestr" || clean(thread.name).toLowerCase() === "orkestr");
   const target = named || (candidates.length === 1 ? candidates[0] : null);
