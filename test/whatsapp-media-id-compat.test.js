@@ -4,10 +4,11 @@ import { createRequire } from "node:module";
 import vm from "node:vm";
 import test from "node:test";
 import { mediaIdPatch, messageLookupPatch, originalMessageLookup, patchWhatsAppMediaIdSource } from "../scripts/patch-whatsapp-media-id.mjs";
+import { stripWhatsAppHistoryIdPatch } from "../scripts/whatsapp-history-id-compat.mjs";
 
 const require = createRequire(import.meta.url);
 const installed = await fs.readFile(require.resolve("whatsapp-web.js/src/util/Injected/Utils.js"), "utf8");
-const original = installed.replace(mediaIdPatch, "").replace(messageLookupPatch, originalMessageLookup);
+const original = stripWhatsAppHistoryIdPatch(installed).replace(mediaIdPatch, "").replace(messageLookupPatch, originalMessageLookup);
 
 async function simulateSend(source, { media = true, group = false, mime = "application/pdf", keyFormat = "_serialized", collectionFallback = false, candidates = value => [value], sendRejected = false } = {}) {
   let result;

@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { isMainModule } from "./main-module.mjs";
+import { applyWhatsAppHistoryIdPatch, stripWhatsAppHistoryIdPatch } from "./whatsapp-history-id-compat.mjs";
 
 const upstreamSha256 = "0d0f88565f481dbfeb9493b04b24033a2cb60f5fd2fd0e84e543b461d98878fe";
 const anchor = "        // Bot's won't reply if canonicalUrl is set (linking)";
@@ -26,14 +27,14 @@ export const messageLookupPatch = `        // Orkestr: resolve only the exact ge
         });
         return matches.length === 1 ? matches[0] : undefined;`;
 
-// Pinned compatibility repair for wwebjs/whatsapp-web.js#201922 and #201923.
-// Preserve all upload fields; only remove the colliding private model ID.
+// Pinned compatibility repairs for wwebjs/whatsapp-web.js#201922, #201923,
+// and #201845. Normalize read IDs and preserve all media upload fields.
 export function patchWhatsAppMediaIdSource(source) {
-  const original = source.replace(mediaIdPatch, "").replace(messageLookupPatch, originalMessageLookup);
+  const original = stripWhatsAppHistoryIdPatch(source).replace(mediaIdPatch, "").replace(messageLookupPatch, originalMessageLookup);
   if (createHash("sha256").update(original).digest("hex") !== upstreamSha256) {
     throw Error("whatsapp_media_id_patch_source_mismatch: review the dependency before deployment");
   }
-  return original.replace(anchor, mediaIdPatch + anchor).replace(originalMessageLookup, messageLookupPatch);
+  return applyWhatsAppHistoryIdPatch(original.replace(anchor, mediaIdPatch + anchor).replace(originalMessageLookup, messageLookupPatch));
 }
 
 export async function patchInstalledWhatsAppMediaId() {
@@ -50,5 +51,5 @@ export async function patchInstalledWhatsAppMediaId() {
 
 if (isMainModule(import.meta.url)) {
   const result = await patchInstalledWhatsAppMediaId();
-  console.log(`WhatsApp media-ID compatibility verified (${result.version}, ${result.patched ? "patched" : "already patched"}).`);
+  console.log(`WhatsApp message-ID compatibility verified (${result.version}, ${result.patched ? "patched" : "already patched"}).`);
 }
