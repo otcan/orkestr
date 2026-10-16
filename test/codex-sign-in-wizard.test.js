@@ -86,10 +86,13 @@ test("without an agent only the wizard shows; signing Codex in there opens the a
         if (route === "GET /api/setup/status") {
           const real = await (await fetch(`${origin}/api/setup/status`)).json();
           real.onboarding = { ...(real.onboarding || {}), autoOpen: false };
+          // Readiness must follow the fixture, even on a signed-in developer host.
+          real.agentRuntime = { ready: fake.codex === "connected" };
           real.connectors = (real.connectors || []).filter((item) => item.id !== "codex")
             .concat([{ id: "codex", label: "Codex", state: fake.codex, summary: "", details: { command: "codex" } }]);
           return request.respond(json(real));
         }
+        if (route === "GET /api/llm-accounts") return request.respond(json({ enabled: false, accounts: [] }));
         if (route === "GET /api/threads") return request.respond(json({ threads: fake.created.map((body) => ({ id: body.id, name: body.name, title: body.name, status: "idle" })) }));
         if (route === "POST /api/threads") {
           const body = JSON.parse(request.postData() || "{}");
