@@ -7,7 +7,9 @@ answer. This is an upstream compatibility failure, not evidence that the
 Orkestr host, timer scheduler, or tenant VM stopped.
 
 Orkestr starts its managed Codex app-server with `remote_compaction_v2`
-enabled. New installs use Codex CLI 0.154.0 by default. Existing installations
+enabled. New installs use Codex CLI 0.163.0 by default. From Codex 0.163.0 the
+`remote_compaction_v2` flag is listed as `removed`; the `--enable` flag is still
+accepted and ignored, so older and newer CLIs both start. Existing installations
 should check and update their separately installed CLI:
 
 ```bash

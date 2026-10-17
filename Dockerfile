@@ -11,7 +11,7 @@ RUN node scripts/patch-whatsapp-media-id.mjs && npm run build
 
 FROM node:22-bookworm-slim
 
-ARG ORKESTR_CODEX_VERSION=0.154.0
+ARG ORKESTR_CODEX_VERSION=0.163.0
 ARG TARGETARCH=amd64
 ENV NODE_ENV=production \
     ORKESTR_HOME=/data \
