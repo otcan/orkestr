@@ -38,11 +38,13 @@ test("the pairing baseline never hides worker failure, drift, missing accounts o
 });
 
 test("automatic repair preserves a pairing prompt instead of restarting the account", async () => {
+  for (const deadLetter of [0, 3]) {
   const result = await runConnectorDoctor({ repair: true,
     env: { ...env, ORKESTR_CONNECTORS_DOCTOR_REVISION_CHECK: "0" },
-    fetchImpl: async () => ({ ok: true, json: async () => payload }),
+    fetchImpl: async () => ({ ok: true, json: async () => ({ ...payload, queue: { deadLetter } }) }),
   });
   assert.equal(result.ok, false);
   assert.equal(result.repaired, false);
   assert.equal(result.repairSuppressed, "pairing_required");
+  }
 });

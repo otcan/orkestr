@@ -186,7 +186,8 @@ export async function runConnectorDoctor({ releaseHealth = false, repair = false
   const assessment = assessConnectorHealth(payload, env, release, { releaseHealth });
   if (assessment.ok || !repair) return { ...assessment, repaired: false, health: payload };
 
-  if (assessment.issues.length === 1 && assessment.issues[0] === "required_accounts_unavailable" &&
+  const repairIssues = assessment.issues.filter((issue) => issue !== "dead_letter_events");
+  if (repairIssues.length === 1 && repairIssues[0] === "required_accounts_unavailable" &&
       assessment.pairingRequiredAccounts.length === assessment.unavailableAccounts.length) {
     return { ...assessment, repaired: false, repairSuppressed: "pairing_required", health: payload };
   }
@@ -214,7 +215,8 @@ export async function runConnectorDoctor({ releaseHealth = false, repair = false
   const workerService = clean(env.ORKESTR_WA_WORKER_SYSTEMD_SERVICE || "orkestr-wa-worker@sender");
   const gatewayService = clean(env.ORKESTR_CONNECTORS_MCP_SYSTEMD_SERVICE || "orkestr-connectors-mcp");
   const repairedServices = [];
-  if (assessment.issues.some((issue) => ["worker_unhealthy", "required_accounts_missing", "required_accounts_unavailable"].includes(issue))) {
+  const runtimeUnavailable = assessment.unavailableAccounts.some((id) => !assessment.pairingRequiredAccounts.includes(id));
+  if (assessment.issues.some((issue) => ["worker_unhealthy", "required_accounts_missing"].includes(issue)) || runtimeUnavailable) {
     await restartService(workerService);
     repairedServices.push(workerService);
   }
