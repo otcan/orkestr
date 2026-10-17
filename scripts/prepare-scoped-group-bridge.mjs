@@ -33,17 +33,20 @@ bridge = replaceOnce(bridge, ready, ready + "\n    if(transportOnly.groupsMode) 
 bridge = replaceOnce(bridge, 'transportOnly.sendText(client,to,text,requestedAccountId)', 'transportOnly.sendText(client,to,text,requestedAccountId,req.body)');
 bridge = replaceOnce(bridge, 'const ready=bridgeState.ready && diagnostics.identityMatches;', 'const ready=bridgeState.ready && diagnostics.identityMatches && !transportOnly.blocked?.();');
 bridge = replaceOnce(bridge, 'ownerSelfChatPolicy:transportOnly.policyFields(transportOnlyBuildHash)', "[transportOnly.groupsMode?'groupTransportPolicy':'ownerSelfChatPolicy']:transportOnly.policyFields(transportOnlyBuildHash)");
-wrapper = replaceOnce(wrapper, "['serve','status','history','send-text','identity']", "['serve','status','history','send-text','identity','group-meta','group-reply']");
-wrapper = replaceOnce(wrapper, "  if (command === 'send-text') {", `  if(command==='group-reply') {
+wrapper = replaceOnce(wrapper, "['serve','status','history','send-text','identity']", "['serve','status','history','send-text','identity','group-meta','group-reply','group-notify']");
+wrapper = replaceOnce(wrapper, "  if (command === 'send-text') {", `  if(command==='group-reply' || command==='group-notify') {
     const [to,requestId,parentId,...parts]=args;
     const text=parts.join(' ').trim();
     if(!to || !requestId || !parentId || !text)throw new Error('group_reply_arguments_required');
-    printJson(await request(runtime,'/send-text',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({to,text,accountId:'main',requestId,parentId})}));
+    printJson(await request(runtime,'/send-text',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({to,text,accountId:'main',requestId,parentId,...(command==='group-notify'?{notificationId:requestId}:{})})}));
     return;
   }
   if (command === 'send-text') {`);
 const files = ['packages/connectors/src/whatsapp-scoped-group-transport.js',
   'packages/connectors/src/whatsapp-scoped-group-formatting.js',
+  'packages/connectors/src/whatsapp-scoped-timer-notifications.js',
+  'packages/connectors/src/whatsapp-timer-notification-proof.js',
+  'packages/connectors/src/whatsapp-delivery-route-fence.js',
   'packages/connectors/src/whatsapp-scoped-group-relay.js', 'scripts/scoped-group-relay.mjs', 'apps/cli/src/api-client.js'];
 const buildHash = crypto.createHash('sha256').update(bridge.replace(/const transportOnlyBuildHash = '[a-f0-9]+';/, '')).update(wrapper);
 for (const relative of files) buildHash.update(fs.readFileSync(path.join(source, relative)));
