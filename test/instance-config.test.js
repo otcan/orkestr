@@ -14,9 +14,11 @@ import {
   readInstanceConfig,
 } from "../packages/storage/src/instance-config-repository.js";
 import {
+  getLocalInstanceContext,
   observeLocalInstanceConfig,
   patchLocalInstanceConfig,
 } from "../packages/core/src/instance-config-service.js";
+import { withCanonicalPublicReferenceLock } from "../packages/core/src/canonical-public-reference-lock.js";
 import { writeInstanceIdentity } from "../packages/core/src/instance-identity.js";
 import { readRuntimeSettings } from "../packages/core/src/runtime-settings.js";
 
@@ -29,6 +31,30 @@ async function testEnv(t) {
     ORKESTR_ADMIN_USER_ID: "admin",
   };
 }
+
+test("page-load context reads an existing identity without waiting for thread mutation locks", async t => {
+  const env = { ...await testEnv(t), ORKESTR_CANONICAL_PUBLIC_REF_LOCK_TIMEOUT_MS: "50" };
+  const publicRef = "ins_AQEBAQEBAQEBAQEBAQEBAQ";
+  await writeInstanceIdentity({ internalInstanceId: env.ORKESTR_INSTANCE_ID, publicRef }, env);
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const held = withCanonicalPublicReferenceLock(async () => { entered(); await gate; }, env);
+  await started;
+  try {
+    assert.deepEqual(await getLocalInstanceContext(env), { publicRef, canonicalPath: `/instance/${publicRef}/` });
+  } finally {
+    release();
+    await held;
+  }
+});
+
+test("page-load context still creates a missing standalone identity safely", async t => {
+  const env = await testEnv(t);
+  const results = await Promise.all([getLocalInstanceContext(env), getLocalInstanceContext(env)]);
+  assert.deepEqual(results[0], { publicRef: "", canonicalPath: "" });
+  assert.deepEqual(results[1], results[0]);
+});
 
 test("instance config schema rejects unknown and secret-bearing fields", () => {
   const current = emptyInstanceConfig("2026-01-01T00:00:00.000Z");

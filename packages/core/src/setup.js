@@ -34,14 +34,18 @@ function setupState(connectors) {
 
 export async function getSetupStatus({ env = process.env, home, principal = null, validateConnectors = false } = {}) {
   const paths = dataPaths(env);
-  const connectors = await getConnectorStatuses({ env, home, principal, validateGmail: validateConnectors === true });
-  const overlay = await readOverlay(env);
-  const security = await securityStatus(env);
+  const [connectors, overlay, security, settings] = await Promise.all([
+    getConnectorStatuses({ env, home, principal, validateGmail: validateConnectors === true }),
+    readOverlay(env),
+    securityStatus(env),
+    readRuntimeSettings(env),
+  ]);
   const auth = publicAuthStatus(env);
   const urls = publicUrlConfig(env);
-  const settings = await readRuntimeSettings(env);
-  const whatsappOnboarding = await whatsappOnboardingStatus({ env, settings, connectors });
-  const agentRuntime = await agentRuntimeStatus(connectors, env, principal);
+  const [whatsappOnboarding, agentRuntime] = await Promise.all([
+    whatsappOnboardingStatus({ env, settings, connectors }),
+    agentRuntimeStatus(connectors, env, principal),
+  ]);
   return {
     generatedAt: new Date().toISOString(),
     home: paths.home,

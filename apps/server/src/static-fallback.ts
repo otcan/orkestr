@@ -276,7 +276,7 @@ async function serveStaticPath(requestUrl: string, response: any, prefixPath = "
     const body = await fs.readFile(target);
     return response
       .status(200)
-      .header("cache-control", "no-store")
+      .header("cache-control", ext === ".html" ? "no-store" : "private, max-age=0, must-revalidate")
       .type(mimeTypes.get(ext) || "application/octet-stream")
       .send(ext === ".html" ? rewriteStaticBase(body, prefixPath) : body);
   } catch {

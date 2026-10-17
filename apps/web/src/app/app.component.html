@@ -72,6 +72,7 @@
       <button class="secondary" type="button" [class.active]="activePanel === 'instanceDesktops'" [attr.aria-current]="activePanel === 'instanceDesktops' ? 'page' : null" (click)="utilityMenu.open = false; openPanel('instanceDesktops')">Desktops</button>
       @if (isAdminMode()) {
         <button class="secondary" type="button" (click)="utilityMenu.open = false; openSetup('system')">Setup</button>
+        <button class="secondary" type="button" [class.active]="activePanel === 'instanceSettings'" [attr.aria-current]="activePanel === 'instanceSettings' ? 'page' : null" (click)="utilityMenu.open = false; openPanel('instanceSettings')">System</button>
       }
       <button class="secondary" type="button" [class.active]="activePanel === 'instanceTimers'" [attr.aria-current]="activePanel === 'instanceTimers' ? 'page' : null" (click)="utilityMenu.open = false; openPanel('instanceTimers')">Timers</button>
       <details class="instance-utility-menu" #utilityMenu>
@@ -398,6 +399,9 @@
     } @else if (activePanel === "files") {
       <ork-files-page></ork-files-page>
     } @else if (activePanel === "instanceSettings") {
+      @if (isAdminMode()) {
+        <ork-system-resources></ork-system-resources>
+      }
       <ork-instance-settings-page></ork-instance-settings-page>
     } @else if (activePanel === "instanceTimers") {
       <ork-user-timers-page></ork-user-timers-page>

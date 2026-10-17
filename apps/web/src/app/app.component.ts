@@ -11,6 +11,8 @@ import { AttachmentPreviewService } from "./attachment-preview.service";
 import { FirstThreadWizardComponent } from "./first-thread-wizard.component";
 import { FilesPageComponent } from "./files-page.component";
 import { InstanceSettingsPageComponent } from "./instance-settings-page.component";
+import { SystemResourcesComponent } from "./system-resources.component";
+import { refreshAppExtras } from "./app-refresh-extras";
 import { OnboardingPageComponent } from "./onboarding-page.component";
 import { OwnerLoginPageComponent } from "./owner-login-page.component";
 import { PairingRequiredPageComponent } from "./pairing-required-page.component";
@@ -91,7 +93,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, OwnerLoginPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, VaultPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent, WhatsAppSelfChatCardComponent],
+  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, SystemResourcesComponent, OnboardingPageComponent, OwnerLoginPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, VaultPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent, WhatsAppSelfChatCardComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -410,25 +412,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (showBusy) this.busy = true;
     try {
-      const [threadsResult, systemResult, setupResult, timersResult, whatsappResult, userResult, versionResult, instanceContextResult] = await Promise.allSettled([
+      const ownerLoginRequest = this.ownerLoginChecked ? Promise.resolve() : this.loadOwnerLoginStatus();
+      const [threadsResult, setupResult, userResult, instanceContextResult] = await Promise.allSettled([
         firstValueFrom(this.api.threads({ includeRetired: this.showRetiredThreads })),
-        firstValueFrom(this.api.systemSummary()),
         firstValueFrom(this.api.setupStatus()),
-        firstValueFrom(this.api.timers()),
-        firstValueFrom(this.api.whatsappStatus()),
         firstValueFrom(this.api.currentUser()),
-        firstValueFrom(this.api.version()),
         firstValueFrom(this.api.instanceContext()),
       ]);
-      if (systemResult.status === "fulfilled") this.opsSystem = systemResult.value;
       if (setupResult.status === "fulfilled") this.setupStatus = setupResult.value;
       if (userResult.status === "fulfilled") this.currentUser = userResult.value.user;
       await this.refreshClaudeRuntimeReady();
-      if (!this.ownerLoginChecked) await this.loadOwnerLoginStatus();
+      await ownerLoginRequest;
       if (this.runtimeGateActive() && this.canCreateThreadFromSidebar()) this.threadWizardOpen = true;
-      if (timersResult.status === "fulfilled") this.allTimers = timersResult.value.timers || [];
-      if (whatsappResult.status === "fulfilled") this.whatsappStatusDetails = whatsappResult.value;
-      if (versionResult.status === "fulfilled") this.versionInfo = versionResult.value;
       if (instanceContextResult.status === "fulfilled") {
         this.instanceContext = instanceContextResult.value.instance;
         void this.loadInstanceAccounts();
@@ -468,6 +463,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.applyThreadListMeta(payload);
       this.trackThreadActivity(payload.threads);
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
+      void refreshAppExtras(this.api, {
+        system: value => { if (!this.destroyed) { this.opsSystem = value; this.renderNow(); } },
+        timers: value => { if (!this.destroyed) { this.allTimers = value; this.renderNow(); } },
+        whatsapp: value => { if (!this.destroyed) { this.whatsappStatusDetails = value; this.renderNow(); } },
+        version: value => { if (!this.destroyed) { this.versionInfo = value; this.renderNow(); } },
+      });
       if (this.canonicalizeInstanceRoute()) return;
       if (this.canonicalizeCurrentThreadRoute()) return;
       this.seedReadStateIfNeeded(this.threads);
@@ -502,6 +503,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.syncThreadMetaDraft(selected);
       this.syncThreadBindingDraft(selected);
       this.syncThreadTextState(selected);
+      this.renderNow();
       await this.loadSelectedThread(false);
       this.updateDocumentTitle();
       this.error = "";
@@ -5507,6 +5509,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private canonicalizeCurrentThreadRoute(): boolean {
+    if (this.isGlobalPanel(this.activePanel) || this.onboardingActive) return false;
     const thread = this.selectedThread();
     if (!thread) return false;
     const target = this.canonicalPanelUrl(thread, this.activePanel, true);

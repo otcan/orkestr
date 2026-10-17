@@ -1757,7 +1757,8 @@ test("web shell exposes runtime surface and Codex mode shortcuts", async () => {
   assert.match(template, /deploymentVersionTitle\(\)/);
   assert.match(component, /codexModeShortcutTitle\(thread: ThreadSummary \| null\): string/);
   assert.match(component, /versionInfo: VersionResponse \| null = null/);
-  assert.match(component, /firstValueFrom\(this\.api\.version\(\)\)/);
+  assert.match(component, /void refreshAppExtras\(this\.api,/);
+  assert.match(await fs.readFile("apps/web/src/app/app-refresh-extras.ts", "utf8"), /api\.version\(\)/);
   assert.match(component, /deploymentVersionLabel\(\): string/);
   assert.match(component, /version\.releaseLabel/);
   assert.match(component, /version\.buildId \|\| version\.releaseId/);

@@ -8,7 +8,7 @@ import {
   writeInstanceStatus,
 } from "../../storage/src/instance-config-repository.js";
 import { appendEvent } from "../../storage/src/store.js";
-import { ensureLocalInstanceIdentity } from "./instance-identity.js";
+import { ensureLocalInstanceIdentity, readInstanceIdentity } from "./instance-identity.js";
 import { readRuntimeSettings, writeRuntimeSettings } from "./runtime-settings.js";
 
 function clean(value = "") {
@@ -144,7 +144,10 @@ async function ensureLocalInstanceConfig(identity, env = process.env) {
 }
 
 export async function getLocalInstanceContext(env = process.env) {
-  const identity = await localIdentity(env);
+  // Existing identities are immutable and atomically written. A page-load
+  // read must not queue behind unrelated thread/reference mutations; only
+  // first-time creation needs the shared reference lock.
+  const identity = await readInstanceIdentity(env) || await localIdentity(env);
   return {
     publicRef: identity.publicRef || "",
     canonicalPath: identity.publicRef ? `/instance/${encodeURIComponent(identity.publicRef)}/` : "",

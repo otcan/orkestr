@@ -1,0 +1,57 @@
+<section class="system-resources" aria-label="System resources">
+  <header>
+    <div>
+      <p class="eyebrow">System</p>
+      <h2>CPU, RAM and disk</h2>
+      <p class="subline">Updates every 15 seconds while this page is visible.</p>
+    </div>
+    <button class="secondary" type="button" (click)="refresh()" [disabled]="busy">{{ busy ? "Refreshing…" : "Refresh" }}</button>
+  </header>
+  @if (error) {
+    <p class="notice error" role="status">{{ error }}</p>
+  }
+  @if (!summary && !error) {
+    <p role="status">Loading system readings…</p>
+  }
+  <div class="resource-cards" [attr.aria-busy]="busy">
+    <article>
+      <h3>CPU</h3><strong>{{ percent('cpu.percent') }}</strong>
+      <small>{{ number('cpu.count') ?? '—' }} cores · load {{ number('loadAverage.one') ?? '—' }}</small>
+      <progress max="100" [value]="number('cpu.percent') ?? 0" aria-label="CPU usage"></progress>
+    </article>
+    <article>
+      <h3>RAM</h3><strong>{{ percent('memory.percent') }}</strong>
+      <small>{{ bytes(value('memory.used')) }} / {{ bytes(value('memory.total')) }}</small>
+      <progress max="100" [value]="number('memory.percent') ?? 0" aria-label="RAM usage"></progress>
+    </article>
+    <article>
+      <h3>Disk</h3><strong>{{ percent('disk.percent') }}</strong>
+      <small>{{ bytes(value('disk.used')) }} / {{ bytes(value('disk.total')) }}</small>
+      <progress max="100" [value]="number('disk.percent') ?? 0" aria-label="Disk usage"></progress>
+    </article>
+    <article>
+      <h3>Orkestr memory</h3><strong>{{ bytes(value('orkestr.rss')) }}</strong>
+      <small>PID {{ number('orkestr.pid') ?? '—' }}</small>
+    </article>
+  </div>
+  <footer>
+    <small>@if (sampledAt()) { Last sample {{ sampledAt() | date: "HH:mm:ss" }} }</small>
+    <button class="secondary" type="button" (click)="toggleProcesses()" [attr.aria-expanded]="processesOpen">{{ processesOpen ? "Hide processes" : "Show processes" }}</button>
+  </footer>
+  @if (processesOpen) {
+    @if (processesError) { <p class="notice error" role="status">{{ processesError }}</p> }
+    <div class="process-scroll">
+      <table>
+        <caption>Processes by CPU usage</caption>
+        <thead><tr><th>PID</th><th>User</th><th>CPU</th><th>RAM</th><th>Command</th></tr></thead>
+        <tbody>
+          @for (process of processes; track process['pid']) {
+            <tr><td>{{ process['pid'] }}</td><td>{{ process['user'] }}</td><td>{{ process['cpu'] }}%</td><td>{{ bytes(process['rss']) }}</td><td>{{ process['command'] }}</td></tr>
+          } @empty {
+            <tr><td colspan="5">{{ processesBusy ? "Loading processes…" : "No process sample available." }}</td></tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>
