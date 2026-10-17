@@ -10,11 +10,11 @@ import { personalAgentFeature } from "../packages/core/src/personal-agent-featur
 const ownerRequest = { orkestrPrincipal: { kind: "user", userId: "owner", role: "admin" } };
 
 test("personalAgentFeature is opt-in and accepts only 1 or true", () => {
-  assert.deepEqual(personalAgentFeature({}), { enabled: false });
-  assert.deepEqual(personalAgentFeature({ ORKESTR_PERSONAL_AGENT_ENABLED: "1" }), { enabled: true });
-  assert.deepEqual(personalAgentFeature({ ORKESTR_PERSONAL_AGENT_ENABLED: " TRUE " }), { enabled: true });
+  assert.equal(personalAgentFeature({}), false);
+  assert.equal(personalAgentFeature({ ORKESTR_PERSONAL_AGENT_ENABLED: "1" }), true);
+  assert.equal(personalAgentFeature({ ORKESTR_PERSONAL_AGENT_ENABLED: " TRUE " }), true);
   for (const value of ["", "0", "false", "on", "yes", "2"]) {
-    assert.deepEqual(personalAgentFeature({ ORKESTR_PERSONAL_AGENT_ENABLED: value }), { enabled: false }, value);
+    assert.equal(personalAgentFeature({ ORKESTR_PERSONAL_AGENT_ENABLED: value }), false, value);
   }
 });
 
