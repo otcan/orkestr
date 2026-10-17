@@ -10,6 +10,7 @@ import { routedWhatsAppTypingTarget } from '../packages/connectors/src/whatsapp-
 import { isDedicatedOwnerSelfChatOutput } from '../packages/connectors/src/whatsapp-owner-selfchat-scope.js';
 import { startOwnerSelfChatPolling } from '../packages/connectors/src/whatsapp-owner-selfchat-runtime.js';
 import { listenOwnerSelfChatAdapter } from '../packages/connectors/src/whatsapp-owner-selfchat-socket.js';
+import { selfChatHash } from '../packages/connectors/src/whatsapp-owner-selfchat-journal.js';
 import { createOwnerSelfChatWrapper } from '../packages/connectors/src/whatsapp-owner-selfchat-wrapper.js';
 
 const chatId='15550000001@c.us';
@@ -65,8 +66,10 @@ test('wrapper checks cancellation and runtime identity after asynchronous prefli
   // Synthetic root-owned metadata only: never inspect protected live paths.
   t.mock.method(fs,'lstat',async()=>({uid:0,mode:0o100700,size:1,isSymbolicLink:()=>false,isDirectory:()=>true,isFile:()=>true}));
   let active=true,changeDuringPreflight=true;const calls=[];
-  const runner=createOwnerSelfChatWrapper({wrapperPath:'/mock/wrapper',implementationPaths:['/mock/source'],
-    requiredDirectories:['/mock/state'],requiredFiles:['/mock/existing-token'],existingService:'example.service'},
+  const wrapperEnvironment={WA_EXAMPLE_STATE_DIR:'/mock/state',WA_EXAMPLE_SESSION_DIR:'/mock/session',
+    WA_EXAMPLE_TOKEN_FILE:'/mock/existing-token',WA_EXAMPLE_HOST:'127.0.0.1',WA_EXAMPLE_PORT:'12345'};
+  const runner=createOwnerSelfChatWrapper({wrapperEnvironmentPrefix:'WA_EXAMPLE_',wrapperEnvironment,verifiedWrapperEnvironment:{runtimeId:`example.service:42:${invocation}`,environmentHash:selfChatHash(wrapperEnvironment)},wrapperPath:'/mock/wrapper',implementationPaths:['/mock/source'],
+    requiredDirectories:['/mock/state','/mock/session','/mock'],requiredFiles:['/mock/existing-token'],existingService:'example.service'},
     async(command,args)=>{calls.push(command);assert.equal(command,'/usr/bin/systemctl');
       if(changeDuringPreflight)active=false;
       return {stdout:`ActiveState=active\nMainPID=42\nInvocationID=${invocation}\n`};});

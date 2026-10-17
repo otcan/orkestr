@@ -3,6 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { selfChatError } from './whatsapp-owner-selfchat-journal.js';
+import { ownerSelfChatWrapperEnvironment, assertOwnerSelfChatWrapperEnvironment } from './whatsapp-owner-selfchat-wrapper-config.js';
 const execute=promisify(execFile);
 
 export async function assertRootOwnedPath(filename, { directory=false, privateFile=false } = {}) {
@@ -25,18 +26,20 @@ export async function assertRootOwnedPath(filename, { directory=false, privateFi
 export function createOwnerSelfChatWrapper(config, executeImpl=execute) {
   if(!config.requiredDirectories?.length || !config.requiredFiles?.length || !config.implementationPaths?.length)
     throw selfChatError('selfchat_wrapper_preconditions_required');
+  const wrapperEnvironment=ownerSelfChatWrapperEnvironment(config);
   const fixedEnv={PATH:'/usr/local/bin:/usr/bin:/bin',LANG:'C.UTF-8'};
   async function preflight() {
     await assertRootOwnedPath(config.wrapperPath);
+    await assertRootOwnedPath('/usr/bin/node');
     // The installed executable may import a separate root-owned implementation.
     for (const filename of config.implementationPaths || []) await assertRootOwnedPath(filename);
     for (const directory of config.requiredDirectories || []) {
-      const st=await fs.lstat(directory);
-      if (!st.isDirectory() || st.isSymbolicLink()) throw selfChatError('selfchat_runtime_missing');
+      await assertRootOwnedPath(directory,{directory:true});
     }
     for (const filename of config.requiredFiles || []) {
+      await assertRootOwnedPath(filename);
       const st=await fs.lstat(filename);
-      if (!st.isFile() || st.isSymbolicLink() || !st.size) throw selfChatError('selfchat_runtime_missing');
+      if (!st.size) throw selfChatError('selfchat_runtime_missing');
     }
     if (!/^[A-Za-z0-9_.@-]+\.service$/.test(config.existingService || ''))
       throw selfChatError('selfchat_service_required');
@@ -46,7 +49,9 @@ export function createOwnerSelfChatWrapper(config, executeImpl=execute) {
     const fields=Object.fromEntries(stdout.trim().split('\n').map(line=>line.split('=')));
     if (fields.ActiveState!=='active' || !/^[1-9]\d*$/.test(fields.MainPID || '') || !/^[a-f0-9]{32}$/.test(fields.InvocationID || ''))
       throw selfChatError('selfchat_existing_service_inactive');
-    return `${config.existingService}:${fields.MainPID}:${fields.InvocationID}`;
+    const runtimeId=`${config.existingService}:${fields.MainPID}:${fields.InvocationID}`;
+    assertOwnerSelfChatWrapperEnvironment(config,wrapperEnvironment,runtimeId);
+    return runtimeId;
   }
   async function invoke(argv, {runtimeId,isActive=()=>true}={}) {
     const current=await preflight();
@@ -54,7 +59,7 @@ export function createOwnerSelfChatWrapper(config, executeImpl=execute) {
     if(runtimeId && current!==runtimeId) throw selfChatError('selfchat_runtime_changed');
     if (!['status','history','send-text'].includes(argv[0])) throw selfChatError('selfchat_wrapper_operation_denied');
     try {
-      const {stdout}=await executeImpl(config.wrapperPath,argv,{env:fixedEnv,timeout:30000,maxBuffer:1024*1024});
+      const {stdout}=await executeImpl('/usr/bin/node',[config.wrapperPath,...argv],{env:{...fixedEnv,...wrapperEnvironment},timeout:30000,maxBuffer:1024*1024});
       return JSON.parse(stdout);
     } catch { throw selfChatError('selfchat_wrapper_request_failed',502); }
   }
