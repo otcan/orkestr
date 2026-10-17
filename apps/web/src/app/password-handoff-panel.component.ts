@@ -59,7 +59,7 @@ export function handoffStatusText(handoff: PasswordHandoff): string {
           Agents are locked out of this desktop until you end it{{ handoff.expired ? " (time is up, so please end it)" : "" }}.</p>
         <p>{{ statusText(handoff) }}</p>
         <div class="vault-approval-actions">
-          <a class="button secondary" [href]="desktopUrl(handoff.desktopSlug)" target="_blank" rel="noopener">Open desktop</a>
+          <button class="secondary" type="button" (click)="openDesktop(handoff)" [disabled]="busyId === handoff.id">Open desktop</button>
           <button type="button" (click)="end(handoff, 'owner_ended')" [disabled]="busyId === handoff.id">Done</button>
           <button class="secondary" type="button" (click)="end(handoff, 'signup_abandoned')" [disabled]="busyId === handoff.id">Cancel</button>
         </div>
@@ -139,6 +139,27 @@ export class PasswordHandoffPanelComponent implements OnInit, OnDestroy {
   desktopUrl(slug: string): string {
     const encoded = encodeURIComponent(slug);
     return `/desktop/${encoded}/vnc.html?autoconnect=1&resize=scale&view_only=false&path=desktop/${encoded}/websockify`;
+  }
+
+  // A desktop share opened for this browser session works where desktops
+  // require brokered shares and counts as the owner during the handoff.
+  // Sessions that cannot open such a share use the direct desktop link.
+  async openDesktop(handoff: PasswordHandoff): Promise<void> {
+    const pending = window.open("about:blank", "_blank");
+    try {
+      if (pending) pending.opener = null;
+    } catch {
+      // Some browsers block assigning opener on a new tab.
+    }
+    let url = "";
+    try {
+      url = (await firstValueFrom(this.desktopsApi.openDesktopSession(handoff.desktopSlug, { threadId: handoff.threadId, start: false })))?.url || "";
+    } catch {
+      url = "";
+    }
+    url ||= this.desktopUrl(handoff.desktopSlug);
+    if (pending) pending.location.href = url;
+    else window.location.assign(url);
   }
 
   async load(): Promise<void> {

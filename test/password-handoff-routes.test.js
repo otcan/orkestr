@@ -117,3 +117,24 @@ test("viewer websockets still connecting when a handoff starts never get through
     assert.doesNotMatch(viewer.response(), /^HTTP\/1.1 101 /);
   }
 });
+
+test("a desktop share opened for the owner's own session views a blind desktop; unbound shares do not", async (t) => {
+  await openHandoff(t, "blind-desk");
+  let handler = null;
+  registerDesktopProxy({ use: (_prefix, fn) => { handler = fn; } });
+  const send = (request) => new Promise((resolve) => {
+    const result = {};
+    handler({ originalUrl: "/desktop/blind-desk/vnc.html", url: "/blind-desk/vnc.html", headers: {}, ...request }, {
+      writeHead: (code) => { result.status = code; }, end: (body) => { result.body = String(body); resolve(result); },
+    });
+  });
+  const share = { id: "share-1" };
+  const shareViewer = { kind: "user", userId: "owner", role: "admin" };
+  const unbound = await send({ orkestrDesktopShare: share, orkestrSecuritySession: null, orkestrPrincipal: shareViewer });
+  assert.equal(unbound.status, 423, "a link-only share is not the owner");
+  const otherUser = await send({ orkestrDesktopShare: share, orkestrSecuritySession: { id: "sess-b", userId: "someone-else" }, orkestrPrincipal: shareViewer });
+  assert.equal(otherUser.status, 423, "a share bound to another user's session is not the owner");
+  const bound = await send({ orkestrDesktopShare: share, orkestrSecuritySession: { id: "sess-owner", userId: "owner" }, orkestrPrincipal: shareViewer });
+  assert.notEqual(bound.status, 423, bound.body);
+  assert.doesNotMatch(bound.body, /desktop_password_blind/, "the owner's own session-bound share passes the blind guard");
+});

@@ -91,6 +91,26 @@ test("password handoff panel: lists the lease thread and https tabs, starts, sho
   assert.match(handoffStatusText({ status: "saved_verified" }), /Saved in Chrome/);
 });
 
+test("password handoff panel opens the desktop through a session share, else the direct link", async () => {
+  const opened = [];
+  const tab = { opener: {}, location: { href: "" } };
+  const shareCalls = [];
+  let shareUrl = "/desktop/pa-desk/vnc.html?share=1";
+  const api = { openDesktopSession: (slug, body) => { shareCalls.push([slug, body]); return shareUrl ? rxjs.of({ url: shareUrl }) : rxjs.throwError(() => new Error("oidc_desktop_session_required")); } };
+  const window = { open: (...args) => { opened.push(args); return tab; }, location: { assign() {} } };
+  const { load } = createLoader({ api, http: {}, context: { document: { querySelector: () => null }, window } });
+  const { PasswordHandoffPanelComponent } = await load("password-handoff-panel.component");
+  const panel = new PasswordHandoffPanelComponent();
+  const handoff = { id: "pwh_1", desktopSlug: "pa-desk", threadId: "pa-thread" };
+  await panel.openDesktop(handoff);
+  assert.deepEqual(JSON.parse(JSON.stringify(shareCalls)), [["pa-desk", { threadId: "pa-thread", start: false }]]);
+  assert.equal(tab.location.href, shareUrl);
+  assert.equal(tab.opener, null);
+  shareUrl = "";
+  await panel.openDesktop(handoff);
+  assert.match(tab.location.href, /^\/desktop\/pa-desk\/vnc\.html\?autoconnect=1/);
+});
+
 test("vault page includes the password handoff panel", async () => {
   const [component, template] = await Promise.all([read("vault-page.component.ts"), read("vault-page.component.html")]);
   assert.match(component, /PasswordHandoffPanelComponent/);

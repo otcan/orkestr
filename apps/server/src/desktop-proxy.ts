@@ -64,13 +64,21 @@ onDesktopPasswordBlind(({ desktopSlug, ownerUserId }: { desktopSlug: string; own
   }
 });
 
+// The handoff owner viewing: their own unscoped browser session, or a desktop
+// share opened for that session (bound to it and re-validated by
+// authorizeHttpRequest). Unbound shares, machine auth and anonymous callers
+// never count as the owner.
+function desktopViewerOwner({ session, principal, share, machineAuth, anonymous }: any): any {
+  if (anonymous === true || machineAuth) return null;
+  if (share) {
+    if (!session?.id || !session.userId) return null;
+    return vaultOwnerFromRequest({ orkestrSecuritySession: session, orkestrPrincipal: { kind: "user", userId: session.userId } });
+  }
+  return vaultOwnerFromRequest({ orkestrSecuritySession: session, orkestrPrincipal: principal });
+}
+
 function upgradeOwner(auth: any): any {
-  return vaultOwnerFromRequest({
-    orkestrAnonymous: auth.anonymous === true,
-    orkestrMachineAuth: auth.machineAuth || null,
-    orkestrSecuritySession: auth.desktopShare ? { ...auth.session, shareId: auth.desktopShare.id || "share" } : auth.session,
-    orkestrPrincipal: auth.principal,
-  });
+  return desktopViewerOwner({ session: auth.session, principal: auth.principal, share: auth.desktopShare, machineAuth: auth.machineAuth, anonymous: auth.anonymous });
 }
 
 function recordShareSocketEvent(type: string, connection: ShareSocket, reason = ""): void {
@@ -224,7 +232,12 @@ async function proxyDesktopHttp(request: any, response: any): Promise<void> {
   try {
     // Before any upstream work: during a password handoff only its owner may view.
     const route = parseDesktopUrl(request.originalUrl || request.url);
-    if (route) await assertDesktopNotPasswordBlind(route.slug, request.orkestrDesktopShare ? null : vaultOwnerFromRequest(request));
+    if (route) {
+      await assertDesktopNotPasswordBlind(route.slug, desktopViewerOwner({
+        session: request.orkestrSecuritySession, principal: request.orkestrPrincipal, share: request.orkestrDesktopShare,
+        machineAuth: request.orkestrMachineAuth, anonymous: request.orkestrAnonymous,
+      }));
+    }
     const scope = desktopRequestScope(request.originalUrl || request.url, request);
     target = await desktopTarget(request.originalUrl || request.url, requestPrincipal(request), {
       ...scope,
