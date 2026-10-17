@@ -43,7 +43,7 @@ function personalAgentStorageReady(env) {
 
 export function personalAgentCapability(request, env = process.env) {
   ownerRequired(request);
-  const enabled = personalAgentFeature(env);
+  const { enabled } = personalAgentFeature(env);
   const assistant = { available: false, reason: "not_configured" };
   if (!enabled) return { enabled: false, capability: false, reason: "disabled", assistant };
   if (!personalAgentStorageReady(env)) {
