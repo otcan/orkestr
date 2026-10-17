@@ -68,7 +68,10 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   }
 
   async function routeInput(input, group) {
-    if (routeFence && group.threadId === config.routeControl.threadId && routeFence.current()?.route !== config.routeControl.routeId) return;
+    if (routeFence && group.threadId === config.routeControl.threadId) {
+      const active = routeFence.current();
+      if (active?.route !== config.routeControl.routeId || !Number.isFinite(Date.parse(input.created_at)) || Date.parse(input.created_at) < Date.parse(active.since)) return;
+    }
     let route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
     if (route?.completed) return;
     await threadFor(group);
