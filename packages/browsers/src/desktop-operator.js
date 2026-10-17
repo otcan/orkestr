@@ -1,3 +1,4 @@
+import { desktopPasswordBlind } from "../../core/src/password-handoff.js";
 import WebSocket from "ws";
 import { managedDesktopAction, managedDesktopOpenUrl } from "./browserctl.js";
 import { assertDesktopAccess } from "../../core/src/desktop-access.js";
@@ -339,6 +340,13 @@ export async function operateManagedDesktop(slug = "", args = {}, env = process.
   if (!desktopSlug) {
     const error = new Error("desktop_slug_required");
     error.statusCode = 400;
+    throw error;
+  }
+  // An open password handoff blinds the desktop for agents (no observe/read/
+  // extract or input) until the owner ends it (docs/password-handoff.md).
+  if (await desktopPasswordBlind(desktopSlug, env)) {
+    const error = new Error("desktop_password_blind");
+    error.statusCode = 423;
     throw error;
   }
   const operation = clean(args.operation || args.action || "observe").toLowerCase();
