@@ -139,3 +139,23 @@ test('history polling refreshes identity before it expires during the wrapper ca
  assert.equal(journal.routes().length,0);
  assert.equal(journal.outboundIds().length,0);
 });
+
+test('early refresh still rejects history that outlives newly collected evidence',async t=>{
+ const initial=Date.now();let clock=initial;t.mock.method(Date,'now',()=>clock);
+ const {config,evidence,attest}=fixture(initial);
+ const journal=new OwnerSelfChatJournal(':memory:',{});t.after(()=>journal.close());
+ journal.setMeta('identity',attest());clock=initial+29940;const calls=[];
+ const adapter=createOwnerSelfChatAdapter({config,journal,preflight:async()=>runtimeId,
+  invoke:async(args,options)=>{
+   assert.equal(options.isActive(),true);calls.push(args[0]);
+   if(args[0]==='identity')return {...evidence(args[1]),checkedAt:new Date(clock).toISOString()};
+   if(args[0]==='status')return status;
+   assert.equal(args[0],'history');clock+=30001;
+   return {ok:true,chatId,messages:[]};
+  }});
+ await assert.rejects(adapter.request({operation:'history',mark_seen:false,limit:50,
+  accountId:config.accountId,chatId,contract:ownerSelfChatTransportContract(config)}),
+  /selfchat_identity_or_eligibility_unverified/);
+ assert.deepEqual(calls,['identity','status','history']);
+ assert.equal(journal.routes().length,0);assert.equal(journal.outboundIds().length,0);
+});
