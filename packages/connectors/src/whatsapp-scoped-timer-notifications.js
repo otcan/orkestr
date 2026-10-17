@@ -94,7 +94,11 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
             const r=await send({chatId:scope.chatId,requestId:id,notificationId:id,parentId:parent.id,text:row.text});
             if(r.ok!==true || !r.ids?.length)throw new Error('unconfirmed');
             proofs.mark(id,'sent');sent++;
-          }catch{proofs.mark(id,'uncertain');throw new Error('timer_notification_delivery_unresolved');}
+          }catch{
+            const recovered=fence.unknown({id,hash:notificationKey([scope.chatId,row.text,parent.id]),route:config.routeControl.routeId});
+            if(recovered.providerId){proofs.mark(id,'sent');sent++;}
+            else {proofs.mark(id,'uncertain');throw new Error('timer_notification_delivery_unresolved');}
+          }
         }
       }
       return {enabled:true,runs:runs.length,sent};

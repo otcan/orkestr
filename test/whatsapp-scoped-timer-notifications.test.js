@@ -125,3 +125,12 @@ test('thread-only route fence preserves unrelated group replies after switching'
  assert.equal(state.sent.length,1);
  assert.equal(await transport.observe(client,{...owner,id:{_serialized:'owner1'},to:config.groups[0].chatId}),false);
 });
+
+test('wrapper response loss reconciles an accepted receipt; absent receipt blocks cutover',async t=>{
+ const f=fixture(t);
+ const afterAccept=createScopedTimerNotifications({...f.options,send:async p=>{await f.options.send(p);throw new Error('lost response');}});
+ assert.equal((await afterAccept.tick()).sent,1);assert.equal(f.state.sent.length,1);assert.equal(f.fence.blocked(),false);afterAccept.close();
+ const g=fixture(t);
+ const beforeAccept=createScopedTimerNotifications({...g.options,send:async()=>{throw new Error('unknown wrapper outcome');}});
+ await assert.rejects(beforeAccept.tick(),/unresolved/);assert.equal(g.fence.blocked(),true);assert.equal(g.state.sent.length,0);beforeAccept.close();
+});

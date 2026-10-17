@@ -52,6 +52,17 @@ export function createDeliveryRouteFence({dbPath, db: supplied, now = Date.now})
       const changed=db.prepare("UPDATE delivery_attempt SET state='sent',provider_id=? WHERE id=? AND state='sending'").run(providerId,id);
       if (!changed.changes) fail('reservation_required');
     },
+    unknown({id,hash,route}) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const prior=db.prepare('SELECT * FROM delivery_attempt WHERE id=?').get(id);
+        if(prior && prior.hash!==hash)fail('payload_conflict');
+        if(prior?.state==='sent'){db.exec('COMMIT');return {providerId:prior.provider_id};}
+        if(prior)db.prepare("UPDATE delivery_attempt SET state='uncertain' WHERE id=?").run(id);
+        else db.prepare("INSERT INTO delivery_attempt VALUES(?,?,?,?, 'uncertain',NULL)").run(id,hash,route,current()?.epoch||0);
+        db.exec('COMMIT');return {uncertain:true};
+      }catch(e){db.exec('ROLLBACK');throw e;}
+    },
     uncertain(id) { db.prepare("UPDATE delivery_attempt SET state='uncertain' WHERE id=? AND state='sending'").run(id); },
     recover(route) { db.prepare("UPDATE delivery_attempt SET state='uncertain' WHERE route=? AND state='sending'").run(route); },
   };
