@@ -1,0 +1,77 @@
+# Scoped owner group replies
+
+This optional transport extension uses an already paired WhatsApp Web account
+to route fresh messages authored by that account into existing Orkestr threads.
+Completed answers return to the original group. It does not create groups or
+pair accounts. It supports text and need-input questions; it does not transfer
+attachments or forward messages from other participants.
+
+The thread registry remains authoritative: before input and each reply the relay
+checks the thread owner, group binding, enabled state and retirement state.
+The deployment config supplies an explicit allowlist of existing group/thread
+pairs. Disable the old binding mirror when this relay owns reply delivery.
+Do not enable two transports for the same owner-authored input.
+
+## Preparation
+
+Use `scripts/prepare-scoped-group-bridge.mjs <inactive-bridge-copy>` against a
+copy of the preserving self-chat transport runtime. The source-shape checks
+reject an incompatible runtime before modifying files. The helper adds the
+group policy, wrapper command and relay files. It does not install services.
+
+The bridge keeps the legacy router disabled. Set its existing preserving mode
+and identity variables, plus `WA_OWNER_GROUP_CONFIG` pointing to a protected
+JSON config. Run `scripts/scoped-group-relay.mjs <config>` as a separate service
+with access to the local Orkestr API and the same transport journal.
+
+Config fields:
+
+| Field | Purpose |
+| --- | --- |
+| `ownChatId` | Exact paired account identifier; checked against the live client |
+| `ownerUserId` | Orkestr principal who owns every allowed thread |
+| `activatedAt` | ISO timestamp; older input is never imported |
+| `groups` | Array of `{chatId, threadId, name}` |
+| `replyPrefix` | Deployment's configured reply identity |
+| `journalPath` | Transport SQLite journal |
+| `relayJournalPath` | Orkestr routing and completed reply journal |
+| `statusPath` | Optional private JSON status file, updated each poll |
+| `wrapperPath` | Prepared account wrapper, called using `group-reply` |
+
+The account, cutoff and group map are bound to the transport journal by a hash.
+Changing that contract requires a deliberate journal migration; do not reset a
+journal to bypass an uncertain delivery. Keep the config, journals and account
+credentials private. `ORKESTR_ENV_FILE` selects the local CLI API credentials.
+
+## Delivery and recovery
+
+The transport records provider message IDs, admits only `fromMe` input in the
+allowlist, and suppresses its own output IDs. Sends and observations share a
+serial queue so an echo arriving before its receipt is suppressed. On bridge
+readiness, the latest 30 messages per group are reconciled against the cutoff
+and ledgers. This bounded recovery does not replace a full historical import.
+
+Orkestr input uses a stable idempotency key and never requests the legacy
+WhatsApp reply path. Replies are matched to the exact parent message, with
+pagination for long turns. A broken thread binding does not starve other
+groups. Old questions are skipped when a completed final exists.
+
+Each provider send is reserved durably before the attempt. A timeout, missing
+receipt or restart during sending changes it to `uncertain` and blocks further
+outbound delivery until an operator checks the provider history. Never retry an
+uncertain send blindly. A confirmed receipt can be replayed locally by the same
+request ID without another external send.
+
+The wrapper allows authenticated health, allowlisted history/group metadata,
+and `group-reply <group-id> <request-id> <original-message-id> <text>`. A send
+without an observed owner input in the same group is rejected. Reset, pairing,
+group mutation, arbitrary destinations and legacy router endpoints are closed.
+
+Validate with:
+
+```sh
+node --test test/whatsapp-scoped-group-transport.test.js test/whatsapp-scoped-group-relay.test.js
+```
+
+A live end-to-end verification still needs a fresh owner message from WhatsApp.
+Service health and membership checks alone do not prove phone delivery.
