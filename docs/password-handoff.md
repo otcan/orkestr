@@ -82,7 +82,7 @@ Routes (all under `/api/vault`):
   - the agent process stopped or suspended for the duration.
 - **Chrome's generation and save behaviour:** checked on 2026-10-17 with Chrome 147, using a throwaway profile and a loopback fixture that was never submitted:
   - Without a Google sign-in, Chrome offered no password generation. Generation needs a profile signed in to Google password storage.
-  - Whether Chrome saves a generated password before submission was therefore not observable synthetically. It still needs one check on a signed-in profile.
+  - Whether Chrome saves a generated password before submission was therefore not observable synthetically. The owner accepted this on 2026-10-17: the first real signup will show it. If the status stays `accepted` until submission, end the handoff after Chrome confirms the save.
   - The synthetic tests type the value to simulate acceptance and insert login rows to simulate the save.
 - **The websocket cut uses an in-process notice.** Start a handoff only through the server routes below, never from a separate process.
 - **Same-origin tabs between checks:** a tab opened and closed between two status checks is not seen. The owner should keep a single tab on that origin.

@@ -138,6 +138,11 @@ test("saved-login check also reads Chrome's Google-account store (Login Data For
   assert.deepEqual(await savedLoginSince(home, "https://a.test", since), { ok: true, saved: false, count: 0 });
   account.prepare("insert into logins values (?, ?, ?, ?, ?)").run("https://a.test/signup", "https://a.test/", "ada", Buffer.from(SECRET), msToChromeTime(since + 1000));
   assert.deepEqual(await savedLoginSince(home, "https://a.test", since), { ok: true, saved: true, count: 1 }, "a generated password saved to the account store counts");
+  if (process.getuid?.() !== 0) {
+    await fs.chmod(path.join(home, "Default", "Login Data For Account"), 0o000);
+    assert.equal((await savedLoginSince(home, "https://a.test", since)).reason, "login_store_unreadable", "an inaccessible store is never treated as absent");
+    await fs.chmod(path.join(home, "Default", "Login Data For Account"), 0o600);
+  }
   await fs.writeFile(path.join(home, "Default", "Login Data For Account-journal"), "pending");
   assert.equal((await savedLoginSince(home, "https://a.test", since)).reason, "journal_pending");
   local.close();

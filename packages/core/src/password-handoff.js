@@ -170,19 +170,21 @@ export async function startPasswordHandoff(principal, input = {}, env = process.
   if (selector && !SELECTOR_PATTERN.test(selector)) throw vaultError("password_handoff_selector_invalid", 400);
   if (!desktopSlug || !threadId || !targetId) throw vaultError("password_handoff_input_required", 400);
   if (!origin) throw vaultError("password_handoff_origin_invalid", 400);
-  const leaseStatus = deps.activeDesktopLeaseStatus || activeDesktopLeaseStatus;
-  const lease = await leaseStatus(desktopSlug, env, { ownerUserId: owner });
-  if (!lease?.active || lease.expired || lease.stale) throw vaultError("desktop_lease_required", 403);
-  if (lease.threadId !== threadId) throw vaultError("desktop_lease_owned_by_other_thread", 409);
-  const desktop = await desktopFor(desktopSlug, owner, principal, env, deps);
-  const probe = await (deps.probePasswordField || probePasswordField)(desktop.cdpUrl, { targetId, expectedOrigin: origin, selector });
-  if (!probe.ok) throw vaultError(`password_handoff_${probe.reason}`, 409);
-  if (!probe.field.found || !probe.field.isPassword) throw vaultError("password_handoff_field_not_password", 409);
-  if (probe.field.filled) throw vaultError("password_handoff_field_not_empty", 409);
   const ttl = Math.min(MAX_TTL_MS, Math.max(60_000, Number(input.ttlMs) || DEFAULT_TTL_MS));
-  // Under the desktop gate: in-flight agent actions finish first; later ones
-  // see the open handoff.
+  // Lease, tab, origin and empty field are checked and the record is opened
+  // under the desktop gate: in-flight agent actions finish first (so they
+  // cannot change the page between the check and the start); later ones see
+  // the open handoff.
   const record = await withDesktopHandoffGate(desktopSlug, async () => {
+    const leaseStatus = deps.activeDesktopLeaseStatus || activeDesktopLeaseStatus;
+    const lease = await leaseStatus(desktopSlug, env, { ownerUserId: owner });
+    if (!lease?.active || lease.expired || lease.stale) throw vaultError("desktop_lease_required", 403);
+    if (lease.threadId !== threadId) throw vaultError("desktop_lease_owned_by_other_thread", 409);
+    const desktop = await desktopFor(desktopSlug, owner, principal, env, deps);
+    const probe = await (deps.probePasswordField || probePasswordField)(desktop.cdpUrl, { targetId, expectedOrigin: origin, selector });
+    if (!probe.ok) throw vaultError(`password_handoff_${probe.reason}`, 409);
+    if (!probe.field.found || !probe.field.isPassword) throw vaultError("password_handoff_field_not_password", 409);
+    if (probe.field.filled) throw vaultError("password_handoff_field_not_empty", 409);
     const nowMs = Date.now();
     const record = await mutateHandoffs(env, async (handoffs) => {
       if (handoffs.some((item) => item.desktopSlug === desktopSlug && isOpen(item))) {

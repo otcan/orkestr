@@ -67,8 +67,10 @@ export async function savedLoginSince(profileDir, origin, sinceMs, deps = {}) {
     const file = path.join(String(profileDir), "Default", name);
     try {
       await fs.access(file);
-    } catch {
-      continue;
+    } catch (error) {
+      // Only a missing file means "no such store"; anything else is unreadable.
+      if (error?.code === "ENOENT") continue;
+      return { ok: false, reason: "login_store_unreadable" };
     }
     found += 1;
     const result = await countStore(file, origin, sinceMs, deps);

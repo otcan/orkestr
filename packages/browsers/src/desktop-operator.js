@@ -336,8 +336,11 @@ export function detectDesktopBrowserChallenge(page = {}) {
 }
 
 // The blind check and the operation run under the per-desktop handoff gate.
+// The gate key is the same desktop the operation resolves (slug, args.slug or
+// args.target).
 export async function operateManagedDesktop(slug = "", args = {}, env = process.env, options = {}) {
-  return withDesktopHandoffGate(slug, () => operateManagedDesktopUngated(slug, args, env, options), env);
+  const desktopSlug = clean(slug || args?.slug || args?.target);
+  return withDesktopHandoffGate(desktopSlug, () => operateManagedDesktopUngated(desktopSlug, args, env, options), env);
 }
 
 async function operateManagedDesktopUngated(slug = "", args = {}, env = process.env, options = {}) {
