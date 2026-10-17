@@ -121,6 +121,9 @@ async function writeExecutable(file, content) {
 test.before(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-vault-fill-"));
   const bin = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-vault-fill-bin-"));
+  // The fake tools are CommonJS scripts; pin their module type so a stray or
+  // empty package.json higher up (e.g. /tmp/package.json) cannot break them.
+  await fs.writeFile(path.join(bin, "package.json"), JSON.stringify({ type: "commonjs" }));
   typist = await writeExecutable(path.join(bin, "fake-xdotool"), fakeTypist);
   typistLog = path.join(bin, "typist.log");
   cdpServer = await startFakeCdp();
