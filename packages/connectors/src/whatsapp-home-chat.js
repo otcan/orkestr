@@ -126,7 +126,7 @@ export async function resolveHomeChatRoute({ input = {}, threadRoute = {}, threa
   if ((env.ORKESTR_WHATSAPP_OWNER_SELFCHAT_SCOPE || clean(homeThread.binding?.chatId) !== chatId) && !scope)
     return { blocked:'owner_selfchat_scope_required' };
   const targets = homeChatTargets(threads, homeThread, chatId, env, scope);
-  const origin = scope ? { ownerSelfChatOrigin:{ revision:scope.revision, homeThreadId:scope.homeThreadId } } : {};
+  const origin = scope ? { ownerSelfChatOrigin:{ revision:scope.revision, homeThreadId:scope.homeThreadId, dedicatedTransport:scope.transport==='owner-selfchat-socket' } } : {};
   const state = await readHomeChatState(env);
   const focusId = clean(state.focus[chatId]);
   const directive = parseHomeChatDirective(input.text);

@@ -1,5 +1,15 @@
 // Pure policy for a separately authorized self-chat transport. No credentials,
 // sockets, subprocesses, account registration or live requests are created here.
+import { createHash } from 'node:crypto';
+
+export function ownerSelfChatTransportContract(config) {
+  return createHash('sha256').update(JSON.stringify([
+    config.ownerUserId,config.accountId,config.chatId,config.homeThreadId,
+    [...config.threadIds].sort(),config.activatedAt,config.socketPath,
+    config.allowSuppressedThreadReplies===true,
+  ])).digest('hex');
+}
+
 export function createOwnerSelfChatTransportPolicy(config = {}) {
   const { accountId, chatId, verifiedOwnChatId, activatedAt } = config;
   const cutoff = Date.parse(activatedAt);

@@ -7,7 +7,11 @@ export function ownerSelfChatScope(env = process.env) {
     if (s?.enabled !== true || !['ownerUserId', 'accountId', 'chatId', 'homeThreadId'].every(k => typeof s[k] === 'string' && s[k].trim())
         || !Array.isArray(s.threadIds) || !s.threadIds.length || s.threadIds.some(id => typeof id !== 'string' || !id.trim())) return null;
     const scope = { ownerUserId:s.ownerUserId, accountId:s.accountId, chatId:s.chatId,
-      homeThreadId:s.homeThreadId, threadIds:[...new Set(s.threadIds)].sort() };
+      homeThreadId:s.homeThreadId, threadIds:[...new Set(s.threadIds)].sort(),
+      ...(s.transport === 'owner-selfchat-socket' ? {transport:s.transport,
+        socketPath:s.socketPath,activatedAt:s.activatedAt,
+        allowSuppressedThreadReplies:s.allowSuppressedThreadReplies===true} : {}) };
+    if (scope.transport && (!scope.socketPath?.startsWith('/') || !Number.isFinite(Date.parse(scope.activatedAt)))) return null;
     return { ...scope, revision:createHash('sha256').update(JSON.stringify(scope)).digest('hex') };
   } catch { return null; }
 }

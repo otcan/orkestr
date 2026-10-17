@@ -68,10 +68,10 @@ separate from granting the agent new access. After approved activation, an
 owner-only test must verify inbound ID, selected existing thread, one reply ID,
 and absence of echo-generated input before expanding any scope.
 
-## Separate transport boundary (private implementation in progress)
+## Separate transport boundary (disabled until operator activation)
 
-`whatsapp-owner-selfchat-transport.js` is an inert, pure policy module, not an
-installed service. It admits only history for one pinned self chat with explicit
+`whatsapp-owner-selfchat-transport.js` is the pure policy module. It admits only
+history for one pinned self chat with explicit
 `mark_seen=false`, and bounded text to that same chat. Pairing, service control,
 bulk inbox reads, group operations and attachments are not admitted. Constructing
 it requires verified identity as well as an activation timestamp; readiness or a
@@ -83,13 +83,62 @@ uncertain delivery blocks ingestion to prevent an unacknowledged echo becoming
 an owner command. The configured chat ID must match both sender and recipient;
 unverified address aliases fail closed. An operator integration must retain a
 durable cursor and atomic send reservations, persist receipt IDs before resuming
-ingestion, and never retry uncertain delivery automatically. These persistence
-and socket components are not implemented by this pure policy module.
+ingestion, and never retry uncertain delivery automatically.
 
-Do not repoint a global worker socket to add a second account. Remaining work is
-account-specific transport dispatch and status, a scoped operator-owned adapter,
-durable acknowledgement handling, supplemental account/chat registration and a
-private thread allowlist. Existing primary-group mirror holds remain effective;
-any requested owner-only exception requires an explicit scoped policy and tests,
-not removal of the original group hold. No live readiness is implied by local
-tests, and this module must not be installed as a privileged service as-is.
+The adapter, SQLite journal, identity verifier, Unix-socket client/server,
+registration planner and dedicated pump are implemented in the neighboring
+`whatsapp-owner-selfchat-*` modules. The pump runs inside the existing Orkestr
+server only when `ORKESTR_OWNER_SELFCHAT_CONFIG` names an approved, root-owned
+configuration file whose ancestors are protected from non-root writes. It does
+not sweep the general outbox. The general mirror permanently excludes the
+dedicated-origin marker, including after scope revocation. This exclusion must be
+deployed before activation; running the pump alongside an older server is unsafe.
+
+The private runtime configuration has `home`, `activationApproved`, and `scope`.
+In addition to the scope fields above, set `transport` to
+`owner-selfchat-socket`, `socketPath` to the private operator-installed socket,
+and `activatedAt` to the reviewed activation cutoff. An explicitly approved
+`allowSuppressedThreadReplies: true` permits only replies whose parent is a
+verified, allowlisted self-chat input. It never edits or lifts a primary group
+hold. Disabled or retired threads remain excluded. API-agent threads are refused
+for this subscription-only route. Progress, attachments and unparented replies
+are not transported; only completed text responses are eligible.
+
+The operator adapter is separately started with
+`scripts/owner-selfchat-adapter.mjs serve <private-config>`. It has no TCP listener,
+pairing/restart endpoint or broad inbox access. Its `challenge` and `verify`
+commands corroborate the pinned identity using one fresh owner-authored message
+with exact self sender/recipient fields. This is an ordinary self-chat message,
+not phone authentication or a pairing code. Runtime PID plus systemd invocation
+ID pin the proof to the existing session process; a change fails closed.
+
+SQLite uses WAL and FULL synchronous commits. Send reservations are persisted
+before invoking the existing wrapper, receipt IDs before accepting further
+ingress. Pending/uncertain sends survive process restart and are never retried.
+The same request key returns its saved receipt; a changed payload conflicts.
+Inbound messages remain pending until the canonical router acknowledges them.
+A bounded history overflow stops the pump rather than skipping messages. There
+is no automatic reconciliation, history restoration or queue replay.
+
+The adapter also requires an operator-verified `verifiedSendPolicy` for the
+current runtime: `attempts: 1`, `textOnly: true`, and `maxTextLength >= 3000`.
+The existing wrapper may have its own retry and long-text attachment behavior;
+an outer journal cannot disable that. Verify effective provider settings before
+attesting. If changing them requires restarting the existing bridge, obtain
+specific approval; do not include that silently in installing this adapter.
+
+`scripts/owner-selfchat-router.mjs plan|register|retire <private-config>` manages
+only the distinct connector account and supplemental chat binding. Registration
+requires verified adapter health, an approved config, unchanged reviewed state
+and thread ownership. Run registration during the reviewed release maintenance
+window to avoid concurrent legacy JSON writers. It neither creates threads nor
+rebinds groups. Retirement disables only the supplemental binding and retains
+delivery evidence. The runtime notices config removal/change and pauses; errors
+do not restart a bridge, fall back to another account, or trigger general recovery.
+
+Rollout starts with the existing home thread only, then explicitly selected
+same-owner thread IDs. The thread selection implementation supports `/threads`,
+`/switch` and `@name` without new threads. Quote routing requires quote metadata;
+the supported wrapper history currently does not expose it, so use those explicit
+commands for this transport. Expanding the allowlist is separately reviewed
+configuration, not a primary group change. No live readiness is implied by mocks.
