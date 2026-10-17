@@ -20,7 +20,7 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    started=true;
   },
   checkRequest(method,url,body={}) {
-   if(method==='GET' && ['/health','/accounts','/diagnostics/health'].includes(url.pathname))return;
+   if(method==='GET' && ['/health','/accounts'].includes(url.pathname))return;
    const a=encodeURIComponent(config.workerAccountId),g=encodeURIComponent(config.groups[0].chatId);
    if(method==='GET' && url.pathname===`/accounts/${a}/chats/${g}/history` && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
       && Number(url.searchParams.get('limit')||30)>0 && Number(url.searchParams.get('limit')||30)<=50)return;

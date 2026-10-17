@@ -6,6 +6,7 @@ test('native worker accepts only scoped text, health and read-without-seen opera
  const p=createScopedNativeWorkerPolicy(config);
  const url=s=>new URL(s,'http://local');
  p.checkRequest('GET',url('/health'));
+ assert.throws(()=>p.checkRequest('GET',url('/diagnostics/health?readOnly=0')),/denied/);
  p.checkRequest('GET',url('/accounts/existing/chats/120000000001%40g.us/history?mark_seen=false&limit=30'));
  const body={accountId:'existing',to:config.groups[0].chatId,text:'hello',requestId:'r1',parentId:'p1'};
  p.checkRequest('POST',url('/send-text'),body);
