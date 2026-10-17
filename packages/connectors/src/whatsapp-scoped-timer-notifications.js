@@ -42,6 +42,7 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
   return {
     close(){if(!suppliedProof)proofs.close();if(!suppliedFence)fence.close();},
     async tick() {
+      if(fence.current()?.route!==config.routeControl.routeId)return {enabled:true,active:false,sent:0};
       const route=fence.assertActive(config.routeControl.routeId);
       if(fence.blocked())throw new Error('timer_notification_delivery_unresolved');
       const since=Math.max(Date.parse(scope.since),Date.parse(route.since));

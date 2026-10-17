@@ -90,7 +90,7 @@ test('legacy mirror must be suppressed and no backlog is sent after cutover',asy
  const {notifier,state,fence,advance}=fixture(t);state.mirror=true;
  await assert.rejects(notifier.tick(),/duplicate_route/);state.mirror=false;
  advance(1000);fence.activate({from:'temporary',to:'primary',evidence:{routeId:'primary',checkedAt:iso(11000),restrictionCleared:true,authenticated:true,ready:true,identityVerified:true,oldRouteStopped:true,legacyRouterDisabled:true,transportJournalsClear:true}});
- await assert.rejects(notifier.tick(),/inactive/);assert.equal(state.sent.length,0);
+ assert.equal((await notifier.tick()).active,false);assert.equal(state.sent.length,0);
 });
 
 test('lost response after accepted send reuses the bridge receipt without a new provider send',async t=>{
