@@ -1,4 +1,4 @@
-<main class="personal-agent-home" aria-labelledby="personal-agent-home-title">
+<section class="personal-agent-home" aria-labelledby="personal-agent-home-title">
   <header class="personal-agent-home__header">
     <div>
       <p class="eyebrow">Personal Agent</p>
@@ -18,6 +18,11 @@
         <button type="button" (click)="createConversation.emit()">New conversation</button>
       </header>
       <ng-content select="[personalAgentConversation]"></ng-content>
+      @if (!assistantAvailable) {
+        <p class="personal-agent-home__assistant-state" role="status">
+          Local assistant unavailable ({{ assistantReasonLabel() }}). Existing conversation history remains visible; no reply will be generated here.
+        </p>
+      }
     </section>
 
     <section class="personal-agent-home__panel personal-agent-home__briefing" aria-labelledby="personal-agent-briefing-title">
@@ -67,4 +72,4 @@
       </ul>
     </section>
   </div>
-</main>
+</section>

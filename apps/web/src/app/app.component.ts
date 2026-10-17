@@ -358,7 +358,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.gmailBrowserNotifications.start();
     if (!this.sharedAppActive() && !this.publicAppsActive() && !this.pairingRequired) {
       void this.personalAgentCapability.load().then(() => {
-        if (this.activePanel === "personalHome" && !this.personalAgentHomeEnabled()) this.openConversationsFromHome();
+        if (this.activePanel === "personalHome" && !this.personalAgentHomeEnabled()) this.fallbackFromPersonalAgentHome();
         else this.renderNow();
       });
     }
@@ -1229,6 +1229,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   personalAgentHomeDataState(): PersonalAgentHomeDataState {
     return this.personalAgentCapability.dataState();
+  }
+
+  private fallbackFromPersonalAgentHome(): void {
+    this.activePanel = "chat";
+    this.mobileSidebarOpen = false;
+    globalThis.history?.replaceState({}, "", this.appPath("/"));
+    this.updateDocumentTitle();
+    this.renderNow();
   }
 
   async openHomeConversation(thread: ThreadSummary): Promise<void> {
@@ -5312,7 +5320,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private panelFromPath(): Panel {
     const parts = this.locationPathParts();
-    if (parts[0] === "home") return "personalHome";
+    if (parts[0] === "assistant") return "personalHome";
     if (this.sharedAppParts(parts) || parts[0] === "apps") return "chat";
     if (parts[0] === "ops" || (parts[0] === "ng" && parts[1] === "ops")) return "instanceSettings";
     if (parts[0] === "launcher" || (parts[0] === "ng" && parts[1] === "launcher")) return "instanceApps";
@@ -5534,7 +5542,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private pathForPanel(id: string, panel: Panel): string {
-    if (panel === "personalHome") return this.appPath("/home");
+    if (panel === "personalHome") return this.appPath("/assistant");
     if (panel === "files") return this.instancePath("/files");
     if (panel === "instanceApps") return String(this.setupStatus?.urls?.launcherUrl || "").trim() || this.instancePath("/launcher");
     if (panel === "instanceSettings") return this.instancePath("/settings");

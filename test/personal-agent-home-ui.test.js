@@ -23,7 +23,7 @@ test("personal-agent home follows the OP-02 capability contract and stays hidden
   assert.equal(app.personalAgentHomeEnabled(), false);
   app.value = { enabled: false, capability: false };
   assert.equal(app.personalAgentHomeEnabled(), false);
-  app.value = { enabled: true, capability: false };
+  app.value = { enabled: true, capability: false, reason: "storage_unavailable", assistant: { available: false, reason: "not_configured" } };
   assert.equal(app.personalAgentHomeEnabled(), true, "configured home may show its explicit offline state");
 
   const nav = template.match(/<nav class="instance-topbar-nav"[\s\S]*?<\/nav>/)?.[0] || "";
@@ -31,6 +31,9 @@ test("personal-agent home follows the OP-02 capability contract and stays hidden
   assert.match(template, /@if \(activePanel === "personalHome" && personalAgentHomeEnabled\(\)\)[\s\S]*<ork-personal-agent-home/);
   assert.match(template, /\} @else if \(activePanel === "chat" \|\| \(activePanel === "personalHome" && !personalAgentHomeEnabled\(\)\)\) \{\s*<section #messagePane class="messages"/,
     "the existing conversations/message renderer remains the unchanged flag-off branch");
+  assert.match(source, /parts\[0\] === "assistant"/);
+  assert.match(source, /fallbackFromPersonalAgentHome[\s\S]*this\.appPath\("\/"\)/);
+  assert.match(source, /personalAgentHomeEnabled\(\)[\s\S]*this\.personalAgentCapability\.enabled\(\)/);
 });
 
 test("home shell exposes verified state and existing-thread actions without fabricated product data", async () => {
@@ -45,6 +48,10 @@ test("home shell exposes verified state and existing-thread actions without fabr
   }
   for (const state of ["loading", "offline", "stale", "unavailable"]) assert.match(component, new RegExp(`"${state}"`));
   assert.match(template, /aria-live="polite"/);
+  assert.match(template, /Local assistant unavailable[\s\S]*no reply will be generated here/);
+  const appTemplate = await read("app.component.html");
+  assert.match(appTemplate, /activePanel === "personalHome" && personalAgentCapability\.assistantAvailable\(\)/,
+    "the existing composer is not offered while the local assistant is unavailable");
   assert.match(template, /\(openConversation\)|openConversation\.emit\(thread\)/);
   assert.match(template, /\(showAllConversations\)|showAllConversations\.emit\(\)/);
   assert.match(template, /conversations\.slice\(0, 5\)/);
@@ -55,9 +62,23 @@ test("home shell exposes verified state and existing-thread actions without fabr
   assert.match(styles, /:focus-visible|focus/i);
 });
 
-test("personal-agent UI fixture is synthetic and only used by this test", async () => {
-  const fixture = { id: "synthetic-thread", title: "Example conversation", status: "active" };
-  const component = await read("personal-agent-home.component.ts");
-  assert.equal(fixture.id, "synthetic-thread");
-  assert.doesNotMatch(component, /synthetic-thread|Example conversation/);
+test("capability fixture uses only the coordinator-approved response fields", async () => {
+  const fixture = {
+    enabled: true,
+    capability: false,
+    reason: "storage_unavailable",
+    assistant: { available: false, reason: "not_configured" },
+  };
+  const [api, service, component] = await Promise.all([
+    read("api.service.ts"),
+    read("personal-agent-home-capability.service.ts"),
+    read("personal-agent-home.component.ts"),
+  ]);
+  assert.deepEqual(Object.keys(fixture), ["enabled", "capability", "reason", "assistant"]);
+  assert.deepEqual(Object.keys(fixture.assistant), ["available", "reason"]);
+  assert.match(api, /reason\?: "disabled" \| "storage_unavailable"/);
+  assert.match(api, /assistant:\s*\{\s*available: boolean;/);
+  assert.match(service, /response\?\.assistant\?\.available !== "boolean"/);
+  assert.match(component, /assistantReasonLabel/);
+  assert.doesNotMatch(service + component, /fixture|synthetic-thread|Example conversation/);
 });

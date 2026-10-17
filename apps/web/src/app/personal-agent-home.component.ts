@@ -10,6 +10,9 @@ export type PersonalAgentHomeDataState = "loading" | "ready" | "offline" | "stal
 })
 export class PersonalAgentHomeComponent {
   @Input() dataState: PersonalAgentHomeDataState = "unavailable";
+  @Input() capabilityReason = "";
+  @Input() assistantAvailable = false;
+  @Input() assistantReason = "not_configured";
   @Input() lastVerifiedAt = "";
   @Input() conversations: ThreadSummary[] = [];
   @Output() openConversation = new EventEmitter<ThreadSummary>();
@@ -28,7 +31,11 @@ export class PersonalAgentHomeComponent {
 
   statusDescription(): string {
     if (this.dataState === "loading") return "Checking the latest persisted status.";
-    if (this.dataState === "offline") return "The status service is unavailable. Existing conversations are still available.";
+    if (this.dataState === "offline") {
+      return this.capabilityReason === "storage_unavailable"
+        ? "Required Personal Agent storage is unavailable. Existing conversations remain available."
+        : "The status service is unavailable. Existing conversations are still available.";
+    }
     if (this.dataState === "stale") {
       return this.lastVerifiedAt
         ? `The latest verified status is from ${this.lastVerifiedAt}. It may have changed.`
@@ -44,6 +51,12 @@ export class PersonalAgentHomeComponent {
     if (this.dataState === "stale") return "This section is stale; no new result has been verified.";
     if (this.dataState === "ready") return "No verified items are available.";
     return "No live status is connected yet.";
+  }
+
+  assistantReasonLabel(): string {
+    return this.assistantReason === "local_runtime_unavailable"
+      ? "local runtime unavailable"
+      : "not configured";
   }
 
   conversationTitle(thread: ThreadSummary): string {

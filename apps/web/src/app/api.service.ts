@@ -20,7 +20,11 @@ export interface HealthResponse {
 export interface PersonalAgentCapabilityResponse {
   enabled: boolean;
   capability: boolean;
-  reason?: string;
+  reason?: "disabled" | "storage_unavailable";
+  assistant: {
+    available: boolean;
+    reason?: "not_configured" | "local_runtime_unavailable";
+  };
 }
 
 export interface CodexModelControls {

@@ -794,6 +794,9 @@
       @if (activePanel === "personalHome" && personalAgentHomeEnabled()) {
         <ork-personal-agent-home
           [dataState]="personalAgentHomeDataState()"
+          [capabilityReason]="personalAgentCapability.capabilityReason()"
+          [assistantAvailable]="personalAgentCapability.assistantAvailable()"
+          [assistantReason]="personalAgentCapability.assistantReason()"
           [conversations]="threads"
           (openConversation)="openHomeConversation($event)"
           (showAllConversations)="openConversationsFromHome()"
@@ -1587,7 +1590,7 @@
         </section>
       }
 
-      @if (activePanel === "chat" || activePanel === "personalHome") {
+      @if (activePanel === "chat" || (activePanel === "personalHome" && personalAgentCapability.assistantAvailable())) {
         @if (settingsCommandReplies[thread.id]) {
           <div role="status" style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 35vh; overflow: auto; padding: 12px;">
             {{ settingsCommandReplies[thread.id] }}

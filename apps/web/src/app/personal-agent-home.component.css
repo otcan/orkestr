@@ -75,6 +75,15 @@
   font-weight: 650;
 }
 
+.personal-agent-home__assistant-state {
+  margin: 12px 0 0;
+  padding: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: 9px;
+  color: var(--ui-muted);
+  line-height: 1.5;
+}
+
 .personal-agent-home__timestamp {
   color: var(--ui-muted);
   font-size: 0.86rem;

@@ -3,7 +3,8 @@
 This shell adds a home view to the existing Orkestr web app; it does not replace
 threads, thread workers, task agents, or the Agent Job store. The view is
 available only when the server reports the `personalAgent` flag as enabled.
-The existing Conversations navigation and thread routes remain intact.
+The existing Conversations navigation and thread routes remain intact. Its
+manual route is `/assistant`; when disabled, that path redirects to `/`.
 
 ## Desktop wireframe
 
@@ -47,8 +48,16 @@ Existing conversations
   code contains no sample tasks, fabricated counts, or synthetic progress.
 - Loading, offline, stale, and unavailable labels are distinct. Stale content
   must remain visibly marked with its last verified time once real data exists.
-- The capability endpoint is used only for the `personalAgent` gate. Failure
-  or an unrecognized response keeps the legacy app view available.
+- The capability endpoint is used only for the `personalAgent` gate and
+  assistant availability. The UI does not read the server environment flag
+  directly. Failure or an unrecognized response keeps the legacy app view
+  available.
+- `enabled` controls route/navigation visibility. With `enabled` true and
+  `capability` false, the shell remains visible with an offline/degraded state.
+  Assistant availability is independent; an unavailable local assistant is
+  named in the conversation pane and its composer is not offered.
+- With the flag off, the route falls back to `/`; `/` and all legacy routes
+  retain their existing behavior. The default landing page is unchanged.
 - This is an application-level single-user experience, not an isolation
   boundary for root-capable runtimes.
 
