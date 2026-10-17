@@ -170,32 +170,42 @@ async function overlayConnectorStatus(id, overlay) {
 
 export async function getConnectorStatuses({ env = process.env, home = os.homedir(), principal = null, validateGmail = false } = {}) {
   const paths = dataPaths(env);
-  const scopedPaths = await connectorScopePaths(env, { principal });
-  const [openaiConfig, whatsappConfig] = await Promise.all([
+  const configuredCodex = codexBinaryStatus(env);
+  const [scopedPaths, openaiConfig, whatsappConfig, chrome, codex, timersExist] = await Promise.all([
+    connectorScopePaths(env, { principal }),
     readConnectorConfig("openai", env),
     readConnectorConfig("whatsapp", env),
+    firstCommandVersion(["google-chrome", "chrome", "chromium", "chromium-browser"]),
+    configuredCodex || firstCommandVersion([String(env.ORKESTR_CODEX_BIN || "codex").trim() || "codex"]),
+    pathExists(paths.timers),
   ]);
   const codexHome = defaultCodexHome(env, home);
   const codexAuthPath = path.join(codexHome, "auth.json");
-  const [chrome, codex] = await Promise.all([
-    firstCommandVersion(["google-chrome", "chrome", "chromium", "chromium-browser"]),
-    codexBinaryStatus(env) || firstCommandVersion([String(env.ORKESTR_CODEX_BIN || "codex").trim() || "codex"]),
-  ]);
-  const codexAuth = codex.command ? await codexLoginStatus({ env, home, timeoutMs: 2500 }) : null;
-  const codexRuntime = codexRuntimeKind(env);
-  const codexAppServerHelp = codex.command ? await commandVersion(codex.command, ["app-server", "--help"]) : "";
-  const codexAppServerAvailable = Boolean(codexAppServerHelp);
-  const codexAppServerProbeResult = codex.command && codexAuth?.connected && codexAppServerAvailable
-    ? await codexAppServerProbe({ env, home, command: codex.command })
-    : null;
-  const codexRuntimeAuthInvalid = codex.command && codexAuth?.connected
-    ? await activeCodexRuntimeAuthInvalid({ env, codexAuthPath })
-    : null;
-  const [timersExist, linkedinProfileExists, gmailProfileExists, codexAuthExists] = await Promise.all([
-    pathExists(paths.timers),
+  const [linkedinProfileExists, gmailProfileExists, codexAuthExists] = await Promise.all([
     pathExists(connectorFile(scopedPaths, "browsers", "linkedin")),
     pathExists(connectorFile(scopedPaths, "browsers", "gmail")),
     pathExists(codexAuthPath),
+  ]);
+  const codexRuntime = codexRuntimeKind(env);
+  const [codexAuth, codexAppServerHelp, whatsapp, [gmailAuth, outlookAuth, jiraAuth, shopifyAuth]] = await Promise.all([
+    codex.command ? codexLoginStatus({ env, home, timeoutMs: 2500 }) : null,
+    codex.command ? commandVersion(codex.command, ["app-server", "--help"]) : "",
+    getWhatsAppStatus(env),
+    Promise.all([
+      connectorAuthStatus("gmail", env, { principal, validate: validateGmail === true }),
+      connectorAuthStatus("outlook", env, { principal }),
+      connectorAuthStatus("jira", env, { principal }),
+      connectorAuthStatus("shopify", env, { principal }),
+    ]),
+  ]);
+  const codexAppServerAvailable = Boolean(codexAppServerHelp);
+  const [codexAppServerProbeResult, codexRuntimeAuthInvalid] = await Promise.all([
+    codex.command && codexAuth?.connected && codexAppServerAvailable
+      ? codexAppServerProbe({ env, home, command: codex.command })
+      : null,
+    codex.command && codexAuth?.connected
+      ? activeCodexRuntimeAuthInvalid({ env, codexAuthPath })
+      : null,
   ]);
   const openaiKey = env.OPENAI_API_KEY || openaiConfig.openaiApiKey || "";
   const codexEnvKey = Boolean(env.OPENAI_API_KEY);
@@ -204,13 +214,6 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const codexAppServerAuthInvalid = codexAppServerFailed && codexAppServerProbeResult?.reason === "codex_app_server_auth_invalid";
   const codexAppServerUnavailable = codexAppServerFailed && !codexAppServerAuthInvalid;
   const codexRuntimeInvalid = Boolean(codexRuntimeAuthInvalid);
-  const [whatsapp, gmailAuth, outlookAuth, jiraAuth, shopifyAuth] = await Promise.all([
-    getWhatsAppStatus(env),
-    connectorAuthStatus("gmail", env, { principal, validate: validateGmail === true }),
-    connectorAuthStatus("outlook", env, { principal }),
-    connectorAuthStatus("jira", env, { principal }),
-    connectorAuthStatus("shopify", env, { principal }),
-  ]);
   const parentWhatsApp = parentConnectorAppStatus({ provider: "whatsapp", config: whatsappConfig, env, runtimeStatus: whatsapp });
   const tenantScoped = isTenantScopedRuntime(env);
   const overlay = scopedPaths.global && !tenantScoped ? await readOverlay(env) : { connectors: {} };

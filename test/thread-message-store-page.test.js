@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { threadMessagePage } from "../dist/server/apps/server/src/modules/threads/thread-message-page.js";
-import { storedThreadMessagePage } from "../dist/server/apps/server/src/modules/threads/thread-message-store-page.js";
+import { pendingQuestionForSummary, storedThreadMessagePage } from "../dist/server/apps/server/src/modules/threads/thread-message-store-page.js";
 import {
   appendThreadMessageRecord,
   closeThreadMessageRegistryCache,
@@ -107,6 +107,40 @@ test("sqlite thread message page finds an old pending question and superseded in
   const page = await storedThreadMessagePage(thread, {}, null);
   assert.equal(page.pendingQuestion?.messageId, "q");
   assert.deepEqual(page.messages.map((message) => message.id), ["q", "f"]);
+});
+
+test("pending-question scan is reused for an unchanged revision and recomputed after revision change", async () => {
+  let reads = 0;
+  const messages = new Map(Array.from({ length: 401 }, (_, index) => [index + 1, {
+    id: `m-${index + 1}`,
+    role: "assistant",
+    phase: index === 0 ? "need_input" : "commentary",
+    text: index === 0 ? "Continue?" : "",
+    cursor: index + 1,
+  }]));
+  const store = {
+    messagesAt(positions) {
+      reads += 1;
+      return positions.map((position) => ({ position, message: messages.get(position) }));
+    },
+    messagesForTurns() { return []; },
+  };
+  const makeSummary = (revision) => ({
+    revision,
+    ordered: [...messages.keys()].map((position) => ({ position, cursor: position, ms: position })),
+    turns: new Map(),
+  });
+
+  const first = makeSummary("r1");
+  assert.equal(pendingQuestionForSummary(store, first)?.text, "Continue?");
+  const readsAfterFirstScan = reads;
+  assert.ok(readsAfterFirstScan > 1, "fixture should require a multi-chunk scan");
+  assert.equal(pendingQuestionForSummary(store, first)?.text, "Continue?");
+  assert.equal(reads, readsAfterFirstScan, "same revision should reuse its pending-question result");
+
+  const second = makeSummary("r2");
+  assert.equal(pendingQuestionForSummary(store, second)?.text, "Continue?");
+  assert.ok(reads > readsAfterFirstScan, "new revision summary should be recomputed");
 });
 
 test("stored thread message page defers to the full list for the JSON store", async (t) => {

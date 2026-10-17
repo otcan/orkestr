@@ -26,6 +26,8 @@ type ThreadSummary = {
   supersededMessageIds: unknown[];
   // Messages of turns with a runtime_interrupted notice, filled lazily while walking.
   turns: Map<string, any[]>;
+  pendingQuestionComputed?: boolean;
+  pendingQuestion?: any;
 };
 
 // Sorted per-thread summaries keyed by the store revision, so polling an unchanged thread skips the scan.
@@ -94,6 +96,20 @@ function* visibleNewestFirst(store: any, summary: ThreadSummary, loaded: Map<num
   }
 }
 
+// A thread's pending-question state changes only when its message-store revision
+// changes. Reuse it across the frequent unchanged-history polls from the Web UI.
+export function pendingQuestionForSummary(store: any, summary: ThreadSummary) {
+  if (!summary.pendingQuestionComputed) {
+    const loaded = new Map<number, any>();
+    const pending = (function* () {
+      for (const { message } of visibleNewestFirst(store, summary, loaded, () => true)) yield message;
+    })();
+    summary.pendingQuestion = latestPendingQuestion(pending);
+    summary.pendingQuestionComputed = true;
+  }
+  return summary.pendingQuestion || null;
+}
+
 // Same payload as threadMessagePage(thread, await listThreadMessages(...)) without parsing every message.
 // Returns null when the thread message store is not sqlite so callers fall back to the full list.
 export async function storedThreadMessagePage(thread: any, query: Record<string, unknown> = {}, status: any = null) {
@@ -101,9 +117,6 @@ export async function storedThreadMessagePage(thread: any, query: Record<string,
     const summary = threadSummary(store);
     const pageQuery = threadMessagePageQuery(query);
     const loaded = new Map<number, any>();
-    const pending = (function* () {
-      for (const { message } of visibleNewestFirst(store, summary, loaded, () => true)) yield message;
-    })();
     const page: Array<{ message: any; index: number }> = [];
     const inRange = (entry: Entry) => pageQuery.includes({ cursor: entry.cursor, text: "x" });
     for (const item of visibleNewestFirst(store, summary, loaded, inRange)) {
@@ -114,7 +127,7 @@ export async function storedThreadMessagePage(thread: any, query: Record<string,
     // The bridge index only feeds the eventId fallback, which never applies here: stored rows always have ids.
     return threadMessagePagePayload(thread, pageQuery, status, {
       page,
-      pendingQuestion: latestPendingQuestion(pending),
+      pendingQuestion: pendingQuestionForSummary(store, summary),
       cursor: summary.cursor,
       minCursor: summary.minCursor,
       supersededMessageIds: summary.supersededMessageIds,
