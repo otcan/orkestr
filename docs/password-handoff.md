@@ -18,6 +18,7 @@ Lets the owner create a new site password with Chrome's own generator on a manag
 4. While the handoff is open the desktop is **password-blind**. Every path except the handoff owner's own vault-owner browser session refuses with `desktop_password_blind` (HTTP 423):
    - agent desktop operations (`operateManagedDesktop`: observe, read, extract, click, type, navigate);
    - agent vault fill;
+   - tenant agent desktop skill actions (open, open_url, start, stop, restart);
    - `POST /api/browser-sessions/:slug/:action` and `/api/browsers/:slug/:action`;
    - the `/desktop/:slug/…` HTTP and websocket (noVNC) proxy. Desktop shares, machine credentials and the local operator proxy count as non-owner. Websockets already open when the handoff starts are cut, except the owner's.
 5. The owner, in the live desktop view, uses Chrome's "Suggest password…" and "Use strong password". Agents never click these.
@@ -64,7 +65,7 @@ Routes (all under `/api/vault`):
 
 ## Not covered yet (blockers before live use)
 
-- **Raw DevTools access:** an agent process that already has the desktop's DevTools port can still read the page or take screenshots directly. Orkestr's blind flag stops Orkestr's own agent paths, not a raw CDP client. Live use needs one of these:
+- **Raw DevTools access:** Chrome's DevTools port listens on loopback, so any local process can connect to it, whatever user it runs as. Such a process can read the page or take screenshots directly. Orkestr's blind flag stops Orkestr's own paths, not a raw CDP client, and nothing helps against agents with root on the host. Against unprivileged agents, live use needs one of these:
   - a CDP proxy that refuses agents while the desktop is blind;
   - DevTools port isolation per lease;
   - the agent process stopped or suspended for the duration.
