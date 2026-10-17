@@ -78,6 +78,8 @@ const messageStringFields = [
   "runtimeCheckpointId",
   "originSurface",
   "homeChatRouted",
+  "ownerSelfChatRevision",
+  "ownerSelfChatHomeThreadId",
   "originTransport",
   "senderParticipantId",
   "senderTrustLevel",
@@ -862,6 +864,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
       const value = String(input[key] || "").trim();
       if (value) nextMessage[key] = value;
     }
+    if (input.ownerSelfChatDedicatedTransport === true) nextMessage.ownerSelfChatDedicatedTransport = true;
     if (input.bridgeWhatsAppReply === true || input.bridgeWhatsAppReply === false) {
       nextMessage.bridgeWhatsAppReply = input.bridgeWhatsAppReply;
     }

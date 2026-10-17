@@ -1,3 +1,5 @@
+import { ownerSelfChatReplyRoute,isDedicatedOwnerSelfChatOutput } from './whatsapp-owner-selfchat-scope.js';
+import { ownerSelfChatStatusForInput } from './whatsapp-owner-selfchat-client.js';
 import crypto from "node:crypto";
 import { withInboundRouteLock } from "./whatsapp-inbound-route-lock.js";
 import { dispatchWhatsAppJobTriggers } from "./whatsapp-job-triggers.js";
@@ -2090,7 +2092,8 @@ async function routeThread(input, config, env) {
   );
   if (!chatId && !explicit) return { threadId: "", binding: null };
   const threads = await listThreads(env);
-  if (explicit) {
+  const selfChatStatus = await ownerSelfChatStatusForInput(input, env);
+  if (explicit && !selfChatStatus) {
     const thread = threads.find((item) => item.id === explicit || item.name === explicit || item.bindingName === explicit) || null;
     if (thread && isThreadRetired(thread)) return { threadId: "", binding: null };
     const binding = thread?.binding || null;
@@ -2100,7 +2103,7 @@ async function routeThread(input, config, env) {
       ? await getWhatsAppStatus(env).catch(() => ({})) : {};
     return { threadId: explicit, binding, accountPolicyAccounts: status.accounts || [] };
   }
-  const whatsappStatus = await getWhatsAppStatus(env).catch(() => ({}));
+  const whatsappStatus = selfChatStatus || await getWhatsAppStatus(env).catch(() => ({}));
   const registryRoute = await resolveWhatsAppBinding({ chatId, accountId }, { env, threads, status: whatsappStatus }).catch(() => null);
   const registryBinding = registryRoute?.selected || null;
   if (registryRoute?.ok && registryBinding?.threadId) {
@@ -4362,6 +4365,13 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
 }
 
 async function routeWhatsAppInboundUnlocked(input = {}, env = process.env, fetchImpl = fetch) {
+  // These markers are produced only by the verified home-chat router.
+  input = { ...input };
+  delete input.ownerSelfChatOrigin;
+  delete input.ownerSelfChatRevision;
+  delete input.ownerSelfChatHomeThreadId;
+  delete input.ownerSelfChatDedicatedTransport;
+
   const config = await readConnectorConfig("whatsapp", env);
   const eventId = pickString(input.eventId, input.id, input.messageId);
   const canonicalEventId = canonicalWhatsAppEventId(eventId);
@@ -4398,10 +4408,6 @@ async function routeWhatsAppInboundUnlocked(input = {}, env = process.env, fetch
     phase: "received",
   }, env).catch(() => {});
 
-  // Agent Job triggers see every routed message; their own group/sender
-  // allowlist decides, and failures never block thread routing.
-  await dispatchWhatsAppJobTriggers({ ...input, eventId }, env).catch((error) =>
-    appendEvent({ type: "agent_job_whatsapp_trigger_failed", eventId, chatId: initialChatId, error: error?.message || String(error) }, env).catch(() => {}));
   let state = await readWhatsAppState(env);
   let threadRoute = await routeThread(input, config, env);
   const securityApproval = await maybeApprovePairingChallengeFromWhatsApp({
@@ -4463,21 +4469,6 @@ async function routeWhatsAppInboundUnlocked(input = {}, env = process.env, fetch
       threadId: null,
       messageId: null,
     };
-  }
-  // "Message yourself" home chat: @name, quote-reply and /switch pick the
-  // thread. The home chat's binding stays the security context.
-  const homeChat = await resolveHomeChatRoute({ input, threadRoute, threads: await listThreads(env) }, env).catch(() => null);
-  if (homeChat?.reply) input = { ...input, homeChatCommandReply: homeChat.reply };
-  else if (homeChat?.threadId) {
-    const homeThreadId = threadRoute.threadId;
-    if (homeChat.threadId !== homeThreadId) threadRoute = { ...threadRoute, threadId: homeChat.threadId };
-    input = { ...input, text: homeChat.text, ...(homeChat.routed ? { homeChatRouted: true } : {}) };
-    // Mark the addressed thread so its replies are scanned for the home chat.
-    if (homeChat.routed) {
-      await updateThread(homeChat.threadId, (thread) => thread.whatsappHomeChat?.chatId === initialChatId
-        ? null
-        : { whatsappHomeChat: { chatId: initialChatId, homeThreadId } }, env).catch(() => null);
-    }
   }
   const incomingEventIdentity = { eventId, canonicalEventId, chatId: initialChatId };
   const existing = (state.inboundEvents || []).find((event) =>
@@ -4600,6 +4591,31 @@ async function routeWhatsAppInboundUnlocked(input = {}, env = process.env, fetch
       agentId: null,
       threadId: pickString(outboundEchoDelivery.threadId) || null,
     };
+  }
+
+  // "Message yourself" home chat: @name, quote-reply and /switch pick the
+  // thread. The home chat's binding stays the security context.
+  const homeThread = threadRoute.threadId ? await getThread(threadRoute.threadId, env).catch(() => null) : null;
+  const homeSecurity = evaluateWhatsAppInboundSecurity({ binding:threadRoute.binding || {}, input, state, thread:homeThread || {}, env });
+  const homeAccount = threadRoute.binding ? whatsappBindingInboundAccountPolicy(input, threadRoute.binding, state, env) : { allowed:false };
+  const homeChat = homeSecurity.allowed && homeAccount.allowed ? await resolveHomeChatRoute({ input, threadRoute, threads: await listThreads(env) }, env) : null;
+  if (homeChat?.blocked) throw badRequest(homeChat.blocked);
+  if (homeChat?.ownerSelfChatOrigin) input = { ...input, ownerSelfChatOrigin:homeChat.ownerSelfChatOrigin };
+  // A dedicated owner conversation does not trigger unrelated job/campaign
+  // automations. Ordinary connector ingress retains its existing trigger path.
+  if (!homeChat?.ownerSelfChatOrigin?.dedicatedTransport) await dispatchWhatsAppJobTriggers({ ...input, eventId }, env).catch((error) =>
+    appendEvent({ type: "agent_job_whatsapp_trigger_failed", eventId, chatId: initialChatId, error: error?.message || String(error) }, env).catch(() => {}));
+  if (homeChat?.reply) input = { ...input, homeChatCommandReply: homeChat.reply };
+  else if (homeChat?.threadId) {
+    const homeThreadId = threadRoute.threadId;
+    if (homeChat.threadId !== homeThreadId) threadRoute = { ...threadRoute, threadId: homeChat.threadId };
+    input = { ...input, text: homeChat.text, ...(homeChat.routed ? { homeChatRouted: true } : {}) };
+    // Mark the addressed thread so its replies are scanned for the home chat.
+    if (homeChat.routed) {
+      await updateThread(homeChat.threadId, (thread) => thread.whatsappHomeChat?.chatId === initialChatId
+        ? null
+        : { whatsappHomeChat: { chatId: initialChatId, homeThreadId } }, env).catch(() => null);
+    }
   }
 
   const disabledThreadForInbound = async (routedThreadId = "") => {
@@ -5115,6 +5131,9 @@ async function routeWhatsAppInboundUnlocked(input = {}, env = process.env, fetch
     senderPolicyMode: inboundSecurity.policyMode || "",
     securityClassification: inboundSecurity.classified || null,
     ...(input.homeChatRouted ? { homeChatRouted: true } : {}),
+    ...(input.ownerSelfChatOrigin ? { ownerSelfChatRevision:input.ownerSelfChatOrigin.revision, ownerSelfChatHomeThreadId:input.ownerSelfChatOrigin.homeThreadId } : {}),
+    ...(input.ownerSelfChatOrigin?.dedicatedTransport
+      ? {ownerSelfChatDedicatedTransport:true} : {}),
   };
   await ensureRouterTurn({
     routerTraceId,
@@ -6321,11 +6340,20 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         ? messages.find((entry) => entry.id === message.parentMessageId) ||
           (kind === "thread" ? await getThreadMessage(threadId, message.parentMessageId, env) : null)
         : null;
+      const ownerSelfRoute = ownerSelfChatReplyRoute(parent || message, thread, env);
+      // This ingress has its own durable, account-specific transport. Never
+      // replay it through the general mirror, even after its scope is removed.
+      if (isDedicatedOwnerSelfChatOutput(message,parent,state)) continue;
+      if (ownerSelfRoute.applies && (!ownerSelfRoute.allowed || message.role !== "assistant" || !["final_answer", "final", ""].includes(String(message.phase || "")))) {
+        skipped.push({ threadId, messageId:message.id, reason:"owner_selfchat_scope_or_phase_denied" });
+        continue;
+      }
+
       if (kind === "thread" && (
         message.bridgeWhatsAppReply === false ||
         (parent?.source === "thread_bridge_message" && parent.bridgeWhatsAppReply === false)
       )) continue;
-      const routerUpdateTarget = routerUpdateWhatsAppDeliveryTarget({
+      const routerUpdateTarget = ownerSelfRoute.applies ? null : routerUpdateWhatsAppDeliveryTarget({
         message,
         thread,
         state,
@@ -6439,7 +6467,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         continue;
       }
-      const queuedModeTarget = queuedModeWhatsAppDeliveryTarget(message, thread, state);
+      const queuedModeTarget = ownerSelfRoute.applies ? null : queuedModeWhatsAppDeliveryTarget(message, thread, state);
       if (queuedModeTarget) {
         const deliveryId = `${message.id}:mode_queued`;
         if (deliveredIds.has(deliveryId)) continue;
@@ -6546,7 +6574,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         continue;
       }
-      const queuedInputTarget = queuedInputWhatsAppDeliveryTarget(message, thread, state);
+      const queuedInputTarget = ownerSelfRoute.applies ? null : queuedInputWhatsAppDeliveryTarget(message, thread, state);
       if (queuedInputTarget) {
         const deliveryId = `${message.id}:queue_notice`;
         if (deliveredIds.has(deliveryId)) continue;
@@ -6714,7 +6742,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         continue;
       }
-      const failedDeliveryTarget = failedWhatsAppDeliveryTarget(message, thread, state);
+      const failedDeliveryTarget = ownerSelfRoute.applies ? null : failedWhatsAppDeliveryTarget(message, thread, state);
       if (failedDeliveryTarget) {
         if (deliveredIds.has(message.id)) continue;
         const chatId = failedDeliveryTarget.chatId;
@@ -6836,7 +6864,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         continue;
       }
       const mutationParent = messages.find((entry) => entry.id === message.parentMessageId);
-      const mutationTarget = whatsappMutationNoticeTarget({
+      const mutationTarget = ownerSelfRoute.applies ? null : whatsappMutationNoticeTarget({
         message,
         parent: mutationParent,
         thread,
@@ -7236,8 +7264,8 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         kind,
         env,
       });
-      const chatId = snapshotChatId || pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
-      const accountId = snapshotAccountId || (kind === "thread"
+      const chatId = ownerSelfRoute.chatId || snapshotChatId || pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
+      const accountId = ownerSelfRoute.accountId || snapshotAccountId || (kind === "thread"
         ? pickString(thread?.binding?.replyAccountId, thread?.binding?.bridgeAccountId, thread?.binding?.responderConnectorAccountId, thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
         : pickString(message.accountId, parent?.accountId));
       const messagePhase = pickString(message.phase || "final_answer").toLowerCase();

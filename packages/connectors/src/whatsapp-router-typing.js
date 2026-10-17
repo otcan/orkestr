@@ -3,6 +3,7 @@ function clean(value) {
 }
 
 export function routedWhatsAppTypingTarget({ thread = {}, input = {} } = {}) {
+  if (input.ownerSelfChatDedicatedTransport === true || input.ownerSelfChatOrigin?.dedicatedTransport === true) return null;
   const binding = thread?.binding && typeof thread.binding === "object" ? thread.binding : {};
   const chatId = clean(input.chatId || input.fromChatId || input.chat?.id || binding.chatId);
   if (!chatId) return null;

@@ -654,6 +654,7 @@ export function normalizeWhatsAppBinding(input = {}, { accounts = [], env = proc
     inboundSecurity: binding.inboundSecurity && typeof binding.inboundSecurity === "object" && !Array.isArray(binding.inboundSecurity)
       ? binding.inboundSecurity
       : null,
+    privateOwnerChat: binding.privateOwnerChat === true,
     participantIdentityV2: binding.participantIdentityV2 && typeof binding.participantIdentityV2 === "object" && !Array.isArray(binding.participantIdentityV2)
       ? binding.participantIdentityV2
       : null,

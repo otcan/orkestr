@@ -77,6 +77,11 @@ export function whatsappProjectionFields(parent = null, thread = null) {
     connector: "whatsapp",
     chatId: whatsappParentChatId(parent, thread),
     accountId: whatsappParentAccountId(parent, thread),
+    ...(parent.ownerSelfChatDedicatedTransport === true ? {
+      ownerSelfChatDedicatedTransport:true,
+      ownerSelfChatRevision:parent.ownerSelfChatRevision,
+      ownerSelfChatHomeThreadId:parent.ownerSelfChatHomeThreadId,
+    } : {}),
   };
 }
 

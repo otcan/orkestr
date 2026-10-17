@@ -31,6 +31,8 @@ import {
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { startPairedLocalWhatsAppAccounts } from "../../../packages/connectors/src/whatsapp-paired-accounts.js";
 import { clearWhatsAppDeliveryIdleCache } from "../../../packages/connectors/src/whatsapp.js";
+import { routeWhatsAppInbound } from "../../../packages/connectors/src/whatsapp.js";
+import { startOwnerSelfChatPolling } from "../../../packages/connectors/src/whatsapp-owner-selfchat-runtime.js";
 import { mailboxThreadDeliveryPumpIntervalMs, runMailboxDeliveryPump } from "../../../packages/connectors/src/mailbox-delivery-pump.js";
 import { runThreadWatchPump, threadWatchPumpIntervalMs } from "../../../packages/core/src/thread-watch-pump.js";
 import { ensureExistingWorkerWatches } from "../../../packages/core/src/thread-watches.js";
@@ -710,6 +712,10 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     whatsappDeliveryScheduler.schedule();
   }, whatsappDeliveryPollIntervalMs(serverEnv));
   whatsappDeliveryPoll.unref?.();
+  const ownerSelfChatPolling = await startOwnerSelfChatPolling(serverEnv, {
+    routeInbound: routeWhatsAppInbound, track: (promise) => background.track(promise),
+    onError: () => reportServerError(serverEnv, { source: "server.ownerSelfChat", code: "owner_selfchat_paused", message: "Owner self-chat paused; inspect the private adapter status." }, { deliverWatcher: false }),
+  });
   const mailboxDeliveryPoll = setInterval(() => {
     background.track(timeBackgroundRun("mailbox_delivery", () => runMailboxDeliveryPump(serverEnv))).catch((error) => {
       reportServerError(serverEnv, {
@@ -844,6 +850,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     if (startupRecoveryTimer) clearTimeout(startupRecoveryTimer);
     brokerClientHeartbeat.close();
     clearInterval(whatsappDeliveryPoll);
+    ownerSelfChatPolling.close();
     clearInterval(mailboxDeliveryPoll);
     clearInterval(threadWatchPoll);
     clearInterval(mcpEventPoll);
