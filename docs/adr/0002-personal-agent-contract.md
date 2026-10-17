@@ -180,6 +180,34 @@ When enabled, capability depends only on storage readiness (the OP-03 tables);
 local-runtime health never makes it false. Until OP-09 supplies runtime health,
 `assistant` is `{ available: false, reason: "not_configured" }`.
 
+### OP-09 local assistant adapter contract
+
+Lane B fills and registers the existing `openai-compatible` Agent Job adapter
+slot; it does not add a second runtime or task store. Its adapter contract is:
+
+- `step(ctx, { input, transcript })` processes one bounded step; cancellation
+  follows the provided `AbortSignal`.
+- Probe/discovery reports health for an explicitly configured endpoint only.
+  The endpoint must be loopback-only in the first release; do not scan for or
+  silently select other model servers.
+- Stream incremental `message.delta` updates through the existing `emit`
+  mechanism and report usage through the existing Agent Job usage path.
+- `toolLoop = "orkestr"`: all tools go through Orkestr policy and the existing
+  effect ledger; the model adapter does not dispatch tools itself.
+- `resume = "transcript"`; `structuredOutput = "validate"`.
+- Missing/unavailable local inference is an explicit unavailable result. Never
+  synthesize a reply or silently fall back to a cloud model.
+
+Lane B owns the local-runtime environment variable names and exports
+`personalAgentLocalRuntimeStatus(env)` with the contract
+`{ available, reason?: "not_configured" | "local_runtime_unavailable", model?, checkedAt }`.
+The capability endpoint delegates its `assistant` field to this helper once the
+OP-09 change is available. Until then it returns
+`{ available: false, reason: "not_configured" }`. Lane A alone owns
+`ORKESTR_PERSONAL_AGENT_ENABLED`, the Project/Task schemas, and the correlated
+event envelope; Lane B does not add task, memory, or event schemas. OP-07 memory
+implementation waits on these contracts and its storage design.
+
 ### OP-18 route and UI boundary
 
 The new Personal Agent route is `/assistant` in the existing manual path
