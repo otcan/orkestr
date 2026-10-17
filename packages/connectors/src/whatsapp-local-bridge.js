@@ -7725,9 +7725,7 @@ function recoverableLocalWhatsAppRuntimeError(error) {
     reason.includes("before startcomms") ||
     reason.includes("singletonorthrowifuninitialized") ||
     reason.includes("deprecatedsendstanzaandreturnack") ||
-    reason.includes("sendiq called before startcomms") ||
-    reason.includes("whatsapp_send_message_timeout") ||
-    reason.includes("whatsapp_send_media_timeout");
+    reason.includes("sendiq called before startcomms");
 }
 
 async function recoverLocalWhatsAppAccountAfterRuntimeError(accountId, error, env = process.env, options = {}) {

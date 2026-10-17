@@ -159,3 +159,28 @@ for (const backend of ["json", "sqlite"]) {
     assert.equal(new Set([first.job.id, otherMessage.job.id, otherChat.job.id]).size, 3);
   });
 }
+
+test('repeated history hydration leaves a newer pending delivery and its timestamps intact', async t => {
+  const { env, thread, final } = await boundFinal(t);
+  await reconcileCodexFinalProjection({ thread, message: final, runtimeGeneration: generation, source: 'history_hydration', env });
+  const stored = await getThreadMessage(thread.id, final.id, env);
+  assert.ok(stored.finalProjectionFingerprint);
+  const newer = await appendThreadMessage(thread.id, answer({ codexTurnId: 'turn-b', codexItemId: 'item-b',
+    text: 'Newer answer', parentMessageId: 'newer-request', connector: 'whatsapp', chatId: 'chat-a', accountId: 'account-a' }), env);
+  await reconcileCodexFinalProjection({ thread, message: newer, runtimeGeneration: generation, env });
+  const before = (await getThread(thread.id, env)).runtime.finalDelivery;
+  for (let i = 0; i < 3; i++) {
+    const replay = await reconcileCodexFinalProjection({ thread, message: stored, runtimeGeneration: generation, source: 'history_hydration', env });
+    assert.equal(replay.unchanged, true);
+  }
+  assert.deepEqual((await getThread(thread.id, env)).runtime.finalDelivery, before);
+  assert.equal((await finalJobs(env)).length, 2);
+});
+
+test('a changed historical final cannot use the unchanged projection shortcut', async t => {
+  const { env, thread, final } = await boundFinal(t);
+  await reconcileCodexFinalProjection({ thread, message: final, runtimeGeneration: generation, env });
+  const stored = await getThreadMessage(thread.id, final.id, env);
+  const result = await reconcileCodexFinalProjection({ thread, message: { ...stored, text: 'Corrected answer' }, runtimeGeneration: generation, source: 'history_hydration', env });
+  assert.notEqual(result.unchanged, true);
+});

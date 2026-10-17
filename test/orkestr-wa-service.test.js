@@ -628,3 +628,34 @@ test("WA readiness checker can probe the standalone service", async () => {
     assert.equal(result.notReady[0].account, "sender");
   });
 });
+
+test('worker diagnostics retain readiness and QR state without exposing session data', async () => {
+  const home = await testHome('orkestr-wa-diagnostic-readiness-');
+  const env = { ORKESTR_HOME: home, ORKESTR_WA_SERVICE_AUTH_DISABLED: '1' };
+  await withWaService(env, async ({ bridgeUrl }) => {
+    const payload = await (await fetch(`${bridgeUrl}/diagnostics/health`)).json();
+    const [ready, pairing] = payload.accounts;
+    assert.equal(ready.ready, true);
+    assert.equal(ready.authenticated, true);
+    assert.equal(ready.sendReady, true);
+    assert.equal(pairing.qrAvailable, true);
+    assert.equal(pairing.ready, false);
+    assert.equal(pairing.qrUrl, '/qr.svg?accountId=account-b');
+    assert.doesNotMatch(JSON.stringify(payload), /private-session|private-client|sessionRoot|clientId/);
+  }, mockBridge({ getLocalWhatsAppBridgeStatus: async () => ({ ok: true, state: 'ready', accounts: [
+    { id: 'account-a', ready: true, authenticated: true, started: true, state: 'ready', sessionRoot: 'private-session', clientId: 'private-client' },
+    { id: 'account-b', ready: false, state: 'qr_needed', qrAvailable: true, qrUrl: '/qr.svg?accountId=account-b' },
+  ] }) }));
+});
+
+test('worker reconnect forwards resetRuntime to the existing managed runtime', async () => {
+  const home = await testHome('orkestr-wa-worker-reconnect-');
+  const calls = [];
+  await withWaService({ ORKESTR_HOME: home, ORKESTR_WA_SERVICE_AUTH_DISABLED: '1' }, async ({ bridgeUrl }) => {
+    const response = await fetch(`${bridgeUrl}/accounts/account-a/reconnect`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(response.status, 202);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], 'account-a');
+    assert.equal(calls[0][2].resetRuntime, true);
+  }, mockBridge({ startLocalWhatsAppAccount: async (...args) => { calls.push(args); return { id: args[0], state: 'starting' }; } }));
+});

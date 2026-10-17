@@ -28,13 +28,11 @@ import {
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import {
   localWhatsAppBridgeBasePath,
-  getLocalWhatsAppQrSvg,
-  logoutLocalWhatsAppAccount,
-  startLocalWhatsAppAccount,
 } from "../../../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { whatsappBindingAclAllows } from "../../../../../packages/connectors/src/whatsapp-binding-acl.js";
 import { whatsappAccountLookupKeys } from "../../../../../packages/connectors/src/whatsapp-account-identity.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
+import { runWhatsAppAccountLifecycle } from "../../../../../packages/connectors/src/whatsapp-account-lifecycle.js";
 import { httpError } from "../../common/http.js";
 
 function clean(value: unknown): string {
@@ -80,7 +78,7 @@ function whatsappAccountNotReadyReason(account: Record<string, any> = {}) {
 }
 
 function localStatusMode(status: Record<string, any> = {}): boolean {
-  return clean(status.mode) === "local" || clean(status.bridgeUrl) === localWhatsAppBridgeBasePath;
+  return ["local", "worker"].includes(clean(status.mode)) || clean(status.bridgeUrl) === localWhatsAppBridgeBasePath;
 }
 
 function filterBindings(payload: Record<string, any> = {}, filters: Record<string, string> = {}) {
@@ -429,7 +427,7 @@ export class WhatsAppDiagnosticsController {
     const status = await getWhatsAppStatus();
     const accounts = await listPersistentWhatsAppConnectorAccounts({ status });
     assertAccountForPrincipal(findAccount(accounts, accountId), principal, "wa_account_read");
-    const svg = await getLocalWhatsAppQrSvg(accountId, process.env);
+    const svg = await runWhatsAppAccountLifecycle(status, accountId, "qr", {}, process.env);
     if (!svg) {
       return response
         .status(404)
@@ -471,12 +469,12 @@ export class WhatsAppDiagnosticsController {
     const status = await getWhatsAppStatus();
     assertAccountForPrincipal(findAccount(await listPersistentWhatsAppConnectorAccounts({ status }), accountId), principal, "wa_account_pair");
     if (!localStatusMode(status)) throw httpError("wa_account_pairing_not_supported_for_external_bridge", 400);
-    await startLocalWhatsAppAccount(accountId, process.env, {
+    await runWhatsAppAccountLifecycle(status, accountId, "pair", {
       phoneNumber: clean(body.phoneNumber || body.phone),
       showNotification: body.showNotification !== false,
       intervalMs: Number(body.intervalMs || 0) || undefined,
       authReadyTimeoutMs: Number(body.authReadyTimeoutMs || body.authTimeoutMs || 0) || undefined,
-    });
+    }, process.env);
     const nextStatus = await getWhatsAppStatus();
     const account = assertAccountForPrincipal(findAccount(await listPersistentWhatsAppConnectorAccounts({ status: nextStatus }), accountId), principal, "wa_account_read");
     return {
@@ -502,7 +500,7 @@ export class WhatsAppDiagnosticsController {
     const status = await getWhatsAppStatus();
     assertAccountForPrincipal(findAccount(await listPersistentWhatsAppConnectorAccounts({ status }), accountId), principal, "wa_account_reconnect");
     if (!localStatusMode(status)) throw httpError("wa_account_reconnect_not_supported_for_external_bridge", 400);
-    await startLocalWhatsAppAccount(accountId, process.env, { showNotification: true, resetRuntime: true });
+    await runWhatsAppAccountLifecycle(status, accountId, "reconnect", { showNotification: true }, process.env);
     const nextStatus = await getWhatsAppStatus();
     const accounts = await listPersistentWhatsAppConnectorAccounts({ status: nextStatus });
     const account = assertAccountForPrincipal(findAccount(accounts, accountId), principal, "wa_account_read");
@@ -516,7 +514,7 @@ export class WhatsAppDiagnosticsController {
     const status = await getWhatsAppStatus();
     assertAccountForPrincipal(findAccount(await listPersistentWhatsAppConnectorAccounts({ status }), accountId), principal, "wa_account_disconnect");
     if (!localStatusMode(status)) throw httpError("wa_account_disconnect_not_supported_for_external_bridge", 400);
-    await logoutLocalWhatsAppAccount(accountId, process.env);
+    await runWhatsAppAccountLifecycle(status, accountId, "logout", {}, process.env);
     const nextStatus = await getWhatsAppStatus();
     const accounts = await listPersistentWhatsAppConnectorAccounts({ status: nextStatus });
     const account = assertAccountForPrincipal(findAccount(accounts, accountId), principal, "wa_account_read");

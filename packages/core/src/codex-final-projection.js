@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { appendEvent } from "../../storage/src/store.js";
 import { ensureConnectorOutboxJobThroughAdapter } from "./connector-outbox-adapter.js";
 import { resourceOwnerUserId } from "./policy.js";
@@ -31,6 +32,14 @@ function finalDeliveryAccountId(thread = {}, message = {}) {
   const binding = thread.binding || {};
   return clean(binding.replyAccountId || binding.bridgeAccountId || binding.responderConnectorAccountId ||
     binding.responderAccountId || binding.outboundAccountId || message.accountId);
+}
+
+function projectionFingerprint(thread, message, generation) {
+  return createHash("sha256").update(JSON.stringify([
+    thread.id, message.id, generation, message.parentMessageId || "",
+    message.codexTurnId || message.executorTurnId || "", message.chatId,
+    finalDeliveryAccountId(thread, message), clean(message.text),
+  ])).digest("hex");
 }
 
 function signalReservationKey(threadId, messageId, env = process.env) {
@@ -88,6 +97,15 @@ export async function reconcileCodexFinalProjection({
     return { message, reconciled: false, rejected: true, reason: initialGeneration.reason };
   }
   if (!whatsappFinal(message)) return { message, reconciled: false, reason: "not_whatsapp_final" };
+  const fingerprint = projectionFingerprint(thread, message, generation);
+  if (source === "history_hydration" && message.finalProjectionFingerprint === fingerprint &&
+      (isNoReplyAssistantMessage(message) || (message.mirrorOutboxJobId && message.finalProjectionConnectorSignaledAt))) {
+    const latest = await getThread(thread.id, env);
+    if (latest && generationIsAccepted(latest, generation, allowUnboundGeneration).ok &&
+        projectionFingerprint(latest, message, generation) === fingerprint) {
+      return { message, reconciled: true, unchanged: true, outboxCreated: false };
+    }
+  }
 
   const pending = await markRuntimeFinalDeliveryPending(thread.id, {
     messageId: message.id,
@@ -128,6 +146,9 @@ export async function reconcileCodexFinalProjection({
       messageId: message.id,
       turnId: message.codexTurnId || message.executorTurnId || null,
     }, env).catch((error) => ({ ok: false, reason: error?.message || "final_delivery_ack_failed" }));
+    if (acknowledged?.ok) {
+      await updateThreadMessage(currentThread.id, message.id, { finalProjectionFingerprint: fingerprint }, env);
+    }
     await appendEvent({
       type: "codex_final_projection_no_reply",
       threadId: currentThread.id,
@@ -194,6 +215,9 @@ export async function reconcileCodexFinalProjection({
         }
       }
     }
+  }
+  if (projected.finalProjectionConnectorSignaledAt && projected.finalProjectionFingerprint !== fingerprint) {
+    projected = await updateThreadMessage(currentThread.id, message.id, { finalProjectionFingerprint: fingerprint }, env);
   }
   await appendEvent({
     type: "codex_final_projection_reconciled",

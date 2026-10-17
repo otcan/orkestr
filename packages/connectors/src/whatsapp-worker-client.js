@@ -60,7 +60,7 @@ function normalizeRequestError(cause) {
   return error;
 }
 
-export function requestWhatsAppWorker(pathname = "/health", { method = "GET", body = null, timeoutMs = null } = {}, env = process.env) {
+export function requestWhatsAppWorker(pathname = "/health", { method = "GET", body = null, timeoutMs = null, responseType = "json" } = {}, env = process.env) {
   const config = whatsappWorkerConfig(env);
   if (!config.baseUrl && !config.socketPath) return Promise.reject(Object.assign(new Error("whatsapp_worker_unconfigured"), { statusCode: 503 }));
   const encoded = body === null || body === undefined ? "" : JSON.stringify(body);
@@ -83,6 +83,10 @@ export function requestWhatsAppWorker(pathname = "/health", { method = "GET", bo
       res.once("error", (cause) => finish(reject, normalizeRequestError(cause)));
       res.on("end", () => {
         const raw = Buffer.concat(chunks).toString("utf8");
+        if (responseType === "text" && res.statusCode >= 200 && res.statusCode < 300) {
+          finish(resolve, raw);
+          return;
+        }
         let payload = {};
         try {
           payload = raw ? JSON.parse(raw) : {};

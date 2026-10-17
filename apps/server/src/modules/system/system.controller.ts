@@ -13,7 +13,7 @@ import { assertWhatsAppOnboardingModeAvailable } from "../../../../../packages/c
 import { effectiveWhatsAppBridgeMode } from "../../../../../packages/connectors/src/whatsapp.js";
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
 import { saveWhatsAppOnboardingMode } from "../../../../../packages/core/src/whatsapp-onboarding-preferences.js";
-import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
+import { systemDoctorResponse } from "../../../../../packages/core/src/system-doctor-response.js";
 import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
 import {
   appendApiSessionMessage,
@@ -1101,7 +1101,7 @@ export class SystemController {
 
   @Get("system/doctor")
   async systemDoctor() {
-    return systemDoctor();
+    return systemDoctorResponse();
   }
 
   @Get("system/resources")
