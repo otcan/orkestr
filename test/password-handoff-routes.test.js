@@ -1,0 +1,78 @@
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { PassThrough } from "node:stream";
+import test from "node:test";
+import { attachDesktopProxyUpgrade, registerDesktopProxy } from "../dist/server/apps/server/src/desktop-proxy.js";
+import { BrowsersController } from "../dist/server/apps/server/src/modules/browsers/browsers.controller.js";
+import { dataPaths } from "../packages/storage/src/paths.js";
+
+// Server paths refuse a password-blind desktop before any upstream work.
+// The open handoff is written straight to the store (synthetic, no Chrome).
+async function openHandoff(t, slug) {
+  const file = path.join(dataPaths(process.env).home, "password-handoffs.json");
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const prior = await fs.readFile(file, "utf8").catch(() => null);
+  await fs.writeFile(file, JSON.stringify({ handoffs: [{
+    id: "pwh_route-test", ownerUserId: "owner", threadId: "pa-thread", desktopSlug: slug, targetId: "t", origin: "https://signup.example.test",
+    selector: "", state: "open", startedAt: new Date().toISOString(), expiresAt: new Date(Date.now() - 1000).toISOString(),
+  }] }));
+  t.after(() => (prior === null ? fs.rm(file, { force: true }) : fs.writeFile(file, prior)));
+}
+
+const ownerSession = { id: "sess-owner" };
+const ownerRequest = (extra = {}) => ({ orkestrSecuritySession: ownerSession, orkestrPrincipal: { kind: "user", userId: "owner", role: "admin" }, headers: {}, ...extra });
+
+test("browser-session actions on a blind desktop: agents, machine auth and other users get 423", async (t) => {
+  await openHandoff(t, "blind-desk");
+  const controller = new BrowsersController();
+  const denied = [
+    { ...ownerRequest(), orkestrMachineAuth: "cli" },
+    { ...ownerRequest(), orkestrSecuritySession: { id: "s", shareId: "share-1" } },
+    ownerRequest({ orkestrPrincipal: { kind: "user", userId: "someone-else", role: "admin" } }),
+    { headers: {} },
+  ];
+  for (const request of denied) {
+    for (const action of ["stop", "navigate", "restart"]) {
+      await assert.rejects(controller.browserSessionAction(request, "blind-desk", action, {}), (error) => {
+        const response = error.getResponse?.() || {};
+        return error.getStatus?.() === 423 && JSON.stringify(response).includes("desktop_password_blind");
+      });
+    }
+  }
+  await assert.rejects(controller.browserSessionAction(ownerRequest(), "blind-desk", "no-such-action", {}), (error) => !JSON.stringify(error.getResponse?.() || error.message).includes("desktop_password_blind"), "the owner's own session passes the blind guard");
+});
+
+test("desktop HTTP and websocket proxy refuse a blind desktop before resolving it", async (t) => {
+  await openHandoff(t, "blind-desk");
+  let handler = null;
+  registerDesktopProxy({ use: (_prefix, fn) => { handler = fn; } });
+  const send = async (request) => {
+    const result = {};
+    await new Promise((resolve) => {
+      handler(request, { writeHead: (code) => { result.status = code; }, end: (body) => { result.body = String(body); resolve(); } });
+    });
+    return result;
+  };
+  for (const request of [{ originalUrl: "/desktop/blind-desk/vnc.html", url: "/blind-desk/vnc.html", headers: {}, orkestrMachineAuth: "cli" },
+    { ...ownerRequest(), originalUrl: "/desktop/blind-desk/vnc.html", url: "/blind-desk/vnc.html", orkestrDesktopShare: { id: "share-1" } }]) {
+    const result = await send(request);
+    assert.equal(result.status, 423);
+    assert.match(result.body, /desktop_password_blind/);
+  }
+
+  const prior = process.env.ORKESTR_HOST_BOUNDARIES;
+  process.env.ORKESTR_HOST_BOUNDARIES = "0";
+  t.after(() => (prior === undefined ? delete process.env.ORKESTR_HOST_BOUNDARIES : (process.env.ORKESTR_HOST_BOUNDARIES = prior)));
+  const server = new EventEmitter();
+  attachDesktopProxyUpgrade(server);
+  const socket = new PassThrough();
+  let response = "";
+  socket.on("data", (chunk) => { response += chunk; });
+  // The local operator proxy is machine auth, not a vault-owner session.
+  await server.listeners("upgrade")[0]({ url: "/desktop/blind-desk/websockify", headers: { host: "localhost" }, rawHeaders: [], orkestrTrustedOperatorProxy: true }, socket, Buffer.alloc(0));
+  assert.match(response, /^HTTP\/1.1 423 /);
+  assert.match(response, /desktop_password_blind/);
+  assert.equal(socket.destroyed, true);
+});

@@ -10,6 +10,8 @@ import { assertDesktopAccess } from "../../../packages/core/src/desktop-access.j
 import { onDesktopShareLifecycle } from "../../../packages/core/src/desktop-share-lifecycle.js";
 import { validateDesktopShareSession } from "../../../packages/core/src/desktop-shares.js";
 import { appendEvent } from "../../../packages/storage/src/store.js";
+import { assertDesktopNotPasswordBlind, onDesktopPasswordBlind } from "../../../packages/core/src/password-handoff.js";
+import { vaultOwnerFromRequest } from "../../../packages/core/src/vault-access.js";
 import { desktopCapabilityRequired } from "../../../packages/browsers/src/desktop-capability-broker.js";
 import { hostBoundaryUpgradeDenied } from "./host-boundaries.js";
 import { appendSanitizedForwardedHeaders, rawUpgradeHeaderAllowed } from "./upgrade-forwarded-headers.js";
@@ -32,6 +34,39 @@ type ShareSocket = {
   closed: boolean;
 };
 const shareSockets = new Map<string, Set<ShareSocket>>();
+
+// Live desktop sockets by slug, so a password handoff can cut every viewer
+// except the handoff owner's own vault-owner session (docs/password-handoff.md).
+type ViewerSocket = { ownerUserId: string; socket: Duplex; upstream: Duplex };
+const viewerSockets = new Map<string, Set<ViewerSocket>>();
+
+function trackViewerSocket(slug: string, ownerUserId: string, socket: Duplex, upstream: Duplex): void {
+  const viewers = viewerSockets.get(slug) || new Set<ViewerSocket>();
+  const viewer = { ownerUserId, socket, upstream };
+  viewers.add(viewer);
+  viewerSockets.set(slug, viewers);
+  socket.once("close", () => {
+    viewers.delete(viewer);
+    if (!viewers.size) viewerSockets.delete(slug);
+  });
+}
+
+onDesktopPasswordBlind(({ desktopSlug, ownerUserId }: { desktopSlug: string; ownerUserId: string }) => {
+  for (const viewer of viewerSockets.get(desktopSlug) || []) {
+    if (viewer.ownerUserId && viewer.ownerUserId === ownerUserId) continue;
+    viewer.upstream.destroy();
+    viewer.socket.destroy();
+  }
+});
+
+function upgradeOwner(auth: any): any {
+  return vaultOwnerFromRequest({
+    orkestrAnonymous: auth.anonymous === true,
+    orkestrMachineAuth: auth.machineAuth || null,
+    orkestrSecuritySession: auth.desktopShare ? { ...auth.session, shareId: auth.desktopShare.id || "share" } : auth.session,
+    orkestrPrincipal: auth.principal,
+  });
+}
 
 function recordShareSocketEvent(type: string, connection: ShareSocket, reason = ""): void {
   void appendEvent({
@@ -182,6 +217,9 @@ async function proxyDesktopHttp(request: any, response: any): Promise<void> {
 
   let target: DesktopTarget | null = null;
   try {
+    // Before any upstream work: during a password handoff only its owner may view.
+    const route = parseDesktopUrl(request.originalUrl || request.url);
+    if (route) await assertDesktopNotPasswordBlind(route.slug, request.orkestrDesktopShare ? null : vaultOwnerFromRequest(request));
     const scope = desktopRequestScope(request.originalUrl || request.url, request);
     target = await desktopTarget(request.originalUrl || request.url, requestPrincipal(request), {
       ...scope,
@@ -259,8 +297,10 @@ export function attachDesktopProxyUpgrade(server: Server): void {
       return;
     }
 
+    const owner = upgradeOwner(auth);
     let target: DesktopTarget | null = null;
     try {
+      await assertDesktopNotPasswordBlind(parseDesktopUrl(request.url)?.slug || "", owner);
       const share = auth.desktopShare || null;
       const scope = desktopRequestScope(request.url, { headers: request.headers, orkestrDesktopShare: share });
       target = await desktopTarget(request.url, auth.principal, {
@@ -280,8 +320,10 @@ export function attachDesktopProxyUpgrade(server: Server): void {
 
     if (socket.destroyed) return;
 
+    const slug = target.slug;
     proxyDesktopSocket(socket, head, target.port, rawUpgradeHeaders(request, target), (upstream) => {
       registerDesktopShareSocket(socket, upstream, auth.desktopShare || null, auth.desktopShareAttempt || null);
+      trackViewerSocket(slug, owner ? String(owner.userId || "") : "", socket, upstream);
     });
   });
 }

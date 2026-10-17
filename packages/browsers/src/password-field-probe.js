@@ -48,7 +48,8 @@ export function exactOrigin(url) {
 /**
  * `{ ok: true, field }` for the bound tab and field, or `{ ok: false, reason }`
  * with a value-free reason: devtools_unreachable, tab_not_found,
- * origin_mismatch, probe_failed.
+ * origin_mismatch, ambiguous_tab (another tab has the same origin, so a save
+ * could not be attributed to this one), probe_failed.
  */
 export async function probePasswordField(cdpUrl, { targetId, expectedOrigin, selector = "" } = {}, deps = {}) {
   const base = clean(cdpUrl).replace(/\/+$/g, "");
@@ -65,6 +66,8 @@ export async function probePasswordField(cdpUrl, { targetId, expectedOrigin, sel
   const page = (Array.isArray(pages) ? pages : []).find((item) => clean(item?.id) === clean(targetId) && clean(item?.type) === "page");
   if (!page || !clean(page.webSocketDebuggerUrl)) return { ok: false, reason: "tab_not_found" };
   if (exactOrigin(page.url) !== clean(expectedOrigin)) return { ok: false, reason: "origin_mismatch" };
+  const sameOrigin = pages.filter((item) => clean(item?.type) === "page" && exactOrigin(item?.url) === clean(expectedOrigin));
+  if (sameOrigin.length > 1) return { ok: false, reason: "ambiguous_tab" };
   const client = new CdpClient(page.webSocketDebuggerUrl);
   try {
     await client.connect();

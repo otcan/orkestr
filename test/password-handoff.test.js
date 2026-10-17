@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { desktopPasswordBlind, endPasswordHandoff, handoffOrigin, passwordHandoffStatus, startPasswordHandoff } from "../packages/core/src/password-handoff.js";
+import {
+  agentPasswordHandoffStatus, assertDesktopNotPasswordBlind, desktopPasswordBlind, endPasswordHandoff, handoffOrigin,
+  onDesktopPasswordBlind, ownerPasswordHandoffStatus, startPasswordHandoff,
+} from "../packages/core/src/password-handoff.js";
 import { msToChromeTime, savedLoginSince } from "../packages/browsers/src/chrome-saved-login-probe.js";
 import { exactOrigin } from "../packages/browsers/src/password-field-probe.js";
 import { operateManagedDesktop } from "../packages/browsers/src/desktop-operator.js";
@@ -79,6 +82,7 @@ async function setup(t) {
   const deps = {
     activeDesktopLeaseStatus: async () => lease,
     readManagedDesktopSession: async () => ({ cdp_url: cdpUrl, profileDir }),
+    resolveAgentThread: async (ref) => ({ threadId: ref, ownerUserId: "owner" }),
   };
   const owner = { kind: "user", userId: "owner", role: "admin", vaultOwner: true, recentAuthAt: new Date().toISOString() };
   t.after(async () => {
@@ -88,7 +92,7 @@ async function setup(t) {
     await fs.rm(home, { recursive: true, force: true });
   });
   return {
-    env, deps, owner, db, signup, other, origin: `http://127.0.0.1:${port}`, otherOrigin: `http://localhost:${port}`,
+    env, deps, owner, db, browser, signup, other, profileDir, origin: `http://127.0.0.1:${port}`, otherOrigin: `http://localhost:${port}`,
     signupTarget: await targetIdOf(signup), otherTarget: await targetIdOf(other),
     setLease: (value) => { lease = value; },
   };
@@ -120,6 +124,8 @@ test("saved-login check reads only realm/date metadata and only logins created a
   db.exec("COMMIT");
   db.close();
   assert.equal((await savedLoginSince(path.join(home, "missing"), "https://a.test", since)).reason, "login_store_missing");
+  await fs.writeFile(path.join(home, "Default", "Login Data-wal"), "pending");
+  assert.deepEqual(await savedLoginSince(home, "https://other.test", since), { ok: false, reason: "journal_pending" }, "unread journal writes are never reported as not saved or saved");
   await fs.rm(home, { recursive: true, force: true });
 });
 
@@ -133,12 +139,12 @@ test("handoff binds the exact tab and origin, blinds the desktop, and reports ac
 
   // The owner accepts Chrome's suggestion (simulated: headless Chrome has no generation UI).
   await f.signup.type("#new-password", SECRET);
-  const accepted = await passwordHandoffStatus({ ownerUserId: "owner", threadId: "pa-thread" }, handoff.id, f.env, f.deps);
+  const accepted = await agentPasswordHandoffStatus("pa-thread", handoff.id, f.env, f.deps);
   assert.equal(accepted.status, "accepted", "a filled field is accepted, never saved");
   assert.equal(accepted.chromeFilled, false, "typed by hand, not filled by Chrome");
 
   f.db.prepare("insert into logins values (?, ?, ?, ?, ?)").run(`${f.origin}/signup`, `${f.origin}/`, "ada", Buffer.from(SECRET), msToChromeTime(Date.now()));
-  const saved = await passwordHandoffStatus({ ownerUserId: "owner" }, handoff.id, f.env, f.deps);
+  const saved = await ownerPasswordHandoffStatus(f.owner, handoff.id, f.env, f.deps);
   assert.equal(saved.status, "saved_verified");
 
   const ended = await endPasswordHandoff(f.owner, handoff.id, {}, f.env, f.deps);
@@ -173,13 +179,68 @@ test("handoff refuses the wrong tab, a foreign origin, a non-password or filled 
   await assert.rejects(startPasswordHandoff(f.owner, base, fresh, f.deps), /password_handoff_field_not_empty/);
 });
 
-test("navigating the bound tab away closes the handoff as aborted with status unknown", { timeout: 60_000 }, async (t) => {
+test("blind until the owner ends it: navigation and expiry only change the status", { timeout: 60_000 }, async (t) => {
   const f = await setup(t);
   if (!f) return;
   const handoff = await startPasswordHandoff(f.owner, { desktopSlug: "pa-desk", threadId: "pa-thread", targetId: f.signupTarget, origin: f.origin, selector: "#new-password" }, f.env, f.deps);
   await f.signup.goto(`${f.otherOrigin}/signup`);
-  const status = await passwordHandoffStatus({ ownerUserId: "owner" }, handoff.id, f.env, f.deps);
-  assert.deepEqual([status.status, status.reason, status.state], ["unknown", "origin_mismatch", "aborted"]);
+  const status = await ownerPasswordHandoffStatus(f.owner, handoff.id, f.env, f.deps);
+  assert.deepEqual([status.status, status.reason, status.state], ["unknown", "origin_mismatch", "open"]);
+  assert.equal(await desktopPasswordBlind("pa-desk", f.env), true, "a lost tab does not unblind: the password may still be on screen");
+
+  const file = path.join(f.env.ORKESTR_HOME, "password-handoffs.json");
+  const store = JSON.parse(await fs.readFile(file, "utf8"));
+  store.handoffs[0].expiresAt = new Date(Date.now() - 1000).toISOString();
+  await fs.writeFile(file, JSON.stringify(store));
+  const expired = await ownerPasswordHandoffStatus(f.owner, handoff.id, f.env, f.deps);
+  assert.equal(expired.expired, true);
+  assert.equal(expired.state, "open");
+  assert.equal(await desktopPasswordBlind("pa-desk", f.env), true, "expiry does not unblind");
+  await assert.rejects(operateManagedDesktop("pa-desk", { operation: "observe" }, f.env), /desktop_password_blind/);
+
+  await assert.rejects(endPasswordHandoff(f.owner, handoff.id, { reason: `leak ${SECRET}` }, f.env, f.deps), /password_handoff_reason_invalid/, "free text never reaches the record");
+  const ended = await endPasswordHandoff(f.owner, handoff.id, { reason: "signup_abandoned" }, f.env, f.deps);
+  assert.equal(ended.state, "ended");
   assert.equal(await desktopPasswordBlind("pa-desk", f.env), false);
-  await assert.rejects(passwordHandoffStatus({ ownerUserId: "someone-else" }, handoff.id, f.env, f.deps), /password_handoff_not_found/, "other owners cannot read it");
+  assert.equal((await fs.readFile(file, "utf8") + await eventsText(f.env)).includes(SECRET), false);
+});
+
+test("only the handoff owner's vault-owner session passes the blind guard; status is bound to owner or thread", { timeout: 60_000 }, async (t) => {
+  const f = await setup(t);
+  if (!f) return;
+  const cut = [];
+  const unsubscribe = onDesktopPasswordBlind((notice) => cut.push(notice));
+  t.after(unsubscribe);
+  const handoff = await startPasswordHandoff(f.owner, { desktopSlug: "pa-desk", threadId: "pa-thread", targetId: f.signupTarget, origin: f.origin }, f.env, f.deps);
+  assert.deepEqual(cut, [{ desktopSlug: "pa-desk", ownerUserId: "owner" }], "live viewers are told to disconnect");
+  await assertDesktopNotPasswordBlind("pa-desk", f.owner, f.env);
+  await assertDesktopNotPasswordBlind("other-desk", null, f.env);
+  for (const principal of [null, { ...f.owner, vaultOwner: false }, { ...f.owner, userId: "someone-else" }, { ...f.owner, kind: "system" }]) {
+    await assert.rejects(assertDesktopNotPasswordBlind("pa-desk", principal, f.env), (error) => error.message === "desktop_password_blind" && error.statusCode === 423);
+  }
+  await assert.rejects(ownerPasswordHandoffStatus({ ...f.owner, vaultOwner: false }, handoff.id, f.env, f.deps), /vault_owner_session_required/, "a caller cannot assert owner");
+  await assert.rejects(ownerPasswordHandoffStatus({ ...f.owner, userId: "someone-else" }, handoff.id, f.env, f.deps), /password_handoff_not_found/);
+  await assert.rejects(agentPasswordHandoffStatus("other-thread", handoff.id, f.env, f.deps), /password_handoff_not_found/, "only the bound thread");
+  assert.equal((await agentPasswordHandoffStatus("pa-thread", handoff.id, f.env, f.deps)).status, "awaiting_owner");
+  await assert.rejects(
+    startPasswordHandoff(f.owner, { desktopSlug: "pa-desk-2", threadId: "pa-thread", targetId: f.signupTarget, origin: f.origin, selector: "input[value^='a']" }, f.env, f.deps),
+    /password_handoff_selector_invalid/, "selectors that could probe a value are refused",
+  );
+});
+
+test("a second tab on the same origin makes the save unattributable", { timeout: 60_000 }, async (t) => {
+  const f = await setup(t);
+  if (!f) return;
+  const base = { desktopSlug: "pa-desk", threadId: "pa-thread", targetId: f.signupTarget, origin: f.origin, selector: "#new-password" };
+  const twin = await f.browser.newPage();
+  await twin.goto(`${f.origin}/signup`);
+  await assert.rejects(startPasswordHandoff(f.owner, base, f.env, f.deps), /password_handoff_ambiguous_tab/);
+  await twin.close();
+  const handoff = await startPasswordHandoff(f.owner, base, f.env, f.deps);
+  await f.signup.type("#new-password", SECRET);
+  const late = await f.browser.newPage();
+  await late.goto(`${f.origin}/signup`);
+  f.db.prepare("insert into logins values (?, ?, ?, ?, ?)").run(`${f.origin}/signup`, `${f.origin}/`, "ada", Buffer.from(SECRET), msToChromeTime(Date.now()));
+  const status = await ownerPasswordHandoffStatus(f.owner, handoff.id, f.env, f.deps);
+  assert.deepEqual([status.status, status.reason], ["unknown", "ambiguous_tab"], "never saved_verified while another same-origin tab could have saved");
 });

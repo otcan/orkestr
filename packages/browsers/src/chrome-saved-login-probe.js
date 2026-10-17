@@ -22,9 +22,19 @@ function signonRealm(origin) {
   return `${String(origin || "").replace(/\/+$/g, "")}/`;
 }
 
+async function nonEmpty(file) {
+  try {
+    return (await fs.stat(file)).size > 0;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * `{ ok: true, saved, count }`: logins Chrome saved for `origin` at or after
- * `sinceMs`; `{ ok: false, reason }` when the profile cannot be read.
+ * `sinceMs`; `{ ok: false, reason }` when the profile cannot be read, or
+ * `journal_pending` while a WAL or rollback journal holds writes that an
+ * immutable read cannot see (a save may be there, unconfirmed).
  */
 export async function savedLoginSince(profileDir, origin, sinceMs, deps = {}) {
   const file = path.join(String(profileDir || ""), "Default", "Login Data");
@@ -34,6 +44,7 @@ export async function savedLoginSince(profileDir, origin, sinceMs, deps = {}) {
   } catch {
     return { ok: false, reason: "login_store_missing" };
   }
+  if (await nonEmpty(`${file}-wal`) || await nonEmpty(`${file}-journal`)) return { ok: false, reason: "journal_pending" };
   let db = null;
   try {
     const sqlite = deps.sqlite || await import("node:sqlite");
