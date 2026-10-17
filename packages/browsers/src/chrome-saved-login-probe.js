@@ -30,20 +30,13 @@ async function nonEmpty(file) {
   }
 }
 
-/**
- * `{ ok: true, saved, count }`: logins Chrome saved for `origin` at or after
- * `sinceMs`; `{ ok: false, reason }` when the profile cannot be read, or
- * `journal_pending` while a WAL or rollback journal holds writes that an
- * immutable read cannot see (a save may be there, unconfirmed).
- */
-export async function savedLoginSince(profileDir, origin, sinceMs, deps = {}) {
-  const file = path.join(String(profileDir || ""), "Default", "Login Data");
-  if (!profileDir) return { ok: false, reason: "profile_unknown" };
-  try {
-    await fs.access(file);
-  } catch {
-    return { ok: false, reason: "login_store_missing" };
-  }
+// Chrome keeps two login stores: "Login Data" (this profile) and
+// "Login Data For Account" (the signed-in Google account; generated passwords
+// usually land there). Both are checked; the stores are rollback-journal
+// SQLite files, and a non-empty -journal or -wal means unread writes.
+const STORES = ["Login Data", "Login Data For Account"];
+
+async function countStore(file, origin, sinceMs, deps) {
   if (await nonEmpty(`${file}-wal`) || await nonEmpty(`${file}-journal`)) return { ok: false, reason: "journal_pending" };
   let db = null;
   try {
@@ -52,11 +45,36 @@ export async function savedLoginSince(profileDir, origin, sinceMs, deps = {}) {
     db = new sqlite.DatabaseSync(`file:${encodeURI(file)}?mode=ro&immutable=1`, { readOnly: true });
     const row = db.prepare("select count(*) as count from logins where signon_realm = ? and date_created >= ?")
       .get(signonRealm(origin), msToChromeTime(sinceMs));
-    const count = Number(row?.count || 0) || 0;
-    return { ok: true, saved: count > 0, count };
+    return { ok: true, count: Number(row?.count || 0) || 0 };
   } catch {
     return { ok: false, reason: "login_store_unreadable" };
   } finally {
     try { db?.close(); } catch { /* already closed */ }
   }
+}
+
+/**
+ * `{ ok: true, saved, count }`: logins Chrome saved for `origin` at or after
+ * `sinceMs` in either store; `{ ok: false, reason }` when no store exists, a
+ * store cannot be read, or `journal_pending` while a store has writes an
+ * immutable read cannot see (a save may be there, unconfirmed).
+ */
+export async function savedLoginSince(profileDir, origin, sinceMs, deps = {}) {
+  if (!profileDir) return { ok: false, reason: "profile_unknown" };
+  let found = 0;
+  let count = 0;
+  for (const name of STORES) {
+    const file = path.join(String(profileDir), "Default", name);
+    try {
+      await fs.access(file);
+    } catch {
+      continue;
+    }
+    found += 1;
+    const result = await countStore(file, origin, sinceMs, deps);
+    if (!result.ok) return result;
+    count += result.count;
+  }
+  if (!found) return { ok: false, reason: "login_store_missing" };
+  return { ok: true, saved: count > 0, count };
 }

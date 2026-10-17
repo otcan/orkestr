@@ -68,7 +68,8 @@ Routes (all under `/api/vault`):
 
 - **Field state:** one fixed DevTools `Runtime.evaluate` in the bound tab. It returns booleans only (found, is password, new-password, filled, Chrome autofilled). The value and its length are never read.
 - **Save state:**
-  - Chrome's `Default/Login Data` is opened with `mode=ro&immutable=1`, which also works while Chrome holds its exclusive lock.
+  - Chrome has two login stores: `Default/Login Data` (this profile) and `Default/Login Data For Account` (the signed-in Google account, where generated passwords usually go). Both are read.
+  - Each store is opened with `mode=ro&immutable=1`, which also works while Chrome holds its exclusive lock. A non-empty `-journal` or `-wal` reports `journal_pending`.
   - Only `count(*)` is selected, filtered on `signon_realm` and `date_created`.
   - No usernames or password columns are selected, and the file is never copied.
 - **Events** (`password_handoff_started`, `password_handoff_ended`) and the handoff store (`ORKESTR_HOME/password-handoffs.json`) contain ids, origin and status words only.
@@ -79,6 +80,9 @@ Routes (all under `/api/vault`):
   - a CDP proxy that refuses agents while the desktop is blind;
   - DevTools port isolation per lease;
   - the agent process stopped or suspended for the duration.
-- **Chrome's generation and save behaviour:** this is not exercised by the tests. Headless Chrome has no generation UI, so the synthetic tests type the value to simulate acceptance and insert a fake login row to simulate the save. On a real desktop, Chrome may save a generated password only after form submission. Then `saved_verified` would stay unreachable until submission, which this flow does not do.
+- **Chrome's generation and save behaviour:** checked on 2026-10-17 with Chrome 147, using a throwaway profile and a loopback fixture that was never submitted:
+  - Without a Google sign-in, Chrome offered no password generation. Generation needs a profile signed in to Google password storage.
+  - Whether Chrome saves a generated password before submission was therefore not observable synthetically. It still needs one check on a signed-in profile.
+  - The synthetic tests type the value to simulate acceptance and insert login rows to simulate the save.
 - **The websocket cut uses an in-process notice.** Start a handoff only through the server routes below, never from a separate process.
 - **Same-origin tabs between checks:** a tab opened and closed between two status checks is not seen. The owner should keep a single tab on that origin.
