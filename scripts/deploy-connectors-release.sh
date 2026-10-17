@@ -14,7 +14,7 @@ Environment:
   ORKESTR_CONNECTORS_HEALTH_ATTEMPTS     Health attempts after activation. Defaults to 90.
   ORKESTR_CONNECTORS_HEALTH_RETRY_DELAY  Whole seconds between attempts. Defaults to 1.
   ORKESTR_CONNECTORS_HEALTH_STABLE_SUCCESSES Consecutive healthy checks required. Defaults to 3.
-  ORKESTR_CONNECTORS_RELEASE_AUTH_REQUIRED_ACCOUNTS Explicit account IDs verified
+  ORKESTR_RELEASE_CONNECTORS_AUTH_REQUIRED_ACCOUNTS Explicit account IDs verified
       as needing QR pairing before this deploy. Only the same pairing state is
       tolerated during code activation; operational health still reports it.
 EOF

@@ -168,7 +168,7 @@ isolation audit unless the user explicitly approves the isolation-audit bypass.
 Record any bypass in the evidence packet.
 
 If a WhatsApp account already requires QR pairing before a code-only deploy,
-record that baseline and set `ORKESTR_CONNECTORS_RELEASE_AUTH_REQUIRED_ACCOUNTS`
+record that baseline and set `ORKESTR_RELEASE_CONNECTORS_AUTH_REQUIRED_ACCOUNTS`
 to those exact account IDs for that deployment only. Connector activation may
 tolerate the same pairing requirement; missing accounts, failed workers,
 release drift, and unexpected unavailable accounts still fail. Operational

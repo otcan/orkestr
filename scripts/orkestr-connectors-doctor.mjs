@@ -49,7 +49,7 @@ export function assessConnectorHealth(payload = {}, env = process.env, release =
   ));
   // Only an explicit, verified pre-deploy baseline can exempt pairing from
   // code activation. Normal operational health and other failures stay red.
-  const baselinePairing = new Set(list(env.ORKESTR_CONNECTORS_RELEASE_AUTH_REQUIRED_ACCOUNTS));
+  const baselinePairing = new Set(list(env.ORKESTR_RELEASE_CONNECTORS_AUTH_REQUIRED_ACCOUNTS));
   const knownPairingOnly = unavailableAccounts.length > 0 && unavailableAccounts.every((id) =>
     baselinePairing.has(id) && pairingRequiredAccounts.includes(id)
   );
