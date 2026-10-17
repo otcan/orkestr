@@ -93,3 +93,27 @@ runtime. After an attempt, stop and reconcile or keep the fenced runtime.
 The switch helper does not execute systemctl, change permissions, approve
 provider eligibility or schedule an automatic date-based switch. Evidence is
 an operator attestation, not a substitute for checking the actual provider.
+
+## Existing native-worker adapter
+
+The primary worker can opt in through `ORKESTR_WA_SCOPED_GROUP_CONFIG`, pointing
+to a protected root-owned config with `workerAccountId`, exactly one existing
+group/thread, and the same `routeControl` and proof database. Its configured
+account list must contain only that account. Existing LocalAuth paths are used
+unchanged; a missing/unusable saved profile is an operator blocker. Reset,
+pairing, credential retirement and automatic reinitialization are refused.
+
+In this mode native inbound events go only to the scoped transport journal;
+legacy routing, automatic home-chat creation, unread catch-up, outbound replay,
+repair notifications and send-error recovery are suppressed. HTTP operations
+are limited to authenticated health, account metadata, allowlisted non-marking
+history, and text carrying a valid reply parent or timer proof. Media, group
+changes, recovery, pairing and logout are rejected. The same receipt/echo/fence
+implementation runs against the existing authenticated native client.
+
+`scripts/scoped-worker-wrapper.mjs` provides `group-reply` and `group-notify`
+using the existing authenticated worker socket. It requires that same protected
+config and does not create credentials. Deploy this mode only after provider
+eligibility is confirmed; a masked worker is not started by preparation. Keep
+other active account services unchanged. The production UI does not need to be
+restarted to deploy a pinned worker code release.

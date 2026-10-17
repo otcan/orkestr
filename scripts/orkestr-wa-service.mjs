@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
+import { scopedNativeWorker } from "../packages/connectors/src/whatsapp-scoped-native-worker.js";
 import http from "node:http";
 import { publicWhatsAppPartialDelivery } from "../packages/connectors/src/whatsapp-delivery-evidence.js";
 import path from "node:path";
@@ -348,6 +349,8 @@ const defaultBridge = {
 async function handleRequest(req, res, env = process.env, bridge = defaultBridge) {
   const method = clean(req.method || "GET").toUpperCase();
   const url = new URL(req.url || "/", "http://orkestr-wa.local");
+  const scoped = scopedNativeWorker(env);
+  if (scoped && !(method === "POST" && url.pathname === "/send-text")) scoped.checkRequest(method, url);
   if (method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
     requireAuth(req, env);
     const health = publicHealth(await bridge.getLocalWhatsAppBridgeStatus(env, { probeChatOps: false }), env);
@@ -582,6 +585,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   if (method === "POST" && (url.pathname === "/send-text" || url.pathname === "/send-media")) {
     requireAuth(req, env);
     const body = await readJsonBody(req);
+    if (scoped) scoped.checkRequest(method, url, body);
     const paths = Array.isArray(body.paths)
       ? body.paths.map(clean).filter(Boolean)
       : [clean(body.path)].filter(Boolean);
@@ -593,6 +597,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       mentions: Array.isArray(body.mentions) ? body.mentions.map(clean).filter(Boolean) : [],
       attachments: paths.map((filePath) => ({ path: filePath })),
       crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
+      ...(scoped ? { scopedRequest: { requestId: body.requestId, parentId: body.parentId, ...(body.notificationId ? { notificationId: body.notificationId } : {}) } } : {}),
       env,
     }));
   }

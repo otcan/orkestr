@@ -1,3 +1,4 @@
+import { scopedNativeWorker, createPreservingNativeAuth } from './whatsapp-scoped-native-worker.js';
 import { autoConnectHomeChat } from "./whatsapp-auto-home-chat.js";
 import { chromeLockFromOtherHost, chromeLockHost, retireLoggedOutSession } from "./whatsapp-session-recovery.js";
 import fs from "node:fs/promises";
@@ -430,6 +431,7 @@ function localWhatsAppRepairLink(accountId = "", env = process.env) {
 }
 
 export async function notifyLocalWhatsAppPairingRequired(input = {}, env = process.env, options = {}) {
+  if (scopedNativeWorker(env)) return { skipped: "scoped_worker_operator_recovery_required" };
   const accountId = normalizeAccountId(input.accountId || "", env);
   const targets = await localWhatsAppRepairNotifyTargets(env, options);
   const recipients = localWhatsAppRepairNotifyRecipients(targets);
@@ -4276,6 +4278,8 @@ export function storeModelBodyText(model = null) {
 }
 
 export async function handleInboundMessage(accountId, message, env = process.env, options = {}) {
+  const scoped = scopedNativeWorker(env);
+  if (scoped) return { scoped: true, recorded: await scoped.observe(String(accountId), options.client || runtimes.get(String(accountId))?.client, message) };
   const fromMe = Boolean(message?.fromMe);
   if (options.ownOnly && !fromMe) return { skipped: "not_own_message" };
   if (message?.isStatus) return { skipped: "status_message" };
@@ -4612,6 +4616,7 @@ export async function handleInboundMessage(accountId, message, env = process.env
 }
 
 export async function recoverLocalWhatsAppChatMessages({ accountId = "", chatId = "", limit = 20, unreadOnly = true, markSeen = true, sinceMs = 0, eventIds = /** @type {string[]} */ ([]) } = {}, env = process.env) {
+  if (scopedNativeWorker(env)) return { ok: true, skipped: "scoped_worker_recovery_disabled", routed: [] };
   const exactEventIds = [...new Set((Array.isArray(eventIds) ? eventIds : []).map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 20);
   if (exactEventIds.length) {
     return recoverLocalWhatsAppMessagesById({ accountId, chatId, eventIds: exactEventIds }, env);
@@ -5386,6 +5391,7 @@ export async function runLocalWhatsAppInboundMediaRetries(env = process.env, opt
 }
 
 export async function recoverUnreadLocalWhatsAppMessages(env = process.env, options = {}) {
+  if (scopedNativeWorker(env)) return { ok: true, skipped: "scoped_worker_recovery_disabled", routed: [] };
   if (!localWhatsAppUnreadRecoveryEnabled(env) && !options.force) {
     await runLocalWhatsAppInboundMediaRetries(env, options);
     return { enabled: false, checked: [], recovered: [], routed: 0, skipped: [], failed: [] };
@@ -5912,6 +5918,7 @@ export async function recoverConfiguredLocalWhatsAppAccounts(env = process.env, 
 }
 
 async function recoverOutboundAfterLocalWhatsAppReady(accountId = "", env = process.env) {
+  if (scopedNativeWorker(env)) return { skipped: "scoped_worker_no_backlog" };
   try {
     const probe = await probeLocalWhatsAppAccountChatOps(accountId, env, {
       force: true,
@@ -5987,6 +5994,8 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
 
 async function startLocalWhatsAppAccountOnce(normalized, env = process.env, options = {}, pairingPhoneNumber = "") {
   const existingRuntime = runtimes.get(normalized);
+  const scopedStartup = scopedNativeWorker(env);
+  if (scopedStartup) scopedStartup.claimStart({ accountId: normalized, existing: Boolean(existingRuntime), options, previous: accountStates.get(normalized) || {}, profile: localAuthSessionDirForAccount(normalized, env) });
   if (existingRuntime) {
     const state = accountStates.get(normalized) || defaultAccountState(normalized);
     const shouldResetRuntime = options.resetRuntime === true || options.reset === true || options.force === true;
@@ -6013,8 +6022,8 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     }, env).catch(() => {});
   }
   await ensureBridgeDirs(env);
-  const orphanCleanup = await cleanupLocalWhatsAppOrphanChromeProcesses(normalized, env, options);
-  const staleLockCleanup = await cleanupLocalWhatsAppChromeLocks(normalized, env);
+  const orphanCleanup = scopedStartup ? { killed: [] } : await cleanupLocalWhatsAppOrphanChromeProcesses(normalized, env, options);
+  const staleLockCleanup = scopedStartup ? { moved: [] } : await cleanupLocalWhatsAppChromeLocks(normalized, env);
   // Connect after a verified logout: the saved session would only fail again.
   const previousState = accountStates.get(normalized) || {};
   if (previousState.verifiedLogoutAt || previousState.state === "auth_failure") {
@@ -6373,7 +6382,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     if (typeof connectedPageReadyFallbackTimer.unref === "function") connectedPageReadyFallbackTimer.unref();
   };
   client = new Client({
-    authStrategy: new LocalAuth({ clientId: clientIdForAccount(normalized, env), dataPath: sessionRootForAccount(normalized, env) }),
+    authStrategy: new (scopedStartup ? createPreservingNativeAuth(LocalAuth) : LocalAuth)({ clientId: clientIdForAccount(normalized, env), dataPath: sessionRootForAccount(normalized, env) }),
     puppeteer: puppeteerOptions(env),
     userAgent: whatsappUserAgent(env),
     webVersionCache: {
@@ -6475,7 +6484,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     markLocalWhatsAppAccountReady(normalized, client);
     await appendEvent({ type: "whatsapp_local_ready", accountId: normalized }, env);
     // First link on a simple install: connect "Message yourself" to the main thread.
-    void autoConnectHomeChat({ accountId: normalized, contactId: client?.info?.wid?._serialized }, env).catch((error) =>
+    if (!scopedStartup) void autoConnectHomeChat({ accountId: normalized, contactId: client?.info?.wid?._serialized }, env).catch((error) =>
       appendEvent({ type: "whatsapp_home_chat_auto_connect_failed", accountId: normalized, error: String(error?.message || error) }, env).catch(() => {}));
     void markWhatsAppAccountPaired(normalized, env).catch(() => {});
     void recoverOutboundAfterLocalWhatsAppReady(normalized, env);
@@ -7729,6 +7738,7 @@ function recoverableLocalWhatsAppRuntimeError(error) {
 }
 
 async function recoverLocalWhatsAppAccountAfterRuntimeError(accountId, error, env = process.env, options = {}) {
+  if (scopedNativeWorker(env)) throw new Error("scoped_worker_operator_recovery_required");
   const normalized = String(accountId || "").trim();
   const eventPrefix = String(options.eventPrefix || "whatsapp_local_runtime_recovery");
   const reason = String(options.reason || "runtime_error");
@@ -7823,9 +7833,9 @@ function localWhatsAppOutboundAttachmentMaxBytes(env = process.env) {
 }
 
 /**
- * @param {{ chatId?: string, text?: string, accountId?: string, mentions?: string[], attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean }} [options]
+ * @param {{ chatId?: string, text?: string, accountId?: string, mentions?: string[], attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean, scopedRequest?: Record<string, unknown> }} [options]
  */
-export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", mentions = [], attachments = [], env = process.env, crossAccountEchoSuppression = true, routeSentMessage = false } = {}) {
+export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", mentions = [], attachments = [], env = process.env, crossAccountEchoSuppression = true, routeSentMessage = false, scopedRequest = {} } = {}) {
   const selectedAccountId = accountId
     ? await normalizeManagedAccountId(accountId, env)
     : localWhatsAppAccountIdsForEnv(env).find((id) => {
@@ -7838,6 +7848,11 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
     const error = new Error("whatsapp_local_bridge_not_ready");
     error.statusCode = 400;
     throw error;
+  }
+  const scoped = scopedNativeWorker(env);
+  if (scoped) {
+    if (attachments.length || mentions.length || routeSentMessage) throw new Error("scoped_worker_text_only");
+    return scoped.send(selectedAccountId, runtime.client, chatId, text, scopedRequest);
   }
   await stopLocalWhatsAppTyping({ accountId: selectedAccountId, chatId, env }).catch(() => {});
   const sent = [];
