@@ -131,11 +131,18 @@ root-capable workers.
 
 There is one top-level configuration flag: `ORKESTR_PERSONAL_AGENT_ENABLED`.
 Only the case-insensitive trimmed values `1` and `true` enable it; the default
-is off. The value is read only by
-`packages/core/src/personal-agent-feature.js` through
-`personalAgentFeature(env)`, following the existing feature-policy module
-pattern. Settings or instance-config UI is deferred to OP-20/OP-24 and must be
-an additive change; no second source of truth is introduced.
+is off. Its only reader is the Lane A-owned
+`packages/core/src/personal-agent-feature.js`, whose contract is:
+
+```js
+export function personalAgentFeature(env = process.env) {
+  return { enabled: ["1", "true"].includes(String(env.ORKESTR_PERSONAL_AGENT_ENABLED || "").trim().toLowerCase()) };
+}
+```
+
+Settings or instance-config UI is deferred to OP-20/OP-24 and must be an
+additive change; no second source of truth or `features.personalAgent` field is
+introduced.
 
 `enabled` in the capability response reports this flag and is the UI visibility
 gate. When enabled but storage prerequisites are unhealthy, show a
@@ -187,9 +194,12 @@ slot; it does not add a second runtime or task store. Its adapter contract is:
 
 - `step(ctx, { input, transcript })` processes one bounded step; cancellation
   follows the provided `AbortSignal`.
-- Probe/discovery reports health for an explicitly configured endpoint only.
-  The endpoint must be loopback-only in the first release; do not scan for or
-  silently select other model servers.
+- Runtime configuration is explicit, with no implicit endpoint. Lane B owns
+  `ORKESTR_PERSONAL_AGENT_LOCAL_BASE_URL`,
+  `ORKESTR_PERSONAL_AGENT_LOCAL_MODEL`, and
+  `ORKESTR_PERSONAL_AGENT_LOCAL_REASONING_EFFORT`. Probe/discovery reports
+  health only for that configured endpoint; it must be loopback-only in the
+  first release, with no scanning or silent model-server selection.
 - Stream incremental `message.delta` updates through the existing `emit`
   mechanism and report usage through the existing Agent Job usage path.
 - `toolLoop = "orkestr"`: all tools go through Orkestr policy and the existing
@@ -207,6 +217,13 @@ OP-09 change is available. Until then it returns
 `ORKESTR_PERSONAL_AGENT_ENABLED`, the Project/Task schemas, and the correlated
 event envelope; Lane B does not add task, memory, or event schemas. OP-07 memory
 implementation waits on these contracts and its storage design.
+
+Lane B's `b09f00bb` change passes the pinned provider config to
+`agentJobProviderStatus` during admission and exports the existing native
+attempt journal helper for adapter event emission. OP-03 adds only Project/Task
+tables and store initialization; it does not modify
+`agent-job-admission.js` or `agent-job-native-attempt.js`, so those changes are
+file-disjoint and retain the Agent Job execution/effect contract.
 
 ### OP-18 route and UI boundary
 
