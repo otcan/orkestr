@@ -23,6 +23,11 @@ function healthToken(env = process.env) {
   return clean(env.ORKESTR_CONNECTORS_MCP_TOKEN || env.ORKESTR_WA_SERVICE_TOKEN || env.ORKESTR_WA_WORKER_EVENT_TOKEN);
 }
 
+function pairingRequired(account = {}) {
+  return account.authenticated !== true &&
+    ["qr_required", "qr_needed"].includes(clean(account.state).toLowerCase());
+}
+
 export function assessConnectorHealth(payload = {}, env = process.env, release = {}, { releaseHealth = false } = {}) {
   const requiredAccounts = list(env.ORKESTR_CONNECTORS_REQUIRED_WA_ACCOUNTS || "sender");
   const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
@@ -39,6 +44,15 @@ export function assessConnectorHealth(payload = {}, env = process.env, release =
   const unavailableAccounts = requiredAccounts.filter((id) => accounts.some((account) =>
     matchesAccount(account, id) && !accountReady(account)
   ));
+  const pairingRequiredAccounts = unavailableAccounts.filter((id) => accounts.some((account) =>
+    matchesAccount(account, id) && pairingRequired(account)
+  ));
+  // Only an explicit, verified pre-deploy baseline can exempt pairing from
+  // code activation. Normal operational health and other failures stay red.
+  const baselinePairing = new Set(list(env.ORKESTR_CONNECTORS_RELEASE_AUTH_REQUIRED_ACCOUNTS));
+  const knownPairingOnly = unavailableAccounts.length > 0 && unavailableAccounts.every((id) =>
+    baselinePairing.has(id) && pairingRequiredAccounts.includes(id)
+  );
   const operationalIssues = [
     ...(payload.ok === false ? ["gateway_unhealthy"] : []),
     ...(payload.gateway?.ok === false ? ["gateway_unhealthy"] : []),
@@ -49,7 +63,8 @@ export function assessConnectorHealth(payload = {}, env = process.env, release =
     ...(release.drift === true ? ["connector_release_drift"] : []),
   ];
   const ignoredIssues = releaseHealth
-    ? operationalIssues.filter((issue) => issue === "dead_letter_events")
+    ? operationalIssues.filter((issue) => issue === "dead_letter_events" ||
+      (issue === "required_accounts_unavailable" && knownPairingOnly))
     : [];
   const issues = operationalIssues.filter((issue) => !ignoredIssues.includes(issue));
   return {
@@ -58,6 +73,7 @@ export function assessConnectorHealth(payload = {}, env = process.env, release =
     ignoredIssues: [...new Set(ignoredIssues)],
     missingAccounts,
     unavailableAccounts,
+    pairingRequiredAccounts,
     queue: payload.queue || {},
     workerState: clean(payload.worker?.state || payload.state),
     release,
@@ -169,6 +185,11 @@ export async function runConnectorDoctor({ releaseHealth = false, repair = false
   const release = await connectorReleaseState(env);
   const assessment = assessConnectorHealth(payload, env, release, { releaseHealth });
   if (assessment.ok || !repair) return { ...assessment, repaired: false, health: payload };
+
+  if (assessment.issues.length === 1 && assessment.issues[0] === "required_accounts_unavailable" &&
+      assessment.pairingRequiredAccounts.length === assessment.unavailableAccounts.length) {
+    return { ...assessment, repaired: false, repairSuppressed: "pairing_required", health: payload };
+  }
 
   const recoveringAccounts = recoveringRequiredAccounts(payload, assessment, env);
   if (assessment.issues.length === 1 &&

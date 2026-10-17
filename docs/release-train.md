@@ -167,6 +167,15 @@ Deploys do not require WA2WA real WhatsApp E2E. Demo deploys require an
 isolation audit unless the user explicitly approves the isolation-audit bypass.
 Record any bypass in the evidence packet.
 
+If a WhatsApp account already requires QR pairing before a code-only deploy,
+record that baseline and set `ORKESTR_CONNECTORS_RELEASE_AUTH_REQUIRED_ACCOUNTS`
+to those exact account IDs for that deployment only. Connector activation may
+tolerate the same pairing requirement; missing accounts, failed workers,
+release drift, and unexpected unavailable accounts still fail. Operational
+health remains unhealthy until pairing is complete. This does not waive an
+explicit `ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS` readiness gate. Do not
+persist the baseline as a general readiness exemption.
+
 If tests fail, fix clear failures inside the release train. Escalate only when
 the failure implies a product decision or contradicts a worker's intent.
 

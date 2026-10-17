@@ -14,6 +14,9 @@ Environment:
   ORKESTR_CONNECTORS_HEALTH_ATTEMPTS     Health attempts after activation. Defaults to 90.
   ORKESTR_CONNECTORS_HEALTH_RETRY_DELAY  Whole seconds between attempts. Defaults to 1.
   ORKESTR_CONNECTORS_HEALTH_STABLE_SUCCESSES Consecutive healthy checks required. Defaults to 3.
+  ORKESTR_CONNECTORS_RELEASE_AUTH_REQUIRED_ACCOUNTS Explicit account IDs verified
+      as needing QR pairing before this deploy. Only the same pairing state is
+      tolerated during code activation; operational health still reports it.
 EOF
 }
 
@@ -114,7 +117,7 @@ npm ci --omit=dev
 node scripts/patch-whatsapp-media-id.mjs
 node --check scripts/orkestr-connectors-mcp.mjs
 node --check scripts/orkestr-wa-worker.mjs
-node --test --test-concurrency=1 test/connectors-mcp.test.js test/orkestr-wa-service.test.js test/whatsapp-media-id-compat.test.js test/whatsapp-history-id-compat.test.js
+node --test --test-concurrency=1 test/connectors-mcp.test.js test/connectors-pairing-health.test.js test/orkestr-wa-service.test.js test/whatsapp-media-id-compat.test.js test/whatsapp-history-id-compat.test.js
 printf '%s\n' "$revision" > "$release_dir/REVISION"
 
 if [ "$activate" -ne 1 ]; then
