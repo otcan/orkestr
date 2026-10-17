@@ -30,12 +30,12 @@ import { QuotaProvider, executorLabel } from "./provider-quota";
   `,
   styles: [`
     .executor-switcher { display: inline-flex; gap: 2px; align-items: center; min-width: 0; }
-    .executor-switcher-option { padding: 1px 8px; border: 1px solid var(--line, #d0d5dd); background: transparent; font-size: 12px; line-height: 18px; cursor: pointer; }
+    .executor-switcher-option { padding: 1px 8px; border: 1px solid var(--line, #d0d5dd); background: var(--ui-raised, #263133); color: var(--ui-text, #edf2ef); font-size: 12px; line-height: 18px; cursor: pointer; }
     .executor-switcher-option:first-of-type { border-radius: 999px 0 0 999px; }
     .executor-switcher-option:last-of-type { border-radius: 0 999px 999px 0; }
-    .executor-switcher-option.active { border-color: currentColor; font-weight: 600; cursor: default; }
+    .executor-switcher-option.active { background: var(--ui-accent, #8ed8c2); color: var(--ui-accent-ink, #11241e); border-color: var(--ui-accent, #8ed8c2); font-weight: 600; cursor: default; opacity: 1; }
     .executor-switcher-option.pending { border-style: dashed; }
-    .executor-switcher-option:disabled:not(.active) { opacity: .5; cursor: default; }
+    .executor-switcher-option:disabled:not(.active) { opacity: .75; cursor: default; }
     .executor-switcher-note, .executor-switcher-error { font-style: normal; font-size: 11px; margin-left: 6px; opacity: .8; }
     .executor-switcher-error { color: #b42318; opacity: 1; }
   `],

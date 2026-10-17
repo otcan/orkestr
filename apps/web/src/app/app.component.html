@@ -438,10 +438,14 @@
           <p class="subline">
             <span class="status-pill" [class]="statusClass(thread)">{{ statusLabel(thread) }}</span>
             <ork-executor-switcher [threadId]="thread.id" [activeProvider]="activeExecutorProvider(thread)" [working]="threadIsWorking(thread)" (switched)="onExecutorSwitched()"></ork-executor-switcher>
-            <ork-provider-quota-indicator [activeProvider]="activeExecutorProvider(thread)"></ork-provider-quota-indicator>
             @if (whatsappReach(thread)) {
               <span class="wa-reach-pill" [title]="whatsappReach(thread) + ' — open Settings → WhatsApp for details'">{{ whatsappReach(thread) }}</span>
             }
+          </p>
+          <details class="thread-header-details">
+            <summary>Details</summary>
+            <div class="thread-header-metadata">
+            <ork-provider-quota-indicator [activeProvider]="activeExecutorProvider(thread)"></ork-provider-quota-indicator>
             @if (threadBranchLabel(thread)) {
               <span class="branch-pill">{{ threadBranchLabel(thread) }}</span>
             }
@@ -454,7 +458,8 @@
                 <em>{{ deploymentVersionLabel() }}</em>
               </span>
             }
-          </p>
+            </div>
+          </details>
         </div>
       </header>
 
@@ -462,11 +467,14 @@
         <strong class="thread-tools-title">Thread tools</strong>
         <div class="thread-tools-popover">
         <button type="button" [class.active]="activePanel === 'chat'" (click)="openPanel('chat')">Chat</button>
+        <button type="button" [class.active]="activePanel === 'history'" (click)="openPanel('history')">History</button>
+        <button type="button" [class.active]="activePanel === 'delivery'" (click)="openPanel('delivery')">Delivery</button>
+        <details class="thread-more-tools" [open]="!['chat', 'history', 'delivery'].includes(activePanel)">
+          <summary>More tools</summary>
+          <div class="thread-secondary-tools">
         @if (rawTerminalAvailable(thread)) {
           <button type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')" [disabled]="isAdminMode() && !codexAgentReady()">Raw</button>
         }
-        <button type="button" [class.active]="activePanel === 'history'" (click)="openPanel('history')">History</button>
-        <button type="button" [class.active]="activePanel === 'delivery'" (click)="openPanel('delivery')">Delivery</button>
         <button type="button" [class.active]="activePanel === 'timers'" (click)="openPanel('timers')">Thread Timers</button>
         @if (isUserMode()) {
           <button type="button" (click)="openPanel('files')">Files</button>
@@ -542,6 +550,8 @@
           }
         </div>
         }
+          </div>
+        </details>
         </div>
       </section>
 

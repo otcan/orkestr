@@ -3689,7 +3689,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.objectValue(thread.runtime, "executionState"),
     ].join(" ").toLowerCase();
     return Boolean(
-      this.threadLoading(thread) ||
       thread.working ||
       thread.typingActive ||
       thread.backgroundWork ||
@@ -3720,7 +3719,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   threadProcessingLabel(thread: ThreadSummary | null): string {
     if (!thread) return "Working";
-    if (this.threadLoading(thread)) return "Loading";
     const publicStatusCode = String(thread.publicStatusCode || "").toLowerCase();
     if (publicStatusCode === "retrying_delivery") return "Retrying delivery";
     if (publicStatusCode === "waking") return "Starting";
@@ -3748,7 +3746,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (label === "Background") return "BG";
     if (label === "Starting") return "Start";
     if (label === "Queued") return "Queue";
-    if (label === "Loading") return "Load";
     if (label === "Waiting for approval") return "Approval";
     if (label === "Planning" || label === "Implement plan?") return "Plan";
     if (label === "Waiting for input") return "Input";
@@ -4815,7 +4812,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   threadLoading(thread: ThreadSummary | null): boolean {
-    return Boolean(thread?.id && this.loadingThreadIds()[thread.id]);
+    // A background refresh, including a previously empty chat, is not an initial load.
+    return Boolean(thread?.id && this.loadingThreadIds()[thread.id] && !Object.hasOwn(this.messageCache(), thread.id));
   }
 
   private trackThreadActivity(threads: ThreadSummary[]): void {
