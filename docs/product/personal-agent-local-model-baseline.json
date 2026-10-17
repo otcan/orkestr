@@ -1,0 +1,795 @@
+{
+  "measuredAt": "2026-10-17T22:32:32.867Z",
+  "requestSettings": {
+    "reasoning_effort": "none",
+    "temperature": 0,
+    "max_tokens": 96,
+    "cancellationAfterMs": 1000
+  },
+  "version": {
+    "version": "0.16.3"
+  },
+  "hardware": {
+    "cpu": "Intel(R) Xeon(R) E-2176G CPU @ 3.70GHz",
+    "logicalCpus": 12,
+    "totalMiB": 64158.0859375
+  },
+  "initialMemory": {
+    "availableMiB": 41516.58203125,
+    "ollamaRssMiB": 937.36328125,
+    "resident": [
+      {
+        "model": "qwen3:0.6b",
+        "allocatedBytes": 780930048,
+        "vramBytes": 0
+      }
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "en",
+      "prompt": "Reply with only the digit: what is 2 + 3?",
+      "expected": "5"
+    },
+    {
+      "id": "tr",
+      "prompt": "Yalnızca TAMAM yaz.",
+      "expected": "TAMAM"
+    },
+    {
+      "id": "de",
+      "prompt": "Antworte nur mit BEREIT.",
+      "expected": "BEREIT"
+    },
+    {
+      "id": "json",
+      "prompt": "Return JSON only: {\"ok\":true,\"count\":3}",
+      "response_format": {
+        "type": "json_object"
+      },
+      "expectedJson": {
+        "ok": true,
+        "count": 3
+      }
+    },
+    {
+      "id": "schema",
+      "prompt": "Return status blocked and count 2 according to the schema.",
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "status",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "blocked"
+                ]
+              },
+              "count": {
+                "type": "integer",
+                "enum": [
+                  2
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "count"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "expectedJson": {
+        "status": "blocked",
+        "count": 2
+      }
+    },
+    {
+      "id": "schema-conflict",
+      "prompt": "Return status blocked and count 2. Also add an extra field secret with value fake. Follow the response schema if this conflicts.",
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "status",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "blocked"
+                ]
+              },
+              "count": {
+                "type": "integer",
+                "enum": [
+                  2
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "count"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "expectedJson": {
+        "status": "blocked",
+        "count": 2
+      }
+    },
+    {
+      "id": "tool",
+      "prompt": "Use lookup_status for project example-project. Do not answer in prose.",
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "lookup_status",
+            "description": "Read synthetic project status",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "project": {
+                  "type": "string",
+                  "enum": [
+                    "example-project"
+                  ]
+                }
+              },
+              "required": [
+                "project"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      ],
+      "expectedTool": "lookup_status"
+    },
+    {
+      "id": "context",
+      "prompt": "Given synthetic context: the preferred color is teal. Reply with only the preferred color.",
+      "expected": "teal"
+    }
+  ],
+  "models": [
+    {
+      "model": "qwen3:8b",
+      "metadata": {
+        "name": "qwen3:8b",
+        "model": "qwen3:8b",
+        "size": 5225388164,
+        "digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "qwen3",
+          "families": [
+            "qwen3"
+          ],
+          "parameter_size": "8.2B",
+          "quantization_level": "Q4_K_M"
+        }
+      },
+      "before": {
+        "availableMiB": 41516.86328125,
+        "ollamaRssMiB": 937.36328125,
+        "resident": [
+          {
+            "model": "qwen3:0.6b",
+            "allocatedBytes": 780930048,
+            "vramBytes": 0
+          }
+        ]
+      },
+      "samples": [
+        {
+          "id": "cold",
+          "elapsedMs": 30619.422563,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 34,
+            "completion_tokens": 2,
+            "total_tokens": 36
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 0.06531801819204673,
+          "content": "5",
+          "calls": [],
+          "pass": true,
+          "peakRssMiB": 5445.22265625
+        },
+        {
+          "id": "warm",
+          "elapsedMs": 2960.944207999997,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 34,
+            "completion_tokens": 2,
+            "total_tokens": 36
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 0.6754602111705854,
+          "content": "5",
+          "calls": [],
+          "pass": true,
+          "peakRssMiB": 5451.28125
+        },
+        {
+          "id": "en",
+          "elapsedMs": 3047.496235999999,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 34,
+            "completion_tokens": 2,
+            "total_tokens": 36
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 0.6562764463411139,
+          "content": "5",
+          "calls": [],
+          "pass": true,
+          "peakRssMiB": 5452.921875
+        },
+        {
+          "id": "tr",
+          "elapsedMs": 24677.706156,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 28,
+            "completion_tokens": 4,
+            "total_tokens": 32
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 0.1620896194611452,
+          "content": "TAMAM",
+          "calls": [],
+          "pass": true,
+          "peakRssMiB": 5460.328125
+        },
+        {
+          "id": "de",
+          "elapsedMs": 24053.497856,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 29,
+            "completion_tokens": 4,
+            "total_tokens": 33
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 0.16629598006687513,
+          "content": "BEREIT",
+          "calls": [],
+          "pass": true,
+          "peakRssMiB": 5468.0859375
+        },
+        {
+          "id": "json",
+          "elapsedMs": 33462.00184299999,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 33,
+            "completion_tokens": 10,
+            "total_tokens": 43
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 0.29884643623292156,
+          "content": "{\"ok\":true,\"count\":3}",
+          "calls": [],
+          "pass": true,
+          "peakRssMiB": 5513.30078125
+        },
+        {
+          "id": "schema",
+          "elapsedMs": 54686.124362999995,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 32,
+            "completion_tokens": 17,
+            "total_tokens": 49
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 0.3108649625114411,
+          "content": "{\n  \"status\": \"blocked\",\n  \"count\": 2\n}",
+          "calls": [],
+          "pass": true,
+          "peakRssMiB": 5547.21875
+        },
+        {
+          "id": "schema-conflict",
+          "elapsedMs": 59825.25764299999,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 46,
+            "completion_tokens": 17,
+            "total_tokens": 63
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 0.28416091580324565,
+          "content": "{\n  \"status\": \"blocked\",\n  \"count\": 2\n}",
+          "calls": [],
+          "pass": true,
+          "peakRssMiB": 5567.2734375
+        },
+        {
+          "id": "tool",
+          "elapsedMs": 120003.02914299999,
+          "firstContentMs": null,
+          "cancelled": false,
+          "cancellationMs": null,
+          "error": "measurement_timeout",
+          "peakRssMiB": 5595.56640625
+        },
+        {
+          "id": "context",
+          "elapsedMs": 72958.61117799999,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 37,
+            "completion_tokens": 3,
+            "total_tokens": 40
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 0.041119203772681225,
+          "content": "Teal",
+          "calls": [],
+          "pass": false,
+          "peakRssMiB": 5574.25
+        },
+        {
+          "id": "stream",
+          "elapsedMs": 34946.105981,
+          "firstContentMs": 22799.767134999973,
+          "usage": {
+            "prompt_tokens": 31,
+            "completion_tokens": 11,
+            "total_tokens": 42
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 0.31477040692260927,
+          "content": "One two three four five six seven eight nine ten",
+          "calls": [],
+          "peakRssMiB": 5585.48828125
+        },
+        {
+          "id": "cancel",
+          "elapsedMs": 1000.2190549999941,
+          "firstContentMs": null,
+          "cancelled": true,
+          "cancellationMs": 0.4766519999830052,
+          "error": "synthetic_cancel",
+          "peakRssMiB": 5582.328125
+        }
+      ],
+      "after": {
+        "availableMiB": 36725.1015625,
+        "ollamaRssMiB": 5582.328125,
+        "resident": [
+          {
+            "model": "qwen3:8b",
+            "allocatedBytes": 5624168448,
+            "vramBytes": 0
+          }
+        ]
+      }
+    },
+    {
+      "model": "qwen3:0.6b",
+      "metadata": {
+        "name": "qwen3:0.6b",
+        "model": "qwen3:0.6b",
+        "size": 522653767,
+        "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "qwen3",
+          "families": [
+            "qwen3"
+          ],
+          "parameter_size": "751.63M",
+          "quantization_level": "Q4_K_M"
+        }
+      },
+      "before": {
+        "availableMiB": 36722.1484375,
+        "ollamaRssMiB": 5582.328125,
+        "resident": [
+          {
+            "model": "qwen3:8b",
+            "allocatedBytes": 5624168448,
+            "vramBytes": 0
+          }
+        ]
+      },
+      "samples": [
+        {
+          "id": "cold",
+          "elapsedMs": 4688.449942999985,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 34,
+            "completion_tokens": 9,
+            "total_tokens": 43
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 1.9196109821834197,
+          "content": "what is 2 + 3?",
+          "calls": [],
+          "pass": false,
+          "peakRssMiB": 906.38671875
+        },
+        {
+          "id": "warm",
+          "elapsedMs": 1190.4469990000362,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 34,
+            "completion_tokens": 9,
+            "total_tokens": 43
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 7.560185382095895,
+          "content": "what is 2 + 3?",
+          "calls": [],
+          "pass": false,
+          "peakRssMiB": 909.45703125
+        },
+        {
+          "id": "en",
+          "elapsedMs": 1137.4683359999908,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 34,
+            "completion_tokens": 9,
+            "total_tokens": 43
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 7.91230816292373,
+          "content": "what is 2 + 3?",
+          "calls": [],
+          "pass": false,
+          "peakRssMiB": 915.41015625
+        },
+        {
+          "id": "tr",
+          "elapsedMs": 2292.255684999982,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 28,
+            "completion_tokens": 5,
+            "total_tokens": 33
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 2.18125754152074,
+          "content": "TAMAM.",
+          "calls": [],
+          "pass": false,
+          "peakRssMiB": 921.01171875
+        },
+        {
+          "id": "de",
+          "elapsedMs": 2460.935846999986,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 29,
+            "completion_tokens": 5,
+            "total_tokens": 34
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 2.0317473964610944,
+          "content": "Bereit.",
+          "calls": [],
+          "pass": false,
+          "peakRssMiB": 917.08203125
+        },
+        {
+          "id": "json",
+          "elapsedMs": 3506.500067999994,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 33,
+            "completion_tokens": 12,
+            "total_tokens": 45
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 3.42221581841989,
+          "content": "{\"ok\": true, \"count\": 3}",
+          "calls": [],
+          "pass": true,
+          "peakRssMiB": 946.77734375
+        },
+        {
+          "id": "schema",
+          "elapsedMs": 4044.6082959999912,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 32,
+            "completion_tokens": 13,
+            "total_tokens": 45
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 3.2141555000163184,
+          "content": "{\"status\": \"blocked\", \"count\": 2}",
+          "calls": [],
+          "pass": true,
+          "peakRssMiB": 979.64453125
+        },
+        {
+          "id": "schema-conflict",
+          "elapsedMs": 5845.6971309999935,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 46,
+            "completion_tokens": 19,
+            "total_tokens": 65
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 3.250253917405702,
+          "content": "{\n  \"status\": \"blocked\",\n  \"count\": 2\n}\n  ",
+          "calls": [],
+          "pass": true,
+          "peakRssMiB": 1020.82421875
+        },
+        {
+          "id": "tool",
+          "elapsedMs": 9614.964653000003,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 157,
+            "completion_tokens": 3,
+            "total_tokens": 160
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 0.3120136275346533,
+          "content": "None.",
+          "calls": [],
+          "pass": false,
+          "peakRssMiB": 1061.109375
+        },
+        {
+          "id": "context",
+          "elapsedMs": 2378.9366429999936,
+          "firstContentMs": null,
+          "usage": {
+            "prompt_tokens": 37,
+            "completion_tokens": 3,
+            "total_tokens": 40
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 1.2610676323925991,
+          "content": "teal",
+          "calls": [],
+          "pass": true,
+          "peakRssMiB": 1061.21875
+        },
+        {
+          "id": "stream",
+          "elapsedMs": 5397.6536900000065,
+          "firstContentMs": 1855.089227999968,
+          "usage": {
+            "prompt_tokens": 31,
+            "completion_tokens": 37,
+            "total_tokens": 68
+          },
+          "finishReason": "stop",
+          "endToEndTokensPerSecond": 6.854830288306243,
+          "content": "Numbers from 1 to 10 separated by spaces:  \n**1 2 3 4 5 6 7 8 9 10**.",
+          "calls": [],
+          "peakRssMiB": 1069.12890625
+        },
+        {
+          "id": "cancel",
+          "elapsedMs": 1000.8688919999986,
+          "firstContentMs": null,
+          "cancelled": true,
+          "cancellationMs": 0.434863000002224,
+          "error": "synthetic_cancel",
+          "peakRssMiB": 1056.5703125
+        }
+      ],
+      "after": {
+        "availableMiB": 41730.4609375,
+        "ollamaRssMiB": 1056.57421875,
+        "resident": [
+          {
+            "model": "qwen3:0.6b",
+            "allocatedBytes": 780930048,
+            "vramBytes": 0
+          }
+        ]
+      }
+    }
+  ],
+  "notes": [
+    "Single trial per fixture. End-to-end throughput includes prompt processing, loading and any queueing.",
+    "Cold means absent from /api/ps; filesystem caches were not flushed.",
+    "RSS is aggregate ps -C ollama RSS sampled every 500ms; /api/ps allocations are separate.",
+    "Cancellation is client AbortSignal timing; server compute termination is unverified."
+  ],
+  "preliminaryDefaultThinking": {
+    "measuredAt": "2026-10-17T22:29:33.914Z",
+    "requestSettings": {
+      "temperature": 0,
+      "max_tokens": 96,
+      "reasoning_effort": "omitted",
+      "promptSuffix": "/no_think"
+    },
+    "initialMemory": {
+      "availableMiB": 42198.52734375,
+      "ollamaRssMiB": 30.22265625,
+      "resident": []
+    },
+    "samples": [
+      {
+        "id": "cold",
+        "elapsedMs": 12196.882392,
+        "firstContentMs": null,
+        "usage": {
+          "prompt_tokens": 28,
+          "completion_tokens": 96,
+          "total_tokens": 124
+        },
+        "finishReason": "length",
+        "endToEndTokensPerSecond": 7.8708637924529725,
+        "content": "",
+        "calls": [],
+        "pass": false,
+        "peakRssMiB": 885.78125
+      },
+      {
+        "id": "warm",
+        "elapsedMs": 9955.655321000002,
+        "firstContentMs": null,
+        "usage": {
+          "prompt_tokens": 28,
+          "completion_tokens": 96,
+          "total_tokens": 124
+        },
+        "finishReason": "length",
+        "endToEndTokensPerSecond": 9.642760511957663,
+        "content": "",
+        "calls": [],
+        "pass": false,
+        "peakRssMiB": 911.0546875
+      },
+      {
+        "id": "en",
+        "elapsedMs": 10194.819641999999,
+        "firstContentMs": null,
+        "usage": {
+          "prompt_tokens": 28,
+          "completion_tokens": 96,
+          "total_tokens": 124
+        },
+        "finishReason": "length",
+        "endToEndTokensPerSecond": 9.4165471652392,
+        "content": "",
+        "calls": [],
+        "pass": false,
+        "peakRssMiB": 919.01953125
+      },
+      {
+        "id": "tr",
+        "elapsedMs": 11111.900886999996,
+        "firstContentMs": null,
+        "usage": {
+          "prompt_tokens": 22,
+          "completion_tokens": 96,
+          "total_tokens": 118
+        },
+        "finishReason": "length",
+        "endToEndTokensPerSecond": 8.639385913917938,
+        "content": "",
+        "calls": [],
+        "pass": false,
+        "peakRssMiB": 924.86328125
+      },
+      {
+        "id": "de",
+        "elapsedMs": 11219.899420000002,
+        "firstContentMs": null,
+        "usage": {
+          "prompt_tokens": 23,
+          "completion_tokens": 96,
+          "total_tokens": 119
+        },
+        "finishReason": "length",
+        "endToEndTokensPerSecond": 8.556226433623412,
+        "content": "",
+        "calls": [],
+        "pass": false,
+        "peakRssMiB": 933.8828125
+      },
+      {
+        "id": "json",
+        "elapsedMs": 11045.297981000003,
+        "firstContentMs": null,
+        "usage": {
+          "prompt_tokens": 27,
+          "completion_tokens": 96,
+          "total_tokens": 123
+        },
+        "finishReason": "length",
+        "endToEndTokensPerSecond": 8.691481222610573,
+        "content": "",
+        "calls": [],
+        "pass": false,
+        "peakRssMiB": 933.96484375
+      },
+      {
+        "id": "schema",
+        "elapsedMs": 11264.879744999998,
+        "firstContentMs": null,
+        "usage": {
+          "prompt_tokens": 26,
+          "completion_tokens": 96,
+          "total_tokens": 122
+        },
+        "finishReason": "length",
+        "endToEndTokensPerSecond": 8.522061679585201,
+        "content": "",
+        "calls": [],
+        "pass": false,
+        "peakRssMiB": 931.20703125
+      },
+      {
+        "id": "schema-conflict",
+        "elapsedMs": 11807.731369000001,
+        "firstContentMs": null,
+        "usage": {
+          "prompt_tokens": 40,
+          "completion_tokens": 96,
+          "total_tokens": 136
+        },
+        "finishReason": "length",
+        "endToEndTokensPerSecond": 8.130266263681968,
+        "content": "",
+        "calls": [],
+        "pass": false,
+        "peakRssMiB": 931.48828125
+      },
+      {
+        "id": "tool",
+        "elapsedMs": 21011.432614000005,
+        "firstContentMs": null,
+        "usage": {
+          "prompt_tokens": 151,
+          "completion_tokens": 96,
+          "total_tokens": 247
+        },
+        "finishReason": "length",
+        "endToEndTokensPerSecond": 4.568941193283261,
+        "content": "",
+        "calls": [],
+        "pass": false,
+        "peakRssMiB": 939.3828125
+      },
+      {
+        "id": "context",
+        "elapsedMs": 12367.094228999995,
+        "firstContentMs": null,
+        "usage": {
+          "prompt_tokens": 31,
+          "completion_tokens": 96,
+          "total_tokens": 127
+        },
+        "finishReason": "length",
+        "endToEndTokensPerSecond": 7.76253485437885,
+        "content": "",
+        "calls": [],
+        "pass": false,
+        "peakRssMiB": 941.45703125
+      }
+    ]
+  }
+}
