@@ -136,7 +136,7 @@ is off. Its only reader is the Lane A-owned
 
 ```js
 export function personalAgentFeature(env = process.env) {
-  return { enabled: ["1", "true"].includes(String(env.ORKESTR_PERSONAL_AGENT_ENABLED || "").trim().toLowerCase()) };
+  return ["1", "true"].includes(String(env.ORKESTR_PERSONAL_AGENT_ENABLED || "").trim().toLowerCase());
 }
 ```
 
