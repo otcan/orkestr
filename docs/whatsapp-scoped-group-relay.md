@@ -34,6 +34,8 @@ Config fields:
 | `groups` | Array of `{chatId, threadId, name}` |
 | `replyPrefix` | Deployment's configured reply identity |
 | `appendDebugFooter` | Enable the shared WhatsApp model/quota/queue footer; per-thread suppression and tenant isolation still apply |
+| `forwardProgressUpdates` | Opt in to completed assistant commentary and approval updates on this transport; independent of the disabled legacy mirror |
+| `forwardProgressSince` | Required ISO activation cutoff when updates are enabled; older updates are not replayed |
 | `formattingModulePath` | Optional existing immutable Orkestr formatter module for a minimal transport install; defaults to the product module in the same repository |
 | `journalPath` | Transport SQLite journal |
 | `relayJournalPath` | Orkestr routing and completed reply journal |
@@ -84,3 +86,10 @@ node --test test/whatsapp-scoped-group-transport.test.js test/whatsapp-scoped-gr
 
 A live end-to-end verification still needs a fresh owner message from WhatsApp.
 Service health and membership checks alone do not prove phone delivery.
+
+With progress enabled, only completed commentary/approval messages from known
+agent sources and matching the exact inbound parent are forwarded. Streaming
+fragments, analysis, tools and context-compaction events are excluded. Updates
+keep the turn open, use the same durable payload/receipt journal and label their
+footer `msg:*update*`. A final supersedes any unsent progress already in history.
+Enabling updates does not reopen completed turns or change legacy group bindings.

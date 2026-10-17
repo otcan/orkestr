@@ -4,12 +4,12 @@ import {DatabaseSync} from 'node:sqlite';
 import {createScopedGroupRelay} from '../packages/connectors/src/whatsapp-scoped-group-relay.js';
 import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
 
-function fixture(t, footer = false) {
+function fixture(t, footer = false, progress = false) {
   const inboxDb = new DatabaseSync(':memory:'), relayDb = new DatabaseSync(':memory:');
   inboxDb.exec(`CREATE TABLE group_input(id TEXT,chat_id TEXT,body TEXT,created_at TEXT);
     CREATE TABLE group_send(state TEXT);
     INSERT INTO group_input VALUES('wa-1','group-1','hello','2026-01-01');`);
-  const config = {ownerUserId: 'admin', appendDebugFooter: footer, replyPrefix: 'agent:', groups: [
+  const config = {forwardProgressUpdates: progress, forwardProgressSince: '2026-01-01T00:00:00Z', ownerUserId: 'admin', appendDebugFooter: footer, replyPrefix: 'agent:', groups: [
     {chatId: 'group-1', threadId: 'thread-1', name: 'First'},
     {chatId: 'group-2', threadId: 'thread-2', name: 'Second'},
   ]};
@@ -139,4 +139,55 @@ test('quota lookup failure still delivers the answer with honest unavailable tel
   state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [answer('final')]};
   assert.equal((await relay.tick()).completed, 1);
   assert.match(state.sent[0].text, /codex: no data/);
+});
+
+const update = (id, options = {}) => ({...answer(id, 'input-thread-1', 'commentary'), createdAt: '2026-01-02T00:00:00Z', ...options});
+
+test('opted-in progress arrives once, keeps turn open and labels footer as update', async t => {
+  const {relay, state, relayDb} = fixture(t, true, true);
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [update('progress')]};
+  assert.equal((await relay.tick()).completed, 0);
+  assert.equal(state.sent.length, 1);
+  assert.match(state.sent[0].text, /msg:\*update\*/);
+  await relay.tick(); assert.equal(state.sent.length, 1);
+  state.pages['/api/threads/thread-1/messages?limit=200'].messages.push(answer('final'));
+  assert.equal((await relay.tick()).completed, 1);
+  assert.equal(state.sent.length, 2);
+  assert.match(state.sent[1].text, /msg:\*final\*/);
+  assert.equal(relayDb.prepare('SELECT count(*) n FROM reply_payloads').get().n, 2);
+});
+
+test('progress rejects stale, untrusted, streaming, other-parent and internal messages', async t => {
+  const {relay, state} = fixture(t, false, true);
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [
+    update('old', {createdAt: '2025-12-31T00:00:00Z'}), update('undated', {createdAt: null}),
+    update('untrusted', {source: 'watcher-alert'}), update('stream', {state: 'streaming'}),
+    update('other', {parentMessageId: 'another-parent'}), update('analysis', {phase: 'analysis'}),
+    update('compact', {phase: 'context_compaction'}), update('tool', {role: 'tool'}),
+    update('silent', {text: 'NO_REPLY'}),
+  ]};
+  assert.equal((await relay.tick()).completed, 0); assert.equal(state.sent.length, 0);
+});
+
+test('final already available suppresses unsent progress instead of replaying a backlog', async t => {
+  const {relay, state} = fixture(t, false, true);
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [update('progress'), answer('final')]};
+  assert.equal((await relay.tick()).completed, 1); assert.equal(state.sent.length, 1);
+  await relay.tick(); assert.equal(state.sent.length, 1);
+});
+
+test('uncertain progress stops later output without closing the turn', async t => {
+  const {relay, state, inboxDb} = fixture(t, false, true);
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [update('progress')]};
+  state.failReply = true; assert.equal((await relay.tick()).ok, false);
+  inboxDb.exec("INSERT INTO group_send VALUES('uncertain')");
+  state.pages['/api/threads/thread-1/messages?limit=200'].messages.push(answer('final'));
+  assert.equal((await relay.tick()).error, 'group_delivery_requires_review');
+  assert.equal(state.sent.length, 1);
+});
+
+test('enabling progress without a valid activation cutoff fails closed', () => {
+  for (const forwardProgressSince of [undefined, 'not-a-date']) {
+    assert.throws(() => createScopedGroupRelay({config: {forwardProgressUpdates: true, forwardProgressSince}}), /group_progress_cutoff_required/);
+  }
 });

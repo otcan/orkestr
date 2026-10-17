@@ -3,11 +3,19 @@ import {DatabaseSync} from 'node:sqlite';
 import {scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
+const progressPhases = new Set(['commentary', 'awaiting_approval']);
+const progressSources = new Set(['codex-rollout', 'codex-app-server', 'codex-app-server-import', 'claude-code']);
 const errorCode = error => /^[a-z_]+$/.test(error.message) ? error.message : 'operation_failed';
 
 export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env}) {
   if (config.appendDebugFooter === true && !['shouldAppendWhatsAppDebugFooter', 'stripWhatsAppDebugFooter', 'whatsappDebugFooter'].every(k => typeof formatter?.[k] === 'function'))
     throw new Error('group_footer_formatter_required');
+  const progressSince = Date.parse(config.forwardProgressSince || '');
+  if (config.forwardProgressUpdates === true && !Number.isFinite(progressSince))
+    throw new Error('group_progress_cutoff_required');
+  const eligibleProgress = message => config.forwardProgressUpdates === true
+    && progressPhases.has(message.phase) && progressSources.has(message.source)
+    && Number.isFinite(Date.parse(message.createdAt)) && Date.parse(message.createdAt) >= progressSince;
   const inbox = inboxDb || new DatabaseSync(config.journalPath, {readOnly: true});
   const db = relayDb || new DatabaseSync(config.relayJournalPath);
   db.exec(`PRAGMA journal_mode=WAL;
@@ -38,13 +46,18 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       for (const message of messages) {
         context.set(message.id, message);
         if (message.role === 'assistant' && message.state === 'completed'
-            && ['final_answer', 'final', 'need_input', 'awaiting_input', 'question', 'request_user_input'].includes(message.phase)
+            && (['final_answer', 'final', 'need_input', 'awaiting_input', 'question', 'request_user_input'].includes(message.phase) || eligibleProgress(message))
             && message.parentMessageId === route.message_id) answers.set(message.id, message);
       }
       if (messages.some(m => m.id === route.message_id) || !page.hasMoreBefore || !messages.length) {
         const ordered = [...answers.values()].sort((a, b) => Number(a.cursor || 0) - Number(b.cursor || 0));
         const finals = ordered.filter(m => ['final_answer', 'final'].includes(m.phase));
-        return {answers: finals.length ? finals : ordered.slice(-1), messages: [...context.values()]};
+        // A final supersedes stale progress and unanswered questions. Live progress
+        // keeps the route open; durable reply IDs prevent replays on later polls.
+        const updates = ordered.filter(eligibleProgress);
+        const question = ordered.filter(m => !progressPhases.has(m.phase)).slice(-1);
+        const pending = [...updates, ...question].sort((a, b) => Number(a.cursor || 0) - Number(b.cursor || 0));
+        return {answers: finals.length ? finals : pending, messages: [...context.values()]};
       }
       if (!page.oldestCursor || page.oldestCursor === before) break;
       before = page.oldestCursor;
@@ -81,7 +94,8 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
               if (quota) thread = {...thread, whatsAppDebugProviderQuota: quota};
             } catch { /* Missing telemetry must not prevent an otherwise valid reply. */ }
           }
-          const chunks = scopedGroupReplyChunks({text, message: {...answer, chatId: group.chatId}, thread, messages, config, formatter, env});
+          const deliveryType = progressPhases.has(answer.phase) ? 'progress' : 'final';
+          const chunks = scopedGroupReplyChunks({deliveryType, text, message: {...answer, chatId: group.chatId}, thread, messages, config, formatter, env});
           // Freeze text and chunk boundaries before the first provider attempt.
           // A retry or restart must reuse the same quota snapshot and payload.
           db.prepare('INSERT INTO reply_payloads(id,chunks) VALUES(?,?)').run(payloadId, JSON.stringify(chunks));
