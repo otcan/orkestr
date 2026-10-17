@@ -1,0 +1,70 @@
+<main class="personal-agent-home" aria-labelledby="personal-agent-home-title">
+  <header class="personal-agent-home__header">
+    <div>
+      <p class="eyebrow">Personal Agent</p>
+      <h1 id="personal-agent-home-title">Home</h1>
+      <p>Continue a conversation and see verified work in one place.</p>
+    </div>
+    <button class="secondary" type="button" (click)="showAllConversations.emit()">All conversations</button>
+  </header>
+
+  <div class="personal-agent-home__grid">
+    <section class="personal-agent-home__panel personal-agent-home__conversation" aria-labelledby="personal-agent-conversation-title">
+      <header class="personal-agent-home__section-heading">
+        <div>
+          <p class="eyebrow">Continue where you left off</p>
+          <h2 id="personal-agent-conversation-title">Primary conversation</h2>
+        </div>
+        <button type="button" (click)="createConversation.emit()">New conversation</button>
+      </header>
+      <ng-content select="[personalAgentConversation]"></ng-content>
+    </section>
+
+    <section class="personal-agent-home__panel personal-agent-home__briefing" aria-labelledby="personal-agent-briefing-title">
+      <p class="eyebrow">Grounded briefing</p>
+      <h2 id="personal-agent-briefing-title">A clear view of what matters</h2>
+      <p class="personal-agent-home__state" role="status" aria-live="polite">{{ statusLabel() }}</p>
+      <p>{{ statusDescription() }}</p>
+      @if (dataState === "stale" && lastVerifiedAt) {
+        <p class="personal-agent-home__timestamp">Last verified: {{ lastVerifiedAt }}</p>
+      }
+    </section>
+
+    <section class="personal-agent-home__panel" aria-labelledby="personal-agent-active-title">
+      <p class="eyebrow">Work overview</p>
+      <h2 id="personal-agent-active-title">Active work</h2>
+      <p>{{ sectionDescription() }}</p>
+    </section>
+    <section class="personal-agent-home__panel" aria-labelledby="personal-agent-attention-title">
+      <p class="eyebrow">Owner decisions</p>
+      <h2 id="personal-agent-attention-title">Needs attention</h2>
+      <p>{{ sectionDescription() }}</p>
+    </section>
+    <section class="personal-agent-home__panel" aria-labelledby="personal-agent-results-title">
+      <p class="eyebrow">Verified outcomes</p>
+      <h2 id="personal-agent-results-title">Recent results</h2>
+      <p>{{ sectionDescription() }}</p>
+    </section>
+
+    <section class="personal-agent-home__panel personal-agent-home__conversations" aria-labelledby="personal-agent-conversations-title">
+      <header class="personal-agent-home__section-heading">
+        <div>
+          <p class="eyebrow">Existing threads</p>
+          <h2 id="personal-agent-conversations-title">Conversations</h2>
+        </div>
+        <button class="secondary" type="button" (click)="showAllConversations.emit()">View all</button>
+      </header>
+      <ul>
+        @for (thread of conversations.slice(0, 5); track thread.id) {
+          <li>
+            <button class="personal-agent-home__conversation-link" type="button" (click)="openConversation.emit(thread)">
+              {{ conversationTitle(thread) }}
+            </button>
+          </li>
+        } @empty {
+          <li class="personal-agent-home__empty">No existing conversations yet.</li>
+        }
+      </ul>
+    </section>
+  </div>
+</main>

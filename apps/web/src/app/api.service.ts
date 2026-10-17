@@ -17,6 +17,12 @@ export interface HealthResponse {
   generatedAt: string;
 }
 
+export interface PersonalAgentCapabilityResponse {
+  enabled: boolean;
+  capability: boolean;
+  reason?: string;
+}
+
 export interface CodexModelControls {
   provider?: string;
   readOnly: boolean;
@@ -3127,6 +3133,10 @@ export class ApiService {
 
   instanceContext(): Observable<InstanceContextResponse> {
     return this.http.get<InstanceContextResponse>(this.api("/instance/context"));
+  }
+
+  personalAgentCapability(): Observable<PersonalAgentCapabilityResponse> {
+    return this.http.get<PersonalAgentCapabilityResponse>(this.api("/personal-agent/capability"));
   }
 
   instanceAccounts(): Observable<InstanceAccountsResponse> {

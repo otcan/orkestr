@@ -1,0 +1,154 @@
+:host {
+  display: block;
+  min-height: 100%;
+  color: var(--ui-text);
+}
+
+.personal-agent-home {
+  box-sizing: border-box;
+  width: min(100%, 1480px);
+  margin: 0 auto;
+  padding: clamp(16px, 2.4vw, 32px);
+}
+
+.personal-agent-home__header,
+.personal-agent-home__section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.personal-agent-home__header {
+  margin-bottom: 20px;
+}
+
+.personal-agent-home h1,
+.personal-agent-home h2,
+.personal-agent-home p {
+  margin-top: 0;
+}
+
+.personal-agent-home h1 {
+  margin-bottom: 8px;
+  font-size: clamp(1.65rem, 3vw, 2.2rem);
+}
+
+.personal-agent-home h2 {
+  margin-bottom: 10px;
+  font-size: 1.05rem;
+}
+
+.personal-agent-home__header > div > p:last-child,
+.personal-agent-home__panel > p:last-child {
+  margin-bottom: 0;
+  color: var(--ui-muted);
+  line-height: 1.55;
+}
+
+.personal-agent-home__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.personal-agent-home__panel {
+  min-width: 0;
+  padding: clamp(16px, 2vw, 22px);
+  border: 1px solid var(--ui-border);
+  border-radius: 14px;
+  background: var(--ui-surface);
+}
+
+.personal-agent-home__conversation {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+
+.personal-agent-home__briefing {
+  background: var(--ui-raised);
+}
+
+.personal-agent-home__state {
+  color: var(--ui-accent);
+  font-weight: 650;
+}
+
+.personal-agent-home__timestamp {
+  color: var(--ui-muted);
+  font-size: 0.86rem;
+}
+
+.personal-agent-home__conversations {
+  grid-column: 1 / -1;
+}
+
+.personal-agent-home__conversations ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.personal-agent-home__conversation-link {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: 9px;
+  background: var(--ui-raised);
+  color: var(--ui-text);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.personal-agent-home__empty {
+  color: var(--ui-muted);
+}
+
+.personal-agent-home :focus-visible {
+  outline: 3px solid var(--ui-focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 860px) {
+  .personal-agent-home__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .personal-agent-home__conversation {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
+
+  .personal-agent-home__conversations {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 560px) {
+  .personal-agent-home__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .personal-agent-home__header,
+  .personal-agent-home__section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .personal-agent-home__header > button {
+    align-self: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

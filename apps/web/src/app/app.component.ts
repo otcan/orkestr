@@ -55,10 +55,12 @@ import { ProviderQuotaIndicatorComponent } from "./provider-quota-indicator.comp
 import { ExecutorSwitcherComponent } from "./executor-switcher.component";
 import { ActiveThreadRefresh } from "./active-thread-refresh";
 import { WhatsAppSelfChatCardComponent } from "./whatsapp-self-chat-card.component";
+import { PersonalAgentHomeComponent, PersonalAgentHomeDataState } from "./personal-agent-home.component";
+import { PersonalAgentHomeCapabilityService } from "./personal-agent-home-capability.service";
 import { whatsappReachLabel } from "./whatsapp-thread-reach";
 import { QuotaProvider, claudeEffortLabel, claudeModelName, executorLabel, threadExecutorProvider } from "./provider-quota";
 
-type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "instanceVault" | "userConnectors";
+type Panel = "chat" | "personalHome" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "files" | "instanceApps" | "instanceSettings" | "instanceTimers" | "instanceDesktops" | "instanceVault" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
 type SetupSection = "system" | "security" | "secrets" | "maintenance" | "codex" | "gmail" | "whatsapp" | "browsers";
 type PersistedThreadTextField =
@@ -92,11 +94,12 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, OwnerLoginPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, VaultPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent, WhatsAppSelfChatCardComponent],
+  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, OwnerLoginPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, VaultPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent, WhatsAppSelfChatCardComponent, PersonalAgentHomeComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly api = inject(ApiService);
+  readonly personalAgentCapability = inject(PersonalAgentHomeCapabilityService);
   private readonly attachmentPreview = inject(AttachmentPreviewService);
   private readonly draftUploads = new DraftUploadQueue(this.api, threadId => {
     if (this.selectedThread()?.id === threadId) { this.pendingFiles = [...this.draftUploads.files(threadId)]; this.renderNow(); }
@@ -353,6 +356,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.updateDocumentTitle();
     globalThis.addEventListener?.("popstate", this.popStateHandler);
     this.gmailBrowserNotifications.start();
+    if (!this.sharedAppActive() && !this.publicAppsActive() && !this.pairingRequired) {
+      void this.personalAgentCapability.load().then(() => {
+        if (this.activePanel === "personalHome" && !this.personalAgentHomeEnabled()) this.openConversationsFromHome();
+        else this.renderNow();
+      });
+    }
     void this.refresh(true);
     if (!this.sharedAppActive() && !this.publicAppsActive() && !this.pairingRequired) {
       this.connectSummaryStream();
@@ -496,7 +505,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (this.defaultInstanceRootToLauncher()) return;
       if (!this.isRouteLevelUserPanel(this.activePanel) && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
-        if (this.replacePath(this.selectedId, this.activePanel)) return;
+        if (this.activePanel !== "personalHome" && this.replacePath(this.selectedId, this.activePanel)) return;
       }
       const selected = this.selectedThread();
       this.syncThreadMetaDraft(selected);
@@ -789,6 +798,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   panelAllowedForCurrentUser(panel: Panel): boolean {
     if (this.isAdminMode()) return true;
+    if (panel === "personalHome") return this.personalAgentHomeEnabled();
     if (panel === "raw") return this.rawTerminalAvailable();
     return ["chat", "history", "delivery", "timers", "files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "instanceVault", "userConnectors"].includes(panel);
   }
@@ -799,7 +809,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   isGlobalPanel(panel: Panel): boolean {
-    return ["files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "instanceVault", "userConnectors"].includes(panel);
+    return ["personalHome", "files", "instanceApps", "instanceSettings", "instanceTimers", "instanceDesktops", "instanceVault", "userConnectors"].includes(panel);
   }
 
   private isRouteLevelUserPanel(panel: Panel): boolean {
@@ -1092,6 +1102,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.renderNow();
       return;
     }
+    if (panel === "personalHome") {
+      this.mobileSidebarOpen = false;
+      this.threadWizardOpen = false;
+      this.activePanel = "personalHome";
+      this.modelDetailsOpen = false;
+      this.slashHelpOpen = false;
+      this.gitDetailsThreadId = "";
+      this.pushPath("", "personalHome");
+      if (this.selectedThread()) await this.loadSelectedThread(false);
+      this.updateDocumentTitle();
+      this.renderNow();
+      return;
+    }
     if (panel === "files") {
       this.modelDetailsOpen = false;
       this.slashHelpOpen = false;
@@ -1198,6 +1221,32 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.queueMessagePaneScrollToBottom();
     }
     this.renderNow();
+  }
+
+  personalAgentHomeEnabled(): boolean {
+    return this.personalAgentCapability.enabled();
+  }
+
+  personalAgentHomeDataState(): PersonalAgentHomeDataState {
+    return this.personalAgentCapability.dataState();
+  }
+
+  async openHomeConversation(thread: ThreadSummary): Promise<void> {
+    await this.activateThread(thread);
+  }
+
+  openConversationsFromHome(): void {
+    this.activePanel = "chat";
+    const thread = this.selectedThread();
+    if (thread) this.pushPath(this.threadSlug(thread), "chat");
+    else globalThis.history?.replaceState({}, "", this.appPath("/"));
+    this.updateDocumentTitle();
+    this.renderNow();
+  }
+
+  createConversationFromHome(): void {
+    this.openConversationsFromHome();
+    this.openThreadWizard();
   }
 
   openOnboarding(): void {
@@ -5263,6 +5312,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private panelFromPath(): Panel {
     const parts = this.locationPathParts();
+    if (parts[0] === "home") return "personalHome";
     if (this.sharedAppParts(parts) || parts[0] === "apps") return "chat";
     if (parts[0] === "ops" || (parts[0] === "ng" && parts[1] === "ops")) return "instanceSettings";
     if (parts[0] === "launcher" || (parts[0] === "ng" && parts[1] === "launcher")) return "instanceApps";
@@ -5484,6 +5534,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private pathForPanel(id: string, panel: Panel): string {
+    if (panel === "personalHome") return this.appPath("/home");
     if (panel === "files") return this.instancePath("/files");
     if (panel === "instanceApps") return String(this.setupStatus?.urls?.launcherUrl || "").trim() || this.instancePath("/launcher");
     if (panel === "instanceSettings") return this.instancePath("/settings");
