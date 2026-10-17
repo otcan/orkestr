@@ -16,6 +16,7 @@ test("local adapter is default-off; disabled/off-host configuration makes zero r
   let requests = 0;
   assert.equal(getAgentJobAdapter("openai-compatible", {}), null);
   assert.equal(getAgentJobAdapter("openai-compatible", enabled), adapter);
+  assert.equal(getAgentJobAdapter("openai-compatible", { ORKESTR_PERSONAL_AGENT_ENABLED: "  TRUE  " }), adapter);
   const status = await discoverLocalModel({}, {}, { fetchImpl: () => { requests++; throw Error(); } });
   assert.equal(status.state, "unavailable");
   assert.equal(status.reason, "personal_agent_disabled");

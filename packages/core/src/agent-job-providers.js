@@ -7,7 +7,8 @@
 // agent-job-provider-probes.js) and register here; with no probe registered a
 // provider counts as not connected (fail closed).
 import { agentJobTestProvidersAllowed } from "./agent-job-spec.js";
-import { discoverLocalModel, personalAgentEnabled } from "./agent-job-openai-compatible-health.js";
+import { discoverLocalModel } from "./agent-job-openai-compatible-health.js";
+import { personalAgentFeature } from "./personal-agent-feature.js";
 
 const probes = new Map();
 
@@ -49,7 +50,7 @@ export async function agentJobProviderStatus(provider, env = process.env, provid
   }
 }
 
-export async function agentJobProviderStatuses(env = process.env, candidates = ["codex", "claude-code", ...(personalAgentEnabled(env) ? ["openai-compatible"] : [])]) {
+export async function agentJobProviderStatuses(env = process.env, candidates = ["codex", "claude-code", ...(personalAgentFeature(env).enabled ? ["openai-compatible"] : [])]) {
   return Promise.all(candidates.map((provider) => agentJobProviderStatus(provider, env)));
 }
 

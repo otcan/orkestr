@@ -11,7 +11,8 @@ import { agentJobExecutorFor } from "../../core/src/agent-job-adapters.js";
 import { agentJobClaudeConfigDir } from "../../core/src/agent-job-claude-code.js";
 import { codexAppServerStatus } from "../../core/src/codex-app-server-client.js";
 import { codexLoginStatus } from "./codex.js";
-import { discoverLocalModel, personalAgentEnabled } from "../../core/src/agent-job-openai-compatible-health.js";
+import { discoverLocalModel } from "../../core/src/agent-job-openai-compatible-health.js";
+import { personalAgentFeature } from "../../core/src/personal-agent-feature.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -80,7 +81,7 @@ export function installAgentJobProviderProbes(env = process.env) {
   installed = true;
   // Bounded startup discovery. It performs no inference or model downloads;
   // admission/run checks still probe the exact pinned endpoint + model.
-  if (personalAgentEnabled(env)) void discoverLocalModel(env);
+  if (personalAgentFeature(env).enabled) void discoverLocalModel(env);
   setAgentJobProviderProbe("codex", cached("codex", codexStatus), { ifAbsent: true });
   setAgentJobProviderProbe("claude-code", cached("claude-code", async (env) => withExecutor("claude-code", await claudeHostStatus(env), env)), { ifAbsent: true });
 }

@@ -1,6 +1,6 @@
 # OP-09 local inference adapter: proposal for OP-02
 
-Lane B proposal for Lane A's ADR; domain schemas and the correlated event
+Coordinator-confirmed Lane B adapter contract for Lane A's ADR; domain schemas and the correlated event
 envelope remain Lane A's responsibility. This implements no Project, Task or
 Memory store. It reuses the Agent Job runner, `agent-jobs.sqlite`, checkpoint
 journal, approvals, tool policy and effect ledger. OP-07 and OP-08 remain
@@ -33,11 +33,26 @@ and usage use the existing attempt journal projection; Lane B does not define
 a new event envelope. Partial text is progress, never successful final output.
 Tools are returned to the runner, never executed by the adapter.
 
-For OP-02, reserve `features.personalAgent` and the default-off configuration
-switch `ORKESTR_PERSONAL_AGENT_ENABLED=1` (also accepts `true`). This PR gates
-the adapter and startup probe with that switch; it does not add an API feature
-projection or a competing UI flag. Lane A should own the canonical capability
-helper/projection and all domain schemas.
+Lane A owns the default-off `ORKESTR_PERSONAL_AGENT_ENABLED` switch, read only
+by `personalAgentFeature(env)` in `packages/core/src/personal-agent-feature.js`.
+The adapter consumes that helper. No `features.personalAgent` field is added to
+other capability objects. Lane A's `GET /api/personal-agent/capability` is the
+single place the UI reads the capability; its assistant health does not disable
+project views. The shared helper carried here is verbatim from Lane A's ADR
+definition at `a2d14239`; its ownership stays with Lane A. Lane B owns the
+following local-runtime health function:
+
+```js
+personalAgentLocalRuntimeStatus(env)
+// { available, reason?: "not_configured" | "local_runtime_unavailable",
+//   model?, checkedAt }
+```
+
+It is exported from `packages/core/src/personal-agent-local-runtime.js` for
+Lane A to fill the endpoint's `assistant` field. Missing/invalid configuration
+returns `not_configured` without network access; a configured but unavailable
+endpoint/model returns `local_runtime_unavailable`. It does not expose endpoint
+URLs, model inventories, provider error text or credentials in this projection.
 
 ## Configuration and current limits
 
@@ -45,14 +60,15 @@ Set these only in an explicitly authorized instance or isolated test process:
 
 ```sh
 ORKESTR_PERSONAL_AGENT_ENABLED=1
-ORKESTR_PERSONAL_AGENT_BASE_URL=http://127.0.0.1:11434/v1
-ORKESTR_PERSONAL_AGENT_MODEL=example-installed-model
+ORKESTR_PERSONAL_AGENT_LOCAL_BASE_URL=http://127.0.0.1:11434/v1
+ORKESTR_PERSONAL_AGENT_LOCAL_MODEL=example-installed-model
 # Optional, per-request; tested with Ollama 0.16.3:
-ORKESTR_PERSONAL_AGENT_REASONING_EFFORT=none
+ORKESTR_PERSONAL_AGENT_LOCAL_REASONING_EFFORT=none
 ```
 
 The selected job's `agent.base_url` and `agent.model` take precedence over the
-discovery defaults. There is no model auto-selection and no use of inherited
+runtime configuration. The health projection requires both runtime variables;
+there is no implicit endpoint or model default. There is no model auto-selection and no use of inherited
 `OPENAI_API_KEY` or `OPENAI_BASE_URL`. Numeric loopback endpoints (`127.0.0.1`
 or `[::1]`, `/v1`) only are supported initially; redirects, URL credentials,
 query strings and fragments are refused. Containers requiring a different

@@ -17,7 +17,7 @@ import { nativeExecutorEnabled } from "./agent-job-native-interface.js";
 import { agentJobTestProvidersAllowed } from "./agent-job-spec.js";
 import { getExecutorAdapter, loadOverlayExecutorAdapters } from "./executors.js";
 import { openAICompatibleJobAdapter } from "./agent-job-openai-compatible.js";
-import { personalAgentEnabled } from "./agent-job-openai-compatible-health.js";
+import { personalAgentFeature } from "./personal-agent-feature.js";
 
 const adapters = new Map();
 
@@ -35,7 +35,7 @@ export function getAgentJobAdapter(id, env = process.env) {
   const adapter = adapters.get(String(id || "")) || null;
   // The simulated adapter is a test fixture: never resolvable outside node --test.
   if (adapter?.testOnly && !agentJobTestProvidersAllowed(env)) return null;
-  if (adapter?.personalAgentOnly && !personalAgentEnabled(env)) return null;
+  if (adapter?.personalAgentOnly && !personalAgentFeature(env).enabled) return null;
   return adapter;
 }
 

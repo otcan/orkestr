@@ -1,19 +1,19 @@
 // OP-09: local transport only. No API keys, remote hosts, discovery by scanning,
 // downloads, or provider fallback. The feature flag is default-off.
-export function personalAgentEnabled(env = process.env) {
-  return ["1", "true"].includes(String(env.ORKESTR_PERSONAL_AGENT_ENABLED || "").toLowerCase());
-}
+import { personalAgentFeature } from "./personal-agent-feature.js";
 
 export function localAdapterError(reason, { retryable = false, kind = "provider" } = {}) {
   return Object.assign(new Error(reason), { kind, retryable });
 }
 
 export function localModelConfig(env = process.env, ref = {}) {
-  if (!personalAgentEnabled(env)) throw localAdapterError("personal_agent_disabled");
-  const baseUrl = localBaseUrl(ref.baseUrl || env.ORKESTR_PERSONAL_AGENT_BASE_URL || "http://127.0.0.1:11434/v1");
-  const reasoningEffort = env.ORKESTR_PERSONAL_AGENT_REASONING_EFFORT || null;
+  if (!personalAgentFeature(env).enabled) throw localAdapterError("personal_agent_disabled");
+  const endpoint = String(ref.baseUrl || env.ORKESTR_PERSONAL_AGENT_LOCAL_BASE_URL || "").trim();
+  if (!endpoint) throw localAdapterError("local_endpoint_not_configured");
+  const baseUrl = localBaseUrl(endpoint);
+  const reasoningEffort = env.ORKESTR_PERSONAL_AGENT_LOCAL_REASONING_EFFORT || null;
   if (reasoningEffort && !["none", "low", "medium", "high"].includes(reasoningEffort)) throw localAdapterError("local_reasoning_effort_invalid");
-  return { baseUrl, model: String(ref.model || env.ORKESTR_PERSONAL_AGENT_MODEL || "").trim(), reasoningEffort };
+  return { baseUrl, model: String(ref.model || env.ORKESTR_PERSONAL_AGENT_LOCAL_MODEL || "").trim(), reasoningEffort };
 }
 
 export function localBaseUrl(value) {
