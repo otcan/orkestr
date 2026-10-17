@@ -791,5 +791,30 @@
         "peakRssMiB": 941.45703125
       }
     ]
+  },
+  "supplementalCancellationAfterContent": [
+    {
+      "model": "qwen3:0.6b",
+      "firstContentMs": 1697.121001,
+      "settlementAfterAbortMs": 2.5144850000001497,
+      "elapsedMs": 1699.642092,
+      "aborted": true
+    },
+    {
+      "model": "qwen3:8b",
+      "firstContentMs": 23829.399944,
+      "settlementAfterAbortMs": 0.4754769999999553,
+      "elapsedMs": 23829.984588000003,
+      "aborted": true
+    }
+  ],
+  "adapterSmoke": {
+    "model": "qwen3:0.6b",
+    "reasoning_effort": "none",
+    "elapsedMs": 5527.86618,
+    "output": "Hello! How can I assist you today?",
+    "messageDeltaEvents": 9,
+    "inputTokens": 76,
+    "outputTokens": 10
   }
 }

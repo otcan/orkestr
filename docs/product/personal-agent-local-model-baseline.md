@@ -46,9 +46,11 @@ were not flushed. Ollama managed its own model residency and evictions.
 
 Two extra probes measure SSE and client cancellation. Cancellation aborts a
 1,024-token request after one second; both cancellations happened before first
-content. The client stopped promptly. **Server-side compute termination and
-cancellation after content on the real service remain unverified.** Offline
-fake-server tests separately verify socket closure after streamed content.
+content. The client stopped promptly. A separate follow-up probe aborted after
+first content on each real model: client settlement took 2.5 ms (0.6B) and
+0.5 ms (8B), after first-content latencies of 1.697 s and 23.829 s.
+**Server-side compute termination remains unverified.** Offline fake-server
+tests separately verify socket closure after streamed content.
 
 Process RSS is the sum from `ps -C ollama -o rss=`, sampled every 500 ms;
 it includes server/runner overhead and may miss shorter peaks. `/api/ps` model
@@ -68,6 +70,7 @@ profiling nor a guarantee of minimum system RAM.
 | Peak aggregate Ollama RSS during model probes | 1,069 MiB | 5,596 MiB |
 | `/api/ps` selected-model allocation | 745 MiB | 5,364 MiB |
 | Client request abort total / abort settlement | 1,000.9 / 0.4 ms | 1,000.2 / 0.5 ms |
+| Supplemental client abort settlement after first content | 2.5 ms | 0.5 ms |
 
 End-to-end throughput is reported completion tokens divided by the entire
 request wall time, including loading, prompt processing and any queueing.
