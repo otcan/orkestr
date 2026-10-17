@@ -129,13 +129,17 @@ root-capable workers.
 
 ### Flag and capability
 
-There is one top-level configuration flag named `personalAgent`. When disabled,
-the Personal Agent home and its write APIs are unavailable; legacy threads and
-Agent Jobs continue to work unchanged. When enabled, the server reports the
-`personalAgent` capability only if the feature is configured and the required
-storage/runtime prerequisites are healthy. This is not a separate flag per
-route, lane, or entity. It is opt-in during rollout and does not change live
-channel routing.
+There is one top-level configuration flag named `personalAgent`. `enabled`
+reports that rollout/configuration switch; it is the UI visibility gate. When
+enabled, the Personal Agent shell remains visible even if a required runtime is
+unavailable, and shows a degraded/offline state rather than disappearing. The
+separate `capability` boolean reports whether required prerequisites are
+currently healthy and usable. Actions requiring an unavailable prerequisite
+must be disabled or explain the reason; read-only/degraded shell states remain
+available. When disabled, the Personal Agent home and write APIs are
+unavailable; legacy threads and Agent Jobs continue unchanged. This is not a
+separate flag per route, lane, or entity, and does not change live channel
+routing.
 
 ### Minimal vertical-slice API contracts
 
@@ -146,7 +150,7 @@ state plus `updatedAt`/source evidence; they do not infer state from chat text.
 
 | Method and path | Contract |
 |---|---|
-| `GET /api/personal-agent/capability` | Return `{ enabled, capability, reason? }`; no side effects |
+| `GET /api/personal-agent/capability` | Return `{ enabled: boolean, capability: boolean, reason?: string }`; no side effects. `reason` is a stable machine-readable readiness reason when enabled but not capable. |
 | `GET /api/personal-agent/projects` | List owner projects with bounded pagination/cursor and persisted summary/status |
 | `POST /api/personal-agent/projects` | Idempotently create an explicit project from `{ title, goal?, idempotencyKey }`; return project and creation/replay result |
 | `GET /api/personal-agent/projects/:projectId` | Return one project and bounded task summaries |
@@ -158,6 +162,12 @@ Cursor/event streaming is deliberately deferred to OP-05; these APIs must not
 invent a private cursor or imply real-time completeness before that contract
 exists. Request schemas are versioned with additive optional fields; unknown
 state names and incompatible updates fail explicitly.
+
+The capability endpoint is independent of Project/Task projections and should
+be implemented before OP-06 so the flagged OP-18 shell can render disabled,
+ready, and degraded states without project/task data. Its canonical config
+source is an implementation detail for Lane A to settle against the existing
+server configuration model; it must not create a second feature-flag system.
 
 ### Additive migration and rollback
 
@@ -228,8 +238,8 @@ explicit operator action. OP-03 does not run a production migration.
    which service owns acceptance-criteria verification?
 3. Should the initial task API allow an ungrouped task, or require a Project?
 4. Which established server configuration object is the canonical source for
-   `personalAgent`, and how should capability report missing local-runtime
-   health without disabling read-only project views?
+   `personalAgent`? The UI semantics are fixed: `enabled` controls visibility;
+   `capability` and `reason` report readiness without hiding the shell.
 5. Are event payload retention/redaction and owner export policy sufficient in
    OP-05, or does any event class require a narrower retention contract?
 6. Which thread resource references should be first-class task columns versus
