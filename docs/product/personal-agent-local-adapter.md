@@ -38,8 +38,10 @@ by `personalAgentFeature(env)` in `packages/core/src/personal-agent-feature.js`.
 The adapter consumes that helper. No `features.personalAgent` field is added to
 other capability objects. Lane A's `GET /api/personal-agent/capability` is the
 single place the UI reads the capability; its assistant health does not disable
-project views. The shared helper carried here is verbatim from Lane A's ADR
-definition at `a2d14239`; its ownership stays with Lane A. Lane B owns the
+project views. The shared helper returns a plain boolean and is an exact copy
+of Lane A's published file in PR #52 (`c2aacdd8`), copied from
+`origin/orkestr/op-02-capability`; its ownership stays with Lane A. No other
+Lane A files are brought into this branch. Lane B owns the
 following local-runtime health function:
 
 ```js

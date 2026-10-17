@@ -7,7 +7,7 @@ export function localAdapterError(reason, { retryable = false, kind = "provider"
 }
 
 export function localModelConfig(env = process.env, ref = {}) {
-  if (!personalAgentFeature(env).enabled) throw localAdapterError("personal_agent_disabled");
+  if (!personalAgentFeature(env)) throw localAdapterError("personal_agent_disabled");
   const endpoint = String(ref.baseUrl || env.ORKESTR_PERSONAL_AGENT_LOCAL_BASE_URL || "").trim();
   if (!endpoint) throw localAdapterError("local_endpoint_not_configured");
   const baseUrl = localBaseUrl(endpoint);

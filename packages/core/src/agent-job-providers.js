@@ -50,7 +50,7 @@ export async function agentJobProviderStatus(provider, env = process.env, provid
   }
 }
 
-export async function agentJobProviderStatuses(env = process.env, candidates = ["codex", "claude-code", ...(personalAgentFeature(env).enabled ? ["openai-compatible"] : [])]) {
+export async function agentJobProviderStatuses(env = process.env, candidates = ["codex", "claude-code", ...(personalAgentFeature(env) ? ["openai-compatible"] : [])]) {
   return Promise.all(candidates.map((provider) => agentJobProviderStatus(provider, env)));
 }
 

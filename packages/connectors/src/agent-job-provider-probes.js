@@ -81,7 +81,7 @@ export function installAgentJobProviderProbes(env = process.env) {
   installed = true;
   // Bounded startup discovery. It performs no inference or model downloads;
   // admission/run checks still probe the exact pinned endpoint + model.
-  if (personalAgentFeature(env).enabled) void discoverLocalModel(env);
+  if (personalAgentFeature(env)) void discoverLocalModel(env);
   setAgentJobProviderProbe("codex", cached("codex", codexStatus), { ifAbsent: true });
   setAgentJobProviderProbe("claude-code", cached("claude-code", async (env) => withExecutor("claude-code", await claudeHostStatus(env), env)), { ifAbsent: true });
 }

@@ -35,7 +35,7 @@ export function getAgentJobAdapter(id, env = process.env) {
   const adapter = adapters.get(String(id || "")) || null;
   // The simulated adapter is a test fixture: never resolvable outside node --test.
   if (adapter?.testOnly && !agentJobTestProvidersAllowed(env)) return null;
-  if (adapter?.personalAgentOnly && !personalAgentFeature(env).enabled) return null;
+  if (adapter?.personalAgentOnly && !personalAgentFeature(env)) return null;
   return adapter;
 }
 
