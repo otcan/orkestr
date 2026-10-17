@@ -3,6 +3,13 @@ import { createOwnerSelfChatPump } from './whatsapp-owner-selfchat-pump.js';
 import { selfChatError, selfChatHash } from './whatsapp-owner-selfchat-journal.js';
 import { assertRootOwnedPath } from './whatsapp-owner-selfchat-wrapper.js';
 
+// Keep the diagnostic useful without recording provider errors or message text.
+export function ownerSelfChatFailureCode(error) {
+  const code=error?.message;
+  return typeof code==='string' && /^(?:selfchat_|owner_selfchat_)[a-z_]{1,96}$/.test(code)
+    ? code : 'selfchat_unexpected_error';
+}
+
 export async function readOwnerSelfChatRuntimeConfig(filename, env) {
   await assertRootOwnedPath(filename);
   const config=JSON.parse(await fs.readFile(filename,'utf8'));

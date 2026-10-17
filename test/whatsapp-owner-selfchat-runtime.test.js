@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { startOwnerSelfChatPolling } from '../packages/connectors/src/whatsapp-owner-selfchat-runtime.js';
+import { ownerSelfChatFailureCode, startOwnerSelfChatPolling } from '../packages/connectors/src/whatsapp-owner-selfchat-runtime.js';
 import { createOwnerSelfChatWrapper } from '../packages/connectors/src/whatsapp-owner-selfchat-wrapper.js';
 
 test('server integration is entirely inert without an explicit private config path',async()=>{
@@ -24,4 +24,14 @@ test('malformed scope is disabled before any polling or wrapper invocation',asyn
 
 test('wrapper cannot run without existing runtime and implementation preconditions',()=>{
   assert.throws(()=>createOwnerSelfChatWrapper({}),/wrapper_preconditions_required/);
+});
+
+test('pause diagnostics retain a bounded error code without provider payloads',()=>{
+  assert.equal(ownerSelfChatFailureCode(new Error('selfchat_identity_or_eligibility_unverified')),
+    'selfchat_identity_or_eligibility_unverified');
+  for(const message of ['provider error with private text','selfchat_error\nprivate payload',
+    `selfchat_${'a'.repeat(97)}`]) {
+    assert.equal(ownerSelfChatFailureCode(new Error(message)),'selfchat_unexpected_error');
+  }
+  assert.equal(ownerSelfChatFailureCode(null),'selfchat_unexpected_error');
 });

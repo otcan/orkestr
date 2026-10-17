@@ -35,7 +35,9 @@ export function createOwnerSelfChatAdapter({ config, journal, invoke, preflight 
       if(!identity || identity.runtimeId!==runtimeId || identity.ownerUserId!==config.ownerUserId
           || identity.accountId!==config.accountId || identity.chatId!==config.chatId
           || identity.approvalHash!==selfChatHash(approval))throw selfChatError('selfchat_identity_or_eligibility_unverified');
-      if(Date.parse(identity.evidenceExpiresAt)<=Date.now()) {
+      // Refresh before a wrapper call can outlive otherwise-valid evidence.
+      // Expiry and approval checks still run before dispatch and after history.
+      if(Date.parse(identity.evidenceExpiresAt)-Date.now()<=10000) {
         try {
           await verifyLiveOwnerSelfChatAccount({config,journal,runner:{preflight,
             invoke:(argv,options)=>invoke(argv,{...options,isActive:()=>!closed && options.isActive()})}});
