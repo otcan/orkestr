@@ -1,0 +1,59 @@
+/* Keep conversation controls visible; reveal diagnostics and configuration on demand. */
+.thread-header-details {
+  margin-top: 8px;
+  color: var(--ui-muted);
+  font-size: 0.8rem;
+}
+
+.thread-header-details > summary,
+.thread-more-tools > summary {
+  width: fit-content;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: var(--ui-muted);
+}
+
+.thread-header-details > summary:hover,
+.thread-more-tools > summary:hover {
+  background: var(--ui-raised);
+  color: var(--ui-text);
+}
+
+.thread-header-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+}
+
+.thread-tools-popover {
+  justify-content: flex-start;
+}
+
+.thread-more-tools {
+  min-width: 0;
+}
+
+.thread-more-tools[open] {
+  flex: 1 1 100%;
+}
+
+.thread-secondary-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.thread-secondary-tools > button.active {
+  background: var(--ui-raised);
+  color: var(--ui-text);
+  box-shadow: inset 0 -2px 0 var(--ui-accent);
+}
+
+.thread-secondary-tools .codex-control-scroll {
+  max-width: 100%;
+}
