@@ -2,10 +2,13 @@ import { createOwnerSelfChatTransportPolicy,ownerSelfChatTransportContract } fro
 import { assertOwnerSelfChatIdentity } from './whatsapp-owner-selfchat-identity.js';
 import { assertOwnerSelfChatBridgePolicy } from './whatsapp-owner-selfchat-bridge-policy.js';
 import { selfChatError } from './whatsapp-owner-selfchat-journal.js';
+import { normalizeAttestedSelfChatHistory } from './whatsapp-owner-selfchat-attestation.js';
 
 // invoke is a fixed, operator-installed wrapper runner. Requests cannot choose
 // its executable, environment, account, service, journal path or credential.
 export function createOwnerSelfChatAdapter({ config, journal, invoke, preflight }) {
+  if(config.maxSendAttempts!==undefined && (!Number.isSafeInteger(config.maxSendAttempts) || config.maxSendAttempts<0))
+    throw selfChatError('selfchat_send_limit_invalid');
   const policy=createOwnerSelfChatTransportPolicy({...config, identityVerified:true, verifiedOwnChatId:config.chatId});
   let tail=Promise.resolve();
   let statusAt=0;
@@ -53,7 +56,8 @@ export function createOwnerSelfChatAdapter({ config, journal, invoke, preflight 
         const payload=await invoke(command,{runtimeId:journal.meta('identity').runtimeId,isActive:()=>!closed});
         if (payload?.ok!==true || payload.chatId!==base.chatId || !Array.isArray(payload.messages))
           throw selfChatError('selfchat_history_invalid',502);
-        const rows=[...payload.messages].sort((a,b)=>Date.parse(a.timestamp)-Date.parse(b.timestamp));
+        const normalized=normalizeAttestedSelfChatHistory({config,identity:journal.meta('identity'),payload});
+        const rows=[...normalized.messages].sort((a,b)=>Date.parse(a.timestamp)-Date.parse(b.timestamp));
         const anchor=journal.meta('historyAnchor');
         const limit=Number(command[2]);
         // The wrapper has no pagination. Never silently skip a gap of >50
@@ -75,7 +79,7 @@ export function createOwnerSelfChatAdapter({ config, journal, invoke, preflight 
       if(!journal.routes().some(r=>r.threadId===request.threadId && r.messageId===request.parentMessageId))
         throw selfChatError('selfchat_reply_parent_required',403);
       const payload={...base,text:request.text,threadId:request.threadId,parentMessageId:request.parentMessageId};
-      const prior=journal.reserve(request.requestId,payload);
+      const prior=journal.reserve(request.requestId,payload,config.maxSendAttempts ?? null);
       if (prior.duplicate) return {ok:true,ids:prior.ids,duplicate:true};
       try {
         if(closed) throw selfChatError('selfchat_adapter_closed');

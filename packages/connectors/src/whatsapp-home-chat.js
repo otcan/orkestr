@@ -128,14 +128,18 @@ export async function resolveHomeChatRoute({ input = {}, threadRoute = {}, threa
   const targets = homeChatTargets(threads, homeThread, chatId, env, scope);
   const origin = scope ? { ownerSelfChatOrigin:{ revision:scope.revision, homeThreadId:scope.homeThreadId, dedicatedTransport:scope.transport==='owner-selfchat-socket' } } : {};
   const state = await readHomeChatState(env);
-  const focusId = clean(state.focus[chatId]);
+  // The same contact may also exist on another connector account. The private
+  // supplemental route must not inherit or change that route's current thread.
+  const focusKey = scope?.transport === 'owner-selfchat-socket'
+    ? JSON.stringify(['owner-selfchat',scope.ownerUserId,scope.accountId,chatId]) : chatId;
+  const focusId = clean(state.focus[focusKey]);
   const directive = parseHomeChatDirective(input.text);
   if (directive?.kind === "threads") return { reply: formatHomeChatThreadList(targets, homeThread, focusId), ...origin };
   if (directive?.kind === "switch") {
     const target = directive.target ? targets.find((thread) => threadMatchesName(thread, directive.target)) : targets.find(t => t.id === homeThread.id);
     if (!target) return { reply: `No thread called "${directive.target}". Write /threads to see the list.`, ...origin };
-    if (target.id === homeThread.id) delete state.focus[chatId];
-    else state.focus[chatId] = target.id;
+    if (target.id === homeThread.id) delete state.focus[focusKey];
+    else state.focus[focusKey] = target.id;
     await writeHomeChatState(state, env);
     return { reply: target.id === homeThread.id ? `Back to ${threadLabel(homeThread)}.` : `Now talking to ${threadLabel(target)}. Write /switch to come back.`, ...origin };
   }

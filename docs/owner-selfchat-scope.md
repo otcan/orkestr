@@ -112,10 +112,42 @@ with exact self sender/recipient fields. This is an ordinary self-chat message,
 not phone authentication or a pairing code. Runtime PID plus systemd invocation
 ID pin the proof to the existing session process; a change fails closed.
 
+An alternative `identityVerificationMode: "live-account"` is implemented but
+requires a separate, explicit operator approval in the protected adapter config.
+It does not treat old `fromMe` history as human proof. `liveAccountAttestation`
+must contain `version: 1`, `approved: true`, `approvalRef`, `approvedAt`, the exact
+`runtimeId`, `accountId`, `chatId`, `bridgeBuildHash`, and `transportContract`
+(computed by `ownerSelfChatTransportContract`). The operator must review the
+exact bridge build before setting `readyRequiresConfiguredIdentity: true`:
+its authenticated health must fail unless the SDK's current own account ID
+matches the protected self-chat recipient. Generic ready status is insufficient.
+`verify` then checks live health, all transport-policy invariants, and unchanged
+runtime before recording account evidence. It records
+`humanPresenceVerified: false`, never a fabricated message ID or nonce proof.
+Changing the approval, runtime or scope invalidates this evidence.
+
+For that mode only, the separately reviewed `allowOwnHistoryLidSender: true`
+option accepts a LID sender only in authenticated history fetched for the pinned
+self-chat, with `fromMe: true` and the exact phone-based self recipient. The
+original sender is retained as `providerFrom`; this does not establish a global
+identity alias. LID recipients remain rejected. Activation cutoff, duplicate and
+outbound echo filtering, parent requirements and uncertainty blocking still run.
+Neither option is enabled by installation or by the owner declining a challenge.
+
+The same contact address on a different connector account can coexist without
+replacing its existing binding. Registration refuses missing, malformed or
+overlapping account selectors, including legacy aliases. Dedicated selection
+state is keyed by owner, account and chat, so it cannot change the older route's
+selected thread. The fallback output fence also respects account identity while
+continuing to block replies with missing or ambiguous account evidence.
+
 SQLite uses WAL and FULL synchronous commits. Send reservations are persisted
 before invoking the existing wrapper, receipt IDs before accepting further
 ingress. Pending/uncertain sends survive process restart and are never retried.
 The same request key returns its saved receipt; a changed payload conflicts.
+For a bounded pilot, protected `maxSendAttempts` limits total reservations in
+the retained journal (including uncertain attempts). Saved receipts remain
+readable at the limit; a new request is rejected before provider dispatch.
 Inbound messages remain pending until the canonical router acknowledges them.
 A bounded history overflow stops the pump rather than skipping messages. There
 is no automatic reconciliation, history restoration or queue replay.

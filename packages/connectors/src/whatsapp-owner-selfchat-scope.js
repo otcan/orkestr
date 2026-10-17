@@ -1,5 +1,6 @@
 // Optional owner-only entry to existing threads. No connector or binding is created here.
 import { createHash } from 'node:crypto';
+import { selfChatBindingAccountKeys } from './whatsapp-owner-selfchat-binding-accounts.js';
 
 export function ownerSelfChatScope(env = process.env) {
   try {
@@ -39,6 +40,9 @@ export function ownerSelfChatReplyRoute(parent, thread, env = process.env) {
 export function isDedicatedOwnerSelfChatOutput(message = {}, parent = null, state = {}) {
   if (message.ownerSelfChatDedicatedTransport === true || parent?.ownerSelfChatDedicatedTransport === true) return true;
   const chats = new Set([message.chatId,parent?.chatId].filter(Boolean));
+  const accounts = selfChatBindingAccountKeys({accountIds:[message.accountId,parent?.accountId]},state.connectorAccounts || []);
   return (state.bindings || []).some(binding => binding.privateOwnerChat === true
-    && String(binding.id || '').startsWith('owner-selfchat:') && chats.has(binding.chatId));
+    && String(binding.id || '').startsWith('owner-selfchat:') && chats.has(binding.chatId)
+    && (!accounts.size || !selfChatBindingAccountKeys(binding).size
+      || [...selfChatBindingAccountKeys(binding,state.connectorAccounts || [])].some(id=>accounts.has(id))));
 }

@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { OwnerSelfChatJournal, selfChatError } from '../packages/connectors/src/whatsapp-owner-selfchat-journal.js';
 import { createOwnerSelfChatWrapper, assertRootOwnedPath } from '../packages/connectors/src/whatsapp-owner-selfchat-wrapper.js';
 import { verifyOwnerSelfChatIdentity } from '../packages/connectors/src/whatsapp-owner-selfchat-identity.js';
+import { attestOwnerSelfChatAccount } from '../packages/connectors/src/whatsapp-owner-selfchat-attestation.js';
 import { createOwnerSelfChatAdapter } from '../packages/connectors/src/whatsapp-owner-selfchat-adapter.js';
 import { listenOwnerSelfChatAdapter } from '../packages/connectors/src/whatsapp-owner-selfchat-socket.js';
 import { assertOwnerSelfChatBridgePolicy } from '../packages/connectors/src/whatsapp-owner-selfchat-bridge-policy.js';
@@ -31,6 +32,14 @@ async function main() {
     return;
   }
   if(action==='verify') {
+    if(config.identityVerificationMode==='live-account') {
+      const runtimeId=await runner.preflight();
+      const status=await runner.invoke(['status'],{runtimeId});
+      if(await runner.preflight()!==runtimeId)throw selfChatError('selfchat_runtime_changed');
+      const identity=attestOwnerSelfChatAccount({config,status,runtimeId});
+      journal.setMeta('identity',identity);journal.close();
+      process.stdout.write('Live self-chat account attested; human presence was not verified.\n');return;
+    }
     const challenge=journal.meta('challenge');
     if(!challenge) throw selfChatError('selfchat_identity_challenge_required');
     const runtimeId=await runner.preflight();

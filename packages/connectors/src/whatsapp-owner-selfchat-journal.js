@@ -34,7 +34,7 @@ export class OwnerSelfChatJournal {
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   unresolved() { return Boolean(this.db.prepare("SELECT 1 FROM sends WHERE state != 'sent' LIMIT 1").get()); }
-  reserve(key, payload) {
+  reserve(key, payload, maxSendAttempts=null) {
     if (!/^[A-Za-z0-9_.:-]{1,240}$/.test(key || '')) throw selfChatError('selfchat_request_id_required',400);
     const hash=selfChatHash(payload);
     return this.transaction(() => {
@@ -45,6 +45,12 @@ export class OwnerSelfChatJournal {
         return { duplicate:true, ids:JSON.parse(prior.ids) };
       }
       if (this.unresolved()) throw selfChatError('selfchat_delivery_uncertain');
+      if(maxSendAttempts!==null) {
+        if(!Number.isSafeInteger(maxSendAttempts) || maxSendAttempts<0)
+          throw selfChatError('selfchat_send_limit_invalid');
+        if(this.db.prepare('SELECT count(*) AS count FROM sends').get().count>=maxSendAttempts)
+          throw selfChatError('selfchat_send_limit_reached');
+      }
       this.db.prepare("INSERT INTO sends (key,hash,state,created_at) VALUES (?,?,'pending',?)")
         .run(key,hash,new Date().toISOString());
       return { duplicate:false };

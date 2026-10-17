@@ -4,6 +4,7 @@ import { dataPaths, ensureDataDirs } from '../../storage/src/paths.js';
 import { readJson, writeJson } from '../../storage/src/store.js';
 import { normalizeWhatsAppPersistentBinding } from './whatsapp-binding-registry.js';
 import { validWhatsAppConnectorAccountId } from './whatsapp-account-registry.js';
+import { selfChatBindingAccountKeys } from './whatsapp-owner-selfchat-binding-accounts.js';
 import { ownerSelfChatScope } from './whatsapp-owner-selfchat-scope.js';
 import { ownerSelfChatClient } from './whatsapp-owner-selfchat-client.js';
 import { selfChatError, selfChatHash } from './whatsapp-owner-selfchat-journal.js';
@@ -28,7 +29,13 @@ export async function planOwnerSelfChatRegistration(env=process.env) {
     throw selfChatError('selfchat_registration_account_conflict');
   if(priorBinding && (priorBinding.chatId!==scope.chatId || priorBinding.ownerUserId!==scope.ownerUserId))
     throw selfChatError('selfchat_registration_binding_conflict');
-  if((state.bindings || []).some(b=>b.id!==bindingId && b.chatId===scope.chatId && !b.deletedAt && b.enabled!==false))
+  // A contact reached from another account is not this account's self-chat.
+  // Preserve that route, but refuse an unqualified or overlapping account route.
+  if((state.bindings || []).some(b=>{
+    if(b.id===bindingId || b.chatId!==scope.chatId || b.deletedAt || b.enabled===false)return false;
+    const accounts=selfChatBindingAccountKeys(b,state.connectorAccounts || []);
+    return !accounts.size || accounts.has(scope.accountId.toLowerCase());
+  }))
     throw selfChatError('selfchat_registration_chat_already_bound');
   const account={id:scope.accountId,accountId:scope.accountId,connector:'whatsapp',kind:'connector_account',
     ownerUserId:scope.ownerUserId,displayName:'Owner self-chat',runtimeAccountId:scope.accountId,

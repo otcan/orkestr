@@ -36,6 +36,10 @@ test('output projection and retired supplemental binding fence orphan replies af
   const state={bindings:[{id:'owner-selfchat:example-personal',privateOwnerChat:true,chatId,enabled:false,retired:true}]};
   assert.equal(isDedicatedOwnerSelfChatOutput({chatId,connector:'whatsapp'},null,state),true);
   assert.equal(isDedicatedOwnerSelfChatOutput({chatId:thread.binding.chatId},null,state),false);
+  state.bindings[0].accountId='example-personal';
+  assert.equal(isDedicatedOwnerSelfChatOutput({chatId,accountId:'example-personal'},null,state),true);
+  assert.equal(isDedicatedOwnerSelfChatOutput({chatId,accountId:'old-account'},null,state),false);
+  assert.equal(isDedicatedOwnerSelfChatOutput({chatId},null,state),true,'unknown account still fenced');
 });
 
 test('runtime rereads protected configuration after history await before routing any input',async t=>{

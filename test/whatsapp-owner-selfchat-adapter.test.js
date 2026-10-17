@@ -179,3 +179,14 @@ test('operator send attestation cannot substitute for effective transport-only p
     assert.equal(f.journal.unresolved(),false);
   }
 });
+
+test('pilot send cap survives reopening and returns old receipt without a new attempt',async t=>{
+ const f=await fixture(t);
+ const j=f.journal;
+ j.reserve('pilot:1',{text:'one'},2);j.sent('pilot:1',['first-id']);
+ j.reserve('pilot:2',{text:'two'},2);j.sent('pilot:2',['second-id']);
+ const reopened=new OwnerSelfChatJournal(f.filename,config);
+ assert.deepEqual(reopened.reserve('pilot:1',{text:'one'},2),{duplicate:true,ids:['first-id']});
+ assert.throws(()=>reopened.reserve('pilot:3',{text:'three'},2),/send_limit_reached/);
+ assert.equal(reopened.outboundIds().length,2);reopened.close();
+});

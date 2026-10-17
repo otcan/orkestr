@@ -1,4 +1,5 @@
 import { selfChatError, selfChatHash } from './whatsapp-owner-selfchat-journal.js';
+import { assertLiveAccountApproval } from './whatsapp-owner-selfchat-attestation.js';
 
 export function verifyOwnerSelfChatIdentity({ config, history, status, runtimeId, nonce, issuedAt, now = Date.now() }) {
   if (status?.authenticated !== true || status?.ready !== true || status?.state !== 'ready')
@@ -22,4 +23,13 @@ export function assertOwnerSelfChatIdentity(config, identity, runtimeId) {
   if (config.eligible !== true || !identity || identity.accountId!==config.accountId
       || identity.chatId!==config.chatId || identity.runtimeId!==runtimeId)
     throw selfChatError('selfchat_identity_or_eligibility_unverified');
+  if(config.identityVerificationMode==='live-account') {
+    const approval=assertLiveAccountApproval(config,runtimeId);
+    if(identity.method!=='live-account' || identity.humanPresenceVerified!==false
+        || identity.approvalHash!==selfChatHash(approval) || identity.proofId || identity.challengeHash)
+      throw selfChatError('selfchat_identity_or_eligibility_unverified');
+  } else if(identity.method==='live-account' || (config.identityVerificationMode
+      && config.identityVerificationMode!=='message-challenge')) {
+    throw selfChatError('selfchat_identity_or_eligibility_unverified');
+  }
 }
