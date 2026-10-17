@@ -20,7 +20,7 @@ async function fixture(t,{exception=true,threads=['home','project']}={}) {
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'self-pump-'));
   t.after(()=>fs.rm(root,{recursive:true,force:true}));
   const socketPath=path.join(root,'bridge.sock'),chatId='15550000001@c.us';
-  const config={enabled:true,eligible:true,ownerUserId:'admin',accountId:'example-personal',chatId,
+  const config={bridgeBuildHash:'b'.repeat(64),enabled:true,eligible:true,ownerUserId:'admin',accountId:'example-personal',chatId,
     socketPath,homeThreadId:'home',threadIds:threads,transport:'owner-selfchat-socket',
     allowSuppressedThreadReplies:exception,activatedAt:new Date(Date.now()-10000).toISOString(),
     verifiedSendPolicy:{runtimeId:'example:42',attempts:1,textOnly:true,maxTextLength:3000}};
@@ -36,7 +36,7 @@ async function fixture(t,{exception=true,threads=['home','project']}={}) {
   journal.setMeta('identity',{accountId:config.accountId,chatId,runtimeId:'example:42',proofId:'proof'});
   const inbox=[],sent=[];
   const adapter=createOwnerSelfChatAdapter({config,journal,preflight:async()=>'example:42',invoke:async args=>{
-    if(args[0]==='status') return {state:'ready',ready:true,authenticated:true};
+    if(args[0]==='status') return {state:'ready',ready:true,authenticated:true,ownerSelfChatPolicy:{buildHash:'b'.repeat(64),version:1,transportOnly:true,sendAttempts:1,textOnly:true,maxTextLength:3000,markSeen:false,automaticRouting:false,strictBearer:true}};
     if(args[0]==='history') return {ok:true,chatId,messages:inbox};
     assert.equal(args[0],'send-text');assert.equal(args[1],chatId);
     const id=`agent-${sent.length+1}`;sent.push({id,text:args[2]});

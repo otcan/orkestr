@@ -6,6 +6,7 @@ import { createOwnerSelfChatWrapper, assertRootOwnedPath } from '../packages/con
 import { verifyOwnerSelfChatIdentity } from '../packages/connectors/src/whatsapp-owner-selfchat-identity.js';
 import { createOwnerSelfChatAdapter } from '../packages/connectors/src/whatsapp-owner-selfchat-adapter.js';
 import { listenOwnerSelfChatAdapter } from '../packages/connectors/src/whatsapp-owner-selfchat-socket.js';
+import { assertOwnerSelfChatBridgePolicy } from '../packages/connectors/src/whatsapp-owner-selfchat-bridge-policy.js';
 import { ownerSelfChatTransportContract } from '../packages/connectors/src/whatsapp-owner-selfchat-transport.js';
 
 // Explicit operator-only entrypoint. Nothing in the application starts this.
@@ -34,6 +35,7 @@ async function main() {
     if(!challenge) throw selfChatError('selfchat_identity_challenge_required');
     const runtimeId=await runner.preflight();
     const status=await runner.invoke(['status'],{runtimeId});
+    assertOwnerSelfChatBridgePolicy(status,config.bridgeBuildHash);
     const history=await runner.invoke(['history',config.chatId,'50'],{runtimeId});
     const identity=verifyOwnerSelfChatIdentity({config,history,status,runtimeId,...challenge});
     journal.setMeta('identity',identity);journal.setMeta('challenge',null);journal.close();

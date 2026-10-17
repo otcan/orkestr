@@ -1,5 +1,6 @@
 import { createOwnerSelfChatTransportPolicy,ownerSelfChatTransportContract } from './whatsapp-owner-selfchat-transport.js';
 import { assertOwnerSelfChatIdentity } from './whatsapp-owner-selfchat-identity.js';
+import { assertOwnerSelfChatBridgePolicy } from './whatsapp-owner-selfchat-bridge-policy.js';
 import { selfChatError } from './whatsapp-owner-selfchat-journal.js';
 
 // invoke is a fixed, operator-installed wrapper runner. Requests cannot choose
@@ -17,6 +18,7 @@ export function createOwnerSelfChatAdapter({ config, journal, invoke, preflight 
       const status=await invoke(['status'],{runtimeId,isActive:()=>!closed});
       if(status?.authenticated!==true || status.ready!==true || status.state!=='ready')
         throw selfChatError('selfchat_bridge_not_ready');
+      assertOwnerSelfChatBridgePolicy(status,config.bridgeBuildHash);
       statusAt=Date.now();
     }
   }

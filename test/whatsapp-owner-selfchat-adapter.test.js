@@ -10,12 +10,12 @@ import { listenOwnerSelfChatAdapter,ownerSelfChatSocketRequest } from '../packag
 import { ownerSelfChatTransportContract } from '../packages/connectors/src/whatsapp-owner-selfchat-transport.js';
 
 const chatId='15550000001@c.us';
-const config={enabled:true,eligible:true,accountId:'example-personal',chatId,
+const config={bridgeBuildHash:'b'.repeat(64),enabled:true,eligible:true,accountId:'example-personal',chatId,
   activatedAt:'2026-01-01T12:00:00Z',threadIds:['home'],
   verifiedSendPolicy:{runtimeId:'example.service:42',attempts:1,textOnly:true,maxTextLength:3000}};
 const identity={accountId:config.accountId,chatId,runtimeId:'example.service:42',proofId:'proof'};
 const message={id:'owner-1',from:chatId,to:chatId,fromMe:true,body:'hello',timestamp:'2026-01-01T12:01:00Z'};
-const status={state:'ready',ready:true,authenticated:true};
+const status={state:'ready',ready:true,authenticated:true,ownerSelfChatPolicy:{buildHash:'b'.repeat(64),version:1,transportOnly:true,sendAttempts:1,textOnly:true,maxTextLength:3000,markSeen:false,automaticRouting:false,strictBearer:true}};
 async function fixture(t,options={}) {
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'self-adapter-'));
   t.after(()=>fs.rm(root,{recursive:true,force:true}));
@@ -25,7 +25,7 @@ async function fixture(t,options={}) {
   const calls=[];
   const invoke=async argv=>{
     calls.push(argv);
-    if(argv[0]==='status') return status;
+    if(argv[0]==='status') return options.status || status;
     if(argv[0]==='history') return {ok:true,chatId,messages:options.messages || [message]};
     return options.send ? options.send(argv) : {ok:true,ids:['agent-1']};
   };
@@ -164,4 +164,18 @@ test('close after provider dispatch retains accepted receipt and blocks queued s
   f.adapter.close();release();assert.deepEqual((await first).ids,['accepted-before-close']);await queued;
   assert.deepEqual(f.journal.outboundIds(),['accepted-before-close']);assert.equal(f.journal.unresolved(),false);
   assert.equal(f.calls.filter(args=>args[0]==='send-text').length,1);
+});
+
+
+test('operator send attestation cannot substitute for effective transport-only policy',async t=>{
+  for(const override of [null,{...status.ownerSelfChatPolicy,sendAttempts:2},
+    {...status.ownerSelfChatPolicy,automaticRouting:true},{...status.ownerSelfChatPolicy,strictBearer:false},
+    {...status.ownerSelfChatPolicy,markSeen:true},{...status.ownerSelfChatPolicy,textOnly:false},
+    {...status.ownerSelfChatPolicy,buildHash:'c'.repeat(64)},
+    {...status.ownerSelfChatPolicy,buildHash:undefined}]) {
+    const f=await fixture(t,{status:{...status,ownerSelfChatPolicy:override}});
+    await assert.rejects(f.request({operation:'history',mark_seen:false}),/live_bridge_policy_unverified/);
+    assert.deepEqual(f.calls.map(args=>args[0]),['status']);
+    assert.equal(f.journal.unresolved(),false);
+  }
 });

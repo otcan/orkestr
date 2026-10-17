@@ -127,6 +127,15 @@ an outer journal cannot disable that. Verify effective provider settings before
 attesting. If changing them requires restarting the existing bridge, obtain
 specific approval; do not include that silently in installing this adapter.
 
+An attestation alone is insufficient: both identity verification and adapter
+readiness require the running bridge's `ownerSelfChatPolicy` to match the pinned
+`bridgeBuildHash`. Version 1 requires transport-only operation, one send attempt,
+literal text limited to 3000 characters, no marking seen, disabled automatic
+routing and strict bearer authentication. Missing or mismatched live policy
+blocks history and dispatch. The existing process identity is checked for every
+operation; the policy response is cached for at most 30 seconds. Private bridge
+code and all dependencies must be reviewed and installed under protected paths.
+
 `scripts/owner-selfchat-router.mjs plan|register|retire <private-config>` manages
 only the distinct connector account and supplemental chat binding. Registration
 requires verified adapter health, an approved config, unchanged reviewed state
