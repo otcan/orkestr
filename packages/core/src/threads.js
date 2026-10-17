@@ -78,6 +78,8 @@ const messageStringFields = [
   "runtimeCheckpointId",
   "originSurface",
   "homeChatRouted",
+  "ownerSelfChatRevision",
+  "ownerSelfChatHomeThreadId",
   "originTransport",
   "senderParticipantId",
   "senderTrustLevel",
