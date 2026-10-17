@@ -34,6 +34,25 @@ Lets the owner create a new site password with Chrome's own generator on a manag
 
 7. **Only the owner ending the handoff unblinds the desktop.** End reasons are `owner_ended`, `owner_cancelled` and `signup_abandoned`; free text is refused. A lost tab, an origin change or expiry (10 minutes by default, 30 at most) changes only the reported status (`expired: true`), because the password may still be on screen. Signup submission and accepting terms are separate, owner-gated steps outside this flow.
 
+## Where to use it
+
+On the **Vault** page, choose **New site password with Chrome…**:
+- pick the desktop; the page shows which thread holds its lease and the desktop's https tabs, by origin only;
+- pick the signup tab and choose **Lock agents out and start**;
+- choose **Open desktop**, then use Chrome's suggested password and let Chrome save it;
+- choose **Done**, or **Cancel** if you give up on the signup.
+
+Routes (all under `/api/vault`):
+
+| Route | Who |
+|---|---|
+| `GET password-handoffs[?desktop=]` | Owner session: open handoffs. |
+| `GET password-handoffs/targets?desktop=` | Owner session: the lease thread and `{ targetId, origin }` tabs. |
+| `POST password-handoffs` `{ desktop, threadId, targetId, origin, selector?, ttlMs? }` | Owner session, recent sign-in, same origin. |
+| `GET password-handoffs/:id` | Owner session: status. |
+| `POST password-handoffs/:id/end` `{ reason }` | Owner session, same origin. |
+| `GET agent/password-handoffs/:id` | The agent CLI with the bound thread's token: status only. |
+
 ## What is read, and how
 
 - **Field state:** one fixed DevTools `Runtime.evaluate` in the bound tab. It returns booleans only (found, is password, new-password, filled, Chrome autofilled). The value and its length are never read.
@@ -50,5 +69,5 @@ Lets the owner create a new site password with Chrome's own generator on a manag
   - DevTools port isolation per lease;
   - the agent process stopped or suspended for the duration.
 - **Chrome's generation and save behaviour:** this is not exercised by the tests. Headless Chrome has no generation UI, so the synthetic tests type the value to simulate acceptance and insert a fake login row to simulate the save. On a real desktop, Chrome may save a generated password only after form submission. Then `saved_verified` would stay unreachable until submission, which this flow does not do.
-- **No HTTP or CLI routes yet** to start, query or end a handoff. The core module and blind guard are ready for owner routes in the live desktop view. The websocket cut uses an in-process notice, so start must run inside the server process.
+- **The websocket cut uses an in-process notice.** Start a handoff only through the server routes below, never from a separate process.
 - **Same-origin tabs between checks:** a tab opened and closed between two status checks is not seen. The owner should keep a single tab on that origin.

@@ -258,3 +258,38 @@ export async function endPasswordHandoff(principal, handoffId, input = {}, env =
   await closeHandoff(record.id, "ended", { finalStatus: last.status, reason }, env);
   return publicHandoff({ ...record, state: "ended" }, { status: last.status });
 }
+
+/** The owner's open handoffs, optionally for one desktop (no probing). */
+export async function listOwnerPasswordHandoffs(principal, { desktopSlug = "" } = {}, env = process.env) {
+  const owner = assertVaultOwner(principal);
+  const slug = desktopSlug ? normalizeDesktopSlug(desktopSlug) : "";
+  return (await readHandoffs(env))
+    .filter((record) => record.ownerUserId === owner && isOpen(record) && (!slug || record.desktopSlug === slug))
+    .map((record) => publicHandoff(record, isExpired(record) ? { expired: true } : {}));
+}
+
+/**
+ * What the owner picks from when starting a handoff: the thread holding the
+ * desktop lease and the desktop's page tabs as `{ targetId, origin }`. Only
+ * origins a handoff may bind are listed; paths, titles and queries never are.
+ */
+export async function ownerPasswordHandoffTargets(principal, desktopSlug, env = process.env, deps = {}) {
+  const owner = assertVaultOwner(principal);
+  const slug = normalizeDesktopSlug(desktopSlug);
+  if (!slug) throw vaultError("password_handoff_input_required", 400);
+  const lease = await (deps.activeDesktopLeaseStatus || activeDesktopLeaseStatus)(slug, env, { ownerUserId: owner });
+  const threadId = lease?.active && !lease.expired && !lease.stale ? clean(lease.threadId) : "";
+  const desktop = await desktopFor(slug, owner, principal, env, deps);
+  let pages = [];
+  try {
+    const response = await (deps.fetch || fetch)(`${desktop.cdpUrl.replace(/\/+$/g, "")}/json/list`, { signal: AbortSignal.timeout(5_000) });
+    pages = response.ok ? await response.json() : [];
+  } catch {
+    throw vaultError("password_handoff_devtools_unavailable", 409);
+  }
+  const tabs = (Array.isArray(pages) ? pages : [])
+    .filter((page) => clean(page?.type) === "page" && clean(page?.id))
+    .map((page) => ({ targetId: clean(page.id), origin: handoffOrigin(exactOrigin(page.url)) }))
+    .filter((tab) => tab.origin);
+  return { desktopSlug: slug, threadId, tabs };
+}
