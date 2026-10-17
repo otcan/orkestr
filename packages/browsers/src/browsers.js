@@ -1,3 +1,4 @@
+import { assertDesktopNotPasswordBlind, withDesktopHandoffGate } from "../../core/src/password-handoff.js";
 import fs from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
 import net from "node:net";
@@ -223,7 +224,13 @@ async function assertBrowserAccess(slug, permission, env = process.env, options 
     breakGlassChangeRef: options?.breakGlassChangeRef || options?.changeRef,
     recentAuthAt: options?.recentAuthAt,
   }, env);
-  if (permission === "operate") await assertDesktopLeaseForOperation(slug, env, { ...options, authorizedBreakGlass: decision.breakGlass === true });
+  if (permission === "operate") {
+    await assertDesktopLeaseForOperation(slug, env, { ...options, authorizedBreakGlass: decision.breakGlass === true });
+    // Checked again here, right before the lifecycle action, so an action
+    // admitted before a password handoff started cannot land after it. Only
+    // the handoff owner's own session (passwordHandoffOwner) may act.
+    await assertDesktopNotPasswordBlind(slug, options?.passwordHandoffOwner || null, env);
+  }
   return decision;
 }
 
@@ -503,7 +510,7 @@ export async function readVirtualBrowserTarget(slug, env = process.env, options 
   return session;
 }
 
-export async function prepareVirtualBrowser(slug, env = process.env, options = {}) {
+async function prepareVirtualBrowserUngated(slug, env = process.env, options = {}) {
   await assertBrowserAccess(slug, "operate", env, options);
   const unavailable = desktopUnavailableError(env);
   if (unavailable) throw unavailable;
@@ -539,7 +546,7 @@ export async function prepareVirtualBrowser(slug, env = process.env, options = {
   return publicBrowserRecord(browser, env, options);
 }
 
-export async function openVirtualBrowser(slug, env = process.env, targetUrl = "", options = {}) {
+async function openVirtualBrowserUngated(slug, env = process.env, targetUrl = "", options = {}) {
   await assertBrowserAccess(slug, "operate", env, options);
   const unavailable = desktopUnavailableError(env);
   if (unavailable) throw unavailable;
@@ -610,7 +617,7 @@ export async function openVirtualBrowser(slug, env = process.env, targetUrl = ""
   };
 }
 
-export async function openUrlInVirtualBrowser(slug, url, env = process.env, options = {}) {
+async function openUrlInVirtualBrowserUngated(slug, url, env = process.env, options = {}) {
   await assertBrowserAccess(slug, "operate", env, options);
   const targetUrl = normalizeBrowserOpenUrl(url);
   const unavailable = desktopUnavailableError(env);
@@ -629,7 +636,7 @@ export async function openUrlInVirtualBrowser(slug, url, env = process.env, opti
   };
 }
 
-export async function stopVirtualBrowser(slug, env = process.env, options = {}) {
+async function stopVirtualBrowserUngated(slug, env = process.env, options = {}) {
   await assertBrowserAccess(slug, "operate", env, options);
   const unavailable = desktopUnavailableError(env);
   if (unavailable) throw unavailable;
@@ -679,7 +686,7 @@ export async function stopVirtualBrowser(slug, env = process.env, options = {}) 
   };
 }
 
-export async function restartVirtualBrowser(slug, env = process.env, options = {}) {
+async function restartVirtualBrowserUngated(slug, env = process.env, options = {}) {
   await assertBrowserAccess(slug, "operate", env, options);
   const unavailable = desktopUnavailableError(env);
   if (unavailable) throw unavailable;
@@ -694,7 +701,7 @@ export async function restartVirtualBrowser(slug, env = process.env, options = {
   return openVirtualBrowser(slug, env, "", options);
 }
 
-export async function cleanupVirtualBrowser(slug, env = process.env, options = {}) {
+async function cleanupVirtualBrowserUngated(slug, env = process.env, options = {}) {
   await assertBrowserAccess(slug, "operate", env, options);
   const unavailable = desktopUnavailableError(env);
   if (unavailable) throw unavailable;
@@ -720,4 +727,30 @@ export async function cleanupVirtualBrowser(slug, env = process.env, options = {
     ...(await publicBrowserRecord(browser, env, options)),
     cleaned: existed,
   };
+}
+
+// Lifecycle actions run their blind check (assertBrowserAccess) and their
+// effect under the per-desktop handoff gate (docs/password-handoff.md).
+export async function prepareVirtualBrowser(slug, env = process.env, options = {}) {
+  return withDesktopHandoffGate(slug, () => prepareVirtualBrowserUngated(slug, env, options), env);
+}
+
+export async function openVirtualBrowser(slug, env = process.env, targetUrl = "", options = {}) {
+  return withDesktopHandoffGate(slug, () => openVirtualBrowserUngated(slug, env, targetUrl, options), env);
+}
+
+export async function openUrlInVirtualBrowser(slug, url, env = process.env, options = {}) {
+  return withDesktopHandoffGate(slug, () => openUrlInVirtualBrowserUngated(slug, url, env, options), env);
+}
+
+export async function stopVirtualBrowser(slug, env = process.env, options = {}) {
+  return withDesktopHandoffGate(slug, () => stopVirtualBrowserUngated(slug, env, options), env);
+}
+
+export async function restartVirtualBrowser(slug, env = process.env, options = {}) {
+  return withDesktopHandoffGate(slug, () => restartVirtualBrowserUngated(slug, env, options), env);
+}
+
+export async function cleanupVirtualBrowser(slug, env = process.env, options = {}) {
+  return withDesktopHandoffGate(slug, () => cleanupVirtualBrowserUngated(slug, env, options), env);
 }

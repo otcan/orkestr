@@ -62,6 +62,7 @@ import {
   setUserSkillForPrincipal,
   userScopedCapabilityHints,
 } from "./user-skills.js";
+import { desktopPasswordBlind } from "./password-handoff.js";
 import { linkUserPrivateIdentity } from "./users.js";
 import { fileBrowserRootsForPrincipal, listFilesForPrincipal } from "./workspace-files.js";
 
@@ -876,6 +877,8 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
     const desktop = resolved.desktop;
     const slug = resolved.slug;
     if (!desktop.availableActions.includes(action)) return { ok: false, error: "skill_action_not_available", action, skill, desktop };
+    // Agents never act on a desktop during an owner password handoff.
+    if (await desktopPasswordBlind(slug, env)) return { ok: false, error: "desktop_password_blind", action, skill, desktop };
     const lease = await ensureAgentDesktopLease(slug, principal, thread, env);
     const desktopOptions = { principal, threadId: clean(thread?.id), fencingToken: clean(lease?.fencingToken) };
     let result;

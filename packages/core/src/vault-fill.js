@@ -13,6 +13,7 @@ import {
   vaultError,
 } from "./vault-access.js";
 import { findGrantedItem } from "./vault-agent.js";
+import { assertDesktopNotPasswordBlind, withDesktopHandoffGate } from "./password-handoff.js";
 import { claimItemUse, finishItemUse } from "./vault-item-use.js";
 import { findItem, mutateVault, openRecord, readVault } from "./vault-store.js";
 
@@ -125,8 +126,15 @@ async function fillFromVault({ owner, itemId, threadId = "", desktop, allowUnver
   return ok ? { status: "filled" } : { status: "failed", reason };
 }
 
+// The blind check and the keystrokes run under the per-desktop handoff gate.
 export async function agentFillDesktop(threadRef, itemRef, input = {}, env = process.env) {
+  return withDesktopHandoffGate(fillOptions(input).desktopSlug, () => agentFillDesktopUngated(threadRef, itemRef, input, env), env);
+}
+
+async function agentFillDesktopUngated(threadRef, itemRef, input = {}, env = process.env) {
   const options = fillOptions(input);
+  // Agents never act on a desktop during an owner password handoff.
+  await assertDesktopNotPasswordBlind(options.desktopSlug, null, env);
   const thread = await resolveAgentThread(threadRef, env);
   const owner = thread.ownerUserId;
   const item = findGrantedItem(await readVault(owner, env), itemRef, thread.threadId);

@@ -32,6 +32,8 @@ import {
 } from "../../../../../packages/core/src/desktop-shares.js";
 import { assertDesktopActionSanitized } from "../../../../../packages/core/src/desktop-action-sanitizer.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
+import { assertDesktopNotPasswordBlind } from "../../../../../packages/core/src/password-handoff.js";
+import { vaultOwnerFromRequest } from "../../../../../packages/core/src/vault-access.js";
 import { parseDesktopShareCookie } from "../../../../../packages/core/src/desktop-share-http.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../../../packages/core/src/policy.js";
 import { getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
@@ -409,6 +411,9 @@ export class BrowsersController {
     let warnings: any[] = [];
     try {
       const normalized = String(action || "").trim().toLowerCase();
+      // During an owner password handoff only the owner may act on the desktop.
+      const passwordHandoffOwner = vaultOwnerFromRequest(request);
+      await assertDesktopNotPasswordBlind(slug, passwordHandoffOwner, process.env);
       ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : ownerUserId;
       breakGlassOptions = this.breakGlassInputs(principal, body);
       if (desktopCapabilityRequired(process.env, { threadId, desktopSlug: slug }) && !breakGlassOptions.breakGlass) {
@@ -427,6 +432,7 @@ export class BrowsersController {
         threadId,
         ownerUserId,
         fencingToken: String(body.fencingToken || "").trim(),
+        passwordHandoffOwner,
         ...breakGlassOptions,
       };
       await this.assertDesktopSanitized(normalized || "action", principal, slug, body);

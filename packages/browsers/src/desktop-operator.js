@@ -1,3 +1,4 @@
+import { assertDesktopNotPasswordBlind, withDesktopHandoffGate } from "../../core/src/password-handoff.js";
 import WebSocket from "ws";
 import { managedDesktopAction, managedDesktopOpenUrl } from "./browserctl.js";
 import { assertDesktopAccess } from "../../core/src/desktop-access.js";
@@ -334,13 +335,24 @@ export function detectDesktopBrowserChallenge(page = {}) {
   };
 }
 
+// The blind check and the operation run under the per-desktop handoff gate.
+// The gate key is the same desktop the operation resolves (slug, args.slug or
+// args.target).
 export async function operateManagedDesktop(slug = "", args = {}, env = process.env, options = {}) {
+  const desktopSlug = clean(slug || args?.slug || args?.target);
+  return withDesktopHandoffGate(desktopSlug, () => operateManagedDesktopUngated(desktopSlug, args, env, options), env);
+}
+
+async function operateManagedDesktopUngated(slug = "", args = {}, env = process.env, options = {}) {
   const desktopSlug = clean(slug || args.slug || args.target);
   if (!desktopSlug) {
     const error = new Error("desktop_slug_required");
     error.statusCode = 400;
     throw error;
   }
+  // An open password handoff blinds the desktop for agents (no observe/read/
+  // extract or input) until the owner ends it (docs/password-handoff.md).
+  await assertDesktopNotPasswordBlind(desktopSlug, null, env);
   const operation = clean(args.operation || args.action || "observe").toLowerCase();
   const cdpInteraction = ["click", "type", "navigate"].includes(operation);
   if (!["observe", "extract", "read", "click", "type", "navigate"].includes(operation)) {

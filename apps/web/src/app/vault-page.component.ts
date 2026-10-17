@@ -6,6 +6,7 @@ import { VaultFillDialogComponent } from "./vault-fill-dialog.component";
 import { VaultGrantsDialogComponent } from "./vault-grants-dialog.component";
 import { VaultImportDialogComponent } from "./vault-import-dialog.component";
 import { VaultItemFormComponent } from "./vault-item-form.component";
+import { PasswordHandoffPanelComponent } from "./password-handoff-panel.component";
 import { VaultRequestsPanelComponent } from "./vault-requests-panel.component";
 import { VaultOutsideDialogComponent } from "./vault-outside-dialog.component";
 import { VaultOutsidePanelComponent } from "./vault-outside-panel.component";
@@ -25,7 +26,7 @@ interface RevealedSecret {
 
 @Component({
   selector: "ork-vault-page",
-  imports: [VaultFillDialogComponent, VaultGrantsDialogComponent, VaultImportDialogComponent, VaultItemFormComponent, VaultOutsideDialogComponent, VaultOutsidePanelComponent, VaultRequestsPanelComponent, VaultVisibleDirective],
+  imports: [VaultFillDialogComponent, VaultGrantsDialogComponent, VaultImportDialogComponent, VaultItemFormComponent, VaultOutsideDialogComponent, VaultOutsidePanelComponent, VaultRequestsPanelComponent, VaultVisibleDirective, PasswordHandoffPanelComponent],
   templateUrl: "./vault-page.component.html",
   styleUrl: "./vault-page.component.css",
 })
