@@ -412,7 +412,8 @@ export class BrowsersController {
     try {
       const normalized = String(action || "").trim().toLowerCase();
       // During an owner password handoff only the owner may act on the desktop.
-      await assertDesktopNotPasswordBlind(slug, vaultOwnerFromRequest(request), process.env);
+      const passwordHandoffOwner = vaultOwnerFromRequest(request);
+      await assertDesktopNotPasswordBlind(slug, passwordHandoffOwner, process.env);
       ownerUserId = threadId ? await this.ownerUserIdFromLeaseBody(body, principal) : ownerUserId;
       breakGlassOptions = this.breakGlassInputs(principal, body);
       if (desktopCapabilityRequired(process.env, { threadId, desktopSlug: slug }) && !breakGlassOptions.breakGlass) {
@@ -431,6 +432,7 @@ export class BrowsersController {
         threadId,
         ownerUserId,
         fencingToken: String(body.fencingToken || "").trim(),
+        passwordHandoffOwner,
         ...breakGlassOptions,
       };
       await this.assertDesktopSanitized(normalized || "action", principal, slug, body);

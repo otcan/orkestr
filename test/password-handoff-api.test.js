@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { createThread } from "../packages/core/src/threads.js";
+import { acquireDesktopLease } from "../packages/browsers/src/desktop-leases.js";
+import { userPrincipal } from "../packages/core/src/principal.js";
 import { desktopPasswordBlind } from "../packages/core/src/password-handoff.js";
 import { issueVaultThreadToken } from "../packages/core/src/vault-thread-tokens.js";
 import { pairedCookie, rawRequest, startFixtureServer } from "./support/connector-security-fixture.js";
@@ -68,6 +70,18 @@ test("password handoff API: owner-only start/read/end, bound-thread status, agen
   assert.equal(agentStatus.json.status, "unknown");
   assert.equal((await call(port, "GET", "/api/vault/agent/password-handoffs/pwh_api", { bearer: CLI_TOKEN, threadToken: otherToken })).status, 404, "only the bound thread");
   assert.equal((await call(port, "GET", "/api/vault/agent/password-handoffs/pwh_api", { cookie: alice })).status, 403, "the agent route needs the CLI credential");
+
+  assert.equal((await call(port, "POST", "/api/vault/password-handoffs/pwh_api/open", { bearer: CLI_TOKEN, body: {} })).status, 403, "agents cannot open the owner's view");
+  const openNoLease = await call(port, "POST", "/api/vault/password-handoffs/pwh_api/open", { cookie: alice, body: {} });
+  assert.equal(openNoLease.status, 403, openNoLease.text);
+  assert.match(openNoLease.text, /desktop_lease_required/, "the bound thread must still hold the lease");
+  assert.equal((await call(port, "POST", "/api/vault/password-handoffs/pwh_api/open", { cookie: bob, body: {} })).status, 404);
+  const acquired = await acquireDesktopLease("pw-desk", { threadId: "pw-thread" }, process.env, { principal: userPrincipal({ id: "alice", role: "user" }) });
+  const token = String(acquired?.lease?.fencingToken || acquired?.fencingToken || "");
+  assert.ok(token, "the test lease has a fencing token");
+  const openLeased = await call(port, "POST", "/api/vault/password-handoffs/pwh_api/open", { cookie: alice, body: {} });
+  assert.doesNotMatch(openLeased.text, /desktop_lease_required|lease_fencing_token|password_handoff/, "the lease token is supplied server-side");
+  assert.equal(openLeased.text.includes(token), false, "the fencing token never reaches the page");
 
   assert.equal((await call(port, "POST", "/api/vault/password-handoffs/pwh_api/end", { bearer: CLI_TOKEN, body: {} })).status, 403, "agents cannot unblind");
   assert.equal((await call(port, "POST", "/api/vault/password-handoffs/pwh_api/end", { cookie: alice, body: { reason: "free text" } })).status, 400);

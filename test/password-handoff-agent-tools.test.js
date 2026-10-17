@@ -6,6 +6,7 @@ import test from "node:test";
 import { runTenantApiAgentTool } from "../packages/core/src/tenant-api-agent-tools.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { upsertUser } from "../packages/core/src/users.js";
+import { openUrlInVirtualBrowser, stopVirtualBrowser } from "../packages/browsers/src/browsers.js";
 
 // Agent desktop skill actions (open, open_url, stop, ...) are refused while an
 // owner password handoff blinds the desktop. Synthetic profile desktop only.
@@ -29,4 +30,23 @@ test("tenant agent desktop skill actions are refused on a password-blind desktop
     assert.equal(result.ok, false, action);
     assert.equal(result.error, "desktop_password_blind", action);
   }
+});
+
+test("desktop lifecycle actions re-check blindness right before acting (in-flight agent actions)", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-pw-lifecycle-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const env = { ORKESTR_HOME: home, ORKESTR_BROWSER_DESKTOP_MODE: "profiles", ORKESTR_BROWSER_VISIBLE_SLUGS: "linkedin", ORKESTR_BROWSER_LAUNCH_DISABLED: "1" };
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await fs.writeFile(path.join(home, "password-handoffs.json"), JSON.stringify({ handoffs: [{
+    id: "pwh_life", ownerUserId: "otcan", threadId: "t", desktopSlug: "linkedin", targetId: "x", origin: "https://signup.example.test",
+    selector: "", state: "open", startedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }] }));
+  // An action admitted before the handoff reaches the lifecycle layer after it.
+  await assert.rejects(openUrlInVirtualBrowser("linkedin", "https://example.test/", env, { principal }), /desktop_password_blind/);
+  await assert.rejects(stopVirtualBrowser("linkedin", env, { principal }), /desktop_password_blind/);
+  const owner = { ...principal, vaultOwner: true };
+  await assert.doesNotReject(stopVirtualBrowser("linkedin", env, { principal, passwordHandoffOwner: owner }).catch((error) => {
+    if (/desktop_password_blind/.test(error.message)) throw error;
+  }), "the handoff owner's own session may act");
 });

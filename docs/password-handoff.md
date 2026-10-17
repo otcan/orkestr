@@ -2,6 +2,15 @@
 
 Lets the owner create a new site password with Chrome's own generator on a managed desktop, while the agent thread working on that desktop never sees it. Orkestr never generates, types, reads or stores the password. It only reports value-free statuses.
 
+## Trust model
+
+The handoff keeps the password out of everything Orkestr shows or stores:
+- agent desktop tools, screenshots and OCR;
+- the agent API;
+- desktop shares, logs and events.
+
+It does **not** stop a process that deliberately bypasses Orkestr. Examples are an agent with root on the host, or any local process that connects to Chrome's DevTools port. Use it where the agents are trusted not to work around Orkestr, for example a single-user install. Against hostile agents, use a separate desktop host that agents cannot reach.
+
 ## Flow
 
 1. The agent reaches a signup form on the desktop it holds a lease for.
@@ -65,7 +74,7 @@ Routes (all under `/api/vault`):
 
 ## Not covered yet (blockers before live use)
 
-- **Raw DevTools access:** Chrome's DevTools port listens on loopback, so any local process can connect to it, whatever user it runs as. Such a process can read the page or take screenshots directly. Orkestr's blind flag stops Orkestr's own paths, not a raw CDP client, and nothing helps against agents with root on the host. Against unprivileged agents, live use needs one of these:
+- **Raw DevTools access (accepted for single-user installs, see Trust model):** Chrome's DevTools port listens on loopback, so any local process can connect to it, whatever user it runs as. Such a process can read the page or take screenshots directly. Orkestr's blind flag stops Orkestr's own paths, not a raw CDP client, and nothing helps against agents with root on the host. Against unprivileged agents, live use needs one of these:
   - a CDP proxy that refuses agents while the desktop is blind;
   - DevTools port isolation per lease;
   - the agent process stopped or suspended for the duration.

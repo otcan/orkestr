@@ -91,19 +91,18 @@ test("password handoff panel: lists the lease thread and https tabs, starts, sho
   assert.match(handoffStatusText({ status: "saved_verified" }), /Saved in Chrome/);
 });
 
-test("password handoff panel opens the desktop through a session share, else the direct link", async () => {
-  const opened = [];
+test("password handoff panel opens the desktop through the handoff's session share, else the direct link", async () => {
   const tab = { opener: {}, location: { href: "" } };
-  const shareCalls = [];
+  const posts = [];
   let shareUrl = "/desktop/pa-desk/vnc.html?share=1";
-  const api = { openDesktopSession: (slug, body) => { shareCalls.push([slug, body]); return shareUrl ? rxjs.of({ url: shareUrl }) : rxjs.throwError(() => new Error("oidc_desktop_session_required")); } };
-  const window = { open: (...args) => { opened.push(args); return tab; }, location: { assign() {} } };
-  const { load } = createLoader({ api, http: {}, context: { document: { querySelector: () => null }, window } });
+  const http = { post: (url, body) => { posts.push([url, body]); return shareUrl ? rxjs.of({ url: shareUrl }) : rxjs.throwError(() => new Error("lease_fencing_token_required")); } };
+  const window = { open: () => tab, location: { assign() {} } };
+  const { load } = createLoader({ api: {}, http, context: { document: { querySelector: () => null }, window } });
   const { PasswordHandoffPanelComponent } = await load("password-handoff-panel.component");
   const panel = new PasswordHandoffPanelComponent();
   const handoff = { id: "pwh_1", desktopSlug: "pa-desk", threadId: "pa-thread" };
   await panel.openDesktop(handoff);
-  assert.deepEqual(JSON.parse(JSON.stringify(shareCalls)), [["pa-desk", { threadId: "pa-thread", start: false }]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(posts)), [["/api/vault/password-handoffs/pwh_1/open", {}]], "no lease token is sent from the page");
   assert.equal(tab.location.href, shareUrl);
   assert.equal(tab.opener, null);
   shareUrl = "";

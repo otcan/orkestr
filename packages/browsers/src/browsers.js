@@ -1,3 +1,4 @@
+import { assertDesktopNotPasswordBlind } from "../../core/src/password-handoff.js";
 import fs from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
 import net from "node:net";
@@ -223,7 +224,13 @@ async function assertBrowserAccess(slug, permission, env = process.env, options 
     breakGlassChangeRef: options?.breakGlassChangeRef || options?.changeRef,
     recentAuthAt: options?.recentAuthAt,
   }, env);
-  if (permission === "operate") await assertDesktopLeaseForOperation(slug, env, { ...options, authorizedBreakGlass: decision.breakGlass === true });
+  if (permission === "operate") {
+    await assertDesktopLeaseForOperation(slug, env, { ...options, authorizedBreakGlass: decision.breakGlass === true });
+    // Checked again here, right before the lifecycle action, so an action
+    // admitted before a password handoff started cannot land after it. Only
+    // the handoff owner's own session (passwordHandoffOwner) may act.
+    await assertDesktopNotPasswordBlind(slug, options?.passwordHandoffOwner || null, env);
+  }
   return decision;
 }
 

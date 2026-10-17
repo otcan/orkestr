@@ -69,7 +69,8 @@ export function handoffStatusText(handoff: PasswordHandoff): string {
       <button class="secondary" type="button" (click)="openStart()">New site password with Chrome…</button>
     } @else {
       <div class="vault-approval">
-        <p><strong>New site password with Chrome.</strong> Chrome generates and saves the password; Orkestr and agents never see it.</p>
+        <p><strong>New site password with Chrome.</strong> Chrome generates and saves the password. Orkestr never sees it, and agents are locked out of Orkestr's desktop tools until you end the handoff.</p>
+        <p class="vault-notice warn">This does not stop a program with admin rights on this server. Use it only with agents you trust.</p>
         <label>Desktop
           <select [(ngModel)]="desktop" (ngModelChange)="loadTargets()">
             @for (session of desktops; track slug(session)) {
@@ -141,9 +142,10 @@ export class PasswordHandoffPanelComponent implements OnInit, OnDestroy {
     return `/desktop/${encoded}/vnc.html?autoconnect=1&resize=scale&view_only=false&path=desktop/${encoded}/websockify`;
   }
 
-  // A desktop share opened for this browser session works where desktops
-  // require brokered shares and counts as the owner during the handoff.
-  // Sessions that cannot open such a share use the direct desktop link.
+  // The server opens a desktop share bound to this browser session, using the
+  // bound thread's lease (its token stays server-side). It works where
+  // desktops require brokered shares and counts as the owner during the
+  // handoff. Sessions that cannot open such a share use the direct link.
   async openDesktop(handoff: PasswordHandoff): Promise<void> {
     const pending = window.open("about:blank", "_blank");
     try {
@@ -153,7 +155,7 @@ export class PasswordHandoffPanelComponent implements OnInit, OnDestroy {
     }
     let url = "";
     try {
-      url = (await firstValueFrom(this.desktopsApi.openDesktopSession(handoff.desktopSlug, { threadId: handoff.threadId, start: false })))?.url || "";
+      url = (await firstValueFrom(this.http.post<{ url?: string }>(`${apiBase()}/${encodeURIComponent(handoff.id)}/open`, {})))?.url || "";
     } catch {
       url = "";
     }

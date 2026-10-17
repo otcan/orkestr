@@ -1,9 +1,11 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query, Req } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
+import { BrowsersController } from "../browsers/browsers.controller.js";
 import { agentThreadIdFromRequest } from "../../../../../packages/core/src/vault-access.js";
 import {
   agentPasswordHandoffStatus,
   endPasswordHandoff,
   listOwnerPasswordHandoffs,
+  ownerHandoffDesktopAccess,
   ownerPasswordHandoffStatus,
   ownerPasswordHandoffTargets,
   startPasswordHandoff,
@@ -54,6 +56,17 @@ export class PasswordHandoffController {
   @HttpCode(200)
   async end(@Req() request: any, @Param("id") id: string, @Body() body: JsonBody = {}) {
     return endPasswordHandoff(vaultOwner(request, { mutating: true }), id, { reason: text(body?.reason) });
+  }
+
+  // Opens the handoff desktop for this browser session (a share bound to it).
+  // The lease fencing token is supplied server-side, never sent to the page.
+  @Post("password-handoffs/:id/open")
+  @HttpCode(201)
+  async open(@Req() request: any, @Res({ passthrough: true }) response: any, @Param("id") id: string) {
+    const access = await ownerHandoffDesktopAccess(vaultOwner(request, { mutating: true }), id);
+    return new BrowsersController().shareDesktop(request, response, access.desktopSlug, {
+      threadId: access.threadId, fencingToken: access.fencingToken, start: false, openForCurrentSession: true,
+    });
   }
 
   @Get("agent/password-handoffs/:id")

@@ -5,6 +5,7 @@ import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { readManagedDesktopSession } from "../../browsers/src/browserctl.js";
 import { activeDesktopLeaseStatus, normalizeDesktopSlug } from "../../browsers/src/desktop-leases.js";
+import { desktopLeaseStore } from "../../browsers/src/desktop-lease-store.js";
 import { exactOrigin, probePasswordField } from "../../browsers/src/password-field-probe.js";
 import { savedLoginSince } from "../../browsers/src/chrome-saved-login-probe.js";
 import { normalizeUserId } from "./users.js";
@@ -292,4 +293,20 @@ export async function ownerPasswordHandoffTargets(principal, desktopSlug, env = 
     .map((page) => ({ targetId: clean(page.id), origin: handoffOrigin(exactOrigin(page.url)) }))
     .filter((tab) => tab.origin);
   return { desktopSlug: slug, threadId, tabs };
+}
+
+/**
+ * For the owner's own view of an open handoff's desktop: the bound thread and
+ * that thread's lease fencing token, read server-side so it never reaches the
+ * browser. Refuses unless the handoff is open and the bound thread still
+ * holds the lease.
+ */
+export async function ownerHandoffDesktopAccess(principal, handoffId, env = process.env, deps = {}) {
+  const owner = assertVaultOwner(principal);
+  const record = await findOwned(owner, handoffId, env);
+  if (!isOpen(record)) throw vaultError("password_handoff_not_open", 409);
+  const store = deps.desktopLeaseStore || desktopLeaseStore;
+  const lease = await store(env).activeLease(record.desktopSlug, owner);
+  if (!lease || clean(lease.threadId) !== record.threadId || !clean(lease.fencingToken)) throw vaultError("desktop_lease_required", 403);
+  return { desktopSlug: record.desktopSlug, threadId: record.threadId, fencingToken: clean(lease.fencingToken) };
 }
