@@ -67,3 +67,29 @@ session files or change filesystem ownership. Existing operator access is
 separate from granting the agent new access. After approved activation, an
 owner-only test must verify inbound ID, selected existing thread, one reply ID,
 and absence of echo-generated input before expanding any scope.
+
+## Separate transport boundary (private implementation in progress)
+
+`whatsapp-owner-selfchat-transport.js` is an inert, pure policy module, not an
+installed service. It admits only history for one pinned self chat with explicit
+`mark_seen=false`, and bounded text to that same chat. Pairing, service control,
+bulk inbox reads, group operations and attachments are not admitted. Constructing
+it requires verified identity as well as an activation timestamp; readiness or a
+configured phone-number label alone is insufficient identity evidence.
+
+The input filter excludes events at or before activation, synthetic summaries,
+wrong-chat events, duplicates, consumed events and known outbound IDs. Pending or
+uncertain delivery blocks ingestion to prevent an unacknowledged echo becoming
+an owner command. The configured chat ID must match both sender and recipient;
+unverified address aliases fail closed. An operator integration must retain a
+durable cursor and atomic send reservations, persist receipt IDs before resuming
+ingestion, and never retry uncertain delivery automatically. These persistence
+and socket components are not implemented by this pure policy module.
+
+Do not repoint a global worker socket to add a second account. Remaining work is
+account-specific transport dispatch and status, a scoped operator-owned adapter,
+durable acknowledgement handling, supplemental account/chat registration and a
+private thread allowlist. Existing primary-group mirror holds remain effective;
+any requested owner-only exception requires an explicit scoped policy and tests,
+not removal of the original group hold. No live readiness is implied by local
+tests, and this module must not be installed as a privileged service as-is.
