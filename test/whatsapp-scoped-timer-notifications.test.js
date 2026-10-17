@@ -134,3 +134,13 @@ test('wrapper response loss reconciles an accepted receipt; absent receipt block
  const beforeAccept=createScopedTimerNotifications({...g.options,send:async()=>{throw new Error('unknown wrapper outcome');}});
  await assert.rejects(beforeAccept.tick(),/unresolved/);assert.equal(g.fence.blocked(),true);assert.equal(g.state.sent.length,0);beforeAccept.close();
 });
+
+test('scheduler-recorded passive auth notices notify, while record-only and paused notices do not',async t=>{
+ for(const mode of ['visible','record_only','paused','unverified']) {
+  const {state,notifier}=fixture(t);
+  Object.assign(state.timers[0],{blockedReason:'blocked_auth',lastAuthNoticeMessageId:mode==='unverified'?'other':'notice1',enabled:mode!=='paused'});
+  state.events=[{type:'thread_signal_appended',source:'timer_connector_health',signalMode:'notify_passively',ownerUserId:'admin',threadId:'thread-1',messageId:'notice1',ts:iso(9000)}];
+  state.messages=[{id:'notice1',role:'assistant',state:'completed',phase:'signal',source:'timer_connector_health',signalMode:mode==='record_only'?'record_only':'notify_passively',ownerUserId:'admin',chatId:'120000000001@g.us',createdAt:iso(9000),text:'Reconnect your mail account.'}];
+  await notifier.tick();assert.equal(state.sent.length,mode==='visible'?1:0,mode);
+ }
+});

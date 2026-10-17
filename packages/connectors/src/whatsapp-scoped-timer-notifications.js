@@ -19,6 +19,9 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
   if(!scope)return {tick:async()=>({enabled:false}),close(){}};
   const proofs=suppliedProof || createTimerNotificationProofStore({path:scope.proofDbPath,now});
   const fence=suppliedFence || createDeliveryRouteFence({dbPath:config.routeControl.dbPath,now});
+  const allowedTimer=(timer,event)=>event.type==='thread_signal_appended'
+    ? timer?.enabled===true && timer.ownerUserId===config.ownerUserId && timer.target===scope.threadId && timer.targetType==='thread' && visible(timer) && timer.lastAuthNoticeMessageId===event.messageId && timer.blockedReason==='blocked_auth'
+    : timerRunEligible(timer,event,config.ownerUserId,scope.threadId);
   async function thread() {
     const {thread:t}=await api(`/api/threads/${encodeURIComponent(scope.threadId)}`);
     if(!t || t.ownerUserId!==config.ownerUserId || t.retired || t.lifecycleState==='retired' || t.binding?.chatId!==scope.chatId || t.binding?.enabled!==true || t.binding?.routeEligible===false || t.binding?.retired || t.binding?.deprecated)
@@ -55,6 +58,10 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
       if(events?.length>=500 && Math.min(...events.map(e=>Date.parse(e.ts)||0))>scanned)throw new Error('timer_notification_event_gap');
       for(const e of events||[])if(e.type==='timer_due' && e.ownerUserId===config.ownerUserId && e.target===scope.threadId && e.targetType==='thread'
         && e.messageId && Date.parse(e.ts)>=since && Date.parse(e.ts)<=now() && eligible.some(t=>t.id===e.timerId))proofs.remember(e);
+      for(const e of events||[])if(e.type==='thread_signal_appended' && e.source==='timer_connector_health' && e.signalMode==='notify_passively' && e.ownerUserId===config.ownerUserId && e.threadId===scope.threadId && Date.parse(e.ts)>=since && Date.parse(e.ts)<=now()) {
+        const timer=eligible.find(t=>t.lastAuthNoticeMessageId===e.messageId);
+        if(timer)proofs.remember({...e,timerId:timer.id});
+      }
       proofs.scanned(new Date(now()).toISOString());
       const runs=proofs.runs().filter(e=>Date.parse(e.ts)>=since);
       if(!runs.length)return {enabled:true,runs:0,sent:0};
@@ -62,11 +69,14 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
       let sent=0;
       for(const event of runs) {
         const timer=eligible.find(t=>t.id===event.timerId);
-        if(!timerRunEligible(timer,event,config.ownerUserId,scope.threadId))continue;
+        if(!allowedTimer(timer,event))continue;
         const parent=messages.find(m=>m.id===event.messageId);
-        if(!parent || parent.role!=='user' || parent.source!=='timer_due' || parent.timerId!==event.timerId || parent.ownerUserId!==config.ownerUserId
+        const notice=event.type==='thread_signal_appended';
+        const parentValid=notice ? parent?.role==='assistant' && parent.source==='timer_connector_health' && parent.phase==='signal' && parent.state==='completed' && parent.signalMode==='notify_passively'
+          : parent?.role==='user' && parent.source==='timer_due' && parent.timerId===event.timerId;
+        if(!parentValid || parent.ownerUserId!==config.ownerUserId
           || parent.chatId!==scope.chatId || !visible(parent) || !Number.isFinite(Date.parse(parent.createdAt)) || Date.parse(parent.createdAt)>now() || Date.parse(parent.createdAt)<since)continue;
-        const answers=messages.filter(m=>m.parentMessageId===parent.id && m.role==='assistant' && m.state==='completed'
+        const answers=notice ? (now()-Date.parse(parent.createdAt)<=scope.maxAgeMs && String(parent.text||'').trim() && String(parent.text).trim()!=='NO_REPLY' ? [parent] : []) : messages.filter(m=>m.parentMessageId===parent.id && m.role==='assistant' && m.state==='completed'
           && ['final','final_answer'].includes(m.phase) && sources.has(m.source) && visible(m) && String(m.text||'').trim() && String(m.text).trim()!=='NO_REPLY'
           && Number.isFinite(Date.parse(m.createdAt)) && Date.parse(m.createdAt)>=Math.max(since,Date.parse(parent.createdAt)) && Date.parse(m.createdAt)<=now() && now()-Date.parse(m.createdAt)<=scope.maxAgeMs)
           .sort((a,b)=>Number(a.cursor||0)-Number(b.cursor||0));
@@ -90,7 +100,7 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
           if(Date.parse(row.expires_at)<now()){proofs.mark(id,'revoked');continue;}
           await thread();fence.assertActive(config.routeControl.routeId);
           const latest=(await api('/api/timers')).timers.find(t=>t.id===timer.id);
-          if(!timerRunEligible(latest,event,config.ownerUserId,scope.threadId)){proofs.mark(id,'revoked');continue;}
+          if(!allowedTimer(latest,event)){proofs.mark(id,'revoked');continue;}
           try {
             const r=await send({chatId:scope.chatId,requestId:id,notificationId:id,parentId:parent.id,text:row.text});
             if(r.ok!==true || !r.ids?.length)throw new Error('unconfirmed');

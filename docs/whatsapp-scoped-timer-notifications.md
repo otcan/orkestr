@@ -117,3 +117,8 @@ config and does not create credentials. Deploy this mode only after provider
 eligibility is confirmed; a masked worker is not started by preparation. Keep
 other active account services unchanged. The production UI does not need to be
 restarted to deploy a pinned worker code release.
+
+Eligible timer connector-auth notices are also supported: the scheduler's current
+`lastAuthNoticeMessageId`, a matching audited `thread_signal_appended` event and
+an explicitly `notify_passively` signal must all agree. Record-only notices and
+paused timers stay silent; no scheduler run or owner input is fabricated.
