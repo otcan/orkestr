@@ -2,35 +2,44 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {DatabaseSync} from 'node:sqlite';
 import {createScopedGroupRelay} from '../packages/connectors/src/whatsapp-scoped-group-relay.js';
+import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
 
-function fixture(t) {
+function fixture(t, footer = false) {
   const inboxDb = new DatabaseSync(':memory:'), relayDb = new DatabaseSync(':memory:');
   inboxDb.exec(`CREATE TABLE group_input(id TEXT,chat_id TEXT,body TEXT,created_at TEXT);
     CREATE TABLE group_send(state TEXT);
     INSERT INTO group_input VALUES('wa-1','group-1','hello','2026-01-01');`);
-  const config = {ownerUserId: 'owner', replyPrefix: 'agent:', groups: [
+  const config = {ownerUserId: 'admin', appendDebugFooter: footer, replyPrefix: 'agent:', groups: [
     {chatId: 'group-1', threadId: 'thread-1', name: 'First'},
     {chatId: 'group-2', threadId: 'thread-2', name: 'Second'},
   ]};
-  const state = {posts: [], sent: [], pages: {}, retired: new Set(), failReply: false};
+  const state = {posts: [], sent: [], pages: {}, retired: new Set(), failReply: false,
+    suppressFooter: false, quotaFails: false, quotaCalls: 0,
+    quota: {codex: {fiveHourRemainingPct: 73}, claude: {weeklyRemainingPct: 64}}};
   const api = async (url, options) => {
+    if (url.startsWith('/api/quota/providers')) {
+      state.quotaCalls++;
+      if (state.quotaFails) throw new Error('quota_unavailable');
+      return {quota: state.quota};
+    }
     const threadId = url.split('/')[3], groupId = threadId.replace('thread', 'group');
     if (url.endsWith('/input')) {
       state.posts.push({url, ...options});
       return {message: {id: `input-${threadId}`}};
     }
     if (url.includes('/messages')) return state.pages[url] || {messages: []};
-    return {thread: {ownerUserId: 'owner', retired: state.retired.has(threadId), binding: {chatId: groupId, enabled: true}}};
+    return {thread: {ownerUserId: config.ownerUserId, codexModel: 'example-model', retired: state.retired.has(threadId),
+      binding: {chatId: groupId, enabled: true, suppressWhatsAppDebugFooter: state.suppressFooter}}};
   };
-  const relay = createScopedGroupRelay({config, inboxDb, relayDb, api, send: async payload => {
+  const relay = createScopedGroupRelay({config, inboxDb, relayDb, api, formatter, env: {}, send: async payload => {
     state.sent.push(payload);
     if (state.failReply) throw new Error('transport_disconnected');
     return {ok: true, ids: ['sent-1']};
   }});
   t.after(() => {inboxDb.close(); relayDb.close();});
-  return {relay, state, inboxDb, relayDb};
+  return {relay, state, inboxDb, relayDb, config};
 }
-const answer = (id, parent = 'input-thread-1', phase = 'final_answer') => ({id, role: 'assistant', state: 'completed', phase, parentMessageId: parent, text: 'agent: answer'});
+const answer = (id, parent = 'input-thread-1', phase = 'final_answer') => ({id, role: 'assistant', source: 'codex-app-server', state: 'completed', phase, parentMessageId: parent, text: 'agent: answer'});
 test('only the matching final is sent; input and completed output do not replay', async t => {
   const {relay, state} = fixture(t);
   state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [answer('old', 'other'), answer('progress', 'input-thread-1', 'commentary'), answer('final')]};
@@ -79,4 +88,55 @@ test('uncertain transport status prevents retry and input does not duplicate aft
   inboxDb.exec("INSERT INTO group_send VALUES('uncertain')");
   assert.equal((await relay.tick()).error, 'group_delivery_requires_review');
   assert.equal(state.sent.length, 1); assert.equal(state.posts.length, 1);
+});
+
+test('shared footer includes model, both provider quotas and queue context once', async t => {
+  const {relay, state} = fixture(t, true);
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [answer('final')]};
+  assert.equal((await relay.tick()).completed, 1);
+  const text = state.sent[0].text;
+  assert.match(text, /dbg: codex\/example-model/);
+  assert.match(text, /codex 5h: 73%/); assert.match(text, /claude wk: 64%/);
+  assert.match(text, /q:0.*load:.*help:\/help/);
+  assert.equal(text.match(/dbg:/g).length, 1);
+});
+
+test('long replies keep a single whole footer within the transport chunk bound', async t => {
+  const {relay, state} = fixture(t, true);
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), text: 'a'.repeat(2790)}]};
+  await relay.tick();
+  assert.ok(state.sent.every(x => [...x.text].length <= 1400));
+  assert.equal(state.sent.map(x => x.text).join('').match(/dbg:/g).length, 1);
+  assert.match(state.sent.at(-1).text, /dbg:.*\ncodex.*\nclaude.*\nq:/);
+});
+
+test('saved payload stays byte-identical when quota changes before a safe retry', async t => {
+  const {relay, state, relayDb} = fixture(t, true);
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [answer('final')]};
+  state.failReply = true; await relay.tick();
+  const original = state.sent[0]; state.failReply = false;
+  state.quota.codex.fiveHourRemainingPct = 12;
+  await relay.tick();
+  assert.deepEqual(state.sent[1], original);
+  assert.equal(state.quotaCalls, 1);
+  assert.equal(relayDb.prepare('SELECT count(*) n FROM reply_payloads').get().n, 1);
+});
+
+test('thread suppression, tenant isolation and NO_REPLY remain effective with footers enabled', async t => {
+  for (const mode of ['suppressed', 'tenant', 'silent']) {
+    const {relay, state, config} = fixture(t, true);
+    state.suppressFooter = mode === 'suppressed';
+    if (mode === 'tenant') config.ownerUserId = 'another-user';
+    state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), text: mode === 'silent' ? 'NO_REPLY' : 'answer'}]};
+    await relay.tick();
+    if (mode === 'silent') assert.equal(state.sent.length, 0);
+    else { assert.equal(state.sent.length, 1); assert.doesNotMatch(state.sent[0].text, /dbg:/); }
+  }
+});
+
+test('quota lookup failure still delivers the answer with honest unavailable telemetry', async t => {
+  const {relay, state} = fixture(t, true); state.quotaFails = true;
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [answer('final')]};
+  assert.equal((await relay.tick()).completed, 1);
+  assert.match(state.sent[0].text, /codex: no data/);
 });

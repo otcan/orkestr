@@ -43,6 +43,7 @@ wrapper = replaceOnce(wrapper, "  if (command === 'send-text') {", `  if(command
   }
   if (command === 'send-text') {`);
 const files = ['packages/connectors/src/whatsapp-scoped-group-transport.js',
+  'packages/connectors/src/whatsapp-scoped-group-formatting.js',
   'packages/connectors/src/whatsapp-scoped-group-relay.js', 'scripts/scoped-group-relay.mjs', 'apps/cli/src/api-client.js'];
 const buildHash = crypto.createHash('sha256').update(bridge.replace(/const transportOnlyBuildHash = '[a-f0-9]+';/, '')).update(wrapper);
 for (const relative of files) buildHash.update(fs.readFileSync(path.join(source, relative)));

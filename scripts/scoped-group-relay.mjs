@@ -6,9 +6,12 @@ import {createScopedGroupRelay} from '../packages/connectors/src/whatsapp-scoped
 
 const execute = promisify(execFile);
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const formatter = config.appendDebugFooter === true
+  ? await import(config.formattingModulePath || '../packages/connectors/src/whatsapp-formatting.js') : null;
 const log = event => console.log(JSON.stringify(event));
 const relay = createScopedGroupRelay({
   config,
+  formatter,
   api: (url, options = {}) => requestJson(url, {timeoutMs: 15000, ...options}),
   send: async ({chatId, requestId, parentId, text}) => {
     const {stdout} = await execute('/usr/bin/node', [config.wrapperPath, 'group-reply', chatId, requestId, parentId, text],

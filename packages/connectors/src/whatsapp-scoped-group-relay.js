@@ -1,15 +1,19 @@
 import crypto from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
+import {scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
 const errorCode = error => /^[a-z_]+$/.test(error.message) ? error.message : 'operation_failed';
 
-export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb}) {
+export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env}) {
+  if (config.appendDebugFooter === true && !['shouldAppendWhatsAppDebugFooter', 'stripWhatsAppDebugFooter', 'whatsappDebugFooter'].every(k => typeof formatter?.[k] === 'function'))
+    throw new Error('group_footer_formatter_required');
   const inbox = inboxDb || new DatabaseSync(config.journalPath, {readOnly: true});
   const db = relayDb || new DatabaseSync(config.relayJournalPath);
   db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS routed(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,message_id TEXT NOT NULL,completed INTEGER NOT NULL DEFAULT 0);
-    CREATE TABLE IF NOT EXISTS replies(id TEXT PRIMARY KEY,state TEXT NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS replies(id TEXT PRIMARY KEY,state TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS reply_payloads(id TEXT PRIMARY KEY,chunks TEXT NOT NULL);`);
   const groups = new Map(config.groups.map(g => [g.chatId, g]));
   const errors = new Map();
 
@@ -27,10 +31,12 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     // lose its final answer merely because another turn produced many messages.
     let before = '';
     const answers = new Map();
+    const context = new Map();
     for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
       const page = await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages?limit=200${before ? `&before=${before}` : ''}`);
       const messages = page.messages || [];
       for (const message of messages) {
+        context.set(message.id, message);
         if (message.role === 'assistant' && message.state === 'completed'
             && ['final_answer', 'final', 'need_input', 'awaiting_input', 'question', 'request_user_input'].includes(message.phase)
             && message.parentMessageId === route.message_id) answers.set(message.id, message);
@@ -38,7 +44,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (messages.some(m => m.id === route.message_id) || !page.hasMoreBefore || !messages.length) {
         const ordered = [...answers.values()].sort((a, b) => Number(a.cursor || 0) - Number(b.cursor || 0));
         const finals = ordered.filter(m => ['final_answer', 'final'].includes(m.phase));
-        return finals.length ? finals : ordered.slice(-1);
+        return {answers: finals.length ? finals : ordered.slice(-1), messages: [...context.values()]};
       }
       if (!page.oldestCursor || page.oldestCursor === before) break;
       before = page.oldestCursor;
@@ -61,13 +67,27 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
       log({event: 'input_routed', threadId: group.threadId, messageId});
     }
-    const answers = await answersFor(group, route);
+    const {answers, messages} = await answersFor(group, route);
     for (const answer of answers) {
       const text = String(answer.text || '').trim();
       if (text && text !== 'NO_REPLY') {
-        const prefix = String(config.replyPrefix || '').trim();
-        const content = prefix && !text.toLowerCase().startsWith(prefix.toLowerCase()) ? `${prefix} ${text}` : text;
-        const chunks = content.match(/[\s\S]{1,1400}/gu) || [];
+        const payloadId = key(`${input.id}:${answer.id}`);
+        let saved = db.prepare('SELECT chunks FROM reply_payloads WHERE id=?').get(payloadId);
+        if (!saved) {
+          let thread = await threadFor(group);
+          if (config.appendDebugFooter === true) {
+            try {
+              const {quota} = await api(`/api/quota/providers?ownerUserId=${encodeURIComponent(config.ownerUserId)}`, {timeoutMs: 1000});
+              if (quota) thread = {...thread, whatsAppDebugProviderQuota: quota};
+            } catch { /* Missing telemetry must not prevent an otherwise valid reply. */ }
+          }
+          const chunks = scopedGroupReplyChunks({text, message: {...answer, chatId: group.chatId}, thread, messages, config, formatter, env});
+          // Freeze text and chunk boundaries before the first provider attempt.
+          // A retry or restart must reuse the same quota snapshot and payload.
+          db.prepare('INSERT INTO reply_payloads(id,chunks) VALUES(?,?)').run(payloadId, JSON.stringify(chunks));
+          saved = {chunks: JSON.stringify(chunks)};
+        }
+        const chunks = JSON.parse(saved.chunks);
         for (let index = 0; index < chunks.length; index++) {
           const requestId = `reply:${key(`${input.id}:${answer.id}:${index}`)}`;
           if (db.prepare("SELECT 1 FROM replies WHERE id=? AND state='sent'").get(requestId)) continue;

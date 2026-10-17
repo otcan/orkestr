@@ -33,6 +33,8 @@ Config fields:
 | `activatedAt` | ISO timestamp; older input is never imported |
 | `groups` | Array of `{chatId, threadId, name}` |
 | `replyPrefix` | Deployment's configured reply identity |
+| `appendDebugFooter` | Enable the shared WhatsApp model/quota/queue footer; per-thread suppression and tenant isolation still apply |
+| `formattingModulePath` | Optional existing immutable Orkestr formatter module for a minimal transport install; defaults to the product module in the same repository |
 | `journalPath` | Transport SQLite journal |
 | `relayJournalPath` | Orkestr routing and completed reply journal |
 | `statusPath` | Optional private JSON status file, updated each poll |
@@ -61,6 +63,13 @@ receipt or restart during sending changes it to `uncertain` and blocks further
 outbound delivery until an operator checks the provider history. Never retry an
 uncertain send blindly. A confirmed receipt can be replayed locally by the same
 request ID without another external send.
+
+Formatted chunks are saved in the relay journal before dispatch, keeping retries
+byte-identical even when quota or load changes. The footer is appended once, at
+the end, without splitting its lines across chunks. Quota telemetry comes from
+the existing owner-scoped API and is optional. When upgrading an older relay,
+stop it gracefully and confirm every accepted transport send has a relay receipt
+and no partially delivered reply remains before enabling changed formatting.
 
 The wrapper allows authenticated health, allowlisted history/group metadata,
 and `group-reply <group-id> <request-id> <original-message-id> <text>`. A send
