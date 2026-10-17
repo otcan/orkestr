@@ -43,6 +43,7 @@ wrapper = replaceOnce(wrapper, "  if (command === 'send-text') {", `  if(command
   }
   if (command === 'send-text') {`);
 const files = ['packages/connectors/src/whatsapp-scoped-group-transport.js',
+  'packages/connectors/src/whatsapp-group-owner-author.js',
   'packages/connectors/src/whatsapp-scoped-group-formatting.js',
   'packages/connectors/src/whatsapp-scoped-timer-notifications.js',
   'packages/connectors/src/whatsapp-timer-notification-proof.js',

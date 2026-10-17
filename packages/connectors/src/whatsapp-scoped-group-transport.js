@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import {createGroupOwnerAuthorPolicy} from './whatsapp-group-owner-author.js';
 import {DatabaseSync} from 'node:sqlite';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {notificationScope, createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
@@ -13,6 +14,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
       || !Array.isArray(config.groups) || !config.groups.length || !token)fail('configuration_invalid');
   const groups=new Map(config.groups.map(g=>[g.chatId,g]));
   if(groups.size!==config.groups.length || [...groups].some(([id,g])=>!/^\d+(?:-\d+)?@g\.us$/.test(id) || !g.threadId))fail('configuration_invalid');
+  const authors=createGroupOwnerAuthorPolicy(config,now);
   const db=new DatabaseSync(dbPath);db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS group_input(id TEXT PRIMARY KEY,chat_id TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_send(id TEXT PRIMARY KEY,hash TEXT NOT NULL,chat_id TEXT NOT NULL,parent_id TEXT NOT NULL,state TEXT NOT NULL,provider_id TEXT,created_at TEXT NOT NULL);
@@ -21,6 +23,12 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   const prior=db.prepare('SELECT value FROM group_meta WHERE key=?').get('contract');
   if(prior && prior.value!==contract)fail('configuration_changed');
   db.prepare('INSERT OR IGNORE INTO group_meta VALUES(?,?)').run('contract',contract);
+  if(authors.contract) {
+    const authorContract=hash(authors.contract);
+    const previous=db.prepare('SELECT value FROM group_meta WHERE key=?').get('owner_authors');
+    if(previous && previous.value!==authorContract)fail('owner_author_configuration_changed');
+    db.prepare('INSERT OR IGNORE INTO group_meta VALUES(?,?)').run('owner_authors',authorContract);
+  }
   db.prepare("UPDATE group_send SET state='uncertain' WHERE state='sending'").run();
   const scope=notificationScope(config);
   const routeFence=config.routeControl ? suppliedFence || createDeliveryRouteFence({dbPath:config.routeControl.dbPath,now}) : null;
@@ -70,11 +78,14 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
     observe(client,message) {
       return serial(async()=>{
         assertClient(client);
-        const id=message?.id?._serialized,chatId=message?.to;
+        const id=message?.id?._serialized,chatId=message?.fromMe===true?message?.to:message?.from;
         const ts=Number(message?.timestamp)*1000;
-        if(message?.fromMe!==true || !groups.has(chatId) || typeof id!=='string' || !id || id.startsWith('summary:')
+        if(!groups.has(chatId) || typeof id!=='string' || !id || id.startsWith('summary:')
             || typeof message.body!=='string' || !message.body.trim() || message.body.length>32000
             || !Number.isFinite(ts) || ts<=Date.parse(config.activatedAt) || ts>now()+5000)return false;
+        const remote=message?.id?.remote?._serialized || message?.id?.remote;
+        if(remote && remote!==chatId)return false;
+        if(message?.fromMe!==true && !await authors.accepts(client,message))return false;
         if(fenced(chatId)) {
           let active;try {active=routeFence.assertActive(config.routeControl.routeId);}catch{return false;}
           if(ts<Date.parse(active.since))return false;
@@ -126,7 +137,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         } finally {clearTimeout(timer);}
       });
     },
-    policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,timerNotifications:!!scope,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:3000,markSeen:false,automaticRouting:false,strictBearer:true,buildHash};},
+    policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,additionalOwnerAuthors:authors.count,timerNotifications:!!scope,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:3000,markSeen:false,automaticRouting:false,strictBearer:true,buildHash};},
     diagnostics(client,buildHash) {return {identityMatches:client?.info?.wid?._serialized===config.ownChatId,...this.policyFields(buildHash)};},
   };
 }
