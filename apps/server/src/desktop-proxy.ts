@@ -12,6 +12,8 @@ import { validateDesktopShareSession } from "../../../packages/core/src/desktop-
 import { appendEvent } from "../../../packages/storage/src/store.js";
 import { assertDesktopNotPasswordBlind, onDesktopPasswordBlind } from "../../../packages/core/src/password-handoff.js";
 import { vaultOwnerFromRequest } from "../../../packages/core/src/vault-access.js";
+import { normalizeUserId } from "../../../packages/core/src/users.js";
+import { normalizeDesktopSlug } from "../../../packages/browsers/src/desktop-leases.js";
 import { desktopCapabilityRequired } from "../../../packages/browsers/src/desktop-capability-broker.js";
 import { hostBoundaryUpgradeDenied } from "./host-boundaries.js";
 import { appendSanitizedForwardedHeaders, rawUpgradeHeaderAllowed } from "./upgrade-forwarded-headers.js";
@@ -37,24 +39,27 @@ const shareSockets = new Map<string, Set<ShareSocket>>();
 
 // Live desktop sockets by slug, so a password handoff can cut every viewer
 // except the handoff owner's own vault-owner session (docs/password-handoff.md).
-type ViewerSocket = { ownerUserId: string; socket: Duplex; upstream: Duplex };
+// A socket is tracked before its blind check and through the upstream
+// handshake: a handoff that starts mid-connect either is seen by the check or
+// destroys the client socket, which also tears down the upstream.
+type ViewerSocket = { ownerUserId: string; socket: Duplex };
 const viewerSockets = new Map<string, Set<ViewerSocket>>();
 
-function trackViewerSocket(slug: string, ownerUserId: string, socket: Duplex, upstream: Duplex): void {
-  const viewers = viewerSockets.get(slug) || new Set<ViewerSocket>();
-  const viewer = { ownerUserId, socket, upstream };
+function trackViewerSocket(slug: string, ownerUserId: string, socket: Duplex): void {
+  const key = normalizeDesktopSlug(slug);
+  const viewers = viewerSockets.get(key) || new Set<ViewerSocket>();
+  const viewer = { ownerUserId, socket };
   viewers.add(viewer);
-  viewerSockets.set(slug, viewers);
+  viewerSockets.set(key, viewers);
   socket.once("close", () => {
     viewers.delete(viewer);
-    if (!viewers.size) viewerSockets.delete(slug);
+    if (!viewers.size) viewerSockets.delete(key);
   });
 }
 
 onDesktopPasswordBlind(({ desktopSlug, ownerUserId }: { desktopSlug: string; ownerUserId: string }) => {
-  for (const viewer of viewerSockets.get(desktopSlug) || []) {
+  for (const viewer of viewerSockets.get(normalizeDesktopSlug(desktopSlug)) || []) {
     if (viewer.ownerUserId && viewer.ownerUserId === ownerUserId) continue;
-    viewer.upstream.destroy();
     viewer.socket.destroy();
   }
 });
@@ -298,9 +303,11 @@ export function attachDesktopProxyUpgrade(server: Server): void {
     }
 
     const owner = upgradeOwner(auth);
+    const routeSlug = parseDesktopUrl(request.url)?.slug || "";
+    trackViewerSocket(routeSlug, owner ? normalizeUserId(owner.userId) : "", socket);
     let target: DesktopTarget | null = null;
     try {
-      await assertDesktopNotPasswordBlind(parseDesktopUrl(request.url)?.slug || "", owner);
+      await assertDesktopNotPasswordBlind(routeSlug, owner);
       const share = auth.desktopShare || null;
       const scope = desktopRequestScope(request.url, { headers: request.headers, orkestrDesktopShare: share });
       target = await desktopTarget(request.url, auth.principal, {
@@ -320,10 +327,8 @@ export function attachDesktopProxyUpgrade(server: Server): void {
 
     if (socket.destroyed) return;
 
-    const slug = target.slug;
     proxyDesktopSocket(socket, head, target.port, rawUpgradeHeaders(request, target), (upstream) => {
       registerDesktopShareSocket(socket, upstream, auth.desktopShare || null, auth.desktopShareAttempt || null);
-      trackViewerSocket(slug, owner ? String(owner.userId || "") : "", socket, upstream);
     });
   });
 }

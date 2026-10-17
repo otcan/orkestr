@@ -76,3 +76,44 @@ test("desktop HTTP and websocket proxy refuse a blind desktop before resolving i
   assert.match(response, /desktop_password_blind/);
   assert.equal(socket.destroyed, true);
 });
+
+test("viewer websockets still connecting when a handoff starts never get through", async (t) => {
+  // Same module instance as the compiled proxy, so its disconnect notice fires.
+  const { startPasswordHandoff } = await import("../dist/server/packages/core/src/password-handoff.js");
+  const file = path.join(dataPaths(process.env).home, "password-handoffs.json");
+  const prior = await fs.readFile(file, "utf8").catch(() => null);
+  await fs.rm(file, { force: true });
+  t.after(() => (prior === null ? fs.rm(file, { force: true }) : fs.writeFile(file, prior)));
+  const priorBoundaries = process.env.ORKESTR_HOST_BOUNDARIES;
+  process.env.ORKESTR_HOST_BOUNDARIES = "0";
+  t.after(() => (priorBoundaries === undefined ? delete process.env.ORKESTR_HOST_BOUNDARIES : (process.env.ORKESTR_HOST_BOUNDARIES = priorBoundaries)));
+  const server = new EventEmitter();
+  attachDesktopProxyUpgrade(server);
+  const handler = server.listeners("upgrade")[0];
+  const viewers = [];
+  // Viewers start at staggered points around the handoff start.
+  for (let index = 0; index < 6; index += 1) {
+    const socket = new PassThrough();
+    let response = "";
+    socket.on("data", (chunk) => { response += chunk; });
+    viewers.push({ socket, response: () => response, done: handler({ url: "/desktop/race-desk/websockify", headers: { host: "localhost" }, rawHeaders: [], orkestrTrustedOperatorProxy: true }, socket, Buffer.alloc(0)) });
+    if (index === 2) {
+      await startPasswordHandoff(
+        { kind: "user", userId: "owner", role: "admin", vaultOwner: true, recentAuthAt: new Date().toISOString() },
+        { desktopSlug: "race-desk", threadId: "pa-thread", targetId: "t", origin: "https://signup.example.test" },
+        process.env,
+        {
+          activeDesktopLeaseStatus: async () => ({ active: true, threadId: "pa-thread" }),
+          readManagedDesktopSession: async () => ({ cdp_url: "http://127.0.0.1:9", profileDir: "" }),
+          probePasswordField: async () => ({ ok: true, field: { found: true, isPassword: true, filled: false } }),
+        },
+      );
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await Promise.all(viewers.map((viewer) => viewer.done));
+  for (const viewer of viewers) {
+    assert.equal(viewer.socket.destroyed, true);
+    assert.doesNotMatch(viewer.response(), /^HTTP\/1.1 101 /);
+  }
+});
