@@ -11,9 +11,8 @@ triggers:
 agent:
   provider: openai-compatible
   model: example-local-model
-  base_url: http://llm.example.internal:8000/v1
-  fallback:
-    - provider: codex
+  base_url: http://127.0.0.1:11434/v1
+# Requires ORKESTR_PERSONAL_AGENT_ENABLED=1. No fallback until OP-10.
 task:
   prompt: Summarize commits merged since the previous successful run.
   output_schema:

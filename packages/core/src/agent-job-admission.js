@@ -138,7 +138,7 @@ export async function admitRun({ job = "", spec = null, type = "api", name = "",
   const jobName = pinned.metadata.name;
   const { trigger, triggerName, dedupeKey: key } = resolveTrigger(pinned, { type, name, index, dedupeKey, body });
   // Owner decision: never admit a run whose provider is not connected.
-  const status = await agentJobProviderStatus(pinned.agent.provider, env);
+  const status = await agentJobProviderStatus(pinned.agent.provider, env, pinned.agent);
   if (!status.runnable) {
     await recordTriggerAudit({ job: jobName, type, outcome: "rejected", reason: `provider_not_connected:${status.reason}`, sourceRef: key }, env);
     throw providerNotConnectedError(pinned.agent.provider, status.reason);
