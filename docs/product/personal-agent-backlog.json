@@ -1,0 +1,493 @@
+{
+  "program": "Orkestr Personal Agent",
+  "version": 1,
+  "updated": "2026-10-18",
+  "promise": "One assistant that remembers what matters, organizes ongoing work, delegates to the right agents, and follows through.",
+  "lanes": {
+    "coordinator": "Program coordinator (parent features thread)",
+    "A": "Lane A: core contracts, durable entities and events (existing backend worker)",
+    "B": "Lane B: local assistant runtime and evaluation (existing runtime worker)",
+    "C": "Lane C: built-in web app shell and UX (existing UI worker)",
+    "R": "Independent reviewer: acceptance suite and reviews (existing review worker)"
+  },
+  "items": [
+    {
+      "id": "OP-01",
+      "priority": "P0",
+      "title": "Product charter, repo audit and deduplicated delivery map",
+      "owner": "coordinator",
+      "deps": [],
+      "state": "in_progress",
+      "scope": "Inventory shipped, partial and absent capabilities, open changes and reuse decisions; baseline supervisory effort and status correctness; record non-goals.",
+      "acceptance": [
+        "Committed charter and audit (this plan)",
+        "Actual tracker-to-OP mapping",
+        "Assigned owners and critical path"
+      ],
+      "next": "Commit this plan and backlog; create the tracker epic and items; dispatch lanes A, B, C and the reviewer.",
+      "tracker": "ORK-535"
+    },
+    {
+      "id": "OP-02",
+      "priority": "P0",
+      "title": "Shared architecture and UX contract (ADR)",
+      "owner": "A",
+      "deps": [
+        "OP-01"
+      ],
+      "state": "in_progress",
+      "scope": "Assistant identity; ordinary chat vs durable project; Project, Task, Thread/Subthread, Workspace, Memory, Decision, Event, Action/Approval; API contracts; basic user journeys; feature flag.",
+      "acceptance": [
+        "One versioned ADR in docs/adr",
+        "Migration strategy reusing the agent-job store, threads, task agents and events",
+        "Sample flows and wireframes in the existing web design",
+        "No competing schemas"
+      ],
+      "next": "Draft docs/adr/0002-personal-agent-contract.md from the audit; lanes B and C comment before freeze.",
+      "tracker": "ORK-536"
+    },
+    {
+      "id": "OP-03",
+      "priority": "P0",
+      "title": "Durable project/task/resource entities and additive migration",
+      "owner": "A",
+      "deps": [
+        "OP-02"
+      ],
+      "state": "blocked",
+      "scope": "Additive Project/Task/resource records next to existing threads, task agents and agent-job runs; preserve ids, histories, thread bindings, owners and repo/desk attachments.",
+      "acceptance": [
+        "Migration dry run on sanitized fixtures",
+        "Idempotent rerun",
+        "Rollback/compatibility tests",
+        "No production migration in this task"
+      ],
+      "next": "Blocked on OP-02 contract freeze.",
+      "tracker": "ORK-537"
+    },
+    {
+      "id": "OP-04",
+      "priority": "P0",
+      "title": "Explicit task contracts and lifecycle",
+      "owner": "A",
+      "deps": [
+        "OP-03"
+      ],
+      "state": "blocked",
+      "scope": "Outcome, criteria, scope/permissions, dependencies, assigned worker, priority, budget, evidence, next action; queued/running/blocked/needs-approval/succeeded/failed/cancelled with validated transitions.",
+      "acceptance": [
+        "Reasoned blockers",
+        "Cancellation semantics",
+        "Terminal result required",
+        "Worker 'done' text alone cannot mark success"
+      ],
+      "next": "Blocked on OP-03.",
+      "tracker": "ORK-538"
+    },
+    {
+      "id": "OP-05",
+      "priority": "P0",
+      "title": "Unified event journal and reliable dispatch",
+      "owner": "A",
+      "deps": [
+        "OP-03"
+      ],
+      "state": "blocked",
+      "scope": "Correlate message/task/worker/tool/action/artifact events with actor origin, timestamp, causation and idempotency keys; reuse events.jsonl, orkestr-events, outbox and effect ledgers; add a cursor feed.",
+      "acceptance": [
+        "Cursor reconnect tests",
+        "Crash/replay and duplicate delivery tests",
+        "Provider-accepted vs delivered distinguished",
+        "Uncertain external effects never blindly retried"
+      ],
+      "next": "Blocked on OP-03; event envelope is specified in OP-02.",
+      "tracker": "ORK-539"
+    },
+    {
+      "id": "OP-06",
+      "priority": "P0",
+      "title": "Project/task projections and evidence-backed status API",
+      "owner": "A",
+      "deps": [
+        "OP-04",
+        "OP-05"
+      ],
+      "state": "blocked",
+      "scope": "Durable snapshots with last verified progress, blockers, next action and source events.",
+      "acceptance": [
+        "'What is happening?' reads structured state",
+        "Stale/unknown exposed",
+        "No full-history scan or invented completion"
+      ],
+      "next": "Blocked on OP-04 and OP-05.",
+      "tracker": "ORK-540"
+    },
+    {
+      "id": "OP-07",
+      "priority": "P0",
+      "title": "Persistent assistant memory and context assembly",
+      "owner": "B",
+      "deps": [
+        "OP-02",
+        "OP-03"
+      ],
+      "state": "blocked",
+      "scope": "Separate approved preferences, facts, decisions, commitments and project summaries with provenance, timestamps, correction/forget/export, scoped retrieval and bounded context. Reuse the appendable open-topics ledger pattern already used privately.",
+      "acceptance": [
+        "Survives restart and model swap",
+        "No cross-user/project leakage",
+        "Arbitrary web/agent text is never promoted to owner instructions"
+      ],
+      "next": "Blocked on OP-02 memory contract and OP-03 storage.",
+      "tracker": "ORK-541"
+    },
+    {
+      "id": "OP-08",
+      "priority": "P0",
+      "title": "Single top-level conversational agent",
+      "owner": "B",
+      "deps": [
+        "OP-06",
+        "OP-07",
+        "OP-09"
+      ],
+      "state": "blocked",
+      "scope": "Normal dialogue, recall, cross-project questions, commitments capture, delegation, explaining blockers and approvals via projections and tools.",
+      "acceptance": [
+        "One continuous identity",
+        "'remember this', 'what is blocked', 'start this', 'cancel that' and ordinary chat work",
+        "No automatic project per message"
+      ],
+      "next": "Blocked on OP-06, OP-07 and OP-09.",
+      "tracker": "ORK-542"
+    },
+    {
+      "id": "OP-09",
+      "priority": "P0",
+      "title": "Local inference adapter and health/configuration",
+      "owner": "B",
+      "deps": [
+        "OP-02"
+      ],
+      "state": "in_progress",
+      "scope": "Provider-neutral adapter over existing local serving (OpenAI-compatible endpoint, e.g. an already-running Ollama); fill the validated but unregistered openai-compatible adapter slot; discovery, streaming, cancellation, tool/schema validation, health.",
+      "acceptance": [
+        "Working local-only conversation on available hardware/model",
+        "Measured RAM and latency",
+        "Unavailable model handled without fabricated replies or silent cloud use"
+      ],
+      "next": "Discovery: inventory installed local models and endpoints, measure a baseline, propose the adapter interface for OP-02.",
+      "tracker": "ORK-543"
+    },
+    {
+      "id": "OP-10",
+      "priority": "P1",
+      "title": "Explicit escalation, privacy and resource policies",
+      "owner": "B",
+      "deps": [
+        "OP-09",
+        "OP-14"
+      ],
+      "state": "blocked",
+      "scope": "Optional remote models/workers with allowed data scopes, cost/token/time caps and visible reason; hard local-only setting.",
+      "acceptance": [
+        "Forbidden cloud requests blocked in tests",
+        "Missing credentials, timeout and budget exhaustion handled",
+        "Scheduler/status usable without an LLM"
+      ],
+      "next": "Policy contract drafted inside OP-02; implementation blocked on OP-09 and OP-14.",
+      "tracker": "ORK-544"
+    },
+    {
+      "id": "OP-11",
+      "priority": "P1",
+      "title": "Local-model and orchestration evaluation harness",
+      "owner": "B",
+      "deps": [
+        "OP-08",
+        "OP-09",
+        "OP-10"
+      ],
+      "state": "blocked",
+      "scope": "Versioned fixtures: dialogue, memory, routing, stale status, conflicting instruction sources, delegation, approvals, EN/TR/DE, recovery.",
+      "acceptance": [
+        "Report model/version/hardware, task success, latency/RAM/cost, escalation rate",
+        "Measured default recommendation",
+        "No unsupported model-quality claims"
+      ],
+      "next": "Harness design starts with OP-09 discovery; final run blocked on OP-08..10.",
+      "tracker": "ORK-545"
+    },
+    {
+      "id": "OP-12",
+      "priority": "P0",
+      "title": "Delegation lifecycle and bounded subthreads",
+      "owner": "A",
+      "deps": [
+        "OP-04",
+        "OP-05",
+        "OP-14"
+      ],
+      "state": "blocked",
+      "scope": "Attach work to parent contracts, isolate child context, return structured results/artifacts, propagate state; reuse thread workers, task agents and watches.",
+      "acceptance": [
+        "Max concurrency/depth/budget",
+        "Cancellation propagation",
+        "Duplicate dispatch guard",
+        "Restart-safe resumption",
+        "Closed-child result retention"
+      ],
+      "next": "Blocked on OP-04, OP-05 and OP-14.",
+      "tracker": "ORK-546"
+    },
+    {
+      "id": "OP-13",
+      "priority": "P0",
+      "title": "Supervisor and event-driven follow-through",
+      "owner": "A",
+      "deps": [
+        "OP-06",
+        "OP-12"
+      ],
+      "state": "blocked",
+      "scope": "Heartbeats/progress leases, stall detection, bounded retry for safe actions, escalation, scheduled briefings, low-noise notifications.",
+      "acceptance": [
+        "Seeded stalls detected",
+        "Recoverable work resumes",
+        "Irreversible/uncertain actions held",
+        "No wakeup storms or idle token burn",
+        "Existing paused timers unchanged"
+      ],
+      "next": "Blocked on OP-06 and OP-12.",
+      "tracker": "ORK-547"
+    },
+    {
+      "id": "OP-14",
+      "priority": "P0",
+      "title": "Task-scoped permissions and approval evidence",
+      "owner": "A",
+      "deps": [
+        "OP-02",
+        "OP-04"
+      ],
+      "state": "blocked",
+      "scope": "Reuse policy, agent-job tool decisions and approvals; bind approval to action, target, scope and expiry; distinguish human instruction, delegated context, automation and untrusted content.",
+      "acceptance": [
+        "Pending/dismiss/revoke/approve with audit trail",
+        "No external side effect outside task permission",
+        "Verifiable owner decisions preserved",
+        "Actual root trust boundary documented"
+      ],
+      "next": "Contract within OP-02; implementation blocked on OP-04.",
+      "tracker": "ORK-548"
+    },
+    {
+      "id": "OP-15",
+      "priority": "P1",
+      "title": "Git workspace integration",
+      "owner": "coordinator",
+      "deps": [
+        "OP-12",
+        "OP-14"
+      ],
+      "state": "blocked",
+      "scope": "Attach repos/branches/worktrees and PR/test artifacts to tasks via existing workers and the release train.",
+      "acceptance": [
+        "Concurrent task isolation",
+        "Clean result handoff",
+        "No unapproved merge/deploy",
+        "Safe cleanup preserving unique work"
+      ],
+      "next": "Blocked on OP-12 and OP-14.",
+      "tracker": "ORK-549"
+    },
+    {
+      "id": "OP-16",
+      "priority": "P1",
+      "title": "Virtual desk integration",
+      "owner": "coordinator",
+      "deps": [
+        "OP-12",
+        "OP-14"
+      ],
+      "state": "blocked",
+      "scope": "Reuse desk leases, browser access and the owner password handoff branch; expose desk ownership, blocked credentials and conflicts.",
+      "acceptance": [
+        "No concurrent uncontrolled desk access",
+        "Stale leases recovered safely",
+        "Owner intervention shown in the parent task",
+        "App-only isolation limits stated"
+      ],
+      "next": "Blocked on OP-12 and OP-14; reuses the reviewed password-handoff work, no duplicate.",
+      "tracker": "ORK-550"
+    },
+    {
+      "id": "OP-17",
+      "priority": "P1",
+      "title": "Channel parity and identity continuity",
+      "owner": "coordinator",
+      "deps": [
+        "OP-05",
+        "OP-08",
+        "OP-14"
+      ],
+      "state": "blocked",
+      "scope": "Web and current messaging/MCP inputs share assistant and task state; preserve routing contracts and origin/recipient metadata.",
+      "acceptance": [
+        "Cross-channel continuation",
+        "Self-message/echo/duplicate tests",
+        "Sender-switch regression fixtures",
+        "No live global routing changes"
+      ],
+      "next": "Blocked on OP-05, OP-08 and OP-14.",
+      "tracker": "ORK-551"
+    },
+    {
+      "id": "OP-18",
+      "priority": "P0",
+      "title": "Personal-agent home in the existing web app",
+      "owner": "C",
+      "deps": [
+        "OP-02",
+        "OP-06",
+        "OP-08"
+      ],
+      "state": "in_progress",
+      "scope": "Primary conversation plus active work, needs attention, recent results and grounded briefing, behind a feature flag; legacy threads stay reachable.",
+      "acceptance": [
+        "Responsive and accessibility basics",
+        "Loading/offline/stale states",
+        "Live events and real API data, no fake counters",
+        "Legacy threads retained"
+      ],
+      "next": "Shell discovery and flagged layout against the OP-02 draft; integration blocked on OP-06 and OP-08.",
+      "tracker": "ORK-552"
+    },
+    {
+      "id": "OP-19",
+      "priority": "P1",
+      "title": "Project/work detail view",
+      "owner": "C",
+      "deps": [
+        "OP-12",
+        "OP-15",
+        "OP-16",
+        "OP-18"
+      ],
+      "state": "blocked",
+      "scope": "Tasks/subthreads, dependencies, timeline, outputs, repo/worktree/PR and desk attachments, blocker and next action.",
+      "acceptance": [
+        "Drill from briefing to execution/evidence",
+        "Permitted pause/cancel controls without reading every chat"
+      ],
+      "next": "Blocked on OP-12, OP-15, OP-16 and OP-18.",
+      "tracker": "ORK-553"
+    },
+    {
+      "id": "OP-20",
+      "priority": "P1",
+      "title": "Approval inbox and inspectable memory/settings",
+      "owner": "C",
+      "deps": [
+        "OP-07",
+        "OP-14",
+        "OP-18"
+      ],
+      "state": "blocked",
+      "scope": "Review exact action/scope, approve/deny, edit/forget memories, inspect sources, configure autonomy/local/cloud/budgets.",
+      "acceptance": [
+        "Persisted permissions",
+        "Effective revocation",
+        "Accessible controls",
+        "Meaningful audit records"
+      ],
+      "next": "Blocked on OP-07, OP-14 and OP-18.",
+      "tracker": "ORK-554"
+    },
+    {
+      "id": "OP-21",
+      "priority": "P1",
+      "title": "Opinionated first-run onboarding",
+      "owner": "C",
+      "deps": [
+        "OP-09",
+        "OP-18",
+        "OP-20"
+      ],
+      "state": "blocked",
+      "scope": "Single-user default, detected local runtime, model/data tradeoffs, optional providers, guided first useful task.",
+      "acceptance": [
+        "Reproducible fresh-install walkthrough",
+        "Time-to-first-completed-task measured",
+        "No mandatory cloud account"
+      ],
+      "next": "Blocked on OP-09, OP-18 and OP-20.",
+      "tracker": "ORK-555"
+    },
+    {
+      "id": "OP-22",
+      "priority": "P0",
+      "title": "Independent acceptance and regression suite",
+      "owner": "R",
+      "deps": [],
+      "state": "in_progress",
+      "scope": "End-to-end tests conversation -> task -> worker -> artifact -> verified summary; restart, failed/unknown tool call, permission denial, prompt injection, model loss, stale desk, duplicate input, migration.",
+      "acceptance": [
+        "Failures reproduced before fixes",
+        "Zero unauthorized side effects/false success in seeded cases",
+        "CI evidence; known failures distinguished"
+      ],
+      "next": "Write the acceptance test plan and the first failing vertical-slice fixtures; integrate incrementally across OP-03..21.",
+      "tracker": "ORK-556"
+    },
+    {
+      "id": "OP-23",
+      "priority": "P1",
+      "title": "Five-project dogfood pilot and honest positioning",
+      "owner": "coordinator",
+      "deps": [
+        "OP-11",
+        "OP-13",
+        "OP-17",
+        "OP-19",
+        "OP-20",
+        "OP-22"
+      ],
+      "state": "blocked",
+      "scope": "Permitted/sanitized real work across software and non-coding tasks; track status checks, completion/intervention, stall detection, summary accuracy, time/cost, notification usefulness.",
+      "acceptance": [
+        "Baseline vs measured results",
+        "Gaps explicit",
+        "Demo and draft copy reflecting only working capabilities",
+        "No outreach or public publication"
+      ],
+      "next": "Blocked on OP-11, OP-13, OP-17, OP-19, OP-20 and OP-22.",
+      "tracker": "ORK-557"
+    },
+    {
+      "id": "OP-24",
+      "priority": "P1",
+      "title": "Packaging, release candidate and rollback runbook",
+      "owner": "coordinator",
+      "deps": [
+        "OP-21",
+        "OP-22",
+        "OP-23"
+      ],
+      "state": "blocked",
+      "scope": "Existing install path, compatibility/upgrade tests, backup/export/restore, feature flags, canary plan.",
+      "acceptance": [
+        "Reviewed small PRs",
+        "Green required CI or documented gate blockers",
+        "Tested rollback",
+        "Staged release candidate through the existing release gate"
+      ],
+      "next": "Blocked on OP-21..23.",
+      "tracker": "ORK-558"
+    }
+  ],
+  "tracker": {
+    "system": "Jira project ORK (private)",
+    "epic": "ORK-534"
+  }
+}
