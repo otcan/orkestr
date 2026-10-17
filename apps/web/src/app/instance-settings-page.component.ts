@@ -1,18 +1,20 @@
 import { DatePipe, JsonPipe, KeyValuePipe } from "@angular/common";
-import { Component, OnInit, inject } from "@angular/core";
+import { Component, Input, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, AttachmentEncryptionKey, AttachmentEncryptionStatus, InstanceStatusResponse } from "./api.service";
 import { AttachmentDecryptionService } from "./attachment-decryption.service";
 import { AttachmentEncryptionBootstrapService } from "./attachment-encryption-bootstrap.service";
 import { HushDeviceManagementPanelComponent } from "./hush-device-management-panel.component";
+import { SystemResourcesComponent } from "./system-resources.component";
 
 @Component({
   selector: "ork-instance-settings-page",
-  imports: [DatePipe, FormsModule, HushDeviceManagementPanelComponent, JsonPipe, KeyValuePipe],
+  imports: [DatePipe, FormsModule, HushDeviceManagementPanelComponent, JsonPipe, KeyValuePipe, SystemResourcesComponent],
   templateUrl: "./instance-settings-page.component.html",
 })
 export class InstanceSettingsPageComponent implements OnInit {
+  @Input() showSystemResources = false;
   private readonly api = inject(ApiService);
   private readonly attachmentDecryption = inject(AttachmentDecryptionService);
   private readonly attachmentEncryptionBootstrap = inject(AttachmentEncryptionBootstrapService);
