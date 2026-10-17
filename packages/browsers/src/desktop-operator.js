@@ -1,4 +1,4 @@
-import { assertDesktopNotPasswordBlind } from "../../core/src/password-handoff.js";
+import { assertDesktopNotPasswordBlind, withDesktopHandoffGate } from "../../core/src/password-handoff.js";
 import WebSocket from "ws";
 import { managedDesktopAction, managedDesktopOpenUrl } from "./browserctl.js";
 import { assertDesktopAccess } from "../../core/src/desktop-access.js";
@@ -335,7 +335,12 @@ export function detectDesktopBrowserChallenge(page = {}) {
   };
 }
 
+// The blind check and the operation run under the per-desktop handoff gate.
 export async function operateManagedDesktop(slug = "", args = {}, env = process.env, options = {}) {
+  return withDesktopHandoffGate(slug, () => operateManagedDesktopUngated(slug, args, env, options), env);
+}
+
+async function operateManagedDesktopUngated(slug = "", args = {}, env = process.env, options = {}) {
   const desktopSlug = clean(slug || args.slug || args.target);
   if (!desktopSlug) {
     const error = new Error("desktop_slug_required");

@@ -50,3 +50,39 @@ test("desktop lifecycle actions re-check blindness right before acting (in-fligh
     if (/desktop_password_blind/.test(error.message)) throw error;
   }), "the handoff owner's own session may act");
 });
+
+test("an in-flight desktop action finishes before a handoff opens; later actions are refused", async (t) => {
+  const { assertDesktopNotPasswordBlind, desktopPasswordBlind, startPasswordHandoff, withDesktopHandoffGate } = await import("../packages/core/src/password-handoff.js");
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-pw-gate-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const env = { ORKESTR_HOME: home };
+  const order = [];
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let admitted;
+  const admittedSignal = new Promise((resolve) => { admitted = resolve; });
+  // An agent action: passes its blind check, then is paused mid-action.
+  const action = withDesktopHandoffGate("gate-desk", async () => {
+    await assertDesktopNotPasswordBlind("gate-desk", null, env);
+    admitted();
+    await held;
+    order.push("action_effect");
+  }, env);
+  await admittedSignal;
+  const handoff = startPasswordHandoff(
+    { kind: "user", userId: "owner", role: "admin", vaultOwner: true, recentAuthAt: new Date().toISOString() },
+    { desktopSlug: "gate-desk", threadId: "pa-thread", targetId: "t", origin: "https://signup.example.test" },
+    env,
+    {
+      activeDesktopLeaseStatus: async () => ({ active: true, threadId: "pa-thread" }),
+      readManagedDesktopSession: async () => ({ cdp_url: "http://127.0.0.1:9", profileDir: "" }),
+      probePasswordField: async () => ({ ok: true, field: { found: true, isPassword: true, filled: false } }),
+    },
+  ).then((result) => { order.push("handoff_open"); return result; });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(await desktopPasswordBlind("gate-desk", env), false, "the handoff waits for the in-flight action");
+  release();
+  await Promise.all([action, handoff]);
+  assert.deepEqual(order, ["action_effect", "handoff_open"]);
+  await assert.rejects(withDesktopHandoffGate("gate-desk", () => assertDesktopNotPasswordBlind("gate-desk", null, env), env), /desktop_password_blind/, "actions after the start are refused");
+});

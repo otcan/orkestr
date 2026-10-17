@@ -100,6 +100,17 @@ export async function assertDesktopNotPasswordBlind(desktopSlug, ownerPrincipal 
   throw blindError();
 }
 
+/**
+ * Serializes, per desktop, a handoff start with agent desktop actions.
+ * An action runs its blind check and its effect under this gate, so it
+ * either finishes before a handoff opens or sees it and is refused.
+ * Re-entrant within one async call chain; works across processes.
+ */
+export function withDesktopHandoffGate(desktopSlug, operation, env = process.env) {
+  const slug = normalizeDesktopSlug(desktopSlug) || "_";
+  return withStorageFileLock(path.join(dataPaths(env).home, "password-handoff-gates", slug), operation, { timeoutMs: 180_000 });
+}
+
 const blindListeners = new Set();
 
 /** In-process notice when a desktop turns blind, so live viewers can be cut. */
@@ -169,30 +180,35 @@ export async function startPasswordHandoff(principal, input = {}, env = process.
   if (!probe.field.found || !probe.field.isPassword) throw vaultError("password_handoff_field_not_password", 409);
   if (probe.field.filled) throw vaultError("password_handoff_field_not_empty", 409);
   const ttl = Math.min(MAX_TTL_MS, Math.max(60_000, Number(input.ttlMs) || DEFAULT_TTL_MS));
-  const nowMs = Date.now();
-  const record = await mutateHandoffs(env, async (handoffs) => {
-    if (handoffs.some((item) => item.desktopSlug === desktopSlug && isOpen(item))) {
-      throw vaultError("password_handoff_already_open", 409);
+  // Under the desktop gate: in-flight agent actions finish first; later ones
+  // see the open handoff.
+  const record = await withDesktopHandoffGate(desktopSlug, async () => {
+    const nowMs = Date.now();
+    const record = await mutateHandoffs(env, async (handoffs) => {
+      if (handoffs.some((item) => item.desktopSlug === desktopSlug && isOpen(item))) {
+        throw vaultError("password_handoff_already_open", 409);
+      }
+      const created = {
+        id: `pwh_${randomUUID()}`,
+        ownerUserId: owner,
+        threadId,
+        desktopSlug,
+        targetId,
+        origin,
+        selector,
+        state: "open",
+        startedAt: new Date(nowMs).toISOString(),
+        expiresAt: new Date(nowMs + ttl).toISOString(),
+      };
+      handoffs.push(created);
+      return created;
+    });
+    await event("password_handoff_started", record, {}, env);
+    for (const listener of blindListeners) {
+      try { listener({ desktopSlug, ownerUserId: owner }); } catch { /* listener errors never block the handoff */ }
     }
-    const created = {
-      id: `pwh_${randomUUID()}`,
-      ownerUserId: owner,
-      threadId,
-      desktopSlug,
-      targetId,
-      origin,
-      selector,
-      state: "open",
-      startedAt: new Date(nowMs).toISOString(),
-      expiresAt: new Date(nowMs + ttl).toISOString(),
-    };
-    handoffs.push(created);
-    return created;
-  });
-  await event("password_handoff_started", record, {}, env);
-  for (const listener of blindListeners) {
-    try { listener({ desktopSlug, ownerUserId: owner }); } catch { /* listener errors never block the handoff */ }
-  }
+    return record;
+  }, env);
   return publicHandoff(record, { status: "awaiting_owner" });
 }
 

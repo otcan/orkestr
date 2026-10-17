@@ -29,7 +29,8 @@ It does **not** stop a process that deliberately bypasses Orkestr. Examples are 
    - agent vault fill;
    - tenant agent desktop skill actions (open, open_url, start, stop, restart);
    - `POST /api/browser-sessions/:slug/:action` and `/api/browsers/:slug/:action`;
-   - the `/desktop/:slug/…` HTTP and websocket (noVNC) proxy. Desktop shares, machine credentials and the local operator proxy count as non-owner. Websockets already open when the handoff starts are cut, except the owner's.
+   - the `/desktop/:slug/…` HTTP and websocket (noVNC) proxy.
+   - Agent actions (lifecycle, operate, vault fill) run their check and their effect under a per-desktop gate, which also covers handoff start. An action already running finishes before the handoff opens. Desktop shares, machine credentials and the local operator proxy count as non-owner. Websockets already open when the handoff starts are cut, except the owner's.
 5. The owner, in the live desktop view, uses Chrome's "Suggest password…" and "Use strong password". Agents never click these.
 6. The status is one of the values below. Two callers may ask: the owner's vault-owner session (`ownerPasswordHandoffStatus`), or the thread the handoff is bound to, resolved from its own thread identity (`agentPasswordHandoffStatus`).
 
