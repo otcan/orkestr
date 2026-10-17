@@ -48,8 +48,10 @@ export function createOwnerSelfChatWrapper(config, executeImpl=execute) {
       throw selfChatError('selfchat_existing_service_inactive');
     return `${config.existingService}:${fields.MainPID}:${fields.InvocationID}`;
   }
-  async function invoke(argv) {
-    await preflight();
+  async function invoke(argv, {runtimeId,isActive=()=>true}={}) {
+    const current=await preflight();
+    if(!isActive()) throw selfChatError('selfchat_adapter_closed');
+    if(runtimeId && current!==runtimeId) throw selfChatError('selfchat_runtime_changed');
     if (!['status','history','send-text'].includes(argv[0])) throw selfChatError('selfchat_wrapper_operation_denied');
     try {
       const {stdout}=await executeImpl(config.wrapperPath,argv,{env:fixedEnv,timeout:30000,maxBuffer:1024*1024});

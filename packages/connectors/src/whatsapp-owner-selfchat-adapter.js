@@ -8,12 +8,13 @@ export function createOwnerSelfChatAdapter({ config, journal, invoke, preflight 
   const policy=createOwnerSelfChatTransportPolicy({...config, identityVerified:true, verifiedOwnChatId:config.chatId});
   let tail=Promise.resolve();
   let statusAt=0;
+  let closed=false;
   const serial=work => { const next=tail.catch(()=>{}).then(work); tail=next; return next; };
   async function ready() {
     const runtimeId=await preflight();
     assertOwnerSelfChatIdentity(config,journal.meta('identity'),runtimeId);
     if(Date.now()-statusAt>30000) {
-      const status=await invoke(['status']);
+      const status=await invoke(['status'],{runtimeId,isActive:()=>!closed});
       if(status?.authenticated!==true || status.ready!==true || status.state!=='ready')
         throw selfChatError('selfchat_bridge_not_ready');
       statusAt=Date.now();
@@ -27,10 +28,13 @@ export function createOwnerSelfChatAdapter({ config, journal, invoke, preflight 
       && p.textOnly===true && Number.isInteger(p.maxTextLength) && p.maxTextLength>=3000;
   };
   return {
+    close:()=>{closed=true;},
     request: request => serial(async () => {
+      if(closed) throw selfChatError('selfchat_adapter_closed');
       if (request.accountId!==base.accountId || request.chatId!==base.chatId || request.contract!==contract)
         throw selfChatError('owner_selfchat_transport_scope_denied',403);
       await ready();
+      if(closed) throw selfChatError('selfchat_adapter_closed');
       if (request.operation==='health') return {ok:true,accountId:base.accountId,identityVerified:true,
         readReady:!journal.unresolved(),ready:!journal.unresolved() && sendPolicyVerified(),
         blocked:journal.unresolved()?'selfchat_delivery_uncertain':sendPolicyVerified()?'':'selfchat_provider_send_policy_unverified'};
@@ -44,7 +48,7 @@ export function createOwnerSelfChatAdapter({ config, journal, invoke, preflight 
       const command=policy.command(request);
       if (request.operation==='history') {
         if (journal.unresolved()) throw selfChatError('selfchat_delivery_uncertain');
-        const payload=await invoke(command);
+        const payload=await invoke(command,{runtimeId:journal.meta('identity').runtimeId,isActive:()=>!closed});
         if (payload?.ok!==true || payload.chatId!==base.chatId || !Array.isArray(payload.messages))
           throw selfChatError('selfchat_history_invalid',502);
         const rows=[...payload.messages].sort((a,b)=>Date.parse(a.timestamp)-Date.parse(b.timestamp));
@@ -72,7 +76,8 @@ export function createOwnerSelfChatAdapter({ config, journal, invoke, preflight 
       const prior=journal.reserve(request.requestId,payload);
       if (prior.duplicate) return {ok:true,ids:prior.ids,duplicate:true};
       try {
-        const result=await invoke(command);
+        if(closed) throw selfChatError('selfchat_adapter_closed');
+        const result=await invoke(command,{runtimeId:journal.meta('identity').runtimeId,isActive:()=>!closed});
         if (result?.ok!==true) throw selfChatError('selfchat_delivery_uncertain');
         journal.sent(request.requestId,result.ids);
         return {ok:true,ids:result.ids};

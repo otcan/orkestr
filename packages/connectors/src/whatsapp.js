@@ -1,4 +1,4 @@
-import { ownerSelfChatReplyRoute } from './whatsapp-owner-selfchat-scope.js';
+import { ownerSelfChatReplyRoute,isDedicatedOwnerSelfChatOutput } from './whatsapp-owner-selfchat-scope.js';
 import { ownerSelfChatStatusForInput } from './whatsapp-owner-selfchat-client.js';
 import crypto from "node:crypto";
 import { withInboundRouteLock } from "./whatsapp-inbound-route-lock.js";
@@ -6343,7 +6343,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       const ownerSelfRoute = ownerSelfChatReplyRoute(parent || message, thread, env);
       // This ingress has its own durable, account-specific transport. Never
       // replay it through the general mirror, even after its scope is removed.
-      if (parent?.ownerSelfChatDedicatedTransport === true || message.ownerSelfChatDedicatedTransport === true) continue;
+      if (isDedicatedOwnerSelfChatOutput(message,parent,state)) continue;
       if (ownerSelfRoute.applies && (!ownerSelfRoute.allowed || message.role !== "assistant" || !["final_answer", "final", ""].includes(String(message.phase || "")))) {
         skipped.push({ threadId, messageId:message.id, reason:"owner_selfchat_scope_or_phase_denied" });
         continue;

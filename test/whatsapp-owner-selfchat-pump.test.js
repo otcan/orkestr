@@ -12,6 +12,7 @@ import { createOwnerSelfChatAdapter } from '../packages/connectors/src/whatsapp-
 import { listenOwnerSelfChatAdapter } from '../packages/connectors/src/whatsapp-owner-selfchat-socket.js';
 import { createOwnerSelfChatPump } from '../packages/connectors/src/whatsapp-owner-selfchat-pump.js';
 import { ownerSelfChatScope } from '../packages/connectors/src/whatsapp-owner-selfchat-scope.js';
+import { ownerSelfChatClient } from '../packages/connectors/src/whatsapp-owner-selfchat-client.js';
 import { planOwnerSelfChatRegistration,applyOwnerSelfChatRegistration,retireOwnerSelfChatRegistration } from '../packages/connectors/src/whatsapp-owner-selfchat-registration.js';
 import { routeWhatsAppInbound,deliverWhatsAppReplies } from '../packages/connectors/src/whatsapp.js';
 
@@ -108,4 +109,27 @@ test('registration refuses a different owner thread and conflicting account iden
   const paths=dataPaths(f.env),state=await readJson(paths.whatsapp,{});
   state.connectorAccounts[0].sessionRef='other-connector';await writeJson(paths.whatsapp,state);
   await assert.rejects(planOwnerSelfChatRegistration(f.env),/account_conflict/);
+});
+
+test('revocation mid-batch prevents the next input and preserves its pending journal entry',async t=>{
+  const f=await fixture(t);f.input('first');f.input('second');let active=true;
+  const tick=createOwnerSelfChatPump({env:f.env,
+    assertActive:async()=>{if(!active) throw new Error('selfchat_scope_changed');},
+    routeInbound:async(...args)=>{const result=await routeWhatsAppInbound(...args);active=false;return result;}});
+  await assert.rejects(tick(),/scope_changed/);
+  assert.equal((await listThreadMessages('home',f.env)).filter(m=>m.role==='user').length,1);
+  assert.equal(f.journal.pending().length,1);assert.equal(f.sent.length,0);
+});
+
+test('revocation after one chunk prevents later chunks without losing its receipt',async t=>{
+  const f=await fixture(t);f.input('hello');await f.tick();
+  const parent=(await listThreadMessages('home',f.env)).find(m=>m.role==='user');
+  await appendThreadMessage('home',{role:'assistant',phase:'final_answer',state:'completed',text:'x'.repeat(6000),parentMessageId:parent.id},f.env);
+  const base=ownerSelfChatClient(f.env);let active=true;
+  const tick=createOwnerSelfChatPump({env:f.env,routeInbound:routeWhatsAppInbound,
+    assertActive:async()=>{if(!active) throw new Error('selfchat_scope_changed');},
+    client:{scope:base.scope,call:async request=>{const result=await base.call(request);if(request.operation==='send_text')active=false;return result;}}});
+  await assert.rejects(tick(),/scope_changed/);
+  assert.equal(f.sent.length,1);assert.deepEqual(f.journal.outboundIds(),['agent-1']);
+  assert.equal(f.journal.unresolved(),false);
 });

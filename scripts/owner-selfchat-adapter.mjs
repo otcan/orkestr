@@ -33,8 +33,8 @@ async function main() {
     const challenge=journal.meta('challenge');
     if(!challenge) throw selfChatError('selfchat_identity_challenge_required');
     const runtimeId=await runner.preflight();
-    const status=await runner.invoke(['status']);
-    const history=await runner.invoke(['history',config.chatId,'50']);
+    const status=await runner.invoke(['status'],{runtimeId});
+    const history=await runner.invoke(['history',config.chatId,'50'],{runtimeId});
     const identity=verifyOwnerSelfChatIdentity({config,history,status,runtimeId,...challenge});
     journal.setMeta('identity',identity);journal.setMeta('challenge',null);journal.close();
     process.stdout.write('Self-chat identity verified; routing is still separately gated.\n');return;
@@ -45,6 +45,7 @@ async function main() {
   await assertRootOwnedPath(path.dirname(config.socketPath),{directory:true});
   const server=await listenOwnerSelfChatAdapter({socketPath:config.socketPath,adapter});
   for(const signal of ['SIGINT','SIGTERM']) process.once(signal,()=>{
+    adapter.close();
     server.close(()=>{journal.close();process.exit(0);});
   });
 }

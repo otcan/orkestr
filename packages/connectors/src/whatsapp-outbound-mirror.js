@@ -275,10 +275,11 @@ function latestWhatsAppTypingParent(messages = [], thread = null, state = null) 
 }
 
 export function whatsappTypingTargetForThread({ thread, messages = [], status = null, state = null, env = process.env } = {}) {
+  if ([...messages].reverse().find(message=>message.role==='user')?.ownerSelfChatDedicatedTransport === true) return null;
   if (!threadAllowsWhatsAppMirroring(thread)) return null;
   if (!runtimeTypingActive(status)) return null;
   const parent = latestWhatsAppTypingParent(messages, thread, state);
-  if (!parent) return null;
+  if (!parent || parent.ownerSelfChatDedicatedTransport === true) return null;
   const chatId = pickString(parent.chatId, thread?.binding?.chatId);
   if (!chatId) return null;
   if (typingCooldownActive(state, parent, chatId, env)) return null;

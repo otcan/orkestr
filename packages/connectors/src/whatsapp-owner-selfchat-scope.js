@@ -33,3 +33,12 @@ export function ownerSelfChatReplyRoute(parent, thread, env = process.env) {
     && parent.accountId === scope.accountId && parent.chatId === scope.chatId);
   return { applies:true, allowed, accountId:allowed ? scope.accountId : '', chatId:allowed ? scope.chatId : '' };
 }
+
+// A retired supplemental record still fences its own chat from the general
+// mirror. Missing parents or a revoked scope must never select an old sender.
+export function isDedicatedOwnerSelfChatOutput(message = {}, parent = null, state = {}) {
+  if (message.ownerSelfChatDedicatedTransport === true || parent?.ownerSelfChatDedicatedTransport === true) return true;
+  const chats = new Set([message.chatId,parent?.chatId].filter(Boolean));
+  return (state.bindings || []).some(binding => binding.privateOwnerChat === true
+    && String(binding.id || '').startsWith('owner-selfchat:') && chats.has(binding.chatId));
+}

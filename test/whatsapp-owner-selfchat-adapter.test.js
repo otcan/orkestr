@@ -136,3 +136,32 @@ test('client allowlist or suppression exception mismatch is denied before invoki
     contract:ownerSelfChatTransportContract({...config,allowSuppressedThreadReplies:true})}),/scope_denied/);
   assert.equal(f.calls.length,0);
 });
+
+test('closing while readiness preflight is pending blocks dispatch and queued sends',async t=>{
+  const f=await fixture(t);await f.offer();
+  let release,entered;
+  const waiting=new Promise(resolve=>{entered=resolve;});
+  const gate=new Promise(resolve=>{release=resolve;});const operations=[];
+  const adapter=createOwnerSelfChatAdapter({config,journal:f.journal,
+    preflight:async()=>{entered();await gate;return identity.runtimeId;},
+    invoke:async args=>{operations.push(args[0]);return status;}});
+  const body={...f.send,accountId:config.accountId,chatId,contract:ownerSelfChatTransportContract(config)};
+  const first=assert.rejects(adapter.request(body),/adapter_closed/);
+  await waiting;
+  const queued=assert.rejects(adapter.request({...body,requestId:'reply:2'}),/adapter_closed/);
+  adapter.close();release();await Promise.all([first,queued]);
+  assert.equal(operations.includes('send-text'),false);assert.equal(f.journal.unresolved(),false);
+});
+
+test('close after provider dispatch retains accepted receipt and blocks queued sends',async t=>{
+  let release,entered;
+  const waiting=new Promise(resolve=>{entered=resolve;});
+  const gate=new Promise(resolve=>{release=resolve;});
+  const f=await fixture(t,{send:async()=>{entered();await gate;return {ok:true,ids:['accepted-before-close']};}});
+  await f.offer();
+  const first=f.request(f.send);await waiting;
+  const queued=assert.rejects(f.request({...f.send,requestId:'reply:2'}),/adapter_closed/);
+  f.adapter.close();release();assert.deepEqual((await first).ids,['accepted-before-close']);await queued;
+  assert.deepEqual(f.journal.outboundIds(),['accepted-before-close']);assert.equal(f.journal.unresolved(),false);
+  assert.equal(f.calls.filter(args=>args[0]==='send-text').length,1);
+});

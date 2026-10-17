@@ -6,7 +6,7 @@ import { homeChatReplyText, recordHomeChatReply } from './whatsapp-home-chat.js'
 import { threadAllowsWhatsAppMirroring } from './whatsapp-outbound-mirror.js';
 import { selfChatError, selfChatHash } from './whatsapp-owner-selfchat-journal.js';
 
-export function createOwnerSelfChatPump({env,routeInbound,client=ownerSelfChatClient(env)}) {
+export function createOwnerSelfChatPump({env,routeInbound,client=ownerSelfChatClient(env),assertActive=async()=>{}}) {
   if(!client) throw selfChatError('selfchat_transport_not_configured');
   let active=false;
   return async function tick() {
@@ -15,6 +15,7 @@ export function createOwnerSelfChatPump({env,routeInbound,client=ownerSelfChatCl
       // Configuration is rechecked on each tick, including every reply.
       const current=ownerSelfChatClient(env);
       if(!current || current.scope.revision!==client.scope.revision) throw selfChatError('selfchat_scope_changed');
+      await assertActive();
       const {scope}=client,counts={inbound:0,replies:0};
       for(const id of scope.threadIds) {
         const thread=await getThread(id,env);
@@ -23,6 +24,7 @@ export function createOwnerSelfChatPump({env,routeInbound,client=ownerSelfChatCl
       }
       const history=await client.call({operation:'history',mark_seen:false,limit:50});
       for(const message of history.messages) {
+        await assertActive();
         const result=await routeInbound({accountId:scope.accountId,chatId:scope.chatId,
           eventId:message.id,from:message.from,to:message.to,fromMe:true,
           text:message.body,timestamp:message.timestamp},env);
@@ -50,10 +52,12 @@ export function createOwnerSelfChatPump({env,routeInbound,client=ownerSelfChatCl
           const chunks=[];
           for(let i=0;i<text.length;i+=2800) chunks.push(text.slice(i,i+2800));
           for(const [index,chunk] of chunks.entries()) {
+            await assertActive();
             if(ownerSelfChatClient(env)?.scope.revision!==scope.revision) throw selfChatError('selfchat_scope_changed');
             const liveThread=await getThread(threadId,env);
             if(!ownerSelfChatReplyRoute(parent,liveThread,env).allowed || isThreadRetired(liveThread)
                 || liveThread.binding?.enabled===false) throw selfChatError('selfchat_scope_changed');
+            await assertActive();
             const receipt=await client.call({operation:'send_text',threadId,parentMessageId:parent.id,
               requestId:`reply:${selfChatHash([scope.accountId,threadId,message.id,index])}`,text:chunk});
             await recordHomeChatReply({chatId:scope.chatId,threadId,messageIds:receipt.ids},env);
