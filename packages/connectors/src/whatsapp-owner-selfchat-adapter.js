@@ -1,8 +1,9 @@
 import { createOwnerSelfChatTransportPolicy,ownerSelfChatTransportContract } from './whatsapp-owner-selfchat-transport.js';
 import { assertOwnerSelfChatIdentity } from './whatsapp-owner-selfchat-identity.js';
 import { assertOwnerSelfChatBridgePolicy } from './whatsapp-owner-selfchat-bridge-policy.js';
-import { selfChatError } from './whatsapp-owner-selfchat-journal.js';
-import { normalizeAttestedSelfChatHistory } from './whatsapp-owner-selfchat-attestation.js';
+import { selfChatError,selfChatHash } from './whatsapp-owner-selfchat-journal.js';
+import { normalizeAttestedSelfChatHistory,assertLiveAccountApproval } from './whatsapp-owner-selfchat-attestation.js';
+import { verifyLiveOwnerSelfChatAccount } from './whatsapp-owner-selfchat-live-verification.js';
 
 // invoke is a fixed, operator-installed wrapper runner. Requests cannot choose
 // its executable, environment, account, service, journal path or credential.
@@ -13,12 +14,40 @@ export function createOwnerSelfChatAdapter({ config, journal, invoke, preflight 
   let tail=Promise.resolve();
   let statusAt=0;
   let closed=false;
+  let identityRefreshFailed=false;
+  const activeIdentity=()=>{
+    if(closed)return false;
+    if(config.identityVerificationMode!=='live-account')return true;
+    try {
+      const identity=journal.meta('identity');
+      assertOwnerSelfChatIdentity(config,identity,identity?.runtimeId);return true;
+    } catch { return false; }
+  };
   const serial=work => { const next=tail.catch(()=>{}).then(work); tail=next; return next; };
   async function ready() {
+    if(config.eligible!==true)throw selfChatError('selfchat_identity_or_eligibility_unverified');
+    if(identityRefreshFailed)throw selfChatError('selfchat_account_evidence_refresh_failed');
     const runtimeId=await preflight();
+    if(config.identityVerificationMode==='live-account') {
+      // An altered scope/owner/runtime must fail before refreshing evidence.
+      const identity=journal.meta('identity');
+      const approval=assertLiveAccountApproval(config,runtimeId);
+      if(!identity || identity.runtimeId!==runtimeId || identity.ownerUserId!==config.ownerUserId
+          || identity.accountId!==config.accountId || identity.chatId!==config.chatId
+          || identity.approvalHash!==selfChatHash(approval))throw selfChatError('selfchat_identity_or_eligibility_unverified');
+      if(Date.parse(identity.evidenceExpiresAt)<=Date.now()) {
+        try {
+          await verifyLiveOwnerSelfChatAccount({config,journal,runner:{preflight,
+            invoke:(argv,options)=>invoke(argv,{...options,isActive:()=>!closed && options.isActive()})}});
+        } catch {
+          // Polling must not turn a failed identity check into a retry loop.
+          identityRefreshFailed=true;throw selfChatError('selfchat_account_evidence_refresh_failed');
+        }
+      }
+    }
     assertOwnerSelfChatIdentity(config,journal.meta('identity'),runtimeId);
     if(Date.now()-statusAt>30000) {
-      const status=await invoke(['status'],{runtimeId,isActive:()=>!closed});
+      const status=await invoke(['status'],{runtimeId,isActive:activeIdentity});
       if(status?.authenticated!==true || status.ready!==true || status.state!=='ready')
         throw selfChatError('selfchat_bridge_not_ready');
       assertOwnerSelfChatBridgePolicy(status,config.bridgeBuildHash);
@@ -53,7 +82,7 @@ export function createOwnerSelfChatAdapter({ config, journal, invoke, preflight 
       const command=policy.command(request);
       if (request.operation==='history') {
         if (journal.unresolved()) throw selfChatError('selfchat_delivery_uncertain');
-        const payload=await invoke(command,{runtimeId:journal.meta('identity').runtimeId,isActive:()=>!closed});
+        const payload=await invoke(command,{runtimeId:journal.meta('identity').runtimeId,isActive:activeIdentity});
         if (payload?.ok!==true || payload.chatId!==base.chatId || !Array.isArray(payload.messages))
           throw selfChatError('selfchat_history_invalid',502);
         const normalized=normalizeAttestedSelfChatHistory({config,identity:journal.meta('identity'),payload});
@@ -83,7 +112,7 @@ export function createOwnerSelfChatAdapter({ config, journal, invoke, preflight 
       if (prior.duplicate) return {ok:true,ids:prior.ids,duplicate:true};
       try {
         if(closed) throw selfChatError('selfchat_adapter_closed');
-        const result=await invoke(command,{runtimeId:journal.meta('identity').runtimeId,isActive:()=>!closed});
+        const result=await invoke(command,{runtimeId:journal.meta('identity').runtimeId,isActive:activeIdentity});
         if (result?.ok!==true) throw selfChatError('selfchat_delivery_uncertain');
         journal.sent(request.requestId,result.ids);
         return {ok:true,ids:result.ids};

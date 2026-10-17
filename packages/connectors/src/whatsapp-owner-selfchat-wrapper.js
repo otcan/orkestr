@@ -57,7 +57,9 @@ export function createOwnerSelfChatWrapper(config, executeImpl=execute) {
     const current=await preflight();
     if(!isActive()) throw selfChatError('selfchat_adapter_closed');
     if(runtimeId && current!==runtimeId) throw selfChatError('selfchat_runtime_changed');
-    if (!['status','history','send-text'].includes(argv[0])) throw selfChatError('selfchat_wrapper_operation_denied');
+    if (!['status','history','send-text','identity'].includes(argv[0])) throw selfChatError('selfchat_wrapper_operation_denied');
+    if(argv[0]==='identity' && (config.identityVerificationMode!=='live-account'
+        || argv.length!==2 || !/^[a-f0-9]{32}$/.test(argv[1])))throw selfChatError('selfchat_wrapper_operation_denied');
     try {
       const {stdout}=await executeImpl('/usr/bin/node',[config.wrapperPath,...argv],{env:{...fixedEnv,...wrapperEnvironment},timeout:30000,maxBuffer:1024*1024});
       return JSON.parse(stdout);

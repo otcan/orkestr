@@ -29,9 +29,9 @@ async function fixture(t,{exception=true,threads=['home','project'],existingCont
   const status={state:'ready',ready:true,authenticated:true,ownerSelfChatPolicy:{buildHash:'b'.repeat(64),version:1,transportOnly:true,sendAttempts:1,textOnly:true,maxTextLength:3000,markSeen:false,automaticRouting:false,strictBearer:true}};
   if(liveAccount) {
     config.identityVerificationMode='live-account';
-    config.liveAccountAttestation={version:1,approved:true,approvalRef:'example-approval',approvedAt:config.activatedAt,
+    config.liveAccountAttestation={version:2,approved:true,ownerUserId:config.ownerUserId,expiresAt:new Date(Date.now()+3600000).toISOString(),approvalRef:'example-approval',approvedAt:config.activatedAt,
       runtimeId:'example:42',accountId:config.accountId,chatId,bridgeBuildHash:config.bridgeBuildHash,
-      transportContract:ownerSelfChatTransportContract(config),readyRequiresConfiguredIdentity:true,allowOwnHistoryLidSender:true};
+      transportContract:ownerSelfChatTransportContract(config),readyRequiresConfiguredIdentity:true,allowVerifiedOwnIdAliases:true};
   }
   const env={ORKESTR_HOME:root,ORKESTR_ADMIN_USER_ID:'admin',ORKESTR_CONNECTOR_OUTBOX_STORE:'json',
     ORKESTR_WHATSAPP_API_AGENT_AUTORUN:'0',ORKESTR_WHATSAPP_OWNER_SELFCHAT_SCOPE:JSON.stringify(config)};
@@ -50,7 +50,7 @@ async function fixture(t,{exception=true,threads=['home','project'],existingCont
     await writeJson(path.join(root,'whatsapp-home-chat.json'),{focus:{[chatId]:'project'},replies:[]});
   }
   const journal=new OwnerSelfChatJournal(path.join(root,'journal.sqlite'),config);
-  journal.setMeta('identity',liveAccount?attestOwnerSelfChatAccount({config,status,runtimeId:'example:42'})
+  journal.setMeta('identity',liveAccount?attestOwnerSelfChatAccount({config,runtimeId:'example:42',challenge:'a'.repeat(32),requestedAt:new Date().toISOString(),evidence:{...status,ok:true,version:1,challenge:'a'.repeat(32),checkedAt:new Date().toISOString(),ownChatId:chatId,ownLid:'123456@lid',mappingSource:'whatsapp-sdk-bidirectional',serverRefreshVerified:false}})
     :{accountId:config.accountId,chatId,runtimeId:'example:42',proofId:'proof'});
   const inbox=[],sent=[];
   const adapter=createOwnerSelfChatAdapter({config,journal,preflight:async()=>'example:42',invoke:async args=>{

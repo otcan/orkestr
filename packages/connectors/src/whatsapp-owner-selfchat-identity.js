@@ -19,13 +19,20 @@ export function verifyOwnerSelfChatIdentity({ config, history, status, runtimeId
     verifiedAt:new Date(now).toISOString(), challengeHash:selfChatHash(nonce) };
 }
 
-export function assertOwnerSelfChatIdentity(config, identity, runtimeId) {
+export function assertOwnerSelfChatIdentity(config, identity, runtimeId, now=Date.now()) {
   if (config.eligible !== true || !identity || identity.accountId!==config.accountId
       || identity.chatId!==config.chatId || identity.runtimeId!==runtimeId)
     throw selfChatError('selfchat_identity_or_eligibility_unverified');
   if(config.identityVerificationMode==='live-account') {
-    const approval=assertLiveAccountApproval(config,runtimeId);
+    const approval=assertLiveAccountApproval(config,runtimeId,now);
     if(identity.method!=='live-account' || identity.humanPresenceVerified!==false
+        || identity.ownerUserId!==config.ownerUserId || !/^\d+@lid$/.test(identity.ownLid || '')
+        || !/^[a-f0-9]{64}$/.test(identity.evidenceHash || '')
+        || !/^[a-f0-9]{64}$/.test(identity.evidenceChallengeHash || '')
+        || !Number.isFinite(Date.parse(identity.evidenceCheckedAt))
+        || Date.parse(identity.evidenceCheckedAt)>now
+        || Date.parse(identity.evidenceExpiresAt)!==Date.parse(identity.evidenceCheckedAt)+30_000
+        || Date.parse(identity.evidenceExpiresAt)<=now
         || identity.approvalHash!==selfChatHash(approval) || identity.proofId || identity.challengeHash)
       throw selfChatError('selfchat_identity_or_eligibility_unverified');
   } else if(identity.method==='live-account' || (config.identityVerificationMode

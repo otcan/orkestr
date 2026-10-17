@@ -113,26 +113,44 @@ not phone authentication or a pairing code. Runtime PID plus systemd invocation
 ID pin the proof to the existing session process; a change fails closed.
 
 An alternative `identityVerificationMode: "live-account"` is implemented but
-requires a separate, explicit operator approval in the protected adapter config.
-It does not treat old `fromMe` history as human proof. `liveAccountAttestation`
-must contain `version: 1`, `approved: true`, `approvalRef`, `approvedAt`, the exact
-`runtimeId`, `accountId`, `chatId`, `bridgeBuildHash`, and `transportContract`
-(computed by `ownerSelfChatTransportContract`). The operator must review the
-exact bridge build before setting `readyRequiresConfiguredIdentity: true`:
-its authenticated health must fail unless the SDK's current own account ID
-matches the protected self-chat recipient. Generic ready status is insufficient.
-`verify` then checks live health, all transport-policy invariants, and unchanged
-runtime before recording account evidence. It records
-`humanPresenceVerified: false`, never a fabricated message ID or nonce proof.
-Changing the approval, runtime or scope invalidates this evidence.
+requires separate, explicit operator approval in the protected adapter config.
+`liveAccountAttestation` version 2 binds `ownerUserId`, `accountId`, `chatId`,
+`runtimeId`, `bridgeBuildHash`, `transportContract`, `approvalRef`, `approvedAt`
+and `expiresAt`, with `approved: true`. Generic readiness and old `fromMe`
+history are not accepted as identity evidence. Version 1 attestation is refused.
 
-For that mode only, the separately reviewed `allowOwnHistoryLidSender: true`
-option accepts a LID sender only in authenticated history fetched for the pinned
-self-chat, with `fromMe: true` and the exact phone-based self recipient. The
-original sender is retained as `providerFrom`; this does not establish a global
-identity alias. LID recipients remain rejected. Activation cutoff, duplicate and
-outbound echo filtering, parent requirements and uncertainty blocking still run.
-Neither option is enabled by installation or by the owner declining a challenge.
+Verification generates a random **machine-only** challenge and requests fresh
+account evidence through a fixed authenticated wrapper operation. This never
+sends a WhatsApp message or asks the owner to type a phrase. The reviewed bridge
+checks current SDK own ID and readiness before and after SDK PN→LID and LID→PN
+lookups. Both mappings must agree with the protected self-chat ID. A missing,
+ambiguous or mismatched mapping fails closed. The SDK may return cached mapping
+data; this is not a claim of a fresh server lookup.
+
+The response must match the outstanding challenge and exact build/policy, be
+no older than 30 seconds and no earlier than the request, and come from the
+unchanged runtime. The journal atomically consumes the latest challenge and
+stores identity evidence. Consumed challenges survive reopening; reused or
+superseded responses cannot overwrite identity. Evidence expires after 30 seconds
+and is refreshed read-only before further operations. Expired/revoked approval,
+wrong owner/scope/runtime or failed evidence refresh blocks dispatch. A refresh
+failure latches the adapter closed for the rest of its process lifetime; polling
+cannot retry the SDK lookup. Recovery requires an explicit operator action.
+
+The identity record says `humanPresenceVerified: false`; it contains no invented
+message ID or manual challenge proof. Explicit owner authorization establishes
+which owner may bind the account. This can establish the same account/recipient
+identity property as the earlier check, but does **not** establish the earlier
+fresh human-phone interaction property. Deployment needs approval of that change.
+
+The separately reviewed `allowVerifiedOwnIdAliases: true` option canonicalizes
+only the exact verified own PN/LID pair in authenticated history fetched for that
+self-chat. Both sender and recipient must be in the pair, with `fromMe: true`;
+raw values remain as `providerFrom` and `providerTo`. Arbitrary LIDs, other
+recipients and non-owner messages remain rejected. Outbound addressing always
+uses the configured phone-based self-chat. Activation cutoff, duplicate and echo
+filtering, parent requirements and uncertain-delivery blocking remain mandatory.
+Neither option is enabled merely because an owner declines the manual challenge.
 
 The same contact address on a different connector account can coexist without
 replacing its existing binding. Registration refuses missing, malformed or

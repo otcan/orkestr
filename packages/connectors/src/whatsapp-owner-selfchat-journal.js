@@ -21,6 +21,9 @@ export class OwnerSelfChatJournal {
         state TEXT NOT NULL, ids TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS inbound (id TEXT PRIMARY KEY, body TEXT NOT NULL,
         state TEXT NOT NULL DEFAULT 'offered', route TEXT);
+      CREATE TABLE IF NOT EXISTS identity_evidence (challenge_hash TEXT PRIMARY KEY,
+        runtime TEXT NOT NULL, scope_hash TEXT NOT NULL, requested_at TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'pending');
     `);
     const hash = selfChatHash(binding);
     this.db.prepare('INSERT OR IGNORE INTO meta VALUES (?,?)').run('binding', JSON.stringify(hash));
@@ -32,6 +35,28 @@ export class OwnerSelfChatJournal {
     this.db.exec('BEGIN IMMEDIATE');
     try { const result=work(); this.db.exec('COMMIT'); return result; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  beginIdentityEvidence(challenge, runtimeId, scopeHash, requestedAt) {
+    const hash=selfChatHash(challenge);
+    this.transaction(()=>{
+      if(this.db.prepare('SELECT 1 FROM identity_evidence WHERE challenge_hash=?').get(hash))
+        throw selfChatError('selfchat_account_evidence_replayed');
+      this.db.prepare('INSERT INTO identity_evidence (challenge_hash,runtime,scope_hash,requested_at) VALUES (?,?,?,?)')
+        .run(hash,runtimeId,scopeHash,requestedAt);
+      this.setMeta('pendingIdentityEvidence',hash);
+    });
+  }
+  acceptIdentityEvidence(challenge, identity, requestedAt) {
+    const hash=selfChatHash(challenge);
+    this.transaction(()=>{
+      const row=this.db.prepare('SELECT * FROM identity_evidence WHERE challenge_hash=?').get(hash);
+      if(!row || row.state!=='pending' || this.meta('pendingIdentityEvidence')!==hash
+          || row.runtime!==identity.runtimeId || row.scope_hash!==identity.approvalHash
+          || row.requested_at!==requestedAt || identity.evidenceChallengeHash!==hash)
+        throw selfChatError('selfchat_account_evidence_replayed');
+      this.db.prepare("UPDATE identity_evidence SET state='consumed' WHERE challenge_hash=?").run(hash);
+      this.setMeta('identity',identity);this.setMeta('pendingIdentityEvidence',null);
+    });
   }
   unresolved() { return Boolean(this.db.prepare("SELECT 1 FROM sends WHERE state != 'sent' LIMIT 1").get()); }
   reserve(key, payload, maxSendAttempts=null) {

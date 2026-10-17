@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { OwnerSelfChatJournal, selfChatError } from '../packages/connectors/src/whatsapp-owner-selfchat-journal.js';
 import { createOwnerSelfChatWrapper, assertRootOwnedPath } from '../packages/connectors/src/whatsapp-owner-selfchat-wrapper.js';
 import { verifyOwnerSelfChatIdentity } from '../packages/connectors/src/whatsapp-owner-selfchat-identity.js';
-import { attestOwnerSelfChatAccount } from '../packages/connectors/src/whatsapp-owner-selfchat-attestation.js';
+import { verifyLiveOwnerSelfChatAccount } from '../packages/connectors/src/whatsapp-owner-selfchat-live-verification.js';
 import { createOwnerSelfChatAdapter } from '../packages/connectors/src/whatsapp-owner-selfchat-adapter.js';
 import { listenOwnerSelfChatAdapter } from '../packages/connectors/src/whatsapp-owner-selfchat-socket.js';
 import { assertOwnerSelfChatBridgePolicy } from '../packages/connectors/src/whatsapp-owner-selfchat-bridge-policy.js';
@@ -25,6 +25,7 @@ async function main() {
   const journal=new OwnerSelfChatJournal(config.journalPath,{accountId:config.accountId,chatId:config.chatId,activatedAt:config.activatedAt});
   const runner=createOwnerSelfChatWrapper(config);
   if(action==='challenge') {
+    if(config.identityVerificationMode==='live-account')throw selfChatError('selfchat_manual_challenge_disabled');
     const nonce=randomBytes(16).toString('hex'),issuedAt=new Date().toISOString();
     journal.setMeta('challenge',{nonce,issuedAt});journal.close();
     // This public correlation nonce is not a credential or pairing code.
@@ -33,11 +34,7 @@ async function main() {
   }
   if(action==='verify') {
     if(config.identityVerificationMode==='live-account') {
-      const runtimeId=await runner.preflight();
-      const status=await runner.invoke(['status'],{runtimeId});
-      if(await runner.preflight()!==runtimeId)throw selfChatError('selfchat_runtime_changed');
-      const identity=attestOwnerSelfChatAccount({config,status,runtimeId});
-      journal.setMeta('identity',identity);journal.close();
+      await verifyLiveOwnerSelfChatAccount({config,journal,runner});journal.close();
       process.stdout.write('Live self-chat account attested; human presence was not verified.\n');return;
     }
     const challenge=journal.meta('challenge');
