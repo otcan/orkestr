@@ -537,3 +537,23 @@ Report:
 - release tag or release id
 - deployed target, if any
 - rollback command or previous release id
+
+### Existing-install UI-only cutovers
+
+Use the versioned deployer's `install --ui-only` only when the approved scope is
+an already configured UI service. This mode refuses an unconfigured versioned
+link or missing external Codex runtime. It preserves existing runtime ownership,
+service definitions, security/credential environment and other connector services;
+it also disables fan-out, release notifications and automatic worker syncing.
+It retains CI/provenance, backup, active-work/drain, UI health, exposure and any
+explicit required-account checks. Account recovery commands are disabled. Keep
+corresponding branches aligned manually. `rollback --ui-only` preserves the same
+bounds and permits recovery when the UI is inactive.
+
+The invoking deployer must support this flag; an older installed script cannot
+be made narrow by passing unrelated environment settings. A reviewed operator
+upgrade of that deployer is separate from candidate application code. Preserve
+the running release's provenance implementation when staging such an operator
+upgrade; never substitute candidate-supplied verification policy. Registration
+that requires stopped legacy writers belongs in a reviewed, fixed pre-start step
+of the single UI restart, not an additional restart after deployment.

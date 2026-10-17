@@ -2,13 +2,14 @@
 set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_dir/deploy-backup-policy.sh"
+source "$script_dir/deploy-ui-scope.sh"
 
 usage() {
   cat <<'USAGE'
 Deploy Orkestr from an exact git ref into versioned release directories.
 
 Usage:
-  scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke] [--no-backup] [--sync-workers|--no-sync-workers] [--all-instances|--no-all-instances] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
+  scripts/deploy-git-release.sh install [--ref REF] [--ui-only] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke] [--no-backup] [--sync-workers|--no-sync-workers] [--all-instances|--no-all-instances] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
   scripts/deploy-git-release.sh rollback [--to RELEASE_ID] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
   scripts/deploy-git-release.sh status [--json]
   scripts/deploy-git-release.sh backup
@@ -99,11 +100,16 @@ fanout_arg=""
 no_interrupt_arg=""
 wait_active_arg=""
 active_timeout_arg=""
+ui_only_arg=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     install|rollback|status|backup)
       command="$1"
+      shift
+      ;;
+    --ui-only)
+      ui_only_arg=1
       shift
       ;;
     --ref)
@@ -698,6 +704,7 @@ ensure_connector_security_env() {
 }
 
 sync_versioned_env() {
+  [ "${ui_only_arg:-0}" = 1 ] && return 0
   [ -f "$env_file_path" ] || return 0
   ensure_connector_security_env
   set_env_assignment ORKESTR_APP_DIR "$current_link"
@@ -706,6 +713,7 @@ sync_versioned_env() {
 }
 
 send_release_whatsapp_notifications() {
+  [ "${ui_only_arg:-0}" = 1 ] && return 0
   local release_dir target_ref deployed_at api_base notify_enabled
   release_dir="$1"
   target_ref="${2:-}"
@@ -733,6 +741,7 @@ send_release_whatsapp_notifications() {
 }
 
 repair_env_file_permissions() {
+  [ "${ui_only_arg:-0}" = 1 ] && return 0
   if [ "$(id -u)" -ne 0 ] || [ ! -f "$env_file_path" ]; then
     return 0
   fi
@@ -1051,6 +1060,7 @@ EOF
 }
 
 ensure_codex_app_server_split_for_target() {
+  [ "${ui_only_arg:-0}" = 1 ] && return 0
   local release_dir command socket mode_external_requested
   release_dir="$1"
   target_release_supports_external_codex_app_server "$release_dir" || return 0
@@ -1262,6 +1272,7 @@ deploy_guard_before_restart() {
 }
 
 refresh_parent_whatsapp_bridge_proxy() {
+  [ "${ui_only_arg:-0}" = 1 ] && return 0
   local bridge_service bridge_script current_release dropin_dir dropin_file
   bridge_service="${ORKESTR_PARENT_WA_BRIDGE_SERVICE_NAME:-orkestr-parent-wa-bridge}"
   current_release="$(readlink -f "$current_link" 2>/dev/null || true)"
@@ -1285,6 +1296,7 @@ EOF
 }
 
 sync_standalone_connectors_release() {
+  [ "${ui_only_arg:-0}" = 1 ] && return 0
   local enabled gateway_service worker_service release_dir script expected_revision active_revision revision_file
   enabled="$(bool_value "${ORKESTR_RELEASE_SYNC_CONNECTORS:-1}")"
   if [ "$enabled" != "1" ]; then
@@ -1563,6 +1575,7 @@ verify_required_whatsapp_accounts() {
 }
 
 configure_service_shutdown_timeout() {
+  [ "${ui_only_arg:-0}" = 1 ] && return 0
   if [ "$(id -u)" -ne 0 ]; then
     return 0
   fi
@@ -1700,6 +1713,7 @@ chown_users_tree() {
 }
 
 repair_runtime_ownership() {
+  [ "${ui_only_arg:-0}" = 1 ] && return 0
   if [ "$(id -u)" -ne 0 ]; then
     return 0
   fi
@@ -2030,6 +2044,8 @@ esac
 case "$deploy_drain_ttl_seconds" in
   ''|*[!0-9]*) echo "ORKESTR_DEPLOY_DRAIN_TTL_SECONDS must be a positive integer." >&2; exit 2 ;;
 esac
+
+apply_ui_only_scope
 
 trap cleanup_deploy_on_exit EXIT
 
