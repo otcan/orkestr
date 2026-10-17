@@ -33,7 +33,9 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { stopped
 log({event: 'group_relay_started', groups: config.groups.length});
 while (!stopped) {
   const status = await relay.tick();
-  if(status.ok) {
+  // An unrelated inactive binding must not starve this thread's notifications.
+  // A global unresolved transport delivery still stops every send.
+  if(!status.error) {
     try {status.timerNotifications=await notifications.tick();}
     catch(e){status.timerNotifications={ok:false,error:/^[a-z_]+$/.test(e.message)?e.message:'notification_operation_failed'};}
   }
