@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["crates/orkestr-domain", "crates/orkestr-demo"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.0.1"
+
+# Stage-0 starter intentionally has zero third-party crates.
+# Tokio/Axum/SQLx/Dioxus are chosen in docs but added when real services land.
