@@ -202,6 +202,13 @@ impl MetadataExecutor {
                 &self.shared.active,
                 &self.shared.reaper,
                 provider_fd,
+                if provider_fd
+                    && grant.provider() == orkestr_v2_application::runtime::ProviderKind::Codex
+                {
+                    grant.binding().native_session_id.as_deref()
+                } else {
+                    None
+                },
             )?);
             Ok::<_, Error>(())
         });

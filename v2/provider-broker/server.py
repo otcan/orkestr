@@ -10,7 +10,8 @@ from transport import Pump
 
 
 def main(configuration_path=None):
-    if sys.argv[1:] != ["open-owned-session", "--protocol", PROTOCOL]:
+    resumed = sys.argv[1:] == ["resume-owned-session", "--protocol", PROTOCOL]
+    if not resumed and sys.argv[1:] != ["open-owned-session", "--protocol", PROTOCOL]:
         return 2
     # An installer may generate a tiny trusted wrapper invoking main(privatepath).
     # The public executable defaults to a sibling SERVER-PRIVATE configuration.
@@ -22,13 +23,17 @@ def main(configuration_path=None):
     signal.signal(signal.SIGINT, stop)
     try:
         config = Configuration.load(path)
+        expected_native = None
+        if resumed:
+            from codex_bootstrap import receive
+            expected_native = receive()
         # Launcher exclusively passes a private connected Unix socket at fd 3.
         # No path/listener, environment selector or legacy write fallback.
         with socket.socket(fileno=3) as handoff:
             if handoff.family != socket.AF_UNIX or handoff.type != socket.SOCK_STREAM:
                 raise Refused("invalid private handoff")
             handoff.getpeername()
-            Pump(config, Channel(config.workspace), handoff=handoff).run()
+            Pump(config, Channel(config.workspace, expected_native=expected_native), handoff=handoff).run()
         return 0
     except Exception:
         # Never print provider output, private paths, account data or tokens.
