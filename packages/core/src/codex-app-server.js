@@ -1841,9 +1841,16 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
   const messages = await listThreadMessageCandidates(thread.id, { states: [...pendingInputStates] }, env);
   const pendingMessages = messages.filter((message) => message.role === "user" && pendingInputStates.has(message.state));
   const stopMessage = pendingMessages.find((message) => parseThreadInputCommand(message).command === "stop");
-  let next = stopMessage || pendingMessages[0];
-  if (!next) return delivered;
   thread = await getThread(thread.id, env).catch(() => null) || thread;
+  // A queued separate turn must not block an explicit update to a live turn.
+  // Preserve FIFO when idle and keep /stop ahead of every input.
+  const awaitingOwner = thread.runtime?.pendingRequest || [thread.state, thread.runtime?.state].includes("awaiting_approval");
+  const eligible = awaitingOwner
+    ? pendingMessages.filter(message => !message.reportSourceThreadId && !message.threadWatchSourceThreadId)
+    : pendingMessages;
+  const liveSteer = !awaitingOwner && thread.runtime?.activeTurnId && eligible.find(shouldSteerActiveTurnInput);
+  let next = stopMessage || liveSteer || eligible[0];
+  if (!next) return delivered;
   if (stopMessage) {
     const stopIndex = messages.findIndex((message) => message.id === stopMessage.id);
     const parsedStop = parseThreadInputCommand(stopMessage);
@@ -2067,6 +2074,13 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
   const pendingApproval = client.pendingRequestForThread(thread, { includePersisted: approvalStatusState === "awaiting_approval" });
   const text = clean(next.text);
   const parsedCommand = parseThreadInputCommand(next);
+  if (pendingApproval && (next.reportSourceThreadId || next.threadWatchSourceThreadId)) {
+    // Reports are evidence, never answers to a human question or approval.
+    await updateThreadMessage(thread.id, next.id, {
+      state: "queued", deliveryState: "awaiting_owner_input", deliveryClaimId: null,
+    }, env);
+    return delivered;
+  }
   if (pendingApproval?.method === "item/tool/requestUserInput") {
     await client.answerPendingRequest(thread, "answer", { text });
     await updateThreadMessage(thread.id, next.id, {
