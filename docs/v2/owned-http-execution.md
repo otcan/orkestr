@@ -8,8 +8,9 @@ required. Without `ORKESTR_V2_EXECUTION_CONFIG`, startup remains
 This checkpoint supplies the server factory, not production activation. Runtime's
 actual downstream provider-write fence and sealed interruption must be reviewed
 before a real subscription provider is used. The current ordinary server keeps
-Stop unavailable (503, advertised capability false). A synthetic broker protocol
-peer proves this composition without a real provider or credentials.
+Stop unavailable (503, advertised capability false). The real broker and its
+actual native-stdin FD handoff are exercised with a fixed synthetic executable,
+without a real provider or credentials.
 
 ## Operator configuration
 
@@ -99,5 +100,7 @@ The executable test uses the real default-feature server binary and HTTP setup,
 cookie login, message intake, progress read, explicit acceptance and payload
 removal. It separately verifies default-disabled startup, queued-input refusal,
 revoked startup authentication and ongoing revocation before dispatch. It uses
-an environment allowlist and an explicitly synthetic broker protocol peer; it
-never reads a canonical provider home or launches a real provider.
+an environment allowlist, the product broker and an explicitly synthetic native
+peer. The broker transfers its sole native stdin writer to Runtime before any
+native request; the executable test exercises the normal fenced writes. It never
+reads a canonical provider home or launches a real provider.

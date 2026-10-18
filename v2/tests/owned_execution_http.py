@@ -16,6 +16,7 @@ import urllib.request
 
 binary = Path(sys.argv[1]).resolve(strict=True)
 peer = Path(__file__).with_name("owned_execution_peer.py").resolve(strict=True)
+broker = Path(__file__).resolve().parent.parent / "provider-broker"
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -119,8 +120,23 @@ class Case:
             self.process = None
 
     def configure(self):
+        # Real product broker and FD handoff, fixed synthetic native executable.
+        # All of its homes/configuration are disposable and contain no auth file.
+        provider = self.root / "synthetic-provider"
+        shutil.copyfile(peer, provider)
+        provider.chmod(0o700)
+        provider_home, provider_tmp = self.root / "provider-home", self.root / "provider-tmp"
+        provider_home.mkdir(mode=0o700)
+        provider_tmp.mkdir(mode=0o700)
+        broker_config = self.root / "broker-private.json"
+        broker_config.write_text(json.dumps({"codex_executable": str(provider),
+            "codex_home": str(provider_home), "home": str(provider_home),
+            "temporary": str(provider_tmp), "workspace": str(self.workspace)}))
+        broker_config.chmod(0o600)
         launcher = self.root / "synthetic-launcher"
-        shutil.copyfile(peer, launcher)
+        launcher.write_text("#!/usr/bin/python3\nimport sys\n"
+                            f"sys.path.insert(0, {str(broker)!r})\nfrom server import main\n"
+                            f"raise SystemExit(main({str(broker_config)!r}))\n")
         launcher.chmod(0o700)
         token = self.root / "machine.token"
         token.write_text(self.machine)
