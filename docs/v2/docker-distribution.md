@@ -283,8 +283,15 @@ acceptance is implied. The successor also passed native same-package dormant
 backup/apply/start-refusal/rollback; native evidence is in
 `v2/local-install/tests/successor-dormant-checkpoint.json`.
 
-New container dormant recovery source is reviewable, **actual execution pending
-independent review**. `dormant.py` uses the SQLite backup API, binds its snapshot
+Container dormant recovery passed an actual owned run after independent exact
+source review through `558a9e48`; all 22 focused Docker tests passed. Exact image,
+Compose, artifact hashes and effective restrictions are recorded in
+`v2/packaging/docker/dormant-checkpoint.json`. Synthetic setup/session/message
+idempotency/history passed. The stopped-source snapshot and restored database
+matched SHA-256 with one synthetic message; activation was refused and rollback
+returned the fresh target to empty. All owned containers, networks, volumes, image
+and temporary context were removed. This is stopped exclusive same-image recovery
+with separately pinned UI, not cross-version migration or activation acceptance. `dormant.py` uses the SQLite backup API, binds its snapshot
 to the exact image artifact manifest, applies only into fresh empty state, verifies
 hash/integrity and writes a dormant receipt before copying. The entrypoint refuses
 activation while that receipt exists. Rollback removes only an untouched restored
