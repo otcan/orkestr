@@ -13,6 +13,10 @@ pub(super) fn envelope(row: &SqliteRow) -> Result<ProviderAdmission> {
     let mut result = crate::runtime::envelope::envelope(row, kind)?;
     match row.get::<&str, _>("role") {
         "deep" => {}
+        "fast" => {
+            result.run.role = Role::Fast;
+            result.binding.role = Role::Fast;
+        }
         "worker" => {
             result.run.role = Role::Worker;
             result.binding.role = Role::Worker;
@@ -28,7 +32,7 @@ pub(super) fn envelope(row: &SqliteRow) -> Result<ProviderAdmission> {
 // Admission replay is execution evidence, never an issued cancellation control.
 // Return an actually issued execution token even when cancellation advanced the
 // canonical row. A replay carries no locator and cannot authorize redispatch.
-async fn replay_envelope(
+pub(super) async fn replay_envelope(
     conn: &mut SqliteConnection,
     row: &SqliteRow,
 ) -> Result<ProviderAdmission> {

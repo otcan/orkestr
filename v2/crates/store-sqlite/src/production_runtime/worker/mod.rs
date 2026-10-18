@@ -9,7 +9,7 @@ mod parent;
 mod types;
 pub use types::*;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 #[cfg(test)]
 mod dispatch_tests;
