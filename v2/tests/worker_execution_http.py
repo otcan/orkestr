@@ -57,7 +57,7 @@ class WorkerCase(ordinary.Case):
                 return False
             except ProcessLookupError:
                 pass
-        return True
+        return not any(self.home.rglob("worker-*"))
 
     def worker_gone(self):
         for row in self.trace():
@@ -67,7 +67,7 @@ class WorkerCase(ordinary.Case):
                     return False
                 except ProcessLookupError:
                     pass
-        return True
+        return not any(self.home.rglob("worker-*"))
 
     def completion(self, run_id):
         request = urllib.request.Request(self.origin + self.path + "/events", headers={
