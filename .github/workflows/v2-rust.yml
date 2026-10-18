@@ -45,6 +45,13 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 -m unittest discover -s acceptance -p 'test_release_readiness.py' -v
+      - name: Candidate assembly and Docker policy regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 -m unittest discover -s packaging/candidate/tests -v
+          python3 -m unittest discover -s packaging/docker/tests -v
+          node --check acceptance/browser/execution-scenarios.mjs
       - name: Inert migration and independent quarantine regressions
         env:
           PYTHONDONTWRITEBYTECODE: '1'

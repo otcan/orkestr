@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in real native package probe; requires assigned isolated parent and port.
 
-No builds, external providers, existing homes, browser automation or restore apply.
+No builds, external providers, existing homes, browser automation. Restore apply remains offline and dormant.
 Evidence stdout contains hashes/check names only; generated private state is removed.
 """
 import argparse
@@ -97,7 +97,7 @@ def exercise(args):
                 "ui_file_count": len(inventory), "source_commit_declared": args.source_commit,
                 "ui_source_commit_declared": args.ui_source_commit,
                 "scope": "mixed-revision installation/HTTP checkpoint; not current candidate browser/execution acceptance",
-                "checks": [], "unexecuted": ["macOS", "Docker", "browser interaction", "restore apply", "live providers", "remote CI", "cross-version schema compatibility", "mount/inode alias isolation"]}
+                "checks": [], "unexecuted": ["macOS", "Docker", "browser interaction", "cross-version restore", "live providers", "remote CI", "cross-version schema compatibility", "mount/inode alias isolation"]}
     parent = Path(args.parent)
     require(parent.is_absolute() and parent.is_dir(), "assigned existing absolute parent required")
     with private_probe(parent) as directory:
@@ -149,6 +149,23 @@ def exercise(args):
                 evidence["snapshot_message_count"] = count
                 evidence["snapshot_database_sha256"] = manifest["files"]["core.sqlite3"]
                 evidence["checks"].append("real stopped SQLite API backup/integrity/hash/message count")
+                dormant = root / "dormant-home"
+                invoke(entrypoint, "install", dormant, "--package", package, "--port", args.port)
+                dormant_before = {name: (dormant / name).read_bytes() for name in
+                                  ("install.json", "control/bootstrap.token")}
+                invoke(entrypoint, "restore-apply", dormant, "--snapshot", snapshot)
+                with closing(sqlite3.connect((dormant / "data/core.sqlite3").as_uri() + "?mode=ro&immutable=1", uri=True)) as database:
+                    require(database.execute("SELECT count(*) FROM messages").fetchone()[0] == count,
+                            "dormant applied history count mismatch")
+                require(sha256(dormant / "data/core.sqlite3") == manifest["files"]["core.sqlite3"],
+                        "dormant applied database hash mismatch")
+                rejected = invoke(entrypoint, "start", dormant, expected=1)
+                require("dormant" in rejected.stderr, "dormant launcher activation not refused")
+                invoke(entrypoint, "restore-rollback", dormant)
+                require(not any((dormant / "data").iterdir()), "rollback did not restore empty target")
+                require(all((dormant / name).read_bytes() == value for name, value in dormant_before.items()),
+                        "restore changed target config/bootstrap")
+                evidence["checks"].append("actual same-package dormant apply/hash/history, activation refusal and rollback; target auth/config unchanged")
                 process = launch(entrypoint, home, client, log)
                 verify_history(client, path, receipt, message)
                 require(client.request("POST", path + "/messages", message) == (200, receipt), "real restart receipt mismatch")

@@ -55,7 +55,10 @@ def serve(home):
     unprivileged()
     home = private_home(home)
     process = None
-    with locked(home):
+    with locked(home) as lock_fd:
+        require(not (home / "control/restore-dormant.json").exists() and
+                not (home / "control/restore-dormant.json").is_symlink(),
+                "dormant restore prohibits activation; rollback required")
         current, root, manifest = release(home)
         require(manifest["target"] == f"{platform.system().lower()}-{platform.machine().lower()}",
                 "package platform does not match host; no child started")
@@ -78,7 +81,7 @@ def serve(home):
             signal.signal(signal.SIGTERM, interrupted)
             try:
                 process = start(root / "server" / "orkestr-v2-server", home / "logs",
-                                child_environment(home, root, current["port"]), Client(current["port"]))
+                                child_environment(home, root, current["port"]), Client(current["port"]), lock_fd=lock_fd)
                 print("READY; stop with this package's stop --home command or Ctrl-C", flush=True)
                 while process.poll() is None:
                     try:
@@ -131,7 +134,7 @@ def doctor(home, health=False):
         Client(config(home)["port"]).health()
         report["health"] = "passed; HTTP identity only"
     report["platform_acceptance"] = "unexecuted; package hashes do not prove runtime compatibility"
-    report["restore"] = "gated pending canonical migration contract"
+    report["restore"] = "same-package dormant apply/rollback only; activation and migration gated"
     return report
 
 
@@ -157,7 +160,7 @@ def main():
     change = commands.add_parser("upgrade")
     change.add_argument("--package", required=True)
     change.add_argument("--home", required=True)
-    for name in ("start", "stop", "version", "doctor", "logs", "backup", "restore-preview"):
+    for name in ("start", "stop", "version", "doctor", "logs", "backup", "restore-preview", "restore-apply", "restore-rollback"):
         command = commands.add_parser(name)
         command.add_argument("--home", required=True)
         if name == "doctor":
@@ -166,7 +169,7 @@ def main():
             command.add_argument("--lines", type=int, default=100)
         if name == "backup":
             command.add_argument("--output", required=True)
-        if name == "restore-preview":
+        if name in ("restore-preview", "restore-apply"):
             command.add_argument("--snapshot", required=True)
     args = parser.parse_args()
     try:
@@ -190,8 +193,13 @@ def main():
             print(logs(args.home, args.lines))
             return 0
         else:
-            from recovery import backup, restore_preview
-            result = (backup(args.home, args.output) if args.command == "backup" else
+            from recovery import backup, restore_preview, restore_apply, restore_rollback
+            if args.command == "restore-apply":
+                result = restore_apply(args.home, args.snapshot)
+            elif args.command == "restore-rollback":
+                result = restore_rollback(args.home)
+            else:
+                result = (backup(args.home, args.output) if args.command == "backup" else
                       restore_preview(args.home, args.snapshot))
         print(json.dumps(result, sort_keys=True, indent=2))
     except KeyboardInterrupt:

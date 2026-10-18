@@ -4,7 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import secrets
 import shutil
@@ -16,6 +16,7 @@ from helper import filesystem_disjoint, require
 
 FORMAT = "orkestr-v2-local-install-v1"
 PACKAGE_FORMAT = "orkestr-v2-directory-package-v1"
+PACKAGE_TOOLS = ("helper.py", "install_state.py", "launcher.py", "recovery.py", "path_identity.py")
 
 
 def unprivileged():
@@ -105,17 +106,50 @@ def files(root):
     return result
 
 
+def unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        require(key not in value, "duplicate package manifest key")
+        value[key] = item
+    return value
+
+
 def package(raw):
     root = Path(raw).resolve()
     require(root.is_dir(), "package directory required")
-    require(not (root / "manifest.json").is_symlink(), "package manifest symlink refused")
-    manifest = json.loads((root / "manifest.json").read_text())
+    manifest_path = root / "manifest.json"
+    require(not manifest_path.is_symlink(), "package manifest symlink refused")
+    require(manifest_path.is_file(), "regular package manifest required")
+    manifest = json.loads(manifest_path.read_text(), object_pairs_hook=unique_object)
+    require(isinstance(manifest, dict), "package manifest must be an object")
     require(manifest.get("format") == PACKAGE_FORMAT, "unsupported package format")
-    require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", manifest.get("version", "")), "invalid version")
-    require(re.fullmatch(r"[0-9a-f]{40}", manifest.get("source_commit", "")), "full source commit required")
-    require(manifest.get("files") == files(root), "package checksum inventory mismatch")
-    require("server/orkestr-v2-server" in manifest["files"], "package has no server executable")
-    require(os.access(root / "server/orkestr-v2-server", os.X_OK), "server is not executable")
+    for key, pattern, message in (
+        ("version", r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", "invalid version"),
+        ("source_commit", r"[0-9a-f]{40}", "full source commit required"),
+        ("target", r"[a-z0-9_]+-[a-z0-9_]+", "invalid package target"),
+    ):
+        require(isinstance(manifest.get(key), str) and re.fullmatch(pattern, manifest[key]), message)
+    require(type(manifest.get("ui")) is bool, "package ui must be boolean")
+    require(isinstance(manifest.get("schema_compatibility"), str)
+            and bool(manifest["schema_compatibility"]), "schema compatibility declaration required")
+    inventory = manifest.get("files")
+    require(isinstance(inventory, dict), "package files must be an inventory object")
+    for name, digest in inventory.items():
+        path = PurePosixPath(name)
+        require(bool(name) and not path.is_absolute() and str(path) == name
+                and ".." not in path.parts and "\\" not in name and "\0" not in name
+                and name != "manifest.json", "invalid package inventory path")
+        require(isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest),
+                "invalid package inventory checksum")
+    required = {"server/orkestr-v2-server", "bin/orkestr-v2"}
+    required.update("tools/" + name for name in PACKAGE_TOOLS)
+    require(required <= inventory.keys(), "package required executable/tool inventory incomplete")
+    require(("ui/index.html" in inventory) == manifest["ui"]
+            and (manifest["ui"] or not any(name.startswith("ui/") for name in inventory)),
+            "package UI inventory disagrees with manifest")
+    require(inventory == files(root), "package checksum inventory mismatch")
+    for name in ("server/orkestr-v2-server", "bin/orkestr-v2"):
+        require(os.access(root / name, os.X_OK), "package executable permission missing")
     return root, manifest
 
 
@@ -139,7 +173,10 @@ def locked(home):
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise RuntimeError("home is busy; stop its launcher before this operation") from error
-        yield
+        info = os.fstat(descriptor)
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1 and
+                stat.S_IMODE(info.st_mode) == 0o600, "invalid private launcher lock")
+        yield descriptor
     finally:
         os.close(descriptor)
 
@@ -161,12 +198,17 @@ def add_release(home, source):
     release = sha256(source / "manifest.json")
     target = home / "releases" / release
     if target.exists():
-        package(target)
+        _, cached_manifest = package(target)
+        require(cached_manifest == manifest, "cached release differs from validated source manifest")
+        require(sha256(target / "manifest.json") == release, "cached release manifest identity mismatch")
     else:
         staging = home / "releases" / (".stage-" + secrets.token_hex(8))
         try:
             shutil.copytree(source, staging)
-            package(staging)
+            _, copied_manifest = package(staging)
+            require(copied_manifest == manifest, "copied release manifest changed during validation")
+            require(sha256(staging / "manifest.json") == release,
+                    "copied release manifest identity changed; upgrade refused")
             staging.rename(target)
         finally:
             if staging.exists():
@@ -197,6 +239,8 @@ def upgrade(home, source):
     unprivileged()
     home = private_home(home)
     with locked(home):
+        marker = home / "control/restore-dormant.json"
+        require(not marker.exists() and not marker.is_symlink(), "dormant restore prohibits upgrade; rollback required")
         current = config(home)
         source, _ = package(source)
         source = filesystem_disjoint(source, [home])
