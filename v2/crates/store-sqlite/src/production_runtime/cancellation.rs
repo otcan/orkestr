@@ -188,6 +188,16 @@ impl Store {
         let cancel = sqlx::query("INSERT INTO production_cancellations(run_id,event_id,request_key,lease_generation,dispatch_fence,lease_deadline_ms,receipt_state,inflight_status) VALUES(?,?,?,?,?,?,?,?) RETURNING *")
             .bind(run.to_string()).bind(event.to_string()).bind(key).bind(next).bind(fence).bind(deadline).bind(state).bind(inflight)
             .fetch_one(&mut *tx).await.map_err(db)?;
+        // Only Deep consumes this inbox. A Worker/Fast Stop must not hold its
+        // parent's independent owner input. The cancellation event is the cut.
+        if provider.run.role == Role::Deep {
+            sqlx::query("INSERT INTO production_stop_boundaries(event_id,owner_id,conversation_id,run_id,through_scope_sequence) VALUES(?,?,?,?,?)")
+                .bind(event.to_string()).bind(owner.to_string()).bind(provider.run.conversation_id.to_string())
+                .bind(run.to_string()).bind(sequence-1).execute(&mut *tx).await.map_err(db)?;
+            sqlx::query("INSERT INTO production_held_inputs(event_id,conversation_id,scope_sequence,message_id,boundary_event_id,reason) SELECT i.event_id,i.conversation_id,i.sequence,i.message_id,?,'stop_boundary' FROM reasoning_inbox i WHERE i.conversation_id=? AND i.sequence<=? AND i.state!='consumed' AND NOT EXISTS(SELECT 1 FROM production_held_inputs h WHERE h.event_id=i.event_id)")
+                .bind(event.to_string()).bind(provider.run.conversation_id.to_string()).bind(sequence-1)
+                .execute(&mut *tx).await.map_err(db)?;
+        }
         sqlx::query("INSERT INTO outbox(event_id) VALUES(?)")
             .bind(event.to_string())
             .execute(&mut *tx)

@@ -1,6 +1,8 @@
 //! Version 0 HTTP contracts. No storage or provider dependencies.
 mod cancellation;
 mod execution;
+mod held_inputs;
+pub use held_inputs::*;
 mod worker_discovery;
 pub use execution::*;
 pub use worker_discovery::*;
