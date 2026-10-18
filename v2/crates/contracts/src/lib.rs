@@ -3,6 +3,8 @@ mod cancellation;
 mod execution;
 pub use execution::*;
 mod events;
+mod production_events;
+pub use production_events::*;
 mod resource_health;
 pub use resource_health::*;
 mod stopped;
