@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
 
+# Replace stale PR checks without cancelling exact-source or publication runs.
+# PR numbers also keep identically named branches from different forks separate.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   dependency-advisories:
     runs-on: ubuntu-latest
