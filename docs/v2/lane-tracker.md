@@ -31,8 +31,8 @@ tracker facts, not implementation or acceptance evidence.
 | Lane | Branch | Admitted work | Reported PR / exact tested head | Tests / CI |
 |---|---|---|---|---|
 | Coordinator | `v2/s0-coordination` | Running light: dependency integration, backlog, review routing | This ledger; implementation head pending | No Rust tests run by coordinator; CI pending |
-| Core | `v2/s0-core` | Running heavy: confirms contracts/application/store-sqlite/Axum durable intake on pinned baseline; API fixtures forthcoming | Awaiting first commit/PR; initial head is plan baseline | First build and test counts pending |
-| Runtime | `v2/s0-runtime` | Running heavy: offline provider/runtime slice; proposed `orkestr-runtime` implements core-owned application runtime ports, no own store | Confirmed clean at `a7ba6d59`; first PR pending | Tests pending; Codex 0.163.0 / Claude 2.1.295 version/help only, no live inference |
+| Core | `v2/s0-core` | Intake increment committed; independent review pending; heavy-slot yield requested | [PR #78](https://github.com/otcan/orkestr/pull/78), `28c4779346a2d6e46abed5305cd4b6ee7deac060` | Reports 4 Rust tests plus 7 HTTP/process scenarios; [exact-head v2 CI](https://github.com/otcan/orkestr/actions/runs/39132698484) reported green; full acceptance pending |
+| Runtime | `v2/s0-runtime` | Running heavy: offline adapter/supervisor; migration to core-owned ports pending, no own store | [PR #76](https://github.com/otcan/orkestr/pull/76), observed `81607879ea0b84f9ed37d74064d36267763a77cd` | Reported 9-test checkpoint versus earlier PR 12-test count needs exact-head reconciliation; earlier v2 CI failed; Codex initialize only, Claude version/help only |
 | UI | `v2/s0-ui` | Queued heavy; light feasibility checkpoint committed; no Cargo/downloads | [PR #73](https://github.com/otcan/orkestr/pull/73), observed head `66965cdbb6a43df72ced848a22f7a9a7c179ee64`; reported checkpoint `28b7194e` | Web pending; iOS simulator blocked by Linux/missing Apple tools; independent review routed |
 | Verification | `v2/s0-verification` | Light inventory/spec checkpoint committed; endpoint probes blocked on core build/fixtures | [PR #75](https://github.com/otcan/orkestr/pull/75), coordinator reviewed `0fa321a291f9d3e29d92b2554068b51405f18d2d` | Reporter: 0 passed/17 pending, exit 1; false-pass mutation rejected; no compile; CI build/tests failed, integration blocked |
 
@@ -72,7 +72,14 @@ private host paths and runtime identities stay outside this repository.
 
 ## Outstanding gates
 
-- First shared contract commit, root integration and reproducible clean build.
+- Core contracts/fixtures published at `afcb14ac412e31c362b120bd02d8353dc0e09314`:
+  `v2/fixtures/*.json`, `v2/crates/contracts/src/lib.rs`,
+  `docs/v2/api-v0-intake.md`. Root integration and independent review pending.
+- Archive handoff: reviewed SQLite commit `ef759a48` (25 tests reported) and
+  isolated UI spike `dcf099b1` (6 tests/WASM reported) remain read-only references.
+  Reuse applicable tests/components after contract comparison. PR #77 proposes
+  a separate store/root lock; integration must reconcile with core's authoritative
+  intake schema first, rather than introduce competing execution authorities.
 - Dedicated v2 epic/tasks: materialized per operator report above; coordinator
   supplies exact-head evidence for the operator to mirror to those issues.
 - Every implementation PR: exact head, commands, test counts, independent review,
