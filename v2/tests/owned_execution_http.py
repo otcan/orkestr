@@ -279,27 +279,32 @@ def shutdown_with_open_events(case):
         assert db.execute("SELECT count(*) FROM production_observations WHERE kind='stopped'").fetchone()[0] == 0
 
 
-for scenario in ["success", "revoked_after_start", "revoked_in_flight", "shutdown_with_open_events",
-                 "revoked_at_start", "queued_at_start"]:
-    case = Case()
-    try:
-        case.setup()
-        if scenario == "success":
-            success(case)
-        elif scenario == "revoked_after_start":
-            revoked_after_start(case)
-        elif scenario == "revoked_in_flight":
-            revoked_in_flight(case)
-        elif scenario == "shutdown_with_open_events":
-            shutdown_with_open_events(case)
-        else:
-            if scenario == "queued_at_start":
-                assert case.message()[0] == 202
-            case.stop()
-            case.configure()
-            if scenario == "revoked_at_start":
-                case.revoke_machine()
-            case.start(configured=True, refused=True)
-        print("ordinary synthetic HTTP case passed:", scenario)
-    finally:
-        case.cleanup()
+def main():
+    for scenario in ["success", "revoked_after_start", "revoked_in_flight", "shutdown_with_open_events",
+                     "revoked_at_start", "queued_at_start"]:
+        case = Case()
+        try:
+            case.setup()
+            if scenario == "success":
+                success(case)
+            elif scenario == "revoked_after_start":
+                revoked_after_start(case)
+            elif scenario == "revoked_in_flight":
+                revoked_in_flight(case)
+            elif scenario == "shutdown_with_open_events":
+                shutdown_with_open_events(case)
+            else:
+                if scenario == "queued_at_start":
+                    assert case.message()[0] == 202
+                case.stop()
+                case.configure()
+                if scenario == "revoked_at_start":
+                    case.revoke_machine()
+                case.start(configured=True, refused=True)
+            print("ordinary synthetic HTTP case passed:", scenario)
+        finally:
+            case.cleanup()
+
+
+if __name__ == "__main__":
+    main()
