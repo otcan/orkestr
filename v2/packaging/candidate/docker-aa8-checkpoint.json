@@ -1,0 +1,155 @@
+{
+  "artifact_identity": {
+    "required_glibc": "2.39",
+    "server_sha256": "0f7e9235c01eb67ce5bf55c4f6f79d2d11d1b0b7ca17130cac561f8559ee1b37",
+    "web_features": [
+      "web",
+      "execution-controls"
+    ],
+    "web_inventory_sha256": "53f37e5d9cf1b185171ba1b5afe1b2289135e63fed1be62c72246016a89be3cb"
+  },
+  "base_architecture": "linux/amd64",
+  "base_glibc": "2.41",
+  "base_image": "python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1",
+  "base_image_id": "sha256:df18428df8a0f9189c84e7424d214b4c50092af1f9dca5842a00c41c39bda316",
+  "build_flags": [
+    "--pull=false",
+    "--network=none",
+    "--build-arg BASE_IMAGE=<recorded immutable digest>"
+  ],
+  "candidate_acceptance": {
+    "all_ui_asset_hashes_verified": true,
+    "dormant_recovery": {
+      "activation": "activation refused",
+      "rollback": "empty target restored",
+      "scope": "same exact image offline recovery; no cross-version migration",
+      "snapshot_and_applied": {
+        "messages": 1,
+        "sha256": "b1e1060e78dabb54f20a1c5fdcfe8d22e7caa510c67916bce47130c52a9ce3f5"
+      },
+      "status": "passed"
+    },
+    "effective_port_bindings": {
+      "19822/tcp": [
+        {
+          "HostIp": "127.0.0.1",
+          "HostPort": "19842"
+        }
+      ]
+    },
+    "effective_security": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "mount_types": [
+        "volume"
+      ],
+      "read_only": true,
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "user": "10001:10001"
+    },
+    "health_latency": {
+      "coverage": {
+        "crash": "unexecuted",
+        "health": "observed",
+        "latency": "observed",
+        "restart": "unexecuted",
+        "revocation": "unexecuted"
+      },
+      "duration_ms": 425.01,
+      "health_recovery_transitions": 0,
+      "latency_ms": {
+        "max": 0.859,
+        "p50": 0.776,
+        "p95": 0.859
+      },
+      "latency_threshold_passed": null,
+      "longest_consecutive_failures": 0,
+      "max_latency_ms": null,
+      "samples": [
+        {
+          "elapsed_ms": 0.74,
+          "observed_at": "2026-10-18T20:41:27.481032+00:00",
+          "offset_ms": 20.713,
+          "ok": true,
+          "sample": 0
+        },
+        {
+          "elapsed_ms": 0.776,
+          "observed_at": "2026-10-18T20:41:27.581880+00:00",
+          "offset_ms": 121.558,
+          "ok": true,
+          "sample": 1
+        },
+        {
+          "elapsed_ms": 0.859,
+          "observed_at": "2026-10-18T20:41:27.682729+00:00",
+          "offset_ms": 222.406,
+          "ok": true,
+          "sample": 2
+        },
+        {
+          "elapsed_ms": 0.844,
+          "observed_at": "2026-10-18T20:41:27.783662+00:00",
+          "offset_ms": 323.336,
+          "ok": true,
+          "sample": 3
+        },
+        {
+          "elapsed_ms": 0.728,
+          "observed_at": "2026-10-18T20:41:27.884594+00:00",
+          "offset_ms": 424.274,
+          "ok": true,
+          "sample": 4
+        }
+      ],
+      "scope": "HTTP health latency only; no browser/provider/load or schema-compatibility claim",
+      "started_at": "2026-10-18T20:41:27.460314+00:00",
+      "successes": 5
+    },
+    "schema_versions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17
+    ],
+    "scope": "owned same-source trusted HTTP/control plane; no providers/executor activation",
+    "source_commit": "aa8e19a3d99e3fb83c3c421e8b61f5be4f5a8c2a"
+  },
+  "candidate_manifest_sha256": "af9376b370c4bd5c0ea5ff7cefa08d3a7ecd02147f9376542d526cf400a01cd8",
+  "compose_sha256": "10ade1b3a6994c04ca8450ea89d0ff9299dbf8b7626ad65c501e7537e8518eb8",
+  "image": "sha256:c2d6ae6bcdd73b4a53f9a96314d7768066960ccc843af81bfa6c523af1ba53c6",
+  "network_policy": "trusted control-plane dedicated ordinary bridge; outbound routing allowed; zero providers configured",
+  "owned_resources_removed": true,
+  "paired_receipt_sha256": "71312838a2c2cbe4593718b1ee53856bf3338941af12445c6b3e99b282028547",
+  "previous_base": "Bookworm glibc2.36 incompatible with this glibc2.39 binary; replaced by separately admitted pinned Trixie glibc2.41",
+  "scope": "owned container health/static HTTP only",
+  "status": "passed",
+  "unexecuted": [
+    "Browser interaction",
+    "Provider activation",
+    "OS executor isolation",
+    "Cross-version migration",
+    "Dormant activation",
+    "Unattended soak",
+    "Crash recovery",
+    "Session revocation",
+    "Remote CI",
+    "Production deployment"
+  ]
+}
