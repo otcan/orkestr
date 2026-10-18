@@ -1,0 +1,427 @@
+use super::*;
+use crate::Store;
+use std::collections::BTreeMap;
+
+struct Directory(PathBuf);
+impl Directory {
+    fn new() -> Self {
+        let root = PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").expect("isolated test home"))
+            .join(format!("preflight-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        Self(root.canonicalize().unwrap())
+    }
+    fn db(&self) -> PathBuf {
+        self.0.join("test.sqlite3")
+    }
+    fn files(&self) -> BTreeMap<PathBuf, Vec<u8>> {
+        fs::read_dir(&self.0)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                assert!(
+                    entry.file_type().unwrap().is_file(),
+                    "scratch directory leaked"
+                );
+                (entry.file_name().into(), fs::read(entry.path()).unwrap())
+            })
+            .collect()
+    }
+}
+impl Drop for Directory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+async fn raw(path: &Path) -> SqliteConnection {
+    SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true),
+    )
+    .await
+    .unwrap()
+}
+async fn refused_unchanged(dir: &Directory) {
+    let before = dir.files();
+    assert!(Store::open(&dir.db()).await.is_err());
+    assert_eq!(dir.files(), before, "refusal changed database/sidecars");
+}
+
+#[tokio::test]
+async fn existing_empty_foreign_and_orphan_sidecars_are_preserved() {
+    for setup in [
+        "",
+        "CREATE TABLE foreign_data(value TEXT); INSERT INTO foreign_data VALUES ('synthetic');",
+    ] {
+        let dir = Directory::new();
+        let mut conn = raw(&dir.db()).await;
+        if !setup.is_empty() {
+            sqlx::raw_sql(setup).execute(&mut conn).await.unwrap();
+        }
+        conn.close().await.unwrap();
+        refused_unchanged(&dir).await;
+    }
+    let dir = Directory::new();
+    fs::write(dir.db(), []).unwrap();
+    refused_unchanged(&dir).await;
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let dir = Directory::new();
+        fs::write(sidecar(&dir.db(), suffix), b"synthetic orphan").unwrap();
+        refused_unchanged(&dir).await;
+    }
+}
+
+#[tokio::test]
+async fn future_changed_checksum_and_altered_schema_are_preserved() {
+    for sql in [
+        "INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES (999,'future',1,X'00',0)",
+        "UPDATE _sqlx_migrations SET checksum=X'00' WHERE version=1",
+        "ALTER TABLE messages ADD COLUMN unexpected TEXT",
+        "CREATE TRIGGER unexpected AFTER INSERT ON owners BEGIN SELECT 1; END",
+    ] {
+        let dir = Directory::new();
+        let store = Store::open(&dir.db()).await.unwrap();
+        store.close().await;
+        let mut conn = raw(&dir.db()).await;
+        sqlx::raw_sql(sql).execute(&mut conn).await.unwrap();
+        conn.close().await.unwrap();
+        refused_unchanged(&dir).await;
+    }
+}
+
+#[tokio::test]
+async fn future_migration_only_in_live_wal_is_refused_without_source_writes() {
+    let dir = Directory::new();
+    let store = Store::open(&dir.db()).await.unwrap();
+    store.close().await;
+    let main_before = fs::read(dir.db()).unwrap();
+    let mut conn = raw(&dir.db()).await;
+    sqlx::query("PRAGMA wal_autocheckpoint=0")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES (999,'future',1,X'00',0)")
+        .execute(&mut conn).await.unwrap();
+    assert_eq!(
+        fs::read(dir.db()).unwrap(),
+        main_before,
+        "future version must remain WAL-only"
+    );
+    assert!(fs::metadata(sidecar(&dir.db(), "-wal")).unwrap().len() > 32);
+    refused_unchanged(&dir).await;
+    conn.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn foreign_live_wal_is_refused_without_source_writes() {
+    let dir = Directory::new();
+    let mut conn = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(dir.db())
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal),
+    )
+    .await
+    .unwrap();
+    sqlx::query("PRAGMA wal_autocheckpoint=0")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "CREATE TABLE foreign_data(value TEXT); INSERT INTO foreign_data VALUES ('synthetic');",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    refused_unchanged(&dir).await;
+    conn.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn supported_earlier_migration_prefix_is_identified_then_upgraded() {
+    let dir = Directory::new();
+    let mut conn = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(dir.db())
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal),
+    )
+    .await
+    .unwrap();
+    conn.ensure_migrations_table().await.unwrap();
+    let migrator = sqlx::migrate!("./migrations");
+    let first = migrator.iter().next().unwrap();
+    sqlx::raw_sql(&first.sql).execute(&mut conn).await.unwrap();
+    sqlx::query("INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES (?,?,1,?,0)")
+        .bind(first.version).bind(first.description.as_ref()).bind(first.checksum.as_ref())
+        .execute(&mut conn).await.unwrap();
+    conn.close().await.unwrap();
+    let store = Store::open(&dir.db()).await.unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(count as usize, migrator.iter().count());
+    store.close().await;
+    let reopened = Store::open(&dir.db()).await.unwrap();
+    reopened.close().await;
+}
+
+async fn populated_dispatch_prefix(dir: &Directory) -> SqliteConnection {
+    let mut conn = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(dir.db())
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal),
+    )
+    .await
+    .unwrap();
+    conn.ensure_migrations_table().await.unwrap();
+    let migrator = sqlx::migrate!("./migrations");
+    for migration in migrator.iter().take(4) {
+        conn.apply(migration).await.unwrap();
+    }
+    sqlx::raw_sql("INSERT INTO owners(id,username,password_hash) VALUES('owner','synthetic','synthetic');
+    INSERT INTO conversations(id,owner_id,sequence) VALUES('conversation','owner',1);
+    INSERT INTO messages VALUES('message','owner','conversation','input','digest','synthetic','owner',1);
+    INSERT INTO events(id,owner_id,conversation_id,message_id,sequence) VALUES('event','owner','conversation','message',1);
+    INSERT INTO outbox(event_id) VALUES('event');
+    INSERT INTO fixture_supervisors VALUES('context','owner','synthetic','key','incarnation',1,9999999999999);
+    INSERT INTO session_bindings(id,owner_id,conversation_id,role,provider_kind,provider_namespace,native_session_id,state) VALUES('session','owner','conversation','deep','explicit_fixture','synthetic','synthetic-native','busy');
+    INSERT INTO fixture_readiness VALUES('session','context','incarnation',1);
+    INSERT INTO fixture_runs VALUES('run','context','incarnation','owner','conversation','session','synthetic-native',1,'message','event',1,1,'run-key','digest',1,1,9999999999999,1,'starting','delivery_unknown',NULL,NULL,NULL);
+    INSERT INTO reasoning_inbox(conversation_id,sequence,message_id,event_id,state,claimant_session_id,claim_generation,claim_deadline_ms,admitted_fixture_run_id) VALUES('conversation',1,'message','event','consumed','session',1,9999999999999,'run');").execute(&mut conn).await.unwrap();
+    conn
+}
+
+#[tokio::test]
+async fn populated_dispatch_prefix_upgrade_preserves_inbound_links_and_checksums() {
+    let dir = Directory::new();
+    let mut conn = populated_dispatch_prefix(&dir).await;
+    let legacy: (String, String, i64, String) =
+        sqlx::query_as("SELECT id,message_id,sequence,occurred_at FROM events")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+    let checksums: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap();
+    conn.close().await.unwrap();
+    let store = Store::open(&dir.db()).await.unwrap();
+    let after: (String, String, i64, String) =
+        sqlx::query_as("SELECT id,message_id,sequence,occurred_at FROM events")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(legacy, after);
+    let after_checksums: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT checksum FROM _sqlx_migrations WHERE version<=4 ORDER BY version",
+    )
+    .fetch_all(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(checksums, after_checksums);
+    assert!(sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&store.pool)
+        .await
+        .unwrap()
+        .is_empty());
+    let links: i64 = sqlx::query_scalar("SELECT count(*) FROM reasoning_inbox i JOIN fixture_runs r ON r.id=i.admitted_fixture_run_id JOIN events e ON e.id=r.event_id JOIN outbox o ON o.event_id=e.id WHERE i.event_id=e.id AND r.message_id=e.message_id").fetch_one(&store.pool).await.unwrap();
+    assert_eq!(links, 1);
+    let issued: (String, i64, i64) =
+        sqlx::query_as("SELECT run_id,generation,lease_deadline_ms FROM fixture_run_leases")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(issued, ("run".into(), 1, 9999999999999));
+    store.close().await;
+    Store::open(&dir.db()).await.unwrap().close().await;
+}
+
+#[tokio::test]
+async fn data_constraint_upgrade_failure_in_live_wal_preserves_source_and_sidecars() {
+    let dir = Directory::new();
+    let mut conn = populated_dispatch_prefix(&dir).await;
+    sqlx::raw_sql("PRAGMA wal_autocheckpoint=0;
+    INSERT INTO fixture_runs SELECT 'run-two',context_id,incarnation_id,owner_id,conversation_id,session_id,native_session_id,binding_generation,message_id,event_id,scope_sequence+1,claim_generation,'run-key-two',input_digest,lease_generation,dispatch_fence,lease_deadline_ms,attempt,'blocked','quarantined',NULL,NULL,NULL FROM fixture_runs;").execute(&mut conn).await.unwrap();
+    // Valid prefix 4 permits historical reuse; selected no-reuse migration cannot
+    // silently discard this conflicting history. Its copy rehearsal must refuse.
+    assert!(sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&mut conn)
+        .await
+        .unwrap()
+        .is_empty());
+    refused_unchanged(&dir).await;
+    conn.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn populated_observation_prefix_upgrade_preserves_rows_and_issued_history() {
+    let dir = Directory::new();
+    let mut conn = populated_dispatch_prefix(&dir).await;
+    for migration in sqlx::migrate!("./migrations").iter().skip(4).take(2) {
+        conn.apply(migration).await.unwrap();
+    }
+    sqlx::raw_sql("INSERT INTO events(id,owner_id,conversation_id,sequence,kind,schema_version) VALUES('observed','owner','conversation',2,'fixture_provider_observed',2);
+    INSERT INTO outbox(event_id) VALUES('observed');
+    INSERT INTO fixture_observations VALUES('observed','run',1,'digest','started',NULL,1,1,'running');
+    UPDATE fixture_runs SET state='running'; UPDATE conversations SET sequence=2;
+    INSERT INTO fixture_run_leases VALUES('run',2,9999999999999);").execute(&mut conn).await.unwrap();
+    let checksums: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap();
+    let before: Vec<(String, String, i64, String)> =
+        sqlx::query_as("SELECT id,kind,sequence,occurred_at FROM events ORDER BY sequence")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap();
+    conn.close().await.unwrap();
+    let store = Store::open(&dir.db()).await.unwrap();
+    let after: Vec<(String, String, i64, String)> =
+        sqlx::query_as("SELECT id,kind,sequence,occurred_at FROM events ORDER BY sequence")
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(before, after);
+    let after_checksums: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT checksum FROM _sqlx_migrations WHERE version<=6 ORDER BY version",
+    )
+    .fetch_all(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(checksums, after_checksums);
+    let issued: Vec<(i64, String, i64)> = sqlx::query_as(
+        "SELECT generation,purpose,dispatch_fence FROM fixture_run_leases ORDER BY generation",
+    )
+    .fetch_all(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        issued,
+        vec![(1, "execution".into(), 1), (2, "execution".into(), 1)]
+    );
+    let links: i64 = sqlx::query_scalar("SELECT count(*) FROM fixture_observations o JOIN events e ON e.id=o.event_id JOIN outbox b ON b.event_id=e.id JOIN fixture_runs r ON r.id=o.run_id JOIN reasoning_inbox i ON i.admitted_fixture_run_id=r.id WHERE o.kind='started' AND o.receipt_state='running' AND r.state='running' AND i.state='consumed'").fetch_one(&store.pool).await.unwrap();
+    assert_eq!(links, 1);
+    assert!(sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&store.pool)
+        .await
+        .unwrap()
+        .is_empty());
+    store.close().await;
+    Store::open(&dir.db()).await.unwrap().close().await;
+}
+
+#[tokio::test]
+async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links() {
+    let dir = Directory::new();
+    let mut conn = populated_dispatch_prefix(&dir).await;
+    for migration in sqlx::migrate!("./migrations").iter().skip(4).take(10) {
+        conn.apply(migration).await.unwrap();
+    }
+    sqlx::raw_sql("INSERT INTO projects(id,owner_id,request_key,payload_digest,name) VALUES('production-project','owner','project-key','digest','Synthetic');
+    INSERT INTO conversations(id,owner_id,project_id,sequence) VALUES('production-conversation','owner','production-project',3);
+    INSERT INTO messages VALUES('production-message','owner','production-conversation','production-input','digest','synthetic','owner',1);
+    INSERT INTO events(id,owner_id,conversation_id,message_id,sequence) VALUES('production-input-event','owner','production-conversation','production-message',1);
+    INSERT INTO session_bindings(id,owner_id,conversation_id,role,provider_kind,provider_namespace,native_session_id,state) VALUES('production-session','owner','production-conversation','deep','codex','synthetic','production-native','busy');
+    INSERT INTO production_supervisors VALUES('production-context','owner','codex','synthetic','key','production-incarnation',1,9999999999999);
+    INSERT INTO production_readiness VALUES('production-session','production-context','production-incarnation','synthetic-v1','ready','digest');
+    INSERT INTO production_runs VALUES('production-run','production-context','production-incarnation','owner','production-conversation','production-session','production-native','codex',1,'production-message','production-input-event',1,1,'production-key','digest',1,1,9999999999999,1,'awaiting_acceptance','delivery_unknown',NULL,NULL,NULL);
+    INSERT INTO production_run_leases VALUES('production-run',1,9999999999999,1,'execution');
+    INSERT INTO reasoning_inbox(conversation_id,sequence,message_id,event_id,state,claimant_session_id,claim_generation,claim_deadline_ms,admitted_run_id) VALUES('production-conversation',1,'production-message','production-input-event','consumed','production-session',1,9999999999999,'production-run');
+    INSERT INTO events(id,owner_id,conversation_id,sequence,kind,schema_version) VALUES('progress','owner','production-conversation',2,'provider_observed',8),('completion','owner','production-conversation',3,'provider_observed',5);
+    INSERT INTO outbox(event_id) VALUES('production-input-event'),('progress'),('completion');
+    INSERT INTO production_observations VALUES('progress','production-run',1,'progress-digest','progress',1,1,'running'),('completion','production-run',2,'completion-digest','completed_proposal',1,1,'awaiting_acceptance');
+    INSERT INTO production_payloads VALUES('payload','progress','owner','production-conversation','production-run','synthetic progress');").execute(&mut conn).await.unwrap();
+    async fn rows(conn: &mut SqliteConnection) -> BTreeMap<String, Vec<String>> {
+        let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('production_acceptances','history_imports','history_messages','worker_tool_delegations','worker_provider_delegations','history_recovery_restores','history_recovery_children','production_resume_metadata','production_control_revisions') ORDER BY name")
+            .fetch_all(&mut *conn).await.unwrap();
+        let mut result = BTreeMap::new();
+        for table in tables {
+            let columns: Vec<String> = sqlx::query_scalar(&format!(
+                "SELECT name FROM pragma_table_info('{table}') ORDER BY cid"
+            ))
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap();
+            let columns: Vec<_> = columns
+                .into_iter()
+                .filter(|column| {
+                    (table != "production_runs"
+                        || !["role", "parent_session_id", "worker_delegation_id"]
+                            .contains(&column.as_str()))
+                        && (table != "production_cancellations"
+                            || column != "request_control_revision")
+                })
+                .collect();
+            let expression = columns
+                .iter()
+                .map(|c| format!("quote(\"{c}\")"))
+                .collect::<Vec<_>>()
+                .join(" || '|' || ");
+            let filter = if table == "_sqlx_migrations" {
+                " WHERE version<=14"
+            } else {
+                ""
+            };
+            let data = sqlx::query_scalar(&format!(
+                "SELECT {expression} AS row FROM \"{table}\"{filter} ORDER BY row"
+            ))
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap();
+            result.insert(table, data);
+        }
+        result
+    }
+    let before = rows(&mut conn).await;
+    conn.close().await.unwrap();
+    let store = Store::open(&dir.db()).await.unwrap();
+    let mut conn = raw(&dir.db()).await;
+    assert_eq!(rows(&mut conn).await, before);
+    let legacy:(String,Option<String>,Option<String>)=sqlx::query_as("SELECT role,parent_session_id,worker_delegation_id FROM production_runs WHERE id='production-run'").fetch_one(&mut conn).await.unwrap();
+    assert_eq!(legacy, ("deep".into(), None, None));
+    assert!(sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&mut conn)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM production_acceptances")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT max(version) FROM _sqlx_migrations")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap(),
+        24
+    );
+    for table in [
+        "history_imports",
+        "history_messages",
+        "worker_tool_delegations",
+        "worker_provider_delegations",
+        "history_recovery_restores",
+        "history_recovery_children",
+        "production_resume_metadata",
+    ] {
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
+                .fetch_one(&mut conn)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+    conn.close().await.unwrap();
+    store.close().await;
+    Store::open(&dir.db()).await.unwrap().close().await;
+}

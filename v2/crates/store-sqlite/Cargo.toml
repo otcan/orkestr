@@ -1,0 +1,20 @@
+[package]
+name = "orkestr-v2-store-sqlite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Explicit offline harness only; never enabled by server bootstrap.
+fixture-test-controls = []
+
+[dependencies]
+orkestr-v2-contracts = { path = "../contracts" }
+orkestr-v2-domain = { path = "../orkestr-domain" }
+orkestr-v2-application = { path = "../application" }
+sqlx.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+uuid = { workspace = true, features = ["v4"] }
