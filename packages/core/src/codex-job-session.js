@@ -36,23 +36,29 @@ export class CodexJobSession {
 
   // Start a new Codex thread, or resume `sessionRef`. A resume that fails
   // (thread gone) falls back to a new thread and reports resumed: false.
-  async open({ sessionRef = "", cwd = null, model = "", approvalPolicy = "untrusted", sandbox = "workspace-write", developerInstructions = "", dynamicTools = [] } = {}) {
+  async open({ sessionRef = "", cwd = null, model = "", effort = "", strictResume = false, approvalPolicy = "untrusted", sandbox = "workspace-write", developerInstructions = "", dynamicTools = [] } = {}) {
     this.client = await getCodexJobClient({ env: this.env, home: this.home });
     this.cwd = cwd;
     this.approvalPolicy = approvalPolicy;
+    this.model = strictResume ? model : "";
+    this.effort = strictResume ? effort : "";
     let thread = null;
     let resumed = false;
     if (clean(sessionRef)) {
-      const result = await this.client.request("thread/resume", {
+      const pending = strictResume && this.client.personalAgentPendingSessions?.get(clean(sessionRef));
+      const result = pending ? { thread: pending } : await this.client.request("thread/resume", {
         threadId: clean(sessionRef), cwd, approvalPolicy, sandbox, ...(model ? { model } : {}),
+        ...(strictResume ? { modelProvider: "openai" } : {}),
         ...(developerInstructions ? { developerInstructions } : {}),
-      }).catch(() => null);
+      }).catch((error) => { if (strictResume) throw Object.assign(new Error("personal_agent_native_resume_failed"), { code: "personal_agent_native_resume_failed", cause: error }); return null; });
       thread = result?.thread || null;
-      resumed = Boolean(thread);
+      if (strictResume && clean(thread?.id || thread?.threadId) !== clean(sessionRef)) throw Object.assign(new Error("personal_agent_native_identity_changed"), { code: "personal_agent_native_identity_changed" });
+      resumed = Boolean(thread) && !pending;
     }
     if (!thread) {
       const result = await this.client.request("thread/start", {
         cwd, approvalPolicy, sandbox, serviceName: "orkestr_oss", ephemeral: false,
+        ...(strictResume ? { modelProvider: "openai", allowProviderModelFallback: false } : {}),
         ...(model ? { model } : {}),
         ...(developerInstructions ? { developerInstructions } : {}),
         ...(dynamicTools.length ? { dynamicTools } : {}),
@@ -68,6 +74,7 @@ export class CodexJobSession {
     });
     // A turn left running by a crashed attempt must not race the new one.
     const stale = (Array.isArray(thread.turns) ? thread.turns : []).filter((turn) => turn?.status === "inProgress");
+    if (strictResume && stale.length) throw Object.assign(new Error("personal_agent_native_resume_reconciliation_required"), { code: "personal_agent_native_resume_reconciliation_required" });
     this.staleTurnIds = new Set(stale.map((turn) => clean(turn.id)));
     for (const turn of stale) await this.client.request("turn/interrupt", { threadId: this.codexThreadId, turnId: turn.id }).catch(() => null);
     return { sessionRef: this.codexThreadId, resumed };
@@ -101,8 +108,11 @@ export class CodexJobSession {
         input: [{ type: "text", text, text_elements: [] }],
         cwd: this.cwd,
         approvalPolicy: this.approvalPolicy,
+        ...(this.model ? { model: this.model } : {}),
+        ...(this.effort ? { effort: this.effort } : {}),
       });
       turn.id = clean(started?.turn?.id) || turn.id;
+      this.client.personalAgentPendingSessions?.delete(this.codexThreadId);
       if (signal?.aborted) void this.interrupt();
       const completed = await turn.settled;
       const status = ["interrupted", "cancelled", "canceled", "aborted"].includes(clean(completed.status)) ? "cancelled"
