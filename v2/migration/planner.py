@@ -41,11 +41,15 @@ def validate_ledger(ledger):
     return ledger
 
 
-def classify(document, conflicted=()):
+def classify(document, conflicted=(), quarantined=None):
     records = {identity(r): r for r in document['records']}
-    reasons = {key: ({'identity_content_conflict'} if key in conflicted else set())
+    quarantined = quarantined or {}
+    reasons = {key: set(quarantined.get(key, ()))
+               | ({'identity_content_conflict'} if key in conflicted else set())
                for key in records}
     edges = {key: [] for key in records}
+    dependencies = {key: {identity(ref) for ref in record['references']}
+                    for key, record in records.items()}
     positions = {}
     artifact_paths = {a['path'] for a in document['artifacts']}
     for key, record in records.items():
@@ -79,6 +83,7 @@ def classify(document, conflicted=()):
                 reasons[positions[slot]].add('duplicate_position')
             positions[slot] = key
             thread_ref = {'kind': 'thread', 'key': [record['key'][0]]}
+            dependencies[key].add(identity(thread_ref))
             thread = records.get(identity(thread_ref))
             if thread is None:
                 reasons[key].add('missing_thread')
@@ -118,9 +123,9 @@ def classify(document, conflicted=()):
     changed = True
     while changed:
         changed = False
-        for key, record in records.items():
-            for ref in record['references']:
-                if reasons.get(identity(ref)) and 'quarantined_reference' not in reasons[key]:
+        for key, targets in dependencies.items():
+            for target in targets:
+                if reasons.get(target) and 'quarantined_reference' not in reasons[key]:
                     reasons[key].add('quarantined_reference')
                     changed = True
     return {key: sorted(value) for key, value in reasons.items()}
@@ -134,10 +139,18 @@ def reconcile(document, previous=None):
     """
     import copy
     ledger = copy.deepcopy(validate_ledger(previous) if previous is not None else empty_ledger())
-    conflicted = {identity(record) for record in document['records']
-                  if map_key(document['source_instance'], record) in ledger['entries']
-                  and ledger['entries'][map_key(document['source_instance'], record)]['digest'] != sha(record)}
-    reasons = classify(document, conflicted)
+    conflicted, quarantined = set(), {}
+    for record in document['records']:
+        old = ledger['entries'].get(map_key(document['source_instance'], record))
+        if old is None:
+            continue
+        source_key = identity(record)
+        if old['digest'] != sha(record):
+            conflicted.add(source_key)
+        if old['disposition'] == 'QUARANTINED':
+            # Quarantine is sticky even if original bytes return on a later replay.
+            quarantined[source_key] = old['reasons'] or ['persisted_quarantine']
+    reasons = classify(document, conflicted, quarantined)
     outcomes = Counter()
     for record in sorted(document['records'], key=identity):
         key = map_key(document['source_instance'], record)
@@ -151,7 +164,7 @@ def reconcile(document, previous=None):
                 'reason': 'identity_content_conflict',
             }
             old['disposition'] = 'QUARANTINED'
-            old['reasons'] = sorted(set(old['reasons']) | {'identity_content_conflict'})
+            old['reasons'] = sorted(set(old['reasons']) | set(reasons[identity(record)]))
             outcomes['conflicts'] += 1
             continue
         if old:
