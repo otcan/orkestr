@@ -1,10 +1,10 @@
 """Opt-in trusted selected-account Claude profile; no client account selector."""
 import fcntl
 import os
-from pathlib import Path
 import uuid
 from .authenticated import SelectedCodexProfile, private_path
 from . import policy
+from .claude_state import state_root, projects
 
 
 class SelectedAccount:
@@ -41,13 +41,15 @@ class SelectedAccount:
 class SelectedClaudeProfile(SelectedCodexProfile):
     _provider="claude"
 
-    @staticmethod
-    def _state(path):
-        root=Path(private_path(path,True))
-        # Fresh private native state only at this checkpoint. Never mount an
-        # existing account/profile, copied credentials or another role's state.
-        if any(root.iterdir()):raise ValueError("fresh Claude private state required")
-        return str(root)
+    _state = staticmethod(state_root)
+
+    def _command(self, fd, mode):
+        # Never remount generated account/settings/telemetry into the next child.
+        argv=super()._command(fd,mode)
+        index=argv.index(self.state_root)
+        argv[index-1:index+2]=['--size','268435456','--tmpfs','/account',
+            '--bind',projects(self.state_root,self.workspace),'/account/projects']
+        return argv
 
     def start(self):
         raise ValueError("selected Claude launch requires private account capability")
@@ -58,7 +60,17 @@ class SelectedClaudeProfile(SelectedCodexProfile):
     def selected_account(self, callback):
         return SelectedAccount(self,callback)
 
+    def exec_resume(self, account, resume_spec):
+        from claude_resume import ResumeSpec
+        if type(resume_spec) is not ResumeSpec:raise ValueError('private resume specification required')
+        native=str(resume_spec._take(self))
+        projects(self.state_root,self.workspace,native)
+        self._exec(account,native,'claude-resume')
+
     def exec_native(self, account, native):
+        self._exec(account,native,'claude')
+
+    def _exec(self, account, native, mode):
         # Called only from trusted selected launcher; UUID is not Core proof.
         native=str(uuid.UUID(str(native)))
         if type(account) is not SelectedAccount:raise ValueError("selected account required")
@@ -66,7 +78,7 @@ class SelectedClaudeProfile(SelectedCodexProfile):
         fd=None
         try:
             fd=policy.filter_fd(allow_inet=True)
-            argv=self._command(fd,"claude")
+            argv=self._command(fd,mode)
             argv += [native,str(secret)]
             os.set_inheritable(fd,True);os.set_inheritable(secret,True)
             os.execve(argv[0],argv,{})

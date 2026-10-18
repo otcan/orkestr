@@ -6,7 +6,8 @@ resource, syscall and exact CONNECT proxy policy as the Codex authenticated
 profile. Private format `orkestr-v2-claude-isolated-v1` has exactly format, native,
 state_root, egress_socket, supervisor, hosts, workspace. No auth path, token,
 account selector, environment override or billing configuration is accepted.
-State must be a fresh empty private role directory. Resume is unavailable here.
+State is a dedicated private role directory validated by `claude_state.py`.
+Only workspace-bound project transcripts persist into a subsequent child.
 
 Trusted launcher calls `profile.selected_account(selected_callback)` where the
 existing selected-account provider returns exactly CLAUDE_CODE_OAUTH_TOKEN. This
@@ -26,12 +27,12 @@ root egress Unix endpoint to native. TLS remains end-to-end through the existing
 bounded exact-host proxy. No host-network or API-key fallback is supported.
 
 Fixed native flags mirror ClaudeOwnedSession's restricted, no-tools/no-MCP,
-stream-JSON first-turn profile. Actual native flags/metadata handshake must still
+stream-JSON profile. Actual native flags/metadata handshake must still
 be qualified inside this profile. Control initialize ACK is process readiness
 only; the separate Core requested-native/verified-native contract remains open.
 The selected-account callback and executable wrapper remain root-private and
 must be independently reviewed/staged; no actual selected-account launch was run
-by this lane. Inventory now includes claude_selected.py (eight files total).
+by this lane. Inventory includes claude_selected.py and claude_state.py (nine files total).
 
 Synthetic tests use only a fake token. An actual namespace process verifies its
 single selected environment, absence of unrelated inherited secrets/API keys,
@@ -42,7 +43,7 @@ and concurrent-replacement assumptions remain those of the authenticated profile
 
 ## Immutable compatibility probe handoff
 
-Stage exactly the eight files and SHA-256 values in
+Stage exactly the nine files and SHA-256 values in
 `v2/provider-broker/authenticated-package.json`, retaining the `isolation/`
 package layout. The entry is `isolation.claude_selected.SelectedClaudeProfile`;
 there is no standalone account-selection CLI. The trusted private launcher
@@ -64,10 +65,26 @@ server path.
 
 After owned cleanup, report only state entry names, types, modes, ownership,
 link counts and sizes, plus process/endpoint cleanup counts. Do not export file
-contents, account response payloads, token values or prompts. The initial
-profile still requires fresh state: actual generated persistence layout is a
-prerequisite for the closed restart validator and isolated resume entry. A
-synthetic namespace test proves writable session metadata survives child exit,
-the credential memfd is absent from native descriptors, and the selected token
-is absent from that persisted fixture; it also proves reuse currently refuses.
+contents, account response payloads, token values or prompts. Only project JSONL history is remounted. Generated `.claude.json`, policy-limit
+metadata, remote settings, backups and failed-event telemetry are preserved on
+host storage but excluded from the next child's fresh bounded `/account` tmpfs.
+Their closed observed names/types are validated without reading their contents.
+Unknown files, symlinks, multiply-linked files, foreign workspace directories,
+foreign requested session transcripts and excessive size/count refuse.
+
+`profile.exec_resume(selected_account, resume_spec)` consumes an exact private
+`claude_resume.ResumeSpec` bound to that profile, validates the selected native
+transcript, then uses fixed `--resume` instead of `--session-id`. There is no raw
+resume UUID parameter or failed-resume fallback. The trusted parent bootstrap
+may construct this private spec only through the existing inherited resume pipe
+contract after its issued accepted-session grant and prior-tree reap proof.
+The spec and filesystem existence are not Core authority. A fresh selected
+account capability, process, namespace, FD handoff and local lineage are required
+for each turn. Missing transcript or failed launch never returns the spec.
+
+A synthetic two-process namespace test proves session metadata survives while
+generated account metadata is excluded and remains unchanged on disk. The
+credential memfd is absent from native descriptors; no selected token appears
+in persisted synthetic history. Closed workspace/session, alias and fixed resume
+flag regressions supplement that actual process test.
 This does not qualify actual Claude persistence or authenticated egress.

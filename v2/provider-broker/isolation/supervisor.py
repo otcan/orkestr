@@ -98,7 +98,7 @@ def install_filter(fd):
 
 
 def main():
-    if len(sys.argv)==4 and sys.argv[1]=="claude-native":
+    if len(sys.argv)==4 and sys.argv[1] in ("claude-native","claude-resume-native"):
         import uuid
         native=str(uuid.UUID(sys.argv[3]))
         install_filter(int(sys.argv[2]))
@@ -106,12 +106,13 @@ def main():
             "--verbose","--permission-mode","dontAsk","--permission-prompts","none",
             "--safe-mode","--restricted","--disable-slash-commands","--no-chrome",
             "--prompt-suggestions","false","--tools","","--strict-mcp-config",
-            "--mcp-config",'{"mcpServers":{}}',"--setting-sources","","--session-id",native]
+            "--mcp-config",'{"mcpServers":{}}',"--setting-sources","",
+            "--resume" if sys.argv[1]=="claude-resume-native" else "--session-id",native]
         os.execve("/opt/provider/native",command,dict(os.environ))
     if len(sys.argv)==3 and sys.argv[1]=="native":
         install_filter(int(sys.argv[2]))
         os.execve("/opt/provider/native",["native","app-server","--listen","stdio://"],dict(os.environ))
-    claude=len(sys.argv)==6 and sys.argv[3] in ("claude","claude-synthetic")
+    claude=len(sys.argv)==6 and sys.argv[3] in ("claude","claude-resume","claude-synthetic")
     if not claude and (len(sys.argv)!=4 or sys.argv[3] not in ("codex","synthetic")):return 2
     fd=int(sys.argv[1]);hosts=tuple(sys.argv[2].split(","))
     listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
@@ -142,7 +143,8 @@ def main():
         command=["/usr/bin/python3","-I","-B","-c",
             "import sys;sys.path.insert(0,'/opt/provider');from supervisor import install_filter;"
             "install_filter(int(sys.argv[1]));exec(sys.argv[2])",str(fd),source.decode()]
-    elif claude:command=["/usr/bin/python3","-I","-B",__file__,"claude-native",str(fd),sys.argv[4]]
+    elif claude:command=["/usr/bin/python3","-I","-B",__file__,
+        "claude-resume-native" if sys.argv[3]=="claude-resume" else "claude-native",str(fd),sys.argv[4]]
     else:command=["/usr/bin/python3","-I","-B",__file__,"native",str(fd)]
     child=subprocess.Popen(command,env=environment,close_fds=True,pass_fds=(fd,),stdin=sys.stdin,stdout=sys.stdout,stderr=sys.stderr)
     os.close(fd)
