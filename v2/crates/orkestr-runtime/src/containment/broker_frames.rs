@@ -40,9 +40,20 @@ fn outer<'a>(value: &'a Value, method: &str) -> Result<&'a Value, Error> {
 pub(super) fn metadata(frame: &[u8], workspace: &Path) -> Result<Vec<u8>, Error> {
     let value: Value = serde_json::from_slice(frame).map_err(|_| Error::InvalidFrame)?;
     let inner = outer(&value, "BrokerMetadata")?;
-    // Existing closed metadata whitelist is reused, never expanded.
+    // Broker subscription setup additionally pins the provider. Validate the
+    // remaining fixed setup shape with the original direct-provider whitelist.
+    let mut setup = inner.clone();
+    if setup.get("method").and_then(Value::as_str) == Some("thread/start") {
+        let params = setup
+            .get_mut("params")
+            .and_then(Value::as_object_mut)
+            .ok_or(Error::InvalidFrame)?;
+        if params.remove("modelProvider") != Some(Value::String("openai".into())) {
+            return Err(Error::InvalidFrame);
+        }
+    }
     validate_metadata(
-        &serde_json::to_vec(inner).map_err(|_| Error::InvalidFrame)?,
+        &serde_json::to_vec(&setup).map_err(|_| Error::InvalidFrame)?,
         workspace,
     )?;
     serde_json::to_vec(&value).map_err(|_| Error::InvalidFrame)
@@ -152,6 +163,22 @@ mod tests {
             ),
             Err(Error::InvalidFrame)
         );
+    }
+    #[test]
+    fn broker_thread_setup_requires_only_pinned_openai_provider() {
+        for provider in [None, Some("external"), Some("openai")] {
+            let mut frame = json!({"id":3,"method":"thread/start","params":{
+                "cwd":"/synthetic/workspace","approvalPolicy":"never",
+                "sandbox":"read-only","ephemeral":false}});
+            if let Some(provider) = provider {
+                frame["params"]["modelProvider"] = json!(provider);
+            }
+            let result = metadata(
+                &envelope("BrokerMetadata", frame),
+                Path::new("/synthetic/workspace"),
+            );
+            assert_eq!(result.is_ok(), provider == Some("openai"));
+        }
     }
     #[test]
     fn setup_wrapper_denies_foreign_paths_handles_and_extra_fields() {
