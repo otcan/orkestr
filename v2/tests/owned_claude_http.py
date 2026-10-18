@@ -92,8 +92,17 @@ def exercise(mode):
         if mode == "wrong-init":
             ordinary.wait_for(case.peer_gone, "foreign native identity must quarantine this child")
             assert case.rows("SELECT observed_run_id,observed_event_key FROM production_requested_native") == [(None, None)]
-            assert case.rows("SELECT count(*) FROM production_observations") == [(0,)]
-            assert case.phase("starting") is not None
+            # Rejected init never becomes native identity or positive evidence.
+            # The subsequent owned-pipe EOF may already have persisted Lost;
+            # cleanup timing cannot require it to remain Starting forever.
+            observations = case.rows("SELECT kind FROM production_observations")
+            assert observations in ([], [("lost",)])
+            code, status, _ = case.request(case.path + "/execution")
+            assert code == 200 and status["phase"] in ("starting", "blocked")
+            assert status["progress"] is None and status.get("acceptance_candidate") is None
+            assert status["capabilities"] == {"stop": False, "steer": False}
+            assert case.rows("SELECT state,dispatch_state FROM production_runs") in (
+                [("starting", "delivery_unknown")], [("blocked", "delivery_unknown")])
             return
 
         running = ordinary.wait_for(lambda: case.phase("running"), "matching init must precede Started")
