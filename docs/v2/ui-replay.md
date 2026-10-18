@@ -4,13 +4,13 @@ The UI consumes canonical DTO source and the observation fixture verbatim from
 core `bf87414fd4d9efe669d627f9d8f493cbf9b6f271`. No backend adapter, migration,
 root manifest or lock changes are authored here. Legacy event.json is unchanged.
 
-Both SSE names decode through ConversationEvent. Before applying an event, the UI
+All supported SSE names decode through ConversationEvent. Before applying an event, the UI
 checks variant/schema, positive sequence, exact numeric SSE id, conversation and
 snapshot scope. Invalid JSON/variants become resync_required, never message text.
 Unknown named events also request resync. Invalid events cannot directly advance
 the cursor or mutate messages.
 
-For either supported variant newer than the applied cursor, the UI fetches a
+For any supported variant newer than the applied cursor, the UI fetches a
 paged snapshot from that cursor into a cloned projection. This avoids skipping
 message rows in gaps before metadata. Cursor/projection commit together only when
 the completed snapshot's initial canonical watermark covers the event. A snapshot
@@ -19,7 +19,7 @@ Metadata-only pages can therefore advance the cursor without fabricating text.
 Pagination retains its initial watermark; later page watermarks never silently
 advance beyond that completed scan. Snapshot scope must remain consistent.
 
-Validation: sixteen Rust tests (seven projection, three replay and six executable
+Validation: eighteen Rust tests (seven projection, three replay and eight executable
 reconciliation failure/retry cases),
 22 Node bridge/synthetic HTTP cases, locked offline WASM build and strict UI Clippy
 pass locally. Tests cover legacy JSON roundtrip, mixed sparse journal sequences,
@@ -57,3 +57,14 @@ or endpoint is added. Tests validate mixed schemas 1/2/3, cancellation metadata
 failure/retry, malformed schema/fields/outcome and canonical bridge forwarding.
 Compatibility source and unit checks do not establish adapter writes or live
 browser cancellation behavior; those gates remain independently reviewed.
+
+Schema 4 consumes exact contracts and fixture from core
+`537b7add3106b5089dc7d5188bfcd84ceda52b69` in a separate provenance commit.
+`fixture_provider_stopped` validates typed identity, scope, positive provider
+sequence and the singleton cancelled receipt through the canonical union.
+Only this confirmed fixture acknowledgement is described as a cancelled receipt;
+a schema 3 request remains unconfirmed or not dispatched. Ordinary runtime,
+cancellation API and Stop remain unavailable. Mixed schema 1/2/3/4 tests exercise
+atomic second-page failure, behind-event watermark refusal, retry without skipped
+text or duplicate presentation, and malformed metadata resync. Adapter persistence,
+independent review and live browser acceptance remain separate gates.

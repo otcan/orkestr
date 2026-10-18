@@ -181,7 +181,8 @@ pub fn Conversation(
                     Ok(item)
                         if item.event == "message_accepted"
                             || item.event == "fixture_provider_observed"
-                            || item.event == "fixture_cancellation_requested" =>
+                            || item.event == "fixture_cancellation_requested"
+                            || item.event == "fixture_provider_stopped" =>
                     {
                         let previous = projection.read().clone();
                         let sequence = item.body.as_ref().and_then(|event| {
