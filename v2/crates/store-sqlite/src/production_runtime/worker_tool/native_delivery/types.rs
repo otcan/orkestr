@@ -80,6 +80,14 @@ impl CompletedToolDelivery {
     pub fn source_digest(&self) -> &str {
         &self.reservation.launch.source_digest
     }
+    /// Correlate Runtime's retained exact request source without exposing a
+    /// constructor or requiring transport code to choose a hashing convention.
+    pub fn matches_source(&self, source: &str) -> bool {
+        !source.is_empty()
+            && source.len() <= 32768
+            && !source.contains('\0')
+            && crate::digest(source) == self.source_digest()
+    }
     pub fn output_digest(&self) -> &str {
         &self.reservation.output_digest
     }
