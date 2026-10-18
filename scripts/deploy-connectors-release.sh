@@ -104,7 +104,9 @@ if [ "$activate" -eq 1 ]; then
   flock 9
   if [ "$(active_connector_revision)" = "$revision" ] \
     && systemctl is-active --quiet "$worker_service" \
-    && systemctl is-active --quiet "$gateway_service"; then
+    && systemctl is-active --quiet "$gateway_service" \
+    && "$node_bin" "$source_dir/scripts/connector-runtime-release.mjs" \
+      "$current_link" "${gateway_service}.service" "${worker_service}.service" >/dev/null 2>&1; then
     echo "Connector release already active for revision ${revision:0:12}; skipping activation."
     exit 0
   fi
@@ -168,7 +170,9 @@ fi
 health_ready=0
 health_successes=0
 for _ in $(seq 1 "$health_attempts"); do
-  if ORKESTR_CONNECTORS_MCP_TOKEN="$token" \
+  if "$node_bin" "$release_dir/scripts/connector-runtime-release.mjs" \
+      "$release_dir" "${gateway_service}.service" "${worker_service}.service" >/dev/null 2>&1 \
+    && ORKESTR_CONNECTORS_MCP_TOKEN="$token" \
       ORKESTR_CONNECTORS_MCP_HEALTH_URL="${ORKESTR_CONNECTORS_MCP_HEALTH_URL:-http://127.0.0.1:18914/health}" \
       "$node_bin" "$release_dir/scripts/orkestr-connectors-doctor.mjs" --release-health >/dev/null 2>&1; then
     health_successes=$((health_successes + 1))
@@ -182,6 +186,8 @@ for _ in $(seq 1 "$health_attempts"); do
   sleep "$health_retry_delay"
 done
 if [ "$health_ready" -ne 1 ]; then
+  "$node_bin" "$release_dir/scripts/connector-runtime-release.mjs" \
+    "$release_dir" "${gateway_service}.service" "${worker_service}.service" || true
   echo "Connector health verification failed; restoring the previous release." >&2
   systemctl stop "${gateway_service}.service" "${worker_service}.service" || true
   if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then

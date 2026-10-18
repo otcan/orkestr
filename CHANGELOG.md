@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-alpha.213
+
+- Preserve scoped WhatsApp account recovery, existing thread route fences, and dormant timer notification safeguards in the regular release.
+- Verify the running connector processes use the installed release before reporting activation success or pruning older releases.
+- Keep control-plane encryption keys out of every release-check build and dependency step.
+
+## 0.1.0-alpha.212
+
+- Accepted Codex messages release the delivery queue after a short, bounded wait. Slow notification handlers in the same or another thread no longer hold up subsequent steering messages.
+- Detached Claude turns record cancellation when stopped before their process wrapper starts, allowing the runtime to settle the turn correctly.
+- Codex executor, setup, and capability-check processes no longer inherit control-plane encryption keys. Existing executor identity and provider authentication are preserved.
+
 ## 0.1.0-alpha.208
 
 - WhatsApp no longer shows "broken" (and stops refusing replies) when listing chats is slow, for example Docker on a Mac with many chats: a slow chat list falls back to a quick connection check.

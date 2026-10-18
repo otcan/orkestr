@@ -119,11 +119,16 @@ export function migratePersonalAgentTaskLifecycle(db, { dryRun = true } = {}) {
       actor_json text not null,
       reason text,
       evidence_json text not null default '{}',
+      request_json text,
       idempotency_key text,
       created_at text not null,
       primary key (task_id, seq),
       unique (task_id, idempotency_key)
     )`);
+    // Additive: transition tables created before request_json existed gain it;
+    // their old rows keep null and only replay a bare command.
+    const transitionColumns = new Set(db.prepare("pragma table_info(personal_agent_task_transitions)").all().map((row) => row.name));
+    if (!transitionColumns.has("request_json")) db.exec("alter table personal_agent_task_transitions add column request_json text");
     db.exec("create index if not exists personal_agent_task_transitions_created on personal_agent_task_transitions(task_id, created_at)");
     db.exec("commit");
   } catch (error) {

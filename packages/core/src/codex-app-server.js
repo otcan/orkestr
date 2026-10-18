@@ -1,3 +1,4 @@
+import { withThreadQueueBoundary } from "./thread-queue-control.js";
 import { randomUUID } from "node:crypto";
 import { checkSetupCodexSubscription } from "./setups/setup-dispatch-guard.js";
 import { resourceOwnerUserId } from "./policy.js";
@@ -87,6 +88,7 @@ import { injectRuntimeFault, runtimeNowMs, runtimeStopPhaseFor } from "./runtime
 import { recordRuntimeControlMetric } from "./observability.js";
 import { recordCodexInputDelivery, recordCodexUserInputRequest } from "./codex-input-observability.js";
 import { bindCodexVaultTurnToken, issueCodexVaultTurnToken, revokeCodexVaultTurnToken } from "./vault-codex-turn-tokens.js";
+import { settleCodexStartNotifications } from "./codex-start-notifications.js";
 
 const appServerDeliveryTimers = new Map();
 const appServerHistorySyncTimes = new Map();
@@ -1274,24 +1276,6 @@ export async function stopCodexAppServerThread(thread, env = process.env) {
   };
 }
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function drainCodexAppServerNotifications(client, { cycles = 3, until = null, delayMs = 0 } = {}) {
-  for (let index = 0; index < cycles; index += 1) {
-    await new Promise((resolve) => setImmediate(resolve));
-    await client.drainNotifications?.();
-    if (until?.()) return true;
-    if (delayMs > 0) {
-      await delay(delayMs);
-      await client.drainNotifications?.();
-      if (until?.()) return true;
-    }
-  }
-  return Boolean(until?.());
-}
-
 async function recordInputSubmission(client, thread, pending, id, mode, targetTurnId, env) {
   const baseline = await client.request("thread/read", { threadId: id, includeTurns: true }).catch(() => null);
   const codexSubmission = createSubmission(thread, pending, id, mode, targetTurnId, baseline?.thread);
@@ -1333,11 +1317,7 @@ async function startCodexAppServerTurn({ client, thread, id, pending, env, runti
   const terminalResult = ["completed", "failed", "interrupted", "aborted", "cancelled", "canceled"].includes(status);
   const completedKey = turnId && client.turnParentKey ? client.turnParentKey(id, turnId) : "";
   if (turnId) client.rememberTurnParent(id, turnId, pending);
-  await drainCodexAppServerNotifications(client, {
-    cycles: completedKey ? 20 : 3,
-    delayMs: completedKey ? 5 : 0,
-    until: completedKey ? () => Boolean(client.completedTurns?.has(completedKey)) : null,
-  });
+  await settleCodexStartNotifications(client, id, completedKey);
   const alreadyCompleted = Boolean(completedKey && client.completedTurns?.has(completedKey));
   const runtimeIdentity = await currentCodexDeliveryRuntime(thread, id, env);
   if (!runtimeIdentity.matches) {
@@ -1773,7 +1753,11 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
   appServerDeliveryLocks.add(lockKey);
   let delivered = [];
   try {
-    delivered = await deliverCodexAppServerPendingInputsUnlocked(thread, env);
+    delivered = await withThreadQueueBoundary(lockKey, async () => {
+      const current = await getThread(lockKey, env);
+      if (current?.queueDispatchHold?.paused) return [];
+      return deliverCodexAppServerPendingInputsUnlocked(current || thread, env);
+    }, env);
   } finally {
     appServerDeliveryLocks.delete(lockKey);
   }
@@ -1785,6 +1769,7 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
     return delivered;
   }
   const currentThread = await getThread(lockKey, env).catch(() => null) || thread;
+  if (currentThread?.queueDispatchHold?.paused) return delivered;
   if (!threadReadyForInputRetry(currentThread) || !pendingInputEligibleForReadyRetry(pending)) return delivered;
   const attempt = Math.max(0, Number(pending.deliveryReadyRetryAttempt || 0)) + 1;
   const maxAttempts = codexAppServerReadyRetryMax(env);
@@ -1835,9 +1820,16 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
   const messages = await listThreadMessageCandidates(thread.id, { states: [...pendingInputStates] }, env);
   const pendingMessages = messages.filter((message) => message.role === "user" && pendingInputStates.has(message.state));
   const stopMessage = pendingMessages.find((message) => parseThreadInputCommand(message).command === "stop");
-  let next = stopMessage || pendingMessages[0];
-  if (!next) return delivered;
   thread = await getThread(thread.id, env).catch(() => null) || thread;
+  // A queued separate turn must not block an explicit update to a live turn.
+  // Preserve FIFO when idle and keep /stop ahead of every input.
+  const awaitingOwner = thread.runtime?.pendingRequest || [thread.state, thread.runtime?.state].includes("awaiting_approval");
+  const eligible = awaitingOwner
+    ? pendingMessages.filter(message => !message.reportSourceThreadId && !message.threadWatchSourceThreadId)
+    : pendingMessages;
+  const liveSteer = !awaitingOwner && thread.runtime?.activeTurnId && eligible.find(shouldSteerActiveTurnInput);
+  let next = stopMessage || liveSteer || eligible[0];
+  if (!next) return delivered;
   if (stopMessage) {
     const stopIndex = messages.findIndex((message) => message.id === stopMessage.id);
     const parsedStop = parseThreadInputCommand(stopMessage);
@@ -2061,6 +2053,13 @@ async function deliverCodexAppServerClaimedPendingInput(thread, next, env = proc
   const pendingApproval = client.pendingRequestForThread(thread, { includePersisted: approvalStatusState === "awaiting_approval" });
   const text = clean(next.text);
   const parsedCommand = parseThreadInputCommand(next);
+  if (pendingApproval && (next.reportSourceThreadId || next.threadWatchSourceThreadId)) {
+    // Reports are evidence, never answers to a human question or approval.
+    await updateThreadMessage(thread.id, next.id, {
+      state: "queued", deliveryState: "awaiting_owner_input", deliveryClaimId: null,
+    }, env);
+    return delivered;
+  }
   if (pendingApproval?.method === "item/tool/requestUserInput") {
     await client.answerPendingRequest(thread, "answer", { text });
     await updateThreadMessage(thread.id, next.id, {

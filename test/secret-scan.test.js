@@ -40,10 +40,11 @@ function runnerFor(status, findings = [], version = scannerRelease.version) {
     assert.equal(options.env.HOME, undefined);
     if (args[0] === "version") return { status: 0, stdout: version };
     assert.equal(options.stdio, "ignore");
+    assert.equal(options.captureCoverage, true);
     assert.ok(args.includes("--redact=100"));
     assert.ok(args.includes("--ignore-gitleaks-allow"));
     writeFileSync(args[args.indexOf("--report-path") + 1], JSON.stringify(findings));
-    return { status };
+    return { status, coverage: { summaryValid: true, reportedCommits: 1, reportedBytes: 1, errorReported: false } };
   };
 }
 
