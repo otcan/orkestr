@@ -40,6 +40,15 @@ export async function probeInstalledSessions(env = process.env) {
       }
       client = new CodexJobClient({ env: isolated, home: temporary });
       await client.start();
+      // Reject inference methods before they can reach the installed runtime.
+      const allowed = new Set(["thread/start", "thread/resume", "thread/fork", "thread/read", "thread/settings/update", "turn/steer", "turn/interrupt"]);
+      result.codex.controlRequests = {};
+      const request = client.request.bind(client);
+      client.request = (method, body) => {
+        if (!allowed.has(method)) throw new Error("inference_probe_forbidden");
+        result.codex.controlRequests[method] = (result.codex.controlRequests[method] || 0) + 1;
+        return request(method, body);
+      };
       const params = { cwd: temporary, model: "gpt-6-sol", approvalPolicy: "untrusted", sandbox: "read-only", ephemeral: false, allowProviderModelFallback: false };
       const [fast, deep] = await Promise.all([client.request("thread/start", params), client.request("thread/start", params)]);
       result.codex.distinctNativeIds = Boolean(fast.thread.id && deep.thread.id && fast.thread.id !== deep.thread.id);

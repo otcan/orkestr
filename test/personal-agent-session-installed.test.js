@@ -7,6 +7,8 @@ test("opt-in installed runtime control-plane inventory spends no inference quota
   assert.equal(result.inferenceTurns, 0);
   assert.equal(result.codex.blocked, undefined);
   assert.equal(result.codex.distinctNativeIds, true);
+  assert.equal(result.codex.controlRequests["turn/start"], undefined);
+  assert.equal(result.codex.controlRequests["thread/start"], 2);
   for (const method of ["ThreadResume", "ThreadFork", "TurnSteer", "TurnInterrupt"]) assert.ok(result.codex.protocol[method].includes("threadId"));
   assert.ok(result.codex.protocol.TurnStart.includes("effort"));
   assert.equal(result.codex.idleSteer.accepted, false);

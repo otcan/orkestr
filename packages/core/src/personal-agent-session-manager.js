@@ -115,6 +115,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, runtimes
         })
         : () => adapter.open(row, { signal });
       const result = await open();
+      if (result.nativeSessionId) sessionId(result.nativeSessionId);
       if (row.nativeSessionId && result.nativeSessionId !== row.nativeSessionId) throw sessionError("agent_session_native_identity_changed");
       if (!result.nativeSessionId && result.lifecycle !== "starting") throw sessionError("agent_session_native_session_missing");
       return fenced(row, { nativeSessionId: result.nativeSessionId || null, lifecycle: result.lifecycle || "ready", blockedReason: null }, true);

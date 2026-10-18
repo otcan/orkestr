@@ -55,9 +55,15 @@ test("only one turn owns a session across managers, while fast and deep may run 
 });
 
 test("heartbeat renews a long turn and an expired/crashed lease is never stolen", async () => {
-  const h = sessionHarness({ leaseMs: 120 });
+  let clock = Date.now();
+  const h = sessionHarness({ leaseMs: 120, now: () => clock });
   const row = await h.manager.startOrResume(h.manager.ensure(sessionInput).id);
-  h.adapter.run = async () => { await new Promise(done => setTimeout(done, 190)); return { type: "final" }; };
+  h.adapter.run = async () => {
+    clock += 60;
+    await new Promise(done => setTimeout(done, 60)); // heartbeat extends expiry beyond the original lease
+    clock += 80;
+    return { type: "final" };
+  };
   assert.equal((await h.manager.runTurn(row.id, supervisor(), {})).type, "final");
   const updated = h.manager.get(row.id);
   assert.ok(Date.parse(updated.heartbeatAt) >= Date.parse(row.heartbeatAt));
@@ -145,6 +151,27 @@ test("native identity cannot alias another role, including a provider response d
   const deep = h.manager.ensure({ ...sessionInput, role: "deep" });
   await assert.rejects(h.manager.startOrResume(deep.id), /native_identity_reused/);
   assert.equal(h.manager.get(deep.id).nativeSessionId, null);
+});
+
+test("malformed native identities and null scope fail before persisting a binding", async () => {
+  const h = sessionHarness();
+  assert.throws(() => h.manager.ensure({ ...sessionInput, scope: null }), /scope_invalid/);
+  h.adapter.open = async () => ({ nativeSessionId: { id: "not-a-string" }, lifecycle: "ready" });
+  const row = h.manager.ensure(sessionInput);
+  await assert.rejects(h.manager.startOrResume(row.id), /identity_invalid/);
+  assert.equal(h.manager.get(row.id).nativeSessionId, null);
+});
+
+test("a late authorization cannot return allow after owner cancellation", async () => {
+  const h = sessionHarness();
+  const row = await h.manager.startOrResume(h.manager.ensure(sessionInput).id);
+  const cancelled = new AbortController(), ctx = supervisor(cancelled.signal);
+  ctx.authorizeTool = async () => { cancelled.abort(); return { decision: "allow" }; };
+  h.adapter.run = async (_row, managed) => {
+    await assert.rejects(managed.authorizeTool({}), { name: "AbortError" });
+    return { type: "final" };
+  };
+  assert.equal((await h.manager.runTurn(row.id, ctx, {})).type, "cancelled");
 });
 
 test("fork lineage is same conversation/account and serialized against the parent", async () => {

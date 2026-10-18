@@ -3,7 +3,8 @@
 Measured on 2026-10-18 against the installed command, from a disposable
 app-server and empty temporary runtime home. No inference turn, login, model
 download or live thread modification was performed. The host authentication
-check used the existing CLI status helper; no credential files were read.
+check used the existing CLI status helper; no credential files were inspected
+directly.
 
 ## Installed inventory
 
@@ -43,6 +44,8 @@ sanitized version/authentication booleans, schema property names and RPC result
 classifications. It does not emit account identities, native IDs, paths, raw
 provider errors or credentials. It closes its own child and removes its own
 temporary directory, including generated schemas and empty native sessions.
+An RPC allowlist rejects inference methods before dispatch; the sanitized
+report counts the permitted control requests.
 
 ## Implemented runtime contract
 
