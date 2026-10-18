@@ -12,18 +12,43 @@ fn wait(retiring: &mut RetiringBroker) -> Result<ReapedBroker, Error> {
     }
 }
 
+// Run separately so missing executable / namespace refusal cannot disappear
+// into the contained child's intentionally closed stderr. This is a required
+// readiness check, never a skip or a substitute for the tree cleanup assertion.
+fn namespace_readiness() {
+    let probe = std::process::Command::new("/usr/bin/python3")
+        .arg("-c")
+        .arg(include_str!("retirement_readiness.py"))
+        .env_clear()
+        .output()
+        .expect("launch fixed synthetic namespace readiness probe");
+    assert!(
+        probe.status.success(),
+        "namespace retirement prerequisite failed: status={} stdout={} stderr={}",
+        probe.status,
+        String::from_utf8_lossy(&probe.stdout),
+        String::from_utf8_lossy(&probe.stderr),
+    );
+}
+
 #[test]
 fn clean_eof_reaps_actual_namespace_tree_before_single_use_evidence() {
+    namespace_readiness();
     let fixture = Fixture::new();
     let scope = scope("synthetic-owner", 1);
     let (authority, _) = authority(&scope);
     // This synthetic trusted broker uses the same fixed lifetime wrapper as
     // e460. Its native forks and creates a new session inside the PID namespace.
-    let code = r#"import ctypes,os,signal,subprocess,sys,time
+    let code = r#"import ctypes,os,signal,subprocess,sys,tempfile,time
 assert ctypes.CDLL(None).prctl(36,1,0,0,0)==0
 native="import os,time; p=os.fork(); os.setsid() if p==0 else None; print('native-ready',flush=True); time.sleep(60)"
-child=subprocess.Popen(['/usr/bin/bwrap','--unshare-user','--unshare-pid','--die-with-parent','--bind','/','/','--proc','/proc','--','/usr/bin/python3','-c',native],process_group=0,stdout=subprocess.PIPE)
-assert child.stdout.readline().strip()==b'native-ready'
+startup_errors=tempfile.TemporaryFile()
+child=subprocess.Popen(['/usr/bin/bwrap','--unshare-user','--unshare-pid','--die-with-parent','--bind','/','/','--proc','/proc','--','/usr/bin/python3','-c',native],process_group=0,stdout=subprocess.PIPE,stderr=startup_errors)
+if child.stdout.readline().strip()!=b'native-ready':
+ status=child.wait(timeout=2)
+ startup_errors.seek(0)
+ print('namespace startup failed: status='+str(status)+' stderr='+repr(startup_errors.read(4096)),flush=True)
+ sys.exit(1)
 print('ready',flush=True)
 sys.stdin.buffer.read()
 os.killpg(child.pid,signal.SIGKILL)
