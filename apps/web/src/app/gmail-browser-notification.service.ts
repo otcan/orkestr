@@ -43,12 +43,8 @@ export class GmailBrowserNotificationService {
     if (this.syncing) return;
     this.syncing = true;
     try {
-      const [availableRules, threadPayload] = await Promise.all([
-        rules ? Promise.resolve(rules) : firstValueFrom(this.api.gmailNotifications()).then((result) => result.notifications || []),
-        firstValueFrom(this.api.threads()).catch(() => ({ threads: [] })),
-      ]);
-      this.threadLinks = buildThreadLinkIndex(threadPayload.threads || []);
-      this.process(availableRules);
+      const availableRules = rules || (await firstValueFrom(this.api.gmailNotifications())).notifications || [];
+      await this.process(availableRules);
     } catch {
       // Connector access can be unavailable before pairing or Gmail setup.
     } finally {
@@ -56,18 +52,26 @@ export class GmailBrowserNotificationService {
     }
   }
 
-  private process(rules: GmailNotificationRule[]): void {
+  private async process(rules: GmailNotificationRule[]): Promise<void> {
     const cursors = this.readCursors();
     const next: DeliveryCursor = {};
+    const pending: GmailNotificationRule[] = [];
     for (const rule of rules) {
       const deliveredAt = String(rule.lastDeliveredAt || "");
       if (!deliveredAt) continue;
       next[rule.id] = deliveredAt;
       const prior = cursors[rule.id];
       if (prior && deliveredAt !== prior && this.permission() === "granted") {
-        this.show(rule);
+        pending.push(rule);
       }
     }
+    // Canonical links are only needed for a new, visible thread notification.
+    // Ordinary page entry and quiet polls must not download the thread list again.
+    if (pending.some((rule) => rule.targetType === "thread" && rule.target)) {
+      const payload = await firstValueFrom(this.api.threads()).catch(() => ({ threads: [] }));
+      this.threadLinks = buildThreadLinkIndex(payload.threads || []);
+    }
+    for (const rule of pending) this.show(rule);
     this.writeCursors(next);
   }
 
