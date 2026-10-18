@@ -6,6 +6,9 @@
 //! before returning any retained inactive text. No caller-provided cut attestation.
 use super::*;
 
+#[path = "recovery_json.rs"]
+pub mod json;
+
 /// Combined limits across BOTH sources, including exact binary source framing.
 pub const MAX_RECOVERY_ROWS: usize = 100_000;
 pub const MAX_RECOVERY_SOURCE_BYTES: usize = 16 * 1024 * 1024;
