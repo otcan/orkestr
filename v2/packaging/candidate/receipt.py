@@ -54,7 +54,7 @@ def schema(root, source):
     return result
 
 
-def seal(checkout, binary, ui, source, version, profile, features, required_glibc):
+def seal(checkout, binary, ui, source, version, profile, features, required_glibc, execution_controls=False):
     require(re.fullmatch(r'[0-9a-f]{40}', source), 'exact full source required')
     require(re.fullmatch(r'2\.0\.0-rc\.[1-9][0-9]*', version), 'explicit 2.0.0 release-candidate version required')
     require(profile in ('debug', 'release'), 'supported profile required')
@@ -66,7 +66,7 @@ def seal(checkout, binary, ui, source, version, profile, features, required_glib
     require(header[:6] == b'\x7fELF\x02\x01' and header[18:20] == b'\x3e\x00', 'Linux x86_64 ELF required')
     web = inventory(ui)
     require(all(re.fullmatch(r'[a-zA-Z0-9_-]+', f) for f in features), 'explicit feature names required')
-    return {'format': FORMAT, 'version': version, 'source_commit': source, 'target': 'linux-x86_64',
+    value = {'format': FORMAT, 'version': version, 'source_commit': source, 'target': 'linux-x86_64',
             'server': {'sha256': sha(binary), 'bytes': binary.stat().st_size, 'profile': profile,
                        'features': sorted(set(features)), 'default_features': True},
             'web': {'files': web, 'inventory_sha256': digest(web), 'profile': 'release',
@@ -80,6 +80,11 @@ def seal(checkout, binary, ui, source, version, profile, features, required_glib
                                'required_glibc': required_glibc},
             'provenance': 'producer declares both artifacts built from this clean revision; hashes are integrity, not signed build attestation'}
 
+    if execution_controls:
+        value['web']['features'] = ['web','execution-controls']
+        value['web']['server_candidate'] = source
+    return value
+
 
 def verify(receipt, binary, ui):
     require(receipt['format'] == FORMAT and receipt['target'] == 'linux-x86_64', 'supported paired receipt required')
@@ -88,6 +93,10 @@ def verify(receipt, binary, ui):
             binary.stat().st_size == receipt['server']['bytes'], 'server identity mismatch')
     actual = inventory(ui)
     require(actual == receipt['web']['files'] and digest(actual) == receipt['web']['inventory_sha256'], 'web identity mismatch')
+    controls = 'execution-controls' in receipt['web'].get('features', [])
+    binding = receipt['web'].get('server_candidate')
+    require((controls and receipt['web']['features'] == ['web','execution-controls'] and binding == receipt['source_commit']) or
+            (not controls and binding is None), 'web execution controls candidate binding mismatch')
     require(receipt['schema']['migrations'], 'schema metadata required')
     return receipt
 
@@ -97,7 +106,8 @@ if __name__ == '__main__':
     for name in ('checkout','binary','ui','source','version','profile','required-glibc','output'):
         p.add_argument('--'+name, required=True)
     p.add_argument('--feature', action='append', default=[])
+    p.add_argument('--execution-controls', action='store_true', help='Declare controls UI bound to this exact source')
     a = p.parse_args()
-    value = seal(Path(a.checkout), Path(a.binary), Path(a.ui), a.source, a.version, a.profile, a.feature, a.required_glibc)
+    value = seal(Path(a.checkout), Path(a.binary), Path(a.ui), a.source, a.version, a.profile, a.feature, a.required_glibc, a.execution_controls)
     with open(a.output, 'x') as stream:
         json.dump(value, stream, indent=2, sort_keys=True); stream.write('\n')
