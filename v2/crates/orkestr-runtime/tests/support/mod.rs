@@ -1,12 +1,11 @@
 #![allow(dead_code)]
 //! Ready-future spies only. Unimplemented methods explicitly return Unavailable.
-use async_trait::async_trait;
-use orkestr_v2_application::runtime::{Result, RuntimeStore, RuntimeStoreError};
-use orkestr_v2_contracts::{runtime::*, *};
+use orkestr_v2_application::runtime::*;
+use orkestr_v2_contracts::*;
 use std::{
     future::Future,
-    sync::{Arc, Mutex},
-    task::{Context, Poll, Wake, Waker},
+    sync::Mutex,
+    task::{Context, Poll, Waker},
     time::Duration,
 };
 macro_rules! id {
@@ -30,6 +29,23 @@ pub fn admission(role: Role, n: u64) -> RunAdmission {
         attempt: 1,
         lease_deadline_ms: 1000,
         purpose: AdmissionPurpose::Execution,
+    }
+}
+// Fixture-only envelope; this does not establish durable binding or readiness.
+pub fn provider_admission(a: &RunAdmission) -> ProviderAdmission {
+    ProviderAdmission {
+        run: a.clone(),
+        binding: Binding {
+            owner_id: a.owner_id.clone(),
+            conversation_id: a.conversation_id.clone(),
+            session_id: a.session_id.clone(),
+            role: a.role,
+            provider_kind: ProviderKind::ExplicitFixture,
+            native_session_id: a.native_session_id.clone(),
+            parent_session_id: None,
+            generation: 1,
+            state: SessionState::Busy,
+        },
     }
 }
 pub fn claim(a: &RunAdmission) -> InboxClaim {
@@ -57,10 +73,15 @@ pub fn control(a: &RunAdmission) -> orkestr_runtime::ports::InterruptControl {
 #[derive(Default)]
 pub struct State {
     pub calls: Vec<&'static str>,
+    pub admission_replay: bool,
+    pub disposition: Option<AdmissionDisposition>,
+    pub run_state: Option<RunState>,
+    pub faulty_binding: bool,
     pub fail_once: bool,
+    pub lose_ack_once: bool,
     pub refusal: Option<RuntimeStoreError>,
-    pub attempts: Vec<ProviderObservation>,
-    pub accepted: Vec<ProviderObservation>,
+    pub attempts: Vec<ProviderEventInput>,
+    pub accepted: Vec<ProviderEventInput>,
 }
 pub struct Spy {
     pub a: RunAdmission,
@@ -74,7 +95,7 @@ impl Spy {
         }
     }
 }
-#[async_trait]
+#[orkestr_v2_application::runtime::async_trait]
 impl RuntimeStore for Spy {
     async fn claim_next(
         &self,
@@ -103,9 +124,26 @@ impl RuntimeStore for Spy {
         _: &SessionId,
         _: u64,
         _: &str,
-    ) -> Result<RunAdmission> {
-        self.state.lock().unwrap().calls.push("admitted");
-        Ok(self.a.clone())
+    ) -> Result<RunAdmissionResult> {
+        let mut state = self.state.lock().unwrap();
+        state.calls.push("admitted");
+        let disposition = state.disposition.unwrap_or(if state.admission_replay {
+            AdmissionDisposition::Replay
+        } else {
+            AdmissionDisposition::FreshCandidate
+        });
+        state.admission_replay = true;
+        let mut provider = provider_admission(&self.a);
+        if state.faulty_binding {
+            provider.binding.role = Role::Worker;
+        }
+        Ok(RunAdmissionResult {
+            provider,
+            run_state: state.run_state.unwrap_or(RunState::Starting),
+            disposition,
+            candidate_key: (disposition == AdmissionDisposition::FreshCandidate)
+                .then(|| "FAKE-candidate-only".into()),
+        })
     }
     async fn bind_native_session(
         &self,
@@ -118,33 +156,57 @@ impl RuntimeStore for Spy {
     async fn renew_lease(&self, _: &RunAdmission, _: u64) -> Result<RunAdmission> {
         Err(RuntimeStoreError::Unavailable)
     }
-    async fn record_observation(
+    async fn append_provider_event(
         &self,
-        a: &RunAdmission,
-        key: &str,
-        input: &ProviderObservation,
-    ) -> Result<ObservationReceipt> {
-        assert_eq!(key, input.source_event_key);
-        assert_eq!(a.run_id, input.run_id);
+        owner: &OwnerId,
+        admission: &ProviderAdmission,
+        input: &ProviderEventInput,
+    ) -> Result<ProviderEventReceipt> {
+        let a = &admission.run;
+        if owner != &a.owner_id || a.run_id != input.run_id || a.session_id != input.session_id {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
         let mut s = self.state.lock().unwrap();
         s.calls.push("record");
         s.attempts.push(input.clone());
-        if let Some(error) = s.refusal {
-            return Err(error);
+        let previous = s.accepted.iter().position(|i| i.sequence == input.sequence);
+        if let Some(index) = previous {
+            if s.accepted[index] != *input {
+                return Err(RuntimeStoreError::Conflict);
+            }
+        } else {
+            if let Some(error) = s.refusal {
+                return Err(error);
+            }
+            if input.lease_generation != a.lease_generation
+                || input.dispatch_fence != a.dispatch_fence
+            {
+                return Err(RuntimeStoreError::Fenced);
+            }
+            if !input.is_bounded() || input.sequence != s.accepted.len() as u64 + 1 {
+                return Err(RuntimeStoreError::InvalidInput);
+            }
+            if std::mem::take(&mut s.fail_once) {
+                return Err(RuntimeStoreError::Unavailable);
+            }
+            if matches!(input.event, ProviderEvent::Progress(_)) {
+                return Err(RuntimeStoreError::Unavailable);
+            }
+            s.accepted.push(input.clone());
+            if std::mem::take(&mut s.lose_ack_once) {
+                return Err(RuntimeStoreError::Unavailable);
+            }
         }
-        if std::mem::take(&mut s.fail_once) {
-            return Err(RuntimeStoreError::Unavailable);
-        }
-        s.accepted.push(input.clone());
-        Ok(ObservationReceipt {
+        Ok(ProviderEventReceipt {
             event_id: id!(EventId, 5),
-            scope_sequence: s.accepted.len() as i64,
-            state: if matches!(input.kind, ObservationKind::CompletedProposal { .. }) {
+            scope_sequence: previous.map_or(s.accepted.len() as i64, |i| i as i64 + 1),
+            sequence: input.sequence,
+            state: if matches!(input.event, ProviderEvent::CompletedProposal { .. }) {
                 RunState::AwaitingAcceptance
             } else {
                 RunState::Running
             },
-            duplicate: false,
+            duplicate: previous.is_some(),
         })
     }
     async fn request_cancel(&self, _: &OwnerId, _: &RunId, _: &str) -> Result<CancelReceipt> {
@@ -169,13 +231,9 @@ impl RuntimeStore for Spy {
         Err(RuntimeStoreError::Unavailable)
     }
 }
-struct NoWake;
-impl Wake for NoWake {
-    fn wake(self: Arc<Self>) {}
-}
 pub fn ready<F: Future>(future: F) -> F::Output {
-    let waker = Waker::from(Arc::new(NoWake));
-    let mut cx = Context::from_waker(&waker);
+    let waker = Waker::noop();
+    let mut cx = Context::from_waker(waker);
     match std::pin::pin!(future).as_mut().poll(&mut cx) {
         Poll::Ready(v) => v,
         Poll::Pending => panic!("spy unexpectedly pending"),

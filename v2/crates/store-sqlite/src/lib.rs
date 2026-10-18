@@ -10,6 +10,8 @@ use std::{path::Path, time::Duration};
 use uuid::Uuid;
 mod intake;
 mod paths;
+mod preflight;
+mod runtime;
 
 #[derive(Clone)]
 pub struct Store {
@@ -27,13 +29,18 @@ fn parse(s: String) -> Result<Uuid> {
 impl Store {
     pub async fn open(path: &Path) -> Result<Self> {
         paths::validate(path)?;
+        let created = preflight::prepare(path).await?;
         let options = SqliteConnectOptions::new()
             .filename(path)
-            .create_if_missing(true)
+            .create_if_missing(false)
             .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Full)
             .busy_timeout(Duration::from_secs(5));
+        let options = if created {
+            options.journal_mode(SqliteJournalMode::Wal)
+        } else {
+            options
+        };
         let pool = SqlitePoolOptions::new()
             .max_connections(6)
             .connect_with(options)
