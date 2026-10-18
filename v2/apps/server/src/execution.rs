@@ -53,7 +53,7 @@ pub(crate) async fn stop(
         axum::extract::rejection::JsonRejection,
     >,
 ) -> Result<Response, Error> {
-    let owner = browser::owner(&state, &headers).await?;
+    browser::owner(&state, &headers).await?;
     browser::guard(
         &state,
         &axum::http::Method::POST,
@@ -87,8 +87,9 @@ pub(crate) async fn stop(
         "control_unavailable",
         "Stop unavailable",
     ))?;
+    let credential = browser::credential(&headers)?;
     let receipt = store
-        .stop_execution(&owner, &conversation, &input)
+        .stop_execution_authenticated(&credential, &conversation, &input)
         .await
         .map_err(stop_error)?;
     if !receipt.is_valid()
@@ -112,7 +113,8 @@ fn stop_error(error: RuntimeStoreError) -> Error {
             "invalid_input",
             "Invalid Stop request",
         ),
-        RuntimeStoreError::NotFound | RuntimeStoreError::Unauthorized => {
+        RuntimeStoreError::Unauthorized => unauthorized(),
+        RuntimeStoreError::NotFound => {
             Error(StatusCode::NOT_FOUND, "not_found", "Execution not found")
         }
         RuntimeStoreError::Conflict => Error(

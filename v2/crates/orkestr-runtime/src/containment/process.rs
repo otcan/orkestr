@@ -67,6 +67,8 @@ pub(super) fn start_reaper(active: Arc<AtomicUsize>) -> Result<Sender<Child>, Er
 pub(super) struct Live {
     pub(super) child: Option<Child>,
     pub(super) framing: Framing,
+    pub(super) handoff: Option<super::provider_fd::Handoff>,
+    pub(super) provider_writer: Option<super::provider_fd::ProviderWriter>,
 }
 
 pub(super) struct Process {
@@ -98,6 +100,25 @@ impl Process {
         active: &Arc<AtomicUsize>,
         reaper: &Sender<Child>,
     ) -> Result<Arc<Self>, Error> {
+        Self::spawn_config_mode(program, args, directories, bounds, active, reaper, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn spawn_config_mode(
+        program: &std::path::Path,
+        args: &[std::ffi::OsString],
+        directories: &super::ChildDirectories,
+        bounds: super::TransportBounds,
+        active: &Arc<AtomicUsize>,
+        reaper: &Sender<Child>,
+        provider_fd: bool,
+    ) -> Result<Arc<Self>, Error> {
+        use std::os::fd::AsRawFd;
+        let pair = if provider_fd {
+            Some(super::provider_fd::Handoff::pair()?)
+        } else {
+            None
+        };
         let mut command = Command::new(program);
         command
             .args(args)
@@ -106,12 +127,16 @@ impl Process {
             .stderr(Stdio::null());
         directories.configure(&mut command);
         sys::configure_command(&mut command);
+        if let Some((_, socket)) = &pair {
+            sys::inherit_handoff(&mut command, socket.as_raw_fd());
+        }
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
         let mut child = command.spawn().map_err(|_| Error::Io)?;
+        let handoff = pair.map(|(parent, _)| parent);
         active.fetch_add(1, Ordering::AcqRel);
         let input = child.stdin.take().ok_or(Error::Io);
         let output = child.stdout.take().ok_or(Error::Io);
@@ -133,6 +158,8 @@ impl Process {
             live: Mutex::new(Live {
                 child: Some(child),
                 framing: Framing::new(input, output, bounds),
+                handoff,
+                provider_writer: None,
             }),
             reaper: reaper.clone(),
             workspace: directories.workspace().to_owned(),
@@ -151,6 +178,8 @@ impl Process {
         };
         // Even a signal error quarantines I/O; never grant a retry/replacement.
         live.framing.close();
+        live.handoff = None;
+        live.provider_writer = None;
         if result.is_ok() {
             if let Some(child) = live.child.take() {
                 self.reaper.send(child).map_err(|_| Error::Io)?;
@@ -211,6 +240,29 @@ impl OwnedChild {
                 .map_err(|_| Error::Revoked)?
                 .framing
                 .enqueue(frame)
+        })
+    }
+
+    pub(crate) fn quarantine(&self) {
+        if let Ok(mut state) = self.shared.state.lock() {
+            state.revoked = true;
+        }
+        let _ = self.process.stop();
+    }
+    pub(crate) fn write_provider_suffix(
+        &self,
+        scope: &ExecutionScope,
+        bytes: &[u8],
+    ) -> Result<usize, Error> {
+        self.shared.dispatch(scope, |_| {
+            self.process
+                .live
+                .lock()
+                .map_err(|_| Error::Revoked)?
+                .provider_writer
+                .as_mut()
+                .ok_or(Error::AuthorityProtocol)?
+                .write_suffix(bytes)
         })
     }
 

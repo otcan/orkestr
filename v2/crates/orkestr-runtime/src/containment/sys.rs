@@ -21,6 +21,7 @@ mod linux {
 
     unsafe extern "C" {
         fn close_range(first: u32, last: u32, flags: i32) -> i32;
+        fn dup2(old: i32, new: i32) -> i32;
         fn fcntl(fd: i32, command: i32, ...) -> i32;
         fn kill(pid: i32, signal: i32) -> i32;
         fn waitid(kind: u32, id: u32, info: *mut ChildInfo, options: i32) -> i32;
@@ -34,6 +35,19 @@ mod linux {
         unsafe {
             command.pre_exec(|| {
                 if close_range(3, u32::MAX, 4) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+
+    pub fn inherit_handoff(command: &mut std::process::Command, fd: i32) {
+        use std::os::unix::process::CommandExt;
+        // Registered after configure_command: only this owned socket survives exec.
+        unsafe {
+            command.pre_exec(move || {
+                if dup2(fd, 3) < 0 || fcntl(3, 2, 0) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
@@ -106,7 +120,9 @@ mod linux {
 }
 
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-pub(super) use linux::{configure_command, nonblocking, observe_exit, signal_group};
+pub(super) use linux::{
+    configure_command, inherit_handoff, nonblocking, observe_exit, signal_group,
+};
 
 pub(super) fn supported() -> Result<(), Error> {
     if cfg!(all(target_os = "linux", target_pointer_width = "64")) {

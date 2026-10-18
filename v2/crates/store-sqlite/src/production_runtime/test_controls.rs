@@ -16,6 +16,7 @@ pub enum ProductionCheckpoint {
     CancelAfterCommit,
     StoppedBeforeCommit,
     StoppedAfterCommit,
+    StopAfterAuthentication,
     AcceptanceBeforeCommit,
     AcceptanceAfterCommit,
 }
@@ -35,6 +36,7 @@ impl ProductionCheckpoint {
             Self::CancelAfterCommit => "cancel-after-commit",
             Self::StoppedBeforeCommit => "stopped-before-commit",
             Self::StoppedAfterCommit => "stopped-after-commit",
+            Self::StopAfterAuthentication => "stop-after-authentication",
             Self::AcceptanceBeforeCommit => "acceptance-before-commit",
             Self::AcceptanceAfterCommit => "acceptance-after-commit",
         }
@@ -115,6 +117,16 @@ impl Store {
         let mut marker = options.open(&armed.marker).map_err(db)?;
         marker.write_all(name.as_bytes()).map_err(db)?;
         marker.sync_all().map_err(db)?;
+        if matches!(armed.stage, ProductionCheckpoint::StopAfterAuthentication) {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+            while tokio::time::Instant::now() < deadline {
+                if !armed.marker.exists() {
+                    return Ok(());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            return Err(RuntimeStoreError::Unavailable);
+        }
         // A missing parent cannot hang the harness indefinitely. Before COMMIT
         // timeout rolls back; after COMMIT it reports an unknown reply outcome.
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;

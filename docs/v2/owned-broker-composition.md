@@ -81,3 +81,16 @@ Waiting for a broker/provider acknowledgement inside a SQLite fence callback is
 not an acceptable replacement for a bounded write. Sealed cancellation/control
 must use the same actual-write boundary; a durable Stop receipt alone remains
 intent, not interruption evidence.
+
+The actual-FD codec mode requires `BrokerPrepared` with the current opaque handle
+and outer request ID. Preparation is awaited outside SQLite. A private, one-use
+same-child proof is consumed only after all actual provider-FD suffix writes
+finish; correlated replies cannot advance setup before then, including the
+`initialized` null reply. Preparation is correlation only, never a replacement
+for consumed dispatch or a purpose-specific current fence. This codec checkpoint
+does not implement the FD transfer or enable the legacy broker for real use.
+
+Acceptance discovery imports only Core `ec38c13b` execution projection and Store
+status sources. The optional candidate is the exact committed completion EventId
+for the status run and revision; the HTTP acceptance test reads that candidate
+before submitting the explicit owner decision. Absent candidates remain absent.

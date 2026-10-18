@@ -1,3 +1,5 @@
+import socket
+import array
 """Actual dedicated subprocess path, with a synthetic executable only."""
 import json
 import os
@@ -16,6 +18,7 @@ import json, os, sys
 from pathlib import Path
 Path(__file__).with_name("inspection.json").write_text(json.dumps({"pid":os.getpid(), "argv":sys.argv[1:], "env":sorted(os.environ)}))
 for line in sys.stdin:
+ Path(__file__).with_name("received.txt").open("ab").write(line.encode())
  v=json.loads(line)
  if v.get("method")=="initialize":
   print(json.dumps({"id":v["id"],"result":{"userAgent":"synthetic","platformFamily":"unix","platformOs":"linux","codexHome":os.environ["CODEX_HOME"]}}),flush=True)
@@ -38,7 +41,10 @@ class ServerTests(unittest.TestCase):
     def test_full_owned_session_and_duplicate_turn_has_no_retry(self):
         self.owned_case(True)
 
-    def owned_case(self, commit):
+    def test_stop_after_prepared_before_actual_write_delivers_zero(self):
+        self.owned_case(False, stop_before_write=True)
+
+    def owned_case(self, commit, stop_before_write=False):
         with tempfile.TemporaryDirectory(prefix="provider-broker-synthetic-") as root:
             root = Path(root).resolve()
             for name in ["configuration.py", "protocol.py", "transport.py", "server.py"]:
@@ -51,9 +57,14 @@ class ServerTests(unittest.TestCase):
             config = {"codex_executable": str(fake), "codex_home": str(root / "account"),
                       "workspace": str(root / "workspace"), "home": str(root / "home"), "temporary": str(root / "tmp")}
             (root / "broker-private.json").write_text(json.dumps(config))
-            child = subprocess.Popen(["/usr/bin/python3", str(root / "server.py"),
+            parent, inherited = socket.socketpair()
+            bootstrap = "import os,sys; fd=int(sys.argv[1]); os.dup2(fd,3); os.close(fd) if fd != 3 else None; os.set_inheritable(3,True); os.execv(sys.executable,[sys.executable]+sys.argv[2:])"
+            child = subprocess.Popen(["/usr/bin/python3", "-c", bootstrap, str(inherited.fileno()), str(root / "server.py"),
                 "open-owned-session", "--protocol", PROTOCOL], stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+                pass_fds=(inherited.fileno(),))
+            inherited.close()
+            writer = None
             buffer = b""
             def receive():
                 nonlocal buffer
@@ -71,10 +82,41 @@ class ServerTests(unittest.TestCase):
                 child.stdin.write(encode({"id": 1, "method": "OpenOwnedSession", "params": {
                     "protocol": PROTOCOL, "identity": IDENTITY}})); child.stdin.flush()
                 handle = receive()["result"]["owned_handle"]
+                parent.settimeout(5)
+                marker, ancillary, flags, _ = parent.recvmsg(64, socket.CMSG_SPACE(array.array("i").itemsize))
+                self.assertEqual(marker, b"provider-stdin-v1")
+                self.assertEqual(flags, 0)
+                self.assertEqual(len(ancillary), 1)
+                level, kind, payload = ancillary[0]
+                self.assertEqual((level, kind), (socket.SOL_SOCKET, socket.SCM_RIGHTS))
+                descriptors = array.array("i"); descriptors.frombytes(payload)
+                self.assertEqual(len(descriptors), 1)
+                writer = descriptors[0]
+                self.assertEqual(parent.recv(1), b"")  # broker relinquished socket
+                def prepared_write(outer, frame):
+                    notice = receive()
+                    self.assertEqual(notice, {"method":"BrokerPrepared", "params":{
+                        "owned_handle":handle,"request_id":outer}})
+                    # Synthetic parent only: production Runtime fences each suffix.
+                    self.assertEqual(os.write(writer, encode(frame)), len(encode(frame)))
                 child.stdin.write(encode({"id": 2, "method": "BrokerMetadata", "params": {"owned_handle": handle,
                     "frame": {"id": 1, "method": "initialize", "params": {
                     "clientInfo": {"name": "synthetic", "title": "Synthetic", "version": "1"},
                     "capabilities": {"experimentalApi": False}}}}})); child.stdin.flush()
+                if stop_before_write:
+                    self.assertEqual(receive()["method"], "BrokerPrepared")
+                    child.terminate()
+                    self.assertEqual(child.wait(timeout=5), 2)
+                    self.assertFalse((root / "received.txt").exists())
+                    if (root / "inspection.json").exists():
+                        inspection = json.loads((root / "inspection.json").read_text())
+                        with self.assertRaises(ProcessLookupError):
+                            os.kill(inspection["pid"], 0)
+                    child.stdin.close()
+                    return
+                prepared_write(2, {"id":1,"method":"initialize","params":{
+                    "clientInfo":{"name":"synthetic","title":"Synthetic","version":"1"},
+                    "capabilities":{"experimentalApi":False}}})
                 response = receive()
                 self.assertEqual(response["result"]["frame"]["result"]["codexHome"], "broker-private")
                 self.assertNotIn(str(root / "account"), str(response))
@@ -85,6 +127,7 @@ class ServerTests(unittest.TestCase):
                     def send(outer, frame, method="BrokerMetadata"):
                         child.stdin.write(encode({"id":outer,"method":method,"params":{
                             "owned_handle":handle,"frame":frame}})); child.stdin.flush()
+                        prepared_write(outer, frame)
                         return receive()
                     send(3, {"method":"initialized"})
                     send(4, {"id":2,"method":"account/read","params":{"refreshToken":False}})
@@ -109,6 +152,9 @@ class ServerTests(unittest.TestCase):
                         child.wait(timeout=3)
                     except subprocess.TimeoutExpired:
                         child.kill(); child.wait(timeout=3)
+                if writer is not None:
+                    os.close(writer)
+                parent.close()
                 child.stdout.close(); child.stderr.close()
 
 
