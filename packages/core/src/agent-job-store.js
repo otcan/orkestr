@@ -12,6 +12,7 @@ import { migratePersonalAgentEntities, migratePersonalAgentTaskLifecycle } from 
 import { migratePersonalAgentMemory } from "./personal-agent-memory-migration.js";
 import { migratePersonalAgentEvents } from "./personal-agent-events-migration.js";
 import { migratePersonalAgentIngress } from "./personal-agent-ingress-migration.js";
+import { migratePersonalAgentSessions } from "./personal-agent-session-migration.js";
 import { personalAgentFeature } from "./personal-agent-feature.js";
 import { initializeAgentJobJournal } from "./agent-job-sqlite-initialization.js";
 
@@ -20,6 +21,7 @@ export const RUN_ACTIVE_STATES = Object.freeze(["pending", "running", "retrying"
 
 const databases = new Map();
 const personalAgentSchemaReady = new Set();
+const activeTransactions = new WeakSet();
 let sqliteModule = null;
 
 function ensurePersonalAgentSchema(db, dbPath, env) {
@@ -29,6 +31,7 @@ function ensurePersonalAgentSchema(db, dbPath, env) {
   migratePersonalAgentMemory(db, { dryRun: false });
   migratePersonalAgentEvents(db, { dryRun: false });
   migratePersonalAgentIngress(db, { dryRun: false });
+  migratePersonalAgentSessions(db, { dryRun: false });
   personalAgentSchemaReady.add(dbPath);
 }
 
@@ -162,7 +165,9 @@ export async function closeAgentJobDbs() {
 
 // Run fn(db) inside one IMMEDIATE transaction. fn must be synchronous.
 export function tx(db, fn) {
+  if (activeTransactions.has(db)) return fn(db);
   db.exec("begin immediate");
+  activeTransactions.add(db);
   try {
     const result = fn(db);
     db.exec("commit");
@@ -170,6 +175,8 @@ export function tx(db, fn) {
   } catch (error) {
     try { db.exec("rollback"); } catch {}
     throw error;
+  } finally {
+    activeTransactions.delete(db);
   }
 }
 
