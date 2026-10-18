@@ -57,9 +57,24 @@ impl TrustedLauncher {
         bounds: TransportBounds,
         resources: Box<dyn Send + 'static>,
     ) -> Result<(MetadataAuthority, MetadataChild), Error> {
+        let resume = grant.provider() == orkestr_v2_application::runtime::ProviderKind::Codex
+            && grant.binding().native_session_id.is_some();
         let authority = MetadataAuthority::new_retained(store, grant, resources)?;
         let child = authority
-            .issue_executor(&self.executable, &launch_arguments(), directories, bounds)?
+            .issue_executor(
+                &self.executable,
+                &if resume {
+                    [
+                        "resume-owned-session".into(),
+                        "--protocol".into(),
+                        PROTOCOL.into(),
+                    ]
+                } else {
+                    launch_arguments()
+                },
+                directories,
+                bounds,
+            )?
             .spawn_with_provider_fd()?;
         Ok((authority, child.mark_broker_launcher(BrokerLaunch(()))))
     }

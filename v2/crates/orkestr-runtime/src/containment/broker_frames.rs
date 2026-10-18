@@ -41,7 +41,25 @@ pub(super) fn metadata(frame: &[u8], workspace: &Path) -> Result<Vec<u8>, Error>
     let value: Value = serde_json::from_slice(frame).map_err(|_| Error::InvalidFrame)?;
     let inner = outer(&value, "BrokerMetadata")?;
     let mut validation = inner.clone();
-    if inner.get("method").and_then(Value::as_str) == Some("thread/start") {
+    if validation.get("method").and_then(Value::as_str) == Some("thread/resume") {
+        let params = validation
+            .get_mut("params")
+            .and_then(Value::as_object_mut)
+            .ok_or(Error::InvalidFrame)?;
+        if params.len() != 5
+            || !params
+                .remove("threadId")
+                .and_then(|id| id.as_str().map(str::to_owned))
+                .is_some_and(|id| {
+                    !id.is_empty() && id.len() <= 512 && !id.chars().any(char::is_control)
+                })
+        {
+            return Err(Error::InvalidFrame);
+        }
+        params.insert("ephemeral".into(), Value::Bool(false));
+        validation["method"] = Value::String("thread/start".into());
+    }
+    if validation.get("method").and_then(Value::as_str) == Some("thread/start") {
         let params = validation
             .get_mut("params")
             .and_then(Value::as_object_mut)
@@ -181,6 +199,34 @@ mod tests {
         serde_json::to_vec(&json!({"id":2,"method":method,"params":{
             "owned_handle":"synthetic_owned","frame":frame}}))
         .unwrap()
+    }
+    #[test]
+    fn resume_is_broker_only_and_closed() {
+        let frame = json!({"id":3,"method":"thread/resume","params":{"threadId":"synthetic-native","cwd":"/synthetic/workspace","approvalPolicy":"never","sandbox":"read-only","modelProvider":"openai"}});
+        assert!(metadata(
+            &envelope("BrokerMetadata", frame.clone()),
+            Path::new("/synthetic/workspace")
+        )
+        .is_ok());
+        assert!(validate_metadata(
+            &serde_json::to_vec(&frame).unwrap(),
+            Path::new("/synthetic/workspace")
+        )
+        .is_err());
+        for (key, value) in [
+            ("threadId", json!("")),
+            ("modelProvider", json!("external")),
+            ("ephemeral", json!(false)),
+            ("input", json!([])),
+        ] {
+            let mut denied = frame.clone();
+            denied["params"][key] = value;
+            assert!(metadata(
+                &envelope("BrokerMetadata", denied),
+                Path::new("/synthetic/workspace")
+            )
+            .is_err());
+        }
     }
     #[test]
     fn setup_wrapper_reuses_closed_whitelist() {

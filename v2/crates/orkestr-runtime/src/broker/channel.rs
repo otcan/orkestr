@@ -108,7 +108,7 @@ impl BrokerChannel {
             .ok_or(Blocker::Protocol)?;
         if !matches!(
             method,
-            "initialize" | "initialized" | "account/read" | "thread/start"
+            "initialize" | "initialized" | "account/read" | "thread/start" | "thread/resume"
         ) {
             self.poisoned = true;
             return Err(Blocker::Protocol);
