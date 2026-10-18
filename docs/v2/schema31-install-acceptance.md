@@ -35,8 +35,19 @@ ORKESTR_V2_MIGRATIONS_DIR=/path/to/exact-core-migrations \
   python3 -B -m unittest discover -s v2/local-install/tests -p test_schema31_contract.py -v
 ```
 
-These SQLite checks are executed source-contract checks, not native migration
-qualification. Actual retained schema17/schema14 package-to-schema31 execution,
-matching UI/ELF package acceptance, Docker acceptance, gated launcher start and
-production soak remain unexecuted until matching immutable artifacts and gates
-are available. No schema32/33 assumption or historical acceptance transfers.
+Actual retained schema14 and schema17 package-to-schema31 copy-first upgrade,
+reopen, backward refusal, stopped backup/dormant rollback and untouched predecessor
+rollback passed against development pair `25b3bbb463bd1e71f7c9f2f8eb72e43348b64b4d`.
+Exact artifact identities, executed checks and cleanup are recorded in
+[schema31-install-checkpoint.json](schema31-install-checkpoint.json).
+The original binaries create populated message history; those historical schemas
+have no worker tasks. Pending-task hold behavior is covered separately by the
+actual populated schema30-to31 SQL test, not inferred from empty task tables.
+
+The producer's bounded development receipt was normalized to existing packaging
+receipt fields after byte-only ELF/WASM identity, inventory and source SQL checks;
+this creates no new build attestation. Historical package labels remain integrity
+metadata only. The successor package retains embedded `2.0.0-dev` identity.
+Docker runtime acceptance, browser/provider acceptance, gated daily-use launcher
+start and production soak remain unexecuted for this pair. No RC qualification,
+schema32/33 assumption or historical acceptance transfers.
