@@ -32,7 +32,7 @@ class DistributionTests(unittest.TestCase):
         self.ui = self.root / "web"
         self.ui.mkdir()
         (self.ui / "index.html").write_text("synthetic web index")
-        inventory = prepare.files(self.ui)
+        inventory = prepare.ui_files(self.ui)
         self.args = dict(binary=self.binary, ui=self.ui, output=self.root / "context",
                          binary_sha256=prepare.sha256(self.binary),
                          ui_inventory_sha256=hashlib.sha256(json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
@@ -57,6 +57,24 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(manifest["files"]["server"], self.args["binary_sha256"])
         self.assertNotIn("network_mode", service)
         self.assertNotIn("privileged", service)
+
+    def test_web_manifest_is_declared_verified_and_tamper_checked(self):
+        web_manifest = self.ui / "manifest.json"
+        web_manifest.write_text('{"name":"synthetic web"}')
+        inventory = prepare.ui_files(self.ui)
+        self.assertEqual(set(inventory), {"index.html", "manifest.json"})
+        self.args["ui_inventory_sha256"] = hashlib.sha256(
+            json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        root = self.context()
+        declared = entrypoint.verify(root)["files"]
+        for name, digest in inventory.items():
+            self.assertEqual(declared["ui/" + name], digest)
+        (root / "ui/manifest.json").write_text('{"name":"tampered"}')
+        with self.assertRaisesRegex(RuntimeError, "checksum"):
+            entrypoint.verify(root)
+        web_manifest.write_text('{"name":"source tampered"}')
+        with self.assertRaisesRegex(RuntimeError, "inventory hash"):
+            prepare.prepare(**{**self.args, "output": self.root / "other-context"})
 
     def test_bad_hash_origin_image_and_reserved_opt_in_refused_before_output(self):
         for key, value in (("binary_sha256", "0" * 64), ("ui_inventory_sha256", "0" * 64),

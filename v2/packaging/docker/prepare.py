@@ -13,12 +13,25 @@ from urllib.parse import urlsplit
 
 LOCAL = Path(__file__).resolve().parents[2] / "local-install"
 sys.path.insert(0, str(LOCAL))
-from install_state import files, fresh_path, sha256, write_json
+from install_state import fresh_path, sha256, write_json
 from helper import require
 
 HERE = Path(__file__).resolve().parent
 RESERVED = {"ORKESTR_V2_HOME", "ORKESTR_V2_BIND", "ORKESTR_V2_ORIGIN", "ORKESTR_V2_UI_DIST",
             "ORKESTR_V2_BOOTSTRAP_TOKEN", "ORKESTR_V2_MASTER_KEY"}
+
+
+def ui_files(root):
+    """Complete web inventory; web manifest.json is an artifact, not metadata."""
+    inventory = {}
+    require(root.is_dir() and not root.is_symlink(), "regular UI directory required")
+    for path in sorted(root.rglob("*")):
+        require(not path.is_symlink(), "symlinks are not allowed in web artifacts")
+        if path.is_dir():
+            continue
+        require(path.is_file(), "only regular web files are allowed")
+        inventory[path.relative_to(root).as_posix()] = sha256(path)
+    return inventory
 
 
 def elf_platform(binary):
@@ -49,7 +62,7 @@ def prepare(binary, ui, output, binary_sha256, ui_inventory_sha256, source_commi
     require(binary.is_file() and sha256(binary) == binary_sha256, "assigned binary hash mismatch")
     platform = elf_platform(binary)
     require((ui / "index.html").is_file(), "built web index required")
-    inventory = files(ui)
+    inventory = ui_files(ui)
     digest = hashlib.sha256(json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     require(digest == ui_inventory_sha256, "assigned UI inventory hash mismatch")
     output = fresh_path(output, [binary, ui, HERE])
@@ -60,7 +73,7 @@ def prepare(binary, ui, output, binary_sha256, ui_inventory_sha256, source_commi
     shutil.copytree(ui, output / "ui")
     for filename in ("Dockerfile", "entrypoint.py"):
         shutil.copy2(HERE / filename, output / filename)
-    require(sha256(output / "server") == binary_sha256 and files(output / "ui") == inventory,
+    require(sha256(output / "server") == binary_sha256 and ui_files(output / "ui") == inventory,
             "copied artifact identity changed")
     project = "v2-install-" + secrets.token_hex(6)
     manifest = {"format": "orkestr-v2-container-artifacts-v1", "project": project,
