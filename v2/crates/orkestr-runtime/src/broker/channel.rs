@@ -40,6 +40,17 @@ impl OwnedMetadataHandle {
     }
 }
 impl BrokerChannel {
+    pub(crate) fn cancellation(
+        &mut self,
+        frame: Value,
+    ) -> Result<(std::sync::Arc<()>, Vec<u8>), Blocker> {
+        if !self.execution_claimed || self.preparation != Some(Preparation::Written) {
+            return Err(Blocker::Protocol);
+        }
+        let lineage = self.lineage.clone().ok_or(Blocker::Protocol)?;
+        let bytes = self.wrap("CancelExecution", frame)?;
+        Ok((lineage, bytes))
+    }
     /// Enable only for the actual-FD transport before submitting any setup.
     /// There is no downgrade after this selection.
     pub(crate) fn require_prepared(&mut self) -> Result<(), Blocker> {

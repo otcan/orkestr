@@ -1,10 +1,11 @@
 //! By-value bridge from Core's committed dispatch to the owned transport.
 //! This does not construct a supervisor, credentials, or a permissive fence.
+pub(crate) mod cancellation_fence;
 mod fence;
 mod provider_write;
 mod pump;
 mod session;
-pub use pump::CodexPump;
+pub use pump::{CodexPump, StopFailure, StoppingCodex};
 pub use session::{PreparingCodex, ReadyCodex, SetupFailure};
 #[cfg(test)]
 mod session_tests;
