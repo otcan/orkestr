@@ -102,3 +102,14 @@ is adapted to v5 append: authenticate immutable owner/conversation/run/session/a
 against durable records before receipt retrieval. Existing committed receipt creates
 no authority, lease extension or cancellation acknowledgement. No historical
 record_observation signature, new endpoint or field is introduced.
+
+## Candidate selection correction
+
+Core identifies b8b72af94c2baa8c98db3688782c32ab2056c869, PR #88, parent
+d4cf6934, as the minimal d4-based admission-result proposal. Its result fields
+and admit_run arguments match the bounded result adaptation above. This does
+not select PR #92/93460326 as the canonical successor, nor automatically select
+PR #88 over the coordinator's chosen integration base. The current runtime
+branch remains a source-review candidate with all dispatch blocked; coordinator
+must explicitly reconcile the base before lock/build/integration. No raw d4
+contracts, historical roots or additional port are imported by this comparison.
