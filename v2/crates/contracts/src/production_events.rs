@@ -1,12 +1,11 @@
-//! Production observation replay metadata proposal. No native identity or I/O grant.
-//! Not yet a ConversationEvent variant: consumer review precedes adapter writes.
+//! Production observation replay metadata. No native identity or I/O grant.
 use crate::*;
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderObservedEnvelope {
     pub event_id: EventId,
-    /// Exactly 5 when incorporated into the canonical replay union.
+    /// Exactly 5 in the canonical replay union.
     pub schema_version: u32,
     pub owner_id: OwnerId,
     pub scope: Scope,
