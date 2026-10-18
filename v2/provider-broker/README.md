@@ -108,3 +108,33 @@ A further `CommitExecution` is allowed only after a terminal completed/failed/
 interrupted observation and with a previously unseen durable message ID; each
 requires a fresh consumed capability and current execution fence in Runtime.
 Unknown/lost reply is not terminal, and never authorizes a retry or restart.
+
+### Sole-writer handoff (required server entry)
+
+The trusted launcher passes one connected private Unix stream socket as fd 3;
+there is no listener, path or client-selectable descriptor. At native child
+creation the server sends exactly `provider-stdin-v1` with one SCM_RIGHTS writer,
+closes its writer and socket, and retains only provider stdout. The receiver must
+reject extra/foreign descriptors, set CLOEXEC, verify nonblocking mode and bind
+the opaque writer to the original local child lineage. The server never queues
+or writes provider stdin in this mode. The old in-process Pump mode is only a
+synthetic test facility; the executable has no fallback to it.
+
+For each validated metadata/execution/control envelope, the server first records
+its existing correlation, then emits
+`{"method":"BrokerPrepared","params":{"owned_handle":"opaque","request_id":2}}`.
+Only then may Runtime write the exact derived native frame directly to the
+provider writer. Runtime must require preparation before setup, retain its opaque
+preparation proof and byte offset, and fence **each** bounded nonblocking suffix
+with the exact issued Core metadata/execution/cancellation authority. Waiting for
+preparation or provider replies occurs outside SQLite. Existing BrokerOutput
+correlation is unchanged. `initialized` emits preparation followed by its null
+completion; Runtime must finish the actual write before accepting that completion.
+
+Pipe enqueue/preparation is not provider delivery. Revoked authority refuses an
+unwritten suffix; any partial bytes or fence commit failure is unknown delivery,
+requires child quarantine, and never restores a consumed grant or retries a
+possibly written prefix. Stop remains uncertain until interrupt acknowledgement
+or owned-process cleanup. Synthetic server tests prove handoff, parent-only
+writes and stop-before-write zero delivery; real Store fence race coverage and
+ordinary HTTP composition are separate Runtime gates, not claimed here.
