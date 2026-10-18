@@ -9,13 +9,13 @@ claims. Its digest detects alteration; it authenticates neither provenance nor a
 shared transaction. All supplied components remain explicitly unattested.
 
 The separate unregistered `history_import/recovery_export.rs` publishes the exact
-proposed Store DTOs and domain-separated binary bundle fingerprint. The Python
+module-owned Store DTOs and domain-separated binary bundle fingerprint. The Python
 JSON envelope digest and Store binary bundle fingerprint are distinct contracts;
 no adapter claiming equivalence is implemented. Core review is required before
-connecting them. No shared registration, schema allocation or restore write is
-included in this checkpoint.
+connecting them. No shared registration or schema allocation is included. The owned schema-20
+writer was executed only in the disposable synthetic candidate described below.
 
-Proposed Store methods, with target credentials always separate:
+Owned Store methods, with target credentials always separate:
 
 - `export_history_recovery(credential, owner, namespace, native_conversation)`
   returns `HistoryRecoveryBundle`. One bounded read transaction must verify current
@@ -41,23 +41,23 @@ and target namespaces are explicit new authority choices. Restore request and
 receipt now carry an explicit nonnil `restore_id`. Freshness is a database
 transaction predicate, not something the DTO validator can prove.
 
-Core reserves migration 0020 for durable outer restore provenance, exact semantic
+Core supplies migration 0020 for durable outer restore provenance, exact semantic
 request fingerprint, immutable original receipt and rollback state. Current auth
 must precede replay lookup. Identical replay returns that persisted original
 receipt even after rollback; changed bundle or targets conflict. Bundle rollback
 must verify the outer expected revision and both exact recorded child contents,
 revisions and activity in one transaction before changing either child. Individual
-rollback must refuse bundle-linked children. No restore writes will be added
-against schema 16 alone; exact Core SQL and semantic-request encoding remain
-integration dependencies.
+rollback must refuse bundle-linked children. The owned methods require exact Core schema 20 and its semantic-request
+encoding; they cannot run against schema 16 alone. Core registration and
+independent review remain integration dependencies.
 No credential, native session, binding, route, timer, outbox, runnable admission or
 external effect is copied. Delta content recovery does not restore execution state.
 
 Executed: Python migration suite 115/115 PASS; rustfmt and diff checks PASS.
-The unregistered Rust checkpoint has not been compiled or executed. Real Store
-recovery export/restore, process-crash acceptance for these methods and portable
-return to the legacy authority are unexecuted. Existing isolated dormant-import
-and native-delta preservation tests remain separately documented.
+The unregistered owned Rust source compiled and passed 14 selected Store tests
+and strict feature-enabled all-target clippy in the disposable schema-20 candidate.
+Exact hashes and commands are in [schema-20 recovery evidence](recovery20-build-evidence.md).
+Recovery process-crash acceptance and portable return to legacy are unexecuted.
 
 ## Schema-20 implementation source checkpoint
 
@@ -90,13 +90,12 @@ legacy or multi-authority coherence.
 
 Rollback request keys use 1..=128 exact UTF-8 bytes without control characters,
 consistent with the existing durable stop-receipt key bound; no normalization.
-The history contract previously had no request key. This explicit choice needs
-Core confirmation rather than inference from credential length limits.
+The history contract previously had no request key. Core explicitly accepted this rule; it is independent of credential length limits.
 
 Five new actual Store tests cover inactive-source capture, native delta content,
 reopen/replay/whole-bundle rollback, credential revocation, occupied/swapped targets,
 second-child abort atomicity, individual-child rollback hold and tampered content
-or activity. These Rust tests and the new Rust methods are **unexecuted** pending
-bounded build admission against schema 20 with temporary internal registration.
+or activity. All five passed, together with nine existing selected history tests,
+under build admission against schema 20 with temporary internal registration.
 The Python suite remains 115/115 PASS; rustfmt and diff checks PASS. Actual recovery
 process-kill/crash acceptance is unexecuted and remains a separate verification gate.

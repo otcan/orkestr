@@ -15,7 +15,7 @@ Private observations and actual counts remain outside OSS.
 | Mail/calendar / specialist tools / OXRM | Existing code establishes feature surfaces; Gmail account GET excluded because it migrates credentials | Need inert authoritative selectors and retained external-tool acceptance. Excluded selector is not an absent feature. No credential/profile inspection. |
 | Durable ordinary history transfer | Actual registered Store stable export to fresh-owner dormant import, reopen, replay/conflict/auth refusal, rollback and native-delta export checks | One conversation only. Legacy multi-authority consistent exporter and reviewed scope mapping still absent. |
 | Crash and rollback recovery | Synthetic child exits without destructors before ledger commit and after acknowledged import; reopen/integrity/FK checks | Before-commit case exercises a real ledger transaction, not a fault injected inside import_history. Storage/power-loss and all instruction-boundary crash acceptance unexecuted. |
-| Preserve V2-only delta on return | Synthetic native message survives dormant rollback and is exported using actual stable conversation cut | Native export excludes dormant ledger; no complete portable ledger export/restore or reverse legacy import. Explicit external-effect reconciliation still required. |
+| Preserve V2-only delta on return | Synthetic native message survives dormant rollback; schema-20 recovery cut captures inactive ledger and native delta, and atomic two-history-batch restore/rollback tests pass | Typed single-Store recovery only. JSON-to-Store bundle adapter, registered API, recovery SIGKILL acceptance and reverse legacy import remain incomplete. External-effect reconciliation is separate. |
 
 ## Timer structural selector source review
 
@@ -48,9 +48,10 @@ current scheduling activity, capability availability or cross-authority coherenc
 2. Core/authority-owned consistent legacy thread/history export, explicit owner and
    scope mapping, and separate approval/effect/resource/timer dormant ports. Counts
    and a single V2 conversation export cannot substitute for these.
-3. Portable export/readback of the inert ledger plus native V2 delta, with manifest
-   completeness and reverse reconciliation. Current rollback only deactivates the
-   untouched separate ledger and preserves all rows/native state.
+3. Integrate and independently review schema-20 typed recovery capture/restore and
+   bundle rollback. Complete the JSON-to-Store adapter, recovery process-crash
+   acceptance and reverse legacy reconciliation; synthetic typed Store tests do
+   not establish a production or legacy recovery path.
 4. Per-workflow owner acceptance of effective bindings, mail/calendar, memory and
    OXRM; source feature presence and aggregate counts are insufficient for cutover.
 
