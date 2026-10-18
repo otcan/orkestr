@@ -35,6 +35,12 @@ These rules change scheduling only; job names, dependencies, checkout refs,
 permissions, and immutable scanner policy remain intact. See GitHub's
 [workflow concurrency documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency).
 
+The dependency, secret, and test aggregate jobs run after failures but stop on
+workflow cancellation (`always() && !cancelled()`). An obsolete aggregate must
+not hold the PR concurrency group while waiting for a runner. Their commands
+still reject failed, skipped, or missing upstream results. Step-level evidence
+uploads and registry logout keep their cancellation cleanup behavior.
+
 ## Updating or reverting
 
 1. Review the official upstream action release and resolve its tag to the full
