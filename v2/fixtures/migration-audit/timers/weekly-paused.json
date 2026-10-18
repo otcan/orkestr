@@ -1,0 +1,15 @@
+{
+  "projection": {
+    "version": 1,
+    "sourceNamespace": "synthetic-source",
+    "sourceTimerId": "fake-timer-weekly",
+    "sourceEnabled": false,
+    "schedule": {
+      "cadence": "weekly",
+      "time": "09:00",
+      "timezone": "UTC"
+    }
+  },
+  "scheduleDigest": "09bf470846df3a41cdd6284f1fdb3ed584f59611b0b234beb22414d125838acd",
+  "state": "PAUSED"
+}
