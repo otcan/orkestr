@@ -130,7 +130,7 @@ impl Process {
         active: &Arc<AtomicUsize>,
         reaper: &Sender<Child>,
         provider_fd: bool,
-        resume_native: Option<&str>,
+        resume_native: Option<super::resume_bootstrap::ResumeBootstrap<'_>>,
     ) -> Result<Arc<Self>, Error> {
         use std::os::fd::AsRawFd;
         let pair = if provider_fd {
@@ -139,21 +139,17 @@ impl Process {
             None
         };
         let bootstrap = resume_native
-            .map(|native| {
+            .map(|resume| {
                 use std::io::Write;
                 use std::net::Shutdown;
                 use std::os::unix::net::UnixStream;
-                if !provider_fd
-                    || native.is_empty()
-                    || native.len() > 512
-                    || native.chars().any(char::is_control)
-                {
+                if !provider_fd {
                     return Err(Error::InvalidFrame);
                 }
+                let payload = resume.payload()?;
                 let (mut parent, child) = UnixStream::pair().map_err(|_| Error::Io)?;
                 parent.set_nonblocking(true).map_err(|_| Error::Io)?;
                 // Small, bounded local socket write; never wait for a broker reply.
-                let payload = [b"codex-resume-v1\0".as_slice(), native.as_bytes()].concat();
                 if parent.write(&payload).map_err(|_| Error::Io)? != payload.len() {
                     return Err(Error::Io);
                 }

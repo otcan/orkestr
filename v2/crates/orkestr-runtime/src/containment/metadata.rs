@@ -202,10 +202,18 @@ impl MetadataExecutor {
                 &self.shared.active,
                 &self.shared.reaper,
                 provider_fd,
-                if provider_fd
-                    && grant.provider() == orkestr_v2_application::runtime::ProviderKind::Codex
-                {
-                    grant.binding().native_session_id.as_deref()
+                if provider_fd {
+                    grant
+                        .binding()
+                        .native_session_id
+                        .as_deref()
+                        .map(|native| {
+                            super::resume_bootstrap::ResumeBootstrap::from_grant(
+                                grant.provider(),
+                                native,
+                            )
+                        })
+                        .transpose()?
                 } else {
                     None
                 },

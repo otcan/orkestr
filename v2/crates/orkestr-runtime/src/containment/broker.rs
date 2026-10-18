@@ -57,8 +57,7 @@ impl TrustedLauncher {
         bounds: TransportBounds,
         resources: Box<dyn Send + 'static>,
     ) -> Result<(MetadataAuthority, MetadataChild), Error> {
-        let resume = grant.provider() == orkestr_v2_application::runtime::ProviderKind::Codex
-            && grant.binding().native_session_id.is_some();
+        let resume = grant.binding().native_session_id.is_some();
         let authority = MetadataAuthority::new_retained(store, grant, resources)?;
         let child = authority
             .issue_executor(
