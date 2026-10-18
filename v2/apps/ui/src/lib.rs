@@ -1,5 +1,6 @@
 //! Client presentation only. Accepted input is not model completion.
 pub mod acceptance;
+pub mod payload;
 use orkestr_v2_contracts::{ConversationEvent, ConversationSnapshot, Message, MessageInput, Scope};
 use std::collections::BTreeMap;
 

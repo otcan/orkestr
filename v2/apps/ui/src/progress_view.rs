@@ -10,14 +10,18 @@ pub fn ProgressView(
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
 ) -> Element {
-    let mut output = use_signal(|| None::<String>);
+    let mut output = use_signal(orkestr_v2_ui::payload::Output::default);
     let mut notice = use_signal(|| "Loading provider output…".to_string());
-    let mut busy = use_signal(|| true);
+    let mut busy = use_signal(|| false);
     let mut channel = use_signal(|| None::<document::Eval>);
+    let mut read_channel = use_signal(|| None::<document::Eval>);
     let owner = session_scope.read().generation();
     let selection = execution.read().selection_generation();
     let status_for_load = status.clone();
     use_drop(move || {
+        if let Some(eval) = read_channel.read().as_ref() {
+            let _ = eval.send(json!({"stop":true}));
+        }
         if let Some(eval) = channel.read().as_ref() {
             let _ = eval.send(json!({"stop":true}));
         }
@@ -28,51 +32,66 @@ pub fn ProgressView(
             let Some(progress) = status.progress.as_ref() else {
                 return;
             };
-            let eval = document::eval(include_str!("payload_request.js"));
+            let eval = document::eval(include_str!("payload_poll.js"));
             let _=eval.send(json!({"method":"GET","path":format!("/api/v2/conversations/{}/payloads/{}",status.conversation_id,progress.payload_id)}));
-            channel.set(Some(eval));
-            let response = eval.join::<Value>().await;
-            if !session_scope.read().is_current(owner)
-                || execution.read().selection_generation() != selection
-            {
-                return;
-            }
-            channel.set(None);
-            busy.set(false);
-            match response {
-                Ok(value) if matches!(value["status"].as_u64(), Some(401 | 403)) => {
-                    onexpired.call(());
+            read_channel.set(Some(eval));
+            let mut eval = eval;
+            while let Ok(value) = eval.recv::<Value>().await {
+                if value["kind"] == "tick" {
+                    continue;
                 }
-                Ok(value) if value["status"] == 200 => {
-                    let payload = serde_json::from_value::<ProviderPayload>(value["body"].clone());
-                    match payload {
-                        Ok(payload)
-                            if payload.conversation_id == status.conversation_id
-                                && Some(&payload.run_id) == status.run_id.as_ref()
-                                && payload.payload_id == progress.payload_id =>
-                        {
-                            notice.set(
-                                if payload.text.is_some() {
-                                    "Provider output; review before accepting."
-                                } else {
-                                    "Provider output removed."
-                                }
-                                .into(),
-                            );
-                            output.set(payload.text);
+                let response = Ok::<Value, ()>(value);
+                if !session_scope.read().is_current(owner)
+                    || execution.read().selection_generation() != selection
+                {
+                    let _ = eval.send(json!({"stop":true}));
+                    return;
+                }
+                match response {
+                    Ok(value) if matches!(value["status"].as_u64(), Some(401 | 403)) => {
+                        output.write().unavailable();
+                        let _ = eval.send(json!({"stop":true}));
+                        onexpired.call(());
+                        return;
+                    }
+                    Ok(value) if value["status"] == 200 => {
+                        let payload =
+                            serde_json::from_value::<ProviderPayload>(value["body"].clone());
+                        match payload {
+                            Ok(payload)
+                                if payload.conversation_id == status.conversation_id
+                                    && Some(&payload.run_id) == status.run_id.as_ref()
+                                    && payload.payload_id == progress.payload_id =>
+                            {
+                                notice.set(
+                                    if payload.text.is_some() && !output.read().removed() {
+                                        "Provider output; review before accepting."
+                                    } else {
+                                        "Provider output removed."
+                                    }
+                                    .into(),
+                                );
+                                output.write().observed(payload.text);
+                            }
+                            _ => {
+                                output.write().unavailable();
+                                notice.set("Provider output unavailable.".into());
+                            }
                         }
-                        _ => notice.set("Provider output unavailable.".into()),
+                    }
+                    _ => {
+                        output.write().unavailable();
+                        notice.set("Provider output unavailable. Retrying…".into());
                     }
                 }
-                _ => notice.set("Provider output unavailable. Reconnect to retry.".into()),
             }
         }
     });
     rsx! {
         section { "aria-label":"Provider output",
             p { role:"status", "{notice}" }
-            if let Some(text)=output() { pre { "{text}" } }
-            if output().is_some() {
+            if let Some(text)=output.read().text.clone() { pre { "{text}" } }
+            if output.read().text.is_some() {
                 button { r#type:"button", disabled:busy(), onclick:move |_| {
                     if busy() || !session_scope.read().is_current(owner) {return;}
                     let status=status.clone();let csrf=csrf.clone();busy.set(true);
@@ -84,7 +103,7 @@ pub fn ProgressView(
                         if !session_scope.read().is_current(owner) || execution.read().selection_generation()!=selection {return;}
                         busy.set(false);channel.set(None);
                         match response {
-                            Ok(value) if value["status"]==204=>{output.set(None);notice.set("Provider output removed.".into());}
+                            Ok(value) if value["status"]==204=>{output.write().observed(None);notice.set("Provider output removed.".into());}
                             Ok(value) if matches!(value["status"].as_u64(),Some(401|403))=>onexpired.call(()),
                             _=>notice.set("Removal not confirmed. Retry keeps the same output selected.".into()),
                         }
