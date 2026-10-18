@@ -165,3 +165,79 @@ fn continuation_refuses_prepared_or_writing_without_terminal() {
         assert!(c.reserve_continuation(8).is_err());
     }
 }
+
+fn cancelling_channel() -> BrokerChannel {
+    let mut c = channel();
+    c.require_prepared().unwrap();
+    c.reserve_execution(7).unwrap();
+    c.receive(json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":2}}).to_string().as_bytes()).unwrap();
+    let proof = c.take_prepared().unwrap();
+    c.finish_provider_write(proof).unwrap();
+    c.receive(json!({"id":2,"result":{"owned_handle":"synthetic_owned","frame":{"id":7,"result":{"turn":{"id":"active-turn","status":"inProgress"}}}}}).to_string().as_bytes()).unwrap();
+    c.cancellation(json!({"id":8,"method":"turn/interrupt","params":{"threadId":"native","turnId":"active-turn"}})).unwrap();
+    c
+}
+fn queued_delta(turn: &str) -> Vec<u8> {
+    json!({"method":"BrokerOutput","params":{"owned_handle":"synthetic_owned","frame":{"method":"item/agentMessage/delta","params":{"threadId":"native","turnId":turn,"delta":"queued progress"}}}}).to_string().into_bytes()
+}
+#[test]
+fn cancellation_preparation_preserves_existing_turn_output_until_actual_write() {
+    let mut c = cancelling_channel();
+    assert!(c.receive(&queued_delta("active-turn")).unwrap().is_some());
+    assert!(c.take_prepared().is_err());
+    c.receive(json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":3}}).to_string().as_bytes()).unwrap();
+    assert!(c.receive(&queued_delta("active-turn")).unwrap().is_some());
+    let proof = c.take_prepared().unwrap();
+    assert!(c.receive(&queued_delta("active-turn")).unwrap().is_some());
+    c.finish_provider_write(proof).unwrap();
+    c.receive(
+        json!({"id":3,"result":{"owned_handle":"synthetic_owned","frame":{"id":8,"result":{}}}})
+            .to_string()
+            .as_bytes(),
+    )
+    .unwrap();
+    assert!(!c.terminal_observed);
+    assert!(c.receive(json!({"method":"BrokerOutput","params":{"owned_handle":"synthetic_owned","frame":{"method":"turn/completed","params":{"threadId":"native","turn":{"id":"active-turn","status":"interrupted"}}}}}).to_string().as_bytes()).unwrap().is_some());
+    assert!(c.terminal_observed);
+}
+#[test]
+fn cancellation_early_ack_and_foreign_turn_still_poison() {
+    for phase in 0..3 {
+        let mut c = cancelling_channel();
+        if phase > 0 {
+            c.receive(json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":3}}).to_string().as_bytes()).unwrap();
+        }
+        if phase == 2 {
+            let _proof = c.take_prepared().unwrap();
+        }
+        assert!(c.receive(json!({"id":3,"result":{"owned_handle":"synthetic_owned","frame":{"id":8,"result":{}}}}).to_string().as_bytes()).is_err());
+        assert!(c.receive(&queued_delta("active-turn")).is_err());
+    }
+    let mut c = cancelling_channel();
+    assert!(c.receive(&queued_delta("foreign-turn")).is_err());
+}
+
+#[test]
+fn cancellation_pending_does_not_authorize_first_turn_output_or_wrong_preparation() {
+    let mut c = channel();
+    c.require_prepared().unwrap();
+    c.reserve_execution(7).unwrap();
+    assert!(c.receive(&queued_delta("active-turn")).is_err());
+    for bad in [
+        json!({"method":"BrokerPrepared","params":{"owned_handle":"foreign","request_id":3}}),
+        json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":2}}),
+        json!({"method":"BrokerOutput","params":{"owned_handle":"foreign","frame":{"method":"item/agentMessage/delta","params":{"turnId":"active-turn","delta":"foreign"}}}}),
+    ] {
+        let mut c = cancelling_channel();
+        assert!(c.receive(bad.to_string().as_bytes()).is_err());
+        assert!(c.take_prepared().is_err());
+    }
+}
+#[test]
+fn active_terminal_before_cancel_preparation_remains_terminal_evidence_only() {
+    let mut c = cancelling_channel();
+    assert!(c.receive(json!({"method":"BrokerOutput","params":{"owned_handle":"synthetic_owned","frame":{"method":"turn/completed","params":{"threadId":"native","turn":{"id":"active-turn","status":"completed"}}}}}).to_string().as_bytes()).unwrap().is_some());
+    assert!(c.terminal_observed);
+    assert!(c.take_prepared().is_err());
+    assert!(c.receive(&queued_delta("active-turn")).is_err());
+}
