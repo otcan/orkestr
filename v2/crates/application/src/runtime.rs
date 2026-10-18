@@ -98,6 +98,51 @@ pub struct RecoveryRecord {
     pub requires_reconciliation: bool,
 }
 
+/// Internal provider authority; native references must never enter client DTOs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderAdmission {
+    pub run_id: RunId,
+    pub session_id: SessionId,
+    pub native_session_ref: String,
+    pub lease_generation: i64,
+    pub fence_generation: i64,
+    pub role: SessionRole,
+}
+
+/// Provider evidence only; completion does not establish task acceptance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderEvent {
+    Started,
+    Progress(String),
+    ApprovalRequested,
+    Completed { synthetic: bool },
+    Failed,
+    Stopped,
+    Lost,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderEventInput {
+    pub run_id: RunId,
+    pub session_id: SessionId,
+    pub lease_generation: i64,
+    pub fence_generation: i64,
+    /// Contiguous from one per run; identical retries return the original receipt.
+    pub provider_sequence: i64,
+    pub event: ProviderEvent,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderEventReceipt {
+    pub event_id: EventId,
+    pub run: RunRecord,
+}
+
+/// Version of the internal runtime port shape, separate from HTTP/event versions.
+pub const RUNTIME_PORT_VERSION: u32 = 0;
+/// Storage and provider adapters must reject larger progress payloads.
+pub const MAX_PROVIDER_PROGRESS_BYTES: usize = 8192;
+
 pub trait RuntimeStore: Send + Sync {
     /// Idempotent canonical fast/deep pair; different IDs, initially Starting.
     fn ensure_role_bindings(
@@ -145,6 +190,14 @@ pub trait RuntimeStore: Send + Sync {
         lease: &Lease,
         lease_seconds: u32,
     ) -> impl Future<Output = Result<Lease>> + Send;
+    /// Atomically validate owner, active lease, scope fence and lifecycle, then journal.
+    /// Sequence/payload conflicts fail; identical retries return the original receipt.
+    /// Progress is bounded by MAX_PROVIDER_PROGRESS_BYTES. Approval is never granted here.
+    fn append_provider_event(
+        &self,
+        owner: &OwnerId,
+        input: &ProviderEventInput,
+    ) -> impl Future<Output = Result<ProviderEventReceipt>> + Send;
     /// Commits CancelRequested, scope fence increment and durable control outbox before return.
     fn request_cancel(
         &self,

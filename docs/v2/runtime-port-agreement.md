@@ -1,7 +1,8 @@
 # Runtime port agreement proposal
 
-Status: proposed against the published application ports; no runtime store adapter
-is implemented. This document fixes names for cross-lane review, not acceptance.
+Status: the data types and append-provider-event method below are published in
+`application::runtime`, internal `RUNTIME_PORT_VERSION = 0`. No runtime store
+adapter is implemented; lifecycle and persistence acceptance remain pending.
 
 Dependency: `orkestr-v2-application` (Rust `orkestr_v2_application`, path
 `v2/crates/application`) depends only on `orkestr-v2-contracts` (Rust
@@ -23,7 +24,7 @@ its existing `RunAdmission`, `RunRecord`, `Lease`, `SupervisorAdmission`,
 is a CAS version; `Lease.generation` and `RunRecord.fence_generation` represent
 separate authorities. Do not collapse them into one generation.
 
-## Proposed additions to application::runtime
+## Published additions to application::runtime
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
