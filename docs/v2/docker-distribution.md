@@ -190,3 +190,30 @@ and explicit root topology admission precede an actual run with this option.
 The earlier failed internal-bridge evidence remains valid. No host relay,
 daemon/firewall changes or production workload modifications are required by
 this proposal. Provider-enabled product routing and its acceptance stay separate.
+
+### Admitted normal-bridge diagnostic: passed
+
+Root admitted `diagnostic-egress-allowed` specifically for a no-provider owned
+checkpoint. The reviewed inventory correction was `4abb3c18`; the explicit
+network-policy source was `15873ed5`. The actual normal-bridge image build,
+Compose health, proxy-disabled host loopback health and UI index hash check all
+passed. This confirms host HTTP publication under the admitted diagnostic
+policy; it does not supersede the failed outbound-denied/internal-bridge result.
+No relay was added. Outbound routing was permitted, but no provider was configured
+or activated, and no inference call was made.
+
+`v2/packaging/docker/diagnostic-checkpoint.json` records exact base digest/image
+ID, built image ID, Compose SHA-256, server/UI inventory and cleanup evidence.
+The debug server source remains `8bd994132e790d38fbc01ca2c8be3d353ad9661a`;
+the genuine UI source is `e6b5441a45159d76654cb357749cbe0f6218f7c8`. All ten UI
+files (1,937,957 bytes) were rehashed against the independently assigned sidecar.
+This is a mixed-source debug installation/HTTP checkpoint. Browser WASM execution,
+provider behavior, product inference topology, restore apply, ARM64 and macOS
+Docker Desktop remain unexecuted.
+
+The finalizer removed the owned container, network, volume and image tag. Resource
+queries returned zero remaining project resources; the fresh private context
+was removed and the assigned loopback port could be rebound after cleanup.
+The admitted base remains cached; shared build caches were not pruned. Docker's
+build warning about the required BASE_IMAGE argument having no default is
+expected: the generator always supplies an explicit immutable digest.
