@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { coverageTracker } from "./scanner-coverage.mjs";
 
 // Each scanner owns a separate POSIX process group, including its Git children.
 // Never signal the wrapper's group or discover targets by executable name.
@@ -7,8 +8,9 @@ export function runScanner(binary, args, options, signal) {
     if (signal.aborted) return resolve({ status: null, error: new Error("scan_interrupted") });
     const grouped = process.platform !== "win32";
     const capture = options.stdio !== "ignore";
+    const coverage = options.captureCoverage ? coverageTracker() : null;
     const child = spawn(binary, args, { env: options.env, cwd: options.cwd,
-      detached: grouped, stdio: ["ignore", capture ? "pipe" : "ignore", "ignore"] });
+      detached: grouped, stdio: ["ignore", capture ? "pipe" : "ignore", coverage ? "pipe" : "ignore"] });
     let error, size = 0;
     const chunks = [];
     const stop = reason => {
@@ -28,11 +30,17 @@ export function runScanner(binary, args, options, signal) {
       if (size > (options.maxBuffer || 4096)) stop("scanner_output_limit");
       else chunks.push(chunk);
     });
+    child.stderr?.on("data", chunk => {
+      size += chunk.length;
+      if (size > (options.maxBuffer || 4096)) return stop("scanner_output_limit");
+      try { coverage.write(chunk); } catch { stop("scanner_output_limit"); }
+    });
     child.on("error", cause => { error = cause; });
     child.on("close", status => {
       clearTimeout(timer);
       signal.removeEventListener("abort", abort);
-      resolve({ status, error, stdout: Buffer.concat(chunks).toString("utf8") });
+      resolve({ status, error, stdout: Buffer.concat(chunks).toString("utf8"),
+        ...(coverage ? { coverage: coverage.finish() } : {}) });
     });
   });
 }

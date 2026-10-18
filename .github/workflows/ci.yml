@@ -108,7 +108,7 @@ jobs:
           curl --fail --silent --show-error --location --max-time 60 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o "$scan_dir/release.tar.gz"
           printf '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  %s\n' "$scan_dir/release.tar.gz" | sha256sum --check --status
           tar -xzf "$scan_dir/release.tar.gz" -C "$scan_dir" gitleaks
-          ORKESTR_TEST_GITLEAKS_BINARY="$scan_dir/gitleaks" node --test test/gitleaks-reviewed-digest.test.js
+          ORKESTR_TEST_GITLEAKS_BINARY="$scan_dir/gitleaks" node --test test/gitleaks-reviewed-digest.test.js test/secret-scan-coverage.test.js
           scan_args=(--binary "$scan_dir/gitleaks" --repository "$GITHUB_WORKSPACE" --label "$GITHUB_REPOSITORY" --report "$RUNNER_TEMP/secret-evidence.json" --target-ref HEAD --expected-commit "$SCAN_COMMIT")
           if [[ "$SCAN_BASE" =~ ^[a-f0-9]{40}$ && "$SCAN_BASE" != "0000000000000000000000000000000000000000" ]]; then
             scan_args+=(--base "$SCAN_BASE")
