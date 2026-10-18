@@ -85,3 +85,36 @@ actor injection. Independent narrow auth probes passed as recorded above.
 Cross-owner fixture coverage, browser/device session persistence/revocation and
 transport-level slow-header limits remain pending; none is implied by a green
 intake CI. M1 remains pending.
+
+## Independent fixed-candidate rerun
+
+The preceding failure is historical. On 2026-10-18, independently built exact
+PR #80 candidate `e61cf8956c4ef3ef0aa905325516a5d4b5e5f5ed` from a clean
+source archive with the required host wrapper:
+
+```sh
+CARGO_TARGET_DIR=<verification-target> ORKESTR_V2_HOME=<verification-home> \
+  ORKESTR_V2_BIND=127.0.0.1:47140 \
+  <host-wrapper>/v2-cargo build --locked -p orkestr-v2-server
+```
+
+Build passed in 6.68 seconds. Binary SHA-256:
+`fe45119b90135d96a04e306c01ca3cc5b5ae078f0e0862ec71aae11c75060727`.
+Ran the unchanged independent probe source at
+`43f6f7332235b04ee7c31e74f9ee0f553725b8a1` using the command above,
+an owned isolated home, and port 47140: **5 tests passed, 0 failed**, 7.806 seconds.
+
+Both database-symlink refusal cases passed: empty synthetic legacy database and
+live-WAL synthetic database. The latter holds its SQLite writer open through
+assertions. Bytes, existence and link snapshots before startup, while the owned
+child is still observed, and after child cleanup remained unchanged, including
+WAL/SHM where present. The other three probes (concurrency/conflict/reopen,
+spoof/Origin/cookie authority, and SSE cursor precedence) also passed.
+
+This closes the independently reproduced database-alias P1 for this exact
+candidate under the controlled-parent assumption. It does not independently
+execute every core-authored hardlink/sidecar scenario or establish safety against
+concurrent filesystem replacement. Foreign/future/altered database identity,
+precommit/lost-ack crash boundaries, runtime durability, browser cookie/CSRF and
+other acceptance remain pending. No CI run or broader test-suite execution was
+performed in this bounded rerun. The heavy slot was released after these probes.
