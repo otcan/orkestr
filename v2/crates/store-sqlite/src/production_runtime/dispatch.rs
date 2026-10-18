@@ -16,7 +16,7 @@ impl Store {
         }
         Ok(())
     }
-    async fn production_authorized_run(
+    pub(super) async fn production_authorized_run(
         &self,
         conn: &mut SqliteConnection,
         p: &ProviderAdmission,
@@ -113,9 +113,13 @@ impl Store {
         .await?;
         #[cfg(all(test, unix))]
         super::process_tests::checkpoint("reserve-before-commit");
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("reserve-before-commit").await?;
         tx.commit().await.map_err(db)?;
         #[cfg(all(test, unix))]
         super::process_tests::checkpoint("reserve-after-commit");
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("reserve-after-commit").await?;
         Ok(DispatchClaimResult::Reserved(Box::new(DispatchClaim {
             provider: candidate.provider.clone(),
             reservation_key: reservation,
@@ -179,9 +183,13 @@ impl Store {
         .await?;
         #[cfg(all(test, unix))]
         super::process_tests::checkpoint("consume-before-commit");
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("consume-before-commit").await?;
         tx.commit().await.map_err(db)?;
         #[cfg(all(test, unix))]
         super::process_tests::checkpoint("consume-after-commit");
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("consume-after-commit").await?;
         Ok(if won {
             ExecutionConsumption::Dispatch(Box::new(capability))
         } else {

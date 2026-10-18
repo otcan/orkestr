@@ -86,3 +86,47 @@ run changes, independently of event replay cursors. An identical admission repla
 does not advance it. Queue age uses the accepted event timestamp and store clock;
 progress/resources remain absent, and Stop/steer capabilities remain false.
 No routes or control receipts are activated by this read method.
+
+## Production renewal and containment fence
+
+Migration 0010 preserves every exact issued execution lease token. The existing
+`RuntimeStore::renew_lease` now works only on an authenticated live production
+handle, exact current execution token, readiness and generation. It extends by
+at most sixty store-clock seconds, bounded by the supervisor deadline. It never
+renews cancellation-purpose authority or spends a generation without extension.
+`heartbeat_supervisor` extends only its already-live immutable context; expired
+contexts require exact-predecessor takeover. Admission inserts its initial
+issued token in the same admission/ack transaction.
+
+`with_execution_fence(admission, action)` is a trusted synchronous containment
+bridge. It holds SQLite's immediate transaction across full current authority
+validation and one bounded synchronous action, serializing that action against
+durable fencing. Only DeliveryUnknown may pass. The action must be bounded
+nonblocking transport/spawn work, never provider response waits, network calls
+or blocking pipes. A consumed inference capability is independently required;
+this method grants freshness only. Current-thread Tokio fails Unavailable;
+multithread Tokio uses block_in_place. Any unknown result must not trigger
+inference retry. This new boundary requires independent review before adoption.
+
+## Independent ordinary-process oracle
+
+Feature `fixture-test-controls` also exposes opt-in `ProductionCheckpoint` and
+`production_arm_checkpoint` on an already authenticated production handle. Seven
+variants cover admission before ack/before commit/after commit, reservation
+before/after commit and consume before/after commit. The caller supplies a fresh
+marker in its controlled directory; exact stage bytes are written and synced,
+then a bounded thirty-second pause returns Unavailable. No normal bootstrap arms
+this hook. Reattachment clears the hook; no arbitrary SQL, callbacks, identity
+reconstruction or clock setters are exposed. Production author process tests use
+these public hooks when the feature is enabled.
+
+`inspect_production_attempt(conversation, request_key)` and
+`inspect_production_scope(conversation)` return context-scoped counts and states,
+acknowledgement and verifier-presence booleans, never native IDs or locator/hash
+values. Successors may inspect predecessor quarantine in the same context.
+Full-row read-only crash snapshots must include production_supervisors,
+production_readiness, production_runs, production_run_leases,
+execution_revisions, reasoning_inbox, session_bindings, owners, auth_sessions,
+conversations, messages, events and outbox. New-process authorization uses only
+the machine session and exact public predecessor after its real deadline;
+there is no private-context reconstruction API.

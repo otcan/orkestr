@@ -19,10 +19,19 @@ pub use production_runtime::{
     ConsumedProviderDispatch, ExecutionConsumption, ProductionSupervisorStore,
 };
 
+pub use production_runtime::inspection::{
+    ProductionAttemptInspection, ProductionDispatchState, ProductionScopeInspection,
+};
+#[cfg(feature = "fixture-test-controls")]
+pub use production_runtime::test_controls::ProductionCheckpoint;
+
 #[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,
     authority: Option<production_runtime::Context>,
+    #[cfg(feature = "fixture-test-controls")]
+    production_checkpoint:
+        Option<std::sync::Arc<production_runtime::test_controls::ArmedCheckpoint>>,
 }
 fn db(_: impl std::fmt::Display) -> StoreError {
     StoreError::Unavailable
@@ -60,6 +69,8 @@ impl Store {
         Ok(Self {
             pool,
             authority: None,
+            #[cfg(feature = "fixture-test-controls")]
+            production_checkpoint: None,
         })
     }
     pub async fn close(&self) {

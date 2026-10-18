@@ -134,8 +134,12 @@ impl RuntimeStore for Store {
     ) -> Result<RunAdmission> {
         Err(RuntimeStoreError::Unavailable)
     }
-    async fn renew_lease(&self, _: &RunAdmission, _: u64) -> Result<RunAdmission> {
-        Err(RuntimeStoreError::Unavailable)
+    async fn renew_lease(
+        &self,
+        admission: &RunAdmission,
+        expected_generation: u64,
+    ) -> Result<RunAdmission> {
+        self.production_renew(admission, expected_generation).await
     }
     async fn append_provider_event(
         &self,

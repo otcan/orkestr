@@ -126,8 +126,12 @@ impl Store {
             .bind(claim.message_id.to_string()).bind(claim.event_id.to_string()).bind(claim.scope_sequence)
             .bind(i64::try_from(claim.claim_generation).map_err(db)?).bind(request_key).bind(digest)
             .bind(c.generation).bind(deadline).bind(verifier).fetch_one(&mut *tx).await.map_err(db)?;
+        sqlx::query("INSERT INTO production_run_leases(run_id,generation,lease_deadline_ms,dispatch_fence) VALUES(?,1,?,?)")
+            .bind(run_id.to_string()).bind(deadline).bind(c.generation).execute(&mut *tx).await.map_err(db)?;
         #[cfg(all(test, unix))]
         super::process_tests::checkpoint("admit-before-ack");
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("admit-before-ack").await?;
         sqlx::query("UPDATE reasoning_inbox SET state='consumed',admitted_run_id=? WHERE conversation_id=? AND sequence=?")
             .bind(run_id.to_string()).bind(claim.conversation_id.to_string()).bind(claim.scope_sequence)
             .execute(&mut *tx).await.map_err(db)?;
@@ -144,9 +148,13 @@ impl Store {
         };
         #[cfg(all(test, unix))]
         super::process_tests::checkpoint("admit-before-commit");
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("admit-before-commit").await?;
         tx.commit().await.map_err(db)?;
         #[cfg(all(test, unix))]
         super::process_tests::checkpoint("admit-after-commit");
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("admit-after-commit").await?;
         Ok(result)
     }
 }
