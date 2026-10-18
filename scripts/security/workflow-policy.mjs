@@ -98,7 +98,7 @@ function publishJob(job) {
   return true;
 }
 
-export function validateWorkflow(source) {
+export function validateWorkflow(source, filename = "") {
   requirePolicy(typeof source === "string" && Buffer.byteLength(source) <= 256 * 1024, "workflow_size");
   const document = parseDocument(source, { strict: true, uniqueKeys: true, stringKeys: true, prettyErrors: false, logLevel: "silent" });
   requirePolicy(!document.errors.length && !document.warnings.length, "workflow_yaml");
@@ -109,11 +109,19 @@ export function validateWorkflow(source) {
   const events = typeof workflow.on === "string" ? [workflow.on] : Array.isArray(workflow.on) ? workflow.on : record(workflow.on) ? Object.keys(workflow.on) : [];
   requirePolicy(events.length > 0 && events.every(event => triggers.has(event)), "workflow_trigger");
   requirePolicy(record(workflow.jobs) && Object.keys(workflow.jobs).length > 0, "workflow_jobs");
+  const iosSimulator = filename === "v2-ios.yml";
+  if (iosSimulator) {
+    requirePolicy(record(workflow.on) && events.every(event => ["pull_request", "push"].includes(event)), "workflow_ios_trigger");
+    for (const event of events) {
+      const branches = workflow.on[event]?.branches;
+      requirePolicy(Array.isArray(branches) && branches.length > 0 && branches.every(branch => typeof branch === "string" && /^v2\/[A-Za-z0-9_/*-]+$/.test(branch)), "workflow_ios_branch");
+    }
+  }
   let actions = 0;
   for (const job of Object.values(workflow.jobs)) {
-    requirePolicy(record(job) && githubHostedRunners.has(job["runs-on"]), "workflow_runner");
+    requirePolicy(record(job) && (githubHostedRunners.has(job["runs-on"]) || (iosSimulator && job["runs-on"] === "macos-15")), "workflow_runner");
     requirePolicy(!["uses", "secrets", "container", "services", "environment"].some(key => key in job), "workflow_privileged_job");
-    if ("permissions" in job && !attestationJob(job) && !publishJob(job)) permissions(job.permissions);
+    if ("permissions" in job && (iosSimulator || (!attestationJob(job) && !publishJob(job)))) permissions(job.permissions);
     requirePolicy(!job["continue-on-error"], "workflow_ignored_failure");
     requirePolicy(Array.isArray(job.steps) && job.steps.length > 0, "workflow_steps");
     for (const step of job.steps) {
@@ -136,7 +144,7 @@ export async function checkWorkflows(directory) {
   requirePolicy(workflows.length > 0, "workflow_missing");
   for (const entry of workflows) {
     requirePolicy(entry.isFile(), "workflow_regular_file");
-    validateWorkflow(await fs.readFile(path.join(directory, entry.name), "utf8"));
+    validateWorkflow(await fs.readFile(path.join(directory, entry.name), "utf8"), entry.name);
   }
   return { ok: true, workflows: workflows.length };
 }
