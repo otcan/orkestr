@@ -19,6 +19,7 @@ pub(super) async fn snapshot(f: &Fixture) -> Vec<String> {
         "conversations",
         "events",
         "outbox",
+        "fixture_run_leases",
     ] {
         let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
             .fetch_all(&mut *tx)
@@ -394,7 +395,7 @@ async fn store_expired_run_lease_refuses_both_boundaries_without_consuming_verif
     let deadline = fresh.provider.run.lease_deadline_ms;
     // Test-only damage makes the DURABLE lease expired; a matching caller
     // snapshot cannot bypass store time. No production renewal/setter is added.
-    sqlx::query("UPDATE fixture_runs SET lease_deadline_ms=0")
+    sqlx::query("UPDATE fixture_run_leases SET lease_deadline_ms=0")
         .execute(&f.a.pool)
         .await
         .unwrap();
@@ -413,7 +414,7 @@ async fn store_expired_run_lease_refuses_both_boundaries_without_consuming_verif
         &snapshot(&f).await,
         "durable candidate lease expiry",
     );
-    sqlx::query("UPDATE fixture_runs SET lease_deadline_ms=?")
+    sqlx::query("UPDATE fixture_run_leases SET lease_deadline_ms=?")
         .bind(deadline)
         .execute(&f.a.pool)
         .await
@@ -426,7 +427,7 @@ async fn store_expired_run_lease_refuses_both_boundaries_without_consuming_verif
     else {
         panic!("refusal spent candidate")
     };
-    sqlx::query("UPDATE fixture_runs SET lease_deadline_ms=0")
+    sqlx::query("UPDATE fixture_run_leases SET lease_deadline_ms=0")
         .execute(&f.a.pool)
         .await
         .unwrap();
@@ -445,7 +446,7 @@ async fn store_expired_run_lease_refuses_both_boundaries_without_consuming_verif
         &snapshot(&f).await,
         "durable reservation lease expiry",
     );
-    sqlx::query("UPDATE fixture_runs SET lease_deadline_ms=?")
+    sqlx::query("UPDATE fixture_run_leases SET lease_deadline_ms=?")
         .bind(deadline)
         .execute(&f.a.pool)
         .await
