@@ -3,10 +3,17 @@
 use crate::{ConversationId, PayloadId, RunId};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all="snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum ExecutionPhase {
-    Queued, Starting, Running, CancelRequested, Cancelled,
-    AwaitingAcceptance, Completed, Failed, Blocked,
+    Queued,
+    Starting,
+    Running,
+    CancelRequested,
+    Cancelled,
+    AwaitingAcceptance,
+    Completed,
+    Failed,
+    Blocked,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,10 +53,19 @@ pub struct ExecutionStatus {
     pub capabilities: ExecutionCapabilities,
 }
 impl ExecutionStatus {
-    pub fn is_valid(&self)->bool {
-        self.schema_version==1 && self.revision>=0 && self.observed_at_ms>0
-            && (self.phase==ExecutionPhase::Queued || self.run_id.is_some())
-            && self.progress.as_ref().is_none_or(|p|p.observed_at_ms>0 && p.observed_at_ms<=self.observed_at_ms)
-            && self.resources.as_ref().is_none_or(|s|s.cpu_capacity_permille<=1000 && s.observed_at_ms>0 && s.observed_at_ms<=self.observed_at_ms)
+    pub fn is_valid(&self) -> bool {
+        self.schema_version == 1
+            && self.revision >= 0
+            && self.observed_at_ms > 0
+            && (self.phase == ExecutionPhase::Queued || self.run_id.is_some())
+            && self
+                .progress
+                .as_ref()
+                .is_none_or(|p| p.observed_at_ms > 0 && p.observed_at_ms <= self.observed_at_ms)
+            && self.resources.as_ref().is_none_or(|s| {
+                s.cpu_capacity_permille <= 1000
+                    && s.observed_at_ms > 0
+                    && s.observed_at_ms <= self.observed_at_ms
+            })
     }
 }
