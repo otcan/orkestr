@@ -98,11 +98,25 @@ fn persistent_native_session_requires_authenticated_protocol_and_safe_policy() {
     // Caller/provider policy broadening is refused, leaving readiness unconfirmed.
     assert_eq!(rpc.receive(r#"{"id":3,"result":{"cwd":"/synthetic/workspace","thread":{"id":"synthetic-thread","cwd":"/synthetic/workspace","ephemeral":false},"approvalPolicy":"never","sandbox":{"type":"dangerFullAccess"}}}"#), Err(Blocker::Protocol));
     assert_eq!(rpc.native_session(), None);
-    for access in ["true", "\"false\""] {
-        assert_eq!(rpc.receive(&format!(r#"{{"id":3,"result":{{"thread":{{"id":"synthetic-thread"}},"approvalPolicy":"never","sandbox":{{"type":"readOnly","networkAccess":{access}}}}}}}"#)), Err(Blocker::Protocol));
+    let valid = serde_json::json!({"id":3,"result":{
+        "cwd":"/synthetic/workspace",
+        "thread":{"id":"synthetic-thread","cwd":"/synthetic/workspace","ephemeral":false},
+        "approvalPolicy":"never","sandbox":{"type":"readOnly"}
+    }});
+    for access in [
+        serde_json::json!(true),
+        serde_json::json!("false"),
+        serde_json::Value::Null,
+    ] {
+        let mut invalid = valid.clone();
+        invalid["result"]["sandbox"]["networkAccess"] = access;
+        assert_eq!(rpc.receive(&invalid.to_string()), Err(Blocker::Protocol));
         assert_eq!(rpc.native_session(), None);
     }
-    rpc.receive(r#"{"id":3,"result":{"cwd":"/synthetic/workspace","thread":{"id":"synthetic-thread","cwd":"/synthetic/workspace","ephemeral":false},"approvalPolicy":"never","sandbox":{"type":"readOnly"}}}"#).unwrap();
+    // The same complete response with explicit false is a successful control.
+    let mut explicit_false = valid;
+    explicit_false["result"]["sandbox"]["networkAccess"] = serde_json::json!(false);
+    rpc.receive(&explicit_false.to_string()).unwrap();
     assert_eq!(rpc.native_session(), Some("synthetic-thread"));
     assert_eq!(
         rpc.create_session(std::path::Path::new("/synthetic/workspace")),
