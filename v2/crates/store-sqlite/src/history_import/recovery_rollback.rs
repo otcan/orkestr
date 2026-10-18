@@ -70,7 +70,15 @@ impl Store {
             }
             codec::verify_children(&mut tx, owner, &initial, true).await?;
         }
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("recovery-rollback-before-commit")
+            .await
+            .map_err(|_| HistoryError::Unavailable)?;
         tx.commit().await.map_err(unavailable)?;
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("recovery-rollback-after-commit")
+            .await
+            .map_err(|_| HistoryError::Unavailable)?;
         Ok(receipt)
     }
 }
