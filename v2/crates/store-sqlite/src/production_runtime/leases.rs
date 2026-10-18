@@ -51,6 +51,16 @@ impl Store {
         admission: &RunAdmission,
         expected_generation: u64,
     ) -> Result<RunAdmission> {
+        self.renew_exact(admission, expected_generation, false)
+            .await
+    }
+
+    pub(super) async fn renew_exact(
+        &self,
+        admission: &RunAdmission,
+        expected_generation: u64,
+        running_only: bool,
+    ) -> Result<RunAdmission> {
         let context = self.context()?;
         if admission.owner_id != context.owner {
             return Err(RuntimeStoreError::Unauthorized);
@@ -85,6 +95,12 @@ impl Store {
             return Err(RuntimeStoreError::Conflict);
         }
         self.production_authorized_run(&mut tx, &provider).await?;
+        if running_only
+            && (row.get::<&str, _>("state") != "running"
+                || row.get::<&str, _>("dispatch_state") != "delivery_unknown")
+        {
+            return Err(RuntimeStoreError::Fenced);
+        }
         let supervisor_deadline: i64 = sqlx::query_scalar(
             "SELECT lease_deadline_ms FROM production_supervisors WHERE context_id=?",
         )
@@ -112,6 +128,13 @@ impl Store {
         sqlx::query("INSERT INTO production_run_leases(run_id,generation,lease_deadline_ms,dispatch_fence) VALUES(?,?,?,?)")
             .bind(admission.run_id.to_string()).bind(next as i64).bind(extended)
             .bind(i64::try_from(admission.dispatch_fence).map_err(db)?).execute(&mut *tx).await.map_err(db)?;
+        // Preserve exact descendant lineage through this same-parent renewal.
+        // Child expiry, binding, dispatch fence and one-use grants never change.
+        sqlx::query("UPDATE worker_provider_delegations SET parent_lease_generation=?,parent_deadline_ms=? WHERE parent_run_id=? AND context_id=? AND incarnation_id=? AND parent_lease_generation=? AND parent_deadline_ms=? AND parent_dispatch_fence=? AND state IN ('delegated','admitted')")
+            .bind(next as i64).bind(extended).bind(admission.run_id.to_string())
+            .bind(&context.id).bind(&context.incarnation).bind(expected_generation as i64)
+            .bind(admission.lease_deadline_ms).bind(admission.dispatch_fence as i64)
+            .execute(&mut *tx).await.map_err(db)?;
         sqlx::query("UPDATE production_runs SET lease_generation=?,lease_deadline_ms=? WHERE id=? AND lease_generation=?")
             .bind(next as i64).bind(extended).bind(admission.run_id.to_string()).bind(expected_generation as i64)
             .execute(&mut *tx).await.map_err(db)?;
