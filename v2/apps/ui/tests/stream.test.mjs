@@ -71,3 +71,10 @@ test('canonical metadata fixture and legacy intake retain distinct SSE names and
         assert.equal(cancelled,true);
     }
 });
+
+test('production provider metadata is a known SSE name without synthetic relabeling',async()=>{
+    const body={schema_version:5,sequence:9,payload_ref_or_safe_payload:{kind:'provider_observed',observation:{kind:'completed_proposal'}}};
+    const {result,cancelled}=await run([`id: 9\nevent: provider_observed\ndata: ${JSON.stringify(body)}\n\n`]);
+    assert.equal(result.event,'provider_observed');assert.equal(result.id,'9');
+    assert.deepEqual(result.body,body);assert.equal(cancelled,true);
+});

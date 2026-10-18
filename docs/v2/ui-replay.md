@@ -68,3 +68,19 @@ cancellation API and Stop remain unavailable. Mixed schema 1/2/3/4 tests exercis
 atomic second-page failure, behind-event watermark refusal, retry without skipped
 text or duplicate presentation, and malformed metadata resync. Adapter persistence,
 independent review and live browser acceptance remain separate gates.
+
+## Production observation compatibility
+
+The UI imports the schema-5 production observation contract from exact Core
+`508c5f089d3a162f682e1deaa1b95166eedeedcf`, separately from backend integration.
+`provider_observed` uses canonical identity, scope, sequence and payload validation.
+It remains metadata: snapshots supply conversation text, and a completed proposal
+is shown as awaiting review rather than verified completion. No progress payload,
+provider start or control request is activated by this change.
+
+Regression coverage rejects malformed schema/identity/sequence and forbidden
+payload fields, and exercises a production observation gap across two snapshot
+pages: second-page failure preserves the original projection and cursor; retry
+applies text once. Legacy intake serialization remains covered unchanged.
+Local validation: 43 Rust UI tests, 28 Node bridge tests, locked offline WASM
+build and strict UI Clippy. Live mixed browser/server acceptance remains separate.

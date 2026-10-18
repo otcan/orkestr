@@ -402,3 +402,47 @@ fn stopped_metadata_rejects_bad_identity_schema_receipt_and_provider_sequence() 
     }
     assert_eq!(fingerprint(&view), before);
 }
+
+#[test]
+fn production_observation_gap_failure_retry_preserves_cursor_and_owner_text() {
+    let view = original();
+    let before = fingerprint(&view);
+    let mut wire: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/fixture-provider-observed.json"
+    ))
+    .unwrap();
+    wire["schema_version"] = 5.into();
+    wire["sequence"] = 9.into();
+    wire["aggregate_version"] = 9.into();
+    wire["payload_ref_or_safe_payload"]["kind"] = "provider_observed".into();
+    wire["payload_ref_or_safe_payload"]["observation"] =
+        serde_json::json!({"kind":"completed_proposal"});
+    let event = serde_json::from_value(wire).unwrap();
+    let required = replay_sequence(&view, "provider_observed", Some("9"), &event).unwrap();
+    let (failed, cursors) = run(
+        &view,
+        required,
+        vec![
+            Ok(page(&[3], 9, Some(3))),
+            Err("synthetic page outage".into()),
+        ],
+    );
+    assert!(failed.is_err());
+    assert_eq!(cursors, vec![1, 3]);
+    assert_eq!(fingerprint(&view), before);
+    let (retry, cursors) = run(
+        &view,
+        required,
+        vec![Ok(page(&[3], 9, Some(3))), Ok(page(&[7], 9, None))],
+    );
+    let committed = retry.unwrap();
+    assert_eq!(cursors, vec![1, 3]);
+    assert_eq!(committed.watermark, 9);
+    assert_eq!(
+        committed.messages.keys().copied().collect::<Vec<_>>(),
+        vec![1, 3, 7]
+    );
+    assert_eq!(committed.messages[&7].text, "owner text 7");
+    let (again, _) = run(&committed, required, vec![Ok(page(&[], 9, None))]);
+    assert_eq!(fingerprint(&again.unwrap()), fingerprint(&committed));
+}

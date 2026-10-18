@@ -79,3 +79,70 @@ fn wrong_scope_conversation_cursor_name_schema_or_unknown_variant_fail_closed() 
         .remove("synthetic");
     assert!(serde_json::from_value::<ConversationEvent>(wire).is_err());
 }
+
+fn production() -> serde_json::Value {
+    let mut wire = metadata();
+    wire["schema_version"] = 5.into();
+    wire["sequence"] = 9.into();
+    wire["aggregate_version"] = 9.into();
+    wire["payload_ref_or_safe_payload"]["kind"] = "provider_observed".into();
+    wire["payload_ref_or_safe_payload"]["observation"] =
+        serde_json::json!({"kind":"completed_proposal"});
+    wire
+}
+#[test]
+fn production_replay_is_metadata_only_and_completion_is_awaiting_review() {
+    let mut view = Projection::default();
+    view.page(snapshot()).unwrap();
+    let event: ConversationEvent = serde_json::from_value(production()).unwrap();
+    assert_eq!(event.sse_name(), "provider_observed");
+    assert_eq!(
+        replay_sequence(&view, "provider_observed", Some("9"), &event),
+        Ok(9)
+    );
+    assert_eq!(view.watermark, 1);
+    assert_eq!(view.messages.len(), 1);
+    assert_eq!(
+        orkestr_v2_ui::replay_notice(&event),
+        "Provider finished; awaiting review."
+    );
+    assert!(replay_sequence(&view, "fixture_provider_observed", Some("9"), &event).is_err());
+    assert!(replay_sequence(&view, "provider_observed", Some("8"), &event).is_err());
+}
+#[test]
+fn malformed_production_schema_metadata_resyncs_and_wrong_scope_is_rejected() {
+    for (key, value) in [
+        ("schema_version", 4.into()),
+        ("aggregate_version", 8.into()),
+        ("sequence", 0.into()),
+    ] {
+        let mut wire = production();
+        wire[key] = value;
+        let decoded = orkestr_v2_ui::decode_stream(
+            serde_json::json!({"status":200,"event":"provider_observed","id":"9","body":wire}),
+        );
+        assert_eq!(decoded.event, "resync_required");
+    }
+    for (key, value) in [
+        ("run_sequence", 0.into()),
+        ("native_session", "must-not-render".into()),
+        ("text", "must-not-render".into()),
+    ] {
+        let mut wire = production();
+        wire["payload_ref_or_safe_payload"][key] = value;
+        assert!(serde_json::from_value::<ConversationEvent>(wire).is_err());
+    }
+    let mut wire = production();
+    wire["payload_ref_or_safe_payload"]["observation"] = serde_json::json!({"kind":"completed"});
+    assert!(serde_json::from_value::<ConversationEvent>(wire).is_err());
+    let mut view = Projection::default();
+    view.page(snapshot()).unwrap();
+    let mut wrong = production();
+    wrong["scope"] = serde_json::json!({"kind":"global"});
+    let event = serde_json::from_value(wrong).unwrap();
+    assert!(replay_sequence(&view, "provider_observed", Some("9"), &event).is_err());
+    let mut wrong = production();
+    wrong["aggregate_id"] = "00000000-0000-4000-8000-000000000099".into();
+    let event = serde_json::from_value(wrong).unwrap();
+    assert!(replay_sequence(&view, "provider_observed", Some("9"), &event).is_err());
+}

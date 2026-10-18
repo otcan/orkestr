@@ -119,6 +119,9 @@ pub fn replay_sequence(
     event: &ConversationEvent,
 ) -> Result<i64, &'static str> {
     let (conversation, scope, schema) = match event {
+        ConversationEvent::ProviderObserved(e) => {
+            (e.aggregate_id.to_string(), &e.scope, e.is_valid())
+        }
         ConversationEvent::MessageAccepted(e) => (
             e.aggregate_id.to_string(),
             &e.scope,
@@ -168,10 +171,17 @@ pub fn decode_stream(raw: serde_json::Value) -> StreamItem {
     })
 }
 
-/// Status explains fixture evidence only, never provider-control success.
+/// Status records observations only, never verified completion or control success.
 pub fn replay_notice(event: &ConversationEvent) -> &'static str {
     use orkestr_v2_contracts::FixtureCancellationOutcome;
     match event {
+        ConversationEvent::ProviderObserved(e) => match e.payload_ref_or_safe_payload.observation {
+            orkestr_v2_contracts::ProductionObservationKind::Started => "Provider started.",
+            orkestr_v2_contracts::ProductionObservationKind::ApprovalRequested => "Review requested.",
+            orkestr_v2_contracts::ProductionObservationKind::CompletedProposal => "Provider finished; awaiting review.",
+            orkestr_v2_contracts::ProductionObservationKind::Failed => "Provider reported a failure.",
+            orkestr_v2_contracts::ProductionObservationKind::Lost => "Provider connection lost.",
+        },
         ConversationEvent::FixtureProviderStopped(_) => "Fixture stop acknowledgement recorded: receipt cancelled. Ordinary runtime and Stop remain unavailable.",
         ConversationEvent::FixtureCancellationRequested(e) => match e.payload_ref_or_safe_payload.outcome {
             FixtureCancellationOutcome::Unknown => "Fixture cancellation requested: outcome unconfirmed. Execution and Stop remain unavailable.",
