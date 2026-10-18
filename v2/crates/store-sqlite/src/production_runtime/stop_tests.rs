@@ -144,6 +144,20 @@ async fn authenticated_stop_checks_original_browser_credential_before_fresh_and_
             .unwrap(),
         receipt
     );
+    let before_control = snapshot(&f.store).await;
+    let (public, control) = f
+        .handle
+        .stop_execution_control_authenticated(&browser, &f.conversation, &input)
+        .await
+        .unwrap();
+    assert_eq!(public, receipt);
+    assert_eq!(
+        control.new_fenced_admission.purpose,
+        AdmissionPurpose::CancellationAcknowledgement
+    );
+    assert_eq!(control.new_fenced_admission.run_id, input.run_id);
+    assert_eq!(control.state, RunState::Cancelled);
+    assert_eq!(snapshot(&f.store).await, before_control);
     f.store.revoke_session(&browser).await.unwrap();
     let other = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
     let attached = f.handle.reattach_supervisor(&other).await.unwrap();
@@ -157,6 +171,12 @@ async fn authenticated_stop_checks_original_browser_credential_before_fresh_and_
     assert!(matches!(
         attached
             .stop_execution_authenticated(&browser, &f.conversation, &input)
+            .await,
+        Err(RuntimeStoreError::Unauthorized)
+    ));
+    assert!(matches!(
+        attached
+            .stop_execution_control_authenticated(&browser, &f.conversation, &input)
             .await,
         Err(RuntimeStoreError::Unauthorized)
     ));

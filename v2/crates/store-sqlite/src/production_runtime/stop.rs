@@ -29,6 +29,22 @@ impl Store {
         conversation: &ConversationId,
         input: &ExecutionControlRequest,
     ) -> Result<ExecutionStopReceipt> {
+        Ok(self
+            .stop_execution_control_authenticated(credential, conversation, input)
+            .await?
+            .0)
+    }
+
+    /// Trusted server-only control handoff. The second value is the exact durable
+    /// cancellation receipt from the SAME authenticated transaction, never a
+    /// reconstruction from status. Keep it server-side; serialize only the first.
+    /// It authorizes cancellation acknowledgement, never execution or renewal.
+    pub async fn stop_execution_control_authenticated(
+        &self,
+        credential: &str,
+        conversation: &ConversationId,
+        input: &ExecutionControlRequest,
+    ) -> Result<(ExecutionStopReceipt, CancelReceipt)> {
         if credential.is_empty() || credential.len() > 1024 {
             return Err(RuntimeStoreError::Unauthorized);
         }
@@ -40,7 +56,7 @@ impl Store {
         #[cfg(feature = "fixture-test-controls")]
         self.production_checkpoint("stop-after-authentication")
             .await?;
-        self.stop_execution_guarded(&owner, conversation, input, Some(credential))
+        self.stop_execution_control_guarded(&owner, conversation, input, Some(credential))
             .await
     }
 
@@ -51,6 +67,19 @@ impl Store {
         input: &ExecutionControlRequest,
         credential: Option<&str>,
     ) -> Result<ExecutionStopReceipt> {
+        Ok(self
+            .stop_execution_control_guarded(owner, conversation, input, credential)
+            .await?
+            .0)
+    }
+
+    async fn stop_execution_control_guarded(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        input: &ExecutionControlRequest,
+        credential: Option<&str>,
+    ) -> Result<(ExecutionStopReceipt, CancelReceipt)> {
         if !input.is_valid() || !valid(&input.request_key) || conversation.0.is_nil() {
             return Err(RuntimeStoreError::InvalidInput);
         }
@@ -72,14 +101,17 @@ impl Store {
             }
             _ => return Err(RuntimeStoreError::Unavailable),
         };
-        Ok(ExecutionStopReceipt {
-            schema_version: 1,
-            conversation_id: conversation.clone(),
-            run_id: input.run_id.clone(),
-            request_key: input.request_key.clone(),
-            requested_revision: input.expected_revision,
-            revision,
-            outcome,
-        })
+        Ok((
+            ExecutionStopReceipt {
+                schema_version: 1,
+                conversation_id: conversation.clone(),
+                run_id: input.run_id.clone(),
+                request_key: input.request_key.clone(),
+                requested_revision: input.expected_revision,
+                revision,
+                outcome,
+            },
+            receipt,
+        ))
     }
 }
