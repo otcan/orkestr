@@ -1,6 +1,8 @@
 //! Version 0 HTTP contracts. No storage or provider dependencies.
 mod cancellation;
 mod execution;
+mod worker_discovery;
+pub use worker_discovery::*;
 pub use execution::*;
 mod events;
 mod production_events;
