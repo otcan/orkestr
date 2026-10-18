@@ -29,12 +29,13 @@ impl ConfiguredExecution {
         )
         .map_err(|_| "execution child directories unavailable")?;
         // The metadata fence rechecks current authority at the actual child spawn.
-        let mut setup = PreparingCodex::open(
+        let mut setup = PreparingCodex::open_retained(
             self.store.clone(),
             grant,
             &self.config.launcher,
             &self.config.workspace,
             directories,
+            self.children.retain(),
         )
         .map_err(|_| "execution broker setup refused")?;
         let deadline = Instant::now() + Duration::from_secs(15);

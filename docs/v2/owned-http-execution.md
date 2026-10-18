@@ -88,6 +88,10 @@ requests a durable fence before local cleanup. Local child exit is not proof of
 provider Stop. Unexpected loss stays uncertain and requires reconciliation.
 Shutdown signals the owned supervisor before waiting for HTTP connections, and
 HTTP drain is bounded to two seconds; an open SSE stream cannot retain the child.
+After the supervisor task ends, shutdown separately waits up to two seconds for
+Runtime's retained child resources. An unresolved reap returns an error rather
+than recording clean shutdown. This tracks Runtime's owned broker child; native
+provider PID disappearance and whole-process isolation remain separate evidence.
 The same child remains quiescent while awaiting owner acceptance and after
 accepted completion, with current-session checks and supervisor heartbeats.
 It spends no old execution authority while waiting. After committed owner

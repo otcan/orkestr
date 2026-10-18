@@ -28,10 +28,12 @@ pub struct ConfiguredExecution {
     token: String,
     directory: PathBuf,
     control: control::ControlGate,
+    children: crate::owned_children::ChildSet,
 }
 pub struct ExecutionTask {
     shutdown: watch::Sender<bool>,
     task: JoinHandle<()>,
+    children: crate::owned_children::ChildSet,
 }
 
 impl ConfiguredExecution {
@@ -84,6 +86,7 @@ impl ConfiguredExecution {
             token,
             directory,
             control,
+            children: crate::owned_children::ChildSet::default(),
         })
     }
 
@@ -97,13 +100,18 @@ impl ConfiguredExecution {
 
     pub fn start(self) -> ExecutionTask {
         let (shutdown, receiver) = watch::channel(false);
+        let children = self.children.clone();
         let task = tokio::spawn(async move {
             if let Err(reason) = self.run(receiver).await {
                 // Only static local diagnostics; never provider text, token or paths.
                 eprintln!("owned execution paused: {reason}");
             }
         });
-        ExecutionTask { shutdown, task }
+        ExecutionTask {
+            shutdown,
+            task,
+            children,
+        }
     }
 
     async fn current(&self) -> Result<(), &'static str> {
@@ -133,7 +141,7 @@ fn private_create(path: &Path) -> Result<(), &'static str> {
 }
 
 impl ExecutionTask {
-    pub async fn shutdown(self) {
+    pub async fn shutdown(self) -> Result<(), &'static str> {
         let _ = self.shutdown.send(true);
         let mut task = self.task;
         if tokio::time::timeout(Duration::from_secs(2), &mut task)
@@ -143,5 +151,9 @@ impl ExecutionTask {
             task.abort();
             let _ = task.await;
         }
+        if !self.children.wait_empty(Duration::from_secs(2)).await {
+            return Err("owned child reaping remains unconfirmed");
+        }
+        Ok(())
     }
 }

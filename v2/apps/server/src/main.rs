@@ -70,9 +70,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // An open SSE connection must not delay the owned execution fence/cleanup.
     // Stop accepting HTTP and stop the supervisor before waiting for HTTP drain.
     let _ = shutdown.send(true);
-    if let Some(execution) = execution {
-        execution.shutdown().await;
-    }
+    let cleanup = match execution {
+        Some(execution) => execution.shutdown().await,
+        None => Ok(()),
+    };
     if let Some(result) = completed {
         result??;
     } else {
@@ -84,5 +85,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    cleanup?;
     Ok(())
 }

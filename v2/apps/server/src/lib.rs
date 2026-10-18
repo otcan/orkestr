@@ -23,6 +23,7 @@ mod browser;
 pub mod control_dispatch;
 mod execution;
 mod execution_accept;
+pub mod owned_children;
 pub mod owned_execution;
 mod provider_payload;
 mod routes;
