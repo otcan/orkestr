@@ -3,6 +3,7 @@ use orkestr_v2_contracts::{ConversationEvent, ConversationSnapshot, Message, Mes
 use std::collections::BTreeMap;
 
 pub mod execution;
+pub mod host_resources;
 mod reconcile;
 pub mod session_scope;
 pub use reconcile::reconcile;

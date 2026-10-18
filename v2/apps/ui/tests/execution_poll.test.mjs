@@ -50,3 +50,17 @@ test('status rejects foreign and control routes before fetching',async()=>{
         await assert.rejects(execute({recv:async()=>({path})},()=>assert.fail('no fetch')),/Invalid status path/);
     }
 });
+
+test('host resources uses the exact authenticated aggregate read path',async()=>{
+    let first=true, stop;
+    const messages=[];
+    const run=execute({recv:()=>first?(first=false,Promise.resolve({path:'/api/v2/resources'})):new Promise(resolve=>{stop=resolve;}),send:m=>messages.push(m)},async(path,options)=>{
+        assert.equal(path,'/api/v2/resources'); assert.equal(options.credentials,'same-origin');
+        assert.equal(options.method,'GET'); assert.equal(options.headers,undefined);
+        return new Response('{"scope":"host","sample_sequence":1}');
+    });
+    while(!messages.length) await new Promise(resolve=>setImmediate(resolve));
+    stop(); await run;
+    assert.equal(messages[0].body.scope,'host');
+    assert.ok(messages[0].now<=performance.now());
+});
