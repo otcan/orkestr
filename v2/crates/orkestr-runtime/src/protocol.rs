@@ -1,6 +1,7 @@
 //! Bounded, offline protocol decoding. These are candidate adapter boundaries,
 //! not proof of authentication, subscription entitlement or live execution.
 use crate::ports::{Blocker, ProviderEvent};
+use orkestr_v2_application::runtime::MAX_PROVIDER_PROGRESS_BYTES;
 use serde_json::Value;
 const MAX_FRAME: usize = 64 * 1024;
 
@@ -37,7 +38,11 @@ pub fn codex_event(line: &str, thread: &str, turn: &str) -> Result<Option<Provid
         if text(p, "turnId")? != turn {
             return Err(Blocker::StaleLease);
         }
-        return Ok(Some(ProviderEvent::Progress(text(p, "delta")?.to_owned())));
+        let delta = text(p, "delta")?;
+        if delta.len() > MAX_PROVIDER_PROGRESS_BYTES {
+            return Err(Blocker::Protocol);
+        }
+        return Ok(Some(ProviderEvent::Progress(delta.to_owned())));
     }
     let t = p.get("turn").ok_or(Blocker::Protocol)?;
     if text(t, "id")? != turn {
