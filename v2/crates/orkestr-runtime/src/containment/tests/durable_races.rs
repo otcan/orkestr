@@ -210,7 +210,7 @@ fn ready_rpc() -> CodexRpc {
         .unwrap();
     rpc.create_session(Path::new("/synthetic/workspace"))
         .unwrap();
-    rpc.receive(&json!({"id":3,"result":{"thread":{"id":"synthetic-native","ephemeral":false,"cwd":"/synthetic/workspace"},"cwd":"/synthetic/workspace","approvalPolicy":"never","sandbox":{"type":"readOnly"}}}).to_string()).unwrap();
+    rpc.receive(&json!({"id":3,"result":{"modelProvider":"openai","thread":{"modelProvider":"openai","id":"synthetic-native","ephemeral":false,"cwd":"/synthetic/workspace"},"cwd":"/synthetic/workspace","approvalPolicy":"never","sandbox":{"type":"readOnly"}}}).to_string()).unwrap();
     rpc
 }
 
