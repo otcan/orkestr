@@ -218,3 +218,27 @@ No host mounts or namespaces changed; the optional private-mount probe was not
 rerun here. The changed-path actual-server lifecycle subsequently passed with
 this guard included; see the updated HTTP checkpoint for tooling and historical
 binary/UI identities. It remains installation evidence for those revisions only.
+
+## Package integrity and failed upgrades
+
+Manifest validation now rejects non-object/duplicate-key JSON, invalid field
+types, malformed inventory names/hashes, missing mandatory launcher tools or
+entrypoint, and inconsistent UI declarations. Actual binary/UI/tool hashes must
+match the complete inventory, including refusal of extra/missing files. The
+builder and validator share one mandatory-tool list.
+
+Upgrade validates a private staging copy before publication and binds its full
+manifest bytes and parsed content to the validated source/release identity.
+Cached releases must also match that identity. Interrupted/incomplete copies or
+failed validation remove staging and preserve selected config, old release,
+auth and synthetic SQLite history. Selector replacement uses atomic rename;
+a failure before rename preserves the old config and cleans the temporary
+selector. A verified unselected release can remain after selector failure and
+be reused on retry. No rejected executable is started by upgrade or serve.
+
+Ten synthetic fault-injection tests cover those cases, including selected-binary
+tampering and a valid but changed manifest during copy. This is ordinary
+process/filesystem failure atomicity, not power-loss durability: no fsync/crash
+recovery guarantee, malicious same-user mutation sandbox, signature validation,
+permission-bit inventory, recursive hardlink audit or cross-schema rollback is
+claimed. The SQLite test history is synthetic; no server or migrations run.
