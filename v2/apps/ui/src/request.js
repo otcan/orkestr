@@ -1,18 +1,19 @@
 // Audited platform bridge: only fixed same-origin API paths from Rust.
 const input = await dioxus.recv();
-const route = /^\/api\/v2\/(?:setup|session|projects|conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:\/messages)?)(?:\?after=[0-9]+&limit=100)?$/;
+const route = /^\/api\/v2\/(?:setup|browser\/session|projects|conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:\/messages)?)(?:\?after=[0-9]+&limit=100)?$/;
 if (!route.test(input.path)) throw new Error("Invalid API path");
 const headers = {"Content-Type": "application/json"};
-if (input.token) headers.Authorization = `Bearer ${input.token}`;
+if (input.csrf && !["GET", "HEAD"].includes(input.method)) headers["x-orkestr-csrf"] = input.csrf;
 if (input.bootstrap) headers["x-orkestr-bootstrap"] = input.bootstrap;
 const controller = new AbortController();
 const timer = setTimeout(() => controller.abort(), 15000);
 try {
     const response = await fetch(input.path, {
-        method: input.method, headers, credentials: "omit", cache: "no-store",
+        method: input.method, headers, credentials: "same-origin", cache: "no-store",
         signal: controller.signal,
         body: input.body === null ? undefined : JSON.stringify(input.body)
     });
+    if (response.status === 204) return {status: 204, body: null};
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let bytes = 0, text = "";

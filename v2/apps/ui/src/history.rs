@@ -4,7 +4,7 @@ use orkestr_v2_ui::Projection;
 
 /// A separate page projection: live stream updates never replace the page being read.
 #[component]
-pub fn History(id: String, token: String, onexpired: EventHandler<()>) -> Element {
+pub fn History(id: String, csrf: String, onexpired: EventHandler<()>) -> Element {
     let mut after = use_signal(|| 0_i64);
     let mut next = use_signal(|| None::<i64>);
     let mut page = use_signal(Projection::default);
@@ -15,13 +15,13 @@ pub fn History(id: String, token: String, onexpired: EventHandler<()>) -> Elemen
         let cursor = after();
         let _generation = reload();
         let id = id.clone();
-        let token = token.clone();
+        let csrf = csrf.clone();
         async move {
             busy.set(true);
             next.set(None);
             page.set(Projection::default());
             status.set("Loading accepted input…".into());
-            match transport::history_page(&id, &token, cursor).await {
+            match transport::history_page(&id, &csrf, cursor).await {
                 Ok(snapshot) => {
                     let continuation = snapshot.next_cursor;
                     let mut projection = Projection::default();

@@ -27,14 +27,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::open(&home.join("core.sqlite3"))
         .await
         .map_err(|_| "store startup failed")?;
-    let state = AppState::new(store, token, format!("http://{bind}"))?;
+    let origin = std::env::var("ORKESTR_V2_ORIGIN").unwrap_or_else(|_| format!("http://{bind}"));
+    let state = AppState::new(store, token, origin)?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     eprintln!(
         "orkestr-v2-server schema=1 home={} bind={} execution=disabled connections=none",
         home.display(),
         listener.local_addr()?
     );
-    axum::serve(listener, router(state))
+    let mut app = router(state);
+    if let Some(dist) = std::env::var_os("ORKESTR_V2_UI_DIST") {
+        app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
+    }
+    axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
