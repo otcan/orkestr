@@ -124,7 +124,7 @@ test("turning on the feature migrates an already-open Agent Job store", async ()
     assert.equal(disabled.prepare("select count(*) as count from sqlite_master where type = 'table' and name like 'personal_agent_%'").get().count, 0);
     const enabled = await openAgentJobDb({ ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: "true" });
     assert.equal(enabled, disabled);
-    assert.deepEqual(enabled.prepare("select name from sqlite_master where type = 'table' and name like 'personal_agent_%' order by name").all().map((row) => row.name), ["personal_agent_event_outbox", "personal_agent_memories", "personal_agent_projects", "personal_agent_task_transitions", "personal_agent_tasks"]);
+    assert.deepEqual(enabled.prepare("select name from sqlite_master where type = 'table' and name like 'personal_agent_%' order by name").all().map((row) => row.name), ["personal_agent_conversations", "personal_agent_event_outbox", "personal_agent_memories", "personal_agent_messages", "personal_agent_projects", "personal_agent_reasoning_inbox", "personal_agent_task_transitions", "personal_agent_tasks"]);
   } finally {
     await closeAgentJobDbs();
     await fs.rm(home, { recursive: true, force: true });
@@ -142,9 +142,12 @@ test("Agent Job store creates and reopens the additive entity schema", async () 
 
     const reopened = await openAgentJobDb(env);
     assert.deepEqual(reopened.prepare("select name from sqlite_master where type = 'table' and name like 'personal_agent_%' order by name").all().map((row) => row.name), [
+      "personal_agent_conversations",
       "personal_agent_event_outbox",
       "personal_agent_memories",
+      "personal_agent_messages",
       "personal_agent_projects",
+      "personal_agent_reasoning_inbox",
       "personal_agent_task_transitions",
       "personal_agent_tasks",
     ]);
