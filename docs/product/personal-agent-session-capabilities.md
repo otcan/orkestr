@@ -156,14 +156,17 @@ creates no table, migration, secondary database or competing event envelope.
 The proposed schema/lease constraints were sent directly to that owner.
 
 The manager consumes Lane A's prepared synchronous store surface:
-`create(input)`, `get(id)`, `list({conversationId, scopeKind, scopeId, roles})`,
-`acquireLease(id, {expectedVersion, holderId, ttlMs})` and
+`create(input)`, `get(id)`, `list({conversationId, scopeKind, scopeId?, roles?, lifecycles?})`,
+`acquireLease(id, {expectedVersion, ttlMs})` and
 `update(id, {expectedVersion, leaseToken, patch})`. The env-based public wrappers
 can prepare this store asynchronously before constructing the manager; the
 native event callback cannot await persistence. The manager does not emulate an
 async transaction with a synchronous callback. Each store mutation must use its
 own `BEGIN IMMEDIATE` and conditional version/lease predicates. A null CAS result
 fails closed. Every successful mutation increments the store-managed version.
+Missing mutation IDs throw 404; `get` returns null for a missing row.
+A new row defaults to `starting`, version 0 and nullable native/lease fields.
+Lease tokens fence writers; the store API has no separate holder ID.
 Heartbeat updates use `leaseTtlMs`; release uses `releaseLease`. Lease expiry is
 numeric epoch milliseconds; the other timestamps are ISO strings.
 
@@ -180,8 +183,9 @@ Active fast/deep uniqueness includes starting/ready/busy/blocked; stopped rows
 remain historical and cannot resume. The database enforces native tuple uniqueness
 across all conversations and lifecycles. Concurrent role creation returns only a
 matching unique winner. The manager never takes over an existing lease token,
-even an expired one. Tests use a fake of the prepared CAS store; they do not
-establish SQLite durability or process-level locking. Worker 1's #70 owns that
+even an expired one. Tests use a fake of the prepared CAS store with matching
+defaults, mutation errors, lease CAS and list filters. They do not establish SQLite durability,
+DDL/trigger enforcement or process-level locking. Worker 1's #70 owns that
 implementation and depends on #68's canonical conversations. This runtime PR
 remains based on main and does not import unmerged DDL or ingress code.
 

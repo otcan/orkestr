@@ -16,11 +16,17 @@ export function sessionStore({ now = Date.now } = {}) {
   let sequence = 0;
   const clone = value => value == null ? null : structuredClone(value);
   const active = row => ["starting", "ready", "busy", "blocked"].includes(row.lifecycle);
+  const error = (code, statusCode) => Object.assign(new Error(code), { code, statusCode });
+  function required(id) {
+    const row = rows.get(id);
+    if (!row) throw error("personal_agent_session_not_found", 404);
+    return row;
+  }
   function persist(row) {
     for (const other of rows.values()) {
       if (other.id === row.id) continue;
       if (row.role !== "worker" && active(row) && active(other) && other.conversationId === row.conversationId && other.role === row.role) throw new Error("active role conflict");
-      if (row.nativeSessionId && row.provider === other.provider && row.accountProfileId === other.accountProfileId && row.nativeSessionId === other.nativeSessionId) {
+      if (row.nativeSessionId !== null && row.provider === other.provider && row.accountProfileId === other.accountProfileId && row.nativeSessionId === other.nativeSessionId) {
         throw Object.assign(new Error("agent_session_native_identity_reused"), { code: "agent_session_native_identity_reused" });
       }
     }
@@ -30,24 +36,29 @@ export function sessionStore({ now = Date.now } = {}) {
   return {
     create(input) {
       if (rows.has(input.id)) throw new Error("duplicate session");
-      return persist({ ...input, version: 0, leaseToken: null, leaseExpiresAt: null });
+      return persist({ ...input, scopeId: input.scopeId ?? null, modelProfile: input.modelProfile ?? {},
+        nativeSessionId: input.nativeSessionId ?? null, forkFromSessionId: input.forkFromSessionId ?? null,
+        lifecycle: input.lifecycle ?? "starting", blockedReason: input.blockedReason ?? null, heartbeatAt: input.heartbeatAt ?? null,
+        version: 0, leaseToken: null, leaseExpiresAt: null });
     },
     get: id => clone(rows.get(id)),
     list: ({ conversationId, scopeKind, scopeId = null, roles, lifecycles }) => [...rows.values()]
       .filter(row => row.conversationId === conversationId && row.scopeKind === scopeKind && row.scopeId === scopeId && (!roles || roles.includes(row.role)) && (!lifecycles || lifecycles.includes(row.lifecycle))).map(clone),
     acquireLease(id, { expectedVersion, ttlMs }) {
-      const row = rows.get(id);
-      if (!row || row.version !== expectedVersion || (row.leaseToken && row.leaseExpiresAt > now())) return null;
+      if (!Number.isSafeInteger(ttlMs) || ttlMs < 1) throw error("personal_agent_session_invalid_lease_ttl", 400);
+      const row = required(id);
+      if (row.version !== expectedVersion || (row.leaseToken !== null && row.leaseExpiresAt > now())) return null;
       const session = persist({ ...row, version: row.version + 1, leaseToken: `lease-${++sequence}`, leaseExpiresAt: now() + ttlMs, updatedAt: new Date(now()).toISOString() });
       return { session, leaseToken: session.leaseToken };
     },
     update(id, { expectedVersion, leaseToken, patch }) {
-      const row = rows.get(id);
-      if (!row || row.version !== expectedVersion || row.leaseToken !== leaseToken || row.leaseExpiresAt <= now()) return null;
+      const row = required(id);
+      if (row.version !== expectedVersion || leaseToken == null || row.leaseToken !== leaseToken || row.leaseExpiresAt <= now()) return null;
       const next = { ...row };
-      for (const key of ["lifecycle", "blockedReason", "nativeSessionId", "heartbeatAt", "modelProfile"]) if (patch[key] !== undefined) next[key] = patch[key];
+      for (const key of ["lifecycle", "blockedReason", "nativeSessionId", "heartbeatAt", "modelProfile"]) if (patch[key] !== undefined) next[key] = key === "lifecycle" ? patch[key] ?? row[key] : patch[key];
       next.leaseToken = patch.releaseLease ? null : leaseToken;
       next.leaseExpiresAt = patch.releaseLease ? null : now() + (patch.leaseTtlMs ?? Math.max(1, row.leaseExpiresAt - now()));
+      if (next.leaseExpiresAt !== null && !Number.isSafeInteger(next.leaseExpiresAt)) throw error("personal_agent_session_invalid_lease_ttl", 400);
       return persist({ ...next, version: row.version + 1, updatedAt: new Date(now()).toISOString() });
     },
     // Explicit test-only fault injection. Normal manager writes use CAS above.

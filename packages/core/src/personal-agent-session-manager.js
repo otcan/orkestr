@@ -5,11 +5,11 @@ import { sessionBlockedReason, sessionError, sessionId, sessionProfile, sessionS
 
 // Native IDs are persisted synchronously before their announcement/effects.
 // Lane A supplies the prepared SQLite store; no schema is created here.
-export function createPersonalAgentSessionManager({ store, ownerUserId, resolveConversation, runtimes, env = process.env, now = Date.now, newId = randomUUID, leaseMs = 30_000, holderId = randomUUID() } = {}) {
+export function createPersonalAgentSessionManager({ store, ownerUserId, resolveConversation, runtimes, env = process.env, now = Date.now, newId = randomUUID, leaseMs = 30_000 } = {}) {
   sessionId(ownerUserId);
   if (!Number.isSafeInteger(leaseMs) || leaseMs < 100) throw sessionError("agent_session_lease_invalid", 400);
   const enabled = () => { if (!personalAgentFeature(env)) throw sessionError("personal_agent_disabled", 404); };
-  const { conversation, owned, available, claim, currentLease, fenced, time } = sessionAccess({ store, ownerUserId, resolveConversation, enabled, now, holderId, leaseMs });
+  const { conversation, owned, available, claim, currentLease, fenced, time } = sessionAccess({ store, ownerUserId, resolveConversation, enabled, now, leaseMs });
   // Account ownership is runtime context, never an invented persistence column.
   const runtimeRow = row => ({ ...row, ...storedSessionProfile(row), ownerUserId });
   async function leased(id, operation) {

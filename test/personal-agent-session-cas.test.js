@@ -45,7 +45,7 @@ test("lease acquisition uses expectedVersion and loses a competing CAS without n
   const acquire = h.store.acquireLease;
   h.store.acquireLease = (id, input) => {
     assert.equal(input.expectedVersion, row.version);
-    assert.equal(typeof input.holderId, "string");
+    assert.deepEqual(Object.keys(input).sort(), ["expectedVersion", "ttlMs"]);
     h.store.tamper(id, { version: row.version + 1 });
     return acquire(id, input);
   };

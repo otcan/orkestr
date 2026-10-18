@@ -7,7 +7,7 @@ export const storedSessionProfile = row => ({ provider: row.provider, accountPro
 // BEGIN IMMEDIATE/CAS transaction; a provider await never holds a transaction.
 // resolveConversation is a trusted, owner-authorized projection of the canonical
 // conversation, not a synthetic HTTP principal or a new owner column in SQLite.
-export function sessionAccess({ store, ownerUserId, resolveConversation, enabled, now, holderId, leaseMs }) {
+export function sessionAccess({ store, ownerUserId, resolveConversation, enabled, now, leaseMs }) {
   const time = () => new Date(now()).toISOString();
   function conversation(id) {
     enabled();
@@ -32,7 +32,7 @@ export function sessionAccess({ store, ownerUserId, resolveConversation, enabled
     // Even if the store can reclaim an expired lease, this manager cannot prove
     // the former provider turn stopped. No expired-token takeover here.
     available(row);
-    const result = store.acquireLease(id, { expectedVersion: row.version, holderId, ttlMs: leaseMs });
+    const result = store.acquireLease(id, { expectedVersion: row.version, ttlMs: leaseMs });
     if (!result || result.leaseToken !== result.session.leaseToken) throw sessionError("agent_session_lease_conflict");
     return result.session;
   }
