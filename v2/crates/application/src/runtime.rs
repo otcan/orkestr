@@ -81,6 +81,18 @@ pub trait RuntimeStore: Send + Sync {
     /// Atomic lease/expiry/state/fence check, dedup and journal/projection update.
     /// Started -> Running; CompletedProposal -> AwaitingAcceptance, NEVER Succeeded.
     /// Only current cancellation token may confirm Stopped -> Cancelled.
+    /// Replay precedence: first authenticate the principal and validate immutable
+    /// owner/conversation/run/session/attempt associations against durable records.
+    /// Then look up the stable event key. Identical committed semantic evidence
+    /// returns its original receipt even after lease expiry or cancellation fencing.
+    /// This is receipt retrieval only: no new event, transition, lease extension,
+    /// dispatch authority or cancellation acknowledgement is created. Changed
+    /// evidence at that key is Conflict. Never disclose another principal's receipt.
+    /// Only unseen evidence requires the current live lease, dispatch fence, purpose
+    /// and permitted state transition. Stale/expired/fenced unseen evidence cannot
+    /// insert or transition. Preserve original terminal evidence for reconciliation;
+    /// never relabel it Stopped. This supersedes staged v3 current-authority-before-
+    /// duplicate-ACK wording; no separate receipt endpoint or port is introduced.
     async fn record_observation(
         &self,
         admission: &RunAdmission,
