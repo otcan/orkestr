@@ -1,6 +1,7 @@
 //! Private lineage and closed frame checks; bytes never issue Core authority.
 use super::process::{validate_metadata, Process};
 use super::Error;
+mod claude;
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;
@@ -20,7 +21,12 @@ fn outer<'a>(value: &'a Value, method: &str) -> Result<&'a Value, Error> {
         .get("params")
         .and_then(Value::as_object)
         .ok_or(Error::InvalidFrame)?;
-    if params.len() != 2
+    if params.len()
+        != if method == "CommitExecution" && params.contains_key("message_id") {
+            3
+        } else {
+            2
+        }
         || !params
             .get("owned_handle")
             .and_then(Value::as_str)
@@ -116,6 +122,10 @@ pub(super) fn turn(
             return Err(Error::WrongScope);
         }
         let inner = outer(&value, "CommitExecution")?;
+        if value["params"].get("message_id").is_some() {
+            claude::validate(&value)?;
+            return serde_json::to_vec(&value).map_err(|_| Error::InvalidFrame);
+        }
         committed_inner(inner)?;
         inner
     } else {

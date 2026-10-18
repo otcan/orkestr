@@ -25,12 +25,17 @@ class ClaudeProtocolTests(unittest.TestCase):
         return self.channel.provider({"type":"system","subtype":"init",
             "session_id":self.native,"apiKey":"synthetic-private"})
 
-    def test_readiness_then_terminal_gated_followup(self):
+    def test_terminal_does_not_authorize_continuation_or_replayed_result(self):
         self.assertNotIn("synthetic-private", str(self.init()))
         self.channel.client(self.request(2))
-        self.channel.provider({"type":"result","subtype":"success","is_error":False,
-            "session_id":self.native,"result":"synthetic output"})
-        self.channel.client(self.request(3, "message:2"))
+        prior = {"type":"result","subtype":"success","is_error":False,
+            "uuid":"22222222-2222-4222-8222-222222222222",
+            "session_id":self.native,"result":"synthetic output"}
+        self.channel.provider(prior)
+        with self.assertRaises(Refused):
+            self.channel.client(self.request(3, "message:2"))
+        with self.assertRaises(Refused):
+            self.channel.provider(prior)
         with self.assertRaises(Refused):
             self.channel.client(self.request(4, "message:3"))
 

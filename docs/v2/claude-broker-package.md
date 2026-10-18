@@ -26,7 +26,7 @@ sanitized to identity only and is not subscription authentication evidence.
 The frame is exactly `type:"user"`, `session_id:<generated UUID>`,
 `parent_tool_use_id:null`, `message:{role:"user",content:<durable text>}`.
 Only Runtime's consumed-capability wrapper may derive and submit this. Message
-IDs cannot repeat, and follow-up requires a terminal result on the same child.
+IDs cannot repeat. Claude continuation is refused even after terminal: provider frame UUIDs do not prove which input produced an unseen late frame. A second dispatch requires a separately reviewed correlation mechanism; UUID replay history alone is insufficient.
 There is no durable authority in JSON. Existing BrokerPrepared uses outer ID;
 BrokerOutput includes `request_id` for active-turn correlation (null for init).
 The broker relinquishes stdin via SCM_RIGHTS; Runtime must hold the respective
@@ -40,9 +40,8 @@ successful native interrupt. A partial frame/result loss remains unknown and
 must never be retried or used to reissue a consumed grant.
 
 Synthetic tests execute a fake native process with the fixed launcher options,
-transfer its sole stdin, and complete two terminal-gated turns with unchanged
-PID/UUID. They do not establish installed Claude flag compatibility, whether the
-CLI emits init before a prompt, subscription entitlement, ordinary Store/HTTP
+transfer its sole stdin, and complete one turn on the owned PID/UUID.
+They do not establish subscription entitlement, ordinary Store/HTTP
 composition or production cancellation. Those remain explicit activation gates;
 no real provider was started and no account contents were read. Runtime owns the
 separate Claude codec/parser lifecycle and consumed attachment; a new parser per
@@ -70,3 +69,5 @@ directory route, not a claim that managed subscription auth is absent. Root owns
 selected-account diagnostics and real staging. Completion-only acceptance must
 first integrate Runtime's separate Claude capability/parser adapter; Stop and
 multi-turn acceptance remain independent gates.
+
+Current Claude channel is first-turn-only. The synthetic replay regression refuses a second CommitExecution and a repeated terminal frame. Native engine source inspection by an independent reviewer places system/init before input consumption; no init deadlock is claimed. Existing selected-account readiness is launcher-private evidence, not inferred from system/init or client JSON. Runtime must receive a trusted selected-account attestation through its server-owned launcher configuration; this wire currently provides no subscription proof. Real activation remains held until that composition is reviewed.

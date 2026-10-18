@@ -34,7 +34,9 @@ class ClaudeChannel:
         params = request["params"]
         exact(params, ("owned_handle", "message_id", "frame"))
         require(params["owned_handle"] == self.handle)
-        require(self.initialized and (self.active is None or self.terminal))
+        # UUID identifies a provider frame, not its originating input turn.
+        # Until an issued per-turn correlation is available, this channel is single-use.
+        require(self.initialized and self.active is None)
         message = params["message_id"]
         require(identifier(message) and message not in self.messages)
         frame = params["frame"]

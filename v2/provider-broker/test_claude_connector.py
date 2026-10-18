@@ -39,7 +39,7 @@ class ClaudeLauncherTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ClaudeConfiguration(executable, root / "alias", root, root, root).new_session()
 
-    def test_owned_native_stream_and_same_process_followup(self):
+    def test_owned_native_stream_single_turn(self):
         import array
         import json
         import select
@@ -81,7 +81,7 @@ for line in sys.stdin:
                     raw = os.read(pump.child.stdout.fileno(), 65536)
                     return channel.provider(json.loads(raw))
                 observation()
-                for outer in (2, 3):
+                for outer in (2,):
                     frame = {"type":"user","session_id":str(session.native),
                              "parent_tool_use_id":None,"message":{"role":"user","content":"synthetic"}}
                     channel.client({"id":outer,"method":"CommitExecution","params":{
