@@ -6,6 +6,7 @@ account entitlement proof and Claude control codec remain activation gates.
 from dataclasses import dataclass
 from pathlib import Path
 import uuid
+import json
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,15 @@ class ClaudeConfiguration:
     workspace: Path
     home: Path
     temporary: Path
+
+    @classmethod
+    def load(cls, path):
+        value = json.loads(Path(path).read_text())
+        if not isinstance(value, dict) or set(value) != set(cls.__dataclass_fields__):
+            raise ValueError("invalid private Claude configuration")
+        config = cls(**{key: Path(item) for key, item in value.items()})
+        config.validate()
+        return config
 
     def validate(self):
         for name in self.__dataclass_fields__:

@@ -38,3 +38,65 @@ class ClaudeLauncherTests(unittest.TestCase):
             (root / "alias").symlink_to(root / "account")
             with self.assertRaises(ValueError):
                 ClaudeConfiguration(executable, root / "alias", root, root, root).new_session()
+
+    def test_owned_native_stream_and_same_process_followup(self):
+        import array
+        import json
+        import select
+        import socket
+        from claude_protocol import ClaudeChannel
+        from protocol import PROTOCOL, encode
+        from test_protocol import IDENTITY
+        from transport import Pump
+        with tempfile.TemporaryDirectory(prefix="claude-stream-synthetic-") as root:
+            root = Path(root).resolve()
+            executable = root / "native"
+            executable.write_text('''#!/usr/bin/python3
+import json,sys
+session=sys.argv[sys.argv.index("--session-id")+1]
+print(json.dumps({"type":"system","subtype":"init","session_id":session}),flush=True)
+for line in sys.stdin:
+ value=json.loads(line)
+ assert value["session_id"]==session
+ print(json.dumps({"type":"result","subtype":"success","is_error":False,"session_id":session,"result":"synthetic"}),flush=True)
+''')
+            executable.chmod(0o700)
+            session = ClaudeConfiguration(executable, root, root, root, root).new_session()
+            channel = ClaudeChannel(session)
+            channel.client({"id":1,"method":"OpenOwnedSession","params":{
+                "protocol":PROTOCOL,"identity":dict(IDENTITY, provider="claude")}})
+            parent, child = socket.socketpair()
+            parent.settimeout(5)
+            pump = Pump(session, channel, incoming=100, outgoing=101, handoff=child)
+            writer = None
+            try:
+                pump.launch()
+                _, ancillary, _, _ = parent.recvmsg(64, socket.CMSG_SPACE(4))
+                descriptors = array.array("i"); descriptors.frombytes(ancillary[0][2])
+                writer = descriptors[0]
+                native_pid = pump.child.pid
+                def observation():
+                    ready, _, _ = select.select([pump.child.stdout], [], [], 5)
+                    self.assertTrue(ready)
+                    raw = os.read(pump.child.stdout.fileno(), 65536)
+                    return channel.provider(json.loads(raw))
+                observation()
+                for outer in (2, 3):
+                    frame = {"type":"user","session_id":str(session.native),
+                             "parent_tool_use_id":None,"message":{"role":"user","content":"synthetic"}}
+                    channel.client({"id":outer,"method":"CommitExecution","params":{
+                        "owned_handle":channel.handle,"message_id":f"message:{outer}","frame":frame}})
+                    os.write(writer, encode(frame))  # synthetic parent; no Core claim
+                    self.assertEqual(observation()["params"]["request_id"], outer)
+                    self.assertEqual(pump.child.pid, native_pid)
+                os.close(writer); writer = None
+                self.assertEqual(pump.child.wait(timeout=5), 0)
+            finally:
+                if writer is not None:
+                    os.close(writer)
+                parent.close(); child.close(); pump.selector.close()
+                if pump.child is not None:
+                    if pump.child.poll() is None:
+                        pump.child.kill()
+                    pump.child.wait(timeout=5)
+                    pump.child.stdout.close()
