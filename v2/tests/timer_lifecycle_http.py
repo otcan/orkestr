@@ -1,6 +1,5 @@
 """Bounded actual binary timer lifecycle; no provider or external transport."""
 import hashlib
-import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -10,7 +9,11 @@ import owned_execution_http as ordinary
 def main():
     case = ordinary.Case()
     seed, conversation, once, interval = sys.argv[2:]
-    shutil.copyfile(Path(seed), case.home / "core.sqlite3")
+    # SQLite's snapshot includes any still-present WAL; never copy only the main
+    # file of this disposable seed database across a connection-close boundary.
+    with sqlite3.connect(f"file:{Path(seed)}?mode=ro", uri=True) as source:
+        with sqlite3.connect(case.home / "core.sqlite3") as target:
+            source.backup(target)
     case.conversation = conversation
     case.path = f"/api/v2/conversations/{conversation}"
     case.machine = "a1" * 32
@@ -20,8 +23,15 @@ def main():
     path = lambda namespace: f"/api/v2/timers/{namespace}"
     enable = lambda key: {"expected_revision": 1, "request_key": key,
                           "conversation_id": conversation, "text": "Synthetic scheduled owner input"}
+    def start():
+        try:
+            case.start()
+        except AssertionError as error:
+            if case.process is not None and case.process.poll() is not None:
+                raise AssertionError("synthetic timer startup: " + case.process.stderr.read(16384)) from error
+            raise
     try:
-        case.start()
+        start()
         assert case.request(path(once), browser=False)[0] == 401
         code, paused, headers = case.request(path(once))
         assert code == 200 and paused["state"] == "paused" and not paused["controller_armed"]
@@ -46,7 +56,7 @@ def main():
         process = case.process
         case.stop()
         assert process.returncode == 0, "ordinary shutdown must join the timer controller"
-        case.start()
+        start()
         code, resumed, _ = case.request(path(interval))
         assert code == 200 and resumed["state"] == "enabled"
         assert not resumed["controller_armed"]
@@ -60,7 +70,9 @@ def main():
         assert code == 200 and disabled["state"] == "disabled"
         fresh = dict(interval_body, expected_revision=disabled["revision"], request_key="fresh")
         assert case.request(path(interval) + "/enable", "POST", fresh)[1]["controller_armed"]
-        assert case.request(case.path + "/execution")[0] == 204
+        code, queued, _ = case.request(case.path + "/execution")
+        assert code == 200 and queued["phase"] == "queued" and queued["run_id"] is None
+        assert queued["capabilities"] == {"stop": False, "steer": False}
         assert not (case.home / "owned-execution").exists()
     finally:
         case.cleanup()
