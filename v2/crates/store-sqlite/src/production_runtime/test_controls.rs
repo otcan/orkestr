@@ -3,6 +3,10 @@ use super::*;
 /// Exact transaction boundaries; no caller-supplied SQL or arbitrary callback.
 #[derive(Clone, Copy)]
 pub enum ProductionCheckpoint {
+    HistoryImportBeforeCommit,
+    HistoryImportAfterCommit,
+    HistoryRollbackBeforeCommit,
+    HistoryRollbackAfterCommit,
     ExecutionFenceAfterActionRollback,
     AdmitBeforeAck,
     AdmitBeforeCommit,
@@ -25,6 +29,10 @@ pub enum ProductionCheckpoint {
 impl ProductionCheckpoint {
     fn name(self) -> &'static str {
         match self {
+            Self::HistoryImportBeforeCommit => "history-import-before-commit",
+            Self::HistoryImportAfterCommit => "history-import-after-commit",
+            Self::HistoryRollbackBeforeCommit => "history-rollback-before-commit",
+            Self::HistoryRollbackAfterCommit => "history-rollback-after-commit",
             Self::ExecutionFenceAfterActionRollback => "execution-fence-after-action-rollback",
             Self::AdmitBeforeAck => "admit-before-ack",
             Self::AdmitBeforeCommit => "admit-before-commit",
@@ -104,7 +112,48 @@ impl Store {
         self.production_checkpoint = Some(std::sync::Arc::new(ArmedCheckpoint { stage, marker }));
         Ok(())
     }
-    pub(super) async fn production_checkpoint(&self, name: &str) -> Result<()> {
+    /// Test-only dormant history probe. No target conversation or provider grant
+    /// is created. Import/rollback still authenticate inside their own write TX.
+    pub async fn production_arm_history_checkpoint(
+        &mut self,
+        credential: &str,
+        owner: &OwnerId,
+        stage: ProductionCheckpoint,
+        marker: std::path::PathBuf,
+    ) -> Result<()> {
+        if self.authority.is_some()
+            || !matches!(
+                stage,
+                ProductionCheckpoint::HistoryImportBeforeCommit
+                    | ProductionCheckpoint::HistoryImportAfterCommit
+                    | ProductionCheckpoint::HistoryRollbackBeforeCommit
+                    | ProductionCheckpoint::HistoryRollbackAfterCommit
+            )
+        {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        if credential.is_empty() || credential.len() > 1024 {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        let authorized: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
+            .bind(crate::digest(credential)).bind(owner.to_string())
+            .fetch_one(&mut *tx).await.map_err(db)?;
+        if authorized != 1 {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        tx.commit().await.map_err(db)?;
+        if marker.file_name().is_none()
+            || marker.parent().is_none_or(|p| !p.is_dir())
+            || std::fs::symlink_metadata(&marker).is_ok()
+            || self.production_checkpoint.is_some()
+        {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
+        self.production_checkpoint = Some(std::sync::Arc::new(ArmedCheckpoint { stage, marker }));
+        Ok(())
+    }
+    pub(crate) async fn production_checkpoint(&self, name: &str) -> Result<()> {
         let Some(armed) = &self.production_checkpoint else {
             return Ok(());
         };
