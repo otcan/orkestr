@@ -1,0 +1,89 @@
+//! By-value bridge from Core's committed dispatch to the owned transport.
+//! This does not construct a supervisor, credentials, or a permissive fence.
+#[cfg(test)]
+mod tests;
+use crate::{
+    codex_rpc::CodexRpc,
+    containment::{ConsumedTurn, ExecutionScope, OwnedChild},
+    ports::Blocker,
+};
+use orkestr_v2_application::runtime::{AdmissionPurpose, ProviderKind};
+use orkestr_v2_store_sqlite::ConsumedProviderDispatch;
+use serde_json::json;
+
+/// Failure after durable consumption is uncertain delivery, never a retry grant.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SubmissionFailure {
+    Protocol(Blocker),
+    Transport(crate::containment::Error),
+}
+
+// No public constructor, Clone, Debug, serialized representation, or caller frame.
+struct CodexTurn {
+    capability: Box<ConsumedProviderDispatch>,
+    scope: ExecutionScope,
+    request_id: u64,
+}
+
+impl ConsumedTurn for CodexTurn {
+    fn into_submission(self) -> (ExecutionScope, Vec<u8>) {
+        let provider = self.capability.provider();
+        let frame = json!({
+            "id": self.request_id,
+            "method": "turn/start",
+            "params": {
+                "threadId": provider.binding.native_session_id,
+                "clientUserMessageId": self.capability.message_id().to_string(),
+                "input": [{"type":"text", "text":self.capability.text(), "text_elements":[]}]
+            }
+        });
+        (self.scope, frame.to_string().into_bytes())
+    }
+}
+
+/// Takes the issuer capability by value on every path. An enqueue success means
+/// queued bytes only, never provider acknowledgement or verified completion.
+/// Caller must reconcile any failure; this function cannot return the grant.
+/// The child's injected durable fence must also be current at enqueue/flush.
+pub fn submit_codex(
+    capability: Box<ConsumedProviderDispatch>,
+    rpc: &mut CodexRpc,
+    child: &OwnedChild,
+) -> Result<(), SubmissionFailure> {
+    let provider = capability.provider();
+    let run = &provider.run;
+    let binding = &provider.binding;
+    if binding.provider_kind != ProviderKind::Codex
+        || run.purpose != AdmissionPurpose::Execution
+        || run.owner_id != binding.owner_id
+        || run.conversation_id != binding.conversation_id
+        || run.session_id != binding.session_id
+        || run.role != binding.role
+        || run.native_session_id != binding.native_session_id
+    {
+        return Err(SubmissionFailure::Protocol(Blocker::Protocol));
+    }
+    let native = binding
+        .native_session_id
+        .as_deref()
+        .ok_or(SubmissionFailure::Protocol(Blocker::UnknownSession))?;
+    let scope = ExecutionScope::new(
+        capability.namespace(),
+        capability.incarnation_id(),
+        &run.owner_id.to_string(),
+        &run.session_id.to_string(),
+        &run.run_id.to_string(),
+        run.dispatch_fence,
+    )
+    .map_err(SubmissionFailure::Transport)?;
+    let request_id = rpc
+        .claim_turn_request(native)
+        .map_err(SubmissionFailure::Protocol)?;
+    child
+        .enqueue_turn(CodexTurn {
+            capability,
+            scope,
+            request_id,
+        })
+        .map_err(|failure| SubmissionFailure::Transport(failure.cause))
+}
