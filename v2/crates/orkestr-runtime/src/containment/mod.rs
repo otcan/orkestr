@@ -39,6 +39,9 @@ pub enum Error {
     reason = "Runtime consumed-capability adapter is registered separately"
 )]
 pub(crate) trait ConsumedTurn {
+    fn broker_lineage(&self) -> Option<std::sync::Arc<()>> {
+        None
+    }
     fn into_submission(self) -> (ExecutionScope, Vec<u8>);
 }
 

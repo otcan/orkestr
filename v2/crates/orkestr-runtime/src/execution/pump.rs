@@ -16,6 +16,7 @@ struct CodexOutput {
     stream: TurnStream,
     failed: Option<Blocker>,
     eof: bool,
+    broker: Option<crate::broker::channel::BrokerChannel>,
 }
 impl Provider for CodexOutput {
     fn start(&mut self, _: &RunAdmission) -> Result<(), Blocker> {
@@ -40,6 +41,17 @@ impl Provider for CodexOutput {
         let result = match self.child.poll_stdout(&self.scope) {
             Ok(Output::Pending) => return Ok(None),
             Ok(Output::Frame(bytes)) => {
+                let bytes = match self.broker.as_mut() {
+                    Some(broker) => match broker.receive(&bytes) {
+                        Ok(Some(frame)) => frame.to_string().into_bytes(),
+                        Ok(None) => return Ok(None),
+                        Err(error) => {
+                            self.failed = Some(error.clone());
+                            return Err(error);
+                        }
+                    },
+                    None => bytes,
+                };
                 let text = std::str::from_utf8(&bytes).map_err(|_| Blocker::Protocol);
                 text.and_then(|text| self.stream.receive(text))
             }
@@ -93,10 +105,15 @@ impl CodexPump {
                 stream,
                 failed: None,
                 eof: false,
+                broker: None,
             },
             cursor: PendingObservation::default(),
             admission,
         }
+    }
+    pub(super) fn with_broker(mut self, channel: crate::broker::channel::BrokerChannel) -> Self {
+        self.source.broker = Some(channel);
+        self
     }
     pub(super) async fn step(&mut self, store: &Store) -> Result<bool, supervisor::Error> {
         supervisor::step(store, &mut self.source, &self.admission, &mut self.cursor).await

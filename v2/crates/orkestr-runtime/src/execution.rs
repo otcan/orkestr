@@ -25,6 +25,7 @@ struct CodexTurn {
     capability: Box<ConsumedProviderDispatch>,
     scope: ExecutionScope,
     request_id: u64,
+    broker: Option<crate::broker::channel::BrokerExecutionEnvelope>,
 }
 
 fn execution_scope(
@@ -42,6 +43,9 @@ fn execution_scope(
 }
 
 impl ConsumedTurn for CodexTurn {
+    fn broker_lineage(&self) -> Option<std::sync::Arc<()>> {
+        self.broker.as_ref().map(|b| b.lineage.clone())
+    }
     fn into_submission(self) -> (ExecutionScope, Vec<u8>) {
         let provider = self.capability.provider();
         let frame = json!({
@@ -53,7 +57,11 @@ impl ConsumedTurn for CodexTurn {
                 "input": [{"type":"text", "text":self.capability.text(), "text_elements":[]}]
             }
         });
-        (self.scope, frame.to_string().into_bytes())
+        let bytes = match self.broker {
+            Some(broker) => broker.wrap(frame),
+            None => frame.to_string().into_bytes(),
+        };
+        (self.scope, bytes)
     }
 }
 
@@ -92,6 +100,7 @@ pub fn submit_codex(
             capability,
             scope,
             request_id,
+            broker: None,
         })
         .map_err(|failure| SubmissionFailure::Transport(failure.cause))
 }
