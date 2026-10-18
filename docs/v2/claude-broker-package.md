@@ -48,3 +48,25 @@ no real provider was started and no account contents were read. Runtime owns the
 separate Claude codec/parser lifecycle and consumed attachment; a new parser per
 turn must not fabricate a repeated native initialization. Root owns immutable
 staging and harmless real-provider acceptance after independent review.
+
+## Installed flag and managed-account update
+
+Read-only native Claude 2.1.295 `--help` confirms stream-json input/output,
+UUID session selection, `dontAsk`, empty tools/settings sources, strict empty MCP,
+and permission-prompts `none`. The fixed launcher additionally selects safe-mode,
+restricted mode, disabled slash commands, no Chrome and disabled suggestions.
+Help describes safe-mode as preserving normal auth; bare mode excludes OAuth and
+is deliberately absent. This verifies flag availability, not provider wire timing
+or inference. No prompt, profile or token was read during inspection.
+
+For an existing managed subscription-token account, a root-owned tiny wrapper may
+call `claude_server.main(private_configuration_path, account_environment)`.
+The second argument is a trusted server-private callback resolving the existing
+selected account via the canonical credential provider. Its result may contain
+only `CLAUDE_CODE_OAUTH_TOKEN`; it is supplied only to the trusted native child.
+It is never a client argument, inherited worker environment, persisted JSON,
+command-line token, log or new identity. No callback means the canonical account
+directory route, not a claim that managed subscription auth is absent. Root owns
+selected-account diagnostics and real staging. Completion-only acceptance must
+first integrate Runtime's separate Claude capability/parser adapter; Stop and
+multi-turn acceptance remain independent gates.

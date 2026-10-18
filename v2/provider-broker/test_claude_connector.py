@@ -100,3 +100,15 @@ for line in sys.stdin:
                         pump.child.kill()
                     pump.child.wait(timeout=5)
                     pump.child.stdout.close()
+
+    def test_trusted_selected_account_callback_has_closed_environment(self):
+        with tempfile.TemporaryDirectory(prefix="claude-selected-synthetic-") as root:
+            root = Path(root).resolve()
+            executable = root / "native"
+            executable.write_text("fixture")
+            config = ClaudeConfiguration(executable, root, root, root, root)
+            selected = config.new_session(lambda: {"CLAUDE_CODE_OAUTH_TOKEN":"synthetic-only"})
+            self.assertEqual(selected.environment()["CLAUDE_CODE_OAUTH_TOKEN"], "synthetic-only")
+            for invalid in ({"ANTHROPIC_API_KEY":"synthetic"}, {"PATH":"foreign"}, {}):
+                with self.assertRaises(ValueError):
+                    config.new_session(lambda: invalid).environment()

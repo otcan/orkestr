@@ -169,3 +169,15 @@ current lineage fence. Parent revoke/Stop requires that Core-issued fence; role
 JSON cannot authorize cancellation, bypass readiness or create a grant. Typed
 Worker orchestration and activation remain separate gates. Claude role admission
 is unchanged pending its separate typed composition.
+
+### Same-child continuation correlation
+
+`BrokerChannel::reserve_continuation(inner_id)` reserves correlation only after
+an observed terminal turn, no pending reply, and completed actual-FD write. It
+requires an increasing native request ID, retires the previous native turn ID,
+and rejects late prior-turn notifications/replies. Setup cannot resume after
+execution. Prepared/writing/poisoned channels cannot reset. The sealed Runtime
+adapter must separately prove durable acceptance, exact new issued binding and
+consumed capability, no buffered observations, and retirement of old Authority;
+this method creates none of that authority. Python additionally requires
+increasing outer/turn request IDs and rejects duplicate terminal/retired turns.

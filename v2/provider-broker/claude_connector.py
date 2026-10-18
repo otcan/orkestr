@@ -36,10 +36,10 @@ class ClaudeConfiguration:
             if not (path.is_file() if name == "executable" else path.is_dir()):
                 raise ValueError("invalid trusted Claude path")
 
-    def new_session(self):
+    def new_session(self, account_environment=None):
         self.validate()
         # Server-generated identity only; no resume/adoption or client UUID.
-        return ClaudeOwnedSession(self, uuid.uuid4())
+        return ClaudeOwnedSession(self, uuid.uuid4(), account_environment)
 
 
 class ClaudeOwnedSession:
@@ -50,20 +50,35 @@ class ClaudeOwnedSession:
     exact UUID and terminal/result before any persistent follow-up. This object
     grants neither inference nor cancellation authority.
     """
-    def __init__(self, config, native):
+    def __init__(self, config, native, account_environment=None):
         self._config, self.native = config, native
         self.workspace = config.workspace
+        self._account_environment = account_environment
 
     def command(self):
         return [str(self._config.executable), "-p", "--input-format", "stream-json",
                 "--output-format", "stream-json", "--verbose",
-                "--permission-mode", "dontAsk", "--tools", "",
+                "--permission-mode", "dontAsk", "--permission-prompts", "none",
+                "--safe-mode", "--restricted", "--disable-slash-commands",
+                "--no-chrome", "--prompt-suggestions", "false", "--tools", "",
                 "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
                 "--setting-sources", "", "--session-id", str(self.native)]
 
     def environment(self):
         # Existing canonical auth stays INSIDE this trusted connector. No token,
         # profile copy, inherited API key, resume ID or worker-visible locator.
-        return {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+        environment = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
                 "HOME": str(self._config.home), "TMPDIR": str(self._config.temporary),
                 "CLAUDE_CONFIG_DIR": str(self._config.account)}
+
+        if self._account_environment is not None:
+            # Trusted launcher-side callback only, never protocol/config JSON.
+            # Root resolves the existing selected account at acceptance/runtime.
+            selected = self._account_environment()
+            if not isinstance(selected, dict) or set(selected) != {"CLAUDE_CODE_OAUTH_TOKEN"}:
+                raise ValueError("invalid selected subscription environment")
+            token = selected["CLAUDE_CODE_OAUTH_TOKEN"]
+            if not isinstance(token, str) or not token or "\0" in token:
+                raise ValueError("invalid selected subscription environment")
+            environment.update(selected)
+        return environment

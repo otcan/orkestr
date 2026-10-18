@@ -10,7 +10,7 @@ from protocol import PROTOCOL, Refused
 from transport import Pump
 
 
-def main(configuration_path=None):
+def main(configuration_path=None, account_environment=None):
     if sys.argv[1:] != ["open-owned-session", "--protocol", PROTOCOL]:
         return 2
     def stop(_signal, _frame):
@@ -20,7 +20,7 @@ def main(configuration_path=None):
     try:
         config = ClaudeConfiguration.load(configuration_path or
             Path(__file__).with_name("claude-private.json"))
-        session = config.new_session()
+        session = config.new_session(account_environment)
         with socket.socket(fileno=3) as handoff:
             if handoff.family != socket.AF_UNIX or handoff.type != socket.SOCK_STREAM:
                 raise Refused("invalid private handoff")
