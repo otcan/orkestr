@@ -8,6 +8,12 @@ const progressSources = new Set(['codex-rollout', 'codex-app-server', 'codex-app
 const errorCode = error => /^[a-z_]+$/.test(error.message) ? error.message : 'operation_failed';
 
 export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env}) {
+  // Operator holds are exclusions, not delivery/completion receipts. Validate
+  // before opening either journal and snapshot the policy for this process.
+  const heldIds = config.heldInputIds === undefined ? [] : config.heldInputIds;
+  if (!Array.isArray(heldIds) || heldIds.some(id => typeof id !== 'string' || !id.trim()))
+    throw new Error('group_held_inputs_invalid');
+  const heldInputIds = new Set(heldIds);
   if (config.appendDebugFooter === true && !['shouldAppendWhatsAppDebugFooter', 'stripWhatsAppDebugFooter', 'whatsappDebugFooter'].every(k => typeof formatter?.[k] === 'function'))
     throw new Error('group_footer_formatter_required');
   const progressSince = Date.parse(config.forwardProgressSince || '');
@@ -122,9 +128,11 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (inbox.prepare("SELECT 1 FROM group_send WHERE state IN ('sending','uncertain') LIMIT 1").get())
         return {ok: false, error: 'group_delivery_requires_review'};
       const inputs = inbox.prepare('SELECT * FROM group_input ORDER BY created_at').all();
+      let held = 0, excluded = 0;
       for (const input of inputs) {
+        if (heldInputIds.has(input.id)) { held++; continue; }
         const group = groups.get(input.chat_id);
-        if (!group) continue;
+        if (!group) { excluded++; continue; }
         try { await routeInput(input, group); errors.delete(input.id); }
         catch (error) {
           const code = errorCode(error);
@@ -133,6 +141,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         }
       }
       return {ok: errors.size === 0, groups: groups.size, received: inputs.length,
+        configuredHolds: heldInputIds.size, held, excluded,
         routed: db.prepare('SELECT count(*) n FROM routed').get().n,
         completed: db.prepare('SELECT count(*) n FROM routed WHERE completed=1').get().n,
         sent: db.prepare('SELECT count(*) n FROM replies').get().n,

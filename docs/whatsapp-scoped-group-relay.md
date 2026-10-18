@@ -32,6 +32,7 @@ Config fields:
 | `ownerUserId` | Orkestr principal who owns every allowed thread |
 | `activatedAt` | ISO timestamp; older input is never imported |
 | `groups` | Array of `{chatId, threadId, name}` |
+| `heldInputIds` | Optional array of exact transport input IDs excluded before any API call or send; malformed values fail startup |
 | `replyPrefix` | Deployment's configured reply identity |
 | `appendDebugFooter` | Enable the shared WhatsApp model/quota/queue footer; per-thread suppression and tenant isolation still apply |
 | `forwardProgressUpdates` | Opt in to completed assistant commentary and approval updates on this transport; independent of the disabled legacy mirror |
@@ -48,6 +49,27 @@ journal to bypass an uncertain delivery. Keep the config, journals and account
 credentials private. `ORKESTR_ENV_FILE` selects the local CLI API credentials.
 
 ## Delivery and recovery
+
+For an audited recovery, preserve private snapshots of the transport and relay
+journals, original inputs, accepted provider receipts and a disposition/reason
+ledger. Put unresolved or intentionally deferred original IDs in `heldInputIds`.
+Holds do not mark inputs routed, completed or sent, and never expire. Status
+reports `configuredHolds`, `held` matching stored inputs, and `excluded` inputs
+outside the group whitelist (held takes precedence). IDs and message content are
+not emitted in these counters. Unknown hold IDs are allowed for preemptive holds.
+The process snapshots holds at startup; change them only through a reviewed
+configuration replacement and controlled relay restart. Removing a hold permits
+processing again and therefore requires a separate replay decision.
+
+Removing a group from the relay's `groups` whitelist excludes its inputs and
+replies without changing the thread binding or any delivery receipts. When the
+transport uses a journal-bound group contract, use a separate relay-only config
+for a narrower whitelist. Keep the worker/wrapper on the original transport
+config; never rewrite the transport contract or journal to remove a relay group.
+Reconcile inputs arriving during maintenance before restart: an unheld unfinished
+input in the whitelist is eligible, regardless of its age. These holds are not an
+automatic time cutoff. Roll back by stopping the relay and preserving holds and
+exclusions; do not restart older code that ignores them.
 
 The transport records provider message IDs, admits only `fromMe` input in the
 allowlist, and suppresses its own output IDs. Sends and observations share a
