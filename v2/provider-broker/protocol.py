@@ -79,7 +79,9 @@ class Channel:
             exact(identity, ("provider", "role", "owner_id", "session_id", "namespace", "incarnation"))
             require(identity["provider"] == "codex")  # ClaudeUnsupported; no fallback.
             require(all(identifier(value) for value in identity.values()))
-            require(identity["role"] in ("fast", "deep"))
+            # Closed transport metadata only. Core must separately issue Worker
+            # parent/task admission; role JSON cannot create that authority.
+            require(identity["role"] in ("fast", "deep", "worker"))
             self.handle = secrets.token_hex(24)
             return None, {"id": outer, "result": {"protocol": PROTOCOL,
                     "identity": identity, "metadata_only": True, "owned_handle": self.handle}}
