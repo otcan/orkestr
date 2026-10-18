@@ -25,7 +25,7 @@ class UpgradeInventoryTests(unittest.TestCase):
                 database.close()
 
     def test_supported_edges(self):
-        for edge in ((14,15),(14,17),(14,20),(17,20),(14,24),(17,24)):
+        for edge in ((14,15),(14,17),(14,20),(17,20),(14,24),(17,24),(14,28),(17,28)):
             self.assertEqual(cross_revision.migration_edge(*edge),edge)
 
     def test_unsupported_edges_refused_before_artifact_access(self):

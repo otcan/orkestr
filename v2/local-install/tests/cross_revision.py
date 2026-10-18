@@ -9,12 +9,13 @@ import argparse
 from contextlib import closing
 import json
 from pathlib import Path
-import shutil
 import sqlite3
 import subprocess
 import tempfile
 
 import dormant_checkpoint
+from stopped_copy import copy_home
+from install_state import files
 
 from real_package import (Client, builder, invoke, launch, require, sha256,
                           smoke, stop_owned, verify_history)
@@ -41,8 +42,8 @@ def verify_schema(home, count, checksums=None):
 
 
 def migration_edge(old, new):
-    require(type(old) is int and type(new) is int and (old,new) in {(14,15),(14,17),(14,20),(17,20),(14,24),(17,24)},
-            "unsupported migration edge; admitted edges: 14->15/17/20/24 and 17->20/24")
+    require(type(old) is int and type(new) is int and (old,new) in {(14,15),(14,17),(14,20),(17,20),(14,24),(17,24),(14,28),(17,28)},
+            "unsupported migration edge; admitted edges: 14->15/17/20/24/28 and 17->20/24/28")
     return old,new
 
 
@@ -60,6 +61,7 @@ def selected_package(args, side, binary, output, schema):
 def exercise(args):
     successor = getattr(args, 'new_schema', 15)
     predecessor, successor = migration_edge(getattr(args, 'old_schema', 14), successor)
+    require(successor!=28 or bool(getattr(args,'sqlx_checksums',None)), 'schema28 requires exact Core SQLx checksums; use candidate accept_upgrade with migrations-dir')
     old, new = Path(args.old_binary).resolve(), Path(args.new_binary).resolve()
     require(sha256(old) == args.old_sha256 and sha256(new) == args.new_sha256, 'pinned artifact mismatch')
     require(args.old_source != args.new_source and args.old_sha256 != args.new_sha256, 'distinct revisions required')
@@ -91,11 +93,25 @@ def exercise(args):
             verify_schema(home,predecessor,getattr(args,'sqlx_checksums',None))
             invoke(old_entry, 'backup', home, '--output', root/'preserved-snapshot')
             backup_hash = sha256(root/'preserved-snapshot/core.sqlite3')
+            backup_manifest_hash=sha256(root/'preserved-snapshot/manifest.json')
             # Complete stopped copy includes the original owner's bootstrap/config;
             # this is rollback of this instance, not a dormant import activation API.
-            shutil.copytree(home, rollback)
-            rollback_hash = sha256(rollback/'data/core.sqlite3')
+            copy_home(home, rollback)
+            rollback_inventory=files(rollback/'data')
+            evidence['predecessor_rollback_database_inventory']=rollback_inventory
             evidence['checks'].append(f'old executable created populated schema{predecessor}; verified stopped backup and untouched rollback copy')
+            preflight=root/'preflight-copy'
+            copy_home(home,preflight)
+            source_before=files(home/'data')
+            invoke(new_entry,'upgrade',preflight,'--package',new_package)
+            process=launch(new_entry,preflight,client,log)
+            verify_history(client,path,receipt,message)
+            invoke(new_entry,'stop',preflight);require(process.wait(timeout=10)==0,'preflight copy stop');process=None
+            verify_schema(preflight,successor,getattr(args,'sqlx_checksums',None))
+            require(files(home/'data')==source_before,'copy-upgrade preflight changed original database/WAL/SHM')
+            evidence['copy_upgrade_preflight']={'schema_versions':list(range(1,successor+1)),
+                'original_database_inventory_unchanged':True,'foreign_keys_checked':True}
+            evidence['checks'].append('successor copy-upgrade/FK/history preflight passed before writable original migration')
             invoke(new_entry, 'upgrade', home, '--package', new_package)
             process = launch(new_entry, home, client, log)
             verify_history(client, path, receipt, message)
@@ -114,7 +130,7 @@ def exercise(args):
             evidence['checks'].append('successor stopped backup/dormant apply/refused activation/rollback; old-package snapshot refused')
             # Never downgrade the migrated working fixture. Only an isolated copy
             # is passed to the older executable to measure its refusal behavior.
-            shutil.copytree(home, refused)
+            copy_home(home, refused)
             invoke(old_entry, 'upgrade', refused, '--package', old_package)
             before = {p.name: sha256(p) for p in (refused/'data').iterdir() if p.is_file()}
             rejected_process = subprocess.Popen([str(old_entry), 'start', '--home', str(refused)],
@@ -129,14 +145,16 @@ def exercise(args):
             require(before == after and versions(refused) == list(range(1, successor+1)), 'backward refusal changed database')
             evidence['backward_refusal'] = {'exit_code': rejected_process.returncode, 'database_inventory_unchanged': True}
             evidence['checks'].append(f'old executable refused disposable schema{successor} copy without database inventory mutation')
-            require(sha256(rollback/'data/core.sqlite3') == rollback_hash, 'rollback copy was modified')
+            require(files(rollback/'data')==rollback_inventory,'rollback database/WAL/SHM copy was modified')
             process = launch(old_entry, rollback, client, log)
             verify_history(client, path, receipt, message)
             require(client.request('POST', path+'/messages', message) == (200, receipt), 'rollback idempotency')
             invoke(old_entry, 'stop', rollback); require(process.wait(timeout=10) == 0, 'rollback stop'); process = None
             verify_schema(rollback,predecessor,getattr(args,'sqlx_checksums',None))
             require(sha256(root/'preserved-snapshot/core.sqlite3') == backup_hash, 'preserved backup changed')
+            require(sha256(root/'preserved-snapshot/manifest.json')==backup_manifest_hash,'preserved backup manifest changed')
             evidence['preserved_backup_sha256'] = backup_hash
+            evidence['preserved_backup_manifest_sha256']=backup_manifest_hash
             evidence['checks'].append(f'old executable recovered original owner/history on untouched schema{predecessor} rollback home; backup preserved')
         evidence['status'] = 'passed'
     except BaseException as error:

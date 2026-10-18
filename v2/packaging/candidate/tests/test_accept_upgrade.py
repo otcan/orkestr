@@ -50,7 +50,7 @@ class UpgradePlanTests(unittest.TestCase):
         self.assertEqual(args.new_schema,24)
 
     def test_future_inventory_inspection_never_admits_execution(self):
-        for successor in (25,26,28):
+        for successor in (25,26):
             self.new['schema']['migrations'].update({f'{i:04d}_fixture.sql':'d'*64 for i in range(25,successor+1)})
             with patch.object(accept_upgrade.package_candidate,'verify',side_effect=[self.old,self.new]),patch.object(accept_upgrade.receipt,'sha',side_effect=lambda p:('e'*64 if str(p).startswith('/old') else 'f'*64)),patch.object(accept_upgrade,'source_inventory',return_value='1'*64),patch.object(accept_upgrade,'sqlx_inventory',return_value={}):
                 plan=accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,successor,Path('/core-migrations'))
@@ -78,3 +78,15 @@ class UpgradePlanTests(unittest.TestCase):
             self.assertEqual(accept_upgrade.sqlx_inventory(root,inventory),{'1':hashlib.sha384(data).hexdigest()})
             (root/'0001_fixture.sql').write_bytes(b'changed')
             with self.assertRaisesRegex(RuntimeError,'changed while preparing'):accept_upgrade.sqlx_inventory(root,inventory)
+
+    def test_core_admitted_17_to28_requires_exact_source_checksums(self):
+        self.new['schema']['migrations'].update({f'{i:04d}_fixture.sql':'d'*64 for i in range(25,29)})
+        for supplied in (False,True):
+            with patch.object(accept_upgrade.package_candidate,'verify',side_effect=[self.old,self.new]),patch.object(accept_upgrade.receipt,'sha',side_effect=lambda p:('e'*64 if str(p).startswith('/old') else 'f'*64)),patch.object(accept_upgrade,'source_inventory',return_value='1'*64),patch.object(accept_upgrade,'sqlx_inventory',return_value={str(i):'a'*96 for i in range(1,29)}):
+                if supplied:
+                    plan=accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,28,Path('/core'))
+                    self.assertTrue(plan['execution_edge_admitted']);self.assertEqual(len(plan['sqlx_checksums']),28)
+                    self.assertEqual(plan['status'],'prepared_only_unexecuted')
+                else:
+                    with self.assertRaisesRegex(RuntimeError,'exact Core sources'):
+                        accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,28)

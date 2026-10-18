@@ -8,13 +8,20 @@ SQL name/SHA256 inventory must equal the candidate receipt; historical prefix
 checksums must match. The runner also derives SQLx SHA384 checksums from those
 same verified bytes and checks actual old, migrated, reopened and rollback DBs.
 
-Schema28 execution is pending explicit Core edge admission and a qualified paired
-artifact. Inspection alone reports `pending_core_edge_admission`; `--execute`
-refuses before opening a database. No intermediate recovery pin, version label or
+Core has explicitly admitted exact known-checksum14/17→28 inputs. A qualified
+paired artifact is still pending. Schema28 requires the exact Core sources;
+missing SQLx checksum inputs refuse before any artifact launch. Other future
+unadmitted edges remain inspection-only and refuse before opening a database. No intermediate recovery pin, version label or
 historical aa8 acceptance substitutes for this successor pair.
 
 Once admitted, the existing populated upgrade sequence retains the untouched old
-home and stopped backup. It verifies successor history/idempotency, exact schema,
+home and stopped backup. Under the cooperative exclusive lock, whole stopped homes (including DB, WAL and
+SHM) are copied with complete regular-file inventory comparison. Before writable
+original migration, the successor must upgrade a disposable full-home copy, retain
+history, and pass exact schema/checksum, integrity and FK checks. A failed copy
+preflight leaves the original package selection/database untouched.
+
+It then verifies successor history/idempotency, exact schema,
 reopen, old-executable refusal on a disposable migrated copy, and rollback using
 only the untouched predecessor home. Never point the predecessor at the migrated
 working database.

@@ -59,6 +59,7 @@ def prepare(old, new, old_source, new_source, old_sha, new_sha, successor=24, mi
     receipt.require(schema_version(new_value)==successor,'successor schema differs from requested target')
     inventory_digest=source_inventory(migrations,new_value['schema']['migrations']) if migrations is not None else None
     sqlx_checksums=sqlx_inventory(migrations,new_value['schema']['migrations']) if migrations is not None else None
+    receipt.require(successor!=28 or bool(sqlx_checksums),'schema28 requires exact Core sources via migrations-dir')
     admitted=True
     try:
         cross_revision.migration_edge(predecessor,successor)
