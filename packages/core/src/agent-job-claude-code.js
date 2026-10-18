@@ -182,6 +182,7 @@ async function runClaudeJobAttempt(ctx, jobInput) {
   const input = { ...jobInput, resumeSessionRef: clean(ctx.resume?.sessionRef), resumeReason: clean(ctx.resume?.reason), personalAgentSession: managed, effort: managed ? ctx.personalAgentSession.effort : "" };
   let stop = null; // { kind: "park"|"expired"|"cancelled"|"bypass"|"aborted", approval?, reason? }
   let proc = null;
+  let sessionAnnounced = false;
   const toolsById = new Map();
   const toolUseNames = new Map(); // tool_use id -> provider tool name
 
@@ -195,7 +196,11 @@ async function runClaudeJobAttempt(ctx, jobInput) {
   const broker = await startPermissionBroker({
     owner,
     async authorize({ tool, args, callId }) {
-      if (stop) return { decision: "deny", reason: "the Orkestr job attempt is stopping" };
+      if (stop || ctx.signal?.aborted) return { decision: "deny", reason: "the Orkestr job attempt is stopping" };
+      // Hooks and stdout are independent channels. A first managed turn may
+      // not grant effects until its native identity has been durably emitted.
+      // Deny rather than wait: a hook can itself block the provider's stdout.
+      if (managed && !input.resumeSessionRef && !sessionAnnounced) return { decision: "deny", reason: "the Orkestr session identity is not persisted yet; retry after session start" };
       toolsById.set(callId, tool);
       ctx.emit({ type: "tool.requested", callId, tool });
       const verdict = await ctx.authorizeTool({ tool, args, callId });
@@ -229,7 +234,6 @@ async function runClaudeJobAttempt(ctx, jobInput) {
     ctx.signal?.addEventListener("abort", onAbort, { once: true });
 
     let sessionRef = clean(input.resumeSessionRef);
-    let sessionAnnounced = false;
     let resultText = "";
     let lastText = "";
     let resultError = "";
@@ -244,8 +248,13 @@ async function runClaudeJobAttempt(ctx, jobInput) {
       }
       if (observed) sessionRef = observed;
       if (sessionRef && !sessionAnnounced) {
+        // emit is the supervisor's synchronous prepared-store/journal write.
+        // The manager aborts its signal on a failed identity CAS; other
+        // supervisors may throw. Neither path may open the permission gate.
+        try { ctx.emit({ type: "session.started", sessionRef, resumed: sessionRef === input.resumeSessionRef }); }
+        catch { terminate({ kind: "error", reason: "claude_code_session_persistence_failed" }); return; }
+        if (ctx.signal?.aborted) return;
         sessionAnnounced = true;
-        ctx.emit({ type: "session.started", sessionRef, resumed: sessionRef === input.resumeSessionRef });
       }
       const type = clean(event.type).toLowerCase();
       if (type === "result") {
