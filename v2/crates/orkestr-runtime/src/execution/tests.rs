@@ -1,8 +1,6 @@
 //! Ordinary issuer + owned synthetic echo child; no real provider or credentials.
 use super::*;
-use crate::containment::{
-    Authority, ChildDirectories, DispatchFence, Error, Output, TransportBounds,
-};
+use crate::containment::{Authority, ChildDirectories, Error, Output, TransportBounds};
 use orkestr_v2_application::{runtime::*, IntakeStore};
 use orkestr_v2_contracts::MessageInput;
 use orkestr_v2_store_sqlite::{ExecutionConsumption, Store};
@@ -16,18 +14,6 @@ use std::{
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
-
-// Deliberately test-only. Never registered as an ordinary production fence.
-struct SyntheticFence;
-impl DispatchFence for SyntheticFence {
-    fn dispatch(
-        &self,
-        _: &ExecutionScope,
-        action: &mut dyn FnMut() -> std::result::Result<(), Error>,
-    ) -> std::result::Result<(), Error> {
-        action()
-    }
-}
 
 fn ready_rpc(native: &str) -> CodexRpc {
     let mut rpc = CodexRpc::default();
@@ -49,7 +35,7 @@ fn ready_rpc(native: &str) -> CodexRpc {
     rpc
 }
 
-async fn exercise(wrong_native: bool, namespace: &str) {
+async fn exercise(wrong_native: bool, namespace: &str, defer_flush: bool) {
     let root = std::path::PathBuf::from(
         std::env::var_os("ORKESTR_V2_HOME").expect("isolated home"),
     )
@@ -139,17 +125,9 @@ async fn exercise(wrong_native: bool, namespace: &str) {
     else {
         panic!("unique consumption")
     };
-    let run = &cap.provider().run;
-    let scope = ExecutionScope::new(
-        cap.namespace(),
-        cap.incarnation_id(),
-        &owner.to_string(),
-        &run.session_id.to_string(),
-        &run.run_id.to_string(),
-        run.dispatch_fence,
-    )
-    .unwrap();
-    let authority = Authority::new(scope.clone(), Arc::new(SyntheticFence), 1).unwrap();
+    let scope = execution_scope(&cap).unwrap();
+    let fence = Arc::new(super::fence::StoreFence::from_consumed(bound.clone(), &cap).unwrap());
+    let authority = Authority::new(scope.clone(), fence, 1).unwrap();
     let dirs = ChildDirectories::new(
         &root.join("workspace"),
         &root.join("home"),
@@ -175,6 +153,9 @@ async fn exercise(wrong_native: bool, namespace: &str) {
     if wrong_native {
         assert_eq!(result, Err(SubmissionFailure::Protocol(Blocker::Protocol)));
         assert_eq!(child.flush_stdin(&scope).unwrap().written, 0);
+        assert_eq!(child.poll_stdout(&scope).unwrap(), Output::Pending);
+    } else if defer_flush {
+        result.unwrap();
         assert_eq!(child.poll_stdout(&scope).unwrap(), Output::Pending);
     } else {
         result.unwrap();
@@ -217,6 +198,30 @@ async fn exercise(wrong_native: bool, namespace: &str) {
         AdmissionDisposition::ReconciliationRequired
     );
     assert!(replay.candidate_key.is_none());
+    // Renewal is serialized against transport flush; only one connection wins.
+    tokio::time::sleep(Duration::from_millis(15)).await;
+    bound.heartbeat_supervisor().await.unwrap();
+    let (first, second) = tokio::join!(
+        bound.renew_lease(
+            &candidate.provider.run,
+            candidate.provider.run.lease_generation
+        ),
+        attached.renew_lease(
+            &candidate.provider.run,
+            candidate.provider.run.lease_generation
+        )
+    );
+    assert!(matches!(
+        (first, second),
+        (Ok(_), Err(RuntimeStoreError::StaleLease)) | (Err(RuntimeStoreError::StaleLease), Ok(_))
+    ));
+    assert_eq!(child.flush_stdin(&scope), Err(Error::Revoked));
+    if defer_flush {
+        // The committed-but-unwritten turn cannot cross a renewed fence.
+        assert_eq!(child.poll_stdout(&scope).unwrap(), Output::Pending);
+    }
+    store.revoke_session(&token).await.unwrap();
+    assert!(matches!(executor.spawn(&scope), Err(Error::Revoked)));
     authority.revoke().unwrap();
     drop(child);
     reopened.close().await;
@@ -225,17 +230,22 @@ async fn exercise(wrong_native: bool, namespace: &str) {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_committed_capability_drives_only_its_durable_synthetic_input() {
-    exercise(false, "synthetic-subscription").await;
+    exercise(false, "synthetic-subscription", false).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wrong_native_refuses_io_and_reopen_cannot_reissue_consumed_grant() {
-    exercise(true, "synthetic-subscription").await;
+    exercise(true, "synthetic-subscription", false).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issuer_valid_colon_namespace_reaches_owned_transport_without_reissuing_grant() {
-    exercise(false, "subscription:local").await;
+    exercise(false, "subscription:local", false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn renewal_before_flush_quarantines_uncertain_queued_turn_without_redispatch() {
+    exercise(false, "subscription:local", true).await;
 }

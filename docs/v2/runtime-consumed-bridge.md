@@ -16,19 +16,22 @@ wrong transport scope, queue capacity failure or broken pipe. The durable store
 has already committed `DeliveryUnknown`; no failure returns authority to retry.
 An enqueue result describes queued bytes, not provider acknowledgement.
 
-Core source provenance: `7631dea5`. Containment source provenance: `5ef1ec97`.
+Core source provenance: `7631dea5`. Containment source provenance: `5ef1ec97`; durable fence successor: `4d66e605`.
 The workspace root and lockfile are unchanged. Containment and this bridge are
-registered only under `cfg(test)` pending the reviewed ordinary durable fence
-adapter. Existing high-level production starts remain `DispatchUnconfirmed`.
+registered only under `cfg(test)` pending reviewed metadata bootstrap and same-child execution attachment. Existing high-level production starts remain `DispatchUnconfirmed`.
 
 The integration cases use an ordinary authorized Store, trusted synthetic native
-readiness evidence, and an owned synthetic echo child. Their explicit test-only
-fence is not production authority. Reopening the database cannot reissue a
+readiness evidence, and an owned synthetic echo child. Their private StoreFence invokes Core’s actual
+`with_execution_fence`, holding the immediate SQLite transaction through each
+bounded spawn/enqueue/flush callback. Renewal contenders have one winner; an old
+queued frame cannot flush after renewal, and revoked authentication prevents a
+new spawn. Reopening the database cannot reissue a
 consumed capability. These cases do not establish real provider execution,
 process recovery, durable cancellation, output acceptance or release readiness.
 
-Next prerequisite is the supervisor-bound synchronous durable fence operation
-around bounded spawn/enqueue/flush actions. It must preserve cancellation
-ordering while holding current authority through the callback. No permissive
-production fence may be substituted. Turn response correlation and durable
+Next prerequisite is distinct Core-issued metadata authority before run
+admission, followed by one-way attachment of the same owned metadata child to
+the consumed execution. No fabricated run or permissive setup fence may be
+substituted. Readiness advances binding generation, so attachment needs the
+trusted transition association rather than an assumed generation equality. Turn response correlation and durable
 observation pumping remain subsequent adapter work.

@@ -1,5 +1,6 @@
 //! By-value bridge from Core's committed dispatch to the owned transport.
 //! This does not construct a supervisor, credentials, or a permissive fence.
+mod fence;
 #[cfg(test)]
 mod tests;
 use crate::{
@@ -23,6 +24,20 @@ struct CodexTurn {
     capability: Box<ConsumedProviderDispatch>,
     scope: ExecutionScope,
     request_id: u64,
+}
+
+fn execution_scope(
+    cap: &ConsumedProviderDispatch,
+) -> Result<ExecutionScope, crate::containment::Error> {
+    let run = &cap.provider().run;
+    ExecutionScope::new(
+        cap.namespace(),
+        cap.incarnation_id(),
+        &run.owner_id.to_string(),
+        &run.session_id.to_string(),
+        &run.run_id.to_string(),
+        run.dispatch_fence,
+    )
 }
 
 impl ConsumedTurn for CodexTurn {
@@ -67,15 +82,7 @@ pub fn submit_codex(
         .native_session_id
         .as_deref()
         .ok_or(SubmissionFailure::Protocol(Blocker::UnknownSession))?;
-    let scope = ExecutionScope::new(
-        capability.namespace(),
-        capability.incarnation_id(),
-        &run.owner_id.to_string(),
-        &run.session_id.to_string(),
-        &run.run_id.to_string(),
-        run.dispatch_fence,
-    )
-    .map_err(SubmissionFailure::Transport)?;
+    let scope = execution_scope(&capability).map_err(SubmissionFailure::Transport)?;
     let request_id = rpc
         .claim_turn_request(native)
         .map_err(SubmissionFailure::Protocol)?;
