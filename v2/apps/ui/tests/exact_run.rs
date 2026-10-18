@@ -73,6 +73,7 @@ fn sampled_capabilities_can_change_without_rejuvenating_equal_revision_telemetry
     let mut reordered = wire.clone();
     reordered.observed_at_ms -= 1;
     reordered.capabilities.stop = true;
+    reordered.phase = orkestr_v2_contracts::ExecutionPhase::Starting;
     model.apply_status(g, 60003, reordered).unwrap();
     assert!(!model.can_stop(60003));
     for changed in 0..4 {
@@ -92,4 +93,24 @@ fn sampled_capabilities_can_change_without_rejuvenating_equal_revision_telemetry
     assert!(model.apply_status(g, 0, wire.clone()).is_err());
     model.authorization_lost();
     assert!(model.apply_status(g, 60005, wire).is_err());
+}
+
+#[test]
+fn equal_time_availability_on_remount_preserves_original_telemetry_anchor() {
+    let mut model = Execution::default();
+    let mut wire = status(5, 10);
+    let conversation = wire.conversation_id.to_string();
+    let run = wire.run_id.as_ref().unwrap().to_string();
+    let first = model.select(&conversation, &run);
+    model.apply_status(first, 1, wire.clone()).unwrap();
+    let remount = model.select(&conversation, &run);
+    wire.capabilities.stop = false;
+    model.apply_status(remount, 60001, wire.clone()).unwrap();
+    assert!(!model.fresh(60001));
+    assert!(!model.can_stop(60001));
+    let again = model.select(&conversation, &run);
+    wire.capabilities.stop = true;
+    model.apply_status(again, 60002, wire).unwrap();
+    assert!(!model.fresh(60002));
+    assert!(model.can_stop(60002));
 }

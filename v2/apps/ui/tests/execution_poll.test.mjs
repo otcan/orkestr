@@ -64,3 +64,19 @@ test('host resources uses the exact authenticated aggregate read path',async()=>
     assert.equal(messages[0].body.scope,'host');
     assert.ok(messages[0].now<=performance.now());
 });
+
+
+test('exact-run status permits only the registered single UUID query and owner cookie read',async()=>{
+    const exact=path+'?run_id=00000000-0000-4000-8000-000000000005';
+    let first=true,cancel;
+    const messages=[];
+    const run=execute({recv:()=>first?(first=false,Promise.resolve({path:exact})):new Promise(resolve=>{cancel=resolve;}),send:m=>messages.push(m)},async(url,options)=>{
+        assert.equal(url,exact);assert.equal(options.credentials,'same-origin');assert.equal(options.headers,undefined);
+        return new Response(null,{status:404});
+    });
+    while(!messages.length)await new Promise(resolve=>setImmediate(resolve));
+    cancel();await run;assert.equal(messages[0].status,404);
+    for(const query of ['?run_id=invalid','?run_id=00000000-0000-4000-8000-000000000005&owner=other','?run_id=00000000-0000-4000-8000-000000000005&run_id=00000000-0000-4000-8000-000000000006']) {
+        await assert.rejects(execute({recv:async()=>({path:path+query})},()=>assert.fail('no fetch')),/Invalid status path/);
+    }
+});
