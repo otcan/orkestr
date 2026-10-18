@@ -92,3 +92,18 @@ actual-write/Stop implementation and private launcher before setting
 
 The current broker supports Codex only. Claude's stream parser is not a launched
 or stoppable provider path; Claude acceptance remains pending that composition.
+
+The independent byte oracle can examine an exact source archive that includes
+the broker's synthetic protocol fixtures:
+
+```sh
+python3 -B v2/acceptance/provider/writer_oracle.py \
+  --broker-root /private/review-source/v2/provider-broker
+```
+
+It starts only a raw-byte collector through the broker pump's fixed test
+configuration. After a valid synthetic CommitExecution is prepared, closing the
+handed-off writer must produce EOF with zero bytes; after writing a short prefix,
+EOF must contain that exact prefix without a suffix or replay. This establishes
+sole writer ownership and actual byte effects, not durable Store cancellation
+or revocation race behavior. Those require the Runtime/Core integration tests.
