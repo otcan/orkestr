@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 mod auth;
 mod browser;
+pub mod build_identity;
 pub mod claude_execution;
 pub mod control_dispatch;
 pub mod control_registry;
@@ -216,7 +217,7 @@ async fn guard(
 }
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false})) }))
+        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"build":build_identity::identity()})) }))
         .route("/api/v2/setup",post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))

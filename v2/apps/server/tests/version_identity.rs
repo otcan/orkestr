@@ -14,7 +14,10 @@ fn query(root: &Path, home: Option<&Path>) -> serde_json::Value {
         command.env("ORKESTR_V2_HOME", home);
     }
     let output = command.output().expect("owned version query");
-    assert!(output.status.success(), "version must not need configuration");
+    assert!(
+        output.status.success(),
+        "version must not need configuration"
+    );
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON version");
     assert_eq!(value["format"], "orkestr-v2-build-identity-v1");
     assert_eq!(value["component"], "server");
@@ -37,7 +40,10 @@ fn binary_version_precedes_home_bootstrap_and_state() {
         std::fs::create_dir(&existing).unwrap();
         std::fs::write(existing.join("sentinel"), b"synthetic untouched state").unwrap();
         assert_eq!(query(&root, Some(&existing)), unconfigured);
-        assert_eq!(std::fs::read(existing.join("sentinel")).unwrap(), b"synthetic untouched state");
+        assert_eq!(
+            std::fs::read(existing.join("sentinel")).unwrap(),
+            b"synthetic untouched state"
+        );
         assert_eq!(std::fs::read_dir(&existing).unwrap().count(), 1);
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
     });

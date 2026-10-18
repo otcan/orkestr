@@ -1,9 +1,20 @@
-use orkestr_v2_server::{owned_execution::ConfiguredExecution, router, AppState};
+use orkestr_v2_server::{build_identity, owned_execution::ConfiguredExecution, router, AppState};
 use orkestr_v2_store_sqlite::Store;
 use std::path::PathBuf;
 mod bind_config;
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if let Some(output) = build_identity::version_output(&arguments)? {
+        println!("{output}");
+        return Ok(());
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(serve())
+}
+
+async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let home =
         PathBuf::from(std::env::var("ORKESTR_V2_HOME").map_err(|_| "ORKESTR_V2_HOME is required")?);
     if !home.is_absolute() {
