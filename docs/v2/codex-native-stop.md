@@ -22,3 +22,16 @@ The session tests use an ordinary Store and the fixed broker with an owned
 synthetic native process. They cover acknowledgement without a terminal event,
 acknowledgement followed by interrupted evidence, and completion racing Stop.
 These tests do not establish real-provider interruption or production activation.
+
+## Server factory adapter
+
+The separately owned `server/src/stop_execution` module wraps a pump and its
+Authority after the authenticated Stop transaction. `StopExecution::begin`
+requires the registered owner/run and exact receipt; `tick` returns Pending,
+InterruptAcknowledged, Stopped or ReconciliationRequired. The factory must retain
+this object across transient storage errors, not rebuild or resend it. Pending
+terminal evidence is retried before any further transport flush. An unconfigured
+factory remains unavailable; this module does not register routes or alter main.
+
+`server/tests/stop_execution.rs` compiles the adapter independently of factory
+registration. It is a compile target, not an additional behavioral test count.
