@@ -54,7 +54,7 @@ fn spawn(root: &Path, mode: &str, name: &str) -> Owned {
             .unwrap(),
     )
 }
-async fn rows(root: &Path) -> Vec<String> {
+pub(super) async fn rows(root: &Path) -> Vec<String> {
     let mut conn = SqliteConnection::connect_with(
         &SqliteConnectOptions::new()
             .filename(root.join("core.sqlite3"))
@@ -67,6 +67,7 @@ async fn rows(root: &Path) -> Vec<String> {
     for table in [
         "execution_revisions",
         "production_run_leases",
+        "production_acceptances",
         "production_observations",
         "production_payloads",
         "production_cancellations",

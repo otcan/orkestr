@@ -8,7 +8,7 @@ pub(super) async fn events(
     after: i64,
     limit: u32,
 ) -> Result<Vec<ConversationEvent>> {
-    let rows = sqlx::query("SELECT e.*,coalesce(o.run_sequence,p.run_sequence) AS run_sequence,coalesce(o.kind,p.kind) AS observation_kind,o.synthetic,pp.id AS payload_id,coalesce(o.receipt_state,p.receipt_state) AS receipt_state,coalesce(c.inflight_status,pc.inflight_status) AS cancel_outcome,coalesce(r.id,pr.id) AS run_id,coalesce(r.session_id,pr.session_id) AS session_id,coalesce(r.message_id,pr.message_id) AS source_message_id,coalesce(r.event_id,pr.event_id) AS source_event_id FROM events e LEFT JOIN fixture_observations o ON o.event_id=e.id LEFT JOIN fixture_cancellations c ON c.event_id=e.id LEFT JOIN fixture_runs r ON r.id=coalesce(o.run_id,c.run_id) LEFT JOIN production_observations p ON p.event_id=e.id LEFT JOIN production_cancellations pc ON pc.event_id=e.id LEFT JOIN production_runs pr ON pr.id=coalesce(p.run_id,pc.run_id) LEFT JOIN production_payloads pp ON pp.event_id=e.id WHERE e.conversation_id=? AND e.owner_id=? AND e.sequence>? ORDER BY e.sequence LIMIT ?")
+    let rows = sqlx::query("SELECT e.*,pa.completion_event_id,coalesce(o.run_sequence,p.run_sequence) AS run_sequence,coalesce(o.kind,p.kind) AS observation_kind,o.synthetic,pp.id AS payload_id,coalesce(o.receipt_state,p.receipt_state) AS receipt_state,coalesce(c.inflight_status,pc.inflight_status) AS cancel_outcome,coalesce(r.id,pr.id) AS run_id,coalesce(r.session_id,pr.session_id) AS session_id,coalesce(r.message_id,pr.message_id) AS source_message_id,coalesce(r.event_id,pr.event_id) AS source_event_id FROM events e LEFT JOIN fixture_observations o ON o.event_id=e.id LEFT JOIN fixture_cancellations c ON c.event_id=e.id LEFT JOIN fixture_runs r ON r.id=coalesce(o.run_id,c.run_id) LEFT JOIN production_observations p ON p.event_id=e.id LEFT JOIN production_cancellations pc ON pc.event_id=e.id LEFT JOIN production_acceptances pa ON pa.event_id=e.id LEFT JOIN production_runs pr ON pr.id=coalesce(p.run_id,pc.run_id,pa.run_id) LEFT JOIN production_payloads pp ON pp.event_id=e.id WHERE e.conversation_id=? AND e.owner_id=? AND e.sequence>? ORDER BY e.sequence LIMIT ?")
         .bind(conversation.to_string()).bind(owner.to_string()).bind(after).bind(limit.clamp(1,100)).fetch_all(pool).await.map_err(db)?;
     rows.iter()
         .map(|r| {
@@ -37,6 +37,27 @@ pub(super) async fn events(
                         },
                     }))
                 }
+                ("execution_accepted", 9) => Ok(ConversationEvent::ExecutionAccepted(
+                    ExecutionAcceptedEnvelope {
+                        event_id,
+                        schema_version: 9,
+                        owner_id: owner.clone(),
+                        scope: scope.clone(),
+                        aggregate_id: conversation.clone(),
+                        aggregate_version: sequence,
+                        sequence,
+                        occurred_at,
+                        payload_ref_or_safe_payload: ExecutionAccepted {
+                            kind: ExecutionAcceptedTag::ExecutionAccepted,
+                            run_id: RunId(parse(r.try_get("run_id").map_err(db)?)?),
+                            session_id: SessionId(parse(r.try_get("session_id").map_err(db)?)?),
+                            completion_event_id: EventId(parse(
+                                r.try_get("completion_event_id").map_err(db)?,
+                            )?),
+                            outcome: ExecutionAcceptanceOutcome::Succeeded,
+                        },
+                    },
+                )),
                 ("provider_observed", version @ (5 | 8)) => {
                     if version == 8
                         && r.try_get::<&str, _>("observation_kind").map_err(db)? != "progress"

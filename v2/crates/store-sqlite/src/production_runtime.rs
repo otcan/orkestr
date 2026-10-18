@@ -4,6 +4,11 @@ use orkestr_v2_application::runtime::*;
 use orkestr_v2_contracts::OwnerId;
 use sqlx::{Row, SqliteConnection};
 use uuid::Uuid;
+mod acceptance;
+#[cfg(all(test, unix))]
+mod acceptance_process_tests;
+#[cfg(test)]
+mod acceptance_tests;
 mod admission;
 mod cancellation;
 #[cfg(test)]

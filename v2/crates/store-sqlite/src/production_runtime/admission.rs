@@ -97,7 +97,7 @@ impl Store {
         }
         c.validate(&mut tx).await?;
         let occupied: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM production_runs WHERE session_id=? AND state!='cancelled'",
+            "SELECT count(*) FROM production_runs WHERE session_id=? AND state NOT IN ('cancelled','succeeded')",
         )
         .bind(binding_id.to_string())
         .fetch_one(&mut *tx)
