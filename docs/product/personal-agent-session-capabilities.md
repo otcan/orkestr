@@ -82,8 +82,18 @@ node scripts/personal-agent-session-probe.mjs --run-no-inference
 ORKESTR_SESSION_PROBE=1 node --test test/personal-agent-session-installed.test.js
 ```
 
+These reproduction commands probe **Codex only**. They never execute Claude,
+including a configured wrapper or a PATH fallback, and never run Claude
+`auth status`. Claude reports `manual_metadata_verification_required` with
+`auth.verified=false`; this says nothing about whether Claude is installed.
+The historical Claude inventory above came from the separately authorized,
+operator-identified direct binary, not this script. Repeating that manual
+inventory requires identifying a safe direct binary and environment first;
+do not substitute the configured wrapper or call diagnostics. LIVE Claude auth
+remains UNVERIFIED. No wrapper-free live authentication probe is added here.
+
 Without the opt-in, the installed test is skipped in CI. The script emits only
-sanitized version/authentication booleans, schema property names and RPC result
+sanitized Codex version/authentication booleans, schema property names and RPC result
 classifications. It does not emit account identities, native IDs, paths, raw
 provider errors or credentials. It closes its own child and removes its own
 temporary directory, including generated schemas and empty native sessions.

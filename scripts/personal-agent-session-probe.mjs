@@ -7,8 +7,6 @@ import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { CodexJobClient } from "../packages/core/src/codex-job-client.js";
 import { codexCommand, codexLoginStatus } from "../packages/connectors/src/codex.js";
-import { claudeCodeCommand } from "../packages/core/src/claude-code-client.js";
-import { claudeCodeStatusAuthenticated } from "../packages/core/src/claude-code-auth-status.js";
 
 const exec = promisify(execFile);
 const options = { timeout: 15_000, maxBuffer: 2 * 1024 * 1024 };
@@ -17,8 +15,12 @@ const safeVersion = value => String(value || "").match(/(?:codex-cli\s+)?\d+\.\d
 export async function probeInstalledSessions(env = process.env) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-session-probe-"));
   const codexBin = codexCommand(env);
-  const claudeBin = claudeCodeCommand(env);
-  const result = { inferenceTurns: 0, codex: {}, claude: {} };
+  // Configured Claude commands can be wrappers that mutate a live profile even
+  // for --version/--help. This generic probe cannot establish a safe direct
+  // binary, and must never invoke one or inspect live authentication.
+  const result = { inferenceTurns: 0, codex: {}, claude: {
+    blocked: "manual_metadata_verification_required", auth: { verified: false },
+  } };
   let client;
   try {
     try {
@@ -67,15 +69,6 @@ export async function probeInstalledSessions(env = process.env) {
       result.codex.modelChange = await check("thread/settings/update", { threadId: fast.thread.id, model: "gpt-6-sol", effort: "high" });
       result.codex.afterModelChange = await check("thread/read", { threadId: fast.thread.id, includeTurns: false });
     } catch (error) { result.codex.blocked = error.code === "ENOENT" ? "cli_missing" : "control_probe_failed"; }
-    try {
-      const { stdout: version } = await exec(claudeBin, ["--version"], { ...options, env });
-      result.claude.version = safeVersion(version);
-      const { stdout: help } = await exec(claudeBin, ["--help"], { ...options, env });
-      result.claude.flags = Object.fromEntries(["resume", "fork-session", "session-id", "model", "effort", "input-format", "output-format"].map(flag => [flag, help.includes(`--${flag}`)]));
-      const { stdout } = await exec(claudeBin, ["auth", "status", "--json"], { ...options, env });
-      const auth = JSON.parse(stdout);
-      result.claude.auth = { authenticated: claudeCodeStatusAuthenticated(stdout), subscription: ["claude.ai", "oauth_token", "subscription_token", "oauth"].includes(auth.authMethod) };
-    } catch (error) { result.claude.blocked = error.code === "ENOENT" ? "cli_missing" : "status_probe_failed"; }
     return result;
   } finally {
     if (client) {
