@@ -58,6 +58,15 @@ returns the original IDs and does not enqueue again. Ordering is per conversatio
 independent of wall-clock order. Migration `0001_intake.sql` is the authoritative
 schema; runtime lanes must request additive migrations through Core.
 
+Store startup validates the absolute canonical parent and all database, `-wal`,
+`-shm` and `-journal` entries before opening SQLite. Symlinks (including dangling
+ones), non-regular files and Unix files with link count other than one are
+refused. Existing files on non-Unix hosts fail closed pending an equivalent
+hardlink check. The caller must control the parent directory throughout startup;
+this check is not a sandbox against concurrent replacement by a filesystem
+writer. Foreign/future database identity refusal and byte preservation remain
+separate, pending acceptance; path checks alone do not establish those properties.
+
 Project resource status is deliberately `local_git=not_provisioned` and
 `local_oxrm=unverified`. No Git workspace or OXRM readiness is claimed.
 Runtime sessions, claims/leases, tasks, cancellation/effect fencing, approvals,

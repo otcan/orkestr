@@ -9,6 +9,7 @@ use sqlx::{
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
 mod intake;
+mod paths;
 
 #[derive(Clone)]
 pub struct Store {
@@ -25,6 +26,7 @@ fn parse(s: String) -> Result<Uuid> {
 }
 impl Store {
     pub async fn open(path: &Path) -> Result<Self> {
+        paths::validate(path)?;
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)

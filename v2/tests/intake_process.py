@@ -88,9 +88,20 @@ class IntakeAcceptance(unittest.TestCase):
                             {"client_message_id": key, "text": text})
 
     def counts(self):
-        with sqlite3.connect(self.home / "core.sqlite3") as db:
+        with sqlite3.connect((self.home / "core.sqlite3").as_uri() + "?mode=ro", uri=True) as db:
+            db.execute("PRAGMA query_only=ON")
+            db.execute("BEGIN")
             return [db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
                     for table in ("messages", "events", "reasoning_inbox", "outbox")]
+
+    def durable_rows(self):
+        # Archive durability oracle adapted to intake's one authoritative schema:
+        # compare accepted rows and cursor, rather than only aggregate counts.
+        with sqlite3.connect((self.home / "core.sqlite3").as_uri() + "?mode=ro", uri=True) as db:
+            db.execute("PRAGMA query_only=ON")
+            db.execute("BEGIN")
+            return {table: db.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+                    for table in ("conversations", "messages", "events", "reasoning_inbox", "outbox")}
 
     def test_concurrent_duplicate_and_body_conflict(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
@@ -104,9 +115,15 @@ class IntakeAcceptance(unittest.TestCase):
         self.assertEqual(self.counts(), [1, 1, 1, 1])
 
     def test_kill_after_receipt_reopen_and_replay(self):
-        receipts = [self.admit(f"key-{i}", f"Synthetic text {i}")[1] for i in range(5)]
+        receipts = []
+        for i in range(5):
+            code, receipt = self.admit(f"key-{i}", f"Synthetic text {i}")
+            self.assertEqual(code, 202, receipt)
+            receipts.append(receipt)
+        before = self.durable_rows()
         self.stop()
         self.start()
+        self.assertEqual(self.durable_rows(), before)
         code, snapshot = self.request("GET", f"/conversations/{self.conversation}?limit=2")
         self.assertEqual(code, 200)
         self.assertEqual(snapshot["last_sequence"], 5)
@@ -133,6 +150,29 @@ class IntakeAcceptance(unittest.TestCase):
         with sqlite3.connect(self.home / "core.sqlite3") as db:
             db.execute("DROP TRIGGER fail_inbox")
         self.assertEqual(self.admit()[1]["sequence"], 1)
+
+    def test_write_failures_preserve_previously_accepted_state(self):
+        # Reuses the archive projection-failure invariant, without its store/schema.
+        code, first = self.admit("preserved", "Previously accepted synthetic text")
+        self.assertEqual(code, 202, first)
+        for table in ("events", "reasoning_inbox", "outbox"):
+            with self.subTest(failed_insert=table):
+                before = self.durable_rows()
+                with sqlite3.connect(self.home / "core.sqlite3") as db:
+                    db.execute(f"CREATE TRIGGER fail_projection BEFORE INSERT ON {table} "
+                               "BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END")
+                try:
+                    code, error = self.admit(f"failure-{table}")
+                    self.assertEqual((code, error["code"]), (503, "store_unavailable"))
+                    self.assertEqual(self.durable_rows(), before)
+                finally:
+                    with sqlite3.connect(self.home / "core.sqlite3") as db:
+                        db.execute("DROP TRIGGER fail_projection")
+                self.assertEqual(self.admit("preserved", "Previously accepted synthetic text"),
+                                 (200, first))
+                code, accepted = self.admit(f"failure-{table}")
+                self.assertEqual(code, 202, accepted)
+                self.assertEqual(accepted["sequence"], len(before["messages"]) + 1)
 
     def test_auth_origin_spoofing_and_scope_rejection(self):
         for method, path, body in [("GET", "/projects", None), ("GET", f"/conversations/{self.conversation}", None),
