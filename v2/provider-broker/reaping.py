@@ -8,6 +8,25 @@ import time
 REAPED_EXIT = 73
 
 
+def contained_command(command):
+    # Trusted connector lifetime containment only. This preserves the existing
+    # filesystem/network view; authenticated filesystem/egress is a separate profile.
+    from pathlib import Path
+    import stat
+    launcher=Path("/usr/bin/bwrap")
+    for item in (launcher,*launcher.parents):
+        info=item.stat()
+        if info.st_uid!=0 or info.st_mode & 0o022:
+            raise ValueError("untrusted lifetime launcher")
+    if not stat.S_ISREG(launcher.stat().st_mode):
+        raise ValueError("invalid lifetime launcher")
+    # bwrap establishes parent-death handling during startup; namespace init
+    # death kills every namespace descendant, including setsid/double-fork.
+    # No preexec_fn or interpreter-before-prctl race is introduced.
+    return [str(launcher),"--unshare-user","--unshare-pid","--die-with-parent",
+            "--bind","/","/","--proc","/proc","--"]+list(command)
+
+
 def become_subreaper():
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER

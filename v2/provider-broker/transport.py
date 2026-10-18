@@ -1,5 +1,5 @@
 """Bounded nonblocking stdio pump; provider shares Runtime-owned process group."""
-from reaping import become_subreaper, reap_owned
+from reaping import become_subreaper, reap_owned, contained_command
 from collections import deque
 import os
 import array
@@ -31,7 +31,7 @@ class Pump:
     def launch(self):
         # A private native group can be killed without killing this subreaper.
         become_subreaper()
-        self.child = subprocess.Popen(self.config.command(), env=self.config.environment(),
+        self.child = subprocess.Popen(contained_command(self.config.command()), env=self.config.environment(),
                                       cwd=self.config.workspace, stdin=subprocess.PIPE,
                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                       close_fds=True, process_group=0)
