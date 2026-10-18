@@ -30,10 +30,19 @@ the repository. It has exactly these fields:
 }
 ```
 
+That schema-1 inventory is retained for already reviewed four-module packages.
+For a broker that imports `codex_bootstrap.py`, use `schema_version: 2` and add
+both `broker_codex_bootstrap` and `broker_inventory` artifacts, with canonical
+paths to `codex_bootstrap.py` and `codex-package.json` inside the package and
+their reviewed SHA-256 digests. Schema 2 requires all five modules and checks
+that the source inventory's module hashes equal the installed artifact pins.
+Its activation text is metadata, never permission to launch or resume a session.
+
 The manifest, all artifacts, and every ancestor must be root-owned with no
 group/other write permission. Files must have one link, canonical paths, bounded
 sizes, stable identity while read, and the reviewed digest. The broker directory
-must contain exactly the six named files, including imported Python modules.
+must contain exactly the six schema-1 files or eight schema-2 files, including
+every listed imported Python module and, for schema 2, the source inventory.
 The launcher must use a fixed isolated interpreter and disable bytecode writes.
 The OS, root operator, and interpreter standard library remain trusted; this is
 not same-UID filesystem isolation or protection against a hostile root.

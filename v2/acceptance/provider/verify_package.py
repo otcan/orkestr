@@ -12,10 +12,15 @@ import sys
 NAMES = frozenset({"server_binary", "provider_native", "python_interpreter",
                    "broker_launcher", "broker_config", "broker_server",
                    "broker_configuration", "broker_protocol", "broker_transport"})
-PACKAGE = frozenset(name for name in NAMES if name.startswith("broker_"))
 PACKAGE_FILES = {"broker_launcher": "launcher", "broker_config": "broker-private.json",
                  "broker_server": "server.py", "broker_configuration": "configuration.py",
-                 "broker_protocol": "protocol.py", "broker_transport": "transport.py"}
+                 "broker_protocol": "protocol.py", "broker_transport": "transport.py",
+                 "broker_codex_bootstrap": "codex_bootstrap.py",
+                 "broker_inventory": "codex-package.json"}
+PACKAGE = frozenset(PACKAGE_FILES)
+INVENTORY_MODULES = frozenset({"broker_server", "broker_configuration", "broker_protocol",
+                               "broker_transport", "broker_codex_bootstrap"})
+VERSION_NAMES = {1: NAMES, 2: NAMES | {"broker_codex_bootstrap", "broker_inventory"}}
 LIMIT = 512 * 1024 * 1024
 
 
@@ -94,12 +99,13 @@ def verify(manifest_path):
     manifest = json.loads(raw.decode("utf-8"), object_pairs_hook=object_unique)
     exact(manifest, {"schema_version", "mode", "server_source", "broker_source",
                      "package_root", "artifacts"})
-    require(manifest["schema_version"] == 1 and type(manifest["schema_version"]) is int
+    version = manifest["schema_version"]
+    require(type(version) is int and version in VERSION_NAMES
             and manifest["mode"] == "isolated-codex-acceptance-v1", "unsupported_manifest")
     for key in ("server_source", "broker_source"):
         require(isinstance(manifest[key], str)
                 and re.fullmatch("[a-f0-9]{40}", manifest[key]), "source_pin_required")
-    exact(manifest["artifacts"], NAMES)
+    exact(manifest["artifacts"], VERSION_NAMES[version])
     package = protected(manifest["package_root"], directory=True)
     paths, hashes, package_files = set(), {}, set()
     for name, artifact in manifest["artifacts"].items():
@@ -122,11 +128,31 @@ def verify(manifest_path):
     # The interpreter/stdlib are an explicitly trusted system boundary.
     require({entry.name for entry in package.iterdir()} == package_files,
             "unexpected_broker_package_entry")
-    return {"schema_version": 1, "status": "verified", "mode": manifest["mode"],
+    if version == 2:
+        verify_inventory(manifest, hashes)
+    return {"schema_version": version, "status": "verified", "mode": manifest["mode"],
             "server_source": manifest["server_source"], "broker_source": manifest["broker_source"],
             "manifest_sha256": manifest_hash, "artifacts": hashes,
             "provider_started": False, "credentials_read": False,
             "scope": "immutable_artifacts_only_not_dispatch_or_os_isolation_acceptance"}
+
+
+def verify_inventory(manifest, hashes):
+    """Bind the reviewed five-module inventory to every installed module pin."""
+    digest, raw = read_protected(manifest["artifacts"]["broker_inventory"]["path"],
+                                 32 * 1024, retain=True)
+    require(digest == hashes["broker_inventory"], "artifact_hash_mismatch")
+    inventory = json.loads(raw.decode("utf-8"), object_pairs_hook=object_unique)
+    exact(inventory, {"format", "entry", "files", "activation"})
+    require(inventory["format"] == "orkestr-v2-codex-package-v1"
+            and inventory["entry"] == "server.py", "unsupported_broker_inventory")
+    # This is source metadata, never authorization to activate or resume a session.
+    require(isinstance(inventory["activation"], str)
+            and 0 < len(inventory["activation"]) <= 512, "invalid_broker_inventory")
+    exact(inventory["files"], {PACKAGE_FILES[name] for name in INVENTORY_MODULES})
+    for name in INVENTORY_MODULES:
+        require(inventory["files"][PACKAGE_FILES[name]] == hashes[name],
+                "broker_inventory_pin_mismatch")
 
 
 def main():

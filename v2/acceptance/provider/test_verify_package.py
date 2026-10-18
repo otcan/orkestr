@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import unittest
 
-from verify_package import NAMES, PACKAGE, PACKAGE_FILES, Refused, verify
+from verify_package import INVENTORY_MODULES, NAMES, PACKAGE, PACKAGE_FILES, Refused, verify
 
 
 @unittest.skipUnless(os.geteuid() == 0 and Path("/opt").is_dir(),
@@ -89,6 +89,60 @@ class PackageTests(unittest.TestCase):
         self.root.chmod(0o700)
         self.path.write_text('{"schema_version":1,"schema_version":1}')
         self.refused("duplicate_manifest_key")
+
+    def add_inventory(self):
+        self.manifest["schema_version"] = 2
+        module = self.package / "codex_bootstrap.py"
+        module.write_text("synthetic bootstrap fixture")
+        module.chmod(0o400)
+        self.manifest["artifacts"]["broker_codex_bootstrap"] = {
+            "path": str(module), "sha256": hashlib.sha256(module.read_bytes()).hexdigest()}
+        self.inventory = {"format": "orkestr-v2-codex-package-v1", "entry": "server.py",
+                          "activation": "synthetic-only-no-activation-authority", "files": {
+                              PACKAGE_FILES[name]: self.manifest["artifacts"][name]["sha256"]
+                              for name in INVENTORY_MODULES}}
+        self.save_inventory()
+
+    def save_inventory(self):
+        path = self.package / "codex-package.json"
+        path.write_text(json.dumps(self.inventory))
+        path.chmod(0o400)
+        self.manifest["artifacts"]["broker_inventory"] = {
+            "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        self.save()
+
+    def test_complete_five_module_inventory_and_legacy_package_both_verify(self):
+        self.assertEqual(verify(self.path)["schema_version"], 1)
+        self.add_inventory()
+        receipt = verify(self.path)
+        self.assertEqual(receipt["schema_version"], 2)
+        self.assertIn("broker_codex_bootstrap", receipt["artifacts"])
+        self.assertFalse(receipt["provider_started"])
+
+    def test_bootstrap_mutation_and_missing_manifest_pin_refused(self):
+        self.add_inventory()
+        Path(self.manifest["artifacts"]["broker_codex_bootstrap"]["path"]).write_text("changed")
+        self.refused("artifact_hash_mismatch")
+        del self.manifest["artifacts"]["broker_codex_bootstrap"]
+        self.save()
+        self.refused("invalid_manifest_shape")
+
+    def test_reviewed_inventory_must_match_complete_module_pins(self):
+        self.add_inventory()
+        self.inventory["files"]["protocol.py"] = "0" * 64
+        self.save_inventory()
+        self.refused("broker_inventory_pin_mismatch")
+        del self.inventory["files"]["codex_bootstrap.py"]
+        self.save_inventory()
+        self.refused("invalid_manifest_shape")
+
+    def test_legacy_shape_cannot_hide_new_importable_module(self):
+        self.add_inventory()
+        self.manifest["schema_version"] = 1
+        del self.manifest["artifacts"]["broker_codex_bootstrap"]
+        del self.manifest["artifacts"]["broker_inventory"]
+        self.save()
+        self.refused("unexpected_broker_package_entry")
 
 
 if __name__ == "__main__":
