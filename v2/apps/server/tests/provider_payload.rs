@@ -136,7 +136,8 @@ async fn cookie_scoped_progress_read_and_csrf_removal() {
             origin.clone(),
         )
         .unwrap()
-        .with_execution_store(bound);
+        .with_execution_store(owner.clone(), conversation.clone(), bound)
+        .unwrap();
         let task = tokio::spawn(async move {
             axum::serve(listener, router(state)).await.unwrap();
         });

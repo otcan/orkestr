@@ -17,6 +17,10 @@ pub(crate) struct Registration {
     run: RunId,
 }
 impl WorkerTaskAccess {
+    pub(crate) fn matches_scope(&self, owner: &OwnerId, conversation: &ConversationId) -> bool {
+        owner == &self.owner && conversation == &self.conversation
+    }
+
     /// Fixed trusted bootstrap scope, never deserialized browser/provider data.
     pub fn new(owner: OwnerId, conversation: ConversationId) -> Self {
         Self {

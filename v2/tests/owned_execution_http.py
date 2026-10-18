@@ -75,18 +75,22 @@ class Case:
             raw = reply.read()
             return reply.status, json.loads(raw) if raw else None, reply.headers
 
-    def start(self, configured=False, refused=False):
+    def start(self, configured=False, refused=False, config_set=False):
         environment = {"PATH": "/usr/local/bin:/usr/bin:/bin", "ORKESTR_V2_HOME": str(self.home),
                        "ORKESTR_V2_BIND": f"127.0.0.1:{self.port}", "ORKESTR_V2_ORIGIN": self.origin,
                        "ORKESTR_V2_BOOTSTRAP_TOKEN": self.bootstrap}
         if configured:
-            environment["ORKESTR_V2_EXECUTION_CONFIG"] = str(self.root / "execution.json")
+            if config_set:
+                environment["ORKESTR_V2_EXECUTION_SET"] = str(self.root / "execution-set.json")
+            else:
+                environment["ORKESTR_V2_EXECUTION_CONFIG"] = str(self.root / "execution.json")
         self.process = subprocess.Popen([str(binary)], env=environment, stdout=subprocess.DEVNULL,
                                         stderr=subprocess.PIPE, text=True)
         if refused:
             assert self.process.wait(timeout=6) != 0
             assert not (self.workspace / "synthetic-peer.jsonl").exists()
             assert not (self.home / "owned-execution").exists()
+            assert not (self.home / "owned-executions").exists()
             return
         # Prove this exact child owns the requested listener before any HTTP
         # request. An ephemeral-port race must never contact another service.

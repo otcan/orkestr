@@ -26,6 +26,7 @@ pub mod control_dispatch;
 pub mod control_registry;
 mod execution;
 mod execution_accept;
+mod execution_registry;
 pub mod fast_execution;
 mod held_inputs;
 pub mod owned_children;
@@ -43,9 +44,7 @@ pub mod worker_tasks;
 #[derive(Clone)]
 pub struct AppState {
     pub store: Store,
-    execution_store: Option<Store>,
-    execution_control: Option<control_registry::ControlRegistry>,
-    worker_task_access: Option<worker_tasks::WorkerTaskAccess>,
+    executions: execution_registry::ExecutionRegistry,
     bootstrap_token: Arc<String>,
     origin: Arc<String>,
     authority: Arc<String>,
@@ -54,11 +53,6 @@ pub struct AppState {
     timers: timer_http::TimerController,
 }
 impl AppState {
-    /// Trusted bootstrap only; browser input never selects supervisor authority.
-    pub fn with_execution_store(mut self, store: Store) -> Self {
-        self.execution_store = Some(store);
-        self
-    }
     /// The ordinary server owns the bounded controller task and its shutdown.
     pub fn start_timers(&self) -> timer_lifecycle::TimerTask {
         timer_lifecycle::TimerTask::start(self.timers.clone())
@@ -89,9 +83,7 @@ impl AppState {
         Ok(Self {
             timers: timer_http::TimerController::new(store.clone()),
             store,
-            execution_store: None,
-            execution_control: None,
-            worker_task_access: None,
+            executions: execution_registry::ExecutionRegistry::default(),
             bootstrap_token: Arc::new(bootstrap_token),
             origin: Arc::new(origin),
             authority: Arc::new(authority),

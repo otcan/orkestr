@@ -18,7 +18,7 @@ pub(crate) async fn list(
 ) -> Result<Response, Error> {
     // Authenticate before interpreting locators; machine credentials cannot select
     // a browser principal, and Core rechecks this credential in its read snapshot.
-    browser::owner(&state, &headers).await?;
+    let owner = browser::owner(&state, &headers).await?;
     let credential = browser::credential(&headers)?;
     let Query(query) = query.map_err(|_| invalid_query())?;
     let limit = query.limit.unwrap_or(25);
@@ -29,8 +29,12 @@ pub(crate) async fn list(
     if conversation.0.is_nil() {
         return Err(invalid_query());
     }
-    let bound = state.execution_store.as_ref().ok_or_else(unavailable)?;
-    let page = bound
+    let scope = state
+        .execution_scope(&owner, &conversation)
+        .await?
+        .ok_or_else(unavailable)?;
+    let page = scope
+        .store
         .worker_executions_authenticated(&credential, &conversation, query.after.as_ref(), limit)
         .await
         .map_err(|error| match error {

@@ -18,7 +18,7 @@ pub(crate) async fn read(
 ) -> Result<Response, Error> {
     // Browser auth is checked again by Core in the same snapshot as this read.
     // There is no route here to release, delete or turn a hold into authority.
-    browser::owner(&state, &headers).await?;
+    let owner = browser::owner(&state, &headers).await?;
     let Query(page) = query.map_err(|_| {
         Error(
             StatusCode::BAD_REQUEST,
@@ -43,12 +43,16 @@ pub(crate) async fn read(
         ));
     }
     let credential = browser::credential(&headers)?;
-    let store = state.execution_store.as_ref().ok_or(Error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "status_unavailable",
-        "Held input status unavailable",
-    ))?;
-    let page = store
+    let scope = state
+        .execution_scope(&owner, &conversation)
+        .await?
+        .ok_or(Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "status_unavailable",
+            "Held input status unavailable",
+        ))?;
+    let page = scope
+        .store
         .held_owner_inputs_authenticated(&credential, &conversation, after, limit)
         .await
         .map_err(|error| match error {

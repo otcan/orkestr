@@ -37,18 +37,18 @@ pub(crate) async fn status(
             "Invalid conversation ID",
         )
     })?);
+    let scope = state.execution_scope(&owner, &conversation).await?;
     let status = if let Some(run) = &query.run_id {
         // A run locator selects a read, never provider authority. Core checks
         // the browser credential and exact scope in the projection snapshot.
         let credential = browser::credential(&headers)?;
-        state
-            .execution_store
-            .as_ref()
+        scope
             .ok_or(Error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "status_unavailable",
                 "Execution status unavailable",
             ))?
+            .store
             .execution_run_status_authenticated(&credential, &conversation, run)
             .await
     } else {
@@ -81,12 +81,14 @@ pub(crate) async fn status(
                     .is_none_or(|run| status.run_id.as_ref() == Some(run)) =>
         {
             status.capabilities.stop = status.phase == ExecutionPhase::Running
-                && state.execution_control.as_ref().is_some_and(|control| {
-                    status
-                        .run_id
-                        .as_ref()
-                        .is_some_and(|run| control.available(&owner, &conversation, run))
-                });
+                && scope
+                    .and_then(|scope| scope.control.as_ref())
+                    .is_some_and(|control| {
+                        status
+                            .run_id
+                            .as_ref()
+                            .is_some_and(|run| control.available(&owner, &conversation, run))
+                    });
             Ok(Json(status).into_response())
         }
         Some(_) => Err(Error(
@@ -136,13 +138,16 @@ pub(crate) async fn stop(
             "Invalid Stop request",
         ));
     }
-    let store = state.execution_store.as_ref().ok_or(Error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "control_unavailable",
-        "Stop unavailable",
-    ))?;
+    let scope = state
+        .execution_scope(&owner, &conversation)
+        .await?
+        .ok_or(Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "control_unavailable",
+            "Stop unavailable",
+        ))?;
     let credential = browser::credential(&headers)?;
-    let requested = match &state.execution_control {
+    let requested = match &scope.control {
         Some(control) => Some(control.request(&owner, &conversation, &input).ok_or(Error(
             StatusCode::SERVICE_UNAVAILABLE,
             "control_unavailable",
@@ -166,7 +171,8 @@ pub(crate) async fn stop(
             "Stop unavailable",
         ));
     }
-    let (receipt, issued_control) = store
+    let (receipt, issued_control) = scope
+        .store
         .stop_execution_control_authenticated(&credential, &conversation, &input)
         .await
         .map_err(stop_error)?;

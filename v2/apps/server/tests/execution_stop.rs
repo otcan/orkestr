@@ -109,7 +109,8 @@ async fn cookie_csrf_stop_replays_original_durable_receipt() {
             origin.clone(),
         )
         .unwrap()
-        .with_execution_store(bound);
+        .with_execution_store(owner.clone(), conversation.clone(), bound)
+        .unwrap();
         let task = tokio::spawn(async move {
             axum::serve(listener, router(state)).await.unwrap();
         });

@@ -1,4 +1,4 @@
-//! Explicit, one-conversation isolated acceptance composition. No HTTP configuration.
+//! Explicit isolated acceptance composition. No HTTP configuration.
 mod admission;
 mod bootstrap;
 mod budget;
@@ -7,6 +7,8 @@ mod config;
 #[cfg(all(test, unix))]
 mod config_tests;
 mod directory;
+mod group;
+pub use group::{ConfiguredExecutions, ExecutionTasks};
 mod liveness;
 mod retirement;
 mod session;
@@ -51,6 +53,15 @@ impl ConfiguredExecution {
         file: &Path,
     ) -> Result<Self, &'static str> {
         let config = Config::load(file, home, bind)?;
+        Self::from_config(store, home, config, false).await
+    }
+
+    async fn from_config(
+        store: &Store,
+        home: &Path,
+        config: Config,
+        scoped_directory: bool,
+    ) -> Result<Self, &'static str> {
         let token = config.token(home)?;
         let owner = store
             .authenticate(&token)
@@ -88,7 +99,11 @@ impl ConfiguredExecution {
             if status.run_id.as_ref() != Some(&prior_run) {
                 return Err("execution restart predecessor changed");
             }
-            let directory = directory::existing(home)?;
+            let directory = if scoped_directory {
+                directory::existing_for(home, &config.conversation_id)?
+            } else {
+                directory::existing(home)?
+            };
             supervisor.takeover = ProductionTakeover::ExpiredPredecessor { incarnation_id };
             let (bound, grant) = store
                 .reattach_terminal_supervisor(&token, supervisor, &prior_run)
@@ -96,7 +111,11 @@ impl ConfiguredExecution {
                 .map_err(|_| "execution exact predecessor reattachment refused")?;
             (bound, Some(grant), directory)
         } else {
-            let directory = directory::create(home)?;
+            let directory = if scoped_directory {
+                directory::create_for(home, &config.conversation_id)?
+            } else {
+                directory::create(home)?
+            };
             let bound = store
                 .authorize_supervisor(&token, supervisor)
                 .await
@@ -126,10 +145,16 @@ impl ConfiguredExecution {
 
     /// Install only this factory's bound Store and live transport availability.
     /// Neither handle is constructible through HTTP configuration.
-    pub fn install_control(&self, mut state: crate::AppState) -> crate::AppState {
-        state.execution_store = Some(self.store.clone());
-        state.execution_control = Some(self.control.clone());
-        state.with_worker_task_access(self.tasks.clone())
+    pub fn install_control(&self, state: crate::AppState) -> Result<crate::AppState, &'static str> {
+        state.with_execution_scope(
+            self.owner.clone(),
+            self.config.conversation_id.clone(),
+            crate::execution_registry::ExecutionScope {
+                store: self.store.clone(),
+                control: Some(self.control.clone()),
+                tasks: Some(self.tasks.clone()),
+            },
+        )
     }
 
     pub fn start(self) -> ExecutionTask {

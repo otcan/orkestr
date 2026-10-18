@@ -60,6 +60,10 @@ pub struct RequestedControl {
 }
 
 impl ControlRegistry {
+    pub(crate) fn matches_scope(&self, owner: &OwnerId, conversation: &ConversationId) -> bool {
+        owner == &self.owner && conversation == &self.conversation
+    }
+
     pub fn new(owner: OwnerId, conversation: ConversationId) -> Self {
         Self {
             owner,
