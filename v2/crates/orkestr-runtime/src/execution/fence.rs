@@ -5,6 +5,8 @@ use orkestr_v2_store_sqlite::{ConsumedProviderDispatch, Store};
 
 pub(super) struct StoreFence {
     store: Store,
+    #[cfg(all(test, feature = "fixture-test-controls"))]
+    armed_store: std::sync::Mutex<Option<Store>>,
     provider: ProviderAdmission,
     scope: ExecutionScope,
 }
@@ -17,9 +19,25 @@ impl StoreFence {
     ) -> Result<Self, Error> {
         Ok(Self {
             store,
+            #[cfg(all(test, feature = "fixture-test-controls"))]
+            armed_store: std::sync::Mutex::new(None),
             provider: cap.provider().clone(),
             scope: super::execution_scope(cap)?,
         })
+    }
+    // Arm the exact fence already owned by the attached child, after Prepared.
+    // This seam is absent from all non-test builds, even with the feature set.
+    #[cfg(all(test, feature = "fixture-test-controls"))]
+    pub(super) async fn arm_post_action_rollback(&self, marker: std::path::PathBuf) {
+        let mut store = self.store.clone();
+        store
+            .production_arm_checkpoint(
+                orkestr_v2_store_sqlite::ProductionCheckpoint::ExecutionFenceAfterActionRollback,
+                marker,
+            )
+            .await
+            .unwrap();
+        *self.armed_store.lock().unwrap() = Some(store);
     }
 }
 
@@ -34,7 +52,16 @@ impl DispatchFence for StoreFence {
         }
         // BEGIN IMMEDIATE remains held across the bounded nonblocking action.
         // No inference replay follows an outer commit error after action ran.
-        self.store
+        #[cfg(all(test, feature = "fixture-test-controls"))]
+        let store = self
+            .armed_store
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| self.store.clone());
+        #[cfg(not(all(test, feature = "fixture-test-controls")))]
+        let store = &self.store;
+        store
             .with_execution_fence(&self.provider, action)
             .map_err(|error| match error {
                 RuntimeStoreError::Unauthorized
