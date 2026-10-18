@@ -26,6 +26,7 @@ def snapshot(root):
                          "JOIN messages m ON m.id=h.message_id "
                          "ORDER BY h.scope_sequence"),
             "supervisors": rows("SELECT context_id,incarnation_id,generation FROM production_supervisors"),
+            "bindings": rows("SELECT id,state,generation FROM session_bindings ORDER BY id"),
             "retirements": rows("SELECT context_id,incarnation_id,supervisor_generation,prior_run_id,"
                                 "acceptance_event_id,session_id,binding_generation,retired_at_ms "
                                 "FROM production_graceful_retirements ORDER BY retired_at_ms,prior_run_id"),
@@ -84,11 +85,14 @@ def normal_retirement(state, run, receipt, count):
     retirement = matches[0]
     supervisors = [row for row in state["supervisors"] if row["context_id"] == run["context_id"]]
     require(len(supervisors) == 1, "retirement_supervisor_missing")
+    bindings = [row for row in state["bindings"] if row["id"] == run["session_id"]]
+    require(len(bindings) == 1 and bindings[0]["state"] == "ready", "retirement_binding_not_ready")
     require(retirement["context_id"] == run["context_id"]
             and retirement["incarnation_id"] == run["incarnation_id"] == supervisors[0]["incarnation_id"]
             and retirement["supervisor_generation"] == supervisors[0]["generation"]
             and retirement["session_id"] == run["session_id"]
-            and retirement["binding_generation"] == run["binding_generation"]
+            # Owner acceptance releases exactly this occupied generation.
+            and retirement["binding_generation"] == bindings[0]["generation"] == run["binding_generation"] + 1
             and retirement["acceptance_event_id"] == receipt["acceptance_event_id"]
             and retirement["retired_at_ms"] > 0, "graceful_retirement_provenance_mismatch")
 

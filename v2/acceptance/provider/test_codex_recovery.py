@@ -63,18 +63,30 @@ class RecoveryOracleTests(unittest.TestCase):
         run = {"id": "accepted-run", "context_id": "context", "incarnation_id": "old-incarnation",
                "session_id": "native-session", "binding_generation": 2}
         row = {"prior_run_id": "accepted-run", "context_id": "context", "incarnation_id": "old-incarnation",
-               "session_id": "native-session", "binding_generation": 2, "supervisor_generation": 1,
+               "session_id": "native-session", "binding_generation": 3, "supervisor_generation": 1,
                "acceptance_event_id": "owner-acceptance", "retired_at_ms": 123}
         state = {"retirements": [row], "supervisors": [{"context_id": "context",
-                 "incarnation_id": "old-incarnation", "generation": 1}]}
+                 "incarnation_id": "old-incarnation", "generation": 1}],
+                 "bindings": [{"id": "native-session", "state": "ready", "generation": 3}]}
         receipt = {"acceptance_event_id": "owner-acceptance"}
         normal_retirement(state, run, receipt, 1)
         with self.assertRaisesRegex(Refused, "graceful_retirement_missing"):
             normal_retirement({**state, "retirements": []}, run, receipt, 1)
-        for key, value in (("acceptance_event_id", "other-acceptance"), ("binding_generation", 3),
+        for key, value in (("acceptance_event_id", "other-acceptance"), ("binding_generation", 2),
                            ("incarnation_id", "successor"), ("retired_at_ms", 0)):
             with self.subTest(key=key), self.assertRaisesRegex(Refused, "graceful_retirement_provenance_mismatch"):
                 normal_retirement({**state, "retirements": [{**row, key: value}]}, run, receipt, 1)
+        for binding in ({"id": "other-session", "state": "ready", "generation": 3},
+                        {"id": "native-session", "state": "busy", "generation": 3},
+                        {"id": "native-session", "state": "ready", "generation": 2}):
+            with self.subTest(binding=binding), self.assertRaises(Refused):
+                normal_retirement({**state, "bindings": [binding]}, run, receipt, 1)
+        # Matching a later ready binding is insufficient: it must be the exact
+        # generation released by this accepted run, not a subsequent release.
+        with self.assertRaisesRegex(Refused, "graceful_retirement_provenance_mismatch"):
+            normal_retirement({**state, "retirements": [{**row, "binding_generation": 4}],
+                               "bindings": [{"id": "native-session", "state": "ready", "generation": 4}]},
+                              run, receipt, 1)
 
     def replay(self, after, status_after=None):
         status = {"phase": "awaiting_acceptance", "run_id": "successor", "revision": 9,
