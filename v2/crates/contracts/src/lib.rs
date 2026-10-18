@@ -1,7 +1,9 @@
 //! Version 0 HTTP contracts. No storage or provider dependencies.
 mod cancellation;
 mod events;
+mod stopped;
 pub use cancellation::*;
+pub use stopped::*;
 pub mod runtime;
 pub use events::*;
 use serde::{Deserialize, Serialize};
