@@ -1,6 +1,6 @@
 //! Read-only execution presentation. Capabilities are authority advertisements,
 //! never a grant to dispatch, stop or steer. Routes are supplied by server composition.
-use crate::{ConversationId, PayloadId, RunId};
+use crate::{ConversationId, EventId, PayloadId, RunId};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -39,6 +39,12 @@ pub struct ExecutionResources {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ExecutionAcceptanceCandidate {
+    pub run_id: RunId,
+    pub completion_event_id: EventId,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionStatus {
     pub schema_version: u32,
     pub conversation_id: ConversationId,
@@ -49,6 +55,10 @@ pub struct ExecutionStatus {
     pub revision: i64,
     pub observed_at_ms: i64,
     pub phase: ExecutionPhase,
+    /// Exact committed completion and revision from this same read snapshot.
+    /// Read evidence only; never an acceptance or provider authority grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance_candidate: Option<ExecutionAcceptanceCandidate>,
     pub queue_age_ms: Option<u64>,
     pub progress: Option<ExecutionProgress>,
     pub resources: Option<ExecutionResources>,
@@ -63,6 +73,7 @@ impl ExecutionStatus {
             && self.run_id == other.run_id
             && self.revision == other.revision
             && self.phase == other.phase
+            && self.acceptance_candidate == other.acceptance_candidate
             && self.progress == other.progress
             && self.resources == other.resources
             && self.capabilities == other.capabilities
@@ -73,6 +84,12 @@ impl ExecutionStatus {
             && self.revision >= 0
             && self.observed_at_ms > 0
             && (self.phase == ExecutionPhase::Queued || self.run_id.is_some())
+            && self.acceptance_candidate.as_ref().is_none_or(|c| {
+                self.phase == ExecutionPhase::AwaitingAcceptance
+                    && self.run_id.as_ref() == Some(&c.run_id)
+                    && !c.run_id.0.is_nil()
+                    && !c.completion_event_id.0.is_nil()
+            })
             && self
                 .progress
                 .as_ref()
@@ -97,6 +114,7 @@ mod tests {
             revision: 1,
             observed_at_ms: 1000,
             phase: ExecutionPhase::Queued,
+            acceptance_candidate: None,
             queue_age_ms: Some(0),
             progress: None,
             resources: None,
