@@ -153,3 +153,19 @@ Stop remain unexecuted/unimplemented integration gates. Synthetic launcher tests
 validate the specification only; they do not prove Claude execution. Root must
 review immutable native executable/configuration and package inventory before
 activation. Existing six-file Codex package imports are unchanged.
+
+### Worker role transport metadata
+
+The Codex OpenOwnedSession role whitelist is exactly `fast`, `deep`, `worker`.
+The broker preserves the issued identity; it never substitutes Deep for Worker.
+A Worker channel uses a newly owned process/native session and independent opaque
+handle. Same-owner parent and Worker channels cannot exchange handles or native
+thread identities. No parent/task claims are accepted as extra JSON fields.
+
+This additive transport support is not Worker admission. Only the trusted Runtime
+composition may open it using the eventual Core-issued typed parent/task grant,
+consume execution once, and perform actual provider writes under its exact
+current lineage fence. Parent revoke/Stop requires that Core-issued fence; role
+JSON cannot authorize cancellation, bypass readiness or create a grant. Typed
+Worker orchestration and activation remain separate gates. Claude role admission
+is unchanged pending its separate typed composition.

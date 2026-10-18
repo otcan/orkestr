@@ -19,7 +19,7 @@ def request(channel, frame, method="BrokerMetadata", outer=2):
         "params": {"owned_handle": channel.handle, "frame": frame}})
 
 
-def ready(channel):
+def ready(channel, native="synthetic-native"):
     request(channel, {"id": 1, "method": "initialize", "params": {
         "clientInfo": {"name": "synthetic", "title": "Synthetic", "version": "1"},
         "capabilities": {"experimentalApi": False}}})
@@ -33,7 +33,7 @@ def ready(channel):
     assert "fake-secret" not in str(reply)
     request(channel, {"id": 3, "method": "thread/start", "params": {"cwd": channel.workspace,
         "approvalPolicy": "never", "sandbox": "read-only", "ephemeral": False, "modelProvider": "openai"}}, outer=5)
-    channel.provider({"id": 3, "result": {"thread": {"id": "synthetic-native", "cwd": channel.workspace,
+    channel.provider({"id": 3, "result": {"thread": {"id": native, "cwd": channel.workspace,
         "ephemeral": False, "modelProvider": "openai"}, "modelProvider": "openai", "cwd": channel.workspace, "approvalPolicy": "never",
         "sandbox": {"type": "readOnly", "networkAccess": False}}})
 
