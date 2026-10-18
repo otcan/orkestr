@@ -339,3 +339,25 @@ pre-upgrade backup and untouched old-schema rollback home when running
 `cross_revision.py --old-schema 17 --new-schema 20`; never start the schema17
 binary against migrated live20 state. Only its disposable refusal copy is opened
 by the old binary. Same-binary rollback is not cross-version compatibility.
+
+
+### Historical persistent adapter acceptance
+
+`persistent-aa8-checkpoint.json` records the actual reviewed4950 adapter run
+against the retained aa8 `2.0.0-rc.1` fixture: 39 samples in 65.462 seconds.
+The first uninterrupted30-sample journal passed. The same isolated home was
+then restarted and explicitly stopped after nine separate samples; that journal
+correctly invalidated and is never joined to the first window. The committed
+sample streams retain proxy-free health latency and owned process-group RSS.
+All four owned launcher/server PIDs exited, the control socket disappeared and
+loopback port19842 was released. Private home, logs and verified stopped backup
+were retained for inspection. A synthetic noncredential marker survived restart;
+all schema1..17 migration records still carry the original initialization time.
+Snapshot schema/rows matched the stopped database; binary hashes differ because
+the SQLite snapshot uses DELETE journal mode while the source uses WAL.
+
+This exercised `prepare`, `load`, `serve` under the explicit historical fixture
+execution authorization, and CLI `stop`/`backup`. The actual gated `start` CLI
+refused invalid evidence before launch. A successful candidate-gated CLI start
+was **unexecuted**; no passing gate receipt was fabricated for this old fixture.
+No authenticated workflow, Core24 qualification or72-hour window is claimed.

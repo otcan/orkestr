@@ -1,0 +1,88 @@
+{
+  "adapter_source": "4950be7b",
+  "backup_sha256": "5188695d324485fb9e8e40e8d51972c3d79bf03edc41a7f07e712fefdd143b86",
+  "candidate_manifest_sha256": "af9376b370c4bd5c0ea5ff7cefa08d3a7ecd02147f9376542d526cf400a01cd8",
+  "checks": [
+    "verified pinned historical same-source aa8 candidate; no build",
+    "actual prepare, private sealed plan reload and version",
+    "30 uninterrupted health/resource samples passed",
+    "same isolated home restarted with separate 9-sample monitor; explicit stop succeeded and deliberately invalidated that window",
+    "synthetic noncredential marker survived controlled restart; all original successful schema1..17 migration timestamps precede restart",
+    "stopped SQLite backup inventory/integrity/FK and logical schema/row equivalence verified",
+    "actual canonical candidate-gated CLI refused invalid evidence before launch",
+    "all four owned launcher/server PIDs absent, control socket gone, loopback19842 released; home/logs/backup retained"
+  ],
+  "cleanup": {
+    "control_socket_removed": true,
+    "home_retained": true,
+    "logs_retained": true,
+    "owned_pids_gone": true,
+    "port_released": true
+  },
+  "configuration_sha256": "ec94541f4ecf361af54e8ffb766ea00ce07a4bf2d3e3b3fa7f028a6b9882acd7",
+  "database_and_backup_logical_sha256": "71df4b181a66b5b59c67a1b2575037a965e2fc18ca7256d881ac649ef23ebd36",
+  "limitations": [
+    "serve API exercised under exact bounded historical fixture authorization; successful candidate-gated CLI start unexecuted, no fabricated passing gate",
+    "second monitor intentionally interrupted via stop command; its exception and invalidation are expected and not a passing continuous window",
+    "no authenticated workflow/session preservation claim",
+    "SQLite snapshot uses DELETE journal mode; source WAL header bytes differ, logical equivalence checked instead",
+    "Core24 qualification, final candidate, 72h production window, routing, providers, production services and deployment unexecuted"
+  ],
+  "plan_sha256": "cad45bedf6ae2aadc732d6e2057bfa2d9888da88a3f5712220d20b24399d74e1",
+  "processes": [
+    {
+      "launcher_pid": 2174867,
+      "server_pids": [
+        2175005
+      ]
+    },
+    {
+      "launcher_pid": 2182062,
+      "server_pids": [
+        2182157
+      ]
+    }
+  ],
+  "sample_count": 39,
+  "server_and_monitor_elapsed_seconds": 65.462,
+  "server_sha256": "0f7e9235c01eb67ce5bf55c4f6f79d2d11d1b0b7ca17130cac561f8559ee1b37",
+  "source_commit": "aa8e19a3d99e3fb83c3c421e8b61f5be4f5a8c2a",
+  "status": "passed_bounded_historical_lifecycle",
+  "version": "2.0.0-rc.1",
+  "windows": [
+    {
+      "completed_at": "2026-10-18T21:36:30.577881Z",
+      "configuration_sha256": "42ad8f47bfc378ee8350f9422158d2b1ca7e7cbe3efb1b703616b3c5471c9c2a",
+      "environment": "controlled_project_owned",
+      "events": [],
+      "max_latency_ms": 0.835,
+      "max_rss_bytes": 38895616,
+      "name": "window-before-restart",
+      "sample_count": 30,
+      "samples_sha256": "82b67a704e7103a2001dcfbd154ea950e8f9b8d9643b1e6bb772c901c6007c17",
+      "started_at": "2026-10-18T21:35:47.849132Z",
+      "status": "passed",
+      "window_sha256": "1cc5a549ccc54c18f8ca9e45273e8b6bde5024e2612a6636bb73ff8615c927ae"
+    },
+    {
+      "completed_at": null,
+      "configuration_sha256": "42ad8f47bfc378ee8350f9422158d2b1ca7e7cbe3efb1b703616b3c5471c9c2a",
+      "environment": "controlled_project_owned",
+      "events": [
+        {
+          "kind": "persistent_monitor_interruption_or_failure",
+          "observed_at": "2026-10-18T21:36:49.384343Z",
+          "requires_new_window": true
+        }
+      ],
+      "max_latency_ms": 0.893,
+      "max_rss_bytes": 39346176,
+      "name": "window-after-restart",
+      "sample_count": 9,
+      "samples_sha256": "d5da14ebefef0f4231d51ff6b097a77e4c8eb47d42b095ff3419d2f85283bd05",
+      "started_at": "2026-10-18T21:36:34.639165Z",
+      "status": "invalidated",
+      "window_sha256": "a1a3e11766bd96673432e24570533f0b1b6d1ef2eabc61fd30893c292c1e83ce"
+    }
+  ]
+}
