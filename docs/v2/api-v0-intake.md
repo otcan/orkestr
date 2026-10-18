@@ -45,8 +45,11 @@ The owner ID is the authenticated canonical owner ID, never a provider ID.
 JSON command bodies reject unknown fields. Client actor/owner claims cannot
 be admitted. Message text is nonblank, at most 32768 UTF-8 bytes; request keys
 are 1..128 ASCII alphanumeric or `-_.:`. Project names are nonblank and at most
-200 bytes. HTTP JSON bodies are bounded to 40 KiB and request-header/handler
-completion to 10 seconds; SSE bodies stream beyond that deadline.
+200 bytes. HTTP JSON bodies are bounded to 40 KiB. The application-handler
+deadline is 10 seconds, including JSON body extraction, and begins only after
+request headers have been parsed. The server configures no explicit transport
+request-header timeout; this guard is not slow-header protection. SSE response
+bodies stream beyond the application-handler deadline.
 API failures use `{code,message,request_id,retryable}`; malformed path extraction
 at framework routing boundaries may use Axum's rejection response.
 
