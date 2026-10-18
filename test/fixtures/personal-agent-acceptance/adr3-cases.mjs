@@ -21,7 +21,7 @@ export const adr3PluginLayers = Object.freeze([
 export const adr3Cases = [
   {
     id: "AT-01", title: "Receipt while busy", lanes: ["ingress", "runtime", "ui"],
-    ops: ["OP-05", "OP-17", "OP-22"],
+    ops: ["OP-05", "OP-17", "OP-22", "OP-25"],
     scenario: "Pause reasoning and execution independently behind fixture latches; submit three concurrent owner messages and one duplicate through fake web/iOS/WhatsApp ingress.",
     assertions: [
       "Before either latch opens, each unique input has durable acceptance, a distinct correlated event/cursor, and a visible deterministic receipt in the same main conversation.",
@@ -33,7 +33,7 @@ export const adr3Cases = [
   },
   {
     id: "AT-02", title: "Strong reasoning", lanes: ["ingress", "runtime"],
-    ops: ["OP-08", "OP-12", "OP-22"],
+    ops: ["OP-08", "OP-12", "OP-22", "OP-26"],
     scenario: "Submit a difficult synthetic request; make the fast session unavailable, then busy, while the capable reasoning-session stub remains available; finally remove that provider too.",
     assertions: [
       "Reasoning receives the durable event even when the fast session produces no output; a router-only response is not a full answer.",
@@ -45,7 +45,7 @@ export const adr3Cases = [
   },
   {
     id: "AT-03", title: "Real session architecture", lanes: ["runtime"],
-    ops: ["OP-08", "OP-12", "OP-22"],
+    ops: ["OP-08", "OP-12", "OP-22", "OP-26"],
     scenario: "Resolve one global and one project conversation; start fast, reasoning and a supervised execution session; change the model/profile and recreate an expired native session.",
     assertions: [
       "Each scope has distinct persistent fast/reasoning native references and separately supervised execution, not one multiplexed native session.",
@@ -57,7 +57,7 @@ export const adr3Cases = [
   },
   {
     id: "AT-04", title: "Cross-project coordination", lanes: ["ingress", "runtime"],
-    ops: ["OP-06", "OP-12", "OP-14", "OP-22"],
+    ops: ["OP-06", "OP-12", "OP-14", "OP-22", "OP-27", "OP-31"],
     scenario: "From global scope consult three authorized fixture projects concurrently; block one, return the others out of order, and include an unauthorized fourth project.",
     assertions: [
       "Every request/result is correlated to the global cause and its own project, with a truthful partial result and explicit blocker.",
@@ -69,7 +69,7 @@ export const adr3Cases = [
   },
   {
     id: "AT-05", title: "Mid-run modification", lanes: ["ingress", "runtime"],
-    ops: ["OP-05", "OP-12", "OP-14", "OP-22"],
+    ops: ["OP-05", "OP-12", "OP-14", "OP-22", "OP-25"],
     scenario: "Pause immediately before a fake external effect; concurrently deliver an authorized task correction, a duplicate correction and an untrusted worker instruction; replay after restart.",
     assertions: [
       "Authorized correction updates or supersedes the bound task in causal order; all accepted messages and the old/new intent remain inspectable.",
@@ -81,7 +81,7 @@ export const adr3Cases = [
   },
   {
     id: "AT-06", title: "Hard stop", lanes: ["ingress", "runtime", "ui"],
-    ops: ["OP-13", "OP-14", "OP-20", "OP-22"],
+    ops: ["OP-13", "OP-14", "OP-20", "OP-22", "OP-32"],
     scenario: "Keep both model latches closed; issue stop/deployment hold immediately before dispatch, during an in-flight effect and after commit; repeat concurrently and after restart.",
     assertions: [
       "The deterministic control plane persists the target-specific hold before acknowledging it, without needing a model reply or native steering.",
@@ -93,7 +93,7 @@ export const adr3Cases = [
   },
   {
     id: "AT-07", title: "Resource reuse and isolation", lanes: ["ingress", "runtime"],
-    ops: ["OP-03", "OP-14", "OP-16", "OP-22"],
+    ops: ["OP-03", "OP-14", "OP-16", "OP-22", "OP-27"],
     scenario: "Fast/deep/worker sessions resolve project A's bindings; project B requests A's private resource; expire a desktop heartbeat and test a stale holder after safe reacquisition.",
     assertions: [
       "All authorized project A sessions resolve the same canonical resource binding rather than per-session copies; B cannot read or use A's private resource.",
@@ -105,7 +105,7 @@ export const adr3Cases = [
   },
   {
     id: "AT-07a", title: "Project provisioning", lanes: ["ingress", "ui"],
-    ops: ["OP-03", "OP-21", "OP-22"],
+    ops: ["OP-03", "OP-21", "OP-22", "OP-27", "OP-30"],
     scenario: "Create shopping-list and software projects with default automatic provisioning through fake GitHub/Jira/OXRM/WhatsApp providers; retry concurrently; lose one credential and restart halfway through.",
     expectations: adr3ProvisioningExpectations,
     assertions: [
@@ -118,7 +118,7 @@ export const adr3Cases = [
   },
   {
     id: "AT-07b", title: "Plugin inheritance", lanes: ["ingress", "ui"],
-    ops: ["OP-14", "OP-20", "OP-22"],
+    ops: ["OP-14", "OP-20", "OP-22", "OP-30"],
     scenario: "Install one synthetic plugin package with two account connections; resolve capabilities, global/selected-project bindings and resource instances; narrow one project's inherited default, then try escalation.",
     pluginLayers: adr3PluginLayers,
     assertions: [
@@ -131,7 +131,7 @@ export const adr3Cases = [
   },
   {
     id: "AT-07c", title: "Progressive onboarding", lanes: ["ingress", "ui"],
-    ops: ["OP-18", "OP-21", "OP-22"],
+    ops: ["OP-18", "OP-21", "OP-22", "OP-30"],
     scenario: "Enter a fresh fixture install with only a supported reasoning provider; reach the assistant, then request a missing optional capability and complete its synthetic auth flow.",
     assertions: [
       "The assistant is usable without connecting every optional integration; authentication/health remediation is contextual and returns to the same conversation.",
@@ -155,7 +155,7 @@ export const adr3Cases = [
   },
   {
     id: "AT-09", title: "Restart/recovery", lanes: ["ingress", "runtime"],
-    ops: ["OP-05", "OP-12", "OP-13", "OP-22"],
+    ops: ["OP-05", "OP-12", "OP-13", "OP-22", "OP-25", "OP-26"],
     scenario: "Kill only a disposable Node fixture service after acceptance, before dispatch, after fake effect completion and before result delivery; restart its same temporary home.",
     assertions: [
       "Canonical input order, dual-session references/lineage, pending tasks, holds, leases and approvals reconcile without lost messages or duplicate effects.",
@@ -179,7 +179,7 @@ export const adr3Cases = [
   },
   {
     id: "AT-11", title: "Native navigation", lanes: ["ui"],
-    ops: ["OP-18", "OP-19", "OP-20", "OP-22"],
+    ops: ["OP-18", "OP-19", "OP-20", "OP-22", "OP-28"],
     scenario: "On a synthetic iOS fixture navigate global assistant -> project main -> task/run/resource/approval -> back; background/reconnect the app and switch project scopes.",
     assertions: [
       "One canonical main conversation per scope retains draft, ordered messages and continuation context across navigation/reconnect.",

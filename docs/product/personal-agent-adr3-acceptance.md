@@ -64,24 +64,28 @@ real credentials or production scheduler/lease changes are part of this suite.
 
 The executable inventory contains the complete assertions. This table names the
 first supported integration needed, not new APIs the lanes must implement.
+OP dependencies retain the applicable original plan references and add the
+ADR 0003 implementation owners OP-25–OP-32 (ORK-561–ORK-568). They are dependencies,
+not claims that those items or their acceptance integrations are complete. The
+blocking harness checks that this ledger and the executable inventory agree.
 
-| Case | Pending integration / owner | Required adverse evidence |
-| --- | --- | --- |
-| AT-01 | Lane 1 ingress + Lane 3 runtime + Lane 4 UI: ordered dual inbox and deterministic receipt | Both model latches held, concurrent/duplicate inputs accepted durably before release; changed key conflict, exact parent correlation, separate receipt/fast/deep timing |
-| AT-02 | Lane 3 capable reasoning dispatch independent of fast session | Fast busy/down cannot drop reasoning; deep unavailable/quota/auth loss is blocked, with no silent API/local/cloud substitution |
-| AT-03 | Lane 3 distinct native fast/deep/execution sessions | Model/native-session changes keep canonical transcript; fixture IDs do not prove real subscription authentication |
-| AT-04 | Lanes 1/3 global fan-out/fan-in and project scope | Three projects, one blocked, reversed completion, fourth unauthorized; partial answer, no cross-project reads or blocked owner input |
-| AT-05 | Lanes 1/3 task-bound correction and effects | Correction/duplicate/restart before dispatch, obsolete approval refused, uncertain effect reconciled or held; no duplicate sends |
-| AT-06 | Lanes 1/3 deterministic durable hold + Lane 4 truthful status | Closed model latches; stop before/during/after dispatch, repeated after restart; no new effect, truthful too-late/unknown status |
-| AT-07 | Lanes 1/3 canonical bindings and scoped leases | Fast/deep/workers reuse A's binding; B denied, stale heartbeat/fencing denied before effect, scoped concurrency quotas |
-| AT-07a | Lane 1 project provisioning + Lane 4 contextual auth/status | Shopping-list and software projects both automatically provision all four default fake resources, zero desktops; exact blockers, partial failure/retry/restart never duplicates or fabricates readiness |
-| AT-07b | Lane 1 inheritance/policy + Lane 4 connection selection | All five plugin layers, multiple account identities, global/selected/disabled projects; inherited defaults can only narrow, revocation applies to pending work |
-| AT-07c | Lane 4 progressive entry/auth + Lane 1 health | Assistant before all optional connections; callback returns to same context; partial provisioning and missing provider truthful, tenant/admin boundaries intact |
-| AT-08 | Lane 3 reuse/fork/fresh lineage | Pinned snapshot/parent, explicit fresh brief and rationale, expiry/reopen history; unsupported native fork never silently fabricated |
-| AT-09 | Lanes 1/3 whole-service reconciliation | Kill/restart at four boundaries; ordering/holds/approvals/leases/lineage survive, one effect/result; injected stall yields one evidenced blocker with bounded retries |
-| AT-10 | Lanes 1/3 task verifier/control + Lane 4 owner surfaces | Worker/web injection cannot certify/approve/consent; failed/unknown/denied/changed evidence cannot produce task success; valid artifact cited |
-| AT-11 | Lane 4 native iOS navigation and security fixture | Global/project/task/run/resource/approval/back, reconnect and project switch retain context; no cache/notification leaks; web DOM is not native evidence |
-| AT-12 | All lanes: flag-off differential app/channel fixture | Unset/0/false and on→off preserve legacy behavior/data/routes/senders/timers/auth/blindness; no provider launch, implicit deploy or new external effect |
+| Case | OP dependencies | Pending integration / owner | Required adverse evidence |
+| --- | --- | --- | --- |
+| AT-01 | OP-05 OP-17 OP-22 OP-25 | Lane 1 ingress + Lane 3 runtime + Lane 4 UI: ordered dual inbox and deterministic receipt | Both model latches held, concurrent/duplicate inputs accepted durably before release; changed key conflict, exact parent correlation, separate receipt/fast/deep timing |
+| AT-02 | OP-08 OP-12 OP-22 OP-26 | Lane 3 capable reasoning dispatch independent of fast session | Fast busy/down cannot drop reasoning; deep unavailable/quota/auth loss is blocked, with no silent API/local/cloud substitution |
+| AT-03 | OP-08 OP-12 OP-22 OP-26 | Lane 3 distinct native fast/deep/execution sessions | Model/native-session changes keep canonical transcript; fixture IDs do not prove real subscription authentication |
+| AT-04 | OP-06 OP-12 OP-14 OP-22 OP-27 OP-31 | Lanes 1/3 global fan-out/fan-in and project scope | Three projects, one blocked, reversed completion, fourth unauthorized; partial answer, no cross-project reads or blocked owner input |
+| AT-05 | OP-05 OP-12 OP-14 OP-22 OP-25 | Lanes 1/3 task-bound correction and effects | Correction/duplicate/restart before dispatch, obsolete approval refused, uncertain effect reconciled or held; no duplicate sends |
+| AT-06 | OP-13 OP-14 OP-20 OP-22 OP-32 | Lanes 1/3 deterministic durable hold + Lane 4 truthful status | Closed model latches; stop before/during/after dispatch, repeated after restart; no new effect, truthful too-late/unknown status |
+| AT-07 | OP-03 OP-14 OP-16 OP-22 OP-27 | Lanes 1/3 canonical bindings and scoped leases | Fast/deep/workers reuse A's binding; B denied, stale heartbeat/fencing denied before effect, scoped concurrency quotas |
+| AT-07a | OP-03 OP-21 OP-22 OP-27 OP-30 | Lane 1 project provisioning + Lane 4 contextual auth/status | Shopping-list and software projects both automatically provision all four default fake resources, zero desktops; exact blockers, partial failure/retry/restart never duplicates or fabricates readiness |
+| AT-07b | OP-14 OP-20 OP-22 OP-30 | Lane 1 inheritance/policy + Lane 4 connection selection | All five plugin layers, multiple account identities, global/selected/disabled projects; inherited defaults can only narrow, revocation applies to pending work |
+| AT-07c | OP-18 OP-21 OP-22 OP-30 | Lane 4 progressive entry/auth + Lane 1 health | Assistant before all optional connections; callback returns to same context; partial provisioning and missing provider truthful, tenant/admin boundaries intact |
+| AT-08 | OP-12 OP-15 OP-19 OP-22 | Lane 3 reuse/fork/fresh lineage | Pinned snapshot/parent, explicit fresh brief and rationale, expiry/reopen history; unsupported native fork never silently fabricated |
+| AT-09 | OP-05 OP-12 OP-13 OP-22 OP-25 OP-26 | Lanes 1/3 whole-service reconciliation | Kill/restart at four boundaries; ordering/holds/approvals/leases/lineage survive, one effect/result; injected stall yields one evidenced blocker with bounded retries |
+| AT-10 | OP-04 OP-06 OP-07 OP-14 OP-22 | Lanes 1/3 task verifier/control + Lane 4 owner surfaces | Worker/web injection cannot certify/approve/consent; failed/unknown/denied/changed evidence cannot produce task success; valid artifact cited |
+| AT-11 | OP-18 OP-19 OP-20 OP-22 OP-28 | Lane 4 native iOS navigation and security fixture | Global/project/task/run/resource/approval/back, reconnect and project switch retain context; no cache/notification leaks; web DOM is not native evidence |
+| AT-12 | OP-02 OP-17 OP-24 OP-22 | All lanes: flag-off differential app/channel fixture | Unset/0/false and on→off preserve legacy behavior/data/routes/senders/timers/auth/blindness; no provider launch, implicit deploy or new external effect |
 
 For AT-01, hold model completion behind explicit deferred promises; accept and
 persist inputs before releasing them. Use a bounded test timeout as a deadlock

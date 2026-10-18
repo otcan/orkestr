@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { discoverTestFiles } from "../scripts/ci-test-runner.mjs";
@@ -7,6 +8,12 @@ import { adr3Cases, adr3Source, adr3ProvisioningExpectations, adr3PluginLayers }
 
 const expectedIds = ["AT-01", "AT-02", "AT-03", "AT-04", "AT-05", "AT-06", "AT-07", "AT-07a", "AT-07b", "AT-07c", "AT-08", "AT-09", "AT-10", "AT-11", "AT-12"];
 const pending = fileURLToPath(new URL("./personal-agent-adr3-acceptance.test.js", import.meta.url));
+const currentOwners = {
+  "AT-01": ["OP-25"], "AT-02": ["OP-26"], "AT-03": ["OP-26"],
+  "AT-04": ["OP-27", "OP-31"], "AT-05": ["OP-25"], "AT-06": ["OP-32"],
+  "AT-07": ["OP-27"], "AT-07a": ["OP-27", "OP-30"], "AT-07b": ["OP-30"],
+  "AT-07c": ["OP-30"], "AT-09": ["OP-25", "OP-26"], "AT-11": ["OP-28"],
+};
 
 function runInventory(strict) {
   const result = spawnSync(process.execPath, ["--test", "--test-reporter=tap", pending], {
@@ -20,6 +27,11 @@ function runInventory(strict) {
 }
 
 test("ADR3 inventory covers every AT including provisioning, inheritance and progressive onboarding", () => {
+  const ledger = readFileSync(new URL("../docs/product/personal-agent-adr3-acceptance.md", import.meta.url), "utf8");
+  const ledgerOps = new Map(ledger.split("\n").filter(line => line.startsWith("| AT-")).map(line => {
+    const [, id, ops] = line.split("|").map(cell => cell.trim());
+    return [id, ops.match(/OP-\d{2}/g) || []];
+  }));
   assert.deepEqual(adr3Cases.map(item => item.id), expectedIds);
   assert.equal(new Set(adr3Cases.map(item => item.id)).size, expectedIds.length);
   assert.deepEqual(adr3Source.sections, [2, 3, 4, 5, 9, 10]);
@@ -38,6 +50,9 @@ test("ADR3 inventory covers every AT including provisioning, inheritance and pro
     assert.ok(item.title.length > 8 && item.scenario.length > 90 && item.gap.length > 60, item.id);
     assert.ok(item.lanes.length && item.lanes.every(lane => ["ingress", "runtime", "ui"].includes(lane)), item.id);
     assert.ok(item.ops.includes("OP-22") && item.ops.every(op => /^OP-\d{2}$/.test(op)), item.id);
+    assert.equal(new Set(item.ops).size, item.ops.length, `${item.id} duplicate OP reference`);
+    for (const op of currentOwners[item.id] || []) assert.ok(item.ops.includes(op), `${item.id} missing ${op}`);
+    assert.deepEqual(ledgerOps.get(item.id), item.ops, `${item.id} ledger/inventory OP drift`);
     assert.equal(item.assertions.length, 3, `${item.id} needs concrete success and adverse oracles`);
     assert.ok(item.assertions.every(text => text.length > 80), item.id);
     assert.ok(item.foundations.every(id => /^PA-[RG]\d{2}$/.test(id)), item.id);
