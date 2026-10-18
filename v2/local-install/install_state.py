@@ -140,6 +140,9 @@ def free_port(port):
     require(1024 <= port <= 65535, "explicit port must be 1024..65535")
     try:
         with socket.socket() as probe:
+            # Closed server connections may remain in TIME_WAIT after owned stop.
+            # REUSEADDR permits restart while still refusing an active listener.
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
     except OSError as error:
         raise RuntimeError("loopback port unavailable; occupant will not be stopped") from error

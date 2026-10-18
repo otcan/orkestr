@@ -1,0 +1,35 @@
+{
+  "binary_sha256": "1926e962dc3bbe495417af79d17049b1ef158c04814c98074e5d68b9c803d757",
+  "checks": [
+    "real package/install/version/offline doctor",
+    "real health/doctor/UI index and all 10 generated assets byte-for-byte",
+    "real synthetic auth/admission/idempotency/history",
+    "real busy backup/upgrade refusal and owned-child stop/port release",
+    "real stopped SQLite API backup/integrity/hash/message count",
+    "real restart/session/history/receipt persistence",
+    "same-binary version-label package switch/restart/history; no cross-version schema claim",
+    "final stopped doctor/port released; synthetic directory cleanup"
+  ],
+  "scope": "mixed-revision installation/HTTP checkpoint; not current candidate browser/execution acceptance",
+  "snapshot_database_sha256": "0c713ac90b0a9e96042b25b5573bb89e6756e071cde7c7bec4eda3278cf16baf",
+  "snapshot_message_count": 1,
+  "source_commit_declared": "c8358b7fdd6fadbd3853a9067157f4c3876d394e",
+  "status": "passed",
+  "ui_file_count": 10,
+  "ui_index_sha256": "a1deffd301c9678a710aa8b5fd6315250a8cc788e714fc86a25a07b193ca7e79",
+  "ui_inventory_sha256": "451288dc9def9a20c3750716c142107553375c86a1935158342592c8f39b537f",
+  "ui_source_commit_declared": "e9ea830e61614b792e77c8df01d968818530f567",
+  "unexecuted": [
+    "macOS",
+    "Docker",
+    "browser interaction",
+    "restore apply",
+    "live providers",
+    "remote CI",
+    "cross-version schema compatibility",
+    "mount/inode alias isolation"
+  ],
+  "wasm_sha256": {
+    "orkestr_v2_ui_bg.wasm": "4b191a94f6c9dcb9b4963873050f4bb54dfb7337ed2b7939fd72a406d8d6edb5"
+  }
+}

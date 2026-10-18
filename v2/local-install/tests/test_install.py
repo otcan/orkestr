@@ -170,6 +170,18 @@ class InstallTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "checksum"):
             recovery.validate_snapshot(output)
 
+    def test_snapshot_manifest_symlink_rejected_before_read(self):
+        self.install()
+        self.database()
+        snapshot = self.root / "snapshot"
+        recovery.backup(self.home, snapshot)
+        external = self.root / "external-manifest.fixture"
+        (snapshot / "manifest.json").rename(external)
+        (snapshot / "manifest.json").symlink_to(external)
+        with self.assertRaisesRegex(RuntimeError, "snapshot manifest symlink"):
+            recovery.validate_snapshot(snapshot)
+        self.assertTrue(external.is_file())
+
     def test_restore_preview_gates_apply_and_does_not_duplicate_auth(self):
         self.install()
         self.database()
@@ -209,6 +221,17 @@ class InstallTests(unittest.TestCase):
         stop.assert_called_once_with(child)
         path.unlink.assert_called_once_with(missing_ok=True)
         connection.sendall.assert_called_once_with(b"stopping\n")
+
+    def test_port_probe_reuses_closed_connections_and_refuses_occupant(self):
+        self.port.stop()
+        with patch.object(state.socket, "socket") as factory:
+            probe = factory.return_value.__enter__.return_value
+            state.free_port(48123)
+            probe.setsockopt.assert_called_once_with(state.socket.SOL_SOCKET, state.socket.SO_REUSEADDR, 1)
+            probe.bind.assert_called_once_with(("127.0.0.1", 48123))
+            probe.bind.side_effect = OSError("synthetic occupant")
+            with self.assertRaisesRegex(RuntimeError, "occupant will not be stopped"):
+                state.free_port(48123)
 
     def test_ui_package_and_log_tail(self):
         ui = self.root / "ui"
