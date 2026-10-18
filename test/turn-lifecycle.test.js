@@ -33,6 +33,29 @@ test("turn lifecycle normalizes queued, running, approval, and terminal states",
   assert.equal(terminal.sidebarWorking, false);
 });
 
+test("confirmed idle execution wins over stale delivery rows and progress", () => {
+  const status = { state: "ready", working: false, activeTurnId: null, runningCount: 1, progress: { stateHint: "planning" } };
+  const messages = [{ id: "old-input", role: "user", state: "running", executorTurnId: "old-turn" }];
+  const idle = turnLifecycleFromRuntimeStatus(status, messages);
+  assert.equal(idle.state, "ready");
+  assert.equal(idle.sidebarWorking, false);
+  assert.equal(idle.running, false);
+  assert.equal(idle.activeTurnId, null);
+  assert.equal(idle.runningCount, 1, "keep the stale count available for diagnosis");
+  const queued = turnLifecycleFromRuntimeStatus({ ...status, pendingCount: 1 }, messages);
+  assert.equal(queued.state, "queued");
+  assert.equal(queued.sidebarWorking, true);
+  assert.equal(queued.running, false);
+  const live = turnLifecycleFromRuntimeStatus({ ...status, state: "working", working: true, activeTurnId: "new-turn" }, messages);
+  assert.equal(live.sidebarWorking, true);
+  assert.equal(live.activeTurnId, "new-turn");
+});
+
+test("legacy runtimes without an explicit idle signal keep message evidence", () => {
+  const lifecycle = turnLifecycleFromRuntimeStatus({ state: "ready", runningCount: 1 });
+  assert.equal(lifecycle.running, true);
+});
+
 test("shared Orkestr event contract exposes stable names and idempotency keys", () => {
   assert.equal(OrkestrEventTypes.threadInputQueued, "thread.input.queued");
   assert.equal(OrkestrEventTypes.whatsappMirrorDelivered, "whatsapp.mirror.delivered");

@@ -60,6 +60,7 @@ import {
 } from "./codex-app-server-whatsapp.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { containedUserDeveloperInstructions } from "./tenant-policy.js";
+import { codexContextOverrides } from "./codex-context-policy.js";
 import { relocateLegacyUserWorkspace } from "./workspace-files.js";
 import { delegatedAssistantInput, parseThreadInputCommand } from "./thread-commands.js";
 import { claimExecutorHandoffForMessage } from "./executor-handoff-delivery.js";
@@ -1080,6 +1081,7 @@ export async function resumeCodexAppServerThread(thread, env = process.env) {
   const containedMetadata = containedCodexRuntimeMetadata(thread, env) || {};
   const result = await client.request("thread/resume", {
     threadId: id,
+    ...codexContextOverrides(thread, runtimeEnv),
     ...(developerInstructions ? { developerInstructions } : {}),
   });
   const codexThread = result?.thread || {};

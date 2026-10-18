@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
+import { claudeCodeStatusPayload } from "../packages/core/src/claude-code-status.js";
 
 // Exercise the real status methods: message transport must not impersonate agent work.
 async function harness() {
@@ -43,4 +44,15 @@ test("only the first fetch displays loading, even when the loaded chat is empty"
   app.messageCache = () => ({ example: [{ id: "message" }] });
   assert.equal(app.threadLoading(thread), false);
   assert.equal(app.threadLoading(null), false);
+});
+
+test("Claude's idle status does not become a Working badge from an orphaned delivery row", async () => {
+  const app = await harness();
+  const idle = claudeCodeStatusPayload({ thread: { state: "ready" }, profileState: "ready", counts: { runningCount: 1 } });
+  assert.equal(app.statusLabel({ id: "example", ...idle }), "Ready");
+  assert.equal(app.isThreadProcessing(idle), false);
+  const queued = claudeCodeStatusPayload({ thread: { state: "ready" }, counts: { pendingCount: 1, runningCount: 1 } });
+  assert.equal(app.statusLabel({ id: "example", ...queued }), "Queued");
+  const starting = claudeCodeStatusPayload({ thread: { state: "working" }, starting: true, counts: { runningCount: 1 } });
+  assert.equal(app.statusLabel({ id: "example", ...starting }), "Working");
 });
