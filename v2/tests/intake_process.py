@@ -1,5 +1,6 @@
 """Synthetic HTTP/process acceptance. No provider, credentials or legacy state used."""
 import concurrent.futures
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -88,7 +89,7 @@ class IntakeAcceptance(unittest.TestCase):
                             {"client_message_id": key, "text": text})
 
     def counts(self):
-        with sqlite3.connect((self.home / "core.sqlite3").as_uri() + "?mode=ro", uri=True) as db:
+        with closing(sqlite3.connect((self.home / "core.sqlite3").as_uri() + "?mode=ro", uri=True)) as db, db:
             db.execute("PRAGMA query_only=ON")
             db.execute("BEGIN")
             return [db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
@@ -97,7 +98,7 @@ class IntakeAcceptance(unittest.TestCase):
     def durable_rows(self):
         # Archive durability oracle adapted to intake's one authoritative schema:
         # compare accepted rows and cursor, rather than only aggregate counts.
-        with sqlite3.connect((self.home / "core.sqlite3").as_uri() + "?mode=ro", uri=True) as db:
+        with closing(sqlite3.connect((self.home / "core.sqlite3").as_uri() + "?mode=ro", uri=True)) as db, db:
             db.execute("PRAGMA query_only=ON")
             db.execute("BEGIN")
             return {table: db.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
@@ -136,18 +137,18 @@ class IntakeAcceptance(unittest.TestCase):
         self.assertEqual(self.counts(), [5, 5, 5, 5])
         code, receipt = self.admit("key-0", "Synthetic text 0")
         self.assertEqual((code, receipt), (200, receipts[0]))
-        with sqlite3.connect(self.home / "core.sqlite3") as db:
+        with closing(sqlite3.connect(self.home / "core.sqlite3")) as db, db:
             self.assertEqual(db.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(db.execute("PRAGMA journal_mode").fetchone()[0], "wal")
             self.assertEqual(db.execute("SELECT sequence FROM reasoning_inbox ORDER BY sequence").fetchall(), [(i,) for i in range(1, 6)])
 
     def test_rollback_when_inbox_write_fails(self):
-        with sqlite3.connect(self.home / "core.sqlite3") as db:
+        with closing(sqlite3.connect(self.home / "core.sqlite3")) as db, db:
             db.execute("CREATE TRIGGER fail_inbox BEFORE INSERT ON reasoning_inbox BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END")
         code, error = self.admit()
         self.assertEqual((code, error["code"]), (503, "store_unavailable"))
         self.assertEqual(self.counts(), [0, 0, 0, 0])
-        with sqlite3.connect(self.home / "core.sqlite3") as db:
+        with closing(sqlite3.connect(self.home / "core.sqlite3")) as db, db:
             db.execute("DROP TRIGGER fail_inbox")
         self.assertEqual(self.admit()[1]["sequence"], 1)
 
@@ -158,7 +159,7 @@ class IntakeAcceptance(unittest.TestCase):
         for table in ("events", "reasoning_inbox", "outbox"):
             with self.subTest(failed_insert=table):
                 before = self.durable_rows()
-                with sqlite3.connect(self.home / "core.sqlite3") as db:
+                with closing(sqlite3.connect(self.home / "core.sqlite3")) as db, db:
                     db.execute(f"CREATE TRIGGER fail_projection BEFORE INSERT ON {table} "
                                "BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END")
                 try:
@@ -166,7 +167,7 @@ class IntakeAcceptance(unittest.TestCase):
                     self.assertEqual((code, error["code"]), (503, "store_unavailable"))
                     self.assertEqual(self.durable_rows(), before)
                 finally:
-                    with sqlite3.connect(self.home / "core.sqlite3") as db:
+                    with closing(sqlite3.connect(self.home / "core.sqlite3")) as db, db:
                         db.execute("DROP TRIGGER fail_projection")
                 self.assertEqual(self.admit("preserved", "Previously accepted synthetic text"),
                                  (200, first))
@@ -201,7 +202,7 @@ class IntakeAcceptance(unittest.TestCase):
         _, second = self.request("GET", f'/projects?after={page["next_cursor"]}&limit=1')
         self.assertEqual(len(second["projects"]), 1)
         self.assertIsNone(second["next_cursor"])
-        with sqlite3.connect(self.home / "core.sqlite3") as db:
+        with closing(sqlite3.connect(self.home / "core.sqlite3")) as db, db:
             self.assertEqual(db.execute("SELECT count(*) FROM conversations WHERE project_id=?", (project["project_id"],)).fetchone()[0], 1)
         self.assertEqual(self.request("POST", f'/conversations/{project["conversation_id"]}/messages',
             {"client_message_id": "fixture-1", "text": "project scope"})[0], 202)
@@ -229,7 +230,7 @@ class IntakeAcceptance(unittest.TestCase):
         self.assertEqual(self.admit(key="bad key")[0], 400)
         self.assertEqual(self.admit(text=" " * 10)[0], 400)
         self.assertEqual(self.counts(), [0, 0, 0, 0])
-        with sqlite3.connect(self.home / "core.sqlite3") as db:
+        with closing(sqlite3.connect(self.home / "core.sqlite3")) as db, db:
             db.execute("UPDATE auth_sessions SET expires_at=0")
         self.assertEqual(self.request("GET", "/projects")[0], 401)
 
