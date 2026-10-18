@@ -153,33 +153,46 @@ test("session lease acquisition and updates use version/token CAS across store h
   }
 });
 
-test("store transaction groups synchronous operations, rolls back failures, and rejects async callbacks", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-session-tx-"));
+test("flag-gated Agent Job initializer creates sessions after ingress and is idempotent", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-session-init-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: "1" };
+  try {
+    const db = await openAgentJobDb(env);
+    const names = () => db.prepare("select name from sqlite_master where type='table' and name like 'personal_agent_%' order by name").all().map(row => row.name);
+    assert.ok(names().includes("personal_agent_reasoning_inbox"));
+    assert.ok(names().includes("personal_agent_sessions"));
+    assert.deepEqual(planPersonalAgentSessionMigration(db).missingColumns, []);
+    assert.deepEqual(planPersonalAgentSessionMigration(db).missingTriggers, []);
+    assert.ok(db.prepare("pragma foreign_key_list(personal_agent_sessions)").all().some(row => row.table === "personal_agent_conversations"));
+    const beforeRerun = names();
+    await openAgentJobDb(env);
+    assert.deepEqual(names(), beforeRerun);
+  } finally {
+    await closeAgentJobDbs();
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("expired busy session lease is retained and never acquired by another store", async () => {
+  let clock = 1_800_000_000_000;
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-session-busy-lease-"));
   const env = { ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: "1" };
   try {
     const db = await openAgentJobDb(env);
     conversationFixture(db);
     migratePersonalAgentSessions(db, { dryRun: false });
-    const store = await openPersonalAgentSessionStore({ env });
-    const created = store.transaction(tx => {
-      const row = tx.create(session("tx-one"));
-      assert.equal(Object.hasOwn(row, "ownerUserId"), false);
-      return tx.acquireLease("tx-one", { expectedVersion: 0, ttlMs: 1000 });
+    const first = await openPersonalAgentSessionStore({ env, now: () => clock });
+    const second = await openPersonalAgentSessionStore({ env, now: () => clock });
+    first.create(session("ses_busy_expired", { role: "worker" }));
+    const lease = first.acquireLease("ses_busy_expired", { expectedVersion: 0, ttlMs: 100 });
+    const busy = first.update("ses_busy_expired", {
+      expectedVersion: 1, leaseToken: lease.leaseToken,
+      patch: { lifecycle: "busy", leaseTtlMs: 100 },
     });
-    assert.equal(created.session.version, 1);
-    const renewed = store.transaction(tx => tx.update("tx-one", {
-      expectedVersion: 1, leaseToken: created.leaseToken,
-      patch: { lifecycle: "busy", heartbeatAt: new Date().toISOString(), leaseTtlMs: 1000 },
-    }));
-    assert.equal(renewed.version, 2);
-    assert.equal(renewed.lifecycle, "busy");
-    assert.throws(() => store.transaction(tx => {
-      tx.create(session("tx-rollback", { role: "worker" }));
-      throw new Error("rollback_fixture");
-    }), /rollback_fixture/);
-    assert.equal(store.get("tx-rollback"), null);
-    assert.throws(() => store.transaction(async () => {}), { code: "personal_agent_session_transaction_must_be_synchronous" });
-    assert.equal(store.get("tx-one").version, 2);
+    clock += 101;
+    assert.equal(second.acquireLease("ses_busy_expired", { expectedVersion: busy.version, ttlMs: 100 }), null);
+    assert.equal(first.get("ses_busy_expired").leaseToken, lease.leaseToken);
+    assert.equal(first.get("ses_busy_expired").lifecycle, "busy");
   } finally {
     await closeAgentJobDbs();
     await fs.rm(home, { recursive: true, force: true });
@@ -192,6 +205,7 @@ test("feature-off session store refuses access without adding session schema", a
     await assert.rejects(openPersonalAgentSessionStore({ env: { ORKESTR_HOME: home } }), { code: "personal_agent_disabled" });
     const db = await openAgentJobDb({ ORKESTR_HOME: home });
     assert.equal(db.prepare("select count(*) as n from sqlite_master where name='personal_agent_sessions'").get().n, 0);
+    assert.equal(db.prepare("select count(*) as n from sqlite_master where name='personal_agent_reasoning_inbox'").get().n, 0);
   } finally {
     await closeAgentJobDbs();
     await fs.rm(home, { recursive: true, force: true });

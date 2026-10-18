@@ -116,14 +116,6 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
         return toSession(getStatement.get(sessionId));
       });
     },
-    transaction(fn) {
-      if (typeof fn !== "function") throw sessionError("personal_agent_session_transaction_required", 400);
-      return tx(db, () => {
-        const result = fn(store);
-        if (result && typeof result.then === "function") throw sessionError("personal_agent_session_transaction_must_be_synchronous", 400);
-        return result;
-      });
-    },
   };
   return Object.freeze(store);
 }
