@@ -11,8 +11,8 @@ ORK-534 is reference context only. Jira availability does not gate implementatio
 |---|---|---|---|---|
 | Coordinator | `v2/s0-coordination` | Running light: dependency integration, backlog, review routing | This ledger; implementation head pending | No Rust tests run by coordinator; CI pending |
 | Core | `v2/s0-core` | Running heavy: confirms contracts/application/store-sqlite/Axum durable intake on pinned baseline; API fixtures forthcoming | Awaiting first commit/PR; initial head is plan baseline | First build and test counts pending |
-| Runtime | `v2/s0-runtime` | Running heavy: provider port, fake runtime, session supervision | Awaiting first commit/PR; initial head is plan baseline | Tests pending; live inference out of scope |
-| UI | `v2/s0-ui` | Queued heavy; confirmed light plan/contract and Dioxus 0.7/iOS WebView feasibility only; no Cargo/downloads | Confirmed at `a7ba6d59`; first PR pending | Web/native builds pending |
+| Runtime | `v2/s0-runtime` | Running heavy: offline provider/runtime slice; proposed `orkestr-runtime` implements core-owned application runtime ports, no own store | Confirmed clean at `a7ba6d59`; first PR pending | Tests pending; Codex 0.163.0 / Claude 2.1.295 version/help only, no live inference |
+| UI | `v2/s0-ui` | Queued heavy; light feasibility checkpoint committed; no Cargo/downloads | [PR #73](https://github.com/otcan/orkestr/pull/73), observed head `66965cdbb6a43df72ced848a22f7a9a7c179ee64`; reported checkpoint `28b7194e` | Web pending; iOS simulator blocked by Linux/missing Apple tools; independent review routed |
 | Verification | `v2/s0-verification` | Running light: inventory, black-box specifications, independent reviews | Awaiting first commit/PR; initial head is plan baseline | No compile until core first build; acceptance pending |
 
 Admission instructions were queued successfully through `orkestr send` to all
