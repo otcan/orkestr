@@ -149,3 +149,72 @@ Source SHA256: `2a247a55f4be1fd7c102b01caeb54e9ebebf01322d203885033e9f3571004004
 Executed binary SHA256: `f3081b4617336073430edbd6abfd6a2b184a6c2c846cbdf77d941daf5b4e6b10`.
 Independent coordinator review remains required; these are author-executed results
 for independently authored verification tests, not self-approved test correctness.
+
+### Refusal matrix and seven independent kill windows
+
+The next checkpoint still targets exact Core 44ecdb30; it changes only independent
+tests and this evidence. Install `fixture_negative.rs` as
+`tests/independent_transactions/negative.rs` beside the two integration test files.
+The main transaction file loads that purpose-specific module. Commands remain
+locked/offline through the required wrapper, adding both `--test
+independent_transactions --test independent_crash` to the store feature invocation.
+
+Result: **7 transaction tests passed** (0.21s); **1 independent crash parent
+passed** (0.28s), **1 standalone child entry ignored** and invoked seven times.
+The independent parent now covers every public typed checkpoint:
+
+| Kill window | Post-kill read-only durable state |
+| --- | --- |
+| AdmitBeforeAck / AdmitBeforeCommit | 0 runs, 0 acknowledged rows |
+| AdmitAfterCommit | 1 run/ack, Candidate, candidate verifier only |
+| ReserveBeforeCommit | 1 run/ack, Candidate, candidate verifier only |
+| ReserveAfterCommit / ConsumeBeforeCommit | 1 run/ack, Reserved, both verifiers present |
+| ConsumeAfterCommit | 1 run/ack, DeliveryUnknown, neither verifier present |
+
+The new negative module independently tests 14 synthetic returned-envelope
+mutations at **both** reserve and consume: owner, conversation, session, role,
+purpose, lease generation, dispatch fence, attempt, deadline, native identity,
+binding generation/role/state/native identity. Every operation refuses; scope
+counts or the attempt projection remain unchanged after each rejection. A valid
+reservation/consume still succeeds afterward. A different reservation request
+key conflicts. Seven pre-admission claim mutations (owner, conversation,
+consumer, generation, sequence, deadline, expected binding generation) each refuse
+with the scope still at zero attempts. Fast-role readiness and unsupported protocol
+confirmation refuse. These are explicit cases, not an exhaustive error matrix;
+the test name's "unready_protocol" label refers to readiness protocol refusals,
+not an unconfirmed deep binding admission test.
+
+Current procedure coverage, **without declaring full procedures passed**:
+
+| Procedure | Completed independent cases | Still pending |
+| --- | --- | --- |
+| R01 | Admission race, same envelope, one fresh locator, exact 1 run/ack | Wider concurrency/repeated schedules |
+| R02 | 14 envelope mutations at reserve/consume; 7 claim mutations; unchanged projections | Explicit message/event tamper, cross-project existing-ID cases, remaining binding fields |
+| R03 | Actual kill after insert-before-ack and before commit yields 0 run/ack | Public-authority retry after child loss; full unrelated-state retention |
+| R04 | Reservation race, forged candidate, changed key, before/after-commit kills | Replay after reservation child loss cannot be authorized by IDs alone |
+| R05 | Consume race, third-pool unknown observation, before-commit rollback and after-commit unknown | Provider-integrated execution acceptance |
+| R06 | Suppressed reply, live-handle pool reopen, actual consume-commit-before-reply SIGKILL | Public process-restart recovery and integrated no-redispatch oracle |
+| R07 | Reserved predecessor expiry race, quarantine/verifier clearing, unrelated namespace remains live | Candidate and DeliveryUnknown predecessor variants independently authored |
+| R08 | Ordinary admission unavailable, fast readiness/protocol refusal, tamper fail-closed | Unconfirmed deep binding and remaining unavailable/error paths |
+
+Core was notified of this matrix to coordinate its separate meaningful guard
+tests. No implementation defect was observed in this bounded execution. Existing
+private Core crash tests and Runtime tests retain their separate evidence status.
+Coordinator review of these new authored changes remains required.
+
+Current source SHA256 values:
+
+- main: `bfb7378d7a69710f11435ba9e9fe0e4b5a1ffa250e04dca79c5e037e939a12b3`
+- negative: `c14082a546a3b843c3ee00521fed65c287d9fc15976fb8f0af0c97d0a49ec7e4`
+- crash: `4fa70ea39ece0195d76d650adff352c9391da00adbc400f6b98119e15a346be2`
+
+Executed binary SHA256 values:
+
+- transaction: `0a917e58f762695303ea0ee19d215dbde035242d50e2e579859a5c870035e6bb`
+- crash: `19f6a4070c521be98dd0ced55f278e0e2a431b3e7eaeb4628426961feb9a0c6d`
+
+Strict clippy also passed for both independent integration targets, using the
+required wrapper with `--locked --offline -p orkestr-v2-store-sqlite --features
+fixture-test-controls --test independent_transactions --test independent_crash
+-- -D warnings`. Package formatting and git diff checks passed. No exact-head CI
+result is claimed for this verification update.

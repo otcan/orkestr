@@ -76,11 +76,23 @@ async fn independent_checkpoint_child() {
         .unwrap()
         .unwrap();
     let stage = std::env::var("INDEPENDENT_CHECKPOINT_STAGE").unwrap();
-    if stage == "consume-after-commit" {
+    if stage.starts_with("consume-") || stage.starts_with("reserve-") {
         let candidate = h
             .admit_run(&claim, &binding.session_id, binding.generation, "run")
             .await
             .unwrap();
+        if stage.starts_with("reserve-") {
+            let point = if stage == "reserve-before-commit" {
+                FixtureCheckpoint::ReserveBeforeCommit
+            } else {
+                FixtureCheckpoint::ReserveAfterCommit
+            };
+            h.fixture_arm_checkpoint(point, root.join("checkpoint"))
+                .await
+                .unwrap();
+            let _ = h.claim_provider_dispatch(&candidate, "reserve").await;
+            panic!("parent must kill reservation checkpoint");
+        }
         let reservation = match h
             .claim_provider_dispatch(&candidate, "reserve")
             .await
@@ -90,7 +102,11 @@ async fn independent_checkpoint_child() {
             _ => panic!("reservation"),
         };
         h.fixture_arm_checkpoint(
-            FixtureCheckpoint::ConsumeAfterCommit,
+            if stage == "consume-before-commit" {
+                FixtureCheckpoint::ConsumeBeforeCommit
+            } else {
+                FixtureCheckpoint::ConsumeAfterCommit
+            },
             root.join("checkpoint"),
         )
         .await
@@ -100,6 +116,7 @@ async fn independent_checkpoint_child() {
         let point = match stage.as_str() {
             "admit-before-ack" => FixtureCheckpoint::AdmitBeforeAck,
             "admit-after-commit" => FixtureCheckpoint::AdmitAfterCommit,
+            "admit-before-commit" => FixtureCheckpoint::AdmitBeforeCommit,
             _ => panic!("stage"),
         };
         h.fixture_arm_checkpoint(point, root.join("checkpoint"))
@@ -115,20 +132,22 @@ async fn independent_checkpoint_child() {
 async fn independent_sigkill_before_ack_and_after_commit_has_exact_durable_rows() {
     for stage in [
         "admit-before-ack",
+        "admit-before-commit",
         "admit-after-commit",
+        "reserve-before-commit",
+        "reserve-after-commit",
+        "consume-before-commit",
         "consume-after-commit",
     ] {
         let base = PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").expect("isolated home"));
-        let root = Root(
-            base.join(format!(
+        let root = Root(base.join(format!(
                 "independent-kill-{}-{}",
                 std::process::id(),
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_nanos()
-            )),
-        );
+            )));
         std::fs::create_dir(&root.0).unwrap();
         let mut child = OwnedChild(
             Command::new(std::env::current_exe().unwrap())
@@ -174,7 +193,7 @@ async fn independent_sigkill_before_ack_and_after_commit_has_exact_durable_rows(
             .await
             .unwrap();
         let ack:i64=sqlx::query_scalar("SELECT count(*) FROM reasoning_inbox WHERE state='consumed' AND admitted_fixture_run_id IS NOT NULL").fetch_one(&mut *tx).await.unwrap();
-        if stage == "admit-before-ack" {
+        if stage == "admit-before-ack" || stage == "admit-before-commit" {
             assert_eq!((count, ack), (0, 0));
         } else {
             assert_eq!((count, ack), (1, 1));
@@ -183,6 +202,8 @@ async fn independent_sigkill_before_ack_and_after_commit_has_exact_durable_rows(
                 row.get::<String, _>("dispatch_state"),
                 if stage == "consume-after-commit" {
                     "delivery_unknown"
+                } else if stage == "reserve-after-commit" || stage == "consume-before-commit" {
+                    "reserved"
                 } else {
                     "candidate"
                 }
@@ -195,7 +216,10 @@ async fn independent_sigkill_before_ack_and_after_commit_has_exact_durable_rows(
                     1
                 }
             );
-            assert_eq!(row.get::<i64, _>("reservation"), 0);
+            assert_eq!(
+                row.get::<i64, _>("reservation"),
+                i64::from(stage == "reserve-after-commit" || stage == "consume-before-commit")
+            );
         }
         tx.commit().await.unwrap();
         db.close().await.unwrap();
