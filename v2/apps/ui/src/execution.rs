@@ -44,6 +44,7 @@ pub struct Sample {
 }
 #[derive(Clone, Default)]
 pub struct Execution {
+    pub stops: crate::stop::Stops,
     sample: Option<Sample>,
     connected: bool,
     generation: u64,
@@ -205,6 +206,7 @@ impl Execution {
             .expect("selection generation exhausted");
         self.authorized = false;
         self.sample = None;
+        self.stops.clear_owner();
         self.canonical.clear();
         self.canonical_received.clear();
         self.scope = None;
@@ -232,6 +234,23 @@ impl Execution {
                     && s.stop_supported
                     && matches!(s.phase, Phase::Queued | Phase::Starting | Phase::Running)
             })
+    }
+    /// Selection/authentication-bound canonical identity, independent of telemetry age.
+    pub fn control_status(&self) -> Option<orkestr_v2_contracts::ExecutionStatus> {
+        if !self.authorized {
+            return None;
+        }
+        let sample = self.sample.as_ref()?;
+        self.canonical
+            .get(&sample.conversation)
+            .filter(|status| {
+                status
+                    .run_id
+                    .as_ref()
+                    .is_some_and(|run| run.to_string() == sample.run)
+                    && status.revision as u64 == sample.revision
+            })
+            .cloned()
     }
     pub fn can_steer(&self, now_ms: u64) -> bool {
         self.authorized

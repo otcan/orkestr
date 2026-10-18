@@ -6,6 +6,7 @@ pub mod execution;
 pub mod host_resources;
 mod reconcile;
 pub mod session_scope;
+pub mod stop;
 pub use reconcile::reconcile;
 
 pub const WINDOW: usize = 100;
