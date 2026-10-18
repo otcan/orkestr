@@ -222,3 +222,6 @@ mod claude_identity_tests;
 
 mod worker_tasks;
 pub use worker_tasks::WorkerTaskClaim;
+
+mod steering;
+pub use steering::*;
