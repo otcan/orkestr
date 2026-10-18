@@ -3,6 +3,7 @@
 Unregistered: trusted profile selection and Runtime's sealed tool-result fence
 must be reviewed before Channel may call these helpers.
 """
+import unicodedata
 from protocol import exact, identifier, require
 
 NAME='orkestr_offline_python'
@@ -17,7 +18,8 @@ def advertisement():
 
 def request_id(value):
     return (type(value) is int and 0<value<2**53) or (
-        isinstance(value,str) and 0<len(value.encode())<=128)
+        isinstance(value,str) and 0<len(value.encode())<=128
+        and not any(unicodedata.category(char)=='Cc' for char in value))
 
 
 def validate_call(frame, native, turn):
