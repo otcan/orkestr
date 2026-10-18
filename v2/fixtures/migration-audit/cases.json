@@ -1,0 +1,42 @@
+{
+  "audit_version": 1,
+  "source_instance": "fixture-instance-alpha",
+  "dispatch_allowed": false,
+  "threads": [
+    {"id": "fixture-root", "name": "Example", "publicRef": "fixture-ref-root", "parentThreadId": null, "rootThreadId": "fixture-root", "ownerUserId": "fixture-owner"},
+    {"id": "fixture-worker", "name": "Example", "publicRef": "fixture-ref-worker", "parentThreadId": "fixture-root", "rootThreadId": "fixture-root", "threadKind": "worker", "ownerUserId": "fixture-owner"}
+  ],
+  "messages": [
+    {"thread_id": "fixture-root", "id": "fixture-message-1", "position": 1, "cursor": 7, "role": "user", "state": "received", "phase": null, "parent_message_id": null, "created_at": "2026-01-01T00:00:00Z", "data": {"text": "Synthetic request"}},
+    {"thread_id": "fixture-root", "id": "fixture-message-2", "position": 2, "cursor": 11, "role": "assistant", "state": "complete", "phase": "final", "parent_message_id": "fixture-message-1", "created_at": "2025-12-31T23:59:59Z", "data": {"text": "Synthetic response"}},
+    {"thread_id": "fixture-worker", "id": "fixture-message-1", "position": 1, "cursor": 3, "role": "assistant", "state": "complete", "phase": "commentary", "parent_message_id": null, "created_at": "2026-01-01T00:00:01Z", "data": {"text": "Synthetic worker history"}}
+  ],
+  "tasks": [
+    {"id": "fixture-task-1", "projectId": "fixture-project", "threadId": "fixture-root", "runId": "fixture-run-1", "state": "cancelled", "dependencies": [], "completion": null},
+    {"id": "fixture-task-2", "projectId": "fixture-project", "threadId": "fixture-worker", "runId": "fixture-run-2", "state": "needs_approval", "dependencies": ["fixture-task-1"], "completion": null}
+  ],
+  "runs": [
+    {"id": "fixture-run-1", "runKey": "fixture-run-key-1", "state": "cancelled", "output": null},
+    {"id": "fixture-run-2", "runKey": "fixture-run-key-2", "state": "awaiting_approval", "output": {"note": "Synthetic incomplete result"}}
+  ],
+  "effects": [
+    {"effect_key": "fixture-effect-1", "run_id": "fixture-run-1", "state": "cancelled", "outcome": null, "ref": null},
+    {"effect_key": "fixture-effect-2", "run_id": "fixture-run-2", "state": "unknown", "outcome": "unknown", "ref": "fixture-result-reference"}
+  ],
+  "resources": [
+    {"resource_type": "fixture-type", "resource_id": "fixture-resource", "owner_user_id": "fixture-owner"}
+  ],
+  "artifacts": [
+    {"filename": "example.txt", "source": "sandbox_artifact", "sha256": "70dd3fa4834a24f765733ac5357a367af35126a7831dce3fe5c3b5508164ae84", "fixture_relative_path": "artifacts/example.txt"}
+  ],
+  "expected": {
+    "thread_count": 2,
+    "message_count": 3,
+    "root_message_order": ["fixture-message-1", "fixture-message-2"],
+    "unsupported_task_states": ["needs_approval"],
+    "unsupported_run_states": ["awaiting_approval"],
+    "effects_disposition": "quarantined_history_only",
+    "target_contract": null,
+    "exclusions": ["credentials", "sessions", "routes", "leases", "approval_authority", "retry_schedules"]
+  }
+}
