@@ -136,7 +136,7 @@ async fn unready_protocol_and_semantic_claim_refusals_leave_zero_attempts() {
     c.close().await;
 }
 
-async fn project_claim(c: &Case, key: &str, ready: bool) -> (Binding, InboxClaim) {
+pub(super) async fn project_claim(c: &Case, key: &str, ready: bool) -> (Binding, InboxClaim) {
     let project =
         c.a.create_project(
             &c.claim.owner_id,
