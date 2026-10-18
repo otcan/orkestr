@@ -6,7 +6,7 @@ root = Path(__file__).resolve().parents[1]
 allowed = {
     "orkestr-domain": set(),
     "contracts": {"serde", "uuid"},
-    "application": {"orkestr-v2-contracts"},
+    "application": {"orkestr-v2-contracts", "async-trait"},
 }
 for crate, dependencies in allowed.items():
     manifest = tomllib.loads((root / "crates" / crate / "Cargo.toml").read_text())
