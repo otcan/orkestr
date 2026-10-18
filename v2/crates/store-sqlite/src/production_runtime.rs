@@ -11,6 +11,8 @@ mod dispatch;
 mod fence;
 pub(crate) mod inspection;
 mod leases;
+mod metadata;
+pub use metadata::{BoundSessionMetadata, ReadySessionTransition};
 #[cfg(all(test, unix))]
 mod process_tests;
 mod readiness;

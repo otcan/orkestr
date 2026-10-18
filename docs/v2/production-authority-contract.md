@@ -161,3 +161,35 @@ and bounded nonempty steering text. They are not authority or a success receipt.
 Runtime owns cookie/CSRF relative /api/v2/conversations/:id/execution routes;
 Stop/steer remain unavailable until owner/run/revision/idempotency/fence checks
 and durable result receipts are implemented. Do not manufacture a success DTO.
+
+### Pre-run metadata authority and readiness transition
+
+`Store::authorize_session_metadata(&Binding)` issues a non-Clone, nonserializable
+`BoundSessionMetadata` only for the exact current owner-scoped Starting binding
+under the authenticated supervisor. It contains no run ID or inference grant.
+`with_metadata_fence(&grant, action)` holds an immediate SQLite transaction while
+checking current context, token, expiry and exact binding, then invoking one
+bounded synchronous setup action. Metadata transport must whitelist initialization,
+account and persistent-thread setup only; it must never accept inference commands.
+
+After validating correlated persistence/workspace/native readiness, the trusted
+adapter consumes the grant through `confirm_metadata_session(grant, evidence)`.
+The resulting private `ReadySessionTransition` explicitly links Starting and Ready;
+consumers must not assume generation equality or arithmetic. The old metadata
+fence refuses further setup after readiness. Isolation copies the original scope
+into its owned metadata child, while the trusted adapter retains the Core grant.
+
+One-way attachment consumes both transition and `ConsumedProviderDispatch` through
+`ReadySessionTransition::attach_execution`. It checks the exact immutable Ready admission identity
+(the live binding row is Busy), namespace and incarnation. The executor must compare the child's
+original metadata scope to `transition.metadata()` before consuming the link,
+require empty pending setup writes, and use the execution fence around transfer
+and enqueue. Execution scope carries binding generation separately from lease and
+dispatch fence. Any failed transfer quarantines the child; no returned/recreated
+inference grant or reverse transition is permitted. This source boundary requires
+independent review before containment adoption; no real provider is activated.
+
+Current public revocation is `Store::revoke_session(machine_token)`: subsequent
+metadata/execution fences authenticate inside their immediate transaction. Natural
+expiry is the store's 60-second supervisor deadline; heartbeat extends only a live
+context. No public production clock setter or cancellation authority exists yet.

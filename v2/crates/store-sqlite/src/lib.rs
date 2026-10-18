@@ -16,7 +16,8 @@ mod production_runtime;
 mod replay;
 mod runtime;
 pub use production_runtime::{
-    ConsumedProviderDispatch, ExecutionConsumption, ProductionSupervisorStore,
+    BoundSessionMetadata, ConsumedProviderDispatch, ExecutionConsumption,
+    ProductionSupervisorStore, ReadySessionTransition,
 };
 
 pub use production_runtime::inspection::{
