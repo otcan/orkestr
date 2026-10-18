@@ -2,6 +2,7 @@
 //! Runtime owns provider protocols and the private consumed-turn adapter.
 mod environment;
 mod framing;
+pub mod metadata;
 mod process;
 mod scope;
 mod sys;
