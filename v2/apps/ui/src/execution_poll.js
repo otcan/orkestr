@@ -1,6 +1,6 @@
 // Read-only, same-origin execution/host status channel. The owning component sends cancellation on drop.
 const {path} = await dioxus.recv();
-if (path !== "/api/v2/resources" && !/^\/api\/v2\/conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/execution$/.test(path)) throw new Error("Invalid status path");
+if (path !== "/api/v2/resources" && !/^\/api\/v2\/conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/execution(?:\?run_id=[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$/.test(path)) throw new Error("Invalid status path");
 let stopped = false, controller, wake, retryTimer;
 const now = () => Math.floor(performance.now());
 dioxus.recv().then(() => {

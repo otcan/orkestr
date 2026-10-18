@@ -130,13 +130,15 @@ impl Execution {
             || self.received_ms.is_some_and(|last| received_ms < last)
             || self.canonical.get(&cache_key).is_some_and(|old| {
                 status.revision < old.revision
-                    || (status.revision == old.revision && {
-                        // Registry availability is sampled after the durable read.
-                        // Normalize only that overlay; every durable field still matches.
-                        let mut durable = old.clone();
-                        durable.capabilities.stop = status.capabilities.stop;
-                        !status.same_revision_state(&durable)
-                    })
+                    || (status.revision == old.revision
+                        && status.observed_at_ms >= old.observed_at_ms
+                        && {
+                            // Registry availability is sampled after the durable read.
+                            // Normalize only that overlay; every durable field still matches.
+                            let mut durable = old.clone();
+                            durable.capabilities.stop = status.capabilities.stop;
+                            !status.same_revision_state(&durable)
+                        })
             })
         {
             return Err("Invalid or regressing execution status");

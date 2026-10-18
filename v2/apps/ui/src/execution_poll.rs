@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 #[component]
 pub fn ExecutionPoll(
     id: String,
+    #[props(default)] run: String,
     csrf: String,
     session_scope: Signal<SessionScope>,
     mut execution: Signal<Execution>,
@@ -13,11 +14,17 @@ pub fn ExecutionPoll(
 ) -> Element {
     let generation = session_scope.read().generation();
     let selected = id.clone();
-    let selection_generation = use_hook(move || execution.write().select(&selected, ""));
+    let selected_run = run.clone();
+    let selection_generation = use_hook(move || execution.write().select(&selected, &selected_run));
     let mut now = use_signal(|| 0u64);
     let channel = use_hook(move || {
         let eval = document::eval(include_str!("execution_poll.js"));
-        let _ = eval.send(json!({"path":format!("/api/v2/conversations/{id}/execution")}));
+        let path = if run.is_empty() {
+            format!("/api/v2/conversations/{id}/execution")
+        } else {
+            format!("/api/v2/conversations/{id}/execution?run_id={run}")
+        };
+        let _ = eval.send(json!({"path":path}));
         eval
     });
     use_drop(move || {
