@@ -113,3 +113,33 @@ PR #88 over the coordinator's chosen integration base. The current runtime
 branch remains a source-review candidate with all dispatch blocked; coordinator
 must explicitly reconcile the base before lock/build/integration. No raw d4
 contracts, historical roots or additional port are imported by this comparison.
+
+## Frozen read-only dispatch analysis: PR #95
+
+Inspected ee1750cba1c222989e05e00b87f713d5d4caab7a, parent chain
+7d3c8695 -> a05eab4d -> ee1750cb. No shared-path import is selected here.
+This is a native Future+Send v4 proposal, not an implicit reversal of the current
+branch's pending async adaptation or an observation-policy selection.
+
+Runtime mapping after canonical reconciliation would validate returned admission
+identity/role/Execution, refuse Replay/ReconciliationRequired, and treat
+FreshCandidate as insertion evidence only. The store-issued candidate key must
+never be logged/serialized; only core may validate/consume it and reserve once.
+A claim response is still not permission to call Provider::start. Only a unique
+consume result DispatchNow follows a durable DeliveryUnknown CAS before I/O;
+repeat/lost ACK/restart requires reconciliation without retrying provider I/O.
+Until independent durable enforcement exists, current high-level starts remain
+DispatchUnconfirmed and neither new operation is called by runtime.
+
+Required adapter cases include forged/missing candidate and reservation, replay
+and terminal admission, lost ACK at each boundary, cancellation-before-consume
+refusal, consume-before-cancel unknown status and no retry after local write error.
+These need core transactions and acceptance tests; spies cannot prove single-winner
+or restart behavior. No reusable runtime token/store is introduced.
+
+Reconciliation blockers: PR #95 retains v4 record_observation and its old
+current-authority-before-duplicate policy, whereas this branch has v5 append and
+committed replay retrieval. Core/coordinator must explicitly choose one newest
+contract SHA and delta, including async convention and observation policy, before
+shared-path migration. Native readiness, bound supervisor enforcement and worker
+admission remain unavailable; the proposal implements none of them.
