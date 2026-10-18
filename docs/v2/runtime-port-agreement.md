@@ -108,8 +108,9 @@ Synthetic serialization examples:
 protocol examples, not new HTTP endpoints. Existing seven intake fixtures remain
 unchanged. No native references or secret material appear in fixtures.
 
-All ten trait methods (counting binding creation/lease renewal separately) are
-contract-only: SQLite runtime migration/adapter is NOT implemented. There is no
+SQLite migration 0002 and its adapter implement role bindings, worker bindings
+and ordered leased inbox claims. The remaining seven methods explicitly return
+Unavailable; run admission and durable runtime lifecycle are NOT implemented. There is no
 in-memory production fallback. Implementations must return
 `RuntimeStoreError::Unavailable` for any unimplemented method; never fabricate
 successful admissions, recovered state or readiness. Other store errors are
@@ -135,7 +136,8 @@ validated; no second journal is authorized.
 
 Core also owns session_bindings, tasks, runs, runtime_observations and inbox
 claimant/generation/expiry/durable run linkage. Admission and inbox handoff must
-commit together. These tables and constraints remain unimplemented.
+commit together. Migration 0002 adds bindings and inbox lease fields only. Tasks, runs, runtime
+observations and durable run linkage remain unimplemented.
 
 The current HTTP event envelope assumes MessageAccepted and concrete MessageId
 correlation. A versioned event DTO and replay compatibility decision are required
@@ -143,3 +145,19 @@ before publishing other event kinds. The owner-only messages constraint remains
 until core implements a distinct, server-authorized provider-message path; HTTP
 callers must never gain permission to spoof provider actors. This document freezes
 the ten shared port signatures, not an implemented migration or acceptance result.
+
+## Review of runtime proposal 42a0dce6
+
+The exact proposal agrees with atomic admit/ack, metadata-only observations,
+removable provider text, partial message-accepted uniqueness, and a single
+conversation ordering authority. Two authority gaps must be resolved before run
+admission: v2 lacks a provider/profile namespace in the native-binding operation,
+and it lacks the supervisor identity needed to recover only a lost supervisor.
+Migration 0002 reserves a private nullable provider namespace and does not expose
+a native-binding write path. Recovery must not fence unrelated live supervisors.
+No task policy is invented by the foundation adapter.
+
+Authored store tests cover concurrent idempotent bindings, reopen persistence,
+worker replay conflicts, competing claims, generation advance on deterministic
+expiry, retained follow-up order, owner/scope and role rejection, and fail-closed
+run admission. They require execution before acceptance; they are not crash tests.

@@ -18,7 +18,7 @@ pub enum RuntimeStoreError {
 }
 pub type Result<T> = std::result::Result<T, RuntimeStoreError>;
 
-/// The full port is published, but no SQLite runtime adapter exists yet.
+/// SQLite implements bindings and inbox claims; remaining operations are unavailable.
 /// Implementations must return Unavailable for any unimplemented operation.
 /// Unsupported provider commands are a separate runtime capability blocker.
 pub trait RuntimeStore: Send + Sync {
