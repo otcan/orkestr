@@ -30,7 +30,7 @@ pub struct WorkerAdmissionInput {
 }
 // Methods on the already authenticated, bound ordinary Store:
 async fn delegate_worker(
-    &self, credential: &str, parent: &ConsumedProviderDispatch,
+    &self, credential: &str, parent_run_id: &RunId,
     input: &WorkerAdmissionInput,
 ) -> Result<WorkerDelegationResult>;
 async fn admit_worker(
@@ -39,7 +39,11 @@ async fn admit_worker(
 ```
 
 `delegate_worker` authenticates the current exact credential inside BEGIN
-IMMEDIATE, then validates the full consumed parent execution envelope. The parent
+IMMEDIATE, then loads the exact durable parent run under the sealed supervisor context.
+RunId is a locator, not a grant: owner/conversation/provider/namespace/incarnation,
+current issued lease/fence, readiness and binding are read and validated from
+storage in that transaction. No consumed inference capability is retained, cloned
+or reconstructed. The parent
 must be Deep, Running, DeliveryUnknown, currently leased and unfenced. Starting,
 AwaitingAcceptance and terminal parents refuse. Nested delegation is initially
 unsupported. This is a server-supervisor scheduling method, not a provider tool
@@ -86,10 +90,13 @@ new descendant callback/dispatch fail. Parent cancellation/recovery also updates
 live delegation/child authority and erases candidate/reservation locators in the
 same transaction before returning control. DeliveryUnknown remains unknown;
 there is no synthetic child Stopped or success. Already committed authenticated
-observation replay stays historical evidence only. Parent completion/acceptance
-is refused Busy while a child is active; the parent cannot become terminal while
-silently leaving live child authority. Child Failed/Blocked remains occupied
-until a separately reviewed recovery policy resolves it.
+observation replay stays historical evidence only. Genuine parent Failed/Lost and CompletedProposal evidence is never refused Busy
+merely because a child is active. The observation and descendant fencing commit
+atomically: preserve the parent terminal/proposal truth, erase descendant locators
+and mark unresolved descendants Blocked/unknown without fabricating Stopped.
+Owner acceptance must not silently release unresolved descendant effects; its
+separate reviewed policy may refuse Busy until reconciliation. Child Failed/Blocked
+remains occupied until a separately reviewed recovery policy resolves it.
 
 Core owns migration allocation and registration. Required additive ledger:
 Worker delegations with exact parent authority snapshot, semantic request digest,
@@ -105,3 +112,15 @@ oracles: independent Worker/native binding; no inbox delta; owner/source/role/
 namespace/parent forgery; simultaneous issuance/admission/consume; changed replay;
 parent cancel/recovery versus child callback; expiry/revoke; lost reply and fresh
 process reopen with no locator reissue; complete no-write refusal snapshots.
+
+## Runtime compatibility correction
+
+The parent inference capability is consumed by value at transport attachment and
+may be gone before Running. Delegation therefore uses the already bound Store's
+authenticated durable RunId lookup above, not `&ConsumedProviderDispatch`. This
+method remains server-supervisor-only; no JSON route or provider self-grant is
+introduced. Request replay compares the original stored semantic parent snapshot,
+then returns evidence only; fresh issuance requires current parent authority.
+Parent terminal observation persistence and descendant fencing must share a
+transaction, including Failed before/after Started and Lost. This corrects the
+earlier proposal's overly broad parent-terminal Busy rule before implementation.
