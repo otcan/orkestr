@@ -386,6 +386,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   if (method === "POST" && params) {
     requireAuth(req, env);
     const body = await readJsonBody(req);
+    if (scoped) scoped.checkRequest(method, url, body);
     requireServicePolicy(req, url, env, body, { accounts: [params.accountId], pairing: true });
     const account = await bridge.startLocalWhatsAppAccount(params.accountId, env, {
       resetRuntime: body.resetRuntime === true || url.pathname.endsWith("/reconnect"),

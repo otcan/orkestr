@@ -6383,7 +6383,7 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     if (typeof connectedPageReadyFallbackTimer.unref === "function") connectedPageReadyFallbackTimer.unref();
   };
   client = new Client({
-    authStrategy: new (scopedStartup ? createPreservingNativeAuth(LocalAuth) : LocalAuth)({ clientId: clientIdForAccount(normalized, env), dataPath: sessionRootForAccount(normalized, env) }),
+    authStrategy: new (scopedStartup ? createPreservingNativeAuth(LocalAuth, { allowPairing: scopedStartup.pairingAllowed }) : LocalAuth)({ clientId: clientIdForAccount(normalized, env), dataPath: sessionRootForAccount(normalized, env) }),
     puppeteer: puppeteerOptions(env),
     userAgent: whatsappUserAgent(env),
     webVersionCache: {

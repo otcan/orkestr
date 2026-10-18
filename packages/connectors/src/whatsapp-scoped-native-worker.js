@@ -1,25 +1,31 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {createScopedGroupTransport} from './whatsapp-scoped-group-transport.js';
+import {createScopedPairingPermit} from './whatsapp-scoped-pairing.js';
 const loaded=new Map();
 const fail=()=>{throw Object.assign(new Error('scoped_worker_operation_denied'),{statusCode:403});};
 export function createScopedNativeWorkerPolicy(config,{createTransport=createScopedGroupTransport}={}) {
  if(!config.workerAccountId || config.groups?.length!==1 || config.groups[0].threadId!==config.routeControl?.threadId)throw new Error('scoped_worker_configuration_invalid');
  let transport,started=false;
+ const pairing=createScopedPairingPermit(config);
  const get=accountId=>{
   if(accountId!==config.workerAccountId)fail();
   return transport ||= createTransport({config,token:'native-private-socket-policy',base:{}});
  };
  return {
   accountId:config.workerAccountId,
+  pairingAllowed:()=>pairing.allowsAuthentication(),
   claimStart({accountId,existing,options={},previous={},profile}) {
-   if(accountId!==config.workerAccountId || options.resetRuntime || options.reset || options.force || options.phoneNumber || previous.verifiedLogoutAt || previous.state==='auth_failure')throw new Error('scoped_worker_operator_recovery_required');
+   if(accountId!==config.workerAccountId || options.resetRuntime || options.reset || options.force || (options.phoneNumber && !config.pairingAttempt) || previous.verifiedLogoutAt || previous.state==='auth_failure')throw new Error('scoped_worker_operator_recovery_required');
+   if(options.phoneNumber)pairing.claim(options.phoneNumber);
    if(existing)return;
    if(started)throw new Error('scoped_worker_operator_recovery_required');
    const st=fs.lstatSync(profile);if(!st.isDirectory() || st.isSymbolicLink())throw new Error('scoped_worker_existing_session_required');
    started=true;
   },
-  checkRequest(method,url,body={}) {
+  checkRequest(method,url,body) {
+   if(pairing.requestAllowed(method,url,body))return;
+   body ||= {};
    if(method==='GET' && ['/health','/accounts'].includes(url.pathname))return;
    const a=encodeURIComponent(config.workerAccountId),g=encodeURIComponent(config.groups[0].chatId);
    if(method==='GET' && url.pathname===`/accounts/${a}/chats/${g}/history` && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
@@ -45,7 +51,7 @@ export function scopedNativeWorker(env=process.env) {
  const policy=createScopedNativeWorkerPolicy(config);loaded.set(file,policy);return policy;
 }
 
-export function createPreservingNativeAuth(LocalAuth) {
+export function createPreservingNativeAuth(LocalAuth,{allowPairing=()=>false}={}) {
  return class extends LocalAuth {
   async beforeBrowserInitialized(){
    if(!this.clientId || typeof this.dataPath!=='string')throw new Error('scoped_worker_existing_session_required');
@@ -53,7 +59,7 @@ export function createPreservingNativeAuth(LocalAuth) {
    if(!st.isDirectory() || st.isSymbolicLink())throw new Error('scoped_worker_existing_session_required');
    return super.beforeBrowserInitialized();
   }
-  async onAuthenticationNeeded(){return {failed:true,restart:false,failureEventPayload:'scoped_worker_existing_authentication_required'};}
+  async onAuthenticationNeeded(){return {failed:!allowPairing(),restart:false,failureEventPayload:'scoped_worker_existing_authentication_required'};}
   async logout(){throw new Error('scoped_worker_logout_blocked_preserve_session');}
  };
 }
