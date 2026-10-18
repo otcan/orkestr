@@ -3,7 +3,7 @@ import test from "node:test";
 import { sessionStore } from "./fixtures/personal-agent-session-fixtures.js";
 
 // Behavioral parity for the fake CAS surface, not SQLite/trigger evidence.
-const input = (id = "session-example", extra = {}) => ({ id, conversationId: "conversation-global",
+const input = (id = "session-example", extra = {}) => ({ id, ownerUserId: "owner", conversationId: "conversation-global",
   scopeKind: "global", role: "fast", provider: "codex", accountProfileId: "profile-example",
   createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", ...extra });
 const notFound = { code: "personal_agent_session_not_found", statusCode: 404 };

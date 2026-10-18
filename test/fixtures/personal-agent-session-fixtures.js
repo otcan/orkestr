@@ -1,7 +1,7 @@
 import { createPersonalAgentSessionManager } from "../../packages/core/src/personal-agent-session-manager.js";
 
-// Trusted synthetic authorization projection; canonical conversations have no
-// owner column. Production must inject its actual owner-authenticated resolver.
+// Trusted synthetic authorization projection. Session ownership is persisted;
+// canonical conversations still have no owner column.
 export function resolveSessionConversation(id, { ownerUserId }) {
   const rows = {
     "conversation-global": { id, scopeKind: "global", scopeId: null },
@@ -14,6 +14,7 @@ export function resolveSessionConversation(id, { ownerUserId }) {
 export function sessionStore({ now = Date.now } = {}) {
   const rows = new Map();
   let sequence = 0;
+  let transactionDepth = 0;
   const clone = value => value == null ? null : structuredClone(value);
   const active = row => ["starting", "ready", "busy", "blocked"].includes(row.lifecycle);
   const error = (code, statusCode) => Object.assign(new Error(code), { code, statusCode });
@@ -33,11 +34,12 @@ export function sessionStore({ now = Date.now } = {}) {
     rows.set(row.id, clone(row));
     return clone(row);
   }
-  return {
+  const store = {
     create(input) {
       if (rows.has(input.id)) throw new Error("duplicate session");
-      const { ownerUserId: _transientOwner, ...record } = input;
-      return persist({ ...record, scopeId: input.scopeId ?? null, modelProfile: input.modelProfile ?? {},
+      const ownerUserId = String(input.ownerUserId || "").trim();
+      if (!ownerUserId) throw error("personal_agent_session_owner_required", 400);
+      return persist({ ...input, ownerUserId, scopeId: input.scopeId ?? null, modelProfile: input.modelProfile ?? {},
         nativeSessionId: input.nativeSessionId ?? null, forkFromSessionId: input.forkFromSessionId ?? null,
         lifecycle: input.lifecycle ?? "starting", blockedReason: input.blockedReason ?? null, heartbeatAt: input.heartbeatAt ?? null,
         version: 0, leaseToken: null, leaseExpiresAt: null });
@@ -62,9 +64,26 @@ export function sessionStore({ now = Date.now } = {}) {
       if (next.leaseExpiresAt !== null && !Number.isSafeInteger(next.leaseExpiresAt)) throw error("personal_agent_session_invalid_lease_ttl", 400);
       return persist({ ...next, version: row.version + 1, updatedAt: new Date(now()).toISOString() });
     },
+    transaction(fn) {
+      if (typeof fn !== "function") throw error("personal_agent_session_transaction_required", 400);
+      const snapshot = transactionDepth ? null : clone([...rows]);
+      transactionDepth++;
+      try {
+        const result = fn(store);
+        if (result && typeof result.then === "function") {
+          Promise.resolve(result).catch(() => {});
+          throw error("personal_agent_session_transaction_must_be_synchronous", 400);
+        }
+        return result;
+      } catch (failure) {
+        if (snapshot) { rows.clear(); for (const [id, row] of snapshot) rows.set(id, row); }
+        throw failure;
+      } finally { transactionDepth--; }
+    },
     // Explicit test-only fault injection. Normal manager writes use CAS above.
     tamper(id, patch) { rows.set(id, { ...rows.get(id), ...clone(patch) }); },
   };
+  return store;
 }
 
 export const sessionProfile = { provider: "codex", accountProfileId: "profile-example", model: "gpt-example", effort: "high" };

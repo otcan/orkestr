@@ -2,13 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { sessionHarness, sessionInput, sessionProfile, sessionStore, supervisor } from "./fixtures/personal-agent-session-fixtures.js";
 
-test("canonical CAS store needs no outer transaction or persisted owner column", async () => {
+test("canonical CAS store persists the trusted owner through its transaction API", async () => {
   const h = sessionHarness();
-  delete h.store.transaction;
   const create = h.store.create;
-  h.store.create = input => { assert.equal(Object.hasOwn(input, "ownerUserId"), false); return create(input); };
+  h.store.create = input => { assert.equal(input.ownerUserId, "owner"); return create(input); };
   const row = h.manager.ensure({ ...sessionInput, ownerUserId: "untrusted-input" });
-  assert.equal(Object.hasOwn(row, "ownerUserId"), false);
+  assert.equal(row.ownerUserId, "owner");
   h.adapter.open = async native => {
     assert.equal(native.ownerUserId, "owner");
     return { nativeSessionId: "native-canonical", lifecycle: "ready" };
@@ -17,7 +16,7 @@ test("canonical CAS store needs no outer transaction or persisted owner column",
   await h.manager.runTurn(row.id, supervisor(), {});
   const changed = h.manager.changeProfile(row.id, { ...sessionProfile, model: "gpt-next", effort: "low" });
   for (const key of ["id", "conversationId", "nativeSessionId"]) assert.equal(changed[key], opened[key]);
-  assert.equal(Object.hasOwn(h.store.get(row.id), "ownerUserId"), false);
+  assert.equal(h.store.get(row.id).ownerUserId, "owner");
 });
 
 test("revoked app-owner authorization refuses reads and mutations before storage or providers", async () => {
@@ -102,7 +101,7 @@ test("owner revocation during discovery prevents native session creation", async
 test("fake CAS refuses expired busy rows even without a lease token", () => {
   let at = 1000;
   const store = sessionStore({ now: () => at });
-  const row = store.create({ id: "session-example", conversationId: "conversation-global", scopeKind: "global", role: "fast", provider: "codex", accountProfileId: "profile-example" });
+  const row = store.create({ id: "session-example", ownerUserId: "owner", conversationId: "conversation-global", scopeKind: "global", role: "fast", provider: "codex", accountProfileId: "profile-example" });
   const lease = store.acquireLease(row.id, { expectedVersion: 0, ttlMs: 100 });
   const busy = store.update(row.id, { expectedVersion: lease.session.version, leaseToken: lease.leaseToken, patch: { lifecycle: "busy" } });
   at = 1100;

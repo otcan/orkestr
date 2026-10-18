@@ -167,7 +167,8 @@ changes and their compatibility tests remain with that owner.
 The manager consumes Lane A's prepared synchronous store surface:
 `create(input)`, `get(id)`, `list({conversationId, scopeKind, scopeId?, roles?, lifecycles?})`,
 `acquireLease(id, {expectedVersion, ttlMs})`,
-`update(id, {expectedVersion, leaseToken, patch})`. The list filter is
+`update(id, {expectedVersion, leaseToken, patch})`, and
+`transaction(fn)`. The list filter is
 `lifecycles: string[]`, using only `starting|ready|busy|blocked|stopped`.
 Only `openPersonalAgentSessionStore()` may be asynchronous; the prepared methods
 remain synchronous, including persistence before native event forwarding.
@@ -177,10 +178,14 @@ It projects #68's `scope_kind` and `project_id`: global/null or project/project 
 No extra lookup method is required on the session store. The manager uses the
 existing list and SQLite uniqueness constraints instead of new role/native lookups.
 
-There is **no runtime-owned transaction adapter** or `transaction(fn)` requirement.
-Each canonical SQLite mutation owns its short `BEGIN IMMEDIATE`, validates the
-canonical conversation/scope inside that transaction, and fences changes with
-version/token predicates. Provider awaits never hold a database transaction.
+The manager requires the canonical store's synchronous `transaction(fn)` from
+PR #81 (owner/transaction contract at `d1f7d213`). Nested store methods join one
+short `BEGIN IMMEDIATE`: validation plus create/acquire/update, heartbeat writes,
+and profile replacement commit or roll back together. There is no second runtime
+transaction adapter. Async callbacks are rejected and rolled back by the store;
+provider awaits never hold a database transaction. Missing transaction support is
+explicit unavailable (503). This supersedes the earlier owner-free CAS-only
+contract; #71 depends on #81 and #68 without copying their DDL.
 The env-based wrappers prepare the store asynchronously; native event callbacks
 persist synchronously before forwarding an event. A null CAS result fails closed.
 Renewal or write/fence conflicts abort the active provider signal without replay;
@@ -198,14 +203,17 @@ holder ID. Heartbeats use `leaseTtlMs`, release uses `releaseLease`; lease expir
 is numeric epoch milliseconds and other timestamps are ISO strings.
 
 Canonical rows use `modelProfile: {model, effort}` with separate provider and
-account-profile fields. Neither sessions nor conversations persist an owner
-column in this single-user app contract. `ownerUserId` comes from the trusted
-factory context, never a message/tool argument. A mandatory synchronous
+account-profile fields. Sessions persist immutable `ownerUserId`; canonical
+conversations remain owner-free. Creation requires ownership from the trusted
+factory context, never a message/tool argument. Every read and mutation checks
+that the stored owner matches this authenticated context; missing or mismatched
+ownership fails closed. Ownership joins the immutable binding checks across CAS
+results and provider awaits. A mandatory synchronous
 `authorizeOwner(ownerUserId) -> boolean` must verify the authenticated app owner;
 missing, asynchronous or revoked authorization fails closed before storage/native
-access. Native account/profile resolution receives that owner transiently, without
-writing it to SQLite. This is an application trust boundary, not durable ownership
-or isolation against root-capable runtimes.
+access. Native account/profile resolution receives the checked persisted owner.
+Durable ownership supplements application authorization; neither isolates a
+root-capable runtime from the host.
 
 The injected resolver supplies authoritative canonical scope before creation
 and every mutation. It must read canonical scoped conversation storage under
@@ -225,12 +233,12 @@ uniqueness across all conversations and lifecycles. Concurrent role creation
 returns only a matching unique winner. The manager never acquires an existing
 lease token or a busy row, even after expiry. Expired busy sessions stay `busy`
 until explicit native reconciliation CAS-updates/releases them. Expiry alone is
-never evidence that the provider stopped. #70 must enforce this in its acquisition
-predicate too; the earlier expiry-takeover implementation is not compatible.
-Tests use a fake prepared CAS store with no outer transaction or owner column.
+never evidence that the provider stopped. The dependency store must enforce
+this in its acquisition predicate too. Tests use a fake prepared CAS store with
+immutable ownership and nested synchronous transaction rollback.
 They demonstrate defaults, authorization, scope checks, fencing and filters;
 they do not establish SQLite durability, triggers or process-level locking.
-Worker 1 owns that implementation in #70 after #68; this runtime PR copies no
+Worker 1 owns that implementation in #81 (including #70) after #68; this runtime PR copies no
 unmerged DDL or ingress code.
 
 **Not yet wired:** the schema owner's SQLite adapter/durability tests and the
@@ -250,8 +258,13 @@ immutable session/conversation/provider/account bindings, valid profile JSON,
 repeated idempotent migration, expired-busy acquisition refusal, and rollback of
 CAS lease/heartbeat/version writes within the store's transactions. A previous
 flag-off reader must still open the additive database without changing session
-rows. Rolling back code preserves rows/native lineage. This contract adds no owner
-column or owner backfill; authorization remains in the authenticated app context.
+rows. Rolling back code preserves rows/native lineage. The #81 migration owns
+the immutable owner column and the explicitly approved legacy single-user
+backfill to `admin`; #71 performs no migration or backfill. The runtime refuses
+rows whose stored owner differs from its authenticated context. Compatibility
+tests must verify idempotent owner backfill and owner immutability alongside
+transaction rollback. Trusted owner/resolver composition and real SQLite binding
+remain pending the reconciled dependency contract.
 
 ## Acceptance and rollback
 
