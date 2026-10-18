@@ -88,7 +88,7 @@ fn bounded_keyset_wraps_only_after_short_or_empty_page() {
 }
 #[tokio::test]
 async fn registered_store_long_due_logout_restart_and_machine_revoke() {
-    let (store, bound, owner, namespace, conversation, dir) = fixture().await;
+    let (store, bound, owner, namespace, _conversation, dir) = fixture().await;
     let mut controller = DurableTimerController::new(bound.clone());
     assert_eq!(
         controller.tick().await.unwrap(),
