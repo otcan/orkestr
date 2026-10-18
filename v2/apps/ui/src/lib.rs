@@ -121,6 +121,9 @@ pub fn replay_sequence(
             &e.scope,
             e.schema_version == 1 && e.payload_ref_or_safe_payload.kind == "message_accepted",
         ),
+        ConversationEvent::FixtureCancellationRequested(e) => {
+            (e.aggregate_id.to_string(), &e.scope, e.schema_version == 3)
+        }
         ConversationEvent::FixtureProviderObserved(e) => (
             e.aggregate_id.to_string(),
             &e.scope,
@@ -155,4 +158,16 @@ pub fn decode_stream(raw: serde_json::Value) -> StreamItem {
         id: None,
         body: None,
     })
+}
+
+/// Status explains fixture evidence only, never provider-control success.
+pub fn replay_notice(event: &ConversationEvent) -> &'static str {
+    use orkestr_v2_contracts::FixtureCancellationOutcome;
+    match event {
+        ConversationEvent::FixtureCancellationRequested(e) => match e.payload_ref_or_safe_payload.outcome {
+            FixtureCancellationOutcome::Unknown => "Fixture cancellation requested: outcome unconfirmed. Execution and Stop remain unavailable.",
+            FixtureCancellationOutcome::NotDispatched => "Fixture cancellation requested: no provider delivery. Execution and Stop remain unavailable.",
+        },
+        _ => "Journal synchronized. Runtime metadata is synthetic; execution and Stop remain unavailable.",
+    }
 }

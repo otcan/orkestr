@@ -180,7 +180,8 @@ pub fn Conversation(
                     }
                     Ok(item)
                         if item.event == "message_accepted"
-                            || item.event == "fixture_provider_observed" =>
+                            || item.event == "fixture_provider_observed"
+                            || item.event == "fixture_cancellation_requested" =>
                     {
                         let previous = projection.read().clone();
                         let sequence = item.body.as_ref().and_then(|event| {
@@ -206,7 +207,12 @@ pub fn Conversation(
                                     Ok(snapshot) if snapshot.watermark >= sequence => {
                                         cursor = snapshot.watermark;
                                         projection.set(snapshot);
-                                        status.set("Journal synchronized. Runtime metadata is synthetic; execution and Stop remain unavailable.".into());
+                                        status.set(
+                                            orkestr_v2_ui::replay_notice(
+                                                item.body.as_ref().expect("validated event body"),
+                                            )
+                                            .into(),
+                                        );
                                     }
                                     Ok(_) => {
                                         resync = true;

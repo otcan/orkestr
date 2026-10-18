@@ -19,7 +19,7 @@ Metadata-only pages can therefore advance the cursor without fabricating text.
 Pagination retains its initial watermark; later page watermarks never silently
 advance beyond that completed scan. Snapshot scope must remain consistent.
 
-Validation: fourteen Rust tests (seven projection, three replay and four executable
+Validation: sixteen Rust tests (seven projection, three replay and six executable
 reconciliation failure/retry cases),
 22 Node bridge/synthetic HTTP cases, locked offline WASM build and strict UI Clippy
 pass locally. Tests cover legacy JSON roundtrip, mixed sparse journal sequences,
@@ -46,3 +46,14 @@ The local commands are wrapper `test --offline --locked -p orkestr-v2-ui --tests
 --all-targets -- -D warnings`, plus `node --test v2/apps/ui/tests/*.test.mjs`.
 These remain unit/build/bridge evidence; live mixed rendering is a separate CI
 gate. No browser was launched and no auth/native/readiness acceptance is added.
+
+Schema 3 cancellation replay consumes only exact contracts paths and fixture from
+core `14cc7a8f33c844cc99fccc33bc2e1c04e1264ad1` in a separate provenance commit.
+The Rust union match and known SSE names include `fixture_cancellation_requested`.
+It uses the same identity/scope/cursor and atomic snapshot reconciliation checks.
+`unknown` means outcome unconfirmed; `not_dispatched` means no provider delivery.
+Neither means Stopped or successful provider interruption. No cancellation button
+or endpoint is added. Tests validate mixed schemas 1/2/3, cancellation metadata
+failure/retry, malformed schema/fields/outcome and canonical bridge forwarding.
+Compatibility source and unit checks do not establish adapter writes or live
+browser cancellation behavior; those gates remain independently reviewed.
