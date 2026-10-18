@@ -64,3 +64,34 @@ composition and Verification independent process oracle. No scheduler, native
 provider, durable HTTP or full-release acceptance is inferred from Store tests.
 UI must retain current bounded wording until the mounted successor has exact
 reviewed DTO/read-state semantics and corresponding acceptance evidence.
+
+## Implemented controller leaf
+
+Discovery is now published at exact Core
+`e3857e9b79c4b030cc0c3e36e4b5a74e9aefce39`; the proposed method above is its
+actual API. New owned `timer_http/durable.rs` implements
+`DurableTimerController::new(bound_supervisor)`, `tick(&mut self)` and
+`run(self, shutdown_receiver) -> Result<(), HistoryError>`.
+One pass scans at most32 candidates within five seconds; each gets a newly
+validated issuer and Store-clock admission. Short/empty page wraps the keyset.
+Controller stores only its bound Store and optional cursor. It retains no
+instruction, browser credential or timer issuer. Conflict/not-found defers;
+authorization/context/storage errors terminate the run with an explicit error
+for Deep's supervised lifecycle to surface. The original one-hour HTTP controller
+is unchanged. This leaf does not renew a supervisor lease or invent a bootstrap.
+
+Four tests are authored: page wrap/bounds; ordinary Store refusal and joinable
+shutdown; registered weekly grant across creator logout/controller restart/Store
+reattachment plus explicit revoke/machine logout; actual Store-clock once due
+admission then reopened Store/controller with no second admission. These Rust
+tests and strict lint are **unexecuted**, pending exact-source build admission.
+Format/diff checks pass. No production store, provider or live timer was touched.
+
+For an isolated build, overlay only `durable.rs`/`durable_tests.rs` on exact Core
+and add temporary server declaration
+`#[path = "timer_http/durable.rs"] pub mod durable_timer_controller;`.
+No legacy HTTP detail/auth adapter or shared production router changes are needed
+for these controller tests. Integration still requires Deep to map owner enable
+to the durable Store enable port, expose reviewed durable read-state semantics,
+and join this controller under existing trusted supervisor lifecycle. Existing
+HTTP enable must not be treated as a durable grant or silently promoted.
