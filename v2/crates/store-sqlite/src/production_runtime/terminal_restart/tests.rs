@@ -30,7 +30,7 @@ async fn clean_restart_preserves_history_and_dispatches_only_new_queued_input() 
             )
             .await
             .unwrap(),
-        Some((p.run.run_id.clone(), predecessor.clone()))
+        None
     );
     let before = snapshot(&f.store).await;
     assert!(matches!(
@@ -51,9 +51,8 @@ async fn clean_restart_preserves_history_and_dispatches_only_new_queued_input() 
         )
         .await
         .unwrap();
-    // Author test clock boundary only; independent process acceptance uses real expiry.
-    sqlx::query("UPDATE production_supervisors SET lease_deadline_ms=0")
-        .execute(&f.store.pool)
+    f.handle
+        .retire_terminal_supervisor(&f.token, &p.run.run_id)
         .await
         .unwrap();
     let (new, grant) = f
@@ -201,8 +200,8 @@ async fn concurrent_restart_has_one_winner_and_lost_setup_never_reissues() {
         .unwrap();
     let predecessor = f.handle.supervisor_incarnation().unwrap().to_string();
     let other = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
-    sqlx::query("UPDATE production_supervisors SET lease_deadline_ms=0")
-        .execute(&f.store.pool)
+    f.handle
+        .retire_terminal_supervisor(&f.token, &p.run.run_id)
         .await
         .unwrap();
     let config = || {

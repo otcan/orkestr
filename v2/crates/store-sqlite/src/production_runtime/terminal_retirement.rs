@@ -45,6 +45,17 @@ impl Store {
         if unresolved != 0 {
             return Err(RuntimeStoreError::Fenced);
         }
+        // Immutable provenance is issued only after the canonical terminal checks
+        // above. Other expiry/revocation paths must never create this evidence.
+        sqlx::query("INSERT INTO production_graceful_retirements(context_id,incarnation_id,supervisor_generation,prior_run_id,acceptance_event_id,session_id,binding_generation,retired_at_ms) SELECT r.context_id,r.incarnation_id,?,r.id,a.event_id,r.session_id,b.generation,? FROM production_runs r JOIN production_acceptances a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id WHERE r.id=? ON CONFLICT(context_id,incarnation_id,supervisor_generation) DO NOTHING")
+            .bind(c.generation).bind(now(&mut tx).await?).bind(prior_run.to_string())
+            .execute(&mut *tx).await.map_err(db)?;
+        let recorded: i64 = sqlx::query_scalar("SELECT count(*) FROM production_graceful_retirements g JOIN production_runs r ON r.id=g.prior_run_id JOIN production_acceptances a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id WHERE g.context_id=? AND g.incarnation_id=? AND g.supervisor_generation=? AND g.prior_run_id=? AND g.acceptance_event_id=a.event_id AND g.session_id=r.session_id AND g.binding_generation=b.generation")
+            .bind(&c.id).bind(&c.incarnation).bind(c.generation).bind(prior_run.to_string())
+            .fetch_one(&mut *tx).await.map_err(db)?;
+        if recorded != 1 {
+            return Err(RuntimeStoreError::Fenced);
+        }
         sqlx::query("UPDATE production_supervisors SET lease_deadline_ms=0 WHERE context_id=? AND incarnation_id=? AND generation=?")
             .bind(&c.id).bind(&c.incarnation).bind(c.generation).execute(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;

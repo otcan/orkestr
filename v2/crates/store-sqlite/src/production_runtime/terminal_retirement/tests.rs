@@ -21,15 +21,31 @@ async fn graceful_retirement_permits_immediate_exact_restart_without_clock_overr
         .retire_terminal_supervisor(&f.token, &p.run.run_id)
         .await
         .unwrap();
+    assert_eq!(
+        f.store
+            .terminal_supervisor_candidate(
+                &f.token,
+                &config(ProductionTakeover::First),
+                &f.conversation
+            )
+            .await
+            .unwrap(),
+        Some((
+            p.run.run_id.clone(),
+            f.handle.supervisor_incarnation().unwrap().to_string()
+        ))
+    );
     let after = snapshot(&f.store).await;
     assert_eq!(
         before
             .iter()
-            .filter(|row| !row.starts_with("production_supervisors:"))
+            .filter(|row| !row.starts_with("production_supervisors:")
+                && !row.starts_with("production_graceful_retirements:"))
             .collect::<Vec<_>>(),
         after
             .iter()
-            .filter(|row| !row.starts_with("production_supervisors:"))
+            .filter(|row| !row.starts_with("production_supervisors:")
+                && !row.starts_with("production_graceful_retirements:"))
             .collect::<Vec<_>>()
     );
     assert!(matches!(
@@ -148,4 +164,44 @@ async fn independent_setup_and_retirement_cannot_both_issue_live_authority() {
         }
         _ => panic!("unexpected retirement/setup race result"),
     }
+}
+
+#[tokio::test]
+async fn accepted_deadline_zero_without_graceful_provenance_cannot_restart() {
+    let f = setup().await;
+    let (p, decision) = proposal(&f).await;
+    f.store
+        .accept_execution_authenticated(&f.token, &f.conversation, &decision)
+        .await
+        .unwrap();
+    // Models legacy zero/expiry. This deliberately does not invoke the sealed
+    // graceful retirement operation, and must not acquire its provenance.
+    sqlx::query("UPDATE production_supervisors SET lease_deadline_ms=0")
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    let before = snapshot(&f.store).await;
+    assert!(f
+        .store
+        .terminal_supervisor_candidate(
+            &f.token,
+            &config(ProductionTakeover::First),
+            &f.conversation
+        )
+        .await
+        .unwrap()
+        .is_none());
+    assert!(matches!(
+        f.store
+            .reattach_terminal_supervisor(
+                &f.token,
+                config(ProductionTakeover::ExpiredPredecessor {
+                    incarnation_id: f.handle.supervisor_incarnation().unwrap().into(),
+                }),
+                &p.run.run_id
+            )
+            .await,
+        Err(RuntimeStoreError::Fenced)
+    ));
+    assert_eq!(before, snapshot(&f.store).await);
 }

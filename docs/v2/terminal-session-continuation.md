@@ -87,3 +87,20 @@ expired, and the old handle cannot retire a replacement incarnation. This is not
 proof that a native process reaped: server composition must supply that ordering
 and independent process tests. This first port covers accepted clean retirement;
 unknown delivery, ACK-only cancellation and unaccepted proposals remain refused.
+
+### Graceful provenance (migration 0028)
+
+Deadline zero alone is not graceful-shutdown evidence. Migration 0028 adds an
+immutable `production_graceful_retirements` ledger without backfilling legacy
+rows. Only sealed terminal retirement records the exact context, incarnation,
+supervisor generation, owner-accepted prior run/event and released binding
+identity/generation. Discovery and the write-locked predecessor takeover both
+require this same record plus deadline zero. Natural expiry and revoked-session
+retirement cannot qualify. The marker records the trusted server's retirement
+boundary; actual owned-process wait/reap remains the server's responsibility.
+
+0026 (Worker tasks) and 0027 (timers) retain their allocated owners. Execution of
+0028 upgrade tests requires their real SQL in a disposable contiguous union;
+no placeholder migrations or historical provenance are manufactured. An unused
+one-use continuation setup reservation remains non-reissuable; idle restart then
+shutdown is not qualified as another automatic restart.
