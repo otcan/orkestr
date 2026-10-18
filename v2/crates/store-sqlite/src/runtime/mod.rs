@@ -7,6 +7,8 @@ use std::time::Duration;
 use uuid::Uuid;
 mod bindings;
 mod claims;
+pub(crate) mod envelope;
+pub(crate) mod ledger;
 
 fn db(_: impl std::fmt::Display) -> RuntimeStoreError {
     RuntimeStoreError::Unavailable
@@ -104,12 +106,25 @@ impl RuntimeStore for Store {
     }
     async fn admit_run(
         &self,
-        _: &InboxClaim,
-        _: &SessionId,
-        _: u64,
-        _: &str,
+        claim: &InboxClaim,
+        binding: &SessionId,
+        generation: u64,
+        key: &str,
     ) -> Result<RunAdmissionResult> {
-        Err(RuntimeStoreError::Unavailable)
+        self.production_admit(claim, binding, generation, key).await
+    }
+    async fn claim_provider_dispatch(
+        &self,
+        candidate: &RunAdmissionResult,
+        key: &str,
+    ) -> Result<DispatchClaimResult> {
+        self.production_reserve(candidate, key).await
+    }
+    async fn consume_provider_dispatch(
+        &self,
+        claim: &DispatchClaim,
+    ) -> Result<DispatchConsumption> {
+        self.production_consume(claim).await
     }
     async fn bind_native_session(
         &self,
