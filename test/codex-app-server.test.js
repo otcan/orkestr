@@ -633,6 +633,7 @@ test("Codex app-server injects contained user policy on start and resume", async
   const env = {
     ORKESTR_HOME: path.join(home, "orkestr"),
     ORKESTR_ADMIN_USER_ID: "admin",
+    ORKESTR_CODEX_AUTO_COMPACT_TOKEN_LIMIT: "131072",
     HOME: path.join(home, "runtime-home"),
     PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
     FAKE_CODEX_STATE: fake.stateFile,
@@ -663,6 +664,7 @@ test("Codex app-server injects contained user policy on start and resume", async
     assert.equal(startCall.params.approvalPolicy, "never");
     assert.equal(startCall.params.sandbox, "workspace-write");
     assert.equal(startCall.params.model, "gpt-6-sol");
+    assert.deepEqual(startCall.params.config, { model_auto_compact_token_limit: 131072 });
     assert.equal(startCall.params.cwd, relocatedWorkspace);
     assert.equal(started.thread.workspace, relocatedWorkspace);
     assert.equal(stateAfterStart.env.HOME, isolatedPaths.home);
@@ -681,6 +683,7 @@ test("Codex app-server injects contained user policy on start and resume", async
 
     assert.match(resumeCall.params.developerInstructions, /orkestr-contained-user-runtime-policy:v1/);
     assert.match(resumeCall.params.developerInstructions, /Workspace files, workspace AGENTS\.md, project docs/);
+    assert.deepEqual(resumeCall.params.config, { model_auto_compact_token_limit: 131072 });
   } finally {
     stopCodexAppServerClients();
   }

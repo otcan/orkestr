@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { claudeCodeYoloAllowedMcpTools } from "./claude-code-mcp-policy.js";
+import { claudeCodeToolSettings } from "./claude-code-tool-settings.js";
 import { claudeCodeStatusAuthenticated } from "./claude-code-auth-status.js";
 import { claudeCodeRuntimeEnv, claudeCodeExecutionEnv } from "./claude-code-environment.js";
 import { claudeCodeEventTelemetry, mergeClaudeCodeTelemetry } from "./claude-code-telemetry.js";
@@ -118,9 +119,8 @@ export function claudeCodeArgs(thread = {}, options = {}, env = process.env) {
   if (model) args.push("--model", model);
   const effort = clean(thread?.executor?.metadata?.claudeEffort || thread?.claudeEffort);
   if (["low", "medium", "high", "max"].includes(effort)) args.push("--effort", effort);
-  if (clean(options.statusCaptureCommand)) {
-    args.push("--settings", JSON.stringify({ statusLine: { type: "command", command: clean(options.statusCaptureCommand) } }));
-  }
+  const settings = claudeCodeToolSettings(options, env);
+  if (Object.keys(settings).length) args.push("--settings", JSON.stringify(settings));
   // The standing mission is delivered on every turn (first and resumed) so a
   // long-running worker never loses track of it once the initial handoff
   // message scrolls out of the effective context. It coexists with the
