@@ -75,6 +75,7 @@ fn binding(row: &SqliteRow) -> Result<Binding> {
         },
     })
 }
+#[orkestr_v2_application::runtime::async_trait]
 impl RuntimeStore for Store {
     async fn ensure_role_bindings(
         &self,
@@ -107,7 +108,7 @@ impl RuntimeStore for Store {
         _: &SessionId,
         _: u64,
         _: &str,
-    ) -> Result<RunAdmission> {
+    ) -> Result<RunAdmissionResult> {
         Err(RuntimeStoreError::Unavailable)
     }
     async fn bind_native_session(
