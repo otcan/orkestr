@@ -98,3 +98,25 @@ test('session resume and logout handle HttpOnly cookie authority and empty 204',
     });
     assert.deepEqual(result,{status:204,body:null});
 });
+
+test('browser bridge rejects both machine login routes before fetch',async()=>{
+    for (const path of ['/api/v2/session','/api/v2/machine/session']) {
+        await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('machine login must not run')),/Invalid API path/);
+    }
+});
+
+test('legacy bearer input cannot add Authorization or forge browser-managed headers',async()=>{
+    await execute({recv:async()=>({...base,token:'synthetic-legacy-token',headers:{Authorization:'Bearer synthetic',Origin:'https://example.invalid',Cookie:'synthetic'}})},async(_,options)=>{
+        for (const header of ['Authorization','Origin','Host','Cookie']) assert.equal(options.headers[header],undefined);
+        assert.equal(options.credentials,'same-origin');
+        return new Response('{}');
+    });
+});
+
+test('rejected or uncertain logout cannot become a successful bridge result',async()=>{
+    const input = {...base,method:'DELETE',body:null,csrf:'synthetic-stale-csrf'};
+    const result = await execute({recv:async()=>input},async()=>new Response('{"code":"csrf_rejected","message":"Rejected"}',{status:403}));
+    assert.equal(result.status,403);
+    assert.equal(result.body.code,'csrf_rejected');
+    await assert.rejects(execute({recv:async()=>input},async()=>{throw new Error('synthetic connection lost');}),/connection lost/);
+});
