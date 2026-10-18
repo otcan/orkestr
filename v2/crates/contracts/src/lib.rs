@@ -3,8 +3,6 @@ mod cancellation;
 mod held_inputs;
 pub use held_inputs::*;
 mod execution;
-mod held_inputs;
-pub use held_inputs::*;
 mod worker_discovery;
 pub use execution::*;
 pub use worker_discovery::*;
