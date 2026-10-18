@@ -20,7 +20,7 @@ from real_package import (Client, builder, invoke, launch, require, sha256,
 
 def versions(home):
     db = home / 'data/core.sqlite3'
-    with closing(sqlite3.connect(db.as_uri() + '?mode=ro&immutable=1', uri=True)) as connection:
+    with closing(sqlite3.connect(db.as_uri() + '?mode=ro', uri=True)) as connection:
         require(connection.execute('PRAGMA integrity_check').fetchall() == [('ok',)], 'database integrity')
         return [r[0] for r in connection.execute('SELECT version FROM _sqlx_migrations WHERE success ORDER BY version')]
 
