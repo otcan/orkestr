@@ -86,3 +86,13 @@ EOF reaping. Transport backpressure/partial-write checks are mocked. No real
 provider, canonical account, paid inference or host installation was executed.
 Runtime wrapper integration, actual provider compatibility, independent review,
 private host installation and OS isolation acceptance remain pending.
+
+Review hardening: setup pins `modelProvider:"openai"`, requires ChatGPT account
+with `requiresOpenaiAuth:true`, and preserves matching `openai` proof on the
+thread/result. External, absent or mismatched provider evidence refuses readiness.
+Wire input is strict UTF-8 with finite JSON numbers. Malformed nested responses
+refuse without printing traceback or private paths. Source reads pause at the
+existing eight-frame sink bound and resume buffered lines as writes drain; no
+queue cap increase or prefix replay. Production private config must select the
+canonical native Codex ELF directly, never a JS shim or symlink. Synthetic test
+executables are intentionally fixtures, not installation account evidence.

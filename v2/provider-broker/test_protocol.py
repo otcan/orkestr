@@ -32,9 +32,9 @@ def ready(channel):
         "account": {"type": "chatgpt", "token": "fake-secret"}}})
     assert "fake-secret" not in str(reply)
     request(channel, {"id": 3, "method": "thread/start", "params": {"cwd": channel.workspace,
-        "approvalPolicy": "never", "sandbox": "read-only", "ephemeral": False}}, outer=5)
+        "approvalPolicy": "never", "sandbox": "read-only", "ephemeral": False, "modelProvider": "openai"}}, outer=5)
     channel.provider({"id": 3, "result": {"thread": {"id": "synthetic-native", "cwd": channel.workspace,
-        "ephemeral": False}, "cwd": channel.workspace, "approvalPolicy": "never",
+        "ephemeral": False, "modelProvider": "openai"}, "modelProvider": "openai", "cwd": channel.workspace, "approvalPolicy": "never",
         "sandbox": {"type": "readOnly", "networkAccess": False}}})
 
 
@@ -81,7 +81,7 @@ class ProtocolTests(unittest.TestCase):
         for changed in [{"ephemeral": True}, {"ephemeral": 0}, {"cwd": "/foreign"}, {"sandbox": "danger-full-access"}]:
             channel, _ = opened()
             channel.stage = "subscription"
-            params = {"cwd": channel.workspace, "approvalPolicy": "never", "sandbox": "read-only", "ephemeral": False}
+            params = {"cwd": channel.workspace, "approvalPolicy": "never", "sandbox": "read-only", "ephemeral": False, "modelProvider": "openai"}
             params.update(changed)
             with self.assertRaises(Refused):
                 request(channel, {"id": 1, "method": "thread/start", "params": params})

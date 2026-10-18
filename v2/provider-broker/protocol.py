@@ -1,5 +1,6 @@
 """Closed Codex-only owned-session protocol. Wire identity is NOT Core authority."""
 import json
+import math
 import secrets
 
 PROTOCOL = "orkestr-v2-provider-broker-v1"
@@ -31,8 +32,13 @@ def decode(raw):
             require(key not in result)
             result[key] = value
         return result
+    def finite(text):
+        value = float(text)
+        require(math.isfinite(value))
+        return value
     try:
-        return json.loads(raw, object_pairs_hook=unique,
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=unique,
+                          parse_float=finite,
                           parse_constant=lambda _: require(False))
     except (ValueError, UnicodeError, RecursionError) as error:
         raise Refused("invalid frame") from error
@@ -118,7 +124,7 @@ class Channel:
         elif kind == "thread/start":
             require(self.stage == "subscription")
             require(params == {"cwd": self.workspace, "approvalPolicy": "never",
-                               "sandbox": "read-only", "ephemeral": False}
+                               "sandbox": "read-only", "ephemeral": False, "modelProvider": "openai"}
                     and params["ephemeral"] is False)
         else:
             raise Refused("metadata method refused")
@@ -153,7 +159,8 @@ class Channel:
                 turn_id = params["turnId"]
                 clean = {k: params[k] for k in ("threadId", "turnId", "delta")}
             else:
-                turn = params.get("turn", {})
+                turn = params.get("turn")
+                require(isinstance(turn, dict))
                 turn_id = turn.get("id")
                 require(identifier(turn_id) and turn.get("status") in
                         ("inProgress", "completed", "failed", "interrupted"))
@@ -177,26 +184,30 @@ class Channel:
             frame["result"]["codexHome"] = "broker-private"
             self.stage = "initialize-replied"
         elif kind == "account/read":
-            require(type(result.get("requiresOpenaiAuth")) is bool)
+            require(result.get("requiresOpenaiAuth") is True)
             account = result.get("account")
             require(isinstance(account, dict) and account.get("type") == "chatgpt")
             frame = {"id": inner, "result": {"requiresOpenaiAuth": result["requiresOpenaiAuth"],
                                              "account": {"type": "chatgpt"}}}
             self.stage = "subscription"
         elif kind == "thread/start":
-            thread = result.get("thread", {})
+            thread = result.get("thread")
+            require(isinstance(thread, dict))
+            require(result.get("modelProvider") == thread.get("modelProvider") == "openai")
             require(identifier(thread.get("id")) and thread.get("ephemeral") is False)
             require(thread.get("cwd") == self.workspace and result.get("cwd") == self.workspace)
             require(result.get("approvalPolicy") == "never")
-            sandbox = result.get("sandbox", {})
+            sandbox = result.get("sandbox")
+            require(isinstance(sandbox, dict))
             require(sandbox.get("type") == "readOnly" and sandbox.get("networkAccess", False) is False)
             self.native = thread["id"]
             self.stage = "ready"
-            frame = {"id": inner, "result": {"thread": {k: thread[k] for k in ("id", "cwd", "ephemeral")},
-                     "cwd": self.workspace, "approvalPolicy": "never",
+            frame = {"id": inner, "result": {"thread": {k: thread[k] for k in ("id", "cwd", "ephemeral", "modelProvider")},
+                     "cwd": self.workspace, "approvalPolicy": "never", "modelProvider": "openai",
                      "sandbox": {"type": "readOnly", "networkAccess": False}}}
         elif kind == "turn/start":
-            require(identifier(result.get("turn", {}).get("id")))
+            require(isinstance(result.get("turn"), dict))
+            require(identifier(result["turn"].get("id")))
             require(result["turn"].get("status") == "inProgress")
             require(self.turn is None or self.turn == result["turn"]["id"])
             self.turn = result["turn"]["id"]

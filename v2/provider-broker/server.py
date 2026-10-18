@@ -23,7 +23,7 @@ def main(configuration_path=None):
         config = Configuration.load(path)
         Pump(config, Channel(config.workspace)).run()
         return 0
-    except (Refused, OSError, ValueError, TypeError, KeyError, RecursionError):
+    except Exception:
         # Never print provider output, private paths, account data or tokens.
         sys.stderr.write("provider broker refused; reconcile uncertain delivery\n")
         return 2

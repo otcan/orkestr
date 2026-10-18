@@ -55,23 +55,35 @@ class Pump:
             if response is not None:
                 self.queue(self.outgoing, response)
 
-    def read(self, fd):
-        try:
-            chunk = os.read(fd, MAX_FRAME)
-        except BlockingIOError:
-            return True
-        if not chunk:
-            require(not self.buffers.get(fd))  # truncated EOF is never replayed
-            if fd == self.incoming:
-                return False
-            raise Refused("provider EOF; delivery may be unknown")
-        buffer = self.buffers.get(fd, b"") + chunk
-        while b"\n" in buffer:
+    def capacity(self):
+        # Every source operation emits at most one frame per sink. Pause source
+        # processing at the existing bound; never turn a healthy burst into loss.
+        return all(len(queue) < MAX_PENDING for queue in self.queues.values())
+
+    def drain_buffer(self, fd):
+        buffer = self.buffers.get(fd, b"")
+        while b"\n" in buffer and self.capacity():
             raw, buffer = buffer.split(b"\n", 1)
             require(bool(raw) and len(raw) <= MAX_FRAME)
             self.line(fd, raw)
         require(len(buffer) <= MAX_FRAME)
         self.buffers[fd] = buffer
+
+    def read(self, fd):
+        self.drain_buffer(fd)
+        if not self.capacity() or b"\n" in self.buffers[fd]:
+            return True
+        try:
+            chunk = os.read(fd, MAX_FRAME + 1 - len(self.buffers[fd]))
+        except BlockingIOError:
+            return True
+        if not chunk:
+            require(not self.buffers.get(fd))
+            if fd == self.incoming:
+                return False
+            raise Refused("provider EOF; delivery may be unknown")
+        self.buffers[fd] += chunk
+        self.drain_buffer(fd)
         return True
 
     def write(self, fd):
@@ -85,13 +97,23 @@ class Pump:
             queue.popleft()
         else:
             queue[0] = queue[0][count:]  # never replay the written prefix
+        for source in list(self.buffers):
+            self.drain_buffer(source)
 
     def run(self):
         try:
             for fd in (self.incoming, self.outgoing):
                 os.set_blocking(fd, False)
-            self.watch(self.incoming, selectors.EVENT_READ)
             while True:
+                sources = [self.incoming]
+                if self.child is not None:
+                    sources.append(self.child.stdout.fileno())
+                for source in sources:
+                    self.drain_buffer(source)
+                    if self.capacity() and b"\n" not in self.buffers[source]:
+                        self.watch(source, selectors.EVENT_READ)
+                    elif source in self.selector.get_map():
+                        self.selector.unregister(source)
                 for fd, queue in self.queues.items():
                     if queue:
                         self.watch(fd, selectors.EVENT_WRITE)
@@ -105,13 +127,21 @@ class Pump:
         finally:
             self.selector.close()
             if self.child is not None:
-                self.child.stdin.close()
-                self.child.stdout.close()
-                # Direct owned PID only, never a client-selected process. Runtime
-                # remains the owner of the encompassing process-group kill/reaper.
-                self.child.terminate()
+                # A pipe close failure must not skip owned-child termination.
+                for pipe in (self.child.stdin, self.child.stdout):
+                    try:
+                        pipe.close()
+                    except OSError:
+                        pass
+                try:
+                    self.child.terminate()
+                except ProcessLookupError:
+                    pass
                 try:
                     self.child.wait(timeout=0.5)
                 except subprocess.TimeoutExpired:
-                    self.child.kill()
+                    try:
+                        self.child.kill()
+                    except ProcessLookupError:
+                        pass
                     self.child.wait(timeout=1)
