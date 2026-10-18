@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "spec_commit": "a7ba6d5999c570c21cc717d78c83cf53622c22c9",
+  "cases": [
+    {
+      "id": "A01",
+      "name": "bootstrap-auth",
+      "status": "pending",
+      "oracle": "Fresh setup once; unauthenticated calls denied; no shared password",
+      "blocked_on": "server/auth fixture"
+    },
+    {
+      "id": "A02",
+      "name": "local-project",
+      "status": "pending",
+      "oracle": "Concurrent project creation yields one canonical conversation; optional integrations absent; OXRM readiness backed by provisioner evidence",
+      "blocked_on": "project/resource fixture"
+    },
+    {
+      "id": "A03",
+      "name": "duplicate-ingress",
+      "status": "pending",
+      "oracle": "Ten concurrent identical requests return original IDs with one message/event/inbox; changed text returns 409",
+      "blocked_on": "durable inbox inspection fixture"
+    },
+    {
+      "id": "A04",
+      "name": "receipt-restart",
+      "status": "pending",
+      "oracle": "After 202 receipt SIGKILL only owned server; reopen same home; exact acknowledged order and IDs survive",
+      "blocked_on": "owned process launcher"
+    },
+    {
+      "id": "A05",
+      "name": "busy-roles",
+      "status": "pending",
+      "oracle": "Pause deep 30 seconds; fast/deep distinct IDs and independent worker; ten concurrent inputs persist; receipt p95 <250ms on declared SSD hardware",
+      "blocked_on": "runtime pause/role fixture"
+    },
+    {
+      "id": "A06",
+      "name": "sse-replay",
+      "status": "pending",
+      "oracle": "Reconnect after sequence N; subsequent events ordered, no duplicate presentation; stale cursor explicit resync; slow consumer bounded",
+      "blocked_on": "SSE retention/backpressure fixture"
+    },
+    {
+      "id": "A07",
+      "name": "stale-lease",
+      "status": "pending",
+      "oracle": "Replace lease generation; old worker completion and dispatch denied without ledger mutations",
+      "blocked_on": "lease generation fixture"
+    },
+    {
+      "id": "A08",
+      "name": "owner-spoof",
+      "status": "pending",
+      "oracle": "Worker payload actor_kind=owner cannot authorize effect, remove hold or succeed task",
+      "blocked_on": "trusted actor ingress fixture"
+    },
+    {
+      "id": "A09",
+      "name": "cross-project",
+      "status": "pending",
+      "oracle": "Unauthorized principal cannot read conversation/events/run or mutate hold/approval via foreign IDs",
+      "blocked_on": "two isolated principals fixture"
+    },
+    {
+      "id": "A10",
+      "name": "stop-fence",
+      "status": "pending",
+      "oracle": "Hang provider; cancel persists fence before interrupt; post-fence dispatch denied; pre-fence action remains in-flight until reconciliation",
+      "blocked_on": "dispatch barrier and interrupt fixture"
+    },
+    {
+      "id": "A11",
+      "name": "exact-approvals",
+      "status": "pending",
+      "oracle": "Mutated target/args/scope/version, expired and reused approval denied; simultaneous decisions consume once",
+      "blocked_on": "clock and effect/approval fixture"
+    },
+    {
+      "id": "A12",
+      "name": "unknown-effect",
+      "status": "pending",
+      "oracle": "Kill before intent, after intent, after dispatch before receipt; restart quarantines unknown outcomes and never blindly redispatches",
+      "blocked_on": "durable dispatch checkpoint fixture"
+    },
+    {
+      "id": "A13",
+      "name": "completion-evidence",
+      "status": "pending",
+      "oracle": "Duplicate completion does not duplicate result; prose done without verifier evidence cannot succeed",
+      "blocked_on": "evidence verifier fixture"
+    },
+    {
+      "id": "A14",
+      "name": "isolation",
+      "status": "pending",
+      "oracle": "Candidate homes/cookies/providers/processes disjoint; stopping owned candidate leaves 1.x untouched",
+      "blocked_on": "isolated launcher and before/after manifest"
+    },
+    {
+      "id": "A15",
+      "name": "web-ios",
+      "status": "pending",
+      "oracle": "Real web build and editable composer; native simulator build/navigation/keyboard/reconnect evidence; screenshot insufficient",
+      "blocked_on": "UI and native build host"
+    },
+    {
+      "id": "A16",
+      "name": "import-idempotency",
+      "status": "pending",
+      "oracle": "Synthetic consistent snapshot apply twice has stable mappings/counts/hashes; conflicting source identity quarantined",
+      "blocked_on": "versioned importer"
+    },
+    {
+      "id": "A17",
+      "name": "import-dormancy",
+      "status": "pending",
+      "oracle": "Orphans/cycles/missing artifacts reported; source hashes unchanged; imported runs/timers/routes/outbox dormant; credentials excluded; consent preserved",
+      "blocked_on": "versioned importer"
+    }
+  ]
+}
