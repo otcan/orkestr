@@ -18,6 +18,7 @@ pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};
 mod dispatch;
 mod fast;
 mod fence;
+mod held_inputs;
 pub use fast::FastAdmissionInput;
 pub(crate) mod inspection;
 mod leases;
