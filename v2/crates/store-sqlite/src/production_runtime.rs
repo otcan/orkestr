@@ -219,3 +219,6 @@ mod stop_progress_tests;
 
 #[cfg(test)]
 mod claude_identity_tests;
+
+mod worker_tasks;
+pub use worker_tasks::WorkerTaskClaim;
