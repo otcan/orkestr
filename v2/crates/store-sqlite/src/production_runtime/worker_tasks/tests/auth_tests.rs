@@ -213,3 +213,46 @@ async fn browser_data_and_receipts_never_authorize_claim_or_injected_provider_fi
     assert_eq!(audit(&f).await, before);
     cleanup(f).await;
 }
+
+#[tokio::test]
+async fn absent_scheduler_refuses_fresh_intent_but_preserves_exact_receipt_replay() {
+    let f = fixture().await;
+    let before = audit(&f).await;
+    assert!(matches!(
+        f.core
+            .handle
+            .create_worker_task_if_available_authenticated(
+                &f.browser,
+                &f.core.conversation,
+                &f.request,
+                false
+            )
+            .await,
+        Err(RuntimeStoreError::Unavailable)
+    ));
+    assert_eq!(audit(&f).await, before);
+    assert!(statuses(&f).await.can_create); // Core eligibility, not server liveness.
+    let receipt = create(&f).await;
+    f.core
+        .handle
+        .request_cancel(&f.core.owner, &f.parent.run.run_id, "close-task-scheduler")
+        .await
+        .unwrap();
+    assert!(!statuses(&f).await.can_create);
+    let before = audit(&f).await;
+    assert_eq!(
+        f.core
+            .handle
+            .create_worker_task_if_available_authenticated(
+                &f.browser,
+                &f.core.conversation,
+                &f.request,
+                false
+            )
+            .await
+            .unwrap(),
+        receipt
+    );
+    assert_eq!(audit(&f).await, before);
+    cleanup(f).await;
+}

@@ -71,10 +71,13 @@ impl WorkerSchedule {
     }
 
     async fn begin(&mut self) -> Result<(Phase, WorkerProgress), &'static str> {
-        let slot = capacity()
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| "Worker concurrency limit reached")?;
+        let slot = match self.slot.take() {
+            Some(slot) => slot,
+            None => capacity()
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| "Worker concurrency limit reached")?,
+        };
         self.configuration.verify_launcher()?;
         let directory = directory::Directory::create(&self.configuration.directory)?;
         let directories = directory.child(&self.configuration.workspace)?;
@@ -137,21 +140,32 @@ impl WorkerSchedule {
         {
             return Err("Worker readiness lineage changed");
         }
-        let input = WorkerAdmissionInput {
-            worker_binding_id: binding.session_id.clone(),
-            expected_binding_generation: binding.generation,
-            source_message_id: self.message.clone(),
-            source_event_id: self.source_event.clone(),
-            request_key: self.key.clone(),
-            lifetime_ms: self.configuration.policy.lifetime_ms(),
-        };
-        let WorkerDelegationResult::Fresh(delegation) = self
-            .store
-            .delegate_worker(&self.credential, &self.parent.run_id, &input)
-            .await
-            .map_err(|_| "Worker delegation refused")?
-        else {
-            return Err("Worker delegation already exists; automatic replay refused");
+        let delegation = if let Some(claim) = self.task_claim.take() {
+            self.store
+                .delegate_worker_task(&self.credential, claim, &binding)
+                .await
+                .map_err(|_| "Worker subtask delegation refused")?
+        } else {
+            if self.configuration.policy.owner_tasks() {
+                return Err("Worker subtask claim missing; parent input substitution refused");
+            }
+            let input = WorkerAdmissionInput {
+                worker_binding_id: binding.session_id.clone(),
+                expected_binding_generation: binding.generation,
+                source_message_id: self.message.clone(),
+                source_event_id: self.source_event.clone(),
+                request_key: self.key.clone(),
+                lifetime_ms: self.lifetime_ms,
+            };
+            let WorkerDelegationResult::Fresh(delegation) = self
+                .store
+                .delegate_worker(&self.credential, &self.parent.run_id, &input)
+                .await
+                .map_err(|_| "Worker delegation refused")?
+            else {
+                return Err("Worker delegation already exists; automatic replay refused");
+            };
+            delegation
         };
         let admitted = self
             .store
@@ -194,7 +208,7 @@ impl WorkerSchedule {
         // Attempt native interruption before the hard lease expires. Core's
         // clipped authoritative deadline may be earlier; refusal stays unknown.
         self.deadline = Instant::now()
-            + Duration::from_millis(self.configuration.policy.lifetime_ms().into())
+            + Duration::from_millis(self.lifetime_ms.into())
                 .saturating_sub(Duration::from_millis(250));
         Ok((
             Phase::Running(Box::new(Running {

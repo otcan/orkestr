@@ -12,10 +12,19 @@ impl WorkerPolicy {
     /// One independently bound Worker for the parent's immutable input. This
     /// policy cannot select an owner, parent, native session, prompt or privilege.
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.mode != "parent-input-once-v1" || !(1..=30_000).contains(&self.lifetime_ms) {
+        if !matches!(
+            self.mode.as_str(),
+            "parent-input-once-v1" | "owner-tasks-v1"
+        ) || !(1..=30_000).contains(&self.lifetime_ms)
+            || (self.owner_tasks() && self.lifetime_ms != 30_000)
+        {
             return Err("unsupported bounded Worker scheduling policy");
         }
         Ok(())
+    }
+
+    pub(super) fn owner_tasks(&self) -> bool {
+        self.mode == "owner-tasks-v1"
     }
 
     pub(super) fn lifetime_ms(&self) -> u32 {
@@ -42,6 +51,7 @@ mod tests {
             ("parent-input-once-v1", 0),
             ("parent-input-once-v1", 30_001),
             ("unbounded", 100),
+            ("owner-tasks-v1", 1000),
         ] {
             let policy: WorkerPolicy = serde_json::from_value(json!({
                 "mode":mode, "lifetime_ms":lifetime_ms
@@ -61,5 +71,10 @@ mod tests {
             assert!(serde_json::from_value::<WorkerPolicy>(value).is_err());
         }
         assert!(serde_json::from_value::<WorkerPolicy>(json!({})).is_err());
+        let tasks: WorkerPolicy = serde_json::from_value(json!({
+            "mode":"owner-tasks-v1", "lifetime_ms":30000
+        }))
+        .unwrap();
+        assert!(tasks.validate().is_ok() && tasks.owner_tasks());
     }
 }

@@ -7,6 +7,7 @@ from pathlib import Path
 import select
 import sys
 import time
+import uuid
 
 
 def main():
@@ -22,12 +23,14 @@ def main():
         ordinal = len(counter.readlines())
         counter.write("spawn\n")
         counter.flush()
-    native = f"synthetic-independent-native-{os.getpid()}"
+    native = f"synthetic-independent-native-{uuid.uuid4()}"
     role = "deep" if ordinal == 0 else "worker"
     trace = workspace / "synthetic-peer.jsonl"
+    identity = {"pid_namespace": Path("/proc/self/ns/pid").stat().st_ino,
+                "process_start": int(Path("/proc/self/stat").read_text().rsplit(") ", 1)[1].split()[19])}
 
     def record(kind, **fields):
-        value = {"kind": kind, "pid": os.getpid(), "native": native, "role": role, **fields}
+        value = {"kind": kind, "pid": os.getpid(), "native": native, "role": role, **identity, **fields}
         line = (json.dumps(value, separators=(",", ":")) + "\n").encode()
         assert len(line) < 4096
         fd = os.open(trace, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)

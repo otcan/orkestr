@@ -100,18 +100,34 @@ impl WorkerSchedule {
                 .flush()
                 .map_err(|_| "Worker write fence refused")?;
         }
-        match running.pump.step(&self.store).await {
-            Ok(_) => {}
+        let committed = match running.pump.step(&self.store).await {
+            Ok(committed) => committed,
             Err(orkestr_runtime::supervisor::Error::Store(
                 RuntimeStoreError::Busy | RuntimeStoreError::Unavailable,
-            )) => {}
+            )) => false,
             Err(_) => return Err("Worker observation requires reconciliation"),
-        }
+        };
+        let phase = if committed {
+            self.store
+                .execution_run_status(
+                    &self.credential,
+                    &self.parent.owner_id,
+                    &self.parent.conversation_id,
+                    &running.run,
+                )
+                .await
+                .map_err(|_| "Worker committed status unavailable")?
+                .filter(|status| status.run_id.as_ref() == Some(&running.run))
+                .ok_or("Worker committed scope changed")?
+                .phase
+        } else {
+            status.phase
+        };
         // A Busy persistence step can retain a new observation. Refresh before
         // releasing the shared guard so HTTP cannot cancel through that gap.
-        running.control.set_available(
-            status.phase == ExecutionPhase::Running && running.pump.pending().is_none(),
-        );
+        running
+            .control
+            .set_available(phase == ExecutionPhase::Running && running.pump.pending().is_none());
         Ok((Phase::Running(running), WorkerProgress::Running))
     }
 

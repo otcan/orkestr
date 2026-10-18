@@ -13,6 +13,10 @@ mod owned_children;
 #[path = "../src/stop_execution/mod.rs"]
 #[allow(dead_code)]
 mod stop_execution;
+// Compile the trusted scheduler availability port without HTTP route wiring.
 #[path = "../src/worker_execution/mod.rs"]
 #[allow(dead_code)]
 mod worker_execution;
+#[path = "../src/worker_tasks/access.rs"]
+#[allow(dead_code)]
+mod worker_tasks;
