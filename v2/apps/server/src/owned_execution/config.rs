@@ -21,6 +21,8 @@ pub(super) struct Config {
     pub namespace: String,
     pub supervisor_key: String,
     #[serde(default)]
+    pub execution_budget: super::budget::ExecutionBudget,
+    #[serde(default)]
     pub worker: Option<crate::worker_execution::WorkerPolicy>,
 }
 
@@ -98,6 +100,7 @@ impl Config {
         if let Some(policy) = &config.worker {
             policy.validate()?;
         }
+        config.execution_budget.validate()?;
         canonical(&config.workspace)?;
         if !config.workspace.is_dir()
             || config.workspace.starts_with(home)

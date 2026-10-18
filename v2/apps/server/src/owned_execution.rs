@@ -1,6 +1,7 @@
 //! Explicit, one-conversation isolated acceptance composition. No HTTP configuration.
 mod admission;
 mod bootstrap;
+mod budget;
 mod config;
 #[cfg(all(test, unix))]
 mod config_tests;

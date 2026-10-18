@@ -102,7 +102,7 @@ impl ConfiguredExecution {
             .control
             .register(self.store.clone(), &run)
             .map_err(|_| "execution control registration refused")?;
-        let mut deadline = Instant::now() + Duration::from_secs(45);
+        let mut budget = self.config.execution_budget.start(Instant::now());
         loop {
             self.maintain(heartbeat).await?;
             // Parent Stop serializes against both its own pump and a bounded
@@ -162,7 +162,7 @@ impl ConfiguredExecution {
                     .control
                     .register(self.store.clone(), &run)
                     .map_err(|_| "execution control registration refused")?;
-                deadline = Instant::now() + Duration::from_secs(45);
+                budget = self.config.execution_budget.start(Instant::now());
                 continue;
             }
             if status.phase == ExecutionPhase::AwaitingAcceptance {
@@ -186,11 +186,16 @@ impl ConfiguredExecution {
                 // killing a local helper is never reported as provider Stopped.
                 break;
             }
-            if *shutdown.borrow() || Instant::now() >= deadline {
+            let cancellation = if *shutdown.borrow() {
+                Some("isolated-runtime-shutdown")
+            } else {
+                budget.cancellation_key(Instant::now())
+            };
+            if let Some(key) = cancellation {
                 // Fence durably before local child cleanup; no success is inferred.
                 let receipt = self
                     .store
-                    .request_cancel(&self.owner, &run, "isolated-runtime-shutdown")
+                    .request_cancel(&self.owner, &run, key)
                     .await
                     .map_err(|_| "execution shutdown requires reconciliation")?;
                 run_control.disable();
@@ -215,6 +220,7 @@ impl ConfiguredExecution {
                 Err(_) => return Err("execution observation refused; reconciliation required"),
             };
             let phase = if committed {
+                budget.observed(Instant::now());
                 // A committed proposal/terminal event may change phase during
                 // this step. Publish availability from that result before HTTP
                 // acquires the same lock, not from the pre-step Running sample.

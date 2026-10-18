@@ -136,3 +136,25 @@ fn optional_worker_policy_is_validated_before_any_runtime_is_created() {
         assert!(fixture.load().is_err());
     }
 }
+
+#[test]
+fn only_private_finite_execution_budgets_are_accepted() {
+    let mut fixture = Fixture::new();
+    fixture.value["execution_budget"] = json!({"max_run_ms":3_600_000, "max_idle_ms":300_000});
+    fixture.write();
+    let config = fixture.load().unwrap();
+    assert_eq!(config.execution_budget.max_run_ms, 3_600_000);
+    for value in [
+        json!({"max_run_ms":0}),
+        json!({"max_run_ms":86_400_001}),
+        json!({"max_run_ms":10_000, "max_idle_ms":0}),
+        json!({"max_run_ms":10_000, "max_idle_ms":10_001}),
+        json!({"max_run_ms":10_000, "lease_generation":2}),
+        json!({"max_run_ms":10_000, "provider_auth":"synthetic-forbidden"}),
+        json!({"max_run_ms":10_000, "native_session_id":"synthetic-forbidden"}),
+    ] {
+        fixture.value["execution_budget"] = value;
+        fixture.write();
+        assert!(fixture.load().is_err());
+    }
+}
