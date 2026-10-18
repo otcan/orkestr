@@ -23,6 +23,9 @@ impl Store {
             .await
             .map_err(|_| RuntimeStoreError::Unavailable)?
             .ok_or(RuntimeStoreError::Unauthorized)?;
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("acceptance-after-authentication")
+            .await?;
         self.accept_execution_guarded(&owner, conversation, input, Some(credential))
             .await
     }

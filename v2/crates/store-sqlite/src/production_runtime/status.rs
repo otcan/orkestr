@@ -57,6 +57,23 @@ impl Store {
         } else {
             None
         };
+        let acceptance_candidate = if phase == ExecutionPhase::AwaitingAcceptance {
+            let run = run_id.as_ref().ok_or(RuntimeStoreError::Unavailable)?;
+            let completions: Vec<String> = sqlx::query_scalar("SELECT o.event_id FROM production_observations o JOIN events e ON e.id=o.event_id WHERE o.run_id=? AND o.kind='completed_proposal' AND o.receipt_state='awaiting_acceptance' AND e.owner_id=? AND e.conversation_id=? AND e.kind='provider_observed' AND e.schema_version=5")
+                .bind(run.to_string()).bind(owner.to_string()).bind(conversation.to_string())
+                .fetch_all(&mut *tx).await.map_err(db)?;
+            if completions.len() != 1 {
+                return Err(RuntimeStoreError::Unavailable);
+            }
+            Some(orkestr_v2_contracts::ExecutionAcceptanceCandidate {
+                run_id: run.clone(),
+                completion_event_id: orkestr_v2_contracts::EventId(
+                    completions[0].parse().map_err(db)?,
+                ),
+            })
+        } else {
+            None
+        };
         let status = ExecutionStatus {
             schema_version: 1,
             conversation_id: conversation.clone(),
@@ -64,6 +81,7 @@ impl Store {
             revision,
             observed_at_ms,
             phase,
+            acceptance_candidate,
             queue_age_ms: queued.map(|time| observed_at_ms.saturating_sub(time).max(0) as u64),
             progress,
             resources: None,

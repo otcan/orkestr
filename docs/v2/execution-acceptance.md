@@ -72,8 +72,10 @@ turn and immutable old receipt replay, foreign/forged/stale/terminal refusal,
 provider-handle refusal and injected persistence rollback. The actual-process
 parent SIGKILLs two owned writers at the two acceptance boundaries and starts two
 fresh replay processes. This is Store acceptance evidence, not HTTP/browser or
-provider-execution acceptance. Populated historical-prefix upgrade and independent
-acceptance review remain separate gates.
+provider-execution acceptance. The populated migration14-to-15 regression preserves
+all prior table rows, migration checksums, issued history, observation/payload/inbox
+links and foreign keys, then reopens again. Independent acceptance and upgrade
+review remain separate gates.
 
 ## Credential-bearing HTTP boundary
 
@@ -89,3 +91,26 @@ and passes the exact namespaced credential used by session authentication.
 The earlier `accept_execution(owner, ...)` remains a trusted internal Store
 operation: a cached OwnerId is not proof of current authentication. It must not
 be exposed directly by an HTTP handler. No acceptance endpoint is activated here.
+
+The opt-in `AcceptanceAfterAuthentication` checkpoint deterministically pauses
+after preliminary credential lookup and before BEGIN IMMEDIATE. Arm it through
+`production_arm_owner_checkpoint` with a fresh marker. The parent waits for exact
+`acceptance-after-authentication` bytes, commits revocation through a separate
+ordinary Store, then removes its owned marker to resume the child. The operation
+must return Unauthorized without ledger changes. No database lock is held at this
+checkpoint; failure to release within 30 seconds returns Unavailable. Existing
+before/after-COMMIT markers retain their kill-only behavior. No normal-build or
+HTTP checkpoint exists.
+
+## Reload-safe candidate discovery
+
+ExecutionStatus has optional `acceptance_candidate: {run_id, completion_event_id}`.
+Legacy statuses without this field deserialize with None; absent candidates are
+omitted on serialization. The candidate is populated only for the selected exact
+AwaitingAcceptance run, from its unique committed non-synthetic CompletedProposal
+observation and canonical schema5 event. Run, completion and conversation revision
+are captured in the same read transaction. UI uses status.revision for its request;
+this read projection is never an acceptance grant. Malformed/mismatched candidate
+identity or a candidate in another phase invalidates the status. Candidate changes
+participate in equal-revision semantic equality. No canonical acceptance DTO or
+request/receipt version changes. Matching UI/Runtime source review precedes use.
