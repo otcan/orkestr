@@ -1,0 +1,69 @@
+{
+  "backup_retention": "Verified backup and complete original-owner rollback home retained privately; no production data",
+  "backward_refusal": {
+    "database_inventory_unchanged": true,
+    "exit_code": 1,
+    "server_error": "store startup failed",
+    "tested_schema_versions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ]
+  },
+  "checks": [
+    "old executable created populated schema14; verified stopped backup and untouched rollback copy",
+    "new executable migrated populated14 to15; original session/history/idempotency retained",
+    "old executable refused disposable schema15 copy without database inventory mutation",
+    "old executable recovered original owner/history on untouched schema14 rollback home; backup preserved"
+  ],
+  "initial_harness_failure": {
+    "cause": "immutable SQLite read ignored committed WAL after upgrade",
+    "correction": "WAL-aware mode=ro; dedicated uncheckpointed-WAL regression passed",
+    "database_integrity": "WAL-aware integrity_check ok; migrations1\u201315 present; failed checkpoint retained privately"
+  },
+  "new_binary_sha256": "e94ddf3fc81a605c5d06b769584179711e9da596d010d20fe3d1213d7b8ae90a",
+  "new_source": "a30749e85420b869f9a71e65f946fcb2916f90e8",
+  "old_binary_sha256": "c6eca93f7119dbd9cbbfe6e42cf1cc894a62fc8e97123938fabfc82a47cd2f0e",
+  "old_source": "31d8d0395369b32306d14412843a9f9bf5eb2c01",
+  "preserved_backup_sha256": "11f2f44a0b467f5db7a4155656cb18adaef3727bea813171e67fe24c4d4049a6",
+  "rollback_schema_versions": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14
+  ],
+  "scope": "same-owner populated package migration 14 to 15; rollback uses untouched pre-migration full-home copy",
+  "status": "passed",
+  "ui_index_sha256": "a1deffd301c9678a710aa8b5fd6315250a8cc788e714fc86a25a07b193ca7e79",
+  "ui_source": "e6b5441a45159d76654cb357749cbe0f6218f7c8",
+  "unexecuted": [
+    "cross-version dormant import",
+    "owner rebinding",
+    "providers",
+    "browser",
+    "production",
+    "power-loss recovery"
+  ]
+}

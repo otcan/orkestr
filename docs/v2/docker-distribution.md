@@ -332,5 +332,10 @@ protection against hostile same-UID writers, network filesystems or power loss.
 
 Synthetic subprocess tests execute competing lock acquisition, refusal before
 backup/apply/rollback writes, exec inheritance, alias contention and release after
-exit. Actual rebuilt-image contention acceptance remains unexecuted pending exact
-source review; the earlier dormant checkpoint predates this locking increment.
+exit. Actual rebuilt-image contention and dormant recovery passed after independent
+review. `locked-dormant-checkpoint.json` pins the schema-15 server, e6b UI, image
+and Compose hashes. A separate nonroot helper mounting the owned state volume
+refused backup/apply/rollback while the server held its inherited lock, without
+creating the snapshot output. After stop, backup/apply/activation-refusal/rollback
+passed; all owned containers, networks, volumes, image and context were removed.
+Helper-to-helper contention and exec lifetime also passed real subprocess tests.

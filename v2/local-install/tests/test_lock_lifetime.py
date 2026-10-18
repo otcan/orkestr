@@ -38,3 +38,11 @@ class NativeLockLifetimeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'invalid private launcher lock'):
                 with state.locked(home):
                     pass
+
+    def test_fifo_lock_rejected(self):
+        with tempfile.TemporaryDirectory(prefix='v2-native-lock-') as raw:
+            home = Path(raw)
+            os.mkfifo(home/'launcher.lock', 0o600)
+            with self.assertRaisesRegex(RuntimeError, 'invalid private launcher lock'):
+                with state.locked(home):
+                    pass

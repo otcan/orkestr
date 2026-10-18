@@ -168,8 +168,15 @@ mount-alias correctness. No host mounts are modified by these tests.
 `python3 -B v2/local-install/tests/cross_revision.py --help` describes the explicit
 old/new binary hashes, source revisions, UI, private parent and assigned port.
 The older executable must create exactly migrations 1–14; the successor must
-migrate to exactly 1–15. This probe is **unexecuted pending a pinned schema-15
-successor artifact**. A version-label switch does not satisfy it.
+migrate to exactly 1–15. This probe **passed** with pinned `31d8d039`/`c6eca93f` schema-14 and
+`a30749e8`/`e94ddf3f` schema-15 binaries. Exact identities and checks are in
+`v2/local-install/tests/schema14-to15-checkpoint.json`. Original session/history
+and idempotency survived migration. The old binary refused only the disposable
+schema-15 copy (`store startup failed`, exit 1) without changing its database
+inventory. The preserved schema-14 rollback home reopened successfully with the
+old binary. No downgrade of the migrated working database was attempted.
+The first harness read incorrectly ignored WAL; a WAL-aware read and regression
+fixed that harness error, then a fresh full probe passed.
 
 The probe creates synthetic owner/message history under the old package, stops
 it, preserves a verified SQLite backup and complete stopped rollback home, then

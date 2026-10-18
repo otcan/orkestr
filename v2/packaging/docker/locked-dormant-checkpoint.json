@@ -1,0 +1,103 @@
+{
+  "active_server_lock_refusals": "backup/apply/rollback busy refusal passed",
+  "artifacts": {
+    "acceptance": "Executed Linux amd64 mixed-source trusted-control-plane packaging/lock/dormant checkpoint only",
+    "base_image": "python@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258",
+    "container_bind_opt_in": {
+      "name": "ORKESTR_V2_CONTAINER_BIND",
+      "value": "1"
+    },
+    "files": {
+      "dormant.py": "8810f104748e7d503acf21e05901cb06308095046b2a1e97f9585bee4ad77ac2",
+      "entrypoint.py": "63a66d8634c57213ba923db1a12c64699deb22ca3b1c9b0f5662a3825b7a687a",
+      "server": "e94ddf3fc81a605c5d06b769584179711e9da596d010d20fe3d1213d7b8ae90a",
+      "state_lock.py": "4340f9c2a0f427a7e87bdd711b9b5c27dd3ccccf08cc54d20861608c3c564ce4",
+      "ui/index.html": "a1deffd301c9678a710aa8b5fd6315250a8cc788e714fc86a25a07b193ca7e79",
+      "ui/orkestr_v2_ui.js": "ce8d574aeaaece13892ca747089e80a241088cac67e3d753e1b8f42308853fce",
+      "ui/orkestr_v2_ui_bg.wasm": "e0c077788a0d2d6639df3c72a7c9295272ed21a5c82cb1998749efdd9a8fc022",
+      "ui/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js": "07027f8ccbb9ba3619deeb861233594ccab582d7eb3da34ca86559c932a09e6b",
+      "ui/snippets/dioxus-interpreter-js-20451f6aefec841d/inline0.js": "cd533b7b9f2192fa535f92f4f266d03d47c23105cf500498d0bc8d6cc90dc6cf",
+      "ui/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/hydrate.js": "0659b58e105fbc8e7e97feb8aa123f455520333ae10c326fa37ec0eb4b08e833",
+      "ui/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/patch_console.js": "9ef1d21e8c05e91f5dd9e46c8f47ae574185a64497527b687f8fdb9b98045f83",
+      "ui/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/set_attribute.js": "5b56995f71fe629934f4ab5eb292d5cfccd9d99037eb9a39ede5078c78db88df",
+      "ui/snippets/dioxus-web-eae67878b22d6805/inline0.js": "853d44dbc9d2696e80d66c056e21d69e77b2bf68f9636826becd029f67c884a5",
+      "ui/snippets/dioxus-web-eae67878b22d6805/src/js/eval.js": "2cd20723c2c3cc52d648d1f5670df929733b359036044d3fd6c9507d929f28b6"
+    },
+    "format": "orkestr-v2-container-artifacts-v1",
+    "network_policy": "trusted-control-plane",
+    "origin": "http://127.0.0.1:19842",
+    "platform": "linux/amd64",
+    "project": "v2-install-7f913ed58c39",
+    "provider_activation": "none; no provider configured by this distribution",
+    "required_glibc_declared": "2.34",
+    "server_source_commit_declared": "a30749e85420b869f9a71e65f946fcb2916f90e8",
+    "ui_source_commit_declared": "e6b5441a45159d76654cb357749cbe0f6218f7c8"
+  },
+  "base_architecture": "linux/amd64",
+  "base_digest": "python@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258",
+  "base_glibc": "2.36",
+  "base_image_id": "sha256:4f228bc1cbcfc794e4878312cfc241d368eff55a21c08d1e2bb263116c4ef524",
+  "compose_sha256": "d23db25edcdaf22c74f40b1674f57b61cf1a79ad6b56e81e639a67953e12a80c",
+  "dormant_recovery": {
+    "activation": "activation refused",
+    "rollback": "empty target restored",
+    "scope": "same exact image offline recovery; no cross-version migration",
+    "snapshot_and_applied": {
+      "messages": 1,
+      "sha256": "ae2400b1fc255ae42f83ad44fb3c528cd82181db5217a4bfe2cedc8cc9ddc5c7"
+    },
+    "status": "passed"
+  },
+  "effective_port_bindings": {
+    "19822/tcp": [
+      {
+        "HostIp": "127.0.0.1",
+        "HostPort": "19842"
+      }
+    ]
+  },
+  "effective_restrictions": {
+    "Binds": [
+      "v2-install-7f913ed58c39-state:/state:rw"
+    ],
+    "CapDrop": [
+      "ALL"
+    ],
+    "PidsLimit": 64,
+    "Privileged": false,
+    "ReadonlyRootfs": true,
+    "SecurityOpt": [
+      "no-new-privileges:true"
+    ]
+  },
+  "host_http": {
+    "body": "{\"contract_version\":0,\"fixture_mode\":false,\"product\":\"orkestr-v2\",\"status\":\"ok\"}",
+    "status": 200
+  },
+  "image_id": "sha256:9268528c4a86f3a072eb94a239d38e530046f4fd8fd5c10aa10216e442d8e0fe",
+  "inside_health": "200 {\"contract_version\":0,\"fixture_mode\":false,\"product\":\"orkestr-v2\",\"status\":\"ok\"}",
+  "owned_image_removed": true,
+  "policy": "trusted-control-plane default; outbound routing allowed; zero providers",
+  "private_context_removed": true,
+  "project_resources_remaining": {
+    "container": "",
+    "network": "",
+    "volume": ""
+  },
+  "scope": "Cooperative Linux volume inode locking, zero providers; no executor-isolation or cross-version Docker import claim",
+  "source_review_commit": "982c65c370830762fb347fc132aaa580b39f699f",
+  "status": "passed",
+  "synthetic_intake": "setup/session/message/idempotency/history passed",
+  "ui_index_sha256": "a1deffd301c9678a710aa8b5fd6315250a8cc788e714fc86a25a07b193ca7e79",
+  "unexecuted": [
+    "Untrusted executor containment",
+    "Cross-version dormant import",
+    "Restore activation/owner rebinding",
+    "Providers/inference",
+    "Browser interaction",
+    "macOS/ARM",
+    "Power-loss recovery",
+    "Hostile or bypassing writers"
+  ],
+  "working_source_commit": "3c8bc6c3"
+}
