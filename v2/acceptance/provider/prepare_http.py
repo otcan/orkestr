@@ -18,6 +18,11 @@ import uuid
 from verify_package import Refused, exact, require, verify
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
 def private_write(path, value):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w") as file:
@@ -53,9 +58,6 @@ class Candidate:
                                          headers=request_headers,
                                          data=None if body is None else json.dumps(body).encode())
         # Do not inherit HTTP(S)_PROXY or ambient cookies from this host.
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, *_args, **_kwargs):
-                return None
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         try:
             response = opener.open(request, timeout=3)

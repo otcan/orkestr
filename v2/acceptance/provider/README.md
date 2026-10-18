@@ -107,3 +107,32 @@ handed-off writer must produce EOF with zero bytes; after writing a short prefix
 EOF must contain that exact prefix without a suffix or replay. This establishes
 sole writer ownership and actual byte effects, not durable Store cancellation
 or revocation race behavior. Those require the Runtime/Core integration tests.
+
+`codex_reuse.py` is an attended **activation** driver, not another preflight.
+Use it only after explicit review of the exact immutable package, private
+configuration, ordinary server composition and driver source. It consumes one
+fresh preparation and refuses a second activation attempt. The selected native
+executable and canonical account reference require operator review; their hashes
+alone do not identify a provider or authorize launching it.
+
+```sh
+python3 -B v2/acceptance/provider/codex_reuse.py \
+  /opt/example-acceptance/manifest.json /srv/example-acceptance
+```
+
+The two prompts request harmless exact text without tools or other effects. The
+second asks for the previous answer plus a new token. It is queued before the
+first completion is accepted; the driver verifies that it waits for the owner,
+then requires the same native PID/start identity and durable native session for
+both distinct runs. Historical acceptance replay must leave the successor
+unchanged. Both owner receipts must survive a restart with execution disabled.
+This qualifies only that bounded two-turn path; Stop, steering, additional roles,
+crash recovery and OS credential isolation remain separate gates.
+
+Each proposal has a 45-second deadline inside a 90-second overall work deadline.
+A 120-second signal guard bounds the CLI. Termination signals are deferred during
+the cleanup's bounded waits so they cannot leave owned children halfway reaped.
+The event stream refuses redirects just like the ordinary HTTP helper. Output
+text remains private; receipts contain digests and counters. Synthetic native
+validation must pass `evidence_scope="synthetic_native_fixture"` to `run` and
+must never be reported as real provider evidence.
