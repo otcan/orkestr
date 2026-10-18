@@ -4135,6 +4135,14 @@ test("local whatsapp suppresses an outbound media callback that races send confi
     },
     client: {
       async sendMessage(to) {
+        let reachedPendingSendWait;
+        const pendingSendWait = new Promise(resolve => { reachedPendingSendWait = resolve; });
+        const callbackEnv = { ...env };
+        // Release the provider result only after the callback is waiting for it.
+        // Awaiting the whole callback here would create a circular wait.
+        Object.defineProperty(callbackEnv, "ORKESTR_WHATSAPP_PENDING_ATTACHMENT_ECHO_WAIT_MS", {
+          get() { reachedPendingSendWait(); return "22000"; },
+        });
         callbackPromise = handleInboundMessage("responder", {
           id: { _serialized: `true_${chatId}_delivered-after-callback`, remote: chatId },
           from: "responder@lid",
@@ -4149,8 +4157,8 @@ test("local whatsapp suppresses an outbound media callback that races send confi
             downloadAttempts += 1;
             throw new Error("outbound callback media is unavailable");
           },
-        }, env, { ownOnly: true });
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        }, callbackEnv, { ownOnly: true });
+        await pendingSendWait;
         return { id: { _serialized: `true_${chatId}_delivered-after-callback` } };
       },
     },
