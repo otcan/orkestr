@@ -28,14 +28,14 @@ const STAGES: [(&str, ProductionCheckpoint); 7] = [
         ProductionCheckpoint::ConsumeAfterCommit,
     ),
 ];
-struct Owned(Child);
+pub(super) struct Owned(pub(super) Child);
 impl Drop for Owned {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
 }
-fn spawn(root: &std::path::Path, mode: &str, stage: &str) -> Owned {
+pub(super) fn spawn(root: &std::path::Path, mode: &str, stage: &str) -> Owned {
     Owned(
         Command::new(std::env::current_exe().unwrap())
             .args([
@@ -60,7 +60,12 @@ fn spawn(root: &std::path::Path, mode: &str, stage: &str) -> Owned {
 async fn owned_child() {
     let base = PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").unwrap());
     let stage = std::env::var("INDEPENDENT_STAGE").unwrap();
-    if std::env::var("INDEPENDENT_CHILD_MODE").unwrap() == "probe" {
+    let mode = std::env::var("INDEPENDENT_CHILD_MODE").unwrap();
+    if mode == "successor" {
+        super::process_successor::recover(&base, &stage).await;
+        return;
+    }
+    if mode == "probe" || mode == "busy" {
         let root = PathBuf::from(std::fs::read_to_string(base.join("case-path")).unwrap());
         let store = Store::open(&root.join("core.sqlite3")).await.unwrap();
         let predecessor = std::fs::read_to_string(base.join("predecessor")).unwrap();
@@ -72,6 +77,10 @@ async fn owned_child() {
             store.authorize_supervisor(TOKEN, cfg).await,
             Err(RuntimeStoreError::Busy)
         ));
+        if mode == "busy" {
+            store.close().await;
+            return;
+        }
         let mut cfg = config();
         cfg.takeover = ProductionTakeover::ExpiredPredecessor {
             incarnation_id: predecessor,
@@ -94,6 +103,18 @@ async fn owned_child() {
         h.supervisor_incarnation().unwrap(),
     )
     .unwrap();
+    std::fs::write(
+        base.join("input.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "owner": claim.owner_id.to_string(), "conversation": claim.conversation_id.to_string(),
+            "message": claim.message_id.to_string(), "event": claim.event_id.to_string(),
+            "session": claim.consumer_session_id.to_string(), "sequence": claim.scope_sequence,
+            "claim_generation": claim.claim_generation, "claim_deadline": claim.lease_deadline_ms,
+            "binding_generation": binding.generation
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let checkpoint = STAGES.iter().find(|(s, _)| *s == stage).unwrap().1;
     h.production_arm_checkpoint(checkpoint, base.join("marker"))
         .await
@@ -110,6 +131,11 @@ async fn owned_child() {
         )
         .await
         .unwrap();
+    std::fs::write(
+        base.join("receipt.json"),
+        serde_json::to_vec(&super::process_successor::envelope(&admission.provider)).unwrap(),
+    )
+    .unwrap();
     if stage.starts_with("reserve") {
         save_before(&c, &base).await;
     }
@@ -127,6 +153,11 @@ async fn owned_child() {
     panic!("checkpoint failed to stop child");
 }
 async fn save_before(c: &Case, base: &std::path::Path) {
+    std::fs::write(
+        base.join("oracle-before.json"),
+        serde_json::to_vec(&super::process_oracle::rows(&c.root).await).unwrap(),
+    )
+    .unwrap();
     std::fs::write(
         base.join("before.json"),
         serde_json::to_vec(&c.rows().await).unwrap(),

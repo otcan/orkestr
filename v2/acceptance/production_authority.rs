@@ -392,3 +392,10 @@ async fn snapshot_rows(root: &std::path::Path) -> Vec<String> {
     db.close().await.unwrap();
     result
 }
+
+#[cfg(all(feature = "fixture-test-controls", unix))]
+#[path = "production_authority/process_oracle.rs"]
+mod process_oracle;
+#[cfg(all(feature = "fixture-test-controls", unix))]
+#[path = "production_authority/process_successor.rs"]
+mod process_successor;
