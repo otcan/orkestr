@@ -239,3 +239,25 @@ class CandidateTests(unittest.TestCase):
         b=archive.archive(self.root/'candidate',self.root/'b.tar.gz')
         self.assertEqual(a,b)
         with self.assertRaises(RuntimeError):archive.archive(self.root/'candidate',self.root/'a.tar.gz')
+
+    def test_verify_rejects_wrong_architecture_even_with_matching_hash(self):
+        blob=bytearray(self.binary.read_bytes());blob[18:20]=b'\xb7\x00'
+        self.binary.write_bytes(blob);self.value['server']['sha256']=receipt.sha(self.binary)
+        with self.assertRaisesRegex(RuntimeError,'Linux x86_64 ELF'):
+            receipt.verify(self.value,self.binary,self.ui)
+
+    def test_verify_rejects_non_candidate_version(self):
+        self.value['version']='0.1.0'
+        with self.assertRaisesRegex(RuntimeError,'candidate version'):
+            receipt.verify(self.value,self.binary,self.ui)
+
+    def test_candidate_top_level_target_must_match_pair(self):
+        self.assemble();root=self.root/'candidate';path=root/'candidate.json'
+        value=json.loads(path.read_text());value['target']='linux-aarch64';path.write_text(json.dumps(value))
+        with self.assertRaisesRegex(RuntimeError,'target mismatch'):package.verify(root)
+
+    def test_native_source_must_match_pair_even_with_updated_inventory(self):
+        self.assemble();root=self.root/'candidate';native=root/'native/manifest.json'
+        value=json.loads(native.read_text());value['source_commit']='d'*40;native.write_text(json.dumps(value))
+        path=root/'candidate.json';value=json.loads(path.read_text());value['files']['native/manifest.json']=receipt.sha(native);path.write_text(json.dumps(value))
+        with self.assertRaisesRegex(RuntimeError,'native source/target'):package.verify(root)

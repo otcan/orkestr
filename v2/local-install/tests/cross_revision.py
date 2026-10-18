@@ -22,13 +22,25 @@ def versions(home):
     db = home / 'data/core.sqlite3'
     with closing(sqlite3.connect(db.as_uri() + '?mode=ro', uri=True)) as connection:
         require(connection.execute('PRAGMA integrity_check').fetchall() == [('ok',)], 'database integrity')
+        require(not connection.execute('PRAGMA foreign_key_check').fetchall(), 'database foreign keys')
         return [r[0] for r in connection.execute('SELECT version FROM _sqlx_migrations WHERE success ORDER BY version')]
 
 
 def migration_edge(old, new):
-    require(type(old) is int and type(new) is int and (old,new) in {(14,15),(14,17),(14,20),(17,20)},
-            "unsupported migration edge; admitted edges: 14->15/17/20 and 17->20")
+    require(type(old) is int and type(new) is int and (old,new) in {(14,15),(14,17),(14,20),(17,20),(14,24),(17,24)},
+            "unsupported migration edge; admitted edges: 14->15/17/20/24 and 17->20/24")
     return old,new
+
+
+def selected_package(args, side, binary, output, schema):
+    existing=getattr(args,side+'_package',None)
+    source=getattr(args,side+'_source')
+    if existing is None:
+        return builder.assemble(binary,output,f'0.1.0-schema{schema}-probe',source,Path(args.ui))
+    root,manifest=builder.package(Path(existing))
+    require(manifest['source_commit']==source and sha256(root/'server/orkestr-v2-server')==sha256(binary),
+            'selected package source/binary mismatch')
+    return root
 
 
 def exercise(args):
@@ -48,9 +60,12 @@ def exercise(args):
                                             'browser', 'production', 'power-loss recovery']}
     process = None
     try:
-        old_package = builder.assemble(old, root/'old-package', f'0.1.0-schema{predecessor}-probe', args.old_source, Path(args.ui))
-        new_package = builder.assemble(new, root/'new-package', f'0.1.0-schema{successor}-probe', args.new_source, Path(args.ui))
+        old_package = selected_package(args, 'old', old, root/'old-package', predecessor)
+        new_package = selected_package(args, 'new', new, root/'new-package', successor)
         old_entry, new_entry = old_package/'bin/orkestr-v2', new_package/'bin/orkestr-v2'
+        evidence['packages']={side:{'manifest_sha256':sha256(root/'manifest.json'),
+            **{key:builder.package(root)[1][key] for key in ('version','source_commit','target')}}
+            for side,root in (('old',old_package),('new',new_package))}
         home, rollback, refused = root/'working', root/'rollback', root/'refusal-copy'
         invoke(old_entry, 'install', home, '--package', old_package, '--port', args.port)
         client = Client(args.port)
@@ -73,6 +88,12 @@ def exercise(args):
             invoke(new_entry, 'stop', home); require(process.wait(timeout=10) == 0, 'new stop'); process = None
             require(versions(home) == list(range(1, successor+1)), 'successor must migrate to declared exact schema')
             evidence['checks'].append(f'new executable migrated populated{predecessor} to{successor}; original session/history/idempotency retained')
+            process = launch(new_entry, home, client, log)
+            verify_history(client, path, receipt, message)
+            require(client.request('POST', path+'/messages', message) == (200, receipt), 'successor reopen idempotency')
+            invoke(new_entry, 'stop', home); require(process.wait(timeout=10) == 0, 'successor reopen stop'); process = None
+            require(versions(home) == list(range(1, successor+1)), 'successor reopen schema changed')
+            evidence['checks'].append('successor reopened migrated home with original history/idempotency and unchanged schema')
             # Never downgrade the migrated working fixture. Only an isolated copy
             # is passed to the older executable to measure its refusal behavior.
             shutil.copytree(home, refused)
@@ -112,6 +133,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('old-binary', 'old-sha256', 'old-source', 'new-binary', 'new-sha256', 'new-source', 'ui', 'parent'):
         parser.add_argument('--'+name, required=True)
+    parser.add_argument('--old-package', type=Path)
+    parser.add_argument('--new-package', type=Path)
     parser.add_argument('--old-schema', type=int, default=14)
     parser.add_argument('--new-schema', type=int, default=15)
     parser.add_argument('--port', required=True, type=int)

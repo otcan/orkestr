@@ -89,8 +89,12 @@ def seal(checkout, binary, ui, source, version, profile, features, required_glib
 def verify(receipt, binary, ui):
     require(receipt['format'] == FORMAT and receipt['target'] == 'linux-x86_64', 'supported paired receipt required')
     require(re.fullmatch(r'[0-9a-f]{40}', receipt['source_commit']), 'full paired source required')
-    require(not binary.is_symlink() and sha(binary) == receipt['server']['sha256'] and
+    require(binary.is_file() and not binary.is_symlink(), 'regular server artifact required')
+    require(re.fullmatch(r'2\.0\.0-rc\.[1-9][0-9]*', receipt['version']), 'supported candidate version required')
+    require(sha(binary) == receipt['server']['sha256'] and
             binary.stat().st_size == receipt['server']['bytes'], 'server identity mismatch')
+    with binary.open('rb') as stream:header=stream.read(20)
+    require(header[:6]==b'\x7fELF\x02\x01' and header[18:20]==b'\x3e\x00', 'Linux x86_64 ELF required')
     actual = inventory(ui)
     require(actual == receipt['web']['files'] and digest(actual) == receipt['web']['inventory_sha256'], 'web identity mismatch')
     controls = 'execution-controls' in receipt['web'].get('features', [])

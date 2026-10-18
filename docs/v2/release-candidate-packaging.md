@@ -7,7 +7,7 @@ Linux amd64 Docker base. macOS, ARM and executor isolation are not implied.
 The same-source aa8 checkpoint has completed bounded native and Docker acceptance,
 schema14→17 upgrade/refusal/rollback, and a finite attended probe. Its committed
 checkpoint records pin the artifacts and limitations. This is historical schema17
-evidence; final Core20 package acceptance and the production 72-hour window remain
+evidence; final Core24 package acceptance and the production 72-hour window remain
 **unexecuted**. Earlier mixed-source checkpoints do not satisfy the same-source gate.
 
 The coordinator/build owner owns the admitted build slot and workflow registration.
@@ -240,13 +240,13 @@ before that environment can honestly be recorded. Do not relabel synthetic
 records or concatenate separate successful runs. No production monitor or
 72-hour window has been started by this implementation.
 
-## Final Core20 rerun checklist (build owner coordinates exact pins)
+## Final Core24 rerun checklist (build owner coordinates exact pins)
 
-Once Core20 and the final reviewed runtime/UI are integrated, freeze one clean
+Once Core24 and the final reviewed runtime/UI are integrated, freeze one clean
 commit and obtain the coordinator's **single** qualified release server + matching
 controls-enabled web pair. Record source, profile/default features, web features
 and exact server binding, artifact hashes, migrations through 0020 and compatible
-glibc base. Do not rebuild or relabel stale aa8 as Core20.
+glibc base. Do not rebuild or relabel stale aa8 as Core24.
 
 1. Coordinator reruns the repository's locked/offline fmt, strict all-target
    Clippy, server/store/runtime/UI tests, UI scenario/Node checks and canonical
@@ -260,17 +260,17 @@ glibc base. Do not rebuild or relabel stale aa8 as Core20.
    state/port/image/project. Require actual migrations 1–20, all served UI hashes,
    synthetic auth/history/idempotency, stopped consistent backup, dormant
    apply/refusal/rollback, loopback publication, restrictions and owned cleanup.
-4. Run `cross_revision.py --new-schema 20` with retained schema14 source31d8 and
-   new Core20 artifacts; then separately extend/use the harness for a pinned
-   populated schema17 aa8→20 case after Core confirms supported migration edges.
-   The harness now supports explicit `--old-schema 17 --new-schema 20`; its synthetic
-   inventory/edge tests pass, but the actual17→20 run remains unexecuted. Preserve
+4. Run `cross_revision.py --new-schema 24` with retained schema14 source31d8 and
+   new Core24 artifacts; then separately extend/use the harness for a pinned
+   populated schema17 aa8→24 case after Core confirms supported migration edges.
+   The harness now supports explicit `--old-schema 17 --new-schema 24`; its synthetic
+   inventory/edge tests pass, but the actual17→24 run remains unexecuted. Preserve
    complete stopped pre-upgrade homes/backups; use only disposable migrated
    copies for old-binary refusal. Never downgrade a migrated live database.
 5. After review of segmented monitoring, run a short fresh owned segmented probe
    and finite graceful-restart diagnostic separately (restart invalidates a
    continuous journal). Verify incidents/gaps/hash-change refusals and cleanup.
-   Existing aa8 evidence is historical; none of these Core20 runs is executed yet.
+   Existing aa8 evidence is historical; none of these Core24 runs is executed yet.
 6. Release owner validates all full-candidate gates before authorizing any real
    persistent daily-use adapter/window. Production soak, crash/revocation,
    providers, executor containment and production deployment remain separate
@@ -361,3 +361,72 @@ execution authorization, and CLI `stop`/`backup`. The actual gated `start` CLI
 refused invalid evidence before launch. A successful candidate-gated CLI start
 was **unexecuted**; no passing gate receipt was fabricated for this old fixture.
 No authenticated workflow, Core24 qualification or72-hour window is claimed.
+
+
+## Current integrated schema24 acceptance preparation
+
+`accept_upgrade.py` verifies two exact already-packaged candidates and emits
+`prepared_only_unexecuted` by default. It checks full source/server pins,
+contiguous source migration inventories and unchanged historical migration
+checksums. Explicit `--execute --parent ... --port ...` invokes the existing
+populated upgrade/refusal/rollback harness with the original native packages.
+It does not rebuild or relabel either package. The supported harness edges now
+include17→24 and14→24; actual supported application behavior remains a Core and
+real-binary gate. Schema17→20 remains available for its separately pinned pair.
+
+```sh
+python3 -B v2/packaging/candidate/accept_upgrade.py \
+  --old "$PINNED_SCHEMA17_CANDIDATE" --new "$NEW_SCHEMA24_CANDIDATE" \
+  --old-source "$OLD_EXACT_SOURCE" --old-sha "$OLD_SERVER_SHA256" \
+  --new-source "$NEW_EXACT_SOURCE" --new-sha "$NEW_SERVER_SHA256" \
+  --new-schema 24
+# After exact artifact/source review and assigned disposable resources:
+# append --execute --parent "$PRIVATE_PARENT" --port "$ASSIGNED_PORT"
+```
+
+The real probe retains a pre-upgrade snapshot and untouched stopped old-schema
+home. Only a disposable copy of the migrated DB is opened by the old executable
+for intentional refusal. A failed backward refusal or changed inventory fails
+acceptance; it does not downgrade the working DB. Schema24's control revision
+backfill and schema22's production-run rebuild require Core's populated run
+migration tests in addition to Installation's synthetic message history smoke.
+The optional SQL-source test uses `ORKESTR_V2_MIGRATIONS_DIR` to read current
+migration files, checks history/FKs/reopen, and skips explicitly without schema24.
+It is neither SQLx checksum validation nor a real server upgrade receipt.
+
+For the new qualified same-source pin, run candidate verification, fresh native
+acceptance, reviewed owned Docker acceptance, then exact17→24 upgrade/refusal/
+rollback. Record each result independently. Native and Docker target qualification
+must verify Linux x86_64/amd64, actual ELF architecture, required symbol GLIBC
+versions versus the host/base, package version/source/schema alignment, and
+actual origin/health/static behavior. Verification now independently checks ELF
+architecture as well as the paired/candidate/native target and source fields;
+those integrity checks do not prove a producer's build claims or compatibility
+on untested distributions. macOS, ARM and other Linux targets remain unqualified.
+No new build or actual schema24 server run is performed by these preparation
+commands; old aa8 receipts cannot be transferred to the new revision.
+
+### Why successful gated CLI start is still pending
+
+The historical fixture was authorized only for bounded `serve` API testing.
+There is no supplied current, passing canonical candidate evidence packet bound
+to that exact artifact/configuration. No placeholder packet can substitute for
+real qualifications. The canonical candidate stage requires the development
+fixture/recovery and current CI baseline plus production runtime, both real
+provider paths, inventoried workflow parity, migration, security, installation,
+web and performance evidence. Each needs exact revision/artifact/configuration,
+required cases, retained hash-verified artifacts and freshness. The validator
+owns these requirements; Installation must not mark them passed on its behalf.
+72-hour soak and cutover are later full-release gates, not prerequisites invented
+by the launcher. Building the new ordinary server alone does not pass these gates.
+
+A real launcher defect is now corrected: a passing validator report for the same
+revision must also name the selected candidate artifact hash, exact configuration
+hash and package version. `prepare` writes a private adjacent
+`PLAN.configuration.json` containing the canonical configuration bytes; its file
+SHA equals the plan's `configuration_sha256`. Place those exact bytes in the
+private evidence artifact root and reference their SHA, together with the exact
+candidate manifest, when the canonical evidence packet is legitimately assembled.
+This exports no provider credentials. The paths in this file are private runtime
+configuration; do not commit it. Validator selection remains trusted operator
+input and is not cryptographic canonical-provenance attestation.

@@ -96,6 +96,7 @@ class PersistentTests(unittest.TestCase):
             self.assertEqual(plan.stat().st_mode&0o777,0o600)
             seal=value.pop('configuration_sha256')
             self.assertEqual(seal,persistent.receipt.digest(value))
+            self.assertEqual(seal,persistent.receipt.sha(root/'plan.json.configuration.json'))
 
 
     def test_fifo_and_directory_plan_refused_before_read(self):
@@ -107,3 +108,23 @@ class PersistentTests(unittest.TestCase):
                 with patch.object(Path,'read_text',side_effect=AssertionError('must not read special file')):
                     with self.assertRaisesRegex(RuntimeError,'regular private plan required'):
                         persistent.load(path)
+
+    def test_gate_binds_artifact_and_configuration(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw);evidence=root/'evidence.json';scope=root/'scope.json';validator=root/'validator.py'
+            scope.write_text('{}');validator.write_text('# synthetic, not executed')
+            plan={'revision':'a'*40,'candidate':'synthetic','candidate_artifact_sha256':'b'*64,'configuration_sha256':'c'*64}
+            candidate={'version':'2.0.0-rc.1','artifact':{'sha256':'b'*64},'configuration':{'sha256':'c'*64}}
+            result=Mock(returncode=0,stdout=json.dumps({'ready':True,'candidate_revision':'a'*40}))
+            with patch.object(persistent.subprocess,'run',return_value=result), patch.object(persistent.package_candidate,'verify',return_value={'version':'2.0.0-rc.1'}):
+                evidence.write_text(json.dumps({'candidate':candidate}))
+                self.assertEqual(set(persistent.candidate_gate(plan,validator,evidence,scope,root)),{'validator','evidence','scope'})
+                for field in ('artifact','configuration'):
+                    previous=candidate[field]['sha256'];candidate[field]['sha256']='d'*64
+                    evidence.write_text(json.dumps({'candidate':candidate}))
+                    with self.assertRaisesRegex(RuntimeError,'gate '+field+' mismatch'):
+                        persistent.candidate_gate(plan,validator,evidence,scope,root)
+                    candidate[field]['sha256']=previous
+                candidate['version']='2.0.0-rc.2';evidence.write_text(json.dumps({'candidate':candidate}))
+                with self.assertRaisesRegex(RuntimeError,'gate version mismatch'):
+                    persistent.candidate_gate(plan,validator,evidence,scope,root)

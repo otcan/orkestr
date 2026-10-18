@@ -37,11 +37,15 @@ def identity(plan):
 def prepare(candidate, home, plan_path, port):
     candidate=candidate.resolve();manifest=package_candidate.verify(candidate)
     home=fresh_path(home,[candidate]);plan_path=fresh_path(plan_path,[candidate,home])
+    configuration_path=fresh_path(plan_path.with_name(plan_path.name+'.configuration.json'),[candidate,home,plan_path])
     attended.invoke(candidate/'native/bin/orkestr-v2','install',home,'--package',candidate/'native','--port',port)
     value={'format':'orkestr-v2-persistent-plan-v1','candidate':str(candidate),'home':str(home),
            'revision':manifest['source_commit'],'candidate_artifact_sha256':receipt.sha(candidate/'candidate.json'),
            'install_sha256':receipt.sha(home/'install.json'),'port':port,
            'providers':'none','routing':'unconfigured','lifecycle':'foreground_owned_child'}
+    configuration=json.dumps(value,sort_keys=True,separators=(',', ':'))
+    with open(configuration_path,'x',opener=lambda path,flags:os.open(path,flags,0o600)) as stream:
+        stream.write(configuration)
     value['configuration_sha256']=receipt.digest(value)
     write_json(plan_path,value)
     return value
@@ -70,6 +74,12 @@ def candidate_gate(plan, validator, evidence, scope, artifacts):
     receipt.require(result.returncode==0,'candidate gates failed; start refused')
     report=json.loads(result.stdout)
     receipt.require(report.get('ready') is True and report.get('candidate_revision')==plan['revision'], 'candidate gate identity mismatch')
+    packet=json.loads(evidence.read_text())
+    selected=packet.get('candidate',{})
+    receipt.require(selected.get('artifact',{}).get('sha256')==plan['candidate_artifact_sha256'], 'candidate gate artifact mismatch')
+    receipt.require(selected.get('configuration',{}).get('sha256')==plan['configuration_sha256'], 'candidate gate configuration mismatch')
+    manifest=package_candidate.verify(Path(plan['candidate']))
+    receipt.require(selected.get('version')==manifest['version'], 'candidate gate version mismatch')
     return {name:receipt.sha(path) for name,path in [('validator',validator),('evidence',evidence),('scope',scope)]}
 
 
