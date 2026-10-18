@@ -53,9 +53,49 @@ fn replay(
     result.next_due_ms = prior.get("due_ms");
     Ok(result)
 }
+pub(super) async fn enable_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    request: &TimerEnableRequest,
+    now_ms: i64,
+) -> Result<TimerReceipt> {
+    check(
+        request.namespace,
+        request.expected_revision,
+        &request.request_key,
+    )?;
+    schedule::clock(now_ms)?;
+    target(tx, owner, &request.conversation_id).await?;
+    let current = row(tx, owner, request.namespace).await?;
+    let digest = semantic(
+        "enable",
+        request.expected_revision,
+        Some(&request.conversation_id),
+    );
+    if let Some(old) = prior(tx, owner, request.namespace, &request.request_key).await? {
+        let result = replay(&current, &old, &digest, TimerState::Enabled)?;
+        return Ok(result);
+    }
+    let result = receipt(&current)?;
+    if !matches!(result.state, TimerState::Paused | TimerState::Disabled)
+        || result.revision != request.expected_revision
+        || result.dormant_reason.is_some()
+    {
+        return Err(HistoryError::Conflict);
+    }
+    let schedule = schedule::decode(current.get("schedule_json"))?;
+    let due = schedule::next(&schedule, now_ms)?;
+    let rev = revision(result.revision)?;
+    let generation = revision(result.generation)?;
+    sqlx::query("UPDATE dormant_timers SET state='enabled',revision=?,generation=?,conversation_id=?,next_due_ms=? WHERE owner_id=? AND namespace=?")
+            .bind(rev).bind(generation).bind(request.conversation_id.to_string()).bind(due).bind(owner.to_string()).bind(request.namespace.to_string()).execute(&mut **tx).await.map_err(unavailable)?;
+    sqlx::query("INSERT INTO dormant_timer_controls(owner_id,namespace,request_key,semantic_digest,action,receipt_revision,generation,conversation_id,due_ms) VALUES(?,?,?,?,'enable',?,?,?,?)")
+            .bind(owner.to_string()).bind(request.namespace.to_string()).bind(&request.request_key).bind(digest).bind(rev).bind(generation).bind(request.conversation_id.to_string()).bind(due).execute(&mut **tx).await.map_err(unavailable)?;
+    let result = receipt(&row(tx, owner, request.namespace).await?)?;
+    Ok(result)
+}
 impl Store {
-    /// Trusted server clock input, injected for deterministic tests. No dispatcher.
-    /// Authenticates target conversation ownership; connector capability is NOT granted.
+    /// Enables schedule provenance only; use enable_timer_input for ordinary input.
     pub async fn enable_dormant_timer(
         &self,
         credential: &str,
@@ -63,43 +103,10 @@ impl Store {
         request: &TimerEnableRequest,
         now_ms: i64,
     ) -> Result<TimerReceipt> {
-        check(
-            request.namespace,
-            request.expected_revision,
-            &request.request_key,
-        )?;
-        schedule::clock(now_ms)?;
         let mut tx = self.history_transaction(credential, owner, true).await?;
-        target(&mut tx, owner, &request.conversation_id).await?;
-        let current = row(&mut tx, owner, request.namespace).await?;
-        let digest = semantic(
-            "enable",
-            request.expected_revision,
-            Some(&request.conversation_id),
-        );
-        if let Some(old) = prior(&mut tx, owner, request.namespace, &request.request_key).await? {
-            let result = replay(&current, &old, &digest, TimerState::Enabled)?;
-            tx.commit().await.map_err(unavailable)?;
-            return Ok(result);
-        }
-        let result = receipt(&current)?;
-        if !matches!(result.state, TimerState::Paused | TimerState::Disabled)
-            || result.revision != request.expected_revision
-            || result.dormant_reason.is_some()
-        {
-            return Err(HistoryError::Conflict);
-        }
-        let schedule = schedule::decode(current.get("schedule_json"))?;
-        let due = schedule::next(&schedule, now_ms)?;
-        let rev = revision(result.revision)?;
-        let generation = revision(result.generation)?;
-        sqlx::query("UPDATE dormant_timers SET state='enabled',revision=?,generation=?,conversation_id=?,next_due_ms=? WHERE owner_id=? AND namespace=?")
-            .bind(rev).bind(generation).bind(request.conversation_id.to_string()).bind(due).bind(owner.to_string()).bind(request.namespace.to_string()).execute(&mut *tx).await.map_err(unavailable)?;
-        sqlx::query("INSERT INTO dormant_timer_controls(owner_id,namespace,request_key,semantic_digest,action,receipt_revision,generation,conversation_id,due_ms) VALUES(?,?,?,?,'enable',?,?,?,?)")
-            .bind(owner.to_string()).bind(request.namespace.to_string()).bind(&request.request_key).bind(digest).bind(rev).bind(generation).bind(request.conversation_id.to_string()).bind(due).execute(&mut *tx).await.map_err(unavailable)?;
-        let result = receipt(&row(&mut tx, owner, request.namespace).await?)?;
+        let receipt = enable_in_transaction(&mut tx, owner, request, now_ms).await?;
         tx.commit().await.map_err(unavailable)?;
-        Ok(result)
+        Ok(receipt)
     }
     /// Terminal Stop/rollback cannot be resurrected. Disable needs a NEW explicit
     /// enable key/revision/generation. All controls retain provenance and claims.

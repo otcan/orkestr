@@ -87,7 +87,7 @@ pub(crate) async fn validate_claim(
         .map_err(db)?
         .ok_or(RuntimeStoreError::NotFound)?;
     let held: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM production_held_inputs WHERE event_id=?")
+        sqlx::query_scalar("SELECT count(*) FROM ordinary_input_holds WHERE event_id=?")
             .bind(claim.event_id.to_string())
             .fetch_one(&mut *conn)
             .await
@@ -109,7 +109,7 @@ pub(crate) async fn validate_claim(
         return Err(RuntimeStoreError::Expired);
     }
     let earliest: i64 = sqlx::query_scalar(
-        "SELECT min(sequence) FROM reasoning_inbox WHERE conversation_id=? AND state <> 'consumed' AND NOT EXISTS(SELECT 1 FROM production_held_inputs h WHERE h.event_id=reasoning_inbox.event_id)",
+        "SELECT min(sequence) FROM reasoning_inbox WHERE conversation_id=? AND state <> 'consumed' AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=reasoning_inbox.event_id)",
     )
     .bind(claim.conversation_id.to_string())
     .fetch_one(&mut *conn)
