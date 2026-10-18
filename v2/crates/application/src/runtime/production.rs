@@ -1,7 +1,6 @@
 //! Trusted server bootstrap inputs, never browser request DTOs or persisted credentials.
 use super::ProviderKind;
 use orkestr_v2_contracts::SessionId;
-use uuid::Uuid;
 
 /// The caller is trusted server composition, after selecting a local subscription
 /// provider. Namespace identifies that existing provider identity; never a browser field.
@@ -14,7 +13,7 @@ pub struct ProductionSupervisorConfig {
 
 pub enum ProductionTakeover {
     First,
-    ExpiredPredecessor { incarnation_id: Uuid },
+    ExpiredPredecessor { incarnation_id: String },
 }
 
 /// Evidence supplied by the trusted protocol adapter only after a successful
