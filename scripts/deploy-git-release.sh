@@ -844,11 +844,19 @@ codex_app_server_socket_default() {
   echo "${ORKESTR_CODEX_APP_SERVER_SOCKET:-${ORKESTR_HOME:-$deploy_root/data}/run/codex-app-server.sock}"
 }
 
+run_codex_command() {
+  # Keep deployer keys in the parent, including during capability probes.
+  (
+    unset ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
+    "$@"
+  )
+}
+
 codex_command_supports_external_app_server() {
   local command
   command="${1:-codex}"
-  "$command" app-server --help >/dev/null 2>&1 || return 1
-  "$command" app-server proxy --help >/dev/null 2>&1 || return 1
+  run_codex_command "$command" app-server --help >/dev/null 2>&1 || return 1
+  run_codex_command "$command" app-server proxy --help >/dev/null 2>&1 || return 1
 }
 
 codex_app_server_service_is_active() {
