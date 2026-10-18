@@ -1,0 +1,6 @@
+[application]
+name = "orkestr-v2-ui-spike"
+default_platform = "web"
+
+[web.app]
+title = "Orkestr 2.0 — synthetic UI fixture"
