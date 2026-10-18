@@ -66,3 +66,26 @@ store fence before requesting interruption; interruption failure leaves a
 request, never a false confirmation. Exact-head CI and independent review must
 be attached to the PR before integration. This document does not claim the
 runtime slice, M1 or the Rust rewrite is complete.
+
+## Independent source review follow-up
+
+The source-only review of initial head `0a68f50a` found two P2 races.
+The candidate fix preserves queued Completed/Failed/Lost evidence when interrupt
+arrives afterward: interruption returns Busy (unconfirmed), and evidence retains
+its original admission/generation. No confirmed stop is fabricated.
+
+Supervisor steps now take a caller-retained `PendingObservation`. A non-stale
+store error retains the same event under the same admission for retry; success
+clears it and a store StaleLease refusal explicitly discards it. A different
+admission cannot relabel the retained observation. This is one volatile pending
+event per supervised run, not a durable buffer or process-recovery solution.
+Core's shared observation port must supply stable event keys/digest replay
+checks and typed Unavailable/Fenced errors on migration.
+
+Four regression tests were added: terminal-before-newer-cancel race, fail-once
+terminal record retry, explicit stale discard, and no relabeling on retry. The
+terminal cases cover Completed, Failed and Lost. Rust formatting passes. The
+regression test command via v2-cargo with --locked stopped before compile because
+this lane awaits the coordinator-owned lockfile. These new Rust tests are pending,
+not passing acceptance. Formal review still needs a distinct reviewer identity;
+the shared PR-owning account cannot formally approve its own PR.

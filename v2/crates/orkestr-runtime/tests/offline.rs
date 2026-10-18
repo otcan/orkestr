@@ -164,3 +164,24 @@ fn malformed_and_oversized_protocol_frames_fail_closed() {
     let init: serde_json::Value = serde_json::from_str(&codex_initialize()).unwrap();
     assert_eq!(init["method"], "initialize");
 }
+
+#[test]
+fn terminal_evidence_survives_newer_cancel_generation() {
+    for terminal in [
+        ProviderEvent::Completed { synthetic: true },
+        ProviderEvent::Failed,
+        ProviderEvent::Lost,
+    ] {
+        let mut p = FakeProvider::fixture_only(true).unwrap();
+        let original = admission(Role::Worker, "terminal-race");
+        p.start(&original).unwrap();
+        assert_eq!(p.poll(&original), Ok(Some(ProviderEvent::Started)));
+        p.emit(&original, terminal.clone()).unwrap();
+        let mut cancelled = original.clone();
+        cancelled.generation += 1;
+        assert_eq!(p.interrupt(&cancelled), Err(Blocker::Busy));
+        // Unconfirmed interruption must not relabel or erase the original outcome.
+        assert_eq!(p.poll(&cancelled), Err(Blocker::StaleLease));
+        assert_eq!(p.poll(&original), Ok(Some(terminal)));
+    }
+}

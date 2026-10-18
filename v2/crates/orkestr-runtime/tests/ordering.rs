@@ -69,11 +69,12 @@ fn admission_precedes_start_and_running_needs_provider_event() {
         store: &store,
         hung: true,
     };
+    let mut pending = supervisor::PendingObservation::default();
     let admission = supervisor::start(&store, &mut p, "scope", Role::Deep, "run").unwrap();
-    assert!(!supervisor::step(&store, &mut p, &admission).unwrap());
+    assert!(!supervisor::step(&store, &mut p, &admission, &mut pending).unwrap());
     assert_eq!(*store.calls.borrow(), vec!["admitted"]);
     p.hung = false;
-    assert!(supervisor::step(&store, &mut p, &admission).unwrap());
+    assert!(supervisor::step(&store, &mut p, &admission, &mut pending).unwrap());
     assert_eq!(*store.calls.borrow(), vec!["admitted", "record"]);
 }
 #[test]
@@ -99,8 +100,9 @@ fn late_provider_event_cannot_bypass_store_fence() {
         store: &store,
         hung: false,
     };
+    let mut pending = supervisor::PendingObservation::default();
     assert_eq!(
-        supervisor::step(&store, &mut p, &a()),
+        supervisor::step(&store, &mut p, &a(), &mut pending),
         Err(Blocker::StaleLease)
     );
 }

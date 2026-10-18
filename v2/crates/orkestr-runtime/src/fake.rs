@@ -108,6 +108,11 @@ impl Provider for FakeProvider {
         {
             return Err(Blocker::StaleLease);
         }
+        // Completion may already be waiting for persistence. Never replace that
+        // evidence with a fabricated stop confirmation or rebind its generation.
+        if turn.terminal {
+            return Err(Blocker::Busy);
+        }
         turn.admission = admission.clone();
         turn.events.clear();
         turn.events.push_back(ProviderEvent::Stopped);
