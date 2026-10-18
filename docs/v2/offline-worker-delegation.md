@@ -48,6 +48,9 @@ with_offline_python_fence<T,E>(&self, credential: &str,
 async finish_offline_python(&self, credential: &str,
     launch: &ConsumedOfflinePython, outcome: OfflinePythonOutcome,
     output_digest: &str) -> Result<OfflinePythonReceipt>
+async acknowledge_offline_python_cancel(&self, credential: &str,
+    launch: &ConsumedOfflinePython, control: &ProviderAdmission)
+    -> Result<OfflinePythonReceipt>
 ```
 
 `Result` in async signatures is application runtime Result. Credentials remain
@@ -99,3 +102,16 @@ result exposure. A process-local cancellation flag is transport, not durable
 Stop. No permissive callback, private-context reconstruction or unsandboxed
 fallback. Synthetic ordinary Store callsite/race/reopen/queue/kill tests precede
 activation; keep provider/session Worker role gates unchanged.
+
+Cancelled acknowledgement uses only the separate method above: require actual
+owned-child kill/reap evidence from trusted composition and exact Core-issued
+CancellationAcknowledgement for the same parent/owner/context, current new cancel
+fence and issued lease. Authenticate both original launch lineage and current
+control; do not pass control as Execution or accept arbitrary parent IDs. Normal
+finish must refuse Cancelled and leave unknown after loss of execution authority.
+
+The existing blocking `run_python` cannot simply be wrapped in a Store fence.
+Its INTERNAL actual spawn needs an Isolation-owned bounded launch callback or
+consumed-capability integration; waiting for child completion must occur outside
+the transaction. Coordinate this API with the sandbox owner before claiming a
+runnable fenced callsite. A fence around spawn_blocking scheduling is insufficient.
