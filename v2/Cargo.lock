@@ -3629,7 +3629,9 @@ version = "0.0.1"
 dependencies = [
  "orkestr-v2-application",
  "orkestr-v2-contracts",
+ "orkestr-v2-store-sqlite",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
