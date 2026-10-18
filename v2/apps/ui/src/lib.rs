@@ -54,12 +54,14 @@ pub struct Projection {
 impl Projection {
     pub fn page(&mut self, page: ConversationSnapshot) -> Result<(), &'static str> {
         if page.last_sequence < 0 { return Err("Invalid snapshot watermark"); }
+        let mut incoming = BTreeMap::new();
         for message in &page.messages {
             if message.sequence <= 0 || message.sequence > page.last_sequence {
                 return Err("Invalid message sequence");
             }
-            if let Some(old) = self.messages.get(&message.sequence) {
-                if old.message_id != message.message_id || old.text != message.text {
+            let old = incoming.insert(message.sequence, message).or_else(|| self.messages.get(&message.sequence));
+            if let Some(old) = old {
+                if old.message_id != message.message_id || old.text != message.text || old.actor_kind != message.actor_kind {
                     return Err("Conflicting snapshot; reconnect required");
                 }
             }

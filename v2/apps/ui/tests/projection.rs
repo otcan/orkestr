@@ -54,3 +54,47 @@ fn bounded_paginated_projection_and_conflicting_replay() {
     conflict.messages[0].text = "changed".into();
     assert!(view.page(conflict).is_err());
 }
+
+#[test]
+fn sparse_sequences_and_empty_delta_advance_authoritative_watermark() {
+    let mut page: ConversationSnapshot = serde_json::from_str(include_str!("../../../fixtures/conversation-snapshot.json")).unwrap();
+    page.messages[0].sequence = 7;
+    page.last_sequence = 12;
+    let mut view = Projection::default();
+    view.page(page.clone()).unwrap();
+    assert_eq!(view.watermark, 12);
+    assert_eq!(view.messages.len(), 1);
+    page.messages.clear();
+    page.last_sequence = 19;
+    view.page(page).unwrap();
+    assert_eq!(view.watermark, 19);
+    assert!(view.messages.contains_key(&7));
+}
+
+#[test]
+fn invalid_late_message_rejects_whole_page_without_advancing_cursor() {
+    let mut page: ConversationSnapshot = serde_json::from_str(include_str!("../../../fixtures/conversation-snapshot.json")).unwrap();
+    let mut view = Projection::default();
+    view.page(page.clone()).unwrap();
+    page.last_sequence = 3;
+    page.messages[0].sequence = 2;
+    let mut invalid = page.messages[0].clone();
+    invalid.sequence = 4;
+    page.messages.push(invalid);
+    assert!(view.page(page).is_err());
+    assert_eq!(view.watermark, 1);
+    assert_eq!(view.messages.len(), 1);
+    assert!(!view.messages.contains_key(&2));
+}
+
+#[test]
+fn conflicting_duplicates_inside_one_page_are_not_last_write_wins() {
+    let mut page: ConversationSnapshot = serde_json::from_str(include_str!("../../../fixtures/conversation-snapshot.json")).unwrap();
+    let mut conflicting = page.messages[0].clone();
+    conflicting.actor_kind = "assistant".into();
+    page.messages.push(conflicting);
+    let mut view = Projection::default();
+    assert!(view.page(page).is_err());
+    assert!(view.messages.is_empty());
+    assert_eq!(view.watermark, 0);
+}
