@@ -12,6 +12,9 @@ mod fence;
 pub(crate) mod inspection;
 mod leases;
 mod metadata;
+#[cfg(test)]
+mod observation_tests;
+mod observations;
 pub use metadata::{BoundSessionMetadata, ReadySessionTransition};
 #[cfg(all(test, unix))]
 mod process_tests;
@@ -94,7 +97,7 @@ impl Store {
                 }
                 let id: String = row.get("context_id");
                 sqlx::query("UPDATE session_bindings SET state='lost' WHERE id IN (SELECT session_id FROM production_readiness WHERE context_id=?)").bind(&id).execute(&mut *tx).await.map_err(db)?;
-                sqlx::query("UPDATE production_runs SET state='blocked',dispatch_state=CASE WHEN dispatch_state='delivery_unknown' THEN 'delivery_unknown' ELSE 'quarantined' END,candidate_hash=NULL,reservation_hash=NULL,reserve_key=NULL WHERE context_id=?")
+                sqlx::query("UPDATE production_runs SET state='blocked',dispatch_state=CASE WHEN dispatch_state='delivery_unknown' THEN 'delivery_unknown' ELSE 'quarantined' END,candidate_hash=NULL,reservation_hash=NULL,reserve_key=NULL WHERE context_id=? AND state IN ('starting','running')")
                     .bind(&id).execute(&mut *tx).await.map_err(db)?;
                 (
                     id,

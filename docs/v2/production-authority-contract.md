@@ -193,3 +193,31 @@ Current public revocation is `Store::revoke_session(machine_token)`: subsequent
 metadata/execution fences authenticate inside their immediate transaction. Natural
 expiry is the store's 60-second supervisor deadline; heartbeat extends only a live
 context. No public production clock setter or cancellation authority exists yet.
+
+### Ordinary observations, schema 5
+
+Ordinary `RuntimeStore::append_provider_event` now persists Started,
+ApprovalRequested, non-synthetic CompletedProposal, Failed and Lost metadata.
+`0011_production_observations.sql` preserves prior event bytes and issued lease
+history, rebuilds the state CHECK constraints with foreign-key validation, and
+adds `production_observations` to canonical event/outbox/sequence transactions.
+Full-row rollback oracles must include this table in addition to the previously
+listed thirteen tables. Production evidence uses `provider_observed`, schema 5;
+fixture variants 1–4 are unchanged and cannot stand in for production evidence.
+
+Authentication and exact issued historical envelope verification precede duplicate
+lookup. Identical committed semantic input returns the original receipt even after
+expiry/takeover, with no new transition. Changed input conflicts; unseen input
+requires the current authenticated context, consumed dispatch, live lease/fence,
+ready native association, and contiguous run-local sequence. The semantic digest
+uses a versioned length-prefixed typed encoding, never arbitrary JSON ordering.
+
+Starting+Failed is valid without synthesizing Started. Started moves to Running;
+completion moves Running only to AwaitingAcceptance, never Succeeded. Failed and
+AwaitingAcceptance evidence survives supervisor takeover unchanged. Binding reuse
+is still refused until a separately implemented terminal authority transition;
+this slice does not remove the session occupancy guard. Raw Progress and Stopped
+are unavailable; no transcript is written into replay metadata. Synthetic
+completion is invalid for ordinary execution. New typed observation before/after
+COMMIT checkpoints are available only with opt-in test controls. Ordinary server
+activation still requires matching UI/Runtime compatibility review and containment.

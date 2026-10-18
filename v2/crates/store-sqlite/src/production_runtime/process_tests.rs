@@ -67,6 +67,7 @@ async fn rows(root: &Path) -> Vec<String> {
     for table in [
         "execution_revisions",
         "production_run_leases",
+        "production_observations",
         "production_supervisors",
         "production_readiness",
         "production_runs",
@@ -134,6 +135,8 @@ async fn child() {
                 "reserve-after-commit" => ReserveAfterCommit,
                 "consume-before-commit" => ConsumeBeforeCommit,
                 "consume-after-commit" => ConsumeAfterCommit,
+                "observation-before-commit" => ObservationBeforeCommit,
+                "observation-after-commit" => ObservationAfterCommit,
                 _ => panic!("unknown checkpoint"),
             };
             f.handle
@@ -176,6 +179,26 @@ async fn child() {
             .unwrap();
         }
         let _ = f.handle.consume_execution(&reserved).await.unwrap();
+        if checkpoint.starts_with("observation-") {
+            std::fs::write(
+                root.join("before.json"),
+                serde_json::to_vec(&rows(&root).await).unwrap(),
+            )
+            .unwrap();
+            let input = ProviderEventInput {
+                run_id: fresh.provider.run.run_id.clone(),
+                session_id: fresh.provider.run.session_id.clone(),
+                sequence: 1,
+                lease_generation: fresh.provider.run.lease_generation,
+                dispatch_fence: fresh.provider.run.dispatch_fence,
+                event: ProviderEvent::Started,
+            };
+            let _ = f
+                .handle
+                .append_provider_event(&f.owner, &fresh.provider, &input)
+                .await
+                .unwrap();
+        }
         panic!("checkpoint was not reached");
     }
     assert_eq!(mode, "recover");
@@ -232,6 +255,53 @@ async fn child() {
         );
         assert!(result.candidate_key.is_none());
         assert_eq!(result.run_state, RunState::Blocked);
+        if root
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("observation-")
+        {
+            let input = ProviderEventInput {
+                run_id: result.provider.run.run_id.clone(),
+                session_id: result.provider.run.session_id.clone(),
+                sequence: 1,
+                lease_generation: result.provider.run.lease_generation,
+                dispatch_fence: result.provider.run.dispatch_fence,
+                event: ProviderEvent::Started,
+            };
+            let receipt = handle
+                .append_provider_event(&claim.owner_id, &result.provider, &input)
+                .await;
+            if root.ends_with("observation-after-commit") {
+                let receipt = receipt.unwrap();
+                assert!(receipt.duplicate);
+                assert_eq!(receipt.state, RunState::Running);
+                let event: String =
+                    sqlx::query_scalar("SELECT event_id FROM production_observations")
+                        .fetch_one(&store.pool)
+                        .await
+                        .unwrap();
+                assert_eq!(receipt.event_id.to_string(), event);
+                let mut changed = input.clone();
+                changed.event = ProviderEvent::Failed;
+                assert!(matches!(
+                    handle
+                        .append_provider_event(&claim.owner_id, &result.provider, &changed)
+                        .await,
+                    Err(RuntimeStoreError::Conflict)
+                ));
+            } else {
+                assert!(matches!(receipt, Err(RuntimeStoreError::Fenced)));
+            }
+            let mut unseen = input;
+            unseen.sequence = 2;
+            assert!(matches!(
+                handle
+                    .append_provider_event(&claim.owner_id, &result.provider, &unseen)
+                    .await,
+                Err(RuntimeStoreError::Fenced)
+            ));
+        }
         let mut changed = claim.clone();
         changed.message_id = MessageId(Uuid::new_v4());
         assert_eq!(
@@ -263,6 +333,10 @@ async fn actual_process_crashes_preserve_atomic_ack_and_never_reissue_dispatch()
         "reserve-after-commit",
         "consume-before-commit",
         "consume-after-commit",
+        #[cfg(feature = "fixture-test-controls")]
+        "observation-before-commit",
+        #[cfg(feature = "fixture-test-controls")]
+        "observation-after-commit",
     ];
     let mut cases = Vec::new();
     for name in names {

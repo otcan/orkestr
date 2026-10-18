@@ -48,7 +48,7 @@ impl Store {
         if canonical != *p {
             return Err(RuntimeStoreError::Conflict);
         }
-        if row.get::<&str, _>("state") != "starting" {
+        if !matches!(row.get::<&str, _>("state"), "starting" | "running") {
             return Err(RuntimeStoreError::Fenced);
         }
         if p.run.lease_deadline_ms <= now(conn).await? {

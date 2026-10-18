@@ -35,6 +35,9 @@ impl Store {
                 match row.get::<&str, _>("state") {
                     "starting" => ExecutionPhase::Starting,
                     "blocked" => ExecutionPhase::Blocked,
+                    "running" => ExecutionPhase::Running,
+                    "awaiting_acceptance" => ExecutionPhase::AwaitingAcceptance,
+                    "failed" => ExecutionPhase::Failed,
                     _ => return Err(RuntimeStoreError::Unavailable),
                 },
             ),
