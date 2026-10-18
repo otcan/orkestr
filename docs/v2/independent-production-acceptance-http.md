@@ -41,3 +41,13 @@ another owner authority. Spoofed input and nonexistent scope checks are distinct
 Configured broker factory, live provider/Stop, browser and release gates remain
 pending. Separate ec38 Store tests cover transaction-entry revocation/expiry and
 guard-removal mutation. No prior crash matrix was repeated; no CI pass is inferred.
+
+Matching successor `286607bb90ef2e55d0fbcbb08082ef32f7deef4f` independently
+passed the matrix with candidate projection present and exactly linked to the
+completion/run/revision. The extended Python oracle then passed again (one test,
+zero failures/ignored, 0.32 seconds): authenticated SSE replay after duplicate
+acceptance returns contiguous sequences 1..4 with schema versions 1,5,5,9. The
+completion and acceptance event IDs match the committed HTTP decision, and the
+schema9 payload links the exact run/completion. Reading replay changes no ledger
+rows. This is actual HTTP journal ordering, not provider execution or mounted
+browser evidence. The older pin's pending candidate result remains historical.

@@ -90,6 +90,24 @@ for _ in range(2):
     assert rows() == committed
 refused(base + "/accept", dict(body, expected_revision=receipt["revision"]), 409)
 refused(base + "/accept", dict(body, request_key="changed-key"), 409)
+# Replay ordered real journal events after duplicate HTTP decisions; no invented success.
+stream_request = urllib.request.Request(origin + base + "/events", headers={
+    "Cookie": "orkestr_v2_session=" + token, "Last-Event-ID": "0"})
+events = []
+with urllib.request.urlopen(stream_request, timeout=10) as stream:
+    while len(events) < 4:
+        line = stream.readline(131073)
+        assert line and len(line) <= 131072
+        if line.startswith(b"data:"):
+            events.append(json.loads(line[5:]))
+assert [e["sequence"] for e in events] == [1, 2, 3, 4]
+assert [e["schema_version"] for e in events] == [1, 5, 5, 9]
+assert events[2]["event_id"] == c["completion"]
+assert events[3]["event_id"] == receipt["acceptance_event_id"]
+accepted = events[3]["payload_ref_or_safe_payload"]
+assert accepted["run_id"] == c["run"] and accepted["completion_event_id"] == c["completion"]
+assert accepted["outcome"] == "succeeded"
+assert rows() == committed
 assert request("/api/v2/browser/session", method="DELETE")[0] == 204
 refused(base + "/accept", body, 401)
 print(json.dumps({"http_matrix": "passed", "candidate_projection": "passed" if candidate else "pending",
