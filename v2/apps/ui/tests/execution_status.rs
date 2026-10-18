@@ -68,7 +68,7 @@ fn validator_missing_run_old_resources_and_progress_reference_fail_honestly() {
     state
         .apply_status(generation, 4, old_resources.clone())
         .unwrap();
-    old_resources.capabilities.stop = false;
+    old_resources.resources.as_mut().unwrap().resident_bytes += 1;
     assert!(state.apply_status(generation, 5, old_resources).is_err());
 }
 
@@ -142,7 +142,13 @@ fn sampled_clock_advances_without_revision_but_identical_replay_never_refreshes(
     assert!(state.resources(120102).contains("unavailable"));
     assert!(state.can_stop(120102));
     status.capabilities.stop = false;
-    assert!(state.apply_status(generation, 120103, status).is_err());
+    state
+        .apply_status(generation, 120103, status.clone())
+        .unwrap();
+    assert!(!state.can_stop(120103));
+    assert!(!state.fresh(120103));
+    status.phase = orkestr_v2_contracts::ExecutionPhase::Starting;
+    assert!(state.apply_status(generation, 120104, status).is_err());
 }
 
 #[test]
