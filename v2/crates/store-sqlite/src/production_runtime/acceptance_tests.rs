@@ -384,3 +384,67 @@ async fn public_authentication_checkpoint_resumes_after_committed_logout() {
     assert_eq!(snapshot(&other).await, before);
     other.close().await;
 }
+
+#[tokio::test]
+async fn followup_ingress_advances_revision_without_changing_completion_candidate() {
+    let f = setup().await;
+    let (_, mut request) = proposal(&f).await;
+    let original = f
+        .store
+        .execution_status(&f.owner, &f.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    let followup = MessageInput {
+        client_message_id: "browser-conflict-followup".into(),
+        text: "synthetic queued followup; do not claim".into(),
+    };
+    f.store
+        .admit(&f.owner, &f.conversation, &followup)
+        .await
+        .unwrap();
+    let refreshed = f
+        .store
+        .execution_status(&f.owner, &f.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(refreshed.phase, ExecutionPhase::AwaitingAcceptance);
+    assert_eq!(refreshed.run_id, original.run_id);
+    assert_eq!(
+        refreshed.acceptance_candidate,
+        original.acceptance_candidate
+    );
+    assert!(refreshed.revision > original.revision);
+    // Same ingress identity must not manufacture another conflict/revision.
+    f.store
+        .admit(&f.owner, &f.conversation, &followup)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.store
+            .execution_status(&f.owner, &f.conversation)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision,
+        refreshed.revision
+    );
+    let before = snapshot(&f.store).await;
+    assert!(matches!(
+        f.store
+            .accept_execution_authenticated(&f.token, &f.conversation, &request)
+            .await,
+        Err(RuntimeStoreError::Conflict)
+    ));
+    assert_eq!(snapshot(&f.store).await, before);
+    // A deliberate refreshed owner decision uses the same immutable completion,
+    // not a guessed later event. The refused request did not reserve its key.
+    request.expected_revision = refreshed.revision;
+    let accepted = f
+        .store
+        .accept_execution_authenticated(&f.token, &f.conversation, &request)
+        .await
+        .unwrap();
+    assert_eq!(accepted.completion_event_id, request.completion_event_id);
+}
