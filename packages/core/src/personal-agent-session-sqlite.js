@@ -4,7 +4,7 @@ import { personalAgentFeature } from "./personal-agent-feature.js";
 import { migratePersonalAgentSessions } from "./personal-agent-session-migration.js";
 
 const columns = [
-  "id", "conversation_id", "scope_kind", "scope_id", "role", "provider", "account_profile_id",
+  "id", "owner_user_id", "conversation_id", "scope_kind", "scope_id", "role", "provider", "account_profile_id",
   "model_profile_json", "native_session_id", "fork_from_session_id", "lifecycle", "blocked_reason",
   "version", "lease_token", "lease_expires_at", "heartbeat_at", "created_at", "updated_at",
 ];
@@ -16,7 +16,7 @@ function sessionError(code, statusCode = 409) {
 function toSession(row) {
   if (!row) return null;
   return {
-    id: row.id, conversationId: row.conversation_id, scopeKind: row.scope_kind, scopeId: row.scope_id,
+    id: row.id, ownerUserId: row.owner_user_id, conversationId: row.conversation_id, scopeKind: row.scope_kind, scopeId: row.scope_id,
     role: row.role, provider: row.provider, accountProfileId: row.account_profile_id,
     modelProfile: JSON.parse(row.model_profile_json), nativeSessionId: row.native_session_id,
     forkFromSessionId: row.fork_from_session_id, lifecycle: row.lifecycle, blockedReason: row.blocked_reason,
@@ -34,7 +34,7 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
   const getStatement = db.prepare("select * from personal_agent_sessions where id = ?");
   const insertStatement = db.prepare(`insert into personal_agent_sessions (${columns.join(",")}) values (${columns.map(() => "?").join(",")})`);
   const insertLeaseStatement = db.prepare(`update personal_agent_sessions set lease_token = ?, lease_expires_at = ?, version = version + 1, updated_at = ?
-    where id = ? and version = ? and (lease_token is null or lease_expires_at <= ?)`);
+    where id = ? and version = ? and lease_token is null`);
   const updateStatement = db.prepare(`update personal_agent_sessions set
     lifecycle = ?, blocked_reason = ?, native_session_id = ?, heartbeat_at = ?, model_profile_json = ?,
     lease_token = ?, lease_expires_at = ?, version = version + 1, updated_at = ?
@@ -42,10 +42,11 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
   const listStatement = db.prepare(`select * from personal_agent_sessions
     where conversation_id = ? and scope_kind = ? and scope_id is ? order by created_at, id`);
 
-  return Object.freeze({
+  const store = {
     create(input) {
       const row = {
         id: input.id,
+        owner_user_id: String(input.ownerUserId || "").trim(),
         conversation_id: input.conversationId,
         scope_kind: input.scopeKind,
         scope_id: input.scopeId ?? null,
@@ -64,6 +65,7 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
         created_at: input.createdAt,
         updated_at: input.updatedAt,
       };
+      if (!row.owner_user_id) throw sessionError("personal_agent_session_owner_required", 400);
       return tx(db, () => {
         insertStatement.run(...columns.map(key => row[key]));
         return toSession(getStatement.get(row.id));
@@ -83,7 +85,7 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
       return tx(db, () => {
         const current = getStatement.get(sessionId);
         if (!current) throw sessionError("personal_agent_session_not_found", 404);
-        const result = insertLeaseStatement.run(token, at + ttlMs, new Date(at).toISOString(), sessionId, expectedVersion, at);
+        const result = insertLeaseStatement.run(token, at + ttlMs, new Date(at).toISOString(), sessionId, expectedVersion);
         if (result.changes !== 1) return null;
         return { session: toSession(getStatement.get(sessionId)), leaseToken: token };
       });
@@ -111,5 +113,14 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
         return toSession(getStatement.get(sessionId));
       });
     },
-  });
+    transaction(fn) {
+      if (typeof fn !== "function") throw sessionError("personal_agent_session_transaction_required", 400);
+      return tx(db, () => {
+        const result = fn(store);
+        if (result && typeof result.then === "function") throw sessionError("personal_agent_session_transaction_must_be_synchronous", 400);
+        return result;
+      });
+    },
+  };
+  return Object.freeze(store);
 }
