@@ -2,6 +2,8 @@
 //! Core registers this child module and owns the authoritative SQL migration.
 mod claim;
 mod control;
+mod detail;
+pub use detail::TimerDetail;
 mod import;
 pub mod input;
 mod schedule;
