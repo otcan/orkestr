@@ -135,7 +135,11 @@ export async function createPersonalAgentTask(input, env = process.env) {
     if (idempotencyKey) {
       const existing = db.prepare("select * from personal_agent_tasks where project_id = ? and idempotency_key = ?").get(projectId, idempotencyKey);
       if (existing) {
-        if (stableStringify(parseJson(existing.contract_json, {})) !== stableStringify(contract) || (existing.thread_id || null) !== threadId) {
+        // Compare with the creation input, not with a thread bound later by
+        // admission. Tasks created before this was recorded had no thread.
+        const creation = db.prepare("select request_json from personal_agent_task_transitions where task_id = ? and seq = 1").get(existing.id);
+        const createdThreadId = creation?.request_json == null ? null : parseJson(creation.request_json, {})?.threadId ?? null;
+        if (stableStringify(parseJson(existing.contract_json, {})) !== stableStringify(contract) || createdThreadId !== threadId) {
           fail("personal_agent_task_idempotency_conflict", 409);
         }
         return { task: taskFromRow(existing), created: false };
@@ -153,9 +157,9 @@ export async function createPersonalAgentTask(input, env = process.env) {
       values (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`)
       .run(id, projectId, idempotencyKey, contract.title, contract.outcome, JSON.stringify(contract.acceptanceCriteria), threadId, JSON.stringify(contract), now, now);
     db.prepare(`insert into personal_agent_task_transitions
-      (task_id, seq, from_state, to_state, actor_json, reason, evidence_json, idempotency_key, created_at)
-      values (?, 1, null, 'queued', ?, 'task_created', ?, ?, ?)`)
-      .run(id, JSON.stringify(actor), JSON.stringify({ contractValidated: true }), idempotencyKey ? `create:${idempotencyKey}` : null, now);
+      (task_id, seq, from_state, to_state, actor_json, reason, evidence_json, request_json, idempotency_key, created_at)
+      values (?, 1, null, 'queued', ?, 'task_created', ?, ?, ?, ?)`)
+      .run(id, JSON.stringify(actor), JSON.stringify({ contractValidated: true }), JSON.stringify({ threadId }), idempotencyKey ? `create:${idempotencyKey}` : null, now);
     return { task: taskFromRow(taskRow(db, id)), created: true };
   });
 }
@@ -215,7 +219,7 @@ export async function transitionPersonalAgentTask(input, env = process.env) {
           stableStringify(parseJson(prior.evidence_json, {})) !== stableStringify(evidence) ||
           // A transition recorded before request_json existed cannot prove the
           // same completion/nextAction, so it only replays a bare command.
-          stableStringify(parseJson(prior.request_json, { completion: null, nextAction: null })) !== stableStringify(request)
+          stableStringify(prior.request_json == null ? { completion: null, nextAction: null } : parseJson(prior.request_json, null)) !== stableStringify(request)
         ) {
           fail("personal_agent_task_idempotency_conflict", 409);
         }

@@ -245,3 +245,28 @@ test("transition tables created before request_json gain the column without losi
   assert.equal(db.prepare("pragma table_info(personal_agent_task_transitions)").all().some((column) => column.name === "request_json"), true);
   assert.equal((await listPersonalAgentTaskTransitions(task.id, env)).length, 1, "existing transitions are kept");
 });
+
+test("an identical create retry still replays after admission binds a thread", async (t) => {
+  const { env } = await fixture(t);
+  const created = (await createPersonalAgentTask(contract, env)).task;
+  await transitionPersonalAgentTask({ taskId: created.id, to: "running", actor: { kind: "system", id: "controller", origin: "agent_job" }, evidence: { admission: { threadId: "thread-bound-later" } } }, env);
+  const retry = await createPersonalAgentTask(contract, env);
+  assert.deepEqual([retry.created, retry.task.id, retry.task.threadId], [false, created.id, "thread-bound-later"]);
+  await assert.rejects(() => createPersonalAgentTask({ ...contract, threadId: "thread-bound-later" }, env), {
+    code: "personal_agent_task_idempotency_conflict",
+  }, "the creation input had no thread");
+});
+
+test("a legacy transition without request_json still replays the same bare command", async (t) => {
+  const { env, db } = await fixture(t);
+  const task = (await createPersonalAgentTask(contract, env)).task;
+  const system = { kind: "system", id: "controller", origin: "agent_job" };
+  const block = { taskId: task.id, to: "blocked", actor: system, reason: "waiting", idempotencyKey: "legacy-block" };
+  await transitionPersonalAgentTask(block, env);
+  db.prepare("update personal_agent_task_transitions set request_json = null where task_id = ?").run(task.id);
+  assert.equal((await transitionPersonalAgentTask(block, env)).replayed, true);
+  await assert.rejects(() => transitionPersonalAgentTask({ ...block, nextAction: "Different" }, env), {
+    code: "personal_agent_task_idempotency_conflict",
+  }, "a legacy row cannot prove a nextAction");
+  assert.equal((await createPersonalAgentTask(contract, env)).created, false, "a legacy creation row compares as no thread");
+});
