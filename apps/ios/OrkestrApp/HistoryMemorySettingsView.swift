@@ -1,4 +1,5 @@
 import SwiftUI
+import OrkestrMobileCore
 
 struct HistoryMemorySettingsView: View {
     let featureFlags: PersonalAgentFeatureFlags?
