@@ -43,6 +43,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.89"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "atoi"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -899,6 +910,9 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "orkestr-runtime"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
+ "orkestr-v2-application",
+ "orkestr-v2-contracts",
  "serde_json",
 ]
 
@@ -906,6 +920,7 @@ dependencies = [
 name = "orkestr-v2-application"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "orkestr-v2-contracts",
 ]
 
