@@ -325,6 +325,9 @@ for line in frames():"#,
                 .await
                 .unwrap();
             let mut stopping = pump.into_stopping(bound.clone(), &receipt).unwrap();
+            if stop_mode == 9 {
+                stopping = stopping.retaining_terminal();
+            }
             while !stopping.acknowledged() {
                 stopping.flush().unwrap();
                 stopping.step(&bound).await.unwrap();
@@ -425,6 +428,25 @@ for line in frames():"#,
                     .count(),
                 1
             );
+            if stop_mode == 9 {
+                // The ordinary test broker is not an exit-73 proof issuer.
+                // Taking retirement must nevertheless retain the original Child
+                // until wait; canonical Cancelled must not have quarantined it.
+                let mut retiring = stopping.retire_broker().unwrap();
+                drop(authority);
+                loop {
+                    match retiring.poll_reaped() {
+                        Ok(None) => tokio::time::sleep(Duration::from_millis(2)).await,
+                        Err(crate::containment::Error::AuthorityProtocol) => break,
+                        _ => panic!("ordinary broker must not issue replacement evidence"),
+                    }
+                    assert!(Instant::now() < deadline);
+                }
+                drop(bound);
+                drop(store);
+                std::fs::remove_dir_all(root).unwrap();
+                return;
+            }
             authority.revoke().unwrap();
             drop(stopping);
             drop(authority);
@@ -512,4 +534,9 @@ async fn buffered_progress_does_not_hide_interrupted_terminal() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn buffered_progress_preserves_racing_completion_truth() {
     exercise(true, 8).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retained_durable_stopped_hands_owned_child_to_retirement_without_fake_proof() {
+    exercise(true, 9).await;
 }
