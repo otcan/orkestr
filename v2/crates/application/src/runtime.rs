@@ -195,10 +195,21 @@ pub trait RuntimeStore: Send + Sync {
     /// An identical already-committed semantic input returns its original receipt even
     /// after lease expiry or fence advancement, without any new transition or write.
     /// Changed content at an existing sequence conflicts; core computes the canonical digest.
+    /// Equality codec v1: SHA-256 over b"orkestr.provider-event\0" then byte 1,
+    /// then owner/run/session UUIDs as their 16 RFC-order bytes, then lease generation,
+    /// fence generation and provider sequence as signed i64 big-endian bytes.
+    /// Append one event tag: Started=0, Progress=1, ApprovalRequested=2, Completed=3,
+    /// Failed=4, Stopped=5, Lost=6. Progress adds u32 big-endian UTF-8 byte length
+    /// then exact UTF-8 bytes (no normalization); Completed adds synthetic as byte 0/1.
+    /// Other tags add nothing. No JSON, native references or caller-supplied digest.
+    /// Codec version is persisted; replay compares canonical bytes as well as digest.
     /// Unseen events require current owner/session/run, live lease, fence and lifecycle
     /// authority, checked atomically with contiguous sequence admission and journaling.
     /// Unavailable is retryable with identical input; StaleLease/Fenced explicitly refuse
-    /// new authority. Preserve refused evidence for reconciliation, never fabricate Stopped.
+    /// new authority. Unavailable may include a committed write with a lost ACK: retain
+    /// exact input and retry it without advancing sequence or polling another event.
+    /// StaleLease/Fenced terminate automatic submission under that token: quarantine
+    /// original evidence for reconciliation; do not erase it or fabricate Stopped.
     /// A newer cancellation fence is control-only, never execution start/poll authority.
     /// Progress is bounded by MAX_PROVIDER_PROGRESS_BYTES. Approval is never granted here.
     /// Completed is proposal evidence only and must never directly establish Succeeded.
