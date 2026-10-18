@@ -211,3 +211,73 @@ extension. These checks launch only owned
 synthetic Python children. Integrated Runtime/Core inference, actual provider
 launch, CI and the eleven database candidate cases remain **unexecuted**. P1 is
 not closed by these transport checks.
+
+## Proposed pre-readiness metadata boundary (not implemented)
+
+The execution-only Authority cannot launch metadata before admission: Core's
+execution fence requires DeliveryUnknown, whereas native readiness precedes run
+admission. Do not substitute a fabricated run or an always-current fence.
+
+Proposed minimal additional API, subject to Core/Runtime review:
+
+```rust,ignore
+// No run, message, or execution lease; distinct from ExecutionScope.
+MetadataScope { namespace, incarnation, owner, session, binding_generation }
+trait MetadataFence: Send + Sync {
+    fn dispatch(&self, scope: &MetadataScope,
+        action: &mut dyn FnMut() -> Result<(), Error>) -> Result<(), Error>;
+}
+MetadataAuthority::new(scope: MetadataScope, fence: Arc<dyn MetadataFence>,
+    maximum_children: usize) -> Result<MetadataAuthority, Error>;
+// Trusted executable/args/directories/bounds, as for Authority::issue_executor.
+MetadataAuthority::issue_executor(/* trusted launch configuration */)
+    -> Result<MetadataExecutor, Error>;
+MetadataExecutor::spawn(&self) -> Result<MetadataChild, Error>;
+MetadataChild::enqueue_metadata(&self, frame: &[u8]) -> Result<(), Error>;
+MetadataChild::flush_stdin(&self) -> Result<Flush, Error>;
+MetadataChild::poll_stdout(&self) -> Result<Output, Error>;
+MetadataChild::poll_exit(&self) -> Result<Option<Exit>, Error>;
+// crate-private; consumes both non-Clone inputs, including on failure.
+MetadataChild::attach_and_enqueue<D: ConsumedTurn>(self, dispatch: D,
+    execution_fence: Arc<dyn DispatchFence>) -> Result<OwnedChild, TurnFailure>;
+```
+
+MetadataScope is derived only from the authenticated bound-session result and
+current supervisor context, never request JSON. Its exact issuer type/getters
+are a Core dependency. MetadataFence must call a proposed Core
+`with_metadata_fence(binding, action)` which validates authenticated live context,
+namespace/incarnation/owner, exact bound session/generation and usable binding
+state under one immediate transaction, without requiring readiness or a run.
+Only strict whitelisted setup frames, bounded I/O and owned lifecycle operations
+are exposed; metadata never implements inference submission or execution scope.
+Core must decide the precise accepted pre-ready binding states. Invalidation,
+binding replacement, takeover and expiry must prevent further setup writes.
+
+Attachment obtains scope/frame exclusively by consuming Runtime's private wrapper
+around the real Core dispatch. It checks namespace/incarnation/owner/session and
+binding generation against the original metadata binding. ExecutionScope needs
+a separate binding-generation field: the existing generation represents the run
+lease and must not be reused as a session-binding generation. Core's execution
+fence must validate that exact admitted binding in its existing transaction;
+there is no nested call to the metadata durable fence. Runtime must finish and
+validate all setup responses before attachment; transport additionally requires
+an empty pending-write queue. No process restart, new auth home or credential
+copy occurs.
+
+Inside that execution-fence callback, lock metadata ownership, then execution
+ownership, then child I/O; reject local revocation, transfer the same process
+registration exactly once, and enqueue only the cap-derived turn. Remove its
+metadata registry entry before returning, so dropping/revoking the old metadata
+authority cannot kill a transferred child. No public raw-scope attach or reverse
+transition exists. Execution stdout and lifecycle use only the new authority;
+metadata handles are moved, not cloned. A failure after cap consumption kills /
+quarantines the child, drops the cap and requires reconciliation. Failure after
+any callback side effect, including durable COMMIT failure, must never return a
+metadata handle or restore dispatch authority. Existing WNOWAIT/group/reaper
+ownership continues unchanged. These are proposed semantics, not executed tests.
+
+Required negative integration checks: pre-ready setup succeeds with real Store;
+setup turn/start refuses; mismatched namespace/incarnation/session/binding rejects;
+metadata revocation/takeover before attach rejects; attach consumes once; pending
+setup writes reject; old-authority revoke after successful transfer leaves the
+execution child intact; failed attach never retries or leaks an owned child.
