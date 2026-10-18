@@ -32,7 +32,7 @@ be qualified inside this profile. Control initialize ACK is process readiness
 only; the separate Core requested-native/verified-native contract remains open.
 The selected-account callback and executable wrapper remain root-private and
 must be independently reviewed/staged; no actual selected-account launch was run
-by this lane. Inventory includes claude_selected.py and claude_state.py (nine files total).
+by this lane. Inventory includes claude_selected.py and claude_state.py (twelve files total).
 
 Synthetic tests use only a fake token. An actual namespace process verifies its
 single selected environment, absence of unrelated inherited secrets/API keys,
@@ -43,7 +43,7 @@ and concurrent-replacement assumptions remain those of the authenticated profile
 
 ## Immutable compatibility probe handoff
 
-Stage exactly the nine files and SHA-256 values in
+Stage exactly the twelve files and SHA-256 values in
 `v2/provider-broker/authenticated-package.json`, retaining the `isolation/`
 package layout. The entry is `isolation.claude_selected.SelectedClaudeProfile`;
 there is no standalone account-selection CLI. The trusted private launcher
@@ -88,3 +88,13 @@ credential memfd is absent from native descriptors; no selected token appears
 in persisted synthetic history. Closed workspace/session, alias and fixed resume
 flag regressions supplement that actual process test.
 This does not qualify actual Claude persistence or authenticated egress.
+
+
+The profile inventory explicitly includes top-level `claude_resume.py` and
+`protocol.py`, plus the inherited-pipe helper `claude_bootstrap.py`; all must be staged beside the `isolation/` package. Resume uses
+that exact `ResumeSpec` class, not a second capability definition. An isolated
+`python -I` regression copies only inventoried files, verifies their hashes,
+imports the shared class, prepares resume and proves the spec cannot be reused.
+Fresh `exec_native` refuses any existing workspace transcript before native
+launch and consumes the selected-account capability on that failed attempt.
+Existing history requires the explicit private resume entry.

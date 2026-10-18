@@ -77,6 +77,7 @@ class SelectedClaudeProfile(SelectedCodexProfile):
         secret=account._take(self)
         fd=None
         try:
+            if mode=='claude':projects(self.state_root,self.workspace,fresh=True)
             fd=policy.filter_fd(allow_inet=True)
             argv=self._command(fd,mode)
             argv += [native,str(secret)]

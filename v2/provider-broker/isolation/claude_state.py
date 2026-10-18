@@ -47,7 +47,7 @@ def state_root(path):
     return str(root)
 
 
-def projects(root,workspace,native=None):
+def projects(root,workspace,native=None,*,fresh=False):
     state_root(root)
     path=Path(root)/'projects'
     if not path.exists():path.mkdir(mode=0o700)
@@ -55,6 +55,7 @@ def projects(root,workspace,native=None):
     for project in path.iterdir():
         if project.name!=expected or not project.is_dir():raise ValueError('foreign Claude workspace')
         for entry in project.iterdir():
+            if fresh:raise ValueError('fresh Claude setup cannot adopt transcript')
             if not entry.is_file() or entry.suffix!='.jsonl':raise ValueError('unexpected Claude transcript')
             if str(uuid.UUID(entry.stem))!=entry.stem:raise ValueError('invalid Claude session')
             if native is not None and entry.stem!=native:raise ValueError('foreign Claude session')

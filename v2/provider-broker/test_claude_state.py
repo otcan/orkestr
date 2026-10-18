@@ -21,6 +21,14 @@ class ClaudeStateTests(unittest.TestCase):
                 project.mkdir(mode=0o700)
                 transcript=project/(NATIVE+'.jsonl');transcript.touch(mode=0o600)
                 self.assertEqual(projects(root,workspace,NATIVE),str(root/'projects'))
+                with self.assertRaises(ValueError):projects(root,workspace,fresh=True)
+                profile=object.__new__(SelectedClaudeProfile)
+                profile.state_root=str(root);profile.workspace=workspace
+                account=profile.selected_account(lambda:{'CLAUDE_CODE_OAUTH_TOKEN':'synthetic-selected'})
+                with patch('isolation.claude_selected.policy.filter_fd') as filtered:
+                    with self.assertRaises(ValueError):profile.exec_native(account,NATIVE)
+                    filtered.assert_not_called()
+                with self.assertRaises(ValueError):account._take(profile)
                 for other in ('/work/foreign',):
                     with self.assertRaises(ValueError):projects(root,other,NATIVE)
                 with self.assertRaises(ValueError):projects(root,workspace,'22222222-2222-4222-8222-222222222222')
