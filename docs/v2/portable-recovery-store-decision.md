@@ -5,7 +5,7 @@ are accepted as the bounded starting point, with the additions below before rest
 writes. The binary digest is distinct from the Python JSON envelope digest; neither
 proves source authority or cross-system consistency.
 
-Core reserves migration 0020 for a separate `history_recovery_restores` ledger.
+Core allocates migration 0020 for a separate `history_recovery_restores` ledger.
 Migrations 0018 and 0019 belong to independent provider Worker authority. Migration
 owns the new recovery module; Core retains SQL allocation and shared registration.
 This decision does not register the module or claim executable restore support.
@@ -55,3 +55,34 @@ Before activation, exercise current-auth refusal, identical/changed replay,
 occupied or swapped targets, partial-write rollback, both commit crash windows,
 initial inactivity, child tampering and whole-bundle rollback/reopen. Source-only
 DTO review provides none of that execution credit.
+
+## Exact schema and semantic fingerprint
+
+`0020_history_recovery_restores.sql` supplies the outer ledger and a separate
+`history_recovery_children` association with a unique `(owner_id, namespace)` and
+one `original`/`native_delta` child per restore. Store both associations and child
+ledgers before commit; SQL does not by itself prove there are exactly two children.
+Persist initial receipt bytes once, and decode/validate them on replay. Never
+recompute a receipt from the child's present activity. Per-child initial revision,
+activity and source digest support exact rollback guards with verified readback.
+
+The restore request fingerprint is SHA-256 of these bytes in order:
+
+- ASCII `orkestr-history-recovery-restore-v1` followed by one NUL byte;
+- restore UUID as 16 raw bytes;
+- bundle digest as exactly 64 lowercase ASCII hex bytes;
+- original target namespace UUID as 16 raw bytes;
+- delta target namespace UUID as 16 raw bytes.
+
+Owner is a separately authenticated primary-key scope, not transferable authority.
+Reject noncanonical digest spelling before hashing. The rollback fingerprint is
+SHA-256 of ASCII `orkestr-history-recovery-rollback-v1` followed by NUL, restore
+UUID bytes, expected outer revision as unsigned big-endian u64, then request-key
+UTF-8 byte length as unsigned big-endian u64 and exact key bytes. Request key bounds
+must match existing history input bounds. These fingerprints are not the source
+bundle digest or JSON collector envelope digest.
+
+This schema checkpoint creates no restore writer. Migration implements its owned
+module against this exact ledger and must add the individual-child rollback hold
+before registering any restore method. Independent source and executable reviews
+remain required.
