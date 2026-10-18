@@ -1,15 +1,18 @@
-# Orkestr 2.0 Rust workspace
+# Orkestr 2.0 Rust implementation
 
-This path is the isolated Rust v2 implementation. The 1.x TypeScript/NestJS/Angular system is unchanged.
+This directory is reserved for the isolated Rust application. The existing TypeScript/NestJS/Angular implementation remains unchanged outside the v2 track.
 
-Current scope: pure in-memory conversation/task event reducer, a CLI smoke demo and deterministic tests. **No storage persistence, HTTP server, providers, workers, integrations, auth or UI yet.** Do not mistake a passing smoke run for migration readiness.
+## Actual status at plan handoff, 2026-10-18
 
-Run:
+The branch contains architecture and execution documentation. It does not yet contain a verified Cargo workspace, in-memory demo, server, UI or passing Rust tests. Earlier README commands referring to `orkestr-v2-demo` were premature and have been removed.
 
-```sh
-cd v2
-cargo test --workspace
-cargo run -p orkestr-v2-demo
-```
+The first implementation creates the real Cargo workspace, durable SQLite state, authenticated Axum API, separate session/runtime roles, Dioxus UI and independent acceptance tests. New development threads own that work. Update this file with exact build/test/run commands only after they have succeeded on a specified commit.
 
-For goals, boundaries, milestones, and local rollout, read [docs/v2/README.md](../docs/v2/README.md), [workstreams](../docs/v2/workstreams.md), and [migration](../docs/v2/migration.md).
+## Plan
+
+- [Architecture and technology decisions](../docs/v2/README.md)
+- [Full dependency-backed rewrite backlog and new-thread assignments](../docs/v2/workstreams.md)
+- [First implementation: contracts, API and acceptance](../docs/v2/first-implementation.md)
+- [Local installation, snapshot import and rollback](../docs/v2/migration.md)
+
+Do not point this candidate at the existing application's data, provider sessions, browser profiles or live channel routes. Use a fresh `ORKESTR_V2_HOME` and isolated development worktree. The integration target is `v2/rust-rewrite`, never an implicit merge or release to `main`.
