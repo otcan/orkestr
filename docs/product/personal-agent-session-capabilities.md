@@ -153,16 +153,21 @@ remains `starting`, never `ready` with a null native identity. No UUID is presen
 Worker 1 owns the conversation/inbox and AgentSession schema, its flag-gated
 migration in **agent-jobs.sqlite**, and its SQLite store adapter. This branch
 creates no table, migration, secondary database or competing event envelope.
-The proposed schema/lease constraints were sent directly to that owner.
+The accepted session migration is additive, runs after #68's canonical
+conversation migration, and is gated by `personalAgentFeature(env)`. Schema
+changes and their compatibility tests remain with that owner.
 
 The manager consumes Lane A's prepared synchronous store surface:
-`create(input)`, `get(id)`, `list({conversationId, scopeKind, scopeId?, roles?, lifecycles?})`,
+`transaction(fn)`, `create(input)`, `get(id)`, `list({conversationId, scopeKind, scopeId?, roles?, lifecycles?})`,
 `acquireLease(id, {expectedVersion, ttlMs})` and
 `update(id, {expectedVersion, leaseToken, patch})`. The env-based public wrappers
 can prepare this store asynchronously before constructing the manager; the
 native event callback cannot await persistence. The manager does not emulate an
-async transaction with a synchronous callback. Each store mutation must use its
-own `BEGIN IMMEDIATE` and conditional version/lease predicates. A null CAS result
+async transaction with a synchronous callback. Creation, read-plus-claim,
+heartbeat/write fencing and profile replacement use short synchronous
+`transaction(fn)` callbacks. Store methods participate in the same
+`BEGIN IMMEDIATE` when called inside that wrapper; they must not open a nested
+transaction. Expected version/token predicates still guard every update. A null CAS result
 fails closed. Every successful mutation increments the store-managed version.
 Missing mutation IDs throw 404; `get` returns null for a missing row.
 A new row defaults to `starting`, version 0 and nullable native/lease fields.
@@ -171,20 +176,26 @@ Heartbeat updates use `leaseTtlMs`; release uses `releaseLease`. Lease expiry is
 numeric epoch milliseconds; the other timestamps are ISO strings.
 
 Canonical session rows use `modelProfile: {model, effort}`, separate provider and
-account-profile fields, and no owner column. Global `scopeId` is SQL NULL, never
+account-profile fields and immutable `ownerUserId` on the **session row**. The
+owner comes from authenticated owner context, never message/tool input. Canonical
+conversations have no owner column. Global `scopeId` is SQL NULL, never
 a sentinel. `resolveConversation(id, {ownerUserId})` is an injected, synchronous,
 trusted authorization projection returning `{id, scopeKind, scopeId}` or null;
 it must map canonical conversation scope and apply actual owner authorization.
 Absent/revoked lookup fails closed. No forged HTTP owner identity is used.
-`ownerUserId`, `model` and `effort` are projected only into native runtime context,
-not copied into persistent session rows. No production resolver is supplied here.
+Access requires both the pinned session owner and the trusted conversation
+projection to match; a permissive projection cannot bypass the session check.
+Model and effort live in `modelProfile` and are projected into native runtime
+context. No production resolver is supplied here.
 
 Active fast/deep uniqueness includes starting/ready/busy/blocked; stopped rows
 remain historical and cannot resume. The database enforces native tuple uniqueness
 across all conversations and lifecycles. Concurrent role creation returns only a
-matching unique winner. The manager never takes over an existing lease token,
-even an expired one. Tests use a fake of the prepared CAS store with matching
-defaults, mutation errors, lease CAS and list filters. They do not establish SQLite durability,
+matching unique winner. Acquisition must reject a busy row or an existing lease
+token, even after expiry. Expired busy sessions remain `busy` and require explicit
+reconciliation; the manager and fake never perform automatic takeover. Tests use a fake of the prepared CAS store with matching
+defaults, immutable owner, mutation errors, lease CAS, synchronous rollback and
+list filters. They do not establish SQLite durability,
 DDL/trigger enforcement or process-level locking. Worker 1's #70 owns that
 implementation and depends on #68's canonical conversations. This runtime PR
 remains based on main and does not import unmerged DDL or ingress code.
@@ -196,6 +207,17 @@ Ingress IDs remain owned by OP-25; runtime native IDs never replace them.
 The manager does not acknowledge, reorder or synthesize inbox events.
 Expired-lease reconciliation and cross-provider/account rebind are explicit
 future operations rather than automatic recovery guesses.
+
+### Migration compatibility gates (schema lane)
+
+The real SQLite composition remains unverified until the schema lane is integrated.
+Required tests cover flag-off startup without session DDL, dry-run without writes,
+post-#68 foreign keys and scope validation, repeated idempotent migration,
+immutable owner enforcement, and rollback of grouped lease/heartbeat/version
+writes. A previous flag-off reader must still open the additive database without
+changing session rows. Rolling back code must preserve rows and native lineage.
+An ownerless pre-release session table cannot silently infer owners from
+conversations; incompatible shapes must fail closed pending a reviewed migration.
 
 ## Acceptance and rollback
 

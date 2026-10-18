@@ -4,13 +4,14 @@ import { sessionHarness, sessionInput, sessionProfile, supervisor } from "./fixt
 
 // Contract tests against the prepared CAS API. SQLite durability and concurrent
 // processes remain the schema lane's integration tests, not claims of this fake.
-test("canonical rows contain modelProfile and NULL global scope, never an owner column", async () => {
+test("canonical session rows pin the owner with modelProfile and NULL global scope", async () => {
   const h = sessionHarness();
   const created = h.manager.ensure(sessionInput);
   assert.equal(created.scopeId, null);
   assert.deepEqual(created.modelProfile, { model: sessionProfile.model, effort: sessionProfile.effort });
-  for (const key of ["ownerUserId", "profile", "model", "effort"]) assert.equal(Object.hasOwn(created, key), false);
-  assert.equal(Object.hasOwn(h.store, "transaction"), false);
+  for (const key of ["profile", "model", "effort"]) assert.equal(Object.hasOwn(created, key), false);
+  assert.equal(created.ownerUserId, "owner");
+  assert.equal(typeof h.store.transaction, "function");
   h.adapter.open = async row => {
     assert.equal(row.ownerUserId, "owner");
     assert.equal(row.model, sessionProfile.model);
@@ -22,7 +23,7 @@ test("canonical rows contain modelProfile and NULL global scope, never an owner 
   const changed = h.manager.changeProfile(opened.id, { ...sessionProfile, model: "gpt-next" });
   assert.equal(changed.version, opened.version + 2);
   assert.equal(changed.nativeSessionId, opened.nativeSessionId);
-  assert.equal(Object.hasOwn(h.store.get(created.id), "ownerUserId"), false);
+  assert.equal(h.store.get(created.id).ownerUserId, "owner");
 });
 
 test("missing or revoked trusted conversation access prevents all native calls", async () => {
@@ -54,7 +55,7 @@ test("lease acquisition uses expectedVersion and loses a competing CAS without n
   assert.equal(h.store.get(row.id).leaseToken, null);
 });
 
-test("an expired token is not reclaimed even when the store supports expiry takeover", async () => {
+test("an expired token is rejected before any store acquisition attempt", async () => {
   const h = sessionHarness({ now: () => 1000 });
   const row = h.manager.ensure(sessionInput);
   h.store.tamper(row.id, { leaseToken: "former-holder", leaseExpiresAt: 999, lifecycle: "busy" });

@@ -3,12 +3,17 @@ import { sessionError, sessionId } from "./personal-agent-session-records.js";
 export const activeSessionLifecycles = ["starting", "ready", "busy", "blocked"];
 export const storedSessionProfile = row => ({ provider: row.provider, accountProfileId: row.accountProfileId, model: row.modelProfile?.model, effort: row.modelProfile?.effort ?? null });
 
-// The prepared store's short methods are synchronous. Each mutation owns its
-// BEGIN IMMEDIATE/CAS transaction; a provider await never holds a transaction.
+// The prepared store groups synchronous reads/mutations in BEGIN IMMEDIATE.
+// CAS still fences each write; a provider await never holds a transaction.
 // resolveConversation is a trusted, owner-authorized projection of the canonical
-// conversation, not a synthetic HTTP principal or a new owner column in SQLite.
+// conversation, which has no owner column. Session rows pin the trusted owner.
 export function sessionAccess({ store, ownerUserId, resolveConversation, enabled, now, leaseMs }) {
   const time = () => new Date(now()).toISOString();
+  function atomic(fn) {
+    enabled();
+    if (typeof store?.transaction !== "function") throw sessionError("agent_session_store_unavailable", 503);
+    return store.transaction(fn);
+  }
   function conversation(id) {
     enabled();
     return resolveConversation?.(sessionId(id), { ownerUserId }) || null;
@@ -16,7 +21,7 @@ export function sessionAccess({ store, ownerUserId, resolveConversation, enabled
   function owned(id) {
     enabled();
     const row = store.get(sessionId(id));
-    if (!row) throw sessionError("agent_session_not_found", 404);
+    if (!row || row.ownerUserId !== ownerUserId) throw sessionError("agent_session_not_found", 404);
     const scope = conversation(row.conversationId);
     if (!scope) throw sessionError("agent_session_not_found", 404);
     if (scope.id !== row.conversationId || scope.scopeKind !== row.scopeKind || scope.scopeId !== row.scopeId) throw sessionError("agent_session_scope_unavailable", 404);
@@ -28,13 +33,15 @@ export function sessionAccess({ store, ownerUserId, resolveConversation, enabled
     if (row.lifecycle === "busy") throw sessionError("agent_session_reconciliation_required");
   }
   function claim(id) {
-    const row = owned(id);
-    // Even if the store can reclaim an expired lease, this manager cannot prove
-    // the former provider turn stopped. No expired-token takeover here.
-    available(row);
-    const result = store.acquireLease(id, { expectedVersion: row.version, ttlMs: leaseMs });
-    if (!result || result.leaseToken !== result.session.leaseToken) throw sessionError("agent_session_lease_conflict");
-    return result.session;
+    return atomic(() => {
+      const row = owned(id);
+      // Neither this manager nor the store may assume an expired provider turn
+      // stopped. Explicit reconciliation is required before a future claim.
+      available(row);
+      const result = store.acquireLease(id, { expectedVersion: row.version, ttlMs: leaseMs });
+      if (!result || result.leaseToken !== result.session.leaseToken) throw sessionError("agent_session_lease_conflict");
+      return result.session;
+    });
   }
   function currentLease(row) {
     const current = owned(row.id);
@@ -42,21 +49,23 @@ export function sessionAccess({ store, ownerUserId, resolveConversation, enabled
     return current;
   }
   function fenced(row, patch, release = false) {
-    const current = currentLease(row);
-    let result;
-    try {
-      result = store.update(row.id, { expectedVersion: current.version, leaseToken: row.leaseToken,
-        patch: { ...patch, releaseLease: release, heartbeatAt: time() } });
-    } catch (error) {
-      // SQLite's native-identity unique constraint is the final authority,
-      // including sessions in other conversations and stopped sessions.
-      if (error?.code === "agent_session_native_identity_reused" || /UNIQUE constraint failed: personal_agent_sessions\.provider, personal_agent_sessions\.account_profile_id, personal_agent_sessions\.native_session_id/.test(String(error?.message))) {
-        throw sessionError("agent_session_native_identity_reused");
+    return atomic(() => {
+      const current = currentLease(row);
+      let result;
+      try {
+        result = store.update(row.id, { expectedVersion: current.version, leaseToken: row.leaseToken,
+          patch: { ...patch, releaseLease: release, heartbeatAt: time() } });
+      } catch (error) {
+        // SQLite's native-identity unique constraint is the final authority,
+        // including sessions in other conversations and stopped sessions.
+        if (error?.code === "agent_session_native_identity_reused" || /UNIQUE constraint failed: personal_agent_sessions\.provider, personal_agent_sessions\.account_profile_id, personal_agent_sessions\.native_session_id/.test(String(error?.message))) {
+          throw sessionError("agent_session_native_identity_reused");
+        }
+        throw error;
       }
-      throw error;
-    }
-    if (!result) throw sessionError("agent_session_lease_lost");
-    return result;
+      if (!result) throw sessionError("agent_session_lease_lost");
+      return result;
+    });
   }
-  return { conversation, owned, available, claim, currentLease, fenced, time };
+  return { atomic, conversation, owned, available, claim, currentLease, fenced, time };
 }

@@ -9,9 +9,9 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, resolveC
   sessionId(ownerUserId);
   if (!Number.isSafeInteger(leaseMs) || leaseMs < 100) throw sessionError("agent_session_lease_invalid", 400);
   const enabled = () => { if (!personalAgentFeature(env)) throw sessionError("personal_agent_disabled", 404); };
-  const { conversation, owned, available, claim, currentLease, fenced, time } = sessionAccess({ store, ownerUserId, resolveConversation, enabled, now, leaseMs });
-  // Account ownership is runtime context, never an invented persistence column.
-  const runtimeRow = row => ({ ...row, ...storedSessionProfile(row), ownerUserId });
+  const { atomic, conversation, owned, available, claim, currentLease, fenced, time } = sessionAccess({ store, ownerUserId, resolveConversation, enabled, now, leaseMs });
+  // The session pins the authenticated owner; conversations have no owner column.
+  const runtimeRow = row => ({ ...row, ...storedSessionProfile(row) });
   async function leased(id, operation) {
     const row = claim(id);
     const controller = new AbortController();
@@ -40,7 +40,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, resolveC
     if (!status.available) throw sessionError(status.reason === "rate_limited" ? "agent_session_rate_limited" : status.reason === "authentication_required" ? "agent_session_auth_required" : "agent_session_runtime_unavailable", 503);
     return adapter;
   }
-  function ensure({ conversationId, scope: rawScope, role, profile: rawProfile, forkFromSessionId = null }) {
+  function ensureWithinTransaction({ conversationId, scope: rawScope, role, profile: rawProfile, forkFromSessionId = null }) {
     const scope = sessionScope(rawScope);
     const profile = sessionProfile(rawProfile);
     if (!["fast", "deep", "worker"].includes(role)) throw sessionError("agent_session_role_invalid", 400);
@@ -61,7 +61,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, resolveC
     }
     const stamp = time();
     try {
-      return store.create({ id: `ags_${newId()}`, conversationId, scopeKind: scope.kind, scopeId: scope.id, role,
+      return store.create({ id: `ags_${newId()}`, ownerUserId, conversationId, scopeKind: scope.kind, scopeId: scope.id, role,
         provider: profile.provider, accountProfileId: profile.accountProfileId, modelProfile: { model: profile.model, effort: profile.effort },
         nativeSessionId: null, forkFromSessionId, lifecycle: "starting", blockedReason: null, heartbeatAt: null, createdAt: stamp, updatedAt: stamp });
     } catch (error) {
@@ -71,6 +71,8 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, resolveC
       throw error;
     }
   }
+
+  function ensure(input) { return atomic(() => ensureWithinTransaction(input)); }
 
   async function startOrResume(id) {
     return leased(id, async (row, signal) => {
@@ -167,12 +169,14 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, resolveC
       return result;
     },
     changeProfile(id, input) {
-      const profile = sessionProfile(input);
-      const row = owned(id);
-      available(row);
-      // Different credentials/providers cannot resume the old native ID.
-      if (row.provider !== profile.provider || row.accountProfileId !== profile.accountProfileId) throw sessionError("agent_session_profile_rebind_required");
-      return fenced(claim(id), { modelProfile: { model: profile.model, effort: profile.effort } }, true);
+      return atomic(() => {
+        const profile = sessionProfile(input);
+        const row = owned(id);
+        available(row);
+        // Different credentials/providers cannot resume the old native ID.
+        if (row.provider !== profile.provider || row.accountProfileId !== profile.accountProfileId) throw sessionError("agent_session_profile_rebind_required");
+        return fenced(claim(id), { modelProfile: { model: profile.model, effort: profile.effort } }, true);
+      });
     },
   });
 }

@@ -3,7 +3,7 @@ import test from "node:test";
 import { sessionStore } from "./fixtures/personal-agent-session-fixtures.js";
 
 // Behavioral parity for the fake CAS surface, not SQLite/trigger evidence.
-const input = (id = "session-example", extra = {}) => ({ id, conversationId: "conversation-global",
+const input = (id = "session-example", extra = {}) => ({ id, ownerUserId: "owner", conversationId: "conversation-global",
   scopeKind: "global", role: "fast", provider: "codex", accountProfileId: "profile-example",
   createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", ...extra });
 const notFound = { code: "personal_agent_session_not_found", statusCode: 404 };
@@ -48,14 +48,16 @@ test("fake lease CAS fences stale versions, tokens and expiry with exact version
   assert.equal(renewed.leaseExpiresAt, 1200);
   at = 1200;
   assert.equal(update(2, claimed.leaseToken), null);
-  const reclaimed = store.acquireLease(row.id, { expectedVersion: 2, ttlMs: 100 });
-  assert.equal(reclaimed.session.version, 3);
-  assert.notEqual(reclaimed.leaseToken, claimed.leaseToken);
-  const released = update(3, reclaimed.leaseToken, { releaseLease: true });
-  assert.equal(released.version, 4);
+  assert.equal(store.acquireLease(row.id, { expectedVersion: 2, ttlMs: 100 }), null);
+  assert.equal(store.get(row.id).version, 2);
+  // No implicit expiry reconciliation. A separate live lease can be released.
+  const other = store.create(input("deep", { role: "deep" }));
+  const fresh = store.acquireLease(other.id, { expectedVersion: 0, ttlMs: 100 });
+  const released = store.update(other.id, { expectedVersion: 1, leaseToken: fresh.leaseToken, patch: { releaseLease: true } });
+  assert.equal(released.version, 2);
   assert.equal(released.leaseToken, null);
   assert.equal(released.leaseExpiresAt, null);
-  assert.equal(update(4, null), null);
+  assert.equal(store.update(other.id, { expectedVersion: 2, leaseToken: null, patch: {} }), null);
 });
 
 test("fake list uses canonical optional roles and lifecycles with NULL global scope", () => {

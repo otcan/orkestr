@@ -34,7 +34,21 @@ export function sessionStore({ now = Date.now } = {}) {
     return clone(row);
   }
   return {
+    transaction(fn) {
+      if (fn.constructor?.name === "AsyncFunction") throw error("personal_agent_session_async_transaction", 400);
+      const before = clone([...rows]);
+      try {
+        const result = fn();
+        if (result && typeof result.then === "function") throw error("personal_agent_session_async_transaction", 400);
+        return result;
+      } catch (failure) {
+        rows.clear();
+        for (const [id, row] of before) rows.set(id, row);
+        throw failure;
+      }
+    },
     create(input) {
+      if (typeof input.ownerUserId !== "string" || !input.ownerUserId.trim()) throw error("personal_agent_session_owner_required", 400);
       if (rows.has(input.id)) throw new Error("duplicate session");
       return persist({ ...input, scopeId: input.scopeId ?? null, modelProfile: input.modelProfile ?? {},
         nativeSessionId: input.nativeSessionId ?? null, forkFromSessionId: input.forkFromSessionId ?? null,
@@ -47,13 +61,14 @@ export function sessionStore({ now = Date.now } = {}) {
     acquireLease(id, { expectedVersion, ttlMs }) {
       if (!Number.isSafeInteger(ttlMs) || ttlMs < 1) throw error("personal_agent_session_invalid_lease_ttl", 400);
       const row = required(id);
-      if (row.version !== expectedVersion || (row.leaseToken !== null && row.leaseExpiresAt > now())) return null;
+      if (row.version !== expectedVersion || (row.leaseToken !== null || row.lifecycle === "busy")) return null;
       const session = persist({ ...row, version: row.version + 1, leaseToken: `lease-${++sequence}`, leaseExpiresAt: now() + ttlMs, updatedAt: new Date(now()).toISOString() });
       return { session, leaseToken: session.leaseToken };
     },
     update(id, { expectedVersion, leaseToken, patch }) {
       const row = required(id);
       if (row.version !== expectedVersion || leaseToken == null || row.leaseToken !== leaseToken || row.leaseExpiresAt <= now()) return null;
+      if (patch.ownerUserId !== undefined && patch.ownerUserId !== row.ownerUserId) throw error("personal_agent_session_owner_immutable", 409);
       const next = { ...row };
       for (const key of ["lifecycle", "blockedReason", "nativeSessionId", "heartbeatAt", "modelProfile"]) if (patch[key] !== undefined) next[key] = key === "lifecycle" ? patch[key] ?? row[key] : patch[key];
       next.leaseToken = patch.releaseLease ? null : leaseToken;
