@@ -180,7 +180,7 @@ export class CodexAppServerClient {
     this.turnParents = new Map();
     this.completedTurns = new Set();
     this.pendingRequests = new Map();
-    this.pendingNotifications = new Set();
+    this.pendingNotifications = new Map();
     // Notifications and server requests for one Codex thread are handled
     // strictly in arrival order; different threads stay concurrent.
     this.threadQueue = createKeyedSerialQueue();
@@ -352,21 +352,35 @@ export class CodexAppServerClient {
   }
 
   trackNotification(message, handler = () => this.handleNotification(message)) {
-    const pending = this.threadQueue.run(codexMessageThreadKey(message), handler).catch((error) => appendEvent({
+    const threadId = codexMessageThreadKey(message);
+    const pending = this.threadQueue.run(threadId, handler).catch((error) => appendEvent({
       type: "codex_app_server_notification_failed",
       method: message?.method || "",
       error: publicError(error),
     }, this.env).catch(() => {}));
-    this.pendingNotifications.add(pending);
+    this.pendingNotifications.set(pending, threadId);
     void pending.finally(() => {
       this.pendingNotifications.delete(pending);
     }).catch(() => {});
   }
 
-  async drainNotifications() {
-    const pending = [...this.pendingNotifications];
-    if (!pending.length) return;
-    await Promise.allSettled(pending);
+  async drainNotifications({ threadId = null, timeoutMs = null } = {}) {
+    const pending = [...this.pendingNotifications]
+      .filter(([, key]) => threadId === null || key === threadId)
+      .map(([promise]) => promise);
+    if (!pending.length) return true;
+    const drained = Promise.allSettled(pending).then(() => true);
+    if (timeoutMs === null) return drained;
+    if (!(timeoutMs > 0)) return false;
+    let timer;
+    try {
+      return await Promise.race([
+        drained,
+        new Promise(resolve => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   rejectAll(error) {

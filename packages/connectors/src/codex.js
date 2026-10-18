@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import WebSocket from "ws";
+import { agentProcessEnv } from "../../shared/src/agent-process-env.js";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import {
   codexAppServerClientArgs,
@@ -37,12 +38,12 @@ export function codexCommand(env = process.env) {
 }
 
 function commandEnv(env = process.env, home = os.homedir(), codexHome = "") {
-  return {
+  return agentProcessEnv({
     ...process.env,
     ...env,
     HOME: runtimeHome(env, home),
     CODEX_HOME: codexHome || defaultCodexHome(env, home),
-  };
+  });
 }
 
 function authInvalidText(value) {
@@ -262,12 +263,7 @@ function runCodex(args, { env = process.env, home = os.homedir(), input = "", ti
   }
   return new Promise((resolve) => {
     const child = spawn(command, args, {
-      env: {
-        ...process.env,
-        ...env,
-        HOME: runtimeHome(env, home),
-        CODEX_HOME: codexHome,
-      },
+      env: commandEnv(env, home, codexHome),
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -456,12 +452,12 @@ export async function startCodexDeviceAuth({ env = process.env, home = os.homedi
   authSessions.set(codexHome, session);
 
   const child = spawn(command, ["login", "--device-auth"], {
-    env: {
+    env: agentProcessEnv({
       ...process.env,
       ...env,
       HOME: home,
       CODEX_HOME: codexHome,
-    },
+    }),
     stdio: ["ignore", "pipe", "pipe"],
   });
   session.child = child;

@@ -1,6 +1,7 @@
 import os from "node:os";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { agentProcessEnv } from "../../shared/src/agent-process-env.js";
 import { withThreadMessageMutation } from "./thread-message-mutation.js";
 import { codexCommand, defaultCodexHome } from "../../connectors/src/codex.js";
 import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
@@ -138,12 +139,12 @@ export function clientKey(env = process.env, home = os.homedir()) {
 }
 
 export function commandEnv(env = process.env, home = os.homedir()) {
-  return {
+  return agentProcessEnv({
     ...process.env,
     ...env,
     HOME: runtimeHome(env, home),
     CODEX_HOME: defaultCodexHome(env, home),
-  };
+  });
 }
 
 export function timeoutMs(env = process.env) {

@@ -88,6 +88,7 @@ import { injectRuntimeFault, runtimeNowMs, runtimeStopPhaseFor } from "./runtime
 import { recordRuntimeControlMetric } from "./observability.js";
 import { recordCodexInputDelivery, recordCodexUserInputRequest } from "./codex-input-observability.js";
 import { bindCodexVaultTurnToken, issueCodexVaultTurnToken, revokeCodexVaultTurnToken } from "./vault-codex-turn-tokens.js";
+import { settleCodexStartNotifications } from "./codex-start-notifications.js";
 
 const appServerDeliveryTimers = new Map();
 const appServerHistorySyncTimes = new Map();
@@ -1275,24 +1276,6 @@ export async function stopCodexAppServerThread(thread, env = process.env) {
   };
 }
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function drainCodexAppServerNotifications(client, { cycles = 3, until = null, delayMs = 0 } = {}) {
-  for (let index = 0; index < cycles; index += 1) {
-    await new Promise((resolve) => setImmediate(resolve));
-    await client.drainNotifications?.();
-    if (until?.()) return true;
-    if (delayMs > 0) {
-      await delay(delayMs);
-      await client.drainNotifications?.();
-      if (until?.()) return true;
-    }
-  }
-  return Boolean(until?.());
-}
-
 async function recordInputSubmission(client, thread, pending, id, mode, targetTurnId, env) {
   const baseline = await client.request("thread/read", { threadId: id, includeTurns: true }).catch(() => null);
   const codexSubmission = createSubmission(thread, pending, id, mode, targetTurnId, baseline?.thread);
@@ -1334,11 +1317,7 @@ async function startCodexAppServerTurn({ client, thread, id, pending, env, runti
   const terminalResult = ["completed", "failed", "interrupted", "aborted", "cancelled", "canceled"].includes(status);
   const completedKey = turnId && client.turnParentKey ? client.turnParentKey(id, turnId) : "";
   if (turnId) client.rememberTurnParent(id, turnId, pending);
-  await drainCodexAppServerNotifications(client, {
-    cycles: completedKey ? 20 : 3,
-    delayMs: completedKey ? 5 : 0,
-    until: completedKey ? () => Boolean(client.completedTurns?.has(completedKey)) : null,
-  });
+  await settleCodexStartNotifications(client, id, completedKey);
   const alreadyCompleted = Boolean(completedKey && client.completedTurns?.has(completedKey));
   const runtimeIdentity = await currentCodexDeliveryRuntime(thread, id, env);
   if (!runtimeIdentity.matches) {

@@ -844,11 +844,19 @@ codex_app_server_socket_default() {
   echo "${ORKESTR_CODEX_APP_SERVER_SOCKET:-${ORKESTR_HOME:-$deploy_root/data}/run/codex-app-server.sock}"
 }
 
+run_codex_command() {
+  # Keep deployer keys in the parent, including during capability probes.
+  (
+    unset ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
+    "$@"
+  )
+}
+
 codex_command_supports_external_app_server() {
   local command
   command="${1:-codex}"
-  "$command" app-server --help >/dev/null 2>&1 || return 1
-  "$command" app-server proxy --help >/dev/null 2>&1 || return 1
+  run_codex_command "$command" app-server --help >/dev/null 2>&1 || return 1
+  run_codex_command "$command" app-server proxy --help >/dev/null 2>&1 || return 1
 }
 
 codex_app_server_service_is_active() {
@@ -905,6 +913,8 @@ if [ -r "$env_file" ]; then
   . "$env_file"
   set +a
 fi
+# The env file belongs to the control plane; these keys are never agent credentials.
+unset ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
 socket="${ORKESTR_CODEX_APP_SERVER_SOCKET:-${ORKESTR_HOME:-/opt/orkestr/data}/run/codex-app-server.sock}"
 codex_bin="${ORKESTR_CODEX_BIN:-codex}"
 mkdir -p "$(dirname "$socket")"
@@ -926,6 +936,8 @@ if [ -r "$env_file" ]; then
   . "$env_file"
   set +a
 fi
+# The env file belongs to the control plane; these keys are never agent credentials.
+unset ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
 codex_bin="${ORKESTR_CODEX_BIN:-codex}"
 service_name="${ORKESTR_CODEX_APP_SERVER_SERVICE_NAME:-orkestr-codex}"
 service_name="${service_name%.service}"
@@ -985,6 +997,7 @@ Documentation=https://github.com/otcan/orkestr
 [Service]
 Type=oneshot
 EnvironmentFile=-$env_file_path
+UnsetEnvironment=ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
 ExecStart=/usr/local/bin/orkestr-refresh-codex-app-server
 EOF
 
@@ -1027,6 +1040,7 @@ User=$run_user
 Group=$run_group
 WorkingDirectory=$workdir
 EnvironmentFile=-$env_file_path
+UnsetEnvironment=ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
 ExecStart=/usr/local/bin/orkestr-codex-app-server
 Restart=on-failure
 RestartSec=3
