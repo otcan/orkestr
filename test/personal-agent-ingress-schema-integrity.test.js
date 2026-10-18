@@ -109,7 +109,7 @@ test("a message table without its idempotency uniqueness is incompatible, not si
     created_at text not null, unique (conversation_id, causal_sequence))`);
   const plan = planPersonalAgentIngressMigration(db);
   assert.equal(plan.schemaCompatible, false);
-  assert.deepEqual(plan.missingConstraints, ["personal_agent_messages(conversation_id,actor_user_id,idempotency_key)"]);
+  assert.deepEqual(plan.incompatibleTables, ["personal_agent_messages"]);
   assert.throws(() => migratePersonalAgentIngress(db, { dryRun: false }), { message: "personal_agent_ingress_schema_incompatible" });
 });
 
@@ -118,7 +118,7 @@ test("a valid schema plans no repairs and stays byte-identical on re-apply", (t)
   const schema = () => db.prepare("select type, name, sql from sqlite_master order by type, name").all();
   const before = schema();
   const plan = planPersonalAgentIngressMigration(db);
-  assert.deepEqual([plan.schemaCompatible, plan.invalidIndexes, plan.missingConstraints, plan.duplicateConflicts], [true, [], [], []]);
+  assert.deepEqual([plan.schemaCompatible, plan.invalidIndexes, plan.incompatibleTables, plan.duplicateConflicts], [true, [], [], []]);
   migratePersonalAgentIngress(db, { dryRun: false });
   assert.deepEqual(schema(), before);
 });
@@ -143,15 +143,15 @@ test("the maximum client idempotency key is accepted and replays to the same rec
     { code: "personal_agent_ingress_idempotency_required" });
 });
 
-test("an equivalent spelling of the canonical index is valid and is not rebuilt", (t) => {
+test("a differently spelled equivalent index is rebuilt to the canonical definition", (t) => {
+  const canonicalSql = indexSql(migrated(t), "personal_agent_conversations_global");
   const db = migrated(t);
   db.exec("drop index personal_agent_conversations_global");
   db.exec(`CREATE UNIQUE INDEX "personal_agent_conversations_global" ON personal_agent_conversations ( "scope_kind" COLLATE BINARY )
     WHERE   "Scope_Kind"='global'`);
-  const before = indexSql(db, "personal_agent_conversations_global");
-  assert.deepEqual(planPersonalAgentIngressMigration(db).invalidIndexes, []);
+  assert.deepEqual(planPersonalAgentIngressMigration(db).invalidIndexes, ["personal_agent_conversations_global"]);
   migratePersonalAgentIngress(db, { dryRun: false });
-  assert.equal(indexSql(db, "personal_agent_conversations_global"), before);
+  assert.equal(indexSql(db, "personal_agent_conversations_global"), canonicalSql);
 });
 
 test("a case-insensitive project index is repaired so case-distinct projects keep separate conversations", (t) => {
@@ -177,7 +177,7 @@ test("a case-insensitive replay identity constraint is incompatible", (t) => {
     created_at text not null, unique (conversation_id, actor_user_id, idempotency_key), unique (conversation_id, causal_sequence))`);
   const plan = planPersonalAgentIngressMigration(db);
   assert.equal(plan.schemaCompatible, false);
-  assert.deepEqual(plan.missingConstraints, ["personal_agent_messages(conversation_id,actor_user_id,idempotency_key)"]);
+  assert.deepEqual(plan.incompatibleTables, ["personal_agent_messages"]);
   assert.throws(() => migratePersonalAgentIngress(db, { dryRun: false }), { message: "personal_agent_ingress_schema_incompatible" });
 });
 
@@ -194,4 +194,65 @@ test("a namesake index owned by another table fails closed and is never dropped"
   assert.equal(indexSql(db, "personal_agent_conversations_global"), before);
   db.exec("insert into unrelated_fixture (id) values ('x')");
   assert.throws(() => db.exec("insert into unrelated_fixture (id) values ('x')"), /UNIQUE constraint failed/);
+});
+
+// Worker 2 round 3: shapes that defeat any parsed notion of equivalence.
+function recreate(db, table, ddl) {
+  db.exec("pragma foreign_keys = OFF");
+  if (table === "personal_agent_messages") db.exec("drop table personal_agent_reasoning_inbox");
+  if (table === "personal_agent_conversations") {
+    db.exec("drop table personal_agent_reasoning_inbox");
+    db.exec("drop table personal_agent_messages");
+  }
+  db.exec(`drop table ${table}`);
+  db.exec(ddl);
+}
+
+function refusesUnchanged(db) {
+  const schema = () => db.prepare("select type, name, sql from sqlite_master order by type, name").all();
+  const before = schema();
+  assert.equal(planPersonalAgentIngressMigration(db).schemaCompatible, false);
+  assert.throws(() => migratePersonalAgentIngress(db, { dryRun: false }), { message: "personal_agent_ingress_schema_incompatible" });
+  assert.deepEqual(schema(), before, "a refused migration changes nothing");
+}
+
+test("a quoted-identifier predicate cannot impersonate the 'global' literal", (t) => {
+  const db = migrated(t);
+  db.exec(`alter table personal_agent_conversations add column "'global'" text`);
+  db.exec("drop index personal_agent_conversations_global");
+  db.exec(`create unique index personal_agent_conversations_global on personal_agent_conversations(scope_kind) where scope_kind = "'global'"`);
+  assert.deepEqual(planPersonalAgentIngressMigration(db).incompatibleTables, ["personal_agent_conversations"]);
+  refusesUnchanged(db);
+});
+
+test("a NOCASE project column is refused even with an explicitly BINARY index", (t) => {
+  const db = migrated(t);
+  recreate(db, "personal_agent_conversations", `create table personal_agent_conversations (id text primary key,
+    scope_kind text not null check (scope_kind in ('global', 'project')), project_id text collate nocase references personal_agent_projects(id),
+    next_causal_sequence integer not null default 1, created_at text not null, updated_at text not null)`);
+  db.exec("create unique index personal_agent_conversations_project on personal_agent_conversations(project_id collate binary) where scope_kind = 'project'");
+  assert.deepEqual(planPersonalAgentIngressMigration(db).incompatibleTables, ["personal_agent_conversations"]);
+  refusesUnchanged(db);
+});
+
+test("a NOCASE idempotency column is refused even with an explicitly BINARY unique constraint", (t) => {
+  const db = migrated(t);
+  recreate(db, "personal_agent_messages", `create table personal_agent_messages (id text primary key, conversation_id text not null,
+    actor_user_id text not null, actor_origin text not null, channel text not null, idempotency_key text not null collate nocase,
+    payload_hash text not null, body text not null, task_id text, run_id text, event_id text not null unique, event_cursor text not null,
+    causal_sequence integer not null, created_at text not null,
+    unique (conversation_id, actor_user_id, idempotency_key collate binary), unique (conversation_id, causal_sequence))`);
+  assert.ok(planPersonalAgentIngressMigration(db).incompatibleTables.includes("personal_agent_messages"));
+  refusesUnchanged(db);
+});
+
+test("a single column named like the joined replay key does not stand in for the composite constraint", (t) => {
+  const db = migrated(t);
+  recreate(db, "personal_agent_messages", `create table personal_agent_messages (id text primary key, conversation_id text not null,
+    actor_user_id text not null, actor_origin text not null, channel text not null, idempotency_key text not null,
+    payload_hash text not null, body text not null, task_id text, run_id text, event_id text not null unique, event_cursor text not null,
+    causal_sequence integer not null, created_at text not null, "actor_user_id,conversation_id,idempotency_key" text unique,
+    unique (conversation_id, causal_sequence))`);
+  assert.ok(planPersonalAgentIngressMigration(db).incompatibleTables.includes("personal_agent_messages"));
+  refusesUnchanged(db);
 });
