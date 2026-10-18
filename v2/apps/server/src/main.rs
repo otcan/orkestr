@@ -1,4 +1,4 @@
-use orkestr_v2_server::{router, AppState};
+use orkestr_v2_server::{owned_execution::ConfiguredExecution, router, AppState};
 use orkestr_v2_store_sqlite::Store;
 use std::path::PathBuf;
 mod bind_config;
@@ -29,21 +29,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|_| "store startup failed")?;
     let origin = config.origin;
-    let state = AppState::new(store, token, origin)?;
+    let state = AppState::new(store.clone(), token, origin)?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
+    let execution = match std::env::var_os("ORKESTR_V2_EXECUTION_CONFIG") {
+        None => None,
+        Some(file) => {
+            let execution =
+                ConfiguredExecution::load(&store, &home, bind, &PathBuf::from(file)).await?;
+            Some(execution)
+        }
+    };
     eprintln!(
-        "orkestr-v2-server schema=1 home={} bind={} execution=disabled connections=none",
+        "orkestr-v2-server schema=1 home={} bind={} execution={} connections=none",
         home.display(),
-        listener.local_addr()?
+        listener.local_addr()?,
+        if execution.is_some() {
+            "isolated-acceptance"
+        } else {
+            "disabled"
+        }
     );
     let mut app = router(state);
     if let Some(dist) = std::env::var_os("ORKESTR_V2_UI_DIST") {
         app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
     }
-    axum::serve(listener, app)
+    let execution = execution.map(ConfiguredExecution::start);
+    let served = axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
-        .await?;
+        .await;
+    if let Some(execution) = execution {
+        execution.shutdown().await;
+    }
+    served?;
     Ok(())
 }
