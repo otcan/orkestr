@@ -110,7 +110,10 @@ fn busy_retries_same_event_and_conflict_blocks_without_ack() {
         let mut pending = PendingObservation::default();
         p.start(&a).unwrap();
         store.state.lock().unwrap().refusal = Some(error);
-        assert_eq!(ready(supervisor::step(&store, &mut p, &a, &mut pending)), Err(Error::Store(error)));
+        assert_eq!(
+            ready(supervisor::step(&store, &mut p, &a, &mut pending)),
+            Err(Error::Store(error))
+        );
         let original = pending.pending().unwrap().clone();
         store.state.lock().unwrap().refusal = None;
         let result = ready(supervisor::step(&store, &mut p, &a, &mut pending));
@@ -133,11 +136,18 @@ fn committed_terminal_lost_ack_retries_original_key_without_duplicate() {
     let mut pending = PendingObservation::default();
     p.start(&a).unwrap();
     p.poll(&a).unwrap();
-    p.emit(&a, ObservationKind::CompletedProposal { synthetic: true }).unwrap();
+    p.emit(&a, ObservationKind::CompletedProposal { synthetic: true })
+        .unwrap();
     store.state.lock().unwrap().lose_ack_once = true;
-    assert_eq!(ready(supervisor::step(&store, &mut p, &a, &mut pending)), Err(Error::Store(RuntimeStoreError::Unavailable)));
+    assert_eq!(
+        ready(supervisor::step(&store, &mut p, &a, &mut pending)),
+        Err(Error::Store(RuntimeStoreError::Unavailable))
+    );
     assert_eq!(p.poll(&a), Err(Blocker::UnknownSession));
-    assert_eq!(ready(supervisor::step(&store, &mut p, &a, &mut pending)), Ok(true));
+    assert_eq!(
+        ready(supervisor::step(&store, &mut p, &a, &mut pending)),
+        Ok(true)
+    );
     let state = store.state.lock().unwrap();
     assert_eq!(state.attempts[0], state.attempts[1]);
     assert_eq!(state.accepted.len(), 1);

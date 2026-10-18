@@ -135,7 +135,10 @@ impl RuntimeStore for Spy {
         if std::mem::take(&mut s.fail_once) {
             return Err(RuntimeStoreError::Unavailable);
         }
-        let previous = s.accepted.iter().position(|i| i.source_event_key == input.source_event_key);
+        let previous = s
+            .accepted
+            .iter()
+            .position(|i| i.source_event_key == input.source_event_key);
         if let Some(index) = previous {
             if s.accepted[index] != *input {
                 return Err(RuntimeStoreError::Conflict);

@@ -120,7 +120,10 @@ pub async fn step<S: RuntimeStore, P: Provider>(
         Err(error) => {
             // Expired authority is a deliberate delivery discard, never an ACK
             // or permission to repoll, readmit or start another provider turn.
-            if matches!(error, RuntimeStoreError::StaleLease | RuntimeStoreError::Expired) {
+            if matches!(
+                error,
+                RuntimeStoreError::StaleLease | RuntimeStoreError::Expired
+            ) {
                 cursor.pending = None;
             }
             if matches!(
