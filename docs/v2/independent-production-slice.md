@@ -52,8 +52,38 @@ release gates; this document does not grant cutover or replace their validator.
 
 ## Current evidence
 
-Initial source artifact only. Syntax validation and CLI help do not constitute
-server execution. The three ordinary cases and all downstream production cases
-remain unexecuted at this checkpoint. Core/Runtime have been asked for the minimal
-public ordinary setup/route and exact source handoff; current runtime ac595343 is
-explicitly fixture-only. No production readiness or release acceptance is claimed.
+Independent execution completed against approved integration
+`c8358b7fdd6fadbd3853a9067157f4c3876d394e`, using a clean exact-head `git archive`
+of `v2/` in an owned verification source directory. From that directory:
+
+```sh
+v2-cargo build --offline --locked -p orkestr-v2-server
+python3 v2/acceptance/production_slice.py --binary <absolute-built-server> \
+  --home <owned-fresh-case-parent> --source-head c8358b7fdd6fadbd3853a9067157f4c3876d394e \
+  --port 47140
+```
+
+The build used the assigned wrapper, verification target and isolated home.
+All three selected ordinary-server cases passed in 3.206 seconds, zero failures
+or errors. The harness exited **1**, intentionally: seven downstream gate groups
+remain pending and `production_slice_accepted` is **false**. No fixture case ran.
+The exact built binary SHA256 was
+`1926e962dc3bbe495417af79d17049b1ef158c04814c98074e5d68b9c803d757`.
+Each case spawned its own server and synthetic credentials; cleanup killed/reaped
+only its owned child. The duplicate case required a durable 202 before SIGKILL,
+then reopened the same home and verified the original receipt and four atomic
+intake counts. This proves intake restart, not provider recovery or lost transport
+acknowledgement.
+
+An earlier run against exact Core454b40d7 passed the same three cases in 3.934
+seconds. The approved integration build produced the same binary hash; source diff
+between those heads was empty for server/application/contracts/store. The c835
+result above is the credited integration execution, not inferred from the first
+run. No Cargo dependency resolution or lock edit occurred.
+
+Core/Runtime have been asked for the minimal public ordinary setup/route and exact
+source handoff. Runtime confirms ac595343 remains fixture-only. Ordinary dispatch,
+protocol-provider execution, lease/unknown-outcome/cancellation, browser session
+interaction and full parity/performance/migration/rollback remain pending. The
+release-readiness validator and its evidence files were not modified. This is no
+production readiness or cutover approval.
