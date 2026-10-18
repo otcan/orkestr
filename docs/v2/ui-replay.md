@@ -19,7 +19,8 @@ Metadata-only pages can therefore advance the cursor without fabricating text.
 Pagination retains its initial watermark; later page watermarks never silently
 advance beyond that completed scan. Snapshot scope must remain consistent.
 
-Validation: ten Rust tests (seven existing projection plus three replay cases),
+Validation: fourteen Rust tests (seven projection, three replay and four executable
+reconciliation failure/retry cases),
 22 Node bridge/synthetic HTTP cases, locked offline WASM build and strict UI Clippy
 pass locally. Tests cover legacy JSON roundtrip, mixed sparse journal sequences,
 metadata-only watermark advancement, wrong scope/conversation/name/cursor/schema,
@@ -29,3 +30,19 @@ forwarding; it does not validate Rust types or execute the real server/browser.
 Fixture metadata remains synthetic. No model success, production run readiness,
 Stop, native/device acceptance or OXRM readiness is inferred. Core's durable
 fixture adapter and live mixed-stream browser acceptance remain separate gates.
+
+The transport now calls the library's async `reconcile` function directly. Tests
+inject deterministic page results into that same function: second-page outage,
+validation failure, mixed message/metadata gaps, exactly-once retry presentation,
+regressing page watermark, repeated rows, invalid/nonadvancing next cursor, and a
+snapshot that cannot yet acknowledge its triggering event. The staged clone is
+returned only on complete success; the original projection/cursor stays unchanged
+on error. A later page watermark cannot replace the initial scan watermark. The
+real Rust bridge decoder is also exercised for malformed-variant resync.
+
+The local commands are wrapper `test --offline --locked -p orkestr-v2-ui --tests`,
+`build --offline --locked -p orkestr-v2-ui --no-default-features --features web
+--target wasm32-unknown-unknown`, and `clippy --offline --locked -p orkestr-v2-ui
+--all-targets -- -D warnings`, plus `node --test v2/apps/ui/tests/*.test.mjs`.
+These remain unit/build/bridge evidence; live mixed rendering is a separate CI
+gate. No browser was launched and no auth/native/readiness acceptance is added.

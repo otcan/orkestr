@@ -151,7 +151,7 @@ pub fn Conversation(
             let mut resync = true;
             loop {
                 if resync {
-                    match transport::snapshot(&id, &csrf, 0, Projection::default()).await {
+                    match transport::snapshot(&id, &csrf, 0, Projection::default(), 0).await {
                         Ok(snapshot) => {
                             cursor = snapshot.watermark;
                             projection.set(snapshot);
@@ -200,7 +200,9 @@ pub fn Conversation(
                                 );
                             }
                             Some(sequence) if sequence > cursor => {
-                                match transport::snapshot(&id, &csrf, cursor, previous).await {
+                                match transport::snapshot(&id, &csrf, cursor, previous, sequence)
+                                    .await
+                                {
                                     Ok(snapshot) if snapshot.watermark >= sequence => {
                                         cursor = snapshot.watermark;
                                         projection.set(snapshot);
