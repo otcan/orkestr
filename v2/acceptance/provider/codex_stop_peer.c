@@ -2,12 +2,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <unistd.h>
 #ifndef ACK_ONLY
 #define ACK_ONLY 0
 #endif
 #ifndef STOP_PROGRESS_BURST
 #define STOP_PROGRESS_BURST 0
+#endif
+#ifndef SIGNAL_PROGRESS
+#define SIGNAL_PROGRESS 0
+#endif
+#if SIGNAL_PROGRESS
+static void progress_signal(int number) {
+ (void)number;
+ const char frame[]="{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"synthetic-stop-session\",\"turnId\":\"synthetic-stop-turn\",\"delta\":\"synthetic externally released progress\"}}\n";
+ if(write(STDOUT_FILENO,frame,sizeof(frame)-1)!=(ssize_t)(sizeof(frame)-1))_exit(3);
+}
 #endif
 static void trace(const char *kind) {
  FILE *f=fopen("synthetic-native-trace.jsonl","a"); if(!f)exit(2);
@@ -16,6 +27,10 @@ static void trace(const char *kind) {
 int main(void) {
  char line[65536],cwd[4096];int turns=0,interrupts=0;
  if(!getcwd(cwd,sizeof(cwd)))return 2;
+#if SIGNAL_PROGRESS
+ struct sigaction action={0};action.sa_handler=progress_signal;action.sa_flags=SA_RESTART;
+ if(sigemptyset(&action.sa_mask)||sigaction(SIGUSR1,&action,0))return 2;
+#endif
  trace("spawn");
  while(fgets(line,sizeof(line),stdin)) {
   char *key=strstr(line,"\"id\":");long id=key?strtol(key+5,0,10):0;

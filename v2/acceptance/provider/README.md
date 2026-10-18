@@ -187,3 +187,10 @@ current-turn progress deltas between interrupt acknowledgement and terminal
 interruption. The same acceptance must pass, preserving bounded output retention
 without losing the later explicit terminal evidence. Keep the failing baseline
 receipt when testing a runtime repair; do not relabel this fixture as a provider.
+
+With `-DSIGNAL_PROGRESS=1`, the synthetic executable also emits one valid progress
+frame on `SIGUSR1`. After proving the owned synthetic PID and its running status,
+an independent harness can release that frame and wait for its persisted progress
+before submitting the original status/control preconditions. This makes the
+progress-between-read-and-Stop ordering explicit. Never send this fixture signal
+to a real provider or an unrelated process.
