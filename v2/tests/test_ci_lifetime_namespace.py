@@ -17,13 +17,22 @@ class HostedPolicyTests(unittest.TestCase):
                               ("", line.replace('comm="bwrap"', 'comm="other"'))):
             self.assertEqual(policy.matching_denials(before, after, 123), [])
 
-    def exercise(self, *, denial=True, restriction="1", existing=False, first_ready=False, final_ready=True):
+    def test_audit_metadata_preserves_child_denial_without_claiming_launcher_match(self):
+        line = 'audit: apparmor="DENIED" operation="capable" profile="unprivileged_userns" pid=456 comm="bwrap" capname="sys_admin" private="excluded"'
+        self.assertEqual(policy.matching_denials("", line, 123), [])
+        metadata = policy.audit_fields("", "unrelated kernel entry\n" + line)
+        self.assertEqual(metadata, [{"apparmor": "DENIED", "operation": "capable", "profile": "unprivileged_userns",
+                                     "pid": "456", "comm": "bwrap", "capname": "sys_admin"}])
+        self.assertEqual(policy.audit_fields(line, line), [])
+
+    def exercise(self, *, denial=True, restriction="1", existing=False, first_ready=False, final_ready=True,
+                 error="bwrap: setting up uid map: Permission denied"):
         commands = []
         reads = {"/etc/os-release": "ID=ubuntu\n", "/proc/self/attr/current": "unconfined\n",
                  "/sys/module/apparmor/parameters/enabled": "Y\n",
                  "/proc/sys/kernel/apparmor_restrict_unprivileged_userns": restriction}
         denied = 'audit: apparmor="DENIED" profile="unprivileged_userns" pid=123 comm="bwrap"'
-        result = {"pid": 123, "code": 1, "output": "", "error": "bwrap: setting up uid map: Permission denied"}
+        result = {"pid": 123, "code": 1, "output": "", "error": error}
         ok = {**result, "code": 0, "output": "orkestr-lifetime-namespace-ready\n", "error": ""}
         installed = False
         kernel_reads = 0
@@ -69,8 +78,13 @@ class HostedPolicyTests(unittest.TestCase):
         result, _ = self.exercise(final_ready=False)
         self.assertEqual(result, "namespace_probe_still_failed_after_exact_profile")
 
-    def test_unevidenced_failure_and_existing_policy_remain_red_without_mutation(self):
-        for values in ({"denial": False}, {"restriction": "0"}, {"existing": True}):
+    def test_missing_exact_pid_audit_does_not_block_documented_hosted_prerequisite(self):
+        result, commands = self.exercise(denial=False)
+        self.assertTrue(result["profile_applied"])
+        self.assertEqual(sum("apparmor_parser" in args for args, _ in commands), 1)
+
+    def test_unrelated_failure_and_existing_policy_remain_red_without_mutation(self):
+        for values in ({"error": "bwrap: unrelated failure"}, {"restriction": "0"}, {"existing": True}):
             result, commands = self.exercise(**values)
             self.assertIsInstance(result, str)
             self.assertFalse(any("apparmor_parser" in args for args, _ in commands))
