@@ -1,0 +1,47 @@
+name: V2 CI headless rendering
+on:
+  push:
+    branches: ['v2/**']
+    paths: ['v2/**', '.github/workflows/v2-browser.yml', 'package-lock.json']
+  pull_request:
+    branches: ['v2/**']
+    paths: ['v2/**', '.github/workflows/v2-browser.yml', 'package-lock.json']
+permissions:
+  contents: read
+jobs:
+  headless-rendering:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert exact candidate
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Prepare isolated build tools
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup target add --toolchain 1.99.1 wasm32-unknown-unknown
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/v2-target" >> "$GITHUB_ENV"
+          echo "UI_BUNDLE_DIR=$RUNNER_TEMP/v2-bundle" >> "$GITHUB_ENV"
+          echo "V2_SERVER=$RUNNER_TEMP/v2-target/debug/orkestr-v2-server" >> "$GITHUB_ENV"
+          echo "V2_CARGO=$RUNNER_TEMP/v2-cargo" >> "$GITHUB_ENV"
+          printf '#!/bin/sh\nexec cargo +1.99.1 "$@"\n' > "$RUNNER_TEMP/v2-cargo"
+          chmod +x "$RUNNER_TEMP/v2-cargo"
+          cargo +1.99.1 install wasm-bindgen-cli --version 0.2.129 --locked --root "$RUNNER_TEMP/bindgen"
+          echo "$RUNNER_TEMP/bindgen/bin" >> "$GITHUB_PATH"
+      - name: Install locked browser dependencies without lifecycle scripts
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install puppeteer browsers install chrome
+      - name: Build actual server and release bundle
+        working-directory: v2
+        run: |
+          cargo +1.99.1 fetch --locked
+          cargo +1.99.1 build --offline --locked -p orkestr-v2-server
+          bash apps/ui/scripts/bundle.sh
+      - name: CI headless rendering with synthetic data
+        run: node v2/ci/headless-rendering.mjs

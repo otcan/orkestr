@@ -1,0 +1,9 @@
+[package]
+name = "orkestr-v2-application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+orkestr-v2-contracts = { path = "../contracts" }
+async-trait = "=0.1.89"
