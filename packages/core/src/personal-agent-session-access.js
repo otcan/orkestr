@@ -6,6 +6,9 @@ export const storedSessionProfile = row => ({ provider: row.provider, accountPro
 // Each prepared SQLite mutation owns its transaction and scope validation.
 // Owner authorization is supplied by the single-user app, never a row column.
 export function sessionAccess({ store, ownerUserId, authorizeOwner, resolveConversation, enabled, now, leaseMs }) {
+  // A rejected CAS invalidates this acquired fence even if a later read still
+  // shows its token. Never retry a cleanup write after uncertain persistence.
+  const failedFences = new WeakSet();
   const time = () => new Date(now()).toISOString();
   function authorized() {
     enabled();
@@ -48,6 +51,7 @@ export function sessionAccess({ store, ownerUserId, authorizeOwner, resolveConve
     }
   }
   function currentLease(row) {
+    if (failedFences.has(row)) throw sessionError("agent_session_lease_lost");
     const current = owned(row.id);
     sameBinding(row, current);
     if (current.leaseToken !== row.leaseToken || !Number.isSafeInteger(current.leaseExpiresAt) || current.leaseExpiresAt <= now()) throw sessionError("agent_session_lease_lost");
@@ -67,7 +71,10 @@ export function sessionAccess({ store, ownerUserId, authorizeOwner, resolveConve
       }
       throw error;
     }
-    if (!result) throw sessionError("agent_session_lease_lost");
+    if (!result) {
+      failedFences.add(row);
+      throw sessionError("agent_session_lease_lost");
+    }
     sameBinding(current, result);
     return result;
   }

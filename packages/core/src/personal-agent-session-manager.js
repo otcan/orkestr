@@ -12,7 +12,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
   const { conversation, owned, available, claim, currentLease, fenced, time } = sessionAccess({ store, ownerUserId, authorizeOwner, resolveConversation, enabled, now, leaseMs });
   // Transient account/profile authorization context, never persisted ownership.
   const runtimeRow = row => ({ ...row, ...storedSessionProfile(row), ownerUserId });
-  async function leased(id, operation) {
+  async function leased(id, operation, { blockOnFailure = true } = {}) {
     const row = claim(id);
     const controller = new AbortController();
     let lost = false;
@@ -28,10 +28,11 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
     } catch (error) {
       // Stop the provider immediately on failed persistence; never replay it.
       controller.abort("session_operation_failed");
-      // A lost fence is intentionally retained for operator reconciliation.
-      if (!lost && error?.code !== "agent_session_lease_lost") {
-        fenced(row, { lifecycle: "blocked", blockedReason: sessionBlockedReason(error) }, true);
-      }
+      // A child's error does not identify this session's fence. Revalidate
+      // our own token/expiry/CAS history before any cleanup write.
+      if (lost) throw sessionError("agent_session_lease_lost");
+      currentLease(row);
+      fenced(row, blockOnFailure ? { lifecycle: "blocked", blockedReason: sessionBlockedReason(error) } : {}, true);
       throw error;
     } finally { clearInterval(timer); }
   }
@@ -80,6 +81,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
       currentLease(row);
       const parent = row.forkFromSessionId && !row.nativeSessionId ? owned(row.forkFromSessionId) : null;
       // Fork only idle parents, with the same fence used for normal turns.
+      // A failed fork belongs to the child; leave a still-fenced parent idle.
       const open = parent
         ? () => leased(parent.id, async (source, parentSignal) => {
           if (source.lifecycle !== "ready") throw sessionError("agent_session_reconciliation_required");
@@ -88,7 +90,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
           const result = await adapter.open(runtimeRow(row), { parent: runtimeRow(source), signal: AbortSignal.any([signal, parentSignal]) });
           fenced(source, {}, true);
           return result;
-        })
+        }, { blockOnFailure: false })
         : () => adapter.open(runtimeRow(row), { signal });
       const result = await open();
       if (result.nativeSessionId) sessionId(result.nativeSessionId);
