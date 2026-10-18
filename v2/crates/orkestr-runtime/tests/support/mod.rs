@@ -91,6 +91,7 @@ impl Spy {
         }
     }
 }
+#[orkestr_v2_application::runtime::async_trait]
 impl RuntimeStore for Spy {
     async fn claim_next(
         &self,

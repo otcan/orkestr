@@ -72,3 +72,16 @@ cancellation fences remain control-only. New append input requires execution
 authority. Cancellation confirmation/reconciliation has no implemented substitute.
 This comment-only adaptation supersedes the earlier ambiguous reference to new
 cancellation authority; core owns the eventual durable enforcement.
+
+## Application-owned async-trait requirement
+
+Adapted core cfa503e83acc3470c8844ae8d5c86d820a2c3f19 onto the reviewed v5
+shape, without restoring its historical record_observation or contracts layout.
+All ten current v5 argument/result types, including append_provider_event, remain
+unchanged. RuntimeStore now uses async_trait with Send + Sync and default Send
+futures. Application alone pins =0.1.89 and reexports the attribute; the runtime
+spy uses that reexport without a direct dependency. IntakeStore is unchanged.
+This supersedes native runtime signatures only. Coordinator owns lock integration
+after independent source review. No Cargo/download/fmt/test run accompanies this
+source-light adaptation. Historical isolated v1 clippy failed double_must_use in
+async-trait expansion; that concrete risk remains unresolved, not waived here.
