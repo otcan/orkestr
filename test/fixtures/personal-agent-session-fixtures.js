@@ -1,30 +1,58 @@
 import { createPersonalAgentSessionManager } from "../../packages/core/src/personal-agent-session-manager.js";
 
-// Deliberately a fake store, not a second schema or database. The schema lane
-// supplies the SQLite transaction implementation against agent-jobs.sqlite.
-export function sessionStore() {
-  let rows = new Map();
-  const conversations = new Map([
-    ["conversation-global", { id: "conversation-global", ownerUserId: "owner", scopeKind: "global", scopeId: null }],
-    ["conversation-project", { id: "conversation-project", ownerUserId: "owner", scopeKind: "project", scopeId: "project-example" }],
-    ["conversation-other", { id: "conversation-other", ownerUserId: "other", scopeKind: "global", scopeId: null }],
-  ]);
-  const clone = value => value === undefined ? undefined : structuredClone(value);
-  const store = {
-    transaction(fn) {
-      const before = clone(rows);
-      const tx = {
-        get: id => clone(rows.get(id)),
-        conversation: id => clone(conversations.get(id)),
-        findRole: (id, role) => clone([...rows.values()].find(row => row.conversationId === id && row.role === role)),
-        findNative: (provider, profile, native) => clone([...rows.values()].find(row => row.provider === provider && row.accountProfileId === profile && row.nativeSessionId === native)),
-        insert(row) { if (rows.has(row.id)) throw new Error("duplicate"); rows.set(row.id, clone(row)); },
-        replace(row) { if (!rows.has(row.id)) throw new Error("missing"); rows.set(row.id, clone(row)); },
-      };
-      try { return clone(fn(tx)); } catch (error) { rows = before; throw error; }
-    },
+// Trusted synthetic authorization projection; canonical conversations have no
+// owner column. Production must inject its actual owner-authenticated resolver.
+export function resolveSessionConversation(id, { ownerUserId }) {
+  const rows = {
+    "conversation-global": { id, scopeKind: "global", scopeId: null },
+    "conversation-project": { id, scopeKind: "project", scopeId: "project-example" },
   };
-  return store;
+  return ownerUserId === "owner" ? rows[id] || null : null;
+}
+
+// A fake of Lane A's prepared CAS store, never a production database/schema.
+export function sessionStore({ now = Date.now } = {}) {
+  const rows = new Map();
+  let sequence = 0;
+  const clone = value => value == null ? null : structuredClone(value);
+  const active = row => ["starting", "ready", "busy", "blocked"].includes(row.lifecycle);
+  function persist(row) {
+    for (const other of rows.values()) {
+      if (other.id === row.id) continue;
+      if (row.role !== "worker" && active(row) && active(other) && other.conversationId === row.conversationId && other.role === row.role) throw new Error("active role conflict");
+      if (row.nativeSessionId && row.provider === other.provider && row.accountProfileId === other.accountProfileId && row.nativeSessionId === other.nativeSessionId) {
+        throw Object.assign(new Error("agent_session_native_identity_reused"), { code: "agent_session_native_identity_reused" });
+      }
+    }
+    rows.set(row.id, clone(row));
+    return clone(row);
+  }
+  return {
+    create(input) {
+      if (rows.has(input.id)) throw new Error("duplicate session");
+      return persist({ ...input, version: 0, leaseToken: null, leaseExpiresAt: null });
+    },
+    get: id => clone(rows.get(id)),
+    list: ({ conversationId, scopeKind, scopeId = null, roles, lifecycles }) => [...rows.values()]
+      .filter(row => row.conversationId === conversationId && row.scopeKind === scopeKind && row.scopeId === scopeId && (!roles || roles.includes(row.role)) && (!lifecycles || lifecycles.includes(row.lifecycle))).map(clone),
+    acquireLease(id, { expectedVersion, ttlMs }) {
+      const row = rows.get(id);
+      if (!row || row.version !== expectedVersion || (row.leaseToken && row.leaseExpiresAt > now())) return null;
+      const session = persist({ ...row, version: row.version + 1, leaseToken: `lease-${++sequence}`, leaseExpiresAt: now() + ttlMs, updatedAt: new Date(now()).toISOString() });
+      return { session, leaseToken: session.leaseToken };
+    },
+    update(id, { expectedVersion, leaseToken, patch }) {
+      const row = rows.get(id);
+      if (!row || row.version !== expectedVersion || row.leaseToken !== leaseToken || row.leaseExpiresAt <= now()) return null;
+      const next = { ...row };
+      for (const key of ["lifecycle", "blockedReason", "nativeSessionId", "heartbeatAt", "modelProfile"]) if (patch[key] !== undefined) next[key] = patch[key];
+      next.leaseToken = patch.releaseLease ? null : leaseToken;
+      next.leaseExpiresAt = patch.releaseLease ? null : now() + (patch.leaseTtlMs ?? Math.max(1, row.leaseExpiresAt - now()));
+      return persist({ ...next, version: row.version + 1, updatedAt: new Date(now()).toISOString() });
+    },
+    // Explicit test-only fault injection. Normal manager writes use CAS above.
+    tamper(id, patch) { rows.set(id, { ...rows.get(id), ...clone(patch) }); },
+  };
 }
 
 export const sessionProfile = { provider: "codex", accountProfileId: "profile-example", model: "gpt-example", effort: "high" };
@@ -44,7 +72,7 @@ export function sessionHarness(options = {}) {
     async open(row, { parent } = {}) { calls.push(["open", row.id]); return { nativeSessionId: row.nativeSessionId || `native-${++sequence}`, lifecycle: "ready", ...(parent ? { forked: true } : {}) }; },
     async run(row, ctx) { calls.push(["run", row.id]); ctx.emit({ type: "session.started", sessionRef: row.nativeSessionId || `native-${++sequence}` }); return { type: "final", output: { text: "synthetic result" } }; },
   };
-  const store = options.store || sessionStore();
-  const settings = { store, ownerUserId: "owner", runtimes: { codex: adapter }, env: { ORKESTR_PERSONAL_AGENT_ENABLED: "1" }, ...options };
+  const store = options.store || sessionStore({ now: options.now });
+  const settings = { store, resolveConversation: resolveSessionConversation, ownerUserId: "owner", runtimes: { codex: adapter }, env: { ORKESTR_PERSONAL_AGENT_ENABLED: "1" }, ...options };
   return { store, adapter, calls, manager: createPersonalAgentSessionManager(settings), another: () => createPersonalAgentSessionManager(settings) };
 }

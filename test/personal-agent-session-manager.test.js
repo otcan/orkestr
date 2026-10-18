@@ -13,8 +13,8 @@ test("AT-03: fast/deep have distinct Orkestr/native identities per conversation 
   assert.deepEqual(restarted.ensure(sessionInput), roles.fast);
   assert.equal((await restarted.startOrResume(roles.fast.id)).nativeSessionId, roles.fast.nativeSessionId);
   const changed = restarted.changeProfile(roles.fast.id, { ...sessionProfile, model: "gpt-other", effort: "low" });
-  for (const key of ["id", "nativeSessionId", "conversationId", "ownerUserId"]) assert.equal(changed[key], roles.fast[key]);
-  assert.equal(changed.model, "gpt-other");
+  for (const key of ["id", "nativeSessionId", "conversationId"]) assert.equal(changed[key], roles.fast[key]);
+  assert.equal(changed.modelProfile.model, "gpt-other");
   assert.throws(() => restarted.changeProfile(changed.id, { ...sessionProfile, accountProfileId: "other-profile" }), /profile_rebind_required/);
 });
 
@@ -32,7 +32,7 @@ test("project/global binding, owner and profile validation fail before native ca
 });
 
 test("flag off does not touch store or runtimes", async () => {
-  const h = sessionHarness({ env: {}, store: { transaction() { assert.fail("storage touched"); } } });
+  const h = sessionHarness({ env: {}, store: new Proxy({}, { get() { assert.fail("storage touched"); } }) });
   assert.throws(() => h.manager.ensure(sessionInput), /personal_agent_disabled/);
   await assert.rejects(h.manager.runTurn("example", supervisor(), {}), /personal_agent_disabled/);
   assert.deepEqual(h.calls, []);
@@ -67,7 +67,7 @@ test("heartbeat renews a long turn and an expired/crashed lease is never stolen"
   assert.equal((await h.manager.runTurn(row.id, supervisor(), {})).type, "final");
   const updated = h.manager.get(row.id);
   assert.ok(Date.parse(updated.heartbeatAt) >= Date.parse(row.heartbeatAt));
-  h.store.transaction(tx => tx.replace({ ...tx.get(row.id), lifecycle: "busy", leaseToken: "crashed", leaseExpiresAt: "2000-01-01T00:00:00.000Z" }));
+  h.store.tamper(row.id, { lifecycle: "busy", leaseToken: "crashed", leaseExpiresAt: 946684800000 });
   await assert.rejects(h.another().startOrResume(row.id), /reconciliation_required/);
   assert.equal(h.manager.get(row.id).leaseToken, "crashed");
 });
@@ -79,7 +79,7 @@ test("a lost heartbeat aborts the native turn and retains its fence for reconcil
   h.adapter.run = async (_row, ctx) => { entered.resolve(); await new Promise(done => ctx.signal.addEventListener("abort", done, { once: true })); return { type: "final" }; };
   const pending = h.manager.runTurn(row.id, supervisor(), {});
   await entered.promise;
-  h.store.transaction(tx => tx.replace({ ...tx.get(row.id), leaseExpiresAt: "2000-01-01T00:00:00.000Z" }));
+  h.store.tamper(row.id, { leaseExpiresAt: 946684800000 });
   // Keep the fake process alive while the manager's unref'ed heartbeat runs.
   const keepAlive = setTimeout(() => {}, 500);
   try { await assert.rejects(pending, /lease_lost/); } finally { clearTimeout(keepAlive); }

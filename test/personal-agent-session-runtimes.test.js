@@ -9,7 +9,7 @@ import { getCodexJobClient, stopCodexJobClients } from "../packages/core/src/cod
 import { claudeJobArgs } from "../packages/core/src/agent-job-claude-code.js";
 import { codexJobEnv, readFakeCodex } from "./fixtures/codex-job-fixtures.js";
 import { fakeClaude } from "./fixtures/claude-job-fixtures.js";
-import { sessionHarness, sessionInput, sessionProfile, sessionStore, supervisor } from "./fixtures/personal-agent-session-fixtures.js";
+import { sessionHarness, sessionInput, sessionProfile, sessionStore, resolveSessionConversation, supervisor } from "./fixtures/personal-agent-session-fixtures.js";
 
 const row = { ownerUserId: "owner", ...sessionProfile };
 const profile = { id: "profile-example", ownerUserId: "owner", provider: "codex", authMode: "subscription", state: "ready", credentialRoot: "/tmp/synthetic-profile" };
@@ -110,7 +110,7 @@ test("real Codex bridge with fake CLI keeps FAST/DEEP IDs, new prompts and chang
   await fs.mkdir(cwd);
   const account = { ...profile, credentialRoot: path.join(env.ORKESTR_HOME, "profile") };
   const runtimes = createPersonalAgentSessionRuntimes({ ...options, env, cwd, resolveProfile: async () => account });
-  const manager = createPersonalAgentSessionManager({ store: sessionStore(), ownerUserId: "owner", runtimes, env });
+  const manager = createPersonalAgentSessionManager({ store: sessionStore(), resolveConversation: resolveSessionConversation, ownerUserId: "owner", runtimes, env });
   const roles = await manager.ensureScope({ ...sessionInput, profiles: { fast: sessionProfile, deep: sessionProfile } });
   assert.notEqual(roles.fast.nativeSessionId, roles.deep.nativeSessionId);
   const runtimeEnv = { ...env, HOME: path.join(account.credentialRoot, "runtime-home"), CODEX_HOME: account.credentialRoot, OPENAI_API_KEY: "", CODEX_API_KEY: "", ORKESTR_CODEX_APP_SERVER_MODE: "stdio", ORKESTR_CODEX_APP_SERVER_SOCKET: "" };
