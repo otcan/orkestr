@@ -10,7 +10,7 @@ ORK-534 is reference context only. Jira availability does not gate implementatio
 | Lane | Branch | Admitted work | Reported PR / exact tested head | Tests / CI |
 |---|---|---|---|---|
 | Coordinator | `v2/s0-coordination` | Running light: dependency integration, backlog, review routing | This ledger; implementation head pending | No Rust tests run by coordinator; CI pending |
-| Core | `v2/s0-core` | Running heavy: first shared contracts/build, then store/API | Awaiting first commit/PR; initial head is plan baseline | First build and test counts pending |
+| Core | `v2/s0-core` | Running heavy: confirms contracts/application/store-sqlite/Axum durable intake on pinned baseline; API fixtures forthcoming | Awaiting first commit/PR; initial head is plan baseline | First build and test counts pending |
 | Runtime | `v2/s0-runtime` | Running heavy: provider port, fake runtime, session supervision | Awaiting first commit/PR; initial head is plan baseline | Tests pending; live inference out of scope |
 | UI | `v2/s0-ui` | Queued heavy; confirmed light plan/contract and Dioxus 0.7/iOS WebView feasibility only; no Cargo/downloads | Confirmed at `a7ba6d59`; first PR pending | Web/native builds pending |
 | Verification | `v2/s0-verification` | Running light: inventory, black-box specifications, independent reviews | Awaiting first commit/PR; initial head is plan baseline | No compile until core first build; acceptance pending |
@@ -32,6 +32,8 @@ private host paths and runtime identities stay outside this repository.
 1. Core publishes a small authoritative contracts/build commit, pins Rust
    1.99.1, and supplies the intended workspace members/dependencies and first
    locked build/test evidence. Core owns schema and migration changes.
+   Core has confirmed it will commit the initial toolchain and lockfile;
+   coordinator has acknowledged this as the serialized integration input.
 2. Coordinator reviews and integrates workspace membership and `v2/Cargo.lock`.
    Core's initial lockfile is the input; later dependency changes are serialized
    through coordinator. Runtime/UI must consume shared contracts rather than
