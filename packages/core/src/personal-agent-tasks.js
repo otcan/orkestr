@@ -128,13 +128,18 @@ export async function createPersonalAgentTask(input, env = process.env) {
   const contract = normalizeContract(input);
   const idempotencyKey = input.idempotencyKey == null ? null : nonEmpty(input.idempotencyKey, "personal_agent_task_idempotency_invalid");
   const actor = normalizeActor(input.actor ?? { kind: "owner", id: null, origin: "api" });
+  const threadId = input.threadId == null ? null : nonEmpty(input.threadId, "personal_agent_task_thread_invalid");
   const db = await openAgentJobDb(env);
   return tx(db, () => {
     if (!db.prepare("select 1 from personal_agent_projects where id = ?").get(projectId)) fail("personal_agent_project_not_found", 404);
     if (idempotencyKey) {
       const existing = db.prepare("select * from personal_agent_tasks where project_id = ? and idempotency_key = ?").get(projectId, idempotencyKey);
       if (existing) {
-        if (stableStringify(parseJson(existing.contract_json, {})) !== stableStringify(contract)) {
+        // Compare with the creation input, not with a thread bound later by
+        // admission. Tasks created before this was recorded had no thread.
+        const creation = db.prepare("select request_json from personal_agent_task_transitions where task_id = ? and seq = 1").get(existing.id);
+        const createdThreadId = creation?.request_json == null ? null : parseJson(creation.request_json, {})?.threadId ?? null;
+        if (stableStringify(parseJson(existing.contract_json, {})) !== stableStringify(contract) || createdThreadId !== threadId) {
           fail("personal_agent_task_idempotency_conflict", 409);
         }
         return { task: taskFromRow(existing), created: false };
@@ -148,13 +153,13 @@ export async function createPersonalAgentTask(input, env = process.env) {
     const id = newId("tsk");
     const now = nowIso();
     db.prepare(`insert into personal_agent_tasks
-      (id, project_id, idempotency_key, title, outcome, acceptance_json, state, contract_json, created_at, updated_at)
-      values (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`)
-      .run(id, projectId, idempotencyKey, contract.title, contract.outcome, JSON.stringify(contract.acceptanceCriteria), JSON.stringify(contract), now, now);
+      (id, project_id, idempotency_key, title, outcome, acceptance_json, state, thread_id, contract_json, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`)
+      .run(id, projectId, idempotencyKey, contract.title, contract.outcome, JSON.stringify(contract.acceptanceCriteria), threadId, JSON.stringify(contract), now, now);
     db.prepare(`insert into personal_agent_task_transitions
-      (task_id, seq, from_state, to_state, actor_json, reason, evidence_json, idempotency_key, created_at)
-      values (?, 1, null, 'queued', ?, 'task_created', ?, ?, ?)`)
-      .run(id, JSON.stringify(actor), JSON.stringify({ contractValidated: true }), idempotencyKey ? `create:${idempotencyKey}` : null, now);
+      (task_id, seq, from_state, to_state, actor_json, reason, evidence_json, request_json, idempotency_key, created_at)
+      values (?, 1, null, 'queued', ?, 'task_created', ?, ?, ?, ?)`)
+      .run(id, JSON.stringify(actor), JSON.stringify({ contractValidated: true }), JSON.stringify({ threadId }), idempotencyKey ? `create:${idempotencyKey}` : null, now);
     return { task: taskFromRow(taskRow(db, id)), created: true };
   });
 }
@@ -163,6 +168,27 @@ export async function getPersonalAgentTask(taskId, env = process.env) {
   requireFeature(env);
   const db = await openAgentJobDb(env);
   return taskFromRow(taskRow(db, taskId));
+}
+
+// ADR 0002: a start requires an admitted execution or explicit transition
+// evidence. The controller (system) proves admission with a run or thread
+// reference; the owner may instead start explicitly with a reason. Workers,
+// connectors and the assistant cannot mark their own task running. Admission
+// references are bound to the task and must match any already bound.
+function startAdmission(row, actor, reason, evidence) {
+  const raw = evidence.admission;
+  const admission = raw == null ? null : object(raw, "personal_agent_task_admission_invalid");
+  const runId = admission?.runId == null ? null : nonEmpty(admission.runId, "personal_agent_task_admission_invalid");
+  const threadId = admission?.threadId == null ? null : nonEmpty(admission.threadId, "personal_agent_task_admission_invalid");
+  const admitted = Boolean(runId || threadId);
+  const explicitOwnerStart = actor.kind === "owner" && Boolean(reason) && evidence.explicit === true;
+  if (!["system", "owner"].includes(actor.kind) || (!admitted && !(actor.kind === "owner" && explicitOwnerStart))) {
+    fail("personal_agent_task_start_unadmitted", 403);
+  }
+  if ((runId && row.run_id && row.run_id !== runId) || (threadId && row.thread_id && row.thread_id !== threadId)) {
+    fail("personal_agent_task_admission_conflict", 409);
+  }
+  return { runId: runId ?? row.run_id ?? null, threadId: threadId ?? row.thread_id ?? null };
 }
 
 export async function transitionPersonalAgentTask(input, env = process.env) {
@@ -175,19 +201,25 @@ export async function transitionPersonalAgentTask(input, env = process.env) {
   const reason = input.reason == null ? null : nonEmpty(input.reason, "personal_agent_task_reason_invalid");
   const evidence = object(input.evidence ?? {}, "personal_agent_task_evidence_invalid");
   const idempotencyKey = input.idempotencyKey == null ? null : nonEmpty(input.idempotencyKey, "personal_agent_task_idempotency_invalid");
+  // Everything the command can change, so a reused key with different content
+  // is a conflict rather than a silent replay.
+  const request = { completion: input.completion ?? null, nextAction: input.nextAction ?? null };
   const db = await openAgentJobDb(env);
 
   return tx(db, () => {
     const row = taskRow(db, taskId);
     if (!row) fail("personal_agent_task_not_found", 404);
     if (idempotencyKey) {
-      const prior = db.prepare("select to_state, actor_json, reason, evidence_json from personal_agent_task_transitions where task_id = ? and idempotency_key = ?").get(taskId, idempotencyKey);
+      const prior = db.prepare("select to_state, actor_json, reason, evidence_json, request_json from personal_agent_task_transitions where task_id = ? and idempotency_key = ?").get(taskId, idempotencyKey);
       if (prior) {
         if (
           prior.to_state !== nextState ||
           stableStringify(parseJson(prior.actor_json, null)) !== stableStringify(actor) ||
           prior.reason !== reason ||
-          stableStringify(parseJson(prior.evidence_json, {})) !== stableStringify(evidence)
+          stableStringify(parseJson(prior.evidence_json, {})) !== stableStringify(evidence) ||
+          // A transition recorded before request_json existed cannot prove the
+          // same completion/nextAction, so it only replays a bare command.
+          stableStringify(prior.request_json == null ? { completion: null, nextAction: null } : parseJson(prior.request_json, null)) !== stableStringify(request)
         ) {
           fail("personal_agent_task_idempotency_conflict", 409);
         }
@@ -196,6 +228,7 @@ export async function transitionPersonalAgentTask(input, env = process.env) {
     }
     if (terminalStates.has(row.state) || !transitions[row.state]?.has(nextState)) fail("personal_agent_task_transition_not_allowed", 409);
     if (!reason && ["blocked", "failed", "cancelled"].includes(nextState)) fail("personal_agent_task_transition_reason_required");
+    const admission = nextState === "running" ? startAdmission(row, actor, reason, evidence) : null;
 
     let completionJson = row.completion_json;
     if (nextState === "succeeded") {
@@ -223,12 +256,12 @@ export async function transitionPersonalAgentTask(input, env = process.env) {
 
     const seq = Number(db.prepare("select coalesce(max(seq), 0) as seq from personal_agent_task_transitions where task_id = ?").get(taskId).seq) + 1;
     const now = nowIso();
-    db.prepare("update personal_agent_tasks set state = ?, completion_json = ?, contract_json = ?, updated_at = ? where id = ?")
-      .run(nextState, completionJson, contractJson, now, taskId);
+    db.prepare("update personal_agent_tasks set state = ?, completion_json = ?, contract_json = ?, thread_id = ?, run_id = ?, updated_at = ? where id = ?")
+      .run(nextState, completionJson, contractJson, admission?.threadId ?? row.thread_id, admission?.runId ?? row.run_id, now, taskId);
     db.prepare(`insert into personal_agent_task_transitions
-      (task_id, seq, from_state, to_state, actor_json, reason, evidence_json, idempotency_key, created_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(taskId, seq, row.state, nextState, JSON.stringify(actor), reason, JSON.stringify(evidence), idempotencyKey, now);
+      (task_id, seq, from_state, to_state, actor_json, reason, evidence_json, request_json, idempotency_key, created_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(taskId, seq, row.state, nextState, JSON.stringify(actor), reason, JSON.stringify(evidence), JSON.stringify(request), idempotencyKey, now);
     return { task: taskFromRow(taskRow(db, taskId)), replayed: false };
   });
 }
