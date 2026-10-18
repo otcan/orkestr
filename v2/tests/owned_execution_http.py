@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import select
 import shutil
 import signal
 import socket
@@ -17,7 +18,12 @@ import urllib.request
 binary = Path(sys.argv[1]).resolve(strict=True)
 peer = Path(__file__).with_name("owned_execution_peer.py").resolve(strict=True)
 broker = Path(__file__).resolve().parent.parent / "provider-broker"
-opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
 
 def wait_for(operation, description, seconds=8):
@@ -80,6 +86,23 @@ class Case:
             assert not (self.workspace / "synthetic-peer.jsonl").exists()
             assert not (self.home / "owned-execution").exists()
             return
+        # Prove this exact child owns the requested listener before any HTTP
+        # request. An ephemeral-port race must never contact another service.
+        expected = (f"orkestr-v2-server schema=1 home={self.home} "
+                    f"bind=127.0.0.1:{self.port} execution=").encode()
+        pending = bytearray()
+        def owned_listener():
+            if self.process.poll() is not None:
+                raise AssertionError("ordinary server exited before owned-listener readiness")
+            if not select.select([self.process.stderr], [], [], 0.05)[0]:
+                return False
+            chunk = os.read(self.process.stderr.fileno(), 8192)
+            assert chunk, "ordinary server stderr closed before readiness"
+            pending.extend(chunk)
+            assert len(pending) <= 16384, "ordinary server readiness output exceeded bound"
+            return any(line.startswith(expected) and line.endswith(b" connections=none")
+                       for line in pending.split(b"\n")[:-1])
+        wait_for(owned_listener, "child-owned listener readiness deadline")
         def healthy():
             if self.process.poll() is not None:
                 raise AssertionError("ordinary server startup failed: " + self.process.stderr.read())
