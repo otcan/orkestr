@@ -150,7 +150,10 @@ impl Engine {
                     },
                 );
             }
-            Event::TaskQueued { id, conversation_id } => {
+            Event::TaskQueued {
+                id,
+                conversation_id,
+            } => {
                 if id.trim().is_empty() || conversation_id.trim().is_empty() {
                     return Err(ApplyError::EmptyIdentifier);
                 }
@@ -188,7 +191,9 @@ impl Engine {
             } => {
                 let task = self.tasks.get_mut(task_id).ok_or(ApplyError::MissingTask)?;
                 match &task.state {
-                    TaskState::Running { worker_id: assigned } if assigned != worker_id => {
+                    TaskState::Running {
+                        worker_id: assigned,
+                    } if assigned != worker_id => {
                         return Err(ApplyError::WorkerMismatch);
                     }
                     TaskState::Running { .. } => {}
@@ -249,8 +254,13 @@ mod tests {
         );
         assert!(engine.journal().is_empty());
         engine.apply(event("e2", project("root", None))).unwrap();
-        engine.apply(event("e3", project("child", Some("root")))).unwrap();
-        assert_eq!(engine.conversations()["child"].parent_id.as_deref(), Some("root"));
+        engine
+            .apply(event("e3", project("child", Some("root"))))
+            .unwrap();
+        assert_eq!(
+            engine.conversations()["child"].parent_id.as_deref(),
+            Some("root")
+        );
     }
 
     #[test]
@@ -269,16 +279,24 @@ mod tests {
     #[test]
     fn running_requires_confirmed_worker_start() {
         let mut engine = with_project();
-        engine.apply(event("e2", Event::TaskQueued {
-            id: "task".into(),
-            conversation_id: "p1".into(),
-        })).unwrap();
+        engine
+            .apply(event(
+                "e2",
+                Event::TaskQueued {
+                    id: "task".into(),
+                    conversation_id: "p1".into(),
+                },
+            ))
+            .unwrap();
         assert_eq!(
-            engine.apply(event("e3", Event::TaskCompleted {
-                task_id: "task".into(),
-                worker_id: "w1".into(),
-                summary: "unexpected".into(),
-            })),
+            engine.apply(event(
+                "e3",
+                Event::TaskCompleted {
+                    task_id: "task".into(),
+                    worker_id: "w1".into(),
+                    summary: "unexpected".into(),
+                }
+            )),
             Err(ApplyError::InvalidTransition)
         );
         assert!(matches!(engine.tasks()["task"].state, TaskState::Queued));
@@ -287,20 +305,33 @@ mod tests {
     #[test]
     fn a_different_worker_cannot_complete_claimed_task() {
         let mut engine = with_project();
-        engine.apply(event("e2", Event::TaskQueued {
-            id: "task".into(),
-            conversation_id: "p1".into(),
-        })).unwrap();
-        engine.apply(event("e3", Event::TaskStarted {
-            task_id: "task".into(),
-            worker_id: "w1".into(),
-        })).unwrap();
+        engine
+            .apply(event(
+                "e2",
+                Event::TaskQueued {
+                    id: "task".into(),
+                    conversation_id: "p1".into(),
+                },
+            ))
+            .unwrap();
+        engine
+            .apply(event(
+                "e3",
+                Event::TaskStarted {
+                    task_id: "task".into(),
+                    worker_id: "w1".into(),
+                },
+            ))
+            .unwrap();
         assert_eq!(
-            engine.apply(event("e4", Event::TaskCompleted {
-                task_id: "task".into(),
-                worker_id: "w2".into(),
-                summary: "wrong worker".into(),
-            })),
+            engine.apply(event(
+                "e4",
+                Event::TaskCompleted {
+                    task_id: "task".into(),
+                    worker_id: "w2".into(),
+                    summary: "wrong worker".into(),
+                }
+            )),
             Err(ApplyError::WorkerMismatch)
         );
         assert_eq!(engine.journal().len(), 3);
@@ -310,19 +341,28 @@ mod tests {
     fn event_history_replays_to_same_conversation_and_task_state() {
         let mut engine = with_project();
         let changes = [
-            event("e2", Event::TaskQueued {
-                id: "t1".into(),
-                conversation_id: "p1".into(),
-            }),
-            event("e3", Event::TaskStarted {
-                task_id: "t1".into(),
-                worker_id: "codex".into(),
-            }),
-            event("e4", Event::TaskCompleted {
-                task_id: "t1".into(),
-                worker_id: "codex".into(),
-                summary: "completed".into(),
-            }),
+            event(
+                "e2",
+                Event::TaskQueued {
+                    id: "t1".into(),
+                    conversation_id: "p1".into(),
+                },
+            ),
+            event(
+                "e3",
+                Event::TaskStarted {
+                    task_id: "t1".into(),
+                    worker_id: "codex".into(),
+                },
+            ),
+            event(
+                "e4",
+                Event::TaskCompleted {
+                    task_id: "t1".into(),
+                    worker_id: "codex".into(),
+                    summary: "completed".into(),
+                },
+            ),
         ];
         for change in changes {
             engine.apply(change).unwrap();
@@ -338,16 +378,31 @@ mod tests {
     #[test]
     fn cancelled_task_cannot_be_restarted() {
         let mut engine = with_project();
-        engine.apply(event("e2", Event::TaskQueued {
-            id: "task".into(),
-            conversation_id: "p1".into(),
-        })).unwrap();
-        engine.apply(event("e3", Event::TaskCancelled { task_id: "task".into() })).unwrap();
+        engine
+            .apply(event(
+                "e2",
+                Event::TaskQueued {
+                    id: "task".into(),
+                    conversation_id: "p1".into(),
+                },
+            ))
+            .unwrap();
+        engine
+            .apply(event(
+                "e3",
+                Event::TaskCancelled {
+                    task_id: "task".into(),
+                },
+            ))
+            .unwrap();
         assert_eq!(
-            engine.apply(event("e4", Event::TaskStarted {
-                task_id: "task".into(),
-                worker_id: "w1".into(),
-            })),
+            engine.apply(event(
+                "e4",
+                Event::TaskStarted {
+                    task_id: "task".into(),
+                    worker_id: "w1".into(),
+                }
+            )),
             Err(ApplyError::InvalidTransition)
         );
     }

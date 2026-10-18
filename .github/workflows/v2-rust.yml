@@ -24,15 +24,14 @@ jobs:
         working-directory: v2
     steps:
       - uses: actions/checkout@v4
-      - name: Install stable Rust with lint and formatter
+      - name: Install pinned Rust with lint and formatter
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup component add rustfmt clippy --toolchain stable
+          rustup show active-toolchain
       - name: Rust format
-        run: cargo +stable fmt --all -- --check
+        run: cargo fmt --all -- --check
       - name: Rust lint
-        run: cargo +stable clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Rust tests
-        run: cargo +stable test --workspace
+        run: cargo test --locked --workspace
       - name: Smoke CLI
-        run: cargo +stable run -p orkestr-v2-demo
+        run: cargo run --locked -p orkestr-v2-demo
