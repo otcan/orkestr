@@ -47,9 +47,15 @@ class DatabasePathIsolation(unittest.TestCase):
             elif kind == "fifo":
                 os.mkfifo(entry)
             before = (files(home), files(legacy))
-            env = dict(os.environ, ORKESTR_HOME=str(legacy), ORKESTR_V2_HOME=str(home),
-                       ORKESTR_V2_BIND=f'127.0.0.1:{os.environ.get("ORKESTR_V2_TEST_PORT", "47110")}',
-                       ORKESTR_V2_BOOTSTRAP_TOKEN="synthetic-bootstrap-for-path-isolation-only")
+            # Do not pass host credentials, provider settings, or loader overrides.
+            env = {
+                "PATH": os.defpath,
+                "LANG": "C",
+                "ORKESTR_HOME": str(legacy),
+                "ORKESTR_V2_HOME": str(home),
+                "ORKESTR_V2_BIND": f'127.0.0.1:{os.environ.get("ORKESTR_V2_TEST_PORT", "47110")}',
+                "ORKESTR_V2_BOOTSTRAP_TOKEN": "synthetic-bootstrap-for-path-isolation-only",
+            }
             # Only this child may be killed; never search/kill by port or process name.
             child = subprocess.Popen([BINARY], env=env, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.PIPE)
