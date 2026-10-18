@@ -84,3 +84,13 @@ pages: second-page failure preserves the original projection and cursor; retry
 applies text once. Legacy intake serialization remains covered unchanged.
 Local validation: 43 Rust UI tests, 28 Node bridge tests, locked offline WASM
 build and strict UI Clippy. Live mixed browser/server acceptance remains separate.
+
+Schema 6/7 compatibility imports only contracts and two published JSON fixtures
+from Core `1c554294c56cd8cf0abae2df3a40202a811b841e` in a separate provenance
+commit. `cancellation_requested` distinguishes unknown confirmation from
+not-dispatched cancellation. Only `provider_stopped` presents confirmed provider
+stop. Both remain metadata and grant no control authority. Their malformed
+identity/schema/sequence/receipt cases fail closed, and snapshot failure/retry
+preserves text and cursor atomically. Combined local validation: 45 Rust UI tests,
+29 Node bridge tests, locked offline WASM, strict UI Clippy and workspace format.
+Adapter activation and live mixed browser rendering still require separate proof.

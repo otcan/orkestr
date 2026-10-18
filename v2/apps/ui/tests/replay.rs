@@ -146,3 +146,80 @@ fn malformed_production_schema_metadata_resyncs_and_wrong_scope_is_rejected() {
     let event = serde_json::from_value(wrong).unwrap();
     assert!(replay_sequence(&view, "provider_observed", Some("9"), &event).is_err());
 }
+
+#[test]
+fn production_cancellation_and_confirmed_stop_validate_without_control_authority() {
+    let mut view = Projection::default();
+    view.page(snapshot()).unwrap();
+    for (raw, name, schema, notice) in [
+        (
+            include_str!("../../../fixtures/production-cancellation-requested.json"),
+            "cancellation_requested",
+            6,
+            "Stop requested; confirmation pending.",
+        ),
+        (
+            include_str!("../../../fixtures/production-provider-stopped.json"),
+            "provider_stopped",
+            7,
+            "Cancelled; provider stop confirmed.",
+        ),
+    ] {
+        let wire: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let event: ConversationEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            replay_sequence(&view, name, Some(&event.sequence().to_string()), &event),
+            Ok(event.sequence())
+        );
+        assert_eq!(orkestr_v2_ui::replay_notice(&event), notice);
+        for (key, value) in [
+            ("schema_version", serde_json::json!(5)),
+            ("sequence", serde_json::json!(0)),
+            ("aggregate_version", serde_json::json!(999)),
+        ] {
+            let mut bad = wire.clone();
+            bad[key] = value;
+            assert_eq!(
+                orkestr_v2_ui::decode_stream(
+                    serde_json::json!({"status":200,"event":name,"id":"1","body":bad})
+                )
+                .event,
+                "resync_required"
+            );
+        }
+        for (key, value) in [
+            ("run_id", serde_json::json!("bad")),
+            ("native_session", serde_json::json!("forbidden")),
+            ("text", serde_json::json!("forbidden")),
+        ] {
+            let mut bad = wire.clone();
+            bad["payload_ref_or_safe_payload"][key] = value;
+            assert!(serde_json::from_value::<ConversationEvent>(bad).is_err());
+        }
+        let mut bad = wire.clone();
+        bad["scope"] = serde_json::json!({"kind":"global"});
+        let event = serde_json::from_value(bad).unwrap();
+        assert!(replay_sequence(&view, name, Some("1"), &event).is_err());
+        let mut bad = wire.clone();
+        if schema == 7 {
+            let mut wrong_receipt = wire.clone();
+            wrong_receipt["payload_ref_or_safe_payload"]["receipt_state"] = "unknown".into();
+            assert!(serde_json::from_value::<ConversationEvent>(wrong_receipt).is_err());
+            bad["payload_ref_or_safe_payload"]["run_sequence"] = 0.into();
+        } else {
+            bad["payload_ref_or_safe_payload"]["outcome"] = "stopped".into();
+        }
+        assert!(serde_json::from_value::<ConversationEvent>(bad).is_err());
+    }
+    let mut wire: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/production-cancellation-requested.json"
+    ))
+    .unwrap();
+    wire["payload_ref_or_safe_payload"]["outcome"] = "not_dispatched".into();
+    assert_eq!(
+        orkestr_v2_ui::replay_notice(&serde_json::from_value(wire).unwrap()),
+        "Cancelled before provider delivery."
+    );
+    assert_eq!(view.watermark, 1);
+    assert_eq!(view.messages.len(), 1);
+}

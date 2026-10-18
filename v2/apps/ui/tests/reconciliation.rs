@@ -446,3 +446,45 @@ fn production_observation_gap_failure_retry_preserves_cursor_and_owner_text() {
     let (again, _) = run(&committed, required, vec![Ok(page(&[], 9, None))]);
     assert_eq!(fingerprint(&again.unwrap()), fingerprint(&committed));
 }
+
+#[test]
+fn production_stop_journal_gaps_fail_atomically_and_retry_once() {
+    for (raw, name) in [
+        (
+            include_str!("../../../fixtures/production-cancellation-requested.json"),
+            "cancellation_requested",
+        ),
+        (
+            include_str!("../../../fixtures/production-provider-stopped.json"),
+            "provider_stopped",
+        ),
+    ] {
+        let view = original();
+        let before = fingerprint(&view);
+        let mut wire: serde_json::Value = serde_json::from_str(raw).unwrap();
+        wire["sequence"] = 11.into();
+        wire["aggregate_version"] = 11.into();
+        let event = serde_json::from_value(wire).unwrap();
+        let required = replay_sequence(&view, name, Some("11"), &event).unwrap();
+        let (failed, _) = run(
+            &view,
+            required,
+            vec![Ok(page(&[3], 11, Some(3))), Err("page two failed".into())],
+        );
+        assert!(failed.is_err());
+        assert_eq!(fingerprint(&view), before);
+        let (retry, _) = run(
+            &view,
+            required,
+            vec![Ok(page(&[3], 11, Some(3))), Ok(page(&[7], 11, None))],
+        );
+        let committed = retry.unwrap();
+        assert_eq!(committed.watermark, 11);
+        assert_eq!(
+            committed.messages.keys().copied().collect::<Vec<_>>(),
+            vec![1, 3, 7]
+        );
+        let (again, _) = run(&committed, required, vec![Ok(page(&[], 11, None))]);
+        assert_eq!(fingerprint(&again.unwrap()), fingerprint(&committed));
+    }
+}

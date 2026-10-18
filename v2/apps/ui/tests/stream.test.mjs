@@ -78,3 +78,11 @@ test('production provider metadata is a known SSE name without synthetic relabel
     assert.equal(result.event,'provider_observed');assert.equal(result.id,'9');
     assert.deepEqual(result.body,body);assert.equal(cancelled,true);
 });
+
+test('production stop metadata preserves canonical SSE names',async()=>{
+ for(const name of ['cancellation_requested','provider_stopped']) {
+  const body={sequence:12,payload_ref_or_safe_payload:{kind:name}};
+  const {result,cancelled}=await run([`id: 12\nevent: ${name}\ndata: ${JSON.stringify(body)}\n\n`]);
+  assert.equal(result.event,name);assert.deepEqual(result.body,body);assert.equal(cancelled,true);
+ }
+});

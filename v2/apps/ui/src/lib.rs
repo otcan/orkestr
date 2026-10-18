@@ -122,6 +122,12 @@ pub fn replay_sequence(
         ConversationEvent::ProviderObserved(e) => {
             (e.aggregate_id.to_string(), &e.scope, e.is_valid())
         }
+        ConversationEvent::CancellationRequested(e) => {
+            (e.aggregate_id.to_string(), &e.scope, e.is_valid())
+        }
+        ConversationEvent::ProviderStopped(e) => {
+            (e.aggregate_id.to_string(), &e.scope, e.is_valid())
+        }
         ConversationEvent::MessageAccepted(e) => (
             e.aggregate_id.to_string(),
             &e.scope,
@@ -175,6 +181,11 @@ pub fn decode_stream(raw: serde_json::Value) -> StreamItem {
 pub fn replay_notice(event: &ConversationEvent) -> &'static str {
     use orkestr_v2_contracts::FixtureCancellationOutcome;
     match event {
+        ConversationEvent::CancellationRequested(e) => match e.payload_ref_or_safe_payload.outcome {
+            orkestr_v2_contracts::CancellationOutcome::Unknown => "Stop requested; confirmation pending.",
+            orkestr_v2_contracts::CancellationOutcome::NotDispatched => "Cancelled before provider delivery.",
+        },
+        ConversationEvent::ProviderStopped(_) => "Cancelled; provider stop confirmed.",
         ConversationEvent::ProviderObserved(e) => match e.payload_ref_or_safe_payload.observation {
             orkestr_v2_contracts::ProductionObservationKind::Started => "Provider started.",
             orkestr_v2_contracts::ProductionObservationKind::ApprovalRequested => "Review requested.",
