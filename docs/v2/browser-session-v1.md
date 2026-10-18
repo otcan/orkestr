@@ -15,8 +15,8 @@ as machine Bearer tokens, and machine tokens cannot authenticate as cookies.
 Ambiguous cookie plus Authorization authentication and duplicate session cookies
 are rejected. Only hashed session material is stored; no schema change is needed.
 
-GET `/api/v2/browser/session` retrieves the current session's CSRF token and global
-conversation ID. Browser writes, including DELETE on that path for logout, require
+GET `/api/v2/browser/session` requires the exact configured Host and returns
+Cache-Control: no-store with the current session's CSRF token and global conversation ID. Browser writes, including DELETE on that path for logout, require
 the cookie, exact Origin/Host and `x-orkestr-csrf`. The CSRF token is a domain-separated
 SHA-256 derivation of the unpredictable cookie token, compared using fixed-size
 hashes. An expired or revoked cookie cannot write or retrieve session metadata.
@@ -26,8 +26,9 @@ No cross-origin response access or CORS allowance is introduced.
 `POST /api/v2/machine/session` is the explicitly named machine Bearer login path;
 `POST /api/v2/session` remains its compatibility alias. Machine responses retain
 `token`, `token_type`, `expires_in` and `global_conversation_id`. Existing machine
-requests need no ambient cookie or CSRF token. They still reject an explicitly
-foreign Origin. Browser clients must use the browser path rather than persist
+requests need no ambient cookie or CSRF token. Bearer issuance (including the compatibility alias) and authenticated Bearer use
+reject every request carrying an Origin header, including the configured origin
+and null. Browser requests must not use machine credentials or Bearer authority. Browser clients must use the browser path rather than persist
 machine tokens in local storage.
 
 The server accepts explicit `ORKESTR_V2_ORIGIN` for an operator-configured HTTPS
