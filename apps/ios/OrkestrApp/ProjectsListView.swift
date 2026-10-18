@@ -126,7 +126,7 @@ private struct ProjectResourcesPlaceholderView: View {
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(resource).foregroundStyle(OrkestrTheme.text)
-                        Text("Status not loaded")
+                        Text("State and blocker details not loaded")
                             .font(.caption)
                             .foregroundStyle(OrkestrTheme.muted)
                     }

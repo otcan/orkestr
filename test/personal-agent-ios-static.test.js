@@ -80,7 +80,7 @@ test("project resources and Integration Hub are honest contract-pending placehol
   for (const resource of ["GitHub repository", "Jira project", "OXRM workspace", "WhatsApp conversation"])
     assert.ok(projects.includes(resource), `missing project resource slot ${resource}`);
   assert.match(projects, /ORK-563 project-resource contract/);
-  assert.match(projects, /Status not loaded/);
+  assert.match(projects, /State and blocker details not loaded/);
   for (const layer of ["Plugin packages", "Connections", "Capabilities", "Global and project bindings", "Resource instances"])
     assert.ok(library.includes(layer), `missing Integration Hub layer ${layer}`);
   assert.match(library, /ORK-566 contracts/);
