@@ -101,3 +101,10 @@ explicit COLLATE BINARY enum comparisons. New tests reject a missing data column
 and preserve unknown uppercase role values even with NOCASE data storage.
 All 73 synthetic tests pass. These guards do not add JSON paths or broaden data
 authority. The updated exact source still awaits independent review/live execution.
+
+
+Subsequent checkpoint: root independently reviewed the corrected predicates and
+structural query and executed both grouped projections in a bounded read-only
+process. Migration reviewed the private receipt and verified exhaustive per-field
+bucket accounting. No rerun or public count publication occurred. See
+`authority-edges.md` for remaining authority review and the export-port dependency.
