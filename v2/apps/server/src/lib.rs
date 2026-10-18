@@ -33,6 +33,7 @@ mod provider_payload;
 mod resource_health;
 mod routes;
 pub mod stop_execution;
+mod worker_discovery;
 pub mod worker_execution;
 
 #[derive(Clone)]
@@ -221,6 +222,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/resources",get(resource_health::resources))
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
         .route("/api/v2/conversations/{id}/execution",get(execution::status))
+        .route("/api/v2/conversations/{id}/workers",get(worker_discovery::list))
         .route("/api/v2/conversations/{id}/stop",post(execution::stop))
         .route("/api/v2/conversations/{id}/accept",post(execution_accept::accept))
         .route("/api/v2/conversations/{id}/payloads/{payload}",get(provider_payload::read).delete(provider_payload::remove))
