@@ -259,3 +259,15 @@ combined `b79e6abe` server, so this run explicitly used the already admitted
 `8bd99413` debug server plus current `e6b5441a` UI. Combined-candidate acceptance
 remains unexecuted. The default recorded outbound routing allowed and zero
 configured providers; it does not pass browser, inference or executor gates.
+
+### Combined binary checkpoint blocked by missing bind integration
+
+The supplied combined `b79e6abef4bd7d8c3f2bfbf3bda59eee04d2778f` binary matched
+SHA-256 `1f45989879fb1f60e0c6dfeaba66ddf7ae77f8ce1d91566b1fd012ab668be177`.
+Its owned image built, but the server exited with `first slice requires loopback
+binding`. That commit's main source still unconditionally rejects nonloopback
+binding and lacks the reviewed container opt-in. Exact failed checkpoint and
+zero-resource cleanup are recorded in `combined-checkpoint.json`. No host or
+image policy was weakened. Combined Docker health/static/recovery acceptance
+requires a coordinator-integrated bind-capable binary; it remains unexecuted.
+Native same-package dormant recovery was separately implemented and passed.

@@ -1,0 +1,15 @@
+{
+  "base": "python@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258",
+  "compose_sha256": "a8d1fac5779e1ef238b1aab54fcdf6a4a8826ebc058d294a4a338cca274c9e04",
+  "container_remaining": "",
+  "error": "first slice requires loopback binding",
+  "image_removed": true,
+  "interpretation": "Combined b79e6abe server lacks reviewed wildcard bind opt-in; hash matched supplied artifact. No health or UI acceptance executed.",
+  "network_remaining": "",
+  "private_context_removed": true,
+  "server_sha256": "1f45989879fb1f60e0c6dfeaba66ddf7ae77f8ce1d91566b1fd012ab668be177",
+  "server_source": "b79e6abef4bd7d8c3f2bfbf3bda59eee04d2778f",
+  "status": "failed-runtime-bind",
+  "ui_source": "e6b5441a45159d76654cb357749cbe0f6218f7c8",
+  "volume_remaining": ""
+}

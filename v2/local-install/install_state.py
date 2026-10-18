@@ -236,6 +236,8 @@ def upgrade(home, source):
     unprivileged()
     home = private_home(home)
     with locked(home):
+        marker = home / "control/restore-dormant.json"
+        require(not marker.exists() and not marker.is_symlink(), "dormant restore prohibits upgrade; rollback required")
         current = config(home)
         source, _ = package(source)
         source = filesystem_disjoint(source, [home])

@@ -242,3 +242,39 @@ process/filesystem failure atomicity, not power-loss durability: no fsync/crash
 recovery guarantee, malicious same-user mutation sandbox, signature validation,
 permission-bit inventory, recursive hardlink audit or cross-schema rollback is
 claimed. The SQLite test history is synthetic; no server or migrations run.
+
+## Same-package dormant recovery apply and rollback
+
+`restore-apply --home FRESH_INSTALLED_HOME --snapshot SNAPSHOT` now performs an
+actual offline restore into an empty installed data directory. The snapshot must
+match the target's **exact package manifest identity**, not merely its version
+label or source commit. Existing data, busy managed homes, corrupt inventory,
+SQLite integrity failures and cross-package restores are refused. A fresh target
+must be installed from the same package before apply; source config/bootstrap,
+provider HOME and external artifacts are not copied. The database is opaque and
+includes its existing database auth/session records, so snapshots remain private
+sensitive artifacts. This is not auth rebinding or credential migration.
+
+Apply writes a dormant receipt before any database copy, verifies the copied
+hash and SQLite integrity, then atomically renames the database into place.
+The native launcher refuses both start and upgrade while the receipt exists.
+There is deliberately no activation command: no work is admitted, effects
+resumed, providers activated or schema rows rewritten. This preserves opaque
+runtime state offline rather than guessing Core's dormant-work policy.
+
+`restore-rollback --home HOME` removes only an unchanged applied database and its
+dormant receipt, returning the originally empty target. A changed database,
+unexpected files or changed release refuses rollback. A handled copy error
+retains dormancy and cleans staging so rollback can recover the empty target.
+An abrupt process/system crash can retain a staging file and requires inspection;
+there is no power-loss durability or arbitrary existing-state rollback claim.
+Do not delete the dormant receipt to bypass activation policy.
+
+The opt-in real native probe executed these commands against a real SQLite
+snapshot produced by the admitted combined `b79e6abe` binary, with synthetic
+admin/message data and the current `e6b5441a` UI. Applied bytes/hash and history
+matched; start refused; rollback returned an empty target with byte-identical
+config and target bootstrap. Exact hashes/checks are in
+`v2/local-install/tests/dormant-real-checkpoint.json`. This is **same-package,
+same-binary recovery**, not cross-version migration. Docker restore apply,
+activation/auth disposition and Core canonical migration remain unexecuted.
