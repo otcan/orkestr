@@ -53,6 +53,10 @@ pub struct ExecutionStatus {
     /// observed_at_ms and derived queue_age_ms are read-time samples, excluded
     /// from equal-revision semantic identity; all other fields must match.
     pub revision: i64,
+    /// Exact-run control state CAS, independent of Progress and sibling runs.
+    /// Absence is legacy/read-only evidence, never a fabricated control version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_revision: Option<i64>,
     pub observed_at_ms: i64,
     pub phase: ExecutionPhase,
     /// Exact committed completion and revision from this same read snapshot.
@@ -72,6 +76,7 @@ impl ExecutionStatus {
             && self.conversation_id == other.conversation_id
             && self.run_id == other.run_id
             && self.revision == other.revision
+            && self.control_revision == other.control_revision
             && self.phase == other.phase
             && self.acceptance_candidate == other.acceptance_candidate
             && self.progress == other.progress
@@ -82,6 +87,7 @@ impl ExecutionStatus {
     pub fn is_valid(&self) -> bool {
         self.schema_version == 1
             && self.revision >= 0
+            && self.control_revision.is_none_or(|r| r > 0 && self.run_id.is_some())
             && self.observed_at_ms > 0
             && (self.phase == ExecutionPhase::Queued || self.run_id.is_some())
             && self.acceptance_candidate.as_ref().is_none_or(|c| {
@@ -112,6 +118,7 @@ mod tests {
             conversation_id: ConversationId(uuid::Uuid::from_u128(1)),
             run_id: None,
             revision: 1,
+            control_revision: None,
             observed_at_ms: 1000,
             phase: ExecutionPhase::Queued,
             acceptance_candidate: None,

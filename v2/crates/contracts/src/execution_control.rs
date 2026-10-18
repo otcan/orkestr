@@ -8,6 +8,10 @@ pub struct ExecutionControlRequest {
     pub run_id: RunId,
     /// Conversation snapshot revision, never the run's lease generation/version.
     pub expected_revision: i64,
+    /// Exact run control revision from status. Legacy None retains strict
+    /// conversation-revision CAS; supplied value never authorizes another run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_control_revision: Option<i64>,
     pub request_key: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,7 +27,7 @@ fn valid_key(key: &str) -> bool {
 }
 impl ExecutionControlRequest {
     pub fn is_valid(&self) -> bool {
-        !self.run_id.0.is_nil() && self.expected_revision >= 0 && valid_key(&self.request_key)
+        !self.run_id.0.is_nil() && self.expected_revision >= 0 && self.expected_control_revision.is_none_or(|r| r > 0) && valid_key(&self.request_key)
     }
 }
 impl ExecutionSteerRequest {
