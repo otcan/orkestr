@@ -48,3 +48,28 @@ must pass client-monotonic elapsed milliseconds at receipt; clock-ahead/behind
 samples and lower revisions on a new run are covered by deterministic tests.
 These tests establish presentation semantics only; authenticated durable cancellation
 identity validation and a hung-provider control request require the reviewed API.
+
+## Reviewed canonical status adapter
+
+Exact Core contract `a7c7952303ca39890b8c389237145224b2e415e7` is imported
+verbatim in a separate provenance commit following independent source review.
+`Execution::apply_status` calls `is_valid` and validates selection generation and
+conversation before replacing state. Canonical revisions remain per conversation
+across run changes and return navigation; equal revisions require identical
+snapshots. Lower canonical revisions are rejected even if a new run is selected.
+A new run can have a lower local presentation revision only through the separate
+non-wire model; it cannot bypass canonical conversation revision ordering.
+
+Queued snapshots without run identity never enable controls. Starting, blocked,
+awaiting acceptance and requested cancellation remain distinct. Completed is only
+presented when the canonical status reports it; the server owns verified acceptance.
+CPU uses the contract's allocated-capacity permille convention and displays one
+decimal percent. Old or missing resource samples stay unavailable, not zero.
+Resource age is server sample age relative to server snapshot time, plus monotonic
+client time since receipt. Progress is an opaque payload reference; no invented
+counts or text are supplied. Reading that payload awaits a reviewed endpoint.
+
+This is a validated read adapter, not live polling: no guessed route registration,
+request, Stop or steering call is added. Runtime owns routes, CSRF and idempotent
+control receipts. Local validation now includes 27 Rust tests (three canonical
+status adapter cases), 22 Node cases, locked offline WASM and strict UI Clippy.

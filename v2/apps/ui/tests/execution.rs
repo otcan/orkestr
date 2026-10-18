@@ -12,7 +12,9 @@ fn sample() -> Sample {
         phase: Phase::Running,
         queue_age_ms: Some(2500),
         progress: Some((2, 10)),
-        cpu_percent: Some(25),
+        cpu_capacity_permille: Some(250),
+        progress_reference: None,
+        resource_age_ms: Some(0),
         ram_bytes: Some(1048576),
         stop_supported: true,
         steering_supported: true,
@@ -58,7 +60,7 @@ fn invalid_or_out_of_order_samples_preserve_confirmed_status() {
             1 => bad.run = "wrong-run".into(),
             2 => bad.revision = 1,
             3 => bad.progress = Some((11, 10)),
-            4 => bad.cpu_percent = Some(101),
+            4 => bad.cpu_capacity_permille = Some(1001),
             _ => bad.run.clear(),
         }
         assert!(state.apply(generation, 1000, bad).is_err());
