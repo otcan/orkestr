@@ -1,4 +1,4 @@
-# Runtime port v3: canonical shared handoff
+# Runtime port v4: canonical shared handoff
 
 The required V2-012/020 contract supersedes internal runtime ports v0, v1 and v2. HTTP intake
 contract version 0, HTTP event schema 1, and migration `0001_intake.sql` remain
@@ -7,7 +7,7 @@ unchanged. Message/event/reasoning-inbox/outbox admission is untouched.
 ## Exact locations and dependencies
 
 - Shared types: `v2/crates/contracts/src/runtime.rs`, Rust
-  `orkestr_v2_contracts::runtime`, `RUNTIME_PORT_VERSION = 3`.
+  `orkestr_v2_contracts::runtime`, `RUNTIME_PORT_VERSION = 4`.
 - Typed UUIDs: `orkestr_v2_contracts::{OwnerId, ConversationId, SessionId, RunId,
   MessageId, EventId}`; provider-native strings never replace these IDs.
 - Async port: `v2/crates/application/src/runtime.rs`, Rust
@@ -222,7 +222,7 @@ and unscoped JournalRecord data cannot be passed off as owner message input.
 
 ## Source migration handoff boundary
 
-Port version 3 is frozen for runtime source migration and independent review.
+Port version 4 supersedes v3 and is frozen for runtime source migration and independent review.
 This additive handoff changes no root manifest, lockfile, CI or SQL migration.
 It is based on core head a89392c5, not the older intake-only review head.
 New v3 serialization tests have not yet executed at publication; prior green
@@ -232,3 +232,22 @@ The method is named record_observation; record_provider_observation is not a
 second method. Provider adapter traits remain runtime-owned. Missing provider
 namespace/supervisor authority must be resolved in a reviewed port revision
 before implementing native binding or recovery; those methods remain Unavailable.
+
+## Role and privacy clarification (v4)
+
+Native ProviderKind, Binding, RunAdmission, cancellation/recovery authority and
+InboxClaim now live only in application::runtime (private authority module,
+public reexports). They are absent from web-safe contracts::runtime. Runtime
+imports authority types from application, not contracts. No native turn reference
+is added. Observation metadata and receipt remain in contracts.
+
+Only deep consumes the ordered reasoning inbox. admit_run must match the claim
+consumer session, owner, scope, claim generation and current session authority;
+claim consumption and Starting admission commit together, or neither does. Fast
+cannot consume this queue. Worker binding allocation is independent, but worker
+run admission has no authorized port yet and must remain blocked; it must never
+consume another deep claim as a workaround. A subsequent reviewed independent
+worker-admission operation is required. renew_lease already carries owner and
+session via RunAdmission plus expected_generation. validate_dispatch is not an
+admission or persistence acknowledgement. Existing CompletedProposal/Failed/Lost
+evidence must survive cancellation races unchanged; Stopped cannot overwrite it.

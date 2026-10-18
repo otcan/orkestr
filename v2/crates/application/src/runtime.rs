@@ -1,6 +1,8 @@
 //! Canonical asynchronous runtime store port. No provider wait occurs in a transaction.
 //! Runtime owns providers/supervision; core owns persistence and verified acceptance.
 pub use orkestr_v2_contracts::runtime::*;
+mod authority;
+pub use authority::*;
 use orkestr_v2_contracts::{ConversationId, OwnerId, RunId, SessionId};
 use std::{future::Future, time::Duration};
 
@@ -54,6 +56,8 @@ pub trait RuntimeStore: Send + Sync {
     /// Validate ownership/claim/generation/fence, persist Starting and acknowledge claim
     /// in the SAME transaction, closing the admit/ack crash gap. RunId is store assigned.
     /// Identical request replay returns original admission; changed replay conflicts.
+    /// Deep only: binding_id must equal claim.consumer_session_id. Fast and workers
+    /// cannot consume this claim. Independent worker admission is not yet exposed.
     fn admit_run(
         &self,
         claim: &InboxClaim,
@@ -84,6 +88,8 @@ pub trait RuntimeStore: Send + Sync {
     /// Atomic lease/expiry/state/fence check, dedup and journal/projection update.
     /// Started -> Running; CompletedProposal -> AwaitingAcceptance, NEVER Succeeded.
     /// Only current cancellation token may confirm Stopped -> Cancelled.
+    /// Cancellation never rewrites existing CompletedProposal/Failed/Lost evidence;
+    /// a racing stop cannot replace terminal truth with successful cancellation.
     /// Receipt acknowledges a committed observation (including identical replay).
     /// Unavailable/Busy retain the exact pending event and key for retry;
     /// StaleLease/Fenced/Expired discard it from the delivery queue without start/replay.
