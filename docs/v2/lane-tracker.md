@@ -1,0 +1,172 @@
+# V2 execution checkpoints
+
+## Current evidence checkpoint
+
+This section supersedes every admission, blocker and pending-status statement in
+the historical ledger below. Evidence remains scoped to its exact tested head.
+
+- Integration: `v2/s0-contract-integration`, [PR #80](https://github.com/otcan/orkestr/pull/80),
+  `60885e212aa51e7d21103624a763ece917d32326`. [Rust CI](https://github.com/otcan/orkestr/actions/runs/39143429620)
+  and [CI headless rendering](https://github.com/otcan/orkestr/actions/runs/39143429701)
+  passed. Rendering covers setup, cookie resume, durable intake, CSRF refusal,
+  logout and fresh password re-login. Independent source review found no blocker.
+  Legacy CI was queued at this checkpoint.
+- Core: `v2/s0-core`, [PR #78](https://github.com/otcan/orkestr/pull/78),
+  implementation checkpoint `851bd5b91ee4e41f611db9978155bb17074ea50f` independently
+  source-reviewed; author reports locked build, strict clippy and 67 Rust tests,
+  with nested HTTP and alias checks. Fixture-only supervisor bootstrap and durable
+  admission/reservation/consumption remain implementation work, not acceptance.
+- Runtime: `v2/s0-runtime`, [PR #76](https://github.com/otcan/orkestr/pull/76),
+  test-only dispatch harness `8e8a83c581af76d090dcf21739dac2f2eeeb6d63`
+  independently source-reviewed. Author reports 36 passing runtime tests. The
+  mutex oracle proves no SQLite crash/reopen guarantee; production starts remain blocked.
+- UI: `v2/s0-ui`, [PR #73](https://github.com/otcan/orkestr/pull/73),
+  `c18fa9d018ffdcf468a1203e1b8697d76f8f7830` independently source-reviewed.
+  Author reports locked WASM build, 7 Rust projection tests, 19 Node tests and
+  strict clippy passed. Managed desktop, physical iOS and live-provider gates remain pending.
+- Verification: `v2/s0-verification`, [PR #75](https://github.com/otcan/orkestr/pull/75),
+  `fcff7e9cd38e68ccfa3acac17b101ff27c9a35d8` merge independently reviewed.
+  Earlier independent probes passed 5/5 against exact
+  `6d3bd66e9131c17f0f34f69a148cdba7947ebca8`, including alias/live-WAL byte
+  preservation. The old reproduced alias failure is therefore a historical
+  finding, not a current unresolved blocker. This does not transfer execution
+  credit to every later head or pass the broader acceptance inventory.
+
+Current resource admission permits all four existing lanes to perform independent
+implementation and approved validation. The shared wrapper permits two independent
+builds with four compiler jobs each and reduces capacity under host pressure.
+Single-writer root manifest/lock integration and Core schema ownership remain.
+
+## Historical ledger — superseded status, retained evidence
+
+Everything below records earlier checkpoints. Words such as “current”, “pending”,
+“outstanding”, admission limits and blocker labels below apply only to those
+historical checkpoints and must not be used as present-day instructions or status.
+
+Snapshot: 2026-10-18. Plan baseline: `a7ba6d5999c570c21cc717d78c83cf53622c22c9`.
+The [workstreams backlog](workstreams.md) remains authoritative. The operator
+coordinator reports one dedicated epic and 32 mapped tasks. The issue mapping and
+runtime identities are retained in private operator tracking, outside this public
+repository. No existing 1.x issue was changed. Tracker state is not implementation
+or acceptance evidence.
+
+## Admission and evidence
+
+| Lane | Branch | Admitted work | Reported PR / historical evidence head | Tests / CI |
+|---|---|---|---|---|
+| Coordinator | `v2/s0-contract-integration` | Additive integration candidate; held for isolation fix and review | [PR #80](https://github.com/otcan/orkestr/pull/80), `76f9c6cd91e094329ae5c29c7e95f301366ed02a` | Local locked workspace: 27 Rust tests, including a runner with 7 nested Python scenarios; 4 separate mocked Python tests; fmt/clippy/boundaries passed. CI at earlier `aec7475b` passed; latest-head CI requires query |
+| Core | `v2/s0-core` | LIGHT contract/review support and bounded isolation fix | [PR #78](https://github.com/otcan/orkestr/pull/78), `f8e1af18b5c88df753623e3a69f7240f56080a0e` | Reported 4 Rust tests including a runner with 7 nested Python scenarios; [exact-head CI](https://github.com/otcan/orkestr/actions/runs/39132972264) passed. Database-alias failure blocks integration |
+| Runtime | `v2/s0-runtime` | Admitted heavy: offline adapter; shared typed-port migration pending; no own store | [PR #76](https://github.com/otcan/orkestr/pull/76), `5481e6b0b7c9cc932d23fccb95bd6eea43221551` | Candidate P2 fixes included in PR #80; combined locked runtime tests: 16 passed. Independent source fix review completed at this checkpoint; volatile retry is not crash durability |
+| UI | `v2/s0-ui` | Explicitly admitted heavy after core cycle completed; implementation pending | [PR #73](https://github.com/otcan/orkestr/pull/73), `be36a064443f562329da80468713663d5f805801` | Independent docs review found no blocker. Fixture JSON syntax only; no UI build/native acceptance. macOS simulator path pending |
+| Verification | `v2/s0-verification` | Light independent implementation review and executable probes | [PR #75](https://github.com/otcan/orkestr/pull/75), `c42b88eed8894430d9cfb6f2be8bda29ec0e800f` | Independently built core `28c47793`; 4 black-box probes: 3 passed, 1 failed (database symlink isolation). Coordinator source-reviewed probes and evidence. Broader inventory: 0 passed/17 pending |
+
+Current admission: runtime and UI are the two heavy implementation lanes; core
+provides light contract/review support and the bounded isolation correction.
+Verification reviews implementation; coordinator reviews verification artifacts.
+Three owner-authorized light helpers now cover isolation probes, local-install
+scripts and copy-only migration audit. They have no shared source, schema,
+manifest or lockfile ownership and no heavy admission.
+
+Historical tested heads in the table are checkpoints, not current PR heads.
+The provisional runtime fixes were independently source-reviewed at `5481e6b0`
+and combined `aec7475b`; that review is complete. The later `379d0b5e` typed
+migration exposed caller-role and replay-dispatch gaps. Canonical v1 migration
+`05d7e369ee69a2a881fefc9260399f7d79ba2235` checks authoritative role and refuses
+provider dispatch pending a fresh/replay distinction. Its 19 Rust tests remain
+uncompiled; exact-head independent review precedes coordinator lock resolution.
+Core v1 input is `d4cf693435378ed232d97df60727ea6e54d9b90b`; its new
+`async-trait =0.1.89` dependency remains lock-blocked. Core oracle increment
+`7960f9b9460a9ccfa0f4a5f1cdec7c6dcb8f3ec2` defines eight Python scenarios,
+not newly executed; source review requested explicit SQLite handle closure.
+
+UI implementation at `8d4049dcf67922d583eb0c21231105922ce52b26` supersedes
+the feasibility-only scope of PR #73. Coordinator independently ran 11 Node
+bridge tests successfully; Rust/WASM, browser and native acceptance remain
+pending. The current dependency proposal uses Dioxus `=0.7.3`, without
+`gloo-timers`. Experimental Bearer transport does not satisfy the original
+browser-session/CSRF acceptance. Same-origin asset serving remains required.
+
+Helper source checkpoints independently reviewed by coordinator:
+`0cc2384b` isolation (5 mocked tests passed; real probes unexecuted),
+`593f62e4` local-install (15 mocked tests passed; real launch unexecuted),
+`fad49979` migration audit (validator and 13 negative cases passed; no importer).
+These checks confer no product acceptance or integration authority.
+
+Host observation at admission: load averages 10.51 / 6.94 / 5.05, approximately
+41 GB available memory. Retain at most two heavy implementation lanes and one
+heavy compile. Existing 1.x work keeps priority. All Rust builds/tests use the
+operator-provided `v2-cargo` wrapper with separate lane target/home directories;
+private host paths and runtime identities stay outside this repository.
+
+## Shared commit sequence
+
+1. Core publishes a small authoritative contracts/build commit, pins Rust
+   1.99.1, and supplies the intended workspace members/dependencies and first
+   locked build/test evidence. Core owns schema and migration changes.
+   Core has confirmed it will commit the initial toolchain and lockfile;
+   coordinator has acknowledged this as the serialized integration input.
+2. Coordinator reviews and integrates workspace membership and `v2/Cargo.lock`.
+   Subsequent lock resolution waits for canonical runtime source migration and
+   independent review; pending compilation is not passing evidence.
+   Core's initial lockfile is the input; later dependency changes are serialized
+   through coordinator. Runtime/UI must consume shared contracts rather than
+   create competing DTOs, schemas, databases, or lockfile resolutions.
+   Core also publishes fixture paths, contract/schema version and pinned commit
+   for UI consumption. UI has received this handoff and explicit heavy admission.
+3. Verification independently reviews the implementation PR at its exact head.
+   Coordinator reviews Verification's authored fixtures/tests. Any new revision
+   needs checks and review for that revision.
+4. Only independently reviewed, green PRs may integrate into
+   `v2/rust-rewrite`. No main merge, release, tag, or deployment is authorized.
+5. After core's first PR and release of its heavy slot, explicitly admit UI.
+   Merely creating a PR does not free a slot if core continues heavy work.
+
+## Outstanding gates
+
+- Reproduced P1: database symlink escapes isolated home and mutates its target.
+  Refusal before mutation is required; foreign/future schema and live WAL/SHM
+  preservation remain pending. The claimed header deadline also needs evidence
+  or narrower documentation. Green CI does not waive these findings.
+- Core contracts/fixtures published at `afcb14ac412e31c362b120bd02d8353dc0e09314`:
+  `v2/fixtures/*.json`, `v2/crates/contracts/src/lib.rs`,
+  `docs/v2/api-v0-intake.md`. Root integration and independent review pending.
+- Archive handoff: reviewed SQLite commit `ef759a48` (25 tests reported) and
+  isolated UI spike `dcf099b1` (6 tests/WASM reported) remain read-only references.
+  Reuse applicable tests/components after contract comparison. Unmanaged PR #77
+  is held as reference-only: do not merge its store, manifests or lockfiles.
+- The integration base advanced five commits from the plan to `2c9e1001`.
+  Its journal format, domain/demo, lockfile, toolchain, CI and parity inventory
+  must be preserved or explicitly reconciled through review; no base reset.
+  Private source snapshots captured all four preserved archive worktrees,
+  including staged/working patches and nonignored untracked files. Source
+  statuses were unchanged; ignored build/cache files were excluded.
+- Dedicated v2 epic/tasks: materialized per operator report; mapping retained privately; coordinator
+  supplies exact-head evidence for the operator to mirror to those issues.
+- Every implementation PR: exact head, commands, test counts, independent review,
+  exact-head CI URL and unresolved acceptance cases.
+- Local OXRM implementation/readiness verification: pending; no ready claim.
+- M1 server durability, nonblocking input, deterministic stop, restart, real UI,
+  and iOS feasibility evidence: pending. No runnable demo is claimed.
+- Prepare narrowly scoped unsigned macOS simulator CI under existing workflow
+  policy, with pinned tooling and no signing, secrets, publication or paid-service
+  changes. Linux is the current native environment blocker, not a permanent waiver.
+- Real persistent subscription-backed fast/deep/worker verification belongs to
+  the later provider gate; fake tests cannot satisfy it.
+
+Update this snapshot when a lane supplies evidence; preserve the distinction
+between admitted, running, committed, tested, reviewed and integrated work.
+
+## Isolation verification admission checkpoint
+
+- PR #80, branch `v2/s0-contract-integration`, now points to
+  `89f2d27012357f0abd731c90e55b35dd3d9d6dc3`. Its parent
+  `e61cf8956c4ef3ef0aa905325516a5d4b5e5f5ed` failed CI run
+  `39137078512` at UI formatting before compilation. Required-wrapper
+  workspace formatting and whitespace checks pass on the new head; no new
+  compiled test result is claimed. Exact-head CI remains pending.
+- Heavy admission: UI and Verification. Runtime pauses further builds; Core
+  remains light. Verification is assigned the unchanged independent alias/WAL
+  probes against exact server candidate `e61cf895`; the formatting-only child
+  does not change server/store sources. P1 remains open pending execution.
+- Newer core/runtime contract revisions are separate review candidates. They
+  have not been adopted into this integration checkpoint.
