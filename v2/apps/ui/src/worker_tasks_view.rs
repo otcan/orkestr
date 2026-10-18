@@ -5,6 +5,7 @@ use orkestr_v2_ui::{
     worker_tasks::{phase_label, TaskDraft, TaskHistory},
 };
 use serde_json::{json, Value};
+use std::{cell::Cell, rc::Rc};
 
 /// Mounted by the canonical parent read controller after the HTTP contract handoff.
 #[component]
@@ -20,10 +21,15 @@ pub fn WorkerTasksView(
     onexpired: EventHandler<()>,
 ) -> Element {
     let mut draft = use_signal(TaskDraft::default);
+    let mut selected_run = use_signal(String::new);
+    let worker_execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut busy = use_signal(|| false);
     let mut notice = use_signal(String::new);
     let mut channel = use_signal(|| None::<document::Eval>);
+    let active = use_hook(|| Rc::new(Cell::new(true)));
+    let dropped = active.clone();
     use_drop(move || {
+        dropped.set(false);
         if let Some(eval) = channel.read().as_ref() {
             let _ = eval.send(json!({"stop":true}));
         }
@@ -42,18 +48,19 @@ pub fn WorkerTasksView(
             button { disabled: busy() || !creating || draft.read().needs_review(), onclick: {
                 let conversation=conversation.clone();let parent=parent.clone();let csrf=csrf.clone();
                 move |_| {
+                    let active = active.clone();
                     if busy() || !creating || draft.read().needs_review() { return; }
                     let conversation=conversation.clone();let parent=parent.clone();let csrf=csrf.clone();
                     let owner=session_scope.read().generation();busy.set(true);
                     spawn(async move {
                         let result=async {
                             let key=crate::transport::key().await?;
-                            if !session_scope.read().is_current(owner) { return Ok(()); }
+                            if !active.get() || !session_scope.read().is_current(owner) { return Ok(()); }
                             let pending=draft.write().prepare(conversation,parent,control_revision,can_create,key).map_err(|m|crate::transport::Failure::from(m.to_string()))?;
                             let eval=document::eval(include_str!("worker_task_request.js"));
                             eval.send(json!({"method":"POST","path":format!("/api/v2/conversations/{}/worker-tasks",pending.conversation),"csrf":csrf,"body":pending.request})).map_err(|_|crate::transport::Failure::from("Task request not confirmed".to_string()))?;
                             channel.set(Some(eval));let response=eval.join::<Value>().await;
-                            if !session_scope.read().is_current(owner) { return Ok(()); }
+                            if !active.get() || !session_scope.read().is_current(owner) { return Ok(()); }
                             let response=match response { Ok(response)=>response,Err(_)=>{draft.write().failed(&pending,0);return Ok(());} };
                             let code=response["status"].as_u64().unwrap_or(0) as u16;
                             if code==401 || code==403 { onexpired.call(());return Ok(()); }
@@ -64,7 +71,7 @@ pub fn WorkerTasksView(
                             } else { draft.write().failed(&pending,code); }
                             Ok::<(),crate::transport::Failure>(())
                         }.await;
-                        if session_scope.read().is_current(owner) {
+                        if active.get() && session_scope.read().is_current(owner) {
                             if let Err(error)=result { notice.set(error.message); }
                             busy.set(false);channel.set(None);
                         }
@@ -84,20 +91,25 @@ pub fn WorkerTasksView(
                             h4 { "{row.title.as_deref().unwrap_or(\"Task payload removed\")}" }
                             p { "{phase_label(row.phase)}" }
                             p { if row.instructions_available { "Instructions saved. This history shows the task title; instruction text is not included." } else { "Saved instructions removed." } }
-                            if row.run_id.is_some() { p { "Open worker activity to review its result or stop running work." } }
+                            if let Some(run) = &row.run_id {
+                                button { onclick: { let run=run.to_string(); move |_| selected_run.set(run.clone()) }, "View worker activity" }
+                            }
                             details { summary { "Task provenance" }
                             p { "Task {row.task.task_id} · Parent {row.task.parent_run_id}" }
                             p { "Source message {row.task.source_message_id} · Source event {row.task.source_event_id}" }
                             if let Some(run)=&row.run_id { p { "Linked worker run: {run}" } }
                             }
                             WorkerTaskAction { key:"hold-{row.task.task_id}", conversation: conversation.clone(), task:row.task.task_id.to_string(), csrf:csrf.clone(), session_scope, history, onrefresh, onexpired,
-                                remove:false, enabled:matches!(row.phase,WorkerTaskPhase::Queued|WorkerTaskPhase::Claimed|WorkerTaskPhase::Held) }
+                                remove:false, enabled:matches!(row.phase,WorkerTaskPhase::Queued|WorkerTaskPhase::Claimed) }
                             WorkerTaskAction { key:"delete-{row.task.task_id}", conversation: conversation.clone(), task:row.task.task_id.to_string(), csrf:csrf.clone(), session_scope, history, onrefresh, onexpired,
                                 remove:true, enabled:row.instructions_available }
                         }
                     }
                 }
             } else { p { "Task history has not been loaded for this parent." } }
+            if !selected_run().is_empty() && history.read().list().is_some_and(|list| list.tasks.iter().any(|row| row.run_id.as_ref().is_some_and(|run| run.to_string()==selected_run()))) {
+                crate::execution_poll::ExecutionPoll { key:"{selected_run()}", id:conversation.to_string(), run:selected_run(), csrf:csrf.clone(), session_scope, execution:worker_execution, onexpired }
+            }
         }
     }
 }
@@ -117,13 +129,17 @@ fn WorkerTaskAction(
     let mut busy = use_signal(|| false);
     let mut notice = use_signal(String::new);
     let mut channel = use_signal(|| None::<document::Eval>);
+    let active = use_hook(|| Rc::new(Cell::new(true)));
+    let dropped = active.clone();
     use_drop(move || {
+        dropped.set(false);
         if let Some(eval) = channel.read().as_ref() {
             let _ = eval.send(json!({"stop":true}));
         }
     });
     rsx! {
         button { disabled:busy()||!enabled, title:if remove { "Remove saved task title and instructions; retain task history" } else { "Hold pending intent. Running work requires Stop in worker activity." }, onclick:move |_| {
+            let active = active.clone();
             if busy()||!enabled{return;}
             let owner=session_scope.read().generation();let task=task.clone();let conversation=conversation.clone();let csrf=csrf.clone();busy.set(true);
             spawn(async move {
@@ -132,7 +148,7 @@ fn WorkerTaskAction(
                 let sent=eval.send(json!({"method":if remove{"DELETE"}else{"POST"},"path":path,"csrf":csrf,"body":{}}));
                 channel.set(Some(eval));
                 let response=if sent.is_ok(){eval.join::<Value>().await.ok()}else{None};
-                if !session_scope.read().is_current(owner){return;}
+                if !active.get() || !session_scope.read().is_current(owner){return;}
                 let code=response.as_ref().and_then(|r|r["status"].as_u64()).unwrap_or(0);
                 if code==401||code==403 {onexpired.call(());return;}
                 if code==204 {
