@@ -185,6 +185,12 @@ The env-based wrappers prepare the store asynchronously; native event callbacks
 persist synchronously before forwarding an event. A null CAS result fails closed.
 Renewal or write/fence conflicts abort the active provider signal without replay;
 the uncertain fence is retained for explicit reconciliation.
+Workspace preparation uses the same before/after callback guard as tool
+authorization and execution: cancellation or a lost fence refuses new preparation
+calls and retries, and rejects an in-flight preparation's late result before a
+provider can start. This does not undo filesystem work already dispatched inside
+a preparation callback; cancellation inside such work requires cooperative checks
+by that callback. The manager does not claim to roll back arbitrary side effects.
 Every successful mutation increments version. Missing mutation IDs throw 404;
 `get` returns null for a missing row. New rows default to `starting`, version 0
 and nullable native/lease fields. Lease tokens fence writers, with no separate

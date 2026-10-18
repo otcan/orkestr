@@ -128,6 +128,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
         return value;
       };
       const result = await adapter.run(runtimeRow(row), { ...ctx, signal,
+        prepareWorkspace: guard(ctx.prepareWorkspace),
         authorizeTool: guard(ctx.authorizeTool), executeTool: guard(ctx.executeTool),
         emit(event) {
           if (persistenceError || signal.aborted) return;
