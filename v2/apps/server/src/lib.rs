@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 mod auth;
 mod browser;
+mod execution;
 mod routes;
 
 #[derive(Clone)]
@@ -195,6 +196,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/browser/session",post(browser::login).get(browser::session).delete(browser::logout))
         .route("/api/v2/projects",get(routes::projects).post(routes::create_project))
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
+        .route("/api/v2/conversations/{id}/execution",get(execution::status))
         .route("/api/v2/conversations/{id}/messages",post(routes::message))
         .route("/api/v2/conversations/{id}/events",get(routes::events))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })
