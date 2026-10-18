@@ -22,6 +22,8 @@ test("consolidation preserves every original and retained human input; repeat an
   const old = await appendThreadMessage("coordinator", { role: "user", source: "cli", text: "old report", state: "queued" }, env);
   const human = await appendThreadMessage("coordinator", { role: "user", source: "ui", text: "keep this decision", state: "queued" }, env);
   const input = await plan(env);
+  // Caller-supplied extra fields must never replace the server snapshot.
+  input.entries[0].message = { text: "forged original" };
   await assert.rejects(consolidateThreadQueue("coordinator", input, env), /queue_hold_required/);
   await setThreadQueueHold("coordinator", { paused: true, reason: "reviewed maintenance" }, env);
   const result = await consolidateThreadQueue("coordinator", input, env);

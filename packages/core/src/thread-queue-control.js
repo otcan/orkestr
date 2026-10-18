@@ -69,7 +69,10 @@ export async function consolidateThreadQueue(threadId, input, env = process.env)
       }
       ledger = { version: 1, threadId, operationId: input.operationId, inputHash, status: "prepared",
         createdAt: new Date().toISOString(), summary: input.summary,
-        entries: snapshot.entries.map(entry => ({ ...entry, ...entries.get(entry.id) })) };
+        entries: snapshot.entries.map(entry => {
+          const decision = entries.get(entry.id);
+          return { ...entry, disposition: decision.disposition, reason: String(decision.reason || ""), evidence: String(decision.evidence || "") };
+        }) };
       await writeJson(file, ledger); // complete original input/provenance before any mutation
     }
     const summary = await appendThreadMessage(threadId, { role: "assistant", phase: "notification", state: "completed",
