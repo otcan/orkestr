@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in populated schema 14 -> 15 package probe; no builds or providers.
+"""Opt-in populated schema 14 -> explicit successor package probe; no builds or providers.
 
 Retains the private pre-upgrade backup and complete stopped rollback home.
 Never points the older server at the migrated working home. The only backward
@@ -26,6 +26,8 @@ def versions(home):
 
 
 def exercise(args):
+    successor = getattr(args, 'new_schema', 15)
+    require(isinstance(successor,int) and 15 <= successor <= 9999, 'explicit supported successor schema required')
     old, new = Path(args.old_binary).resolve(), Path(args.new_binary).resolve()
     require(sha256(old) == args.old_sha256 and sha256(new) == args.new_sha256, 'pinned artifact mismatch')
     require(args.old_source != args.new_source and args.old_sha256 != args.new_sha256, 'distinct revisions required')
@@ -34,13 +36,14 @@ def exercise(args):
     root = Path(tempfile.mkdtemp(prefix='v2-upgrade-', dir=parent))
     evidence = {'old_source': args.old_source, 'new_source': args.new_source,
                 'old_binary_sha256': args.old_sha256, 'new_binary_sha256': args.new_sha256,
-                'scope': 'same-owner populated package migration 14 to 15; rollback uses untouched pre-migration full-home copy',
+                'scope': f'same-owner populated package migration 14 to {successor}; rollback uses untouched pre-migration full-home copy',
+                'old_schema':14, 'new_schema':successor,
                 'checks': [], 'unexecuted': ['cross-version dormant import', 'owner rebinding', 'providers',
                                             'browser', 'production', 'power-loss recovery']}
     process = None
     try:
         old_package = builder.assemble(old, root/'old-package', '0.1.0-schema14-probe', args.old_source, Path(args.ui))
-        new_package = builder.assemble(new, root/'new-package', '0.1.0-schema15-probe', args.new_source, Path(args.ui))
+        new_package = builder.assemble(new, root/'new-package', f'0.1.0-schema{successor}-probe', args.new_source, Path(args.ui))
         old_entry, new_entry = old_package/'bin/orkestr-v2', new_package/'bin/orkestr-v2'
         home, rollback, refused = root/'working', root/'rollback', root/'refusal-copy'
         invoke(old_entry, 'install', home, '--package', old_package, '--port', args.port)
@@ -62,8 +65,8 @@ def exercise(args):
             verify_history(client, path, receipt, message)
             require(client.request('POST', path+'/messages', message) == (200, receipt), 'upgraded idempotency')
             invoke(new_entry, 'stop', home); require(process.wait(timeout=10) == 0, 'new stop'); process = None
-            require(versions(home) == list(range(1, 16)), 'successor must migrate to exact schema15')
-            evidence['checks'].append('new executable migrated populated14 to15; original session/history/idempotency retained')
+            require(versions(home) == list(range(1, successor+1)), 'successor must migrate to declared exact schema')
+            evidence['checks'].append(f'new executable migrated populated14 to{successor}; original session/history/idempotency retained')
             # Never downgrade the migrated working fixture. Only an isolated copy
             # is passed to the older executable to measure its refusal behavior.
             shutil.copytree(home, refused)
@@ -75,12 +78,12 @@ def exercise(args):
                 rejected_process.communicate(timeout=15)
             except subprocess.TimeoutExpired:
                 stop_owned(rejected_process)
-                raise RuntimeError('old executable did not promptly refuse schema15')
-            require(rejected_process.returncode != 0, 'old executable unexpectedly accepted schema15')
+                raise RuntimeError('old executable did not promptly refuse successor schema')
+            require(rejected_process.returncode != 0, 'old executable unexpectedly accepted successor schema')
             after = {p.name: sha256(p) for p in (refused/'data').iterdir() if p.is_file()}
-            require(before == after and versions(refused) == list(range(1, 16)), 'backward refusal changed database')
+            require(before == after and versions(refused) == list(range(1, successor+1)), 'backward refusal changed database')
             evidence['backward_refusal'] = {'exit_code': rejected_process.returncode, 'database_inventory_unchanged': True}
-            evidence['checks'].append('old executable refused disposable schema15 copy without database inventory mutation')
+            evidence['checks'].append(f'old executable refused disposable schema{successor} copy without database inventory mutation')
             require(sha256(rollback/'data/core.sqlite3') == rollback_hash, 'rollback copy was modified')
             process = launch(old_entry, rollback, client, log)
             verify_history(client, path, receipt, message)
@@ -103,5 +106,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('old-binary', 'old-sha256', 'old-source', 'new-binary', 'new-sha256', 'new-source', 'ui', 'parent'):
         parser.add_argument('--'+name, required=True)
+    parser.add_argument('--new-schema', type=int, default=15)
     parser.add_argument('--port', required=True, type=int)
     print(json.dumps(exercise(parser.parse_args()), indent=2, sort_keys=True))

@@ -1,0 +1,29 @@
+{
+  "backward_refusal": {
+    "database_inventory_unchanged": true,
+    "exit_code": 1
+  },
+  "checks": [
+    "old executable created populated schema14; verified stopped backup and untouched rollback copy",
+    "new executable migrated populated14 to17; original session/history/idempotency retained",
+    "old executable refused disposable schema17 copy without database inventory mutation",
+    "old executable recovered original owner/history on untouched schema14 rollback home; backup preserved"
+  ],
+  "new_binary_sha256": "0f7e9235c01eb67ce5bf55c4f6f79d2d11d1b0b7ca17130cac561f8559ee1b37",
+  "new_schema": 17,
+  "new_source": "aa8e19a3d99e3fb83c3c421e8b61f5be4f5a8c2a",
+  "old_binary_sha256": "c6eca93f7119dbd9cbbfe6e42cf1cc894a62fc8e97123938fabfc82a47cd2f0e",
+  "old_schema": 14,
+  "old_source": "31d8d0395369b32306d14412843a9f9bf5eb2c01",
+  "preserved_backup_sha256": "1b1906125491db11522c75c9065388ebcb1cb32eed0f210b4e28defb72c9e1f9",
+  "scope": "same-owner populated package migration 14 to 17; rollback uses untouched pre-migration full-home copy",
+  "status": "passed",
+  "unexecuted": [
+    "cross-version dormant import",
+    "owner rebinding",
+    "providers",
+    "browser",
+    "production",
+    "power-loss recovery"
+  ]
+}

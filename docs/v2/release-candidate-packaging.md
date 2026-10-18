@@ -155,3 +155,37 @@ acceptance and authenticated revocation checks require separate evidence. Result
 provider reliability or a production acceptance claim. Choose the duration and
 latency thresholds explicitly in the release gate; this helper supplies evidence,
 not an implicit passing threshold.
+
+## Finite attended native supervisor
+
+`attended.py` owns a fresh synthetic home and foreground launcher, validates the
+candidate before install, and reserves a new evidence file before starting.
+It never attaches to existing state. Example (after independent source review):
+
+```sh
+python3 -B v2/packaging/candidate/attended.py \
+  --candidate "$FRESH_CANDIDATE_DIR" --parent "$PRIVATE_PROBE_PARENT" \
+  --port "$ASSIGNED_PORT" --samples 60 --interval 1 --restart \
+  --max-latency-ms 1000 --max-rss-bytes 1073741824 \
+  --output "$NEW_ATTENDED_EVIDENCE"
+```
+
+The optional single graceful restart verifies original synthetic history. Each
+sample checks health, explicit latency and aggregate RSS for the launcher's
+private process group using read-only Linux `/proc`. RSS can double-count shared
+pages; it excludes external services and does not certify leak freedom or load
+capacity. Spacing is limited to 600 seconds total; per-request deadlines and
+bounded startup/stop add overhead. Failures exit nonzero, attempt exact-child
+cleanup and retain the private diagnostic home. Success removes that home.
+SIGINT/SIGTERM trigger cleanup; SIGKILL/power loss cannot guarantee cleanup.
+Crash recovery, revocation, browser/provider behavior and a production soak window
+remain unexecuted. This is an attended, finite nonprovider probe, not a completed
+unattended or production soak. Actual supervisor execution requires a separate
+checkpoint; synthetic unit tests alone do not qualify it.
+
+The cross-revision native harness accepts `--new-schema 17` for the pinned
+schema14-to-current17 checkpoint. Its rollback starts the untouched stopped
+schema14 home with the original executable. Only a disposable migrated copy is
+opened by the old executable to verify refusal; the working migrated database is
+never downgraded. The old package uses the supplied UI solely as static packaging
+input; this does not claim historical old-server/old-UI browser compatibility.
