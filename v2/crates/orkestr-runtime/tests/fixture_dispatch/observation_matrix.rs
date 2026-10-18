@@ -290,14 +290,14 @@ async fn terminal_evidence_cannot_be_replaced_by_completion_stop_or_started() {
             ProviderEvent::CompletedProposal { synthetic: false },
             ProviderEvent::Stopped,
         ] {
-            let unsupported = kind == ProviderEvent::Stopped;
+            let requires_control = kind == ProviderEvent::Stopped;
             let input = event(&p, 3, kind);
             assert_eq!(
                 f.handle
                     .append_provider_event(&f.claim.owner_id, &p, &input)
                     .await,
-                Err(if unsupported {
-                    RuntimeStoreError::Unavailable
+                Err(if requires_control {
+                    RuntimeStoreError::Fenced
                 } else {
                     RuntimeStoreError::Conflict
                 })

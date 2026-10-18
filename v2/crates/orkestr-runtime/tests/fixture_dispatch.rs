@@ -144,6 +144,8 @@ async fn consume_then_fake(
     }
 }
 
+#[path = "fixture_dispatch/cancellation.rs"]
+mod cancellation;
 #[cfg(feature = "fixture-test-controls")]
 #[path = "fixture_dispatch/controlled.rs"]
 mod controlled;
