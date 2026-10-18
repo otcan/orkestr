@@ -1,10 +1,16 @@
 use crate::transport;
 use dioxus::prelude::*;
-use orkestr_v2_ui::Projection;
+use orkestr_v2_ui::{session_scope::SessionScope, Projection};
 
 /// A separate page projection: live stream updates never replace the page being read.
 #[component]
-pub fn History(id: String, csrf: String, onexpired: EventHandler<()>) -> Element {
+pub fn History(
+    id: String,
+    csrf: String,
+    session_scope: Signal<SessionScope>,
+    onexpired: EventHandler<()>,
+) -> Element {
+    let generation = session_scope.read().generation();
     let mut after = use_signal(|| 0_i64);
     let mut next = use_signal(|| None::<i64>);
     let mut page = use_signal(Projection::default);
@@ -21,7 +27,12 @@ pub fn History(id: String, csrf: String, onexpired: EventHandler<()>) -> Element
             next.set(None);
             page.set(Projection::default());
             status.set("Loading accepted input…".into());
-            match transport::history_page(&id, &csrf, cursor).await {
+            let result = transport::history_page(&id, &csrf, cursor).await;
+            if !session_scope.read().is_current(generation) {
+                page.set(Projection::default());
+                return;
+            }
+            match result {
                 Ok(snapshot) => {
                     let continuation = snapshot.next_cursor;
                     let mut projection = Projection::default();

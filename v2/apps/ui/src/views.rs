@@ -1,7 +1,7 @@
 use crate::transport::{self, Failure};
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{Credentials, Project, ProjectInput, Receipt};
-use orkestr_v2_ui::{Draft, Projection};
+use orkestr_v2_ui::{session_scope::SessionScope, Draft, Projection};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -58,6 +58,7 @@ pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
 #[component]
 pub fn Projects(
     csrf: String,
+    session_scope: Signal<SessionScope>,
     mut projects: Signal<Vec<Project>>,
     mut pending: Signal<Option<ProjectInput>>,
     onopen: EventHandler<String>,
@@ -66,11 +67,16 @@ pub fn Projects(
     let mut name = use_signal(move || pending().map(|p| p.name).unwrap_or_default());
     let mut status = use_signal(|| "Loading projects…".to_string());
     let mut busy = use_signal(|| false);
+    let generation = session_scope.read().generation();
     let load_csrf = csrf.clone();
     use_future(move || {
         let csrf = load_csrf.clone();
         async move {
-            match transport::projects(&csrf).await {
+            let result = transport::projects(&csrf).await;
+            if !session_scope.read().is_current(generation) {
+                return;
+            }
+            match result {
                 Ok(items) => {
                     projects.set(items);
                     status.set("Local projects".into());
@@ -95,19 +101,22 @@ pub fn Projects(
             } }
             form { onsubmit: move |event| {
                 event.prevent_default();
-                if busy() { return; }
+                if busy() || !session_scope.read().is_current(generation) { return; }
                 busy.set(true);
                 let csrf = csrf.clone();
                 spawn(async move {
                     let result: Result<Project, Failure> = async {
                         let input = if let Some(input) = pending() { input } else {
-                            let input = ProjectInput { client_request_id: transport::key().await?, name: name() };
+                            let key = transport::key().await?;
+                            if !session_scope.read().is_current(generation) { return Err("Session changed".to_string().into()); }
+                            let input = ProjectInput { client_request_id: key, name: name() };
                             if input.name.trim().is_empty() || input.name.len() > 200 { return Err("Project name must contain 1–200 UTF-8 bytes".to_string().into()); }
                             pending.set(Some(input.clone()));
                             input
                         };
                         transport::request("POST", "/api/v2/projects", json!(input), &csrf, "").await
                     }.await;
+                    if !session_scope.read().is_current(generation) { return; }
                     match result {
                         Ok(project) => {
                             pending.set(None);
@@ -135,11 +144,13 @@ pub fn Projects(
 pub fn Conversation(
     id: String,
     csrf: String,
+    session_scope: Signal<SessionScope>,
     mut drafts: Signal<BTreeMap<String, Draft>>,
     onexpired: EventHandler<()>,
 ) -> Element {
+    let generation = session_scope.read().generation();
     let execution_id = id.clone();
-    let execution = use_signal(move || {
+    let mut execution = use_signal(move || {
         let mut state = orkestr_v2_ui::execution::Execution::default();
         state.select(&execution_id, "");
         state
@@ -156,8 +167,19 @@ pub fn Conversation(
             let mut cursor = 0;
             let mut resync = true;
             loop {
+                if !session_scope.read().is_current(generation) {
+                    execution.write().authorization_lost();
+                    projection.set(Projection::default());
+                    return;
+                }
                 if resync {
-                    match transport::snapshot(&id, &csrf, 0, Projection::default(), 0).await {
+                    let result = transport::snapshot(&id, &csrf, 0, Projection::default(), 0).await;
+                    if !session_scope.read().is_current(generation) {
+                        execution.write().authorization_lost();
+                        projection.set(Projection::default());
+                        return;
+                    }
+                    match result {
                         Ok(snapshot) => {
                             cursor = snapshot.watermark;
                             projection.set(snapshot);
@@ -175,7 +197,13 @@ pub fn Conversation(
                         }
                     }
                 }
-                match transport::event(&id, cursor).await {
+                let result = transport::event(&id, cursor).await;
+                if !session_scope.read().is_current(generation) {
+                    execution.write().authorization_lost();
+                    projection.set(Projection::default());
+                    return;
+                }
+                match result {
                     Ok(item) if item.status == 401 || item.event == "session_expired" => {
                         onexpired.call(());
                         return;
@@ -206,9 +234,15 @@ pub fn Conversation(
                                 status.set("History changed unexpectedly. Reloading…".into());
                             }
                             Some(sequence) if sequence > cursor => {
-                                match transport::snapshot(&id, &csrf, cursor, previous, sequence)
-                                    .await
-                                {
+                                let result =
+                                    transport::snapshot(&id, &csrf, cursor, previous, sequence)
+                                        .await;
+                                if !session_scope.read().is_current(generation) {
+                                    execution.write().authorization_lost();
+                                    projection.set(Projection::default());
+                                    return;
+                                }
+                                match result {
                                     Ok(snapshot) if snapshot.watermark >= sequence => {
                                         cursor = snapshot.watermark;
                                         projection.set(snapshot);
@@ -259,16 +293,18 @@ pub fn Conversation(
             crate::execution_panel::ExecutionPanel { execution, now_ms: 0 }
             form { onsubmit: move |event| {
                 event.prevent_default();
-                if sending() { return; }
+                if sending() || !session_scope.read().is_current(generation) { return; }
                 sending.set(true);
                 let id = submit_id.clone();
                 let csrf = csrf.clone();
                 spawn(async move {
                     let result: Result<Receipt, Failure> = async {
                         let key = transport::key().await?;
+                        if !session_scope.read().is_current(generation) { return Err("Session changed".to_string().into()); }
                         let input = drafts.write().entry(id.clone()).or_default().prepare(key).map_err(|m| Failure::from(m.to_string()))?;
                         transport::request("POST", &format!("/api/v2/conversations/{id}/messages"), json!(input), &csrf, "").await
                     }.await;
+                    if !session_scope.read().is_current(generation) { return; }
                     match result {
                         Ok(receipt) => {
                             drafts.write().entry(id).or_default().accepted();
@@ -287,7 +323,7 @@ pub fn Conversation(
             },
                 label { r#for: "composer", "Message" }
                 textarea { id: "composer", rows: 4, value: "{draft.text}", "aria-describedby": "composer-help",
-                    oninput: move |event| drafts.write().entry(input_id.clone()).or_default().edit(event.value())
+                    oninput: move |event| { if session_scope.read().is_current(generation) { drafts.write().entry(input_id.clone()).or_default().edit(event.value()); } }
                 }
                 p { id: "composer-help", "Enter inserts a newline. Use Send to submit. You can keep editing while awaiting receipt." }
                 button { r#type: "submit", disabled: sending(), if draft.pending.is_some() { "Retry pending input" } else { "Send" } }

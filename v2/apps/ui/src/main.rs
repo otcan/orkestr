@@ -4,7 +4,7 @@ mod transport;
 mod views;
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{Project, ProjectInput};
-use orkestr_v2_ui::Draft;
+use orkestr_v2_ui::{session_scope::SessionScope, Draft};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -17,9 +17,10 @@ fn App() -> Element {
     let mut csrf = use_signal(String::new);
     let mut global = use_signal(String::new);
     let mut current = use_signal(String::new);
-    let projects = use_signal(Vec::<Project>::new);
-    let drafts = use_signal(BTreeMap::<String, Draft>::new);
-    let pending_project = use_signal(|| None::<ProjectInput>);
+    let mut projects = use_signal(Vec::<Project>::new);
+    let mut drafts = use_signal(BTreeMap::<String, Draft>::new);
+    let mut pending_project = use_signal(|| None::<ProjectInput>);
+    let mut session_scope = use_signal(SessionScope::default);
     let mut tab = use_signal(|| "Assistant".to_string());
     let mut notice = use_signal(|| "Sign in to your local server.".to_string());
     let mut refresh = use_signal(|| 0_u64);
@@ -36,6 +37,11 @@ fn App() -> Element {
         .await
         {
             Ok(session) => {
+                session_scope
+                    .write()
+                    .activate(&session.global_conversation_id, &mut drafts.write());
+                projects.set(Vec::new());
+                pending_project.set(None);
                 global.set(session.global_conversation_id.clone());
                 current.set(session.global_conversation_id);
                 csrf.set(session.csrf_token);
@@ -50,6 +56,12 @@ fn App() -> Element {
         resuming.set(false);
     });
     let mut expired = move |_| {
+        session_scope.write().invalidate();
+        projects.set(Vec::new());
+        pending_project.set(None);
+        global.set(String::new());
+        current.set(String::new());
+        refresh += 1;
         csrf.set(String::new());
         notice.set("Session expired. Sign in again; unsent drafts remain in this page.".into());
     };
@@ -64,6 +76,9 @@ fn App() -> Element {
                 p { role: "status", "Checking browser session…" }
             } else if csrf().is_empty() {
                 views::Auth { onlogin: move |session: transport::BrowserSession| {
+                    session_scope.write().activate(&session.global_conversation_id, &mut drafts.write());
+                    projects.set(Vec::new()); pending_project.set(None); refresh += 1;
+                    tab.set("Assistant".into());
                     global.set(session.global_conversation_id.to_string());
                     current.set(session.global_conversation_id.to_string());
                     csrf.set(session.csrf_token);
@@ -81,9 +96,15 @@ fn App() -> Element {
                         if logging_out() { return; }
                         logging_out.set(true);
                         let secret = csrf();
+                        let generation = session_scope.read().generation();
                         spawn(async move {
-                            match transport::request::<Value>("DELETE", "/api/v2/browser/session", Value::Null, &secret, "").await {
+                            let result = transport::request::<Value>("DELETE", "/api/v2/browser/session", Value::Null, &secret, "").await;
+                            if !session_scope.read().is_current(generation) { logging_out.set(false); return; }
+                            match result {
                                 Ok(_) => {
+                                    session_scope.write().invalidate();
+                                    projects.set(Vec::new()); pending_project.set(None);
+                                    global.set(String::new()); current.set(String::new()); refresh += 1;
                                     csrf.set(String::new());
                                     notice.set("Signed out. Server session revoked; unsent drafts remain in this page.".into());
                                 }
@@ -95,7 +116,7 @@ fn App() -> Element {
                     }, if logging_out() { "Signing out…" } else { "Sign out" } }
                 }
                 if tab() == "Projects" {
-                    views::Projects { csrf: csrf(), projects, pending: pending_project, onexpired: expired,
+                    views::Projects { csrf: csrf(), session_scope, projects, pending: pending_project, onexpired: expired,
                         onopen: move |id: String| { current.set(id); tab.set("Assistant".into()); }
                     }
                 } else if tab() == "Assistant" {
@@ -107,10 +128,10 @@ fn App() -> Element {
                         }
                     }
                     button { onclick: move |_| refresh += 1, "Reconnect and reload history" }
-                    views::Conversation { id: current(), csrf: csrf(), drafts, onexpired: expired }
+                    views::Conversation { id: current(), csrf: csrf(), session_scope, drafts, onexpired: expired }
                     }
                 } else if tab() == "History" {
-                    history::History { key: "{current()}", id: current(), csrf: csrf(), onexpired: expired }
+                    history::History { key: "{current()}", id: current(), csrf: csrf(), session_scope, onexpired: expired }
                 } else if tab() == "Attention" {
                     p { "Approvals, blockers and task attention are unavailable. No pending-work count is inferred." }
                 } else {

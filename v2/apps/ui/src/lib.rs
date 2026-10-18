@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 pub mod execution;
 mod reconcile;
+pub mod session_scope;
 pub use reconcile::reconcile;
 
 pub const WINDOW: usize = 100;

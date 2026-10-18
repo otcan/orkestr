@@ -173,6 +173,12 @@ impl Execution {
             .checked_add(1)
             .expect("selection generation exhausted");
         self.authorized = false;
+        self.sample = None;
+        self.canonical.clear();
+        self.scope = None;
+        self.received_ms = None;
+        self.connected = false;
+        self.control_error = None;
     }
     /// A failed request is visible and retryable, never a successful stop.
     pub fn control_failed(&mut self) {
