@@ -4,7 +4,7 @@ use super::*;
 use orkestr_v2_contracts::RunId;
 use sqlx::sqlite::SqliteRow;
 
-fn receipt(run: &SqliteRow, cancel: &SqliteRow) -> Result<CancelReceipt> {
+pub(super) fn receipt(run: &SqliteRow, cancel: &SqliteRow) -> Result<CancelReceipt> {
     let mut admission = envelope(run)?.run;
     admission.lease_generation =
         u64::try_from(cancel.get::<i64, _>("lease_generation")).map_err(db)?;
