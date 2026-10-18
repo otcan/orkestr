@@ -29,7 +29,7 @@ def build(checkout, output, source, version, wrapper, cargo_home, rustup_home, g
     output = fresh_path(output,[checkout,wrapper,cargo_home,rustup_home])
     output.mkdir(mode=0o700)
     (output/'build-home').mkdir(mode=0o700)
-    env = {'PATH':os.environ['PATH'], 'HOME':str(output/'build-home'),
+    env = {'PATH':str(cargo_home/'bin')+os.pathsep+os.environ.get('PATH',os.defpath), 'HOME':str(output/'build-home'),
            'CARGO_HOME':str(cargo_home), 'RUSTUP_HOME':str(rustup_home),
            'CARGO_TARGET_DIR':str(output/'target'), 'UI_BUNDLE_DIR':str(output/'ui'),
            'V2_CARGO':str(wrapper), 'CARGO_NET_OFFLINE':'true', 'CARGO_BUILD_JOBS':'4'}
