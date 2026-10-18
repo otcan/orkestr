@@ -38,6 +38,8 @@ mod retirement;
 mod retirement_tests;
 mod status;
 mod stop;
+mod worker_tool;
+pub use worker_tool::*;
 #[cfg(test)]
 mod stop_tests;
 #[cfg(feature = "fixture-test-controls")]
