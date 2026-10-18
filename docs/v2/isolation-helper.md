@@ -134,3 +134,80 @@ actual synthetic hardlink identity, exact assigned-port forwarding, and live
 mutation evidence retained when mocked terminate/kill removes a sidecar. They
 do not establish a server pass. All eleven candidate cases remain **pending /
 unexecuted**. CI is **unexecuted** for this helper revision.
+
+## Containment transport handoff
+
+The new `orkestr-runtime/src/containment/` subtree is an independent transport
+implementation; Runtime owns parent module registration and provider adapters.
+No parent source, dependency, manifest or lockfile is changed here.
+
+`ExecutionScope::new(namespace, incarnation, owner, session, run, generation)`
+binds every operation to all six fields. Namespace and incarnation must be copied
+from Core's consumed dispatch getters, never supplied by an HTTP caller. All
+identifiers are nonempty, at most 128 ASCII letters/digits/`-_.`; generation is
+positive. Getters include `namespace()` and `incarnation_id()`.
+
+Trusted composition constructs `Authority::new(scope, Arc<dyn DispatchFence>,
+maximum_children)`, then issues an immutable executable/arguments `Executor` with
+explicit canonical workspace/home/temp directories and `TransportBounds`.
+`Executor::spawn(&scope)` checks the durable fence and local revocation before
+starting an owned group. The synchronous fence callback must execute exactly
+once while current; it is freshness, **not** a durable inference grant. Lock order
+is durable fence, local authority, child. Durable cancellation commits before
+local `Authority::revoke()`.
+
+Runtime's private non-Clone wrapper owns Core's
+`Box<store_sqlite::ConsumedProviderDispatch>` and implements the crate-private
+`ConsumedTurn::into_submission(self) -> (ExecutionScope, Vec<u8>)`. Its scope,
+turn text and native binding must derive exclusively from that consumed object
+and its authorized provider binding. `OwnedChild::enqueue_turn<D: ConsumedTurn>`
+takes the wrapper **by value**. Failure returns `TurnFailure { cause }`, never a
+grant; queue-full, revoke, framing and write failures require delivery-unknown /
+reconciliation and must not trigger automatic resubmission. There is no
+production trait implementation in this subtree and no arbitrary public frame
+submission method. Exact Core capability inspected: `7631dea5`.
+
+`enqueue_metadata` parses a strict setup whitelist, canonicalizes JSON before
+forwarding, requires `account/read` refreshToken=false and restricts thread/start
+to read-only workspace setup. Runtime must also validate provider responses and
+keep inference separate. `flush_stdin` performs bounded nonblocking progress;
+`poll_stdout` yields one bounded frame, Pending or EOF, with truncated/oversized
+output quarantined. Defaults: 64 KiB frame, eight queued frames, 64 KiB I/O per
+poll, at most 64 syscalls per poll. Pipe failures discard pending bytes.
+
+Child environment is cleared and replaced with PATH, LANG, LC_ALL, HOME and
+TMPDIR only. Inherited nonstdio descriptors are marked close-on-exec. Canonical
+subscription access uses an opaque authority-bound `SubscriptionHandle` and a
+bounded trusted broker callback, never inherited credentials or auth-home copies.
+The actual canonical-auth broker adapter remains Runtime integration work.
+
+Lifecycle signals address only an owned process group; WNOWAIT preserves its
+leader identity until group cleanup. Reaping is asynchronous and unreaped children
+continue counting against capacity. Revocation discards queued input and stops
+owned groups. This transport signal API is not a Core cancellation receipt:
+Runtime must not expose cancellation without its separately authorized control
+path. Linux 64-bit plus close_range support is required; unsupported operations
+fail closed. This is not an OS filesystem/network sandbox. Executable, arguments,
+canonical directories and host child-reaping discipline are trusted; hostile
+program group escape and concurrent directory replacement need outer containment.
+
+Executed validation in a disposable workspace copy with temporary parent module
+registration, unchanged manifests/lock, an isolated target and synthetic homes:
+
+```sh
+python3 -B v2/acceptance/isolation/check_transport.py \
+  --wrapper "$AUTHORIZED_V2_CARGO" --target "$ISOLATED_TARGET" \
+  --home "$DISPOSABLE_HOME_PARENT"
+# Add --clippy for: clippy --locked --offline -p orkestr-runtime --all-targets -- -D warnings
+```
+
+Result: **18 synthetic tests passed, zero failed**. Coverage includes cross-owner,
+namespace, incarnation and generation rejection; revoke-before-dispatch; consumed
+grant loss on backpressure; bounded nonreading-child writes; EOF/overflow;
+exact environment and inherited descriptor exclusion; metadata restrictions;
+owned descendant cleanup and preservation of an unrelated synthetic child.
+Final clippy passed with `-D warnings`, including the namespace/incarnation
+extension. These checks launch only owned
+synthetic Python children. Integrated Runtime/Core inference, actual provider
+launch, CI and the eleven database candidate cases remain **unexecuted**. P1 is
+not closed by these transport checks.
