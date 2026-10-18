@@ -69,3 +69,19 @@ class ManagedCodexTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'^managed refresh unavailable$'):owner.refresh()
         with self.assertRaises(ValueError):old.launch()
         with self.assertRaises(ValueError):owner.select()
+
+    def test_refresh_revocation_or_generation_rollback_never_launches(self):
+        for change in ('revoked','foreign','rollback'):
+            record={'identity':'synthetic-selected','generation':2,'state':'ready'}
+            launched=[]
+            def refresh():
+                if change=='revoked':record['state']='revoked'
+                if change=='foreign':record['identity']='foreign'
+                if change=='rollback':record['generation']=1
+            owner=ManagedCodexOwner('synthetic-selected',lambda:dict(record),
+                lambda:launched.append(True),supported_refresh=refresh)
+            old=owner.select()
+            with self.assertRaises(ValueError):owner.refresh()
+            with self.assertRaises(ValueError):old.launch()
+            with self.assertRaises(ValueError):owner.select()
+            self.assertEqual(launched,[])

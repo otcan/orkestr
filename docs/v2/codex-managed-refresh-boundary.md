@@ -110,3 +110,21 @@ children, or change their `refreshToken:false` metadata whitelist. Fresh launche
 still use read-only selected binds. Runtime/Core readiness and actual inference
 fences remain independent. Production writer topology and live managed refresh
 qualification are explicitly pending root review.
+
+## Pinned native owner-lock evidence
+
+Read-only inspection of public native source at commit
+`83086188ae0614bd882818ff1aa23f3194962012` confirms that
+[AuthManager](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/login/src/auth/manager.rs)
+uses a Tokio semaphore for its refresh lock. Its account-bound disk reload and
+refresh-if-unchanged behavior protect useful native invariants within that
+manager; they do not establish a cross-process canonical writer owner.
+The matching storage implementation saves using truncate/write/flush. No
+process-wide lock spanning reload, network refresh and persistence was identified
+in the inspected files. This is source evidence about the boundary, not proof
+of an active production race, corruption or outage. Legitimate concurrent
+executors must remain undisturbed while the host owner routing is reviewed.
+
+Synthetic post-refresh revocation, selected identity change and generation
+rollback now explicitly quarantine outstanding handles. These tests do not
+model native refresh internals or qualify concurrent production writers.
