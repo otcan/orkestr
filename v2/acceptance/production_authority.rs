@@ -382,3 +382,6 @@ async fn independent_durable_fence_tracks_renewal_and_revocation() {
     other_store.close().await;
     c.finish().await;
 }
+
+#[path = "production_authority/metadata.rs"]
+mod metadata;

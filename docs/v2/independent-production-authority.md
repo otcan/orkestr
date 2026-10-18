@@ -77,3 +77,30 @@ Public ordinary process facilities now exist, superseding the earlier facility
 request. Independently authored seven-window owned-child SIGKILL/new-process
 acceptance remains pending. Core-authored process results do not close that gate.
 Lifecycle append/cancellation and live provider execution remain pending.
+
+## Metadata successor
+
+Exact implementation: `d2a1720bad57df5030aaa962c64e8960feff67e5`.
+The independent source now includes `production_authority/metadata.rs`; copy that
+subdirectory alongside the main integration test in an exact-source export.
+No manifest or implementation change is needed. Five tests passed (zero failed
+or ignored), including the four earlier ordinary-authority cases.
+
+The metadata case compares complete scoped rows after forged/unbound refusal,
+executes a valid setup callback without mutation, consumes the setup grant into
+an exact Ready transition, refuses its obsolete setup fence, and attaches the
+actual consumed dispatch with durable text preserved. Revocation prevents a
+later metadata callback. Trusted synthetic protocol evidence is explicit.
+Source review found no blocker for the private grant/transition boundary;
+confirmation rechecks authority and generation in its own write transaction.
+Same-child transport association and the mandatory subsequent execution fence
+remain Runtime responsibilities. No live provider or production activation credit.
+
+Final split-module rerun used a dedicated metadata target subdirectory: five
+passed, zero failed/ignored in 0.40 seconds. Two intervening reruns using the
+shared target failed at compilation with missing metadata methods after a
+concurrent different-source build reused its store artifact; neither was counted
+as passing. The clean dedicated-target rebuild resolved that artifact collision
+without implementation changes. Package format check passed.
+Selected strict clippy also passed on the final split-module source:
+`clippy --offline --locked -p orkestr-v2-store-sqlite --test independent_production_authority -- -D warnings`.
