@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import {createGroupOwnerAuthorPolicy} from './whatsapp-group-owner-author.js';
+import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {notificationScope, createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
@@ -32,8 +33,9 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   db.prepare("UPDATE group_send SET state='uncertain' WHERE state='sending'").run();
   const scope=notificationScope(config);
   const routeFence=config.routeControl ? suppliedFence || createDeliveryRouteFence({dbPath:config.routeControl.dbPath,now}) : null;
-  if(config.routeControl && !groups.has(config.groups.find(g=>g.threadId===config.routeControl.threadId)?.chatId))fail('route_thread_invalid');
-  const fenced=to=>routeFence && groups.get(to)?.threadId===config.routeControl.threadId;
+  const fencedThreads=scopedRouteMembership(config);
+  if(fencedThreads && [...fencedThreads].some(id=>!config.groups.some(g=>g.threadId===id)))fail('route_thread_invalid');
+  const fenced=to=>routeFence && fencedThreads.has(groups.get(to)?.threadId);
   if(routeFence)routeFence.recover(config.routeControl.routeId);
   const proofStore=scope ? suppliedProof || createTimerNotificationProofStore({path:scope.proofDbPath,readOnly:true,now}) : null;
   let tail=Promise.resolve();

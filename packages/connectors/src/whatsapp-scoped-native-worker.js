@@ -2,10 +2,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createScopedGroupTransport} from './whatsapp-scoped-group-transport.js';
 import {createScopedPairingPermit} from './whatsapp-scoped-pairing.js';
+import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 const loaded=new Map();
 const fail=()=>{throw Object.assign(new Error('scoped_worker_operation_denied'),{statusCode:403});};
 export function createScopedNativeWorkerPolicy(config,{createTransport=createScopedGroupTransport}={}) {
- if(!config.workerAccountId || config.groups?.length!==1 || config.groups[0].threadId!==config.routeControl?.threadId)throw new Error('scoped_worker_configuration_invalid');
+ const threads=scopedRouteMembership(config),groups=config.groups || [];
+ if(!config.workerAccountId || !threads || !groups.length || groups.length!==threads.size
+     || new Set(groups.map(g=>g.chatId)).size!==groups.length
+     || groups.some(g=>!threads.has(g.threadId) || !/^\d+(?:-\d+)?@g\.us$/.test(g.chatId)))throw new Error('scoped_worker_configuration_invalid');
+ const chats=new Set(groups.map(g=>g.chatId));
  let transport,started=false;
  const pairing=createScopedPairingPermit(config);
  const get=accountId=>{
@@ -27,10 +32,10 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    if(pairing.requestAllowed(method,url,body))return;
    body ||= {};
    if(method==='GET' && ['/health','/accounts'].includes(url.pathname))return;
-   const a=encodeURIComponent(config.workerAccountId),g=encodeURIComponent(config.groups[0].chatId);
-   if(method==='GET' && url.pathname===`/accounts/${a}/chats/${g}/history` && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
+   const a=encodeURIComponent(config.workerAccountId);
+   if(method==='GET' && [...chats].some(g=>url.pathname===`/accounts/${a}/chats/${encodeURIComponent(g)}/history`) && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
       && Number(url.searchParams.get('limit')||30)>0 && Number(url.searchParams.get('limit')||30)<=50)return;
-   if(method==='POST' && url.pathname==='/send-text' && body.accountId===config.workerAccountId && body.to===config.groups[0].chatId
+   if(method==='POST' && url.pathname==='/send-text' && body.accountId===config.workerAccountId && chats.has(body.to)
       && typeof body.text==='string' && body.text.length<=3000 && typeof body.requestId==='string' && typeof body.parentId==='string'
       && Object.keys(body).every(k=>['accountId','to','text','requestId','parentId','notificationId'].includes(k)))return;
    fail();
