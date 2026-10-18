@@ -215,3 +215,27 @@ test("secret scanning executes immutable base policy, not candidate scanner or s
   assert.doesNotMatch(run, /node scripts\/security\/secret-scan|\|\||continue-on-error/);
   assert.match(run, /sha256sum --check --status/);
 });
+
+const iosFixture = fixture
+  .replace("on: [pull_request, push]", "on:\n  pull_request: {branches: ['v2/**']}\n  push: {branches: ['v2/**']}")
+  .replace("ubuntu-latest", "macos-15");
+test("pinned macOS runner is allowed only in the dedicated v2 iOS workflow", () => {
+  assert.deepEqual(validateWorkflow(iosFixture, "v2-ios.yml"), { jobs: 1, actions: 1 });
+  for (const filename of ["", "ci.yml", "v2-rust.yml", "other-ios.yml", "v2-ios.yaml"])
+    assert.throws(() => validateWorkflow(iosFixture, filename), /workflow_runner/, filename);
+});
+for (const runner of ["macos-latest", "macos-14", "macos-15-large", "self-hosted", "[self-hosted, macOS]", "${{ matrix.runner }}"])
+  test(`dedicated iOS workflow rejects runner ${runner}`, () => {
+    assert.throws(() => validateWorkflow(iosFixture.replace("macos-15", runner), "v2-ios.yml"), /workflow_runner/);
+  });
+for (const [name, before, after] of [
+  ["main branch", "v2/**", "main"],
+  ["unbounded branch", "v2/**", "**"],
+  ["negated branch", "v2/**", "!v2/private"],
+  ["missing branch filter", "{branches: ['v2/**']}", "{}"],
+  ["manual trigger", "pull_request:", "workflow_dispatch:"],
+  ["job write token", "runs-on: macos-15", "runs-on: macos-15\n    permissions: {contents: write}"],
+  ["secret", "echo fixture", "echo '${{ secrets.TOKEN }}'"],
+]) test(`dedicated iOS workflow rejects ${name}`, () => {
+  assert.throws(() => validateWorkflow(iosFixture.replace(before, after), "v2-ios.yml"), /workflow_/);
+});
