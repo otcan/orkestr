@@ -1,11 +1,11 @@
 # Timer owner HTTP leaf contract
 
 Source: `v2/apps/server/src/timer_http/dto.rs` and `mod.rs`; bounded controller
-in `controller.rs`. This is an unregistered leaf until Deep integrates the
-existing shared auth/CSRF guard, credential adapter and server lifecycle. Store
-baseline is Core e62129f92c282862ace1b04e322f5e1d44bb6ee1, schema 0029. No
-common migrations, dependencies, auth implementation or server registration are
-changed here. UI must consume these typed fields, not construct due claims.
+in `controller.rs`. The ordinary server registers these routes behind its shared
+auth/CSRF guard and owns one controller task through startup and joined shutdown.
+Store baseline is Core e62129f92c282862ace1b04e322f5e1d44bb6ee1, schema 0029.
+UI consumes these typed fields, without constructing due claims. This remains
+an explicitly bounded checkpoint, with no unattended restart continuity claim.
 
 All routes are relative, owner authenticated, with no query parameters:
 
@@ -63,13 +63,19 @@ Exact historical enable retry never recreates a grant or extends its expiry.
 This bounded capability expires after one hour, so durable unattended timer
 execution beyond that remains a release gap rather than silently storing auth.
 
-Deep's minimal integration: register `timer_http` module, merge
-`timer_http::routes(controller.clone())` before existing guards/state, preserve the private leaf `owner_credential` adapter and existing browser
-credential helper unchanged, and own controller run/shutdown lifecycle.
-Do not bypass browser CSRF/Host/origin checks to satisfy the adapter.
+`AppState` owns the shared controller. Its routes merge before the existing
+guards/state. The private leaf `owner_credential` adapter and browser credential
+helper retain their existing policies. Main starts the controller only after
+successful router/static configuration, then requests shutdown and joins it
+before returning. Controller cleanup failure cannot skip owned provider cleanup.
+The controller has no public tick/run endpoint or independent detached lifetime.
 
-Synthetic loopback tests require the admitted disposable composition; results
-and immutable regression hashes are recorded separately. Coverage:
+The mounted router retains the leaf's synthetic auth and fake-clock regression
+coverage. An additional actual ordinary binary test uses Store-issued disposable
+timer records and natural time, proving one due delivery with execution disabled,
+joined shutdown, unarmed restart, inert old-enable replay and explicit fresh
+disable/enable. Results and immutable regression hashes are recorded separately.
+Coverage:
 actual ephemeral loopback route → explicit enable → fake-clock due → ordinary
 input → disable → SQL held oracle, exact replay/text conflict, client-time
 injection, revoked auth, and strict duplicate/claim field refusal. No production

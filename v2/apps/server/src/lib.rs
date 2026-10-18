@@ -34,6 +34,8 @@ mod provider_payload;
 mod resource_health;
 mod routes;
 pub mod stop_execution;
+pub mod timer_http;
+mod timer_lifecycle;
 mod worker_discovery;
 pub mod worker_execution;
 pub mod worker_tasks;
@@ -49,12 +51,17 @@ pub struct AppState {
     authority: Arc<String>,
     auth_window: Arc<Mutex<(Instant, u32)>>,
     resources: resource_health::ResourceSampler,
+    timers: timer_http::TimerController,
 }
 impl AppState {
     /// Trusted bootstrap only; browser input never selects supervisor authority.
     pub fn with_execution_store(mut self, store: Store) -> Self {
         self.execution_store = Some(store);
         self
+    }
+    /// The ordinary server owns the bounded controller task and its shutdown.
+    pub fn start_timers(&self) -> timer_lifecycle::TimerTask {
+        timer_lifecycle::TimerTask::start(self.timers.clone())
     }
     pub fn new(
         store: Store,
@@ -80,6 +87,7 @@ impl AppState {
             return Err("origin cannot contain user information");
         }
         Ok(Self {
+            timers: timer_http::TimerController::new(store.clone()),
             store,
             execution_store: None,
             execution_control: None,
@@ -236,6 +244,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/conversations/{id}/held-inputs",get(held_inputs::read))
         .route("/api/v2/conversations/{id}/messages",post(routes::message))
         .route("/api/v2/conversations/{id}/events",get(routes::events))
+        .merge(timer_http::routes(state.timers.clone()))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })
         .layer(DefaultBodyLimit::max(40 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(),guard))

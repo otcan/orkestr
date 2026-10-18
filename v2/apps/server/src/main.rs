@@ -61,11 +61,13 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             "disabled"
         }
     );
+    let timer_state = state.clone();
     let mut app = router(state);
     if let Some(dist) = std::env::var_os("ORKESTR_V2_UI_DIST") {
         app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
     }
     let execution = execution.map(ConfiguredExecution::start);
+    let timers = timer_state.start_timers();
     let (shutdown, mut requested) = tokio::sync::watch::channel(false);
     let mut serving = tokio::spawn(async move {
         axum::serve(listener, app)
@@ -81,6 +83,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     // An open SSE connection must not delay the owned execution fence/cleanup.
     // Stop accepting HTTP and stop the supervisor before waiting for HTTP drain.
     let _ = shutdown.send(true);
+    let timer_cleanup = timers.shutdown().await;
     let cleanup = match execution {
         Some(execution) => execution.shutdown().await,
         None => Ok(()),
@@ -96,6 +99,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    timer_cleanup?;
     cleanup?;
     Ok(())
 }

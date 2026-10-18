@@ -88,15 +88,11 @@ async fn timer_loopback_enable_due_input_disable_held_and_refusals() {
     let address = listener.local_addr().unwrap();
     let clock = Arc::new(FakeClock(AtomicI64::new(NOW)));
     let controller = TimerController::with_clock(store.clone(), clock.clone());
-    let state = AppState::new(store.clone(), "b".repeat(32), format!("http://{address}")).unwrap();
-    // Exact leaf plus existing guards/auth, without editing shared registration.
-    let router = routes(controller.clone())
-        .layer(axum::extract::DefaultBodyLimit::max(40 * 1024))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            crate::guard,
-        ))
-        .with_state(state);
+    let mut state =
+        AppState::new(store.clone(), "b".repeat(32), format!("http://{address}")).unwrap();
+    state.timers = controller.clone();
+    // Actual mounted router: the timer routes share the ordinary auth guards.
+    let router = crate::router(state);
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let path = format!("/api/v2/timers/{namespace}");
     let (status, read) = request(address, "GET", &path, &token, serde_json::Value::Null).await;
