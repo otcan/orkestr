@@ -43,6 +43,7 @@ mod status;
 mod stop;
 mod stopped_metadata;
 mod worker;
+mod worker_discovery;
 pub use worker::*;
 mod worker_tool;
 pub use worker_tool::*;
@@ -206,5 +207,3 @@ impl Context {
 
 #[cfg(test)]
 mod stop_progress_tests;
-
-mod worker_discovery;
