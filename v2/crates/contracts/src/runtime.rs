@@ -3,7 +3,7 @@
 use crate::{ConversationId, EventId, MessageId, OwnerId, RunId, SessionId};
 use serde::{Deserialize, Serialize};
 
-pub const RUNTIME_PORT_VERSION: u32 = 1;
+pub const RUNTIME_PORT_VERSION: u32 = 2;
 pub const MAX_PROVIDER_PROGRESS_BYTES: usize = 8192;
 pub const MAX_SOURCE_EVENT_KEY_BYTES: usize = 128;
 pub const MAX_RECOVERY_PAGE_SIZE: u32 = 100;
