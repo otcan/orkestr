@@ -251,3 +251,36 @@ worker-admission operation is required. renew_lease already carries owner and
 session via RunAdmission plus expected_generation. validate_dispatch is not an
 admission or persistence acknowledgement. Existing CompletedProposal/Failed/Lost
 evidence must survive cancellation races unchanged; Stopped cannot overwrite it.
+
+## Adapter mapping and metadata-only slice
+
+Runtime owns its ProviderEvent parser enum and Provider trait. No shared Provider
+trait is required. Map Started, ApprovalRequested, Failed, Stopped and Lost to
+identically named ObservationKind variants; Completed { synthetic } maps only to
+CompletedProposal { synthetic }. ApprovalRequested is informational evidence,
+never an approval grant or effect authority. A cancellation race must not rewrite
+a pending CompletedProposal, Failed or Lost into Stopped.
+
+Use source_event_key `run:<run-uuid>:<decimal-sequence>` for a stable run-local
+observation sequence. Allocate it once and retain the exact key and typed body
+across persistence retries; never allocate a new key for the same pending input.
+The current DTO has no numeric sequence field, so this convention does not claim
+store-enforced monotonic run-local ordering. Durable scope ordering is assigned
+by the store. Core computes the semantic digest, not the adapter. RunAdmission
+and ProviderObservation carry matching run/session IDs, lease_generation and
+dispatch_fence. Binding.generation is not an execution lease or dispatch fence.
+
+Progress(String) must not enter the metadata journal. The first metadata-only
+slice may explicitly skip progress persistence and report that limitation. It
+must not fabricate a PayloadId. ProgressRef is usable only after a core-owned,
+scoped removable payload write produces a valid reference; that port/store is
+not implemented. Frame and progress size limits are adapter responsibilities on
+all provider paths, not just the fake. No parser bounds are certified here.
+
+An explicit StaleLease/Fenced/Expired refusal stops retrying that delivery. It is
+not an acknowledgement and does not authorize deleting or changing the original
+terminal evidence: retain its identity/kind for explicit reconciliation policy.
+This handoff offers no durable rejected-evidence storage API; runtime must report
+that limitation rather than claim evidence was persisted. Unavailable/Busy keeps
+the identical pending delivery for bounded retry. No automatic provider restart
+or effect replay is authorized by either outcome.
