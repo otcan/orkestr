@@ -104,5 +104,7 @@ test("capability endpoint is registered under the Personal Agent module", async 
   assert.match(appModule, /PersonalAgentModule/);
   assert.match(controller, /@Controller\("api\/personal-agent"\)/);
   assert.match(controller, /@Get\("capability"\)/);
+  assert.match(controller, /@Get\("events"\)/);
   assert.match(controller, /personalAgentCapability\(request\)/);
+  assert.match(controller, /personalAgentEventFeed\(request, query\)/);
 });

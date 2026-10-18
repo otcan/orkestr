@@ -7,7 +7,7 @@ import { personalAgentFeature } from "./personal-agent-feature.js";
 
 const requiredTables = Object.freeze(["personal_agent_projects", "personal_agent_tasks"]);
 
-function ownerRequired(request) {
+export function requirePersonalAgentOwner(request) {
   const principal = request?.orkestrPrincipal;
   if (
     !principal?.userId ||
@@ -42,7 +42,7 @@ function personalAgentStorageReady(env) {
 }
 
 export function personalAgentCapability(request, env = process.env) {
-  ownerRequired(request);
+  requirePersonalAgentOwner(request);
   const enabled = personalAgentFeature(env);
   const assistant = { available: false, reason: "not_configured" };
   if (!enabled) return { enabled: false, capability: false, reason: "disabled", assistant };

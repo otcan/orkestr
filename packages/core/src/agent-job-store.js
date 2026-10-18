@@ -10,6 +10,7 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 import { assertTestStoragePath } from "../../storage/src/test-storage-isolation.js";
 import { migratePersonalAgentEntities, migratePersonalAgentTaskLifecycle } from "./agent-job-entities-migration.js";
 import { migratePersonalAgentMemory } from "./personal-agent-memory-migration.js";
+import { migratePersonalAgentEvents } from "./personal-agent-events-migration.js";
 import { personalAgentFeature } from "./personal-agent-feature.js";
 
 export const RUN_TERMINAL_STATES = Object.freeze(["succeeded", "failed", "cancelled", "skipped"]);
@@ -24,6 +25,7 @@ function ensurePersonalAgentSchema(db, dbPath, env) {
   migratePersonalAgentEntities(db, { dryRun: false });
   migratePersonalAgentTaskLifecycle(db, { dryRun: false });
   migratePersonalAgentMemory(db, { dryRun: false });
+  migratePersonalAgentEvents(db, { dryRun: false });
   personalAgentSchemaReady.add(dbPath);
 }
 
