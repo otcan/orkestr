@@ -1,12 +1,11 @@
 #![allow(dead_code)]
-//! Ready-future spies only. Unimplemented methods explicitly return Unavailable.
-use orkestr_v2_application::runtime::{Result, RuntimeStore, RuntimeStoreError};
+//! Ready-future spy only, never a durable store or restart acceptance.
+use orkestr_v2_application::runtime::*;
 use orkestr_v2_contracts::{runtime::*, *};
 use std::{
     future::Future,
     sync::{Arc, Mutex},
     task::{Context, Poll, Wake, Waker},
-    time::Duration,
 };
 macro_rules! id {
     ($ty:ty, $n:expr) => {
@@ -16,57 +15,71 @@ macro_rules! id {
 pub fn owner() -> OwnerId {
     id!(OwnerId, 1)
 }
-pub fn admission(role: Role, n: u64) -> RunAdmission {
-    RunAdmission {
-        owner_id: owner(),
-        conversation_id: id!(ConversationId, 3),
+pub fn admission(role: SessionRole, n: u64) -> ProviderAdmission {
+    ProviderAdmission {
         run_id: id!(RunId, n),
         session_id: id!(SessionId, n),
-        role,
-        native_session_id: Some(format!("FAKE-{n}")),
+        native_session_ref: format!("FAKE-{n}"),
         lease_generation: 1,
-        dispatch_fence: 1,
-        attempt: 1,
-        lease_deadline_ms: 1000,
-        purpose: AdmissionPurpose::Execution,
+        fence_generation: 1,
+        role,
     }
 }
-pub fn claim(a: &RunAdmission) -> InboxClaim {
-    InboxClaim {
-        owner_id: a.owner_id.clone(),
-        conversation_id: a.conversation_id.clone(),
-        message_id: id!(MessageId, 4),
-        event_id: id!(EventId, 5),
-        consumer_session_id: a.session_id.clone(),
-        scope_sequence: 1,
-        claim_generation: 1,
-        lease_deadline_ms: 1000,
+pub fn run(a: &ProviderAdmission) -> RunRecord {
+    RunRecord {
+        run_id: a.run_id.clone(),
+        task_id: id!(TaskId, 2),
+        conversation_id: id!(ConversationId, 3),
+        session_id: a.session_id.clone(),
+        state: RunState::Starting,
+        version: 1,
+        lease_generation: a.lease_generation,
+        fence_generation: a.fence_generation,
     }
 }
-pub fn control(a: &RunAdmission) -> orkestr_runtime::ports::InterruptControl {
-    let mut token = a.clone();
-    token.lease_generation += 1;
-    token.dispatch_fence += 1;
-    token.purpose = AdmissionPurpose::CancellationAcknowledgement;
-    orkestr_runtime::ports::InterruptControl {
-        original: a.clone(),
-        cancellation: token,
+pub fn input(a: &ProviderAdmission) -> RunAdmission {
+    let lease = Lease {
+        owner_id: owner(),
+        session_id: a.session_id.clone(),
+        generation: a.lease_generation,
+        expires_at_ms: 1000,
+    };
+    RunAdmission {
+        request_key: "fixture-request".into(),
+        task_id: id!(TaskId, 2),
+        claim: InboxClaim {
+            conversation_id: id!(ConversationId, 3),
+            message_id: id!(MessageId, 4),
+            event_id: id!(EventId, 5),
+            sequence: 1,
+            text: "fixture".into(),
+            lease: lease.clone(),
+        },
+        execution_lease: lease,
+        supervisor: SupervisorAdmission {
+            session_id: a.session_id.clone(),
+            provider_kind: ProviderKind::ExplicitFixture,
+            native_session_ref: a.native_session_ref.clone(),
+            protocol_version: "fixture-only".into(),
+            supervisor_receipt_ref: "fixture".into(),
+        },
     }
 }
 #[derive(Default)]
 pub struct State {
     pub calls: Vec<&'static str>,
     pub fail_once: bool,
+    pub lose_ack_once: bool,
     pub refusal: Option<RuntimeStoreError>,
-    pub attempts: Vec<ProviderObservation>,
-    pub accepted: Vec<ProviderObservation>,
+    pub attempts: Vec<ProviderEventInput>,
+    pub accepted: Vec<ProviderEventInput>,
 }
 pub struct Spy {
-    pub a: RunAdmission,
+    pub a: ProviderAdmission,
     pub state: Mutex<State>,
 }
 impl Spy {
-    pub fn new(a: RunAdmission) -> Self {
+    pub fn new(a: ProviderAdmission) -> Self {
         Self {
             a,
             state: Mutex::new(State::default()),
@@ -74,56 +87,43 @@ impl Spy {
     }
 }
 impl RuntimeStore for Spy {
-    async fn claim_next(
-        &self,
-        _: &OwnerId,
-        _: &ConversationId,
-        _: &SessionId,
-        _: Duration,
-    ) -> Result<Option<InboxClaim>> {
-        Err(RuntimeStoreError::Unavailable)
-    }
     async fn ensure_role_bindings(&self, _: &OwnerId, _: &ConversationId) -> Result<RoleBindings> {
         Err(RuntimeStoreError::Unavailable)
     }
-    async fn create_worker_binding(
+    async fn confirm_session(
+        &self,
+        _: &OwnerId,
+        _: i64,
+        _: &SupervisorAdmission,
+    ) -> Result<SessionBinding> {
+        Err(RuntimeStoreError::Unavailable)
+    }
+    async fn allocate_worker(
         &self,
         _: &OwnerId,
         _: &ConversationId,
-        _: Option<&SessionId>,
         _: &str,
-    ) -> Result<Binding> {
+    ) -> Result<SessionBinding> {
         Err(RuntimeStoreError::Unavailable)
     }
-    async fn admit_run(
-        &self,
-        _: &InboxClaim,
-        _: &SessionId,
-        _: u64,
-        _: &str,
-    ) -> Result<RunAdmission> {
+    async fn lease_session(&self, _: &OwnerId, _: &SessionId, _: i64, _: u32) -> Result<Lease> {
+        Err(RuntimeStoreError::Unavailable)
+    }
+    async fn claim_inbox(&self, _: &Lease, _: &ConversationId) -> Result<Option<InboxClaim>> {
+        Err(RuntimeStoreError::Unavailable)
+    }
+    async fn admit_run(&self, _: &OwnerId, _: &RunAdmission) -> Result<RunRecord> {
         self.state.lock().unwrap().calls.push("admitted");
-        Ok(self.a.clone())
+        Ok(run(&self.a))
     }
-    async fn bind_native_session(
-        &self,
-        _: &RunAdmission,
-        _: &str,
-        _: &str,
-    ) -> Result<RunAdmission> {
+    async fn renew_lease(&self, _: &Lease, _: u32) -> Result<Lease> {
         Err(RuntimeStoreError::Unavailable)
     }
-    async fn renew_lease(&self, _: &RunAdmission, _: u64) -> Result<RunAdmission> {
-        Err(RuntimeStoreError::Unavailable)
-    }
-    async fn record_observation(
+    async fn append_provider_event(
         &self,
-        a: &RunAdmission,
-        key: &str,
-        input: &ProviderObservation,
-    ) -> Result<ObservationReceipt> {
-        assert_eq!(key, input.source_event_key);
-        assert_eq!(a.run_id, input.run_id);
+        _: &OwnerId,
+        input: &ProviderEventInput,
+    ) -> Result<ProviderEventReceipt> {
         let mut s = self.state.lock().unwrap();
         s.calls.push("record");
         s.attempts.push(input.clone());
@@ -133,37 +133,35 @@ impl RuntimeStore for Spy {
         if std::mem::take(&mut s.fail_once) {
             return Err(RuntimeStoreError::Unavailable);
         }
-        s.accepted.push(input.clone());
-        Ok(ObservationReceipt {
+        if let Some(original) = s.accepted.iter().find(|i| i.provider_sequence == input.provider_sequence) {
+            if original != input {
+                return Err(RuntimeStoreError::Conflict);
+            }
+        } else {
+            s.accepted.push(input.clone());
+        }
+        if std::mem::take(&mut s.lose_ack_once) {
+            return Err(RuntimeStoreError::Unavailable);
+        }
+        Ok(ProviderEventReceipt {
             event_id: id!(EventId, 5),
-            scope_sequence: s.accepted.len() as i64,
-            state: if matches!(input.kind, ObservationKind::CompletedProposal { .. }) {
-                RunState::AwaitingAcceptance
-            } else {
-                RunState::Running
-            },
-            duplicate: false,
+            run: run(&self.a),
         })
     }
-    async fn request_cancel(&self, _: &OwnerId, _: &RunId, _: &str) -> Result<CancelReceipt> {
+    async fn request_cancel(&self, _: &OwnerId, _: &RunId, _: i64) -> Result<CancelReceipt> {
         self.state.lock().unwrap().calls.push("fenced");
+        let mut r = run(&self.a);
+        r.fence_generation += 1;
+        r.state = RunState::CancelRequested;
         Ok(CancelReceipt {
-            new_fenced_admission: control(&self.a).cancellation,
-            state: RunState::CancelRequested,
-            inflight_status: InflightStatus::Unknown,
+            run: r,
+            in_flight_effects_unknown: true,
         })
     }
-    async fn acknowledge_inbox(&self, _: &InboxClaim, _: &RunAdmission) -> Result<()> {
+    async fn check_run_fence(&self, _: &OwnerId, _: &RunId, _: i64, _: i64) -> Result<RunRecord> {
         Err(RuntimeStoreError::Unavailable)
     }
-    async fn recover_runtime(
-        &self,
-        _: &OwnerId,
-        _: &str,
-        _: i64,
-        _: Option<&str>,
-        _: u32,
-    ) -> Result<RecoveryPage> {
+    async fn recover_expired(&self, _: &OwnerId, _: u32) -> Result<Vec<RecoveryRecord>> {
         Err(RuntimeStoreError::Unavailable)
     }
 }
@@ -171,6 +169,7 @@ struct NoWake;
 impl Wake for NoWake {
     fn wake(self: Arc<Self>) {}
 }
+/// These spies are immediately ready; a pending future is a test failure.
 pub fn ready<F: Future>(future: F) -> F::Output {
     let waker = Waker::from(Arc::new(NoWake));
     let mut cx = Context::from_waker(&waker);

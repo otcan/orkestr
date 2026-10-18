@@ -1,32 +1,30 @@
-//! Spy ordering and fail-closed dispatch only, not durable acceptance.
+//! Port ordering only, not durable acceptance.
 mod support;
 use orkestr_runtime::{
     ports::*,
     supervisor::{self, Error},
 };
 use orkestr_v2_application::runtime::RuntimeStoreError;
-use orkestr_v2_contracts::runtime::{InflightStatus, Role};
+use orkestr_v2_contracts::runtime::SessionRole;
 use support::*;
 struct SpyProvider<'a> {
     store: &'a Spy,
-    starts: usize,
     hung: bool,
 }
 impl Provider for SpyProvider<'_> {
-    fn start(&mut self, _: &RunAdmission) -> Result<(), Blocker> {
-        self.starts += 1;
-        Ok(())
+    fn start(&mut self, _: &ProviderAdmission) -> Result<(), Blocker> {
+        panic!("high-level dispatch must remain blocked")
     }
-    fn poll(&mut self, _: &RunAdmission) -> Result<Option<ObservationKind>, Blocker> {
+    fn poll(&mut self, _: &ProviderAdmission) -> Result<Option<ProviderEvent>, Blocker> {
         Ok(if self.hung {
             None
         } else {
-            Some(ObservationKind::Started)
+            Some(ProviderEvent::Started)
         })
     }
     fn interrupt(&mut self, control: &InterruptControl) -> Result<(), Blocker> {
-        assert_eq!(control.cancellation.dispatch_fence, 2);
-        assert_eq!(control.original.dispatch_fence, 1);
+        assert_eq!(control.fence_generation, 2);
+        assert_eq!(control.original.fence_generation, 1);
         assert_eq!(
             self.store.state.lock().unwrap().calls.last(),
             Some(&"fenced")
@@ -35,101 +33,81 @@ impl Provider for SpyProvider<'_> {
     }
 }
 #[test]
-fn mismatched_authoritative_role_never_starts_provider() {
-    let store = Spy::new(admission(Role::Deep, 10));
+fn admission_precedes_start_and_running_needs_provider_event() {
+    let store = Spy::new(admission(SessionRole::Deep, 10));
     let mut p = SpyProvider {
         store: &store,
-        starts: 0,
-        hung: true,
-    };
-    for wrong in [Role::Fast, Role::Worker] {
-        assert_eq!(
-            ready(supervisor::start(
-                &store,
-                &mut p,
-                &claim(&store.a),
-                &store.a.session_id,
-                1,
-                "request",
-                wrong
-            )),
-            Err(Error::Store(RuntimeStoreError::InvalidInput))
-        );
-    }
-    assert_eq!(p.starts, 0);
-}
-#[test]
-fn identical_admission_replay_never_blindly_dispatches() {
-    let store = Spy::new(admission(Role::Deep, 10));
-    let mut p = SpyProvider {
-        store: &store,
-        starts: 0,
-        hung: true,
-    };
-    for _ in 0..2 {
-        assert_eq!(
-            ready(supervisor::start(
-                &store,
-                &mut p,
-                &claim(&store.a),
-                &store.a.session_id,
-                1,
-                "request",
-                Role::Deep
-            )),
-            Err(Error::Provider(Blocker::DispatchUnconfirmed))
-        );
-    }
-    assert_eq!(p.starts, 0);
-}
-#[test]
-fn running_needs_provider_event() {
-    let store = Spy::new(admission(Role::Deep, 10));
-    let mut p = SpyProvider {
-        store: &store,
-        starts: 0,
         hung: true,
     };
     let mut pending = supervisor::PendingObservation::default();
-    assert!(!ready(supervisor::step(&store, &mut p, &store.a, &mut pending)).unwrap());
-    assert!(store.state.lock().unwrap().calls.is_empty());
+    assert_eq!(
+        ready(supervisor::start(&store, &mut p, &owner(), &input(&store.a), SessionRole::Deep)),
+        Err(Error::Provider(Blocker::DispatchUnconfirmed))
+    );
+    let a = store.a.clone();
+    assert!(!ready(supervisor::step(&store, &mut p, &owner(), &a, &mut pending)).unwrap());
+    assert_eq!(store.state.lock().unwrap().calls, vec!["admitted"]);
     p.hung = false;
-    assert!(ready(supervisor::step(&store, &mut p, &store.a, &mut pending)).unwrap());
-    assert_eq!(store.state.lock().unwrap().calls, vec!["record"]);
+    assert!(ready(supervisor::step(&store, &mut p, &owner(), &a, &mut pending)).unwrap());
+    assert_eq!(
+        store.state.lock().unwrap().calls,
+        vec!["admitted", "record"]
+    );
 }
 #[test]
 fn durable_fence_precedes_unsupported_interrupt() {
-    let store = Spy::new(admission(Role::Deep, 10));
+    let store = Spy::new(admission(SessionRole::Deep, 10));
     let mut p = SpyProvider {
         store: &store,
-        starts: 0,
         hung: true,
     };
-    let (receipt, result) = ready(supervisor::cancel(
-        &store,
-        &mut p,
-        &owner(),
-        &store.a,
-        "cancel",
-    ))
-    .unwrap();
-    assert_eq!(result, Err(Blocker::Unsupported));
-    assert_eq!(receipt.inflight_status, InflightStatus::Unknown);
+    let (receipt, interrupted) =
+        ready(supervisor::cancel(&store, &mut p, &owner(), &store.a, 1)).unwrap();
+    assert_eq!(interrupted, Err(Blocker::Unsupported));
+    assert!(receipt.in_flight_effects_unknown);
     assert_eq!(store.state.lock().unwrap().calls, vec!["fenced"]);
 }
 #[test]
 fn late_provider_event_cannot_bypass_store_fence() {
-    let store = Spy::new(admission(Role::Deep, 10));
-    store.state.lock().unwrap().refusal = Some(RuntimeStoreError::StaleLease);
+    let store = Spy::new(admission(SessionRole::Deep, 10));
+    store.state.lock().unwrap().refusal = Some(RuntimeStoreError::Fenced);
     let mut p = SpyProvider {
         store: &store,
-        starts: 0,
         hung: false,
     };
     let mut pending = supervisor::PendingObservation::default();
     assert_eq!(
-        ready(supervisor::step(&store, &mut p, &store.a, &mut pending)),
-        Err(Error::Store(RuntimeStoreError::StaleLease))
+        ready(supervisor::step(
+            &store,
+            &mut p,
+            &owner(),
+            &store.a,
+            &mut pending
+        )),
+        Err(Error::Store(RuntimeStoreError::Fenced))
     );
     assert!(pending.pending().is_some());
+}
+
+#[test]
+fn caller_role_never_authorizes_provider_dispatch() {
+    let store = Spy::new(admission(SessionRole::Deep, 10));
+    let mut p = SpyProvider { store: &store, hung: true };
+    for role in [SessionRole::Fast, SessionRole::Deep, SessionRole::Worker] {
+        assert_eq!(
+            ready(supervisor::start(&store, &mut p, &owner(), &input(&store.a), role)),
+            Err(Error::Provider(Blocker::DispatchUnconfirmed))
+        );
+    }
+}
+#[test]
+fn identical_admission_replay_never_blindly_dispatches() {
+    let store = Spy::new(admission(SessionRole::Deep, 10));
+    let mut p = SpyProvider { store: &store, hung: true };
+    for _ in 0..2 {
+        assert_eq!(
+            ready(supervisor::start(&store, &mut p, &owner(), &input(&store.a), SessionRole::Deep)),
+            Err(Error::Provider(Blocker::DispatchUnconfirmed))
+        );
+    }
 }

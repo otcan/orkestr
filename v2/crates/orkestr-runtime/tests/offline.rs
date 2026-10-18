@@ -1,15 +1,15 @@
 mod support;
 use orkestr_runtime::{fake::FakeProvider, ports::*, protocol::*};
 use orkestr_v2_contracts::runtime::SessionRole;
-fn admission(role: SessionRole, id: &str) -> RunAdmission {
+fn admission(role: SessionRole, id: &str) -> ProviderAdmission {
     let n = id
         .bytes()
         .fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(u64::from(b)))
         & 0xffffffffff;
     support::admission(role, n)
 }
-fn control(a: &RunAdmission) -> InterruptControl {
-    support::control(a)
+fn control(a: &ProviderAdmission) -> InterruptControl {
+    InterruptControl::for_admission(a, a.fence_generation)
 }
 #[test]
 fn fixture_requires_explicit_selection() {
@@ -26,23 +26,17 @@ fn busy_deep_does_not_block_fast_or_independent_worker() {
     let worker = admission(SessionRole::Worker, "worker");
     for a in [&deep, &fast, &worker] {
         p.start(a).unwrap();
-        assert_eq!(p.poll(a), Ok(Some(ObservationKind::Started)));
+        assert_eq!(p.poll(a), Ok(Some(ProviderEvent::Started)));
     }
     assert_eq!(p.poll(&deep), Ok(None));
-    p.emit(
-        &fast,
-        ObservationKind::CompletedProposal { synthetic: true },
-    )
-    .unwrap();
+    p.emit(&fast, ProviderEvent::Completed { synthetic: true })
+        .unwrap();
     assert_eq!(
         p.poll(&fast),
-        Ok(Some(ObservationKind::CompletedProposal { synthetic: true }))
+        Ok(Some(ProviderEvent::Completed { synthetic: true }))
     );
     p.interrupt(&control(&worker)).unwrap();
-    assert_eq!(
-        p.poll(&control(&worker).cancellation),
-        Ok(Some(ObservationKind::Stopped))
-    );
+    assert_eq!(p.poll(&worker), Ok(Some(ProviderEvent::Stopped)));
     assert_eq!(p.poll(&deep), Ok(None));
 }
 #[test]
@@ -50,7 +44,7 @@ fn same_native_session_cannot_run_concurrently() {
     let mut p = FakeProvider::fixture_only(true).unwrap();
     let a = admission(SessionRole::Fast, "fast");
     let mut b = admission(SessionRole::Deep, "deep");
-    b.native_session_id = a.native_session_id.clone();
+    b.native_session_ref = a.native_session_ref.clone();
     p.start(&a).unwrap();
     assert_eq!(p.start(&b), Err(Blocker::Busy));
 }
@@ -62,7 +56,7 @@ fn stale_lease_and_wrong_run_are_rejected() {
     let mut stale = a.clone();
     stale.lease_generation = 0;
     assert_eq!(
-        p.emit(&stale, ObservationKind::Failed),
+        p.emit(&stale, ProviderEvent::Failed),
         Err(Blocker::StaleLease)
     );
     assert_eq!(p.interrupt(&control(&stale)), Err(Blocker::StaleLease));
@@ -70,14 +64,14 @@ fn stale_lease_and_wrong_run_are_rejected() {
     wrong.run_id = support::admission(SessionRole::Deep, 999).run_id;
     assert_eq!(p.interrupt(&control(&wrong)), Err(Blocker::StaleLease));
     let mut fenced = a.clone();
-    fenced.dispatch_fence += 1;
-    p.interrupt(&control(&a)).unwrap();
+    fenced.fence_generation += 1;
+    p.interrupt(&InterruptControl::for_admission(
+        &a,
+        fenced.fence_generation,
+    ))
+    .unwrap();
     assert_eq!(p.poll(&fenced), Err(Blocker::StaleLease));
-    assert_eq!(p.poll(&a), Err(Blocker::StaleLease));
-    assert_eq!(
-        p.poll(&control(&a).cancellation),
-        Ok(Some(ObservationKind::Stopped))
-    );
+    assert_eq!(p.poll(&a), Ok(Some(ProviderEvent::Stopped)));
 }
 #[test]
 fn queues_are_bounded_and_fake_never_claims_real_output() {
@@ -85,25 +79,16 @@ fn queues_are_bounded_and_fake_never_claims_real_output() {
     let a = admission(SessionRole::Deep, "deep");
     p.start(&a).unwrap();
     assert_eq!(
-        p.emit(&a, ObservationKind::CompletedProposal { synthetic: false }),
+        p.emit(&a, ProviderEvent::Completed { synthetic: false }),
         Err(Blocker::FixtureOnly)
     );
     for _ in 0..31 {
-        p.emit(
-            &a,
-            ObservationKind::Progress {
-                text: "pending".into(),
-            },
-        )
-        .unwrap();
+        p.emit(&a, ProviderEvent::Progress("pending".into()))
+            .unwrap();
     }
-    assert_eq!(p.emit(&a, ObservationKind::Failed), Err(Blocker::QueueFull));
+    assert_eq!(p.emit(&a, ProviderEvent::Failed), Err(Blocker::QueueFull));
     p.interrupt(&control(&a)).unwrap(); // stop has priority over bounded progress queue
-    assert_eq!(p.poll(&a), Err(Blocker::StaleLease));
-    assert_eq!(
-        p.poll(&control(&a).cancellation),
-        Ok(Some(ObservationKind::Stopped))
-    );
+    assert_eq!(p.poll(&a), Ok(Some(ProviderEvent::Stopped)));
 }
 #[test]
 fn unsupported_resume_fork_and_steer_are_explicit() {
@@ -126,13 +111,11 @@ fn codex_offline_fixture_checks_identity_and_terminal_status() {
     assert_eq!(
         events,
         vec![
-            ObservationKind::Started,
-            ObservationKind::Progress {
-                text: "Synthetic fixture output".into()
-            },
-            ObservationKind::CompletedProposal { synthetic: false },
-            ObservationKind::Stopped,
-            ObservationKind::Failed
+            ProviderEvent::Started,
+            ProviderEvent::Progress("Synthetic fixture output".into()),
+            ProviderEvent::Completed { synthetic: false },
+            ProviderEvent::Stopped,
+            ProviderEvent::Failed
         ]
     );
     let line = include_str!("fixtures/codex.jsonl").lines().next().unwrap();
@@ -154,10 +137,10 @@ fn claude_offline_fixture_checks_identity_and_error_status() {
     assert_eq!(
         events,
         vec![
-            Some(ObservationKind::Started),
+            Some(ProviderEvent::Started),
             None,
-            Some(ObservationKind::CompletedProposal { synthetic: false }),
-            Some(ObservationKind::Failed)
+            Some(ProviderEvent::Completed { synthetic: false }),
+            Some(ProviderEvent::Failed)
         ]
     );
     assert_eq!(
@@ -192,28 +175,26 @@ fn malformed_and_oversized_protocol_frames_fail_closed() {
 #[test]
 fn terminal_evidence_survives_newer_cancel_generation() {
     for terminal in [
-        ObservationKind::CompletedProposal { synthetic: true },
-        ObservationKind::Failed,
-        ObservationKind::Lost,
+        ProviderEvent::Completed { synthetic: true },
+        ProviderEvent::Failed,
+        ProviderEvent::Lost,
     ] {
         let mut p = FakeProvider::fixture_only(true).unwrap();
         let original = admission(SessionRole::Worker, "terminal-race");
         p.start(&original).unwrap();
-        assert_eq!(p.poll(&original), Ok(Some(ObservationKind::Started)));
+        assert_eq!(p.poll(&original), Ok(Some(ProviderEvent::Started)));
         p.emit(&original, terminal.clone()).unwrap();
         let mut cancelled = original.clone();
-        cancelled.dispatch_fence += 1;
-        assert_eq!(p.interrupt(&control(&original)), Err(Blocker::Busy));
+        cancelled.fence_generation += 1;
+        assert_eq!(
+            p.interrupt(&InterruptControl::for_admission(
+                &original,
+                cancelled.fence_generation
+            )),
+            Err(Blocker::Busy)
+        );
         // Unconfirmed interruption must not relabel or erase the original outcome.
         assert_eq!(p.poll(&cancelled), Err(Blocker::StaleLease));
         assert_eq!(p.poll(&original), Ok(Some(terminal)));
     }
-}
-
-#[test]
-fn cancellation_ack_token_cannot_start_execution() {
-    let mut p = FakeProvider::fixture_only(true).unwrap();
-    let a = admission(SessionRole::Worker, "cancel-purpose");
-    assert_eq!(p.start(&control(&a).cancellation), Err(Blocker::StaleLease));
-    p.start(&a).unwrap();
 }

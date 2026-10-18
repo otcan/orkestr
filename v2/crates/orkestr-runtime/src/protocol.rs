@@ -1,7 +1,7 @@
 //! Bounded, offline protocol decoding. These are candidate adapter boundaries,
 //! not proof of authentication, subscription entitlement or live execution.
-use crate::ports::{Blocker, ObservationKind};
-use orkestr_v2_contracts::runtime::MAX_PROVIDER_PROGRESS_BYTES;
+use crate::ports::{Blocker, ProviderEvent};
+use orkestr_v2_application::runtime::MAX_PROVIDER_PROGRESS_BYTES;
 use serde_json::Value;
 const MAX_FRAME: usize = 64 * 1024;
 
@@ -21,11 +21,7 @@ fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, Blocker> {
 
 /// Ignores unrelated notifications, refuses wrong-thread/wrong-turn events.
 /// Provider completion is a proposal; application evidence gates still apply.
-pub fn codex_event(
-    line: &str,
-    thread: &str,
-    turn: &str,
-) -> Result<Option<ObservationKind>, Blocker> {
+pub fn codex_event(line: &str, thread: &str, turn: &str) -> Result<Option<ProviderEvent>, Blocker> {
     let value = frame(line)?;
     let method = text(&value, "method")?;
     if !matches!(
@@ -46,9 +42,7 @@ pub fn codex_event(
         if delta.len() > MAX_PROVIDER_PROGRESS_BYTES {
             return Err(Blocker::Protocol);
         }
-        return Ok(Some(ObservationKind::Progress {
-            text: delta.to_owned(),
-        }));
+        return Ok(Some(ProviderEvent::Progress(delta.to_owned())));
     }
     let t = p.get("turn").ok_or(Blocker::Protocol)?;
     if text(t, "id")? != turn {
@@ -56,17 +50,17 @@ pub fn codex_event(
     }
     let status = text(t, "status")?;
     Ok(Some(match (method, status) {
-        ("turn/started", "inProgress") => ObservationKind::Started,
-        ("turn/completed", "completed") => ObservationKind::CompletedProposal { synthetic: false },
-        ("turn/completed", "failed") => ObservationKind::Failed,
-        ("turn/completed", "interrupted") => ObservationKind::Stopped,
+        ("turn/started", "inProgress") => ProviderEvent::Started,
+        ("turn/completed", "completed") => ProviderEvent::Completed { synthetic: false },
+        ("turn/completed", "failed") => ProviderEvent::Failed,
+        ("turn/completed", "interrupted") => ProviderEvent::Stopped,
         _ => return Err(Blocker::Protocol),
     }))
 }
 
 /// Claude stream-json candidate fixture decoder. Live protocol remains pending.
 /// No generic text result is ever interpreted as canonical task success.
-pub fn claude_event(line: &str, session: &str) -> Result<Option<ObservationKind>, Blocker> {
+pub fn claude_event(line: &str, session: &str) -> Result<Option<ProviderEvent>, Blocker> {
     let value = frame(line)?;
     let kind = text(&value, "type")?;
     if !matches!(kind, "system" | "assistant" | "result") {
@@ -77,7 +71,7 @@ pub fn claude_event(line: &str, session: &str) -> Result<Option<ObservationKind>
     }
     Ok(match kind {
         "system" if value.get("subtype").and_then(Value::as_str) == Some("init") => {
-            Some(ObservationKind::Started)
+            Some(ProviderEvent::Started)
         }
         "assistant" => None, // content may include tools; never flatten into trusted commands
         "result" => {
@@ -87,9 +81,9 @@ pub fn claude_event(line: &str, session: &str) -> Result<Option<ObservationKind>
                 .and_then(Value::as_bool)
                 .ok_or(Blocker::Protocol)?;
             Some(if subtype == "success" && !error {
-                ObservationKind::CompletedProposal { synthetic: false }
+                ProviderEvent::Completed { synthetic: false }
             } else {
-                ObservationKind::Failed
+                ProviderEvent::Failed
             })
         }
         _ => None,
