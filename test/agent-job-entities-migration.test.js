@@ -81,9 +81,20 @@ test("migration preserves sanitized legacy Agent Job records and old-schema read
   }
 });
 
+test("Agent Job store leaves its schema unchanged while the Personal Agent feature is off", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-personal-agent-migration-off-"));
+  try {
+    const db = await openAgentJobDb({ ORKESTR_HOME: home });
+    assert.equal(db.prepare("select count(*) as count from sqlite_master where type = 'table' and name like 'personal_agent_%'").get().count, 0);
+  } finally {
+    await closeAgentJobDbs();
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
 test("Agent Job store creates and reopens the additive entity schema", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-personal-agent-migration-"));
-  const env = { ORKESTR_HOME: home };
+  const env = { ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: "1" };
   try {
     const first = await openAgentJobDb(env);
     assert.equal(first.prepare("select count(*) as count from sqlite_master where type = 'table' and name = 'personal_agent_projects'").get().count, 1);
