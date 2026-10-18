@@ -3,13 +3,11 @@
 This implements Lane B's service layer against the coordinator-frozen ADR
 0002 memory contract in PR #57 (`fc2a1c25`). Lane A owns
 `personal_agent_memories`, its migration in the existing `agent-jobs.sqlite`,
-and the OP-05 event envelope. This slice creates no table/database, adds no
-HTTP/model tool route, and does not change a live setting or model. Its store
-is injected; the only in-memory implementation is a synthetic test fixture.
-
-SQLite binding and real database reopen/migration integration tests follow
-when Lane A's migration lands. Service recreation over a fake store snapshot
-is covered here; it is not claimed as SQLite restart durability.
+and the OP-05 event envelope. The SQLite binding uses the integrated migration
+from main `2531acea` through the existing Agent Job initializer. This slice adds
+no schema, HTTP/model tool route, or live setting/model change. The pure service
+still accepts an injected store; the only in-memory implementation is a
+synthetic test fixture. The production binding has no fallback.
 
 ## Public boundary
 
@@ -134,8 +132,51 @@ roll back on every exception. Rows use exactly the frozen snake_case ADR
 columns; `list()` contains current rows only. There is no production fallback
 to the fake store and no implicit store selection or migration.
 
-No migration or live activation is performed by this PR. Rollback removes the
-service binding or disables the existing Personal Agent flag; no data is
-dropped. Once the SQLite adapter exists, it must use Lane A's migration and
-existing database initializer without reverting the integration's flag gate.
-Legacy Agent Jobs and model/provider behavior are unchanged.
+### SQLite binding
+
+`openPersonalAgentMemoryStore({ownerUserId, env})` asynchronously opens the
+existing `agent-jobs.sqlite` with `openAgentJobDb(env)`. That initializer owns
+all additive migrations and its existing flag gate. The adapter runs no DDL,
+changes no pragma, and creates no second database. Missing/incompatible
+storage returns `memory_store_unavailable`, with no replacement or fake data.
+`openPersonalAgentMemoryService({ownerUserId, env, now?, newId?})` composes this
+store with the synchronous service. These factories are internal bindings;
+future routes must authenticate before opening the service and pass the trusted
+owner action into each operation. Selecting an `ownerUserId` is not itself
+an authentication mechanism.
+
+The store uses parameter-bound SQL and Agent Job's `BEGIN IMMEDIATE` helper.
+The transaction contains lookup, project/task checks, duplicate/version check
+and mutation, so independent processes cannot both create the same key or
+apply a stale decision. Rows contain no history. A list reads at most 5,001
+rows so exceeding the service limit produces an explicit error without loading
+an unbounded database. SQL failures expose a generic `memory_storage_failure`
+without content-bearing SQL errors. Async callbacks/thenable results are
+rejected and rolled back; captured transaction handles expire on return.
+Disabling the feature blocks even an already-open store before a transaction.
+Disabled factories refuse before creating a data home or opening a database.
+
+`test/personal-agent-memory-sqlite.test.js` uses temporary synthetic homes and
+the actual integrated initializer. It verifies:
+
+- Same Agent Job database, unchanged schema/legacy jobs and task lifecycle;
+  no new table or migration in Lane B.
+- Full records, consent and provenance survive close/reopen and a fresh
+  process with a different synthetic model setting.
+- A committed capture survives `SIGKILL` before a graceful database close;
+  a killed uncommitted writer leaves no partial capture.
+- Two independent writers of the same capture produce one row and one retry,
+  preserving the first consent timestamp.
+- Correction/forget survive a process restart; stale decisions fail closed;
+  no old content appears in current logical rows, context or export.
+- Scope/task checks, external-evidence consent, rollback, duplicate-key errors,
+  feature disable/re-enable and unavailable storage fail closed.
+
+These prove process-crash/restart behavior on synthetic fixtures, not physical
+erasure, backup deletion or a power-loss guarantee. No real memory thread,
+model inference, credential or live setting is used.
+
+Rollback removes the binding or disables the existing Personal Agent flag;
+no data is dropped. Existing Agent Job reads remain usable with the flag off.
+The prior Lane A migration remains additive and unchanged. No user-facing
+capture route, model tool or OP-08 assistant loop is activated by this PR.
