@@ -124,6 +124,11 @@ pub fn replay_sequence(
         ConversationEvent::FixtureCancellationRequested(e) => {
             (e.aggregate_id.to_string(), &e.scope, e.schema_version == 3)
         }
+        ConversationEvent::FixtureProviderStopped(e) => (
+            e.aggregate_id.to_string(),
+            &e.scope,
+            e.schema_version == 4 && e.payload_ref_or_safe_payload.run_sequence > 0,
+        ),
         ConversationEvent::FixtureProviderObserved(e) => (
             e.aggregate_id.to_string(),
             &e.scope,
@@ -164,6 +169,7 @@ pub fn decode_stream(raw: serde_json::Value) -> StreamItem {
 pub fn replay_notice(event: &ConversationEvent) -> &'static str {
     use orkestr_v2_contracts::FixtureCancellationOutcome;
     match event {
+        ConversationEvent::FixtureProviderStopped(_) => "Fixture stop acknowledgement recorded: receipt cancelled. Ordinary runtime and Stop remain unavailable.",
         ConversationEvent::FixtureCancellationRequested(e) => match e.payload_ref_or_safe_payload.outcome {
             FixtureCancellationOutcome::Unknown => "Fixture cancellation requested: outcome unconfirmed. Execution and Stop remain unavailable.",
             FixtureCancellationOutcome::NotDispatched => "Fixture cancellation requested: no provider delivery. Execution and Stop remain unavailable.",

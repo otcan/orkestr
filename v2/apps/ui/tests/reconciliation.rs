@@ -264,3 +264,141 @@ fn cancellation_schema_identity_and_forbidden_fields_fail_closed() {
     assert!(serde_json::from_value::<ConversationEvent>(bad).is_err());
     assert_eq!(view.watermark, 1);
 }
+
+#[test]
+fn confirmed_fixture_stop_mixed_replay_is_atomic_and_retry_applies_once() {
+    let view = original();
+    let before = fingerprint(&view);
+    for (name, source, sequence) in [
+        (
+            "message_accepted",
+            include_str!("../../../fixtures/event.json"),
+            3,
+        ),
+        (
+            "fixture_provider_observed",
+            include_str!("../../../fixtures/fixture-provider-observed.json"),
+            4,
+        ),
+        (
+            "fixture_cancellation_requested",
+            include_str!("../../../fixtures/fixture-cancellation-requested.json"),
+            8,
+        ),
+        (
+            "fixture_provider_stopped",
+            include_str!("../../../fixtures/fixture-provider-stopped.json"),
+            9,
+        ),
+    ] {
+        let mut wire: serde_json::Value = serde_json::from_str(source).unwrap();
+        wire["sequence"] = sequence.into();
+        let event: ConversationEvent = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            replay_sequence(&view, name, Some(&sequence.to_string()), &event),
+            Ok(sequence)
+        );
+        if sequence == 9 {
+            let notice = orkestr_v2_ui::replay_notice(&event);
+            assert!(notice.contains("receipt cancelled"));
+            assert!(notice.contains("Ordinary runtime and Stop remain unavailable"));
+        }
+    }
+    let (failed, cursors) = run(
+        &view,
+        9,
+        vec![Ok(page(&[3], 9, Some(3))), Err("second-page outage".into())],
+    );
+    assert!(failed.is_err());
+    assert_eq!(cursors, vec![1, 3]);
+    assert_eq!(fingerprint(&view), before);
+    // A watermark behind the stop cannot acknowledge it, even after both pages.
+    assert!(run(
+        &view,
+        9,
+        vec![Ok(page(&[3], 8, Some(3))), Ok(page(&[7], 8, None))]
+    )
+    .0
+    .is_err());
+    assert_eq!(fingerprint(&view), before);
+    let committed = run(
+        &view,
+        9,
+        vec![Ok(page(&[3], 9, Some(3))), Ok(page(&[7], 9, None))],
+    )
+    .0
+    .unwrap();
+    assert_eq!(committed.watermark, 9);
+    assert_eq!(
+        committed.messages.keys().copied().collect::<Vec<_>>(),
+        vec![1, 3, 7]
+    );
+    let retry = run(&committed, 9, vec![Ok(page(&[], 9, None))]).0.unwrap();
+    assert_eq!(fingerprint(&retry), fingerprint(&committed));
+}
+
+#[test]
+fn stopped_metadata_rejects_bad_identity_schema_receipt_and_provider_sequence() {
+    let view = original();
+    let before = fingerprint(&view);
+    let wire: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/fixture-provider-stopped.json"
+    ))
+    .unwrap();
+    for (path, value) in [
+        (vec!["schema_version"], serde_json::json!(2)),
+        (vec!["native_id"], serde_json::json!("synthetic")),
+        (
+            vec!["payload_ref_or_safe_payload", "run_sequence"],
+            serde_json::json!(0),
+        ),
+        (
+            vec!["payload_ref_or_safe_payload", "run_sequence"],
+            serde_json::json!(-1),
+        ),
+        (
+            vec!["payload_ref_or_safe_payload", "receipt_state"],
+            serde_json::json!("unknown"),
+        ),
+        (
+            vec!["payload_ref_or_safe_payload", "run_id"],
+            serde_json::json!("invalid"),
+        ),
+        (
+            vec!["payload_ref_or_safe_payload", "session_id"],
+            serde_json::json!("invalid"),
+        ),
+        (
+            vec!["payload_ref_or_safe_payload", "fence"],
+            serde_json::json!(1),
+        ),
+    ] {
+        let mut bad = wire.clone();
+        let mut slot = &mut bad;
+        for key in path {
+            slot = &mut slot[key];
+        }
+        *slot = value;
+        let frame = orkestr_v2_ui::decode_stream(
+            serde_json::json!({"status":200,"event":"fixture_provider_stopped","id":"1","body":bad}),
+        );
+        assert_eq!(frame.event, "resync_required");
+    }
+    let event: ConversationEvent = serde_json::from_value(wire.clone()).unwrap();
+    assert!(replay_sequence(&view, "fixture_provider_stopped", Some("2"), &event).is_err());
+    assert!(replay_sequence(&view, "fixture_cancellation_requested", Some("1"), &event).is_err());
+    for (key, value) in [
+        ("scope", serde_json::json!({"kind":"global"})),
+        (
+            "aggregate_id",
+            serde_json::json!("00000000-0000-4000-8000-000000000099"),
+        ),
+        ("sequence", serde_json::json!(0)),
+    ] {
+        let mut bad = wire.clone();
+        bad[key] = value;
+        let event = serde_json::from_value(bad).unwrap();
+        assert!(replay_sequence(&view, "fixture_provider_stopped", Some("1"), &event).is_err());
+    }
+    assert_eq!(fingerprint(&view), before);
+}
