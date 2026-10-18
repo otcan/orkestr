@@ -146,10 +146,13 @@ impl Store {
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
-        let deadline = clock
+        let mut deadline = clock
             .checked_add(60_000)
             .ok_or(RuntimeStoreError::Unavailable)?
             .min(supervisor_deadline);
+        if provider.run.role == Role::Worker {
+            deadline = deadline.min(provider.run.lease_deadline_ms);
+        }
         let (state, inflight, control) = if dispatch == "delivery_unknown" {
             ("cancel_requested", "unknown", "pending")
         } else {

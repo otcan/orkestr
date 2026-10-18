@@ -95,6 +95,7 @@ pub(super) async fn snapshot(store: &Store) -> Vec<String> {
     let mut tx = store.pool.begin().await.unwrap();
     let mut result = Vec::new();
     for (table,projection) in [
+        ("worker_provider_delegations","id,owner_id,conversation_id,parent_run_id,parent_session_id,context_id,incarnation_id,parent_binding_generation,parent_lease_generation,parent_dispatch_fence,parent_deadline_ms,worker_session_id,worker_binding_generation,source_message_id,source_event_id,request_key,input_digest,requested_lifetime_ms,expires_at_ms,state,grant_hash,admitted_run_id"),
         ("production_acceptances","run_id,owner_id,conversation_id,completion_event_id,event_id,request_key,requested_revision,receipt_revision"),
         ("production_cancellations","run_id,event_id,request_key,lease_generation,dispatch_fence,lease_deadline_ms,receipt_state,inflight_status,request_revision,receipt_revision"),
         ("production_control_outbox","event_id,run_id,state"),
@@ -107,7 +108,7 @@ pub(super) async fn snapshot(store: &Store) -> Vec<String> {
         ("production_run_leases","run_id,generation,lease_deadline_ms,dispatch_fence,purpose"),
         ("production_supervisors","context_id,owner_id,provider_kind,namespace,supervisor_key,incarnation_id,generation,lease_deadline_ms"),
         ("production_readiness","session_id,context_id,incarnation_id,protocol_version,source_event_key,evidence_digest"),
-        ("production_runs","id,context_id,incarnation_id,owner_id,conversation_id,session_id,native_session_id,provider_kind,binding_generation,message_id,event_id,scope_sequence,claim_generation,request_key,input_digest,lease_generation,dispatch_fence,lease_deadline_ms,attempt,state,dispatch_state,candidate_hash,reservation_hash,reserve_key"),
+        ("production_runs","id,context_id,incarnation_id,owner_id,conversation_id,session_id,native_session_id,provider_kind,binding_generation,message_id,event_id,scope_sequence,claim_generation,request_key,input_digest,lease_generation,dispatch_fence,lease_deadline_ms,attempt,state,dispatch_state,candidate_hash,reservation_hash,reserve_key,role,parent_session_id,worker_delegation_id"),
         ("reasoning_inbox","conversation_id,sequence,message_id,event_id,state,claimant_session_id,claim_generation,claim_deadline_ms,admitted_fixture_run_id,admitted_run_id"),
         ("session_bindings","id,owner_id,conversation_id,role,provider_kind,provider_namespace,native_session_id,parent_session_id,generation,state,request_key,request_digest")
     ] {

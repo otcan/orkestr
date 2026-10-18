@@ -10,6 +10,32 @@ impl Store {
         owner: &OwnerId,
         conversation: &ConversationId,
     ) -> Result<Option<ExecutionStatus>> {
+        self.execution_status_in_scope(owner, conversation, None)
+            .await
+    }
+    /// Bound supervisor read of one exact run, including independent Workers.
+    /// Credential, context and owner scope are checked in the read transaction.
+    /// This is evidence only; it cannot reconstruct execution or control authority.
+    pub async fn execution_run_status(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        run: &RunId,
+    ) -> Result<Option<ExecutionStatus>> {
+        self.worker_credential(credential)?;
+        if self.context()?.owner != *owner {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        self.execution_status_in_scope(owner, conversation, Some(run))
+            .await
+    }
+    async fn execution_status_in_scope(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        exact_run: Option<&RunId>,
+    ) -> Result<Option<ExecutionStatus>> {
         let mut tx = self.pool.begin().await.map_err(db)?;
         crate::runtime::scope(&mut tx, owner, conversation).await?;
         if let Some(context) = &self.authority {
@@ -25,10 +51,22 @@ impl Store {
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(db)?;
-        let run = sqlx::query("SELECT id,state FROM production_runs WHERE owner_id=? AND conversation_id=? ORDER BY scope_sequence DESC LIMIT 1")
-            .bind(owner.to_string()).bind(conversation.to_string()).fetch_optional(&mut *tx).await.map_err(db)?;
-        let queued: Option<i64> = sqlx::query_scalar("SELECT CAST((julianday(e.occurred_at)-2440587.5)*86400000 AS INTEGER) FROM reasoning_inbox i JOIN events e ON e.id=i.event_id WHERE i.conversation_id=? AND i.state!='consumed' ORDER BY i.sequence LIMIT 1")
-            .bind(conversation.to_string()).fetch_optional(&mut *tx).await.map_err(db)?;
+        let run = if let Some(id) = exact_run {
+            let context = self.context()?;
+            context.validate(&mut tx).await?;
+            sqlx::query("SELECT id,state FROM production_runs WHERE id=? AND owner_id=? AND conversation_id=? AND context_id=? AND incarnation_id=?")
+                .bind(id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(&context.id).bind(&context.incarnation)
+                .fetch_optional(&mut *tx).await.map_err(db)?
+        } else {
+            sqlx::query("SELECT id,state FROM production_runs WHERE owner_id=? AND conversation_id=? AND role='deep' ORDER BY scope_sequence DESC LIMIT 1")
+                .bind(owner.to_string()).bind(conversation.to_string()).fetch_optional(&mut *tx).await.map_err(db)?
+        };
+        let queued: Option<i64> = if exact_run.is_some() {
+            None
+        } else {
+            sqlx::query_scalar("SELECT CAST((julianday(e.occurred_at)-2440587.5)*86400000 AS INTEGER) FROM reasoning_inbox i JOIN events e ON e.id=i.event_id WHERE i.conversation_id=? AND i.state!='consumed' ORDER BY i.sequence LIMIT 1")
+                .bind(conversation.to_string()).fetch_optional(&mut *tx).await.map_err(db)?
+        };
         let (run_id, phase) = match run {
             Some(row) => (
                 Some(RunId(row.get::<String, _>("id").parse().map_err(db)?)),

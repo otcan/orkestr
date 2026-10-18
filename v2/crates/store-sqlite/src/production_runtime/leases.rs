@@ -92,11 +92,16 @@ impl Store {
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
-        let extended = now(&mut tx)
+        let mut extended = now(&mut tx)
             .await?
             .checked_add(60_000)
             .ok_or(RuntimeStoreError::Unavailable)?
             .min(supervisor_deadline);
+        if provider.run.role == Role::Worker {
+            let limit:i64=sqlx::query_scalar("SELECT expires_at_ms FROM worker_provider_delegations WHERE admitted_run_id=? AND state='admitted'")
+                .bind(admission.run_id.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
+            extended = extended.min(limit);
+        }
         if extended <= admission.lease_deadline_ms {
             return Err(RuntimeStoreError::Busy);
         }

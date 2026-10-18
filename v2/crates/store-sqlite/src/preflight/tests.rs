@@ -315,3 +315,110 @@ async fn populated_observation_prefix_upgrade_preserves_rows_and_issued_history(
     store.close().await;
     Store::open(&dir.db()).await.unwrap().close().await;
 }
+
+#[tokio::test]
+async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links() {
+    let dir = Directory::new();
+    let mut conn = populated_dispatch_prefix(&dir).await;
+    for migration in sqlx::migrate!("./migrations").iter().skip(4).take(10) {
+        conn.apply(migration).await.unwrap();
+    }
+    sqlx::raw_sql("INSERT INTO projects(id,owner_id,request_key,payload_digest,name) VALUES('production-project','owner','project-key','digest','Synthetic');
+    INSERT INTO conversations(id,owner_id,project_id,sequence) VALUES('production-conversation','owner','production-project',3);
+    INSERT INTO messages VALUES('production-message','owner','production-conversation','production-input','digest','synthetic','owner',1);
+    INSERT INTO events(id,owner_id,conversation_id,message_id,sequence) VALUES('production-input-event','owner','production-conversation','production-message',1);
+    INSERT INTO session_bindings(id,owner_id,conversation_id,role,provider_kind,provider_namespace,native_session_id,state) VALUES('production-session','owner','production-conversation','deep','codex','synthetic','production-native','busy');
+    INSERT INTO production_supervisors VALUES('production-context','owner','codex','synthetic','key','production-incarnation',1,9999999999999);
+    INSERT INTO production_readiness VALUES('production-session','production-context','production-incarnation','synthetic-v1','ready','digest');
+    INSERT INTO production_runs VALUES('production-run','production-context','production-incarnation','owner','production-conversation','production-session','production-native','codex',1,'production-message','production-input-event',1,1,'production-key','digest',1,1,9999999999999,1,'awaiting_acceptance','delivery_unknown',NULL,NULL,NULL);
+    INSERT INTO production_run_leases VALUES('production-run',1,9999999999999,1,'execution');
+    INSERT INTO reasoning_inbox(conversation_id,sequence,message_id,event_id,state,claimant_session_id,claim_generation,claim_deadline_ms,admitted_run_id) VALUES('production-conversation',1,'production-message','production-input-event','consumed','production-session',1,9999999999999,'production-run');
+    INSERT INTO events(id,owner_id,conversation_id,sequence,kind,schema_version) VALUES('progress','owner','production-conversation',2,'provider_observed',8),('completion','owner','production-conversation',3,'provider_observed',5);
+    INSERT INTO outbox(event_id) VALUES('production-input-event'),('progress'),('completion');
+    INSERT INTO production_observations VALUES('progress','production-run',1,'progress-digest','progress',1,1,'running'),('completion','production-run',2,'completion-digest','completed_proposal',1,1,'awaiting_acceptance');
+    INSERT INTO production_payloads VALUES('payload','progress','owner','production-conversation','production-run','synthetic progress');").execute(&mut conn).await.unwrap();
+    async fn rows(conn: &mut SqliteConnection) -> BTreeMap<String, Vec<String>> {
+        let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('production_acceptances','history_imports','history_messages','worker_tool_delegations','worker_provider_delegations','history_recovery_restores','history_recovery_children') ORDER BY name")
+            .fetch_all(&mut *conn).await.unwrap();
+        let mut result = BTreeMap::new();
+        for table in tables {
+            let columns: Vec<String> = sqlx::query_scalar(&format!(
+                "SELECT name FROM pragma_table_info('{table}') ORDER BY cid"
+            ))
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap();
+            let columns: Vec<_> = columns
+                .into_iter()
+                .filter(|column| {
+                    table != "production_runs"
+                        || !["role", "parent_session_id", "worker_delegation_id"]
+                            .contains(&column.as_str())
+                })
+                .collect();
+            let expression = columns
+                .iter()
+                .map(|c| format!("quote(\"{c}\")"))
+                .collect::<Vec<_>>()
+                .join(" || '|' || ");
+            let filter = if table == "_sqlx_migrations" {
+                " WHERE version<=14"
+            } else {
+                ""
+            };
+            let data = sqlx::query_scalar(&format!(
+                "SELECT {expression} AS row FROM \"{table}\"{filter} ORDER BY row"
+            ))
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap();
+            result.insert(table, data);
+        }
+        result
+    }
+    let before = rows(&mut conn).await;
+    conn.close().await.unwrap();
+    let store = Store::open(&dir.db()).await.unwrap();
+    let mut conn = raw(&dir.db()).await;
+    assert_eq!(rows(&mut conn).await, before);
+    let legacy:(String,Option<String>,Option<String>)=sqlx::query_as("SELECT role,parent_session_id,worker_delegation_id FROM production_runs WHERE id='production-run'").fetch_one(&mut conn).await.unwrap();
+    assert_eq!(legacy, ("deep".into(), None, None));
+    assert!(sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&mut conn)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM production_acceptances")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT max(version) FROM _sqlx_migrations")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap(),
+        20
+    );
+    for table in [
+        "history_imports",
+        "history_messages",
+        "worker_tool_delegations",
+        "worker_provider_delegations",
+        "history_recovery_restores",
+        "history_recovery_children",
+    ] {
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
+                .fetch_one(&mut conn)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+    conn.close().await.unwrap();
+    store.close().await;
+    Store::open(&dir.db()).await.unwrap().close().await;
+}

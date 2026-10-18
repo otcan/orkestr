@@ -1,11 +1,13 @@
 //! Pre-run setup authority is distinct from a consumed inference grant.
 use super::*;
+use orkestr_v2_contracts::RunId;
 
 /// Issued only for a current, owner-scoped Starting binding. No run identity,
 /// cloning, serialization or public constructor. Setup commands never grant inference.
 pub struct BoundSessionMetadata {
     context: Context,
     binding: Binding,
+    parent_run: Option<RunId>,
 }
 impl BoundSessionMetadata {
     pub fn binding(&self) -> &Binding {
@@ -85,6 +87,18 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
+        if current.role == Role::Worker {
+            let parent = grant.parent_run.as_ref().ok_or(RuntimeStoreError::Fenced)?;
+            let row = self.worker_parent_current_in(tx, parent).await?;
+            let parent_session: String = row.get("session_id");
+            if current.parent_session_id.as_ref().map(ToString::to_string) != Some(parent_session)
+                || current.conversation_id.to_string() != row.get::<String, _>("conversation_id")
+            {
+                return Err(RuntimeStoreError::Fenced);
+            }
+        } else if grant.parent_run.is_some() {
+            return Err(RuntimeStoreError::Fenced);
+        }
         Ok(())
     }
     pub async fn authorize_session_metadata(
@@ -94,6 +108,29 @@ impl Store {
         let grant = BoundSessionMetadata {
             context: self.context()?.clone(),
             binding: binding.clone(),
+            parent_run: None,
+        };
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        self.validate_metadata(&mut tx, &grant).await?;
+        tx.commit().await.map_err(db)?;
+        Ok(grant)
+    }
+    /// Trusted scheduler only: setup authority remains bound to a live consumed
+    /// Deep parent at every setup action and readiness commit.
+    pub async fn authorize_worker_metadata(
+        &self,
+        credential: &str,
+        parent: &RunId,
+        binding: &Binding,
+    ) -> Result<BoundSessionMetadata> {
+        self.worker_credential(credential)?;
+        if binding.role != Role::Worker {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        let grant = BoundSessionMetadata {
+            context: self.context()?.clone(),
+            binding: binding.clone(),
+            parent_run: Some(parent.clone()),
         };
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         self.validate_metadata(&mut tx, &grant).await?;
@@ -141,10 +178,10 @@ impl Store {
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         self.validate_metadata(&mut tx, &grant).await?;
+        let ready = self
+            .confirm_native_session_in(&mut tx, evidence, grant.parent_run.is_some())
+            .await?;
         tx.commit().await.map_err(db)?;
-        // confirm_native_session rechecks context and exact generation in its
-        // write transaction. Replacement between these transactions is refused.
-        let ready = self.confirm_native_session(evidence).await?;
         Ok(ReadySessionTransition {
             metadata: grant,
             ready,
