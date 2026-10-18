@@ -88,9 +88,9 @@ Identify a direct Codex binary before supplying that path. The script does not
 verify an arbitrary executable's implementation. It ignores `ORKESTR_CODEX_BIN`
 and never resolves a PATH fallback; without an explicit absolute probe binary it
 returns `direct_binary_required` without executing a provider. Every Codex
-command, including version, uses a disposable HOME/CODEX_HOME and an allowlisted
-child environment. Ambient profile variables and credentials are excluded,
-including from the shared app-server client's inherited environment. Neither
+command, including version and the app-server process, uses a disposable launch
+cwd, HOME/CODEX_HOME and an allowlisted child environment. Ambient profile
+variables and credentials are excluded, including from the shared app-server client's inherited environment. Neither
 `codex login status` nor any auth/status command is run. Live Codex auth is
 UNVERIFIED by this script; the historical observation above is not a fresh check.
 

@@ -48,7 +48,7 @@ export async function probeInstalledSessions(env = process.env, { codexBinary = 
         const schema = JSON.parse(await fs.readFile(path.join(schemas, "v2", `${name}Params.json`), "utf8"));
         result.codex.protocol[name] = Object.keys(schema.properties || {});
       }
-      client = new CodexJobClient({ env: isolated, home: temporary });
+      client = new CodexJobClient({ env: isolated, home: temporary, cwd: temporary });
       await client.start();
       // Reject inference methods before they can reach the installed runtime.
       const allowed = new Set(["thread/start", "thread/resume", "thread/fork", "thread/read", "thread/settings/update", "turn/steer", "turn/interrupt"]);
