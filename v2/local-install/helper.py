@@ -67,7 +67,7 @@ def preflight(binary, home, port, environ=None):
     home = filesystem_disjoint(home, protected)
     binary = Path(binary).resolve()
     require(binary.is_file() and os.access(binary, os.X_OK), "--binary must be an existing executable; build separately")
-    filesystem_disjoint(home, [binary])
+    home = filesystem_disjoint(home, [binary])
     require(1024 <= port <= 65535, "--port must be between 1024 and 65535")
     try:
         with socket.socket() as probe:

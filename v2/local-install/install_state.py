@@ -66,15 +66,16 @@ def private_home(raw):
     path = path.resolve()
     require(path.is_dir(), "initialized home required")
     roots = protected_roots()
-    filesystem_disjoint(path, roots)
-    siblings = []
+    if roots:
+        path = filesystem_disjoint(path, roots)
+    siblings = [path / "install.json", path / "launcher.lock"]
     info = path.stat()
     require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700,
             "home must be owned by current user with mode 0700")
     for name in ("data", "logs", "control", "releases", "provider-home"):
         child = path / name
         require(not child.is_symlink() and child.is_dir(), "invalid private home layout")
-        filesystem_disjoint(child, roots + siblings)
+        child = filesystem_disjoint(child, roots + siblings)
         siblings.append(child)
         child_info = child.stat()
         require(child_info.st_uid == os.getuid() and stat.S_IMODE(child_info.st_mode) == 0o700,
@@ -198,7 +199,7 @@ def upgrade(home, source):
     with locked(home):
         current = config(home)
         source, _ = package(source)
-        filesystem_disjoint(source, [home])
+        source = filesystem_disjoint(source, [home])
         release, manifest = add_release(home, source)
         current["release"] = release
         replace_json(home / "install.json", current)
