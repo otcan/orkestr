@@ -138,6 +138,12 @@ pub fn Conversation(
     mut drafts: Signal<BTreeMap<String, Draft>>,
     onexpired: EventHandler<()>,
 ) -> Element {
+    let execution_id = id.clone();
+    let execution = use_signal(move || {
+        let mut state = orkestr_v2_ui::execution::Execution::default();
+        state.select(&execution_id, "");
+        state
+    });
     let mut projection = use_signal(Projection::default);
     let mut status = use_signal(|| "Loading history…".to_string());
     let mut sending = use_signal(|| false);
@@ -250,7 +256,7 @@ pub fn Conversation(
                     li { key: "{message.message_id}", strong { "{message.actor_kind}" } p { "{message.text}" } }
                 }
             }
-            crate::execution_panel::ExecutionPanel {}
+            crate::execution_panel::ExecutionPanel { execution, now_ms: 0 }
             form { onsubmit: move |event| {
                 event.prevent_default();
                 if sending() { return; }
