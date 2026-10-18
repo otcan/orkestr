@@ -89,6 +89,12 @@ impl Store {
         ) {
             return Err(RuntimeStoreError::InvalidInput);
         }
+        if !matches!(
+            input.event,
+            ProviderEvent::Failed | ProviderEvent::Lost | ProviderEvent::Stopped
+        ) {
+            self.require_observed_native(&mut tx, provider).await?;
+        }
         let next: i64 = sqlx::query_scalar(
             "SELECT coalesce(max(run_sequence),0)+1 FROM production_observations WHERE run_id=?",
         )
