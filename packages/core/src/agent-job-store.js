@@ -9,13 +9,22 @@ import path from "node:path";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { assertTestStoragePath } from "../../storage/src/test-storage-isolation.js";
 import { migratePersonalAgentEntities } from "./agent-job-entities-migration.js";
+import { migratePersonalAgentMemory } from "./personal-agent-memory-migration.js";
 import { personalAgentFeature } from "./personal-agent-feature.js";
 
 export const RUN_TERMINAL_STATES = Object.freeze(["succeeded", "failed", "cancelled", "skipped"]);
 export const RUN_ACTIVE_STATES = Object.freeze(["pending", "running", "retrying", "awaiting_approval"]);
 
 const databases = new Map();
+const personalAgentSchemaReady = new Set();
 let sqliteModule = null;
+
+function ensurePersonalAgentSchema(db, dbPath, env) {
+  if (!personalAgentFeature(env) || personalAgentSchemaReady.has(dbPath)) return;
+  migratePersonalAgentEntities(db, { dryRun: false });
+  migratePersonalAgentMemory(db, { dryRun: false });
+  personalAgentSchemaReady.add(dbPath);
+}
 
 export function nowMs() {
   return Date.now();
@@ -113,7 +122,11 @@ export async function agentJobDbPath(env = process.env) {
 
 export async function openAgentJobDb(env = process.env) {
   const dbPath = assertTestStoragePath(await agentJobDbPath(env), env, "agent_jobs_sqlite");
-  if (databases.has(dbPath)) return databases.get(dbPath);
+  if (databases.has(dbPath)) {
+    const db = databases.get(dbPath);
+    ensurePersonalAgentSchema(db, dbPath, env);
+    return db;
+  }
   sqliteModule ||= await import("node:sqlite");
   const db = new sqliteModule.DatabaseSync(dbPath);
   db.exec("pragma journal_mode = WAL");
@@ -124,7 +137,7 @@ export async function openAgentJobDb(env = process.env) {
   db.exec(schema);
   // Additive Personal Agent tables only when the feature is switched on, so
   // installs with it off keep their store schema unchanged (OP-03).
-  if (personalAgentFeature(env)) migratePersonalAgentEntities(db, { dryRun: false });
+  ensurePersonalAgentSchema(db, dbPath, env);
   databases.set(dbPath, db);
   return db;
 }
@@ -134,6 +147,7 @@ export async function closeAgentJobDbs() {
     try { db.close(); } catch {}
   }
   databases.clear();
+  personalAgentSchemaReady.clear();
 }
 
 // Run fn(db) inside one IMMEDIATE transaction. fn must be synchronous.
