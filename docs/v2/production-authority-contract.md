@@ -37,3 +37,14 @@ status routes are not activated by this checkpoint. UI must advertise their
 capabilities as unavailable until the concrete adapters/routes are reviewed.
 CompletedProposal remains awaiting acceptance, never completed/succeeded.
 No CPU/RAM telemetry or steering acknowledgement is inferred from activity.
+
+Read-only execution presentation is additive `contracts/src/execution.rs`,
+`ExecutionStatus` schema1. Server/store supply monotonic per-conversation revision
+and observation time. AwaitingAcceptance and Blocked are explicit; Completed
+requires verified acceptance, never a provider completion proposal. Progress and
+resource samples are optional timestamped evidence, not activity inference.
+CPU convention is permille of allocated capacity. A consumer must validate the
+snapshot and reject regressing revisions. Stop/steer remain false until reviewed
+routes and durable authority exist. No route path or control request shape is
+approved by this DTO; Runtime owns the route proposal with existing browser
+CSRF/Origin/Host guards and idempotency. This does not expand fixture schemas.
