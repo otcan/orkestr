@@ -21,6 +21,7 @@ async function fixture(t, enabled = true) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-pa-ingress-"));
   const env = { ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: enabled ? "1" : "0" };
   t.after(async () => {
+    if (env.ORKESTR_PERSONAL_AGENT_ENABLED === "1") await dispatchPersonalAgentEvents(env);
     await closeAgentJobDbs();
     await fs.rm(home, { recursive: true, force: true });
   });
