@@ -20,6 +20,8 @@ pub(super) async fn snapshot(f: &Fixture) -> Vec<String> {
         "events",
         "outbox",
         "fixture_run_leases",
+        "fixture_cancellations",
+        "fixture_control_outbox",
     ] {
         let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
             .fetch_all(&mut *tx)

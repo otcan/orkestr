@@ -24,13 +24,18 @@ pub(super) async fn authenticate(
     let mut expected = envelope(row)?;
     expected.run.lease_generation = provider.run.lease_generation;
     expected.run.lease_deadline_ms = provider.run.lease_deadline_ms;
+    expected.run.dispatch_fence = provider.run.dispatch_fence;
+    expected.run.purpose = provider.run.purpose;
     if expected != *provider {
         return Err(RuntimeStoreError::Conflict);
     }
-    let issued: i64 = sqlx::query_scalar("SELECT count(*) FROM fixture_run_leases WHERE run_id=? AND generation=? AND lease_deadline_ms=?")
+    let issued: i64 = sqlx::query_scalar("SELECT count(*) FROM fixture_run_leases WHERE run_id=? AND generation=? AND lease_deadline_ms=? AND dispatch_fence=? AND purpose=?")
         .bind(provider.run.run_id.to_string())
         .bind(i64::try_from(provider.run.lease_generation).map_err(|_|RuntimeStoreError::InvalidInput)?)
-        .bind(provider.run.lease_deadline_ms).fetch_one(conn).await.map_err(db)?;
+        .bind(provider.run.lease_deadline_ms)
+        .bind(i64::try_from(provider.run.dispatch_fence).map_err(|_|RuntimeStoreError::InvalidInput)?)
+        .bind(match provider.run.purpose { AdmissionPurpose::Execution => "execution", AdmissionPurpose::CancellationAcknowledgement => "cancellation_acknowledgement" })
+        .fetch_one(conn).await.map_err(db)?;
     if issued != 1 {
         return Err(RuntimeStoreError::Conflict);
     }
@@ -128,11 +133,12 @@ impl FixtureSupervisorStore {
             .filter(|g| *g <= i64::MAX as u64)
             .ok_or(RuntimeStoreError::Unavailable)?;
         sqlx::query(
-            "INSERT INTO fixture_run_leases(run_id,generation,lease_deadline_ms) VALUES(?,?,?)",
+            "INSERT INTO fixture_run_leases(run_id,generation,lease_deadline_ms,dispatch_fence) VALUES(?,?,?,?)",
         )
         .bind(admission.run_id.to_string())
         .bind(next as i64)
         .bind(extended)
+        .bind(i64::try_from(admission.dispatch_fence).map_err(db)?)
         .execute(&mut *tx)
         .await
         .map_err(db)?;

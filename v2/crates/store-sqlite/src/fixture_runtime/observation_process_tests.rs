@@ -73,6 +73,8 @@ async fn rows(path: &Path) -> Vec<String> {
         "events",
         "outbox",
         "fixture_run_leases",
+        "fixture_cancellations",
+        "fixture_control_outbox",
     ] {
         let columns = sqlx::query(&format!("PRAGMA table_info({table})"))
             .fetch_all(&mut *tx)
@@ -322,7 +324,7 @@ async fn sigkill_observation_rollback_and_committed_lost_reply_new_process() {
             }
             let observations: Value = serde_json::from_str(&after[3]).unwrap();
             assert_eq!(observations.as_array().unwrap().len(), 1);
-            for index in [0, 1, 4, 5, 9] {
+            for index in [0, 1, 4, 5, 9, 10, 11] {
                 assert!(before[index] == after[index]);
             }
             std::fs::write(root.join("committed"), b"yes").unwrap();

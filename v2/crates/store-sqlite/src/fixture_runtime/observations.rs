@@ -10,6 +10,7 @@ fn state(value: &str) -> Result<RunState> {
         "awaiting_acceptance" => Ok(RunState::AwaitingAcceptance),
         "failed" => Ok(RunState::Failed),
         "blocked" => Ok(RunState::Blocked),
+        "cancelled" => Ok(RunState::Cancelled),
         _ => Err(RuntimeStoreError::Unavailable),
     }
 }
@@ -54,6 +55,7 @@ impl FixtureSupervisorStore {
         if input.run_id != canonical.run.run_id || input.session_id != canonical.run.session_id {
             return Err(RuntimeStoreError::Conflict);
         }
+        let stopped = matches!(input.event, ProviderEvent::Stopped);
         let (kind, synthetic, progress) = match &input.event {
             ProviderEvent::Started => ("started", None, None),
             ProviderEvent::ApprovalRequested => ("approval_requested", None, None),
@@ -80,19 +82,32 @@ impl FixtureSupervisorStore {
         );
         if let Some(committed) = sqlx::query("SELECT o.*,e.sequence AS scope_sequence FROM fixture_observations o JOIN events e ON e.id=o.event_id WHERE o.run_id=? AND o.run_sequence=?")
             .bind(input.run_id.to_string()).bind(input.sequence as i64).fetch_optional(&mut *tx).await.map_err(db)? {
-            if committed.get::<String,_>("semantic_digest") != digest { return Err(RuntimeStoreError::Conflict); }
+            if committed.get::<String,_>("semantic_digest") != digest || input.lease_generation != provider.run.lease_generation || input.dispatch_fence != provider.run.dispatch_fence { return Err(RuntimeStoreError::Conflict); }
             return Ok(ProviderEventReceipt { event_id: EventId(Uuid::parse_str(&committed.get::<String,_>("event_id")).map_err(db)?), scope_sequence: committed.get("scope_sequence"), sequence: input.sequence, state: state(committed.get("receipt_state"))?, duplicate: true });
+        }
+        if (stopped && provider.run.purpose != AdmissionPurpose::CancellationAcknowledgement)
+            || (!stopped && provider.run.purpose != AdmissionPurpose::Execution)
+        {
+            return Err(RuntimeStoreError::Fenced);
         }
         self.validate_in(&mut tx).await?;
         if row.get::<String, _>("incarnation_id") != self.incarnation_id.to_string() {
             return Err(RuntimeStoreError::Fenced);
         }
         let (generation, deadline) = super::leases::current(&mut tx, &input.run_id).await?;
+        let fence: i64 = sqlx::query_scalar(
+            "SELECT dispatch_fence FROM fixture_run_leases WHERE run_id=? AND generation=?",
+        )
+        .bind(input.run_id.to_string())
+        .bind(generation as i64)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
+        if input.dispatch_fence != fence as u64 {
+            return Err(RuntimeStoreError::Fenced);
+        }
         if input.lease_generation != generation || provider.run.lease_generation != generation {
             return Err(RuntimeStoreError::StaleLease);
-        }
-        if input.dispatch_fence != canonical.run.dispatch_fence {
-            return Err(RuntimeStoreError::Fenced);
         }
         if deadline <= now(&mut tx).await? {
             return Err(RuntimeStoreError::Expired);
@@ -103,10 +118,7 @@ impl FixtureSupervisorStore {
         self.ready_in(&mut tx, provider).await?;
         // Unsupported new evidence cannot be persisted, but a changed replay
         // above must still conflict rather than masquerade as a retryable outage.
-        if matches!(
-            input.event,
-            ProviderEvent::Progress(_) | ProviderEvent::Stopped
-        ) {
+        if matches!(input.event, ProviderEvent::Progress(_)) {
             return Err(RuntimeStoreError::Unavailable);
         }
         let next: i64 = sqlx::query_scalar(
@@ -124,13 +136,16 @@ impl FixtureSupervisorStore {
             ("running", "completed_proposal") => "awaiting_acceptance",
             ("starting" | "running", "failed") => "failed",
             ("starting" | "running", "lost") => "blocked",
+            ("cancel_requested", "stopped") => "cancelled",
             _ => return Err(RuntimeStoreError::Conflict),
         };
         let sequence: i64 = sqlx::query_scalar("UPDATE conversations SET sequence=sequence+1 WHERE id=? AND owner_id=? RETURNING sequence")
             .bind(canonical.run.conversation_id.to_string()).bind(owner.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         let event_id = EventId(Uuid::new_v4());
-        sqlx::query("INSERT INTO events(id,owner_id,conversation_id,message_id,sequence,kind,schema_version) VALUES(?,?,?,NULL,?,'fixture_provider_observed',2)")
-            .bind(event_id.to_string()).bind(owner.to_string()).bind(canonical.run.conversation_id.to_string()).bind(sequence).execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("INSERT INTO events(id,owner_id,conversation_id,message_id,sequence,kind,schema_version) VALUES(?,?,?,NULL,?,?,?)")
+            .bind(event_id.to_string()).bind(owner.to_string()).bind(canonical.run.conversation_id.to_string()).bind(sequence)
+            .bind(if stopped { "fixture_provider_stopped" } else { "fixture_provider_observed" })
+            .bind(if stopped { 4_i64 } else { 2_i64 }).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("INSERT INTO fixture_observations(event_id,run_id,run_sequence,semantic_digest,kind,synthetic,lease_generation,dispatch_fence,receipt_state) VALUES(?,?,?,?,?,?,?,?,?)")
             .bind(event_id.to_string()).bind(input.run_id.to_string()).bind(input.sequence as i64).bind(digest).bind(kind).bind(synthetic).bind(input.lease_generation as i64).bind(input.dispatch_fence as i64).bind(target).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("INSERT INTO outbox(event_id) VALUES(?)")
@@ -144,11 +159,25 @@ impl FixtureSupervisorStore {
             .execute(&mut *tx)
             .await
             .map_err(db)?;
+        if stopped {
+            sqlx::query("UPDATE fixture_control_outbox SET state='acknowledged' WHERE run_id=? AND state='pending'")
+                .bind(input.run_id.to_string()).execute(&mut *tx).await.map_err(db)?;
+        }
         #[cfg(feature = "fixture-test-controls")]
-        self.fixture_checkpoint("observation-before-commit").await?;
+        self.fixture_checkpoint(if stopped {
+            "stopped-before-commit"
+        } else {
+            "observation-before-commit"
+        })
+        .await?;
         tx.commit().await.map_err(db)?;
         #[cfg(feature = "fixture-test-controls")]
-        self.fixture_checkpoint("observation-after-commit").await?;
+        self.fixture_checkpoint(if stopped {
+            "stopped-after-commit"
+        } else {
+            "observation-after-commit"
+        })
+        .await?;
         Ok(ProviderEventReceipt {
             event_id,
             scope_sequence: sequence,

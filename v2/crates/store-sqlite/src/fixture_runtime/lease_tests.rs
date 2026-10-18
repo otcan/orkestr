@@ -139,7 +139,7 @@ async fn historical_committed_evidence_replays_after_renewal_but_new_stale_input
             .request_cancel(&f.owner, &p.run.run_id, "cancel")
             .await
             .unwrap_err(),
-        RuntimeStoreError::Unavailable
+        RuntimeStoreError::Fenced
     );
     assert!(before == snapshot(&f).await);
     f.cleanup().await;

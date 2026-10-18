@@ -7,6 +7,7 @@ use sqlx::{Row, SqliteConnection};
 use uuid::Uuid;
 
 mod admission;
+mod cancellation;
 mod dispatch;
 mod inspection;
 mod leases;
@@ -221,3 +222,9 @@ mod observation_process_tests;
 
 #[cfg(test)]
 mod lease_tests;
+
+#[cfg(test)]
+mod cancellation_tests;
+
+#[cfg(test)]
+mod cancellation_authority_tests;

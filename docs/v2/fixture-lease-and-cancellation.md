@@ -1,5 +1,9 @@
 # Fixture lease renewal and the cancellation boundary
 
+Historical design and compatibility checkpoints below describe their original
+commit states. The implemented request/Stopped transactions and current gates
+are documented in [fixture-cancellation-adapter.md](fixture-cancellation-adapter.md).
+
 The existing v5 `RuntimeStore::renew_lease(&RunAdmission, expected_generation)`
 port is implemented only on an authorized `FixtureSupervisorStore`. Ordinary
 `Store` remains unavailable. No provider is started or interrupted.
