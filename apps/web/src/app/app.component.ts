@@ -12,6 +12,7 @@ import { FirstThreadWizardComponent } from "./first-thread-wizard.component";
 import { FilesPageComponent } from "./files-page.component";
 import { InstanceSettingsPageComponent } from "./instance-settings-page.component";
 import { refreshAppExtras } from "./app-refresh-extras";
+import { startAppSetupRefresh } from "./app-setup-refresh";
 import { OnboardingPageComponent } from "./onboarding-page.component";
 import { OwnerLoginPageComponent } from "./owner-login-page.component";
 import { PairingRequiredPageComponent } from "./pairing-required-page.component";
@@ -288,6 +289,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private attachmentEncryptionRetryTimer?: ReturnType<typeof setTimeout>;
   private summarySocket?: WebSocket;
   private destroyed = false;
+  private refreshGeneration = 0;
+  private cancelSetupRefresh?: () => void;
   private applyingSummary = false;
   private pendingSummaryThreads: ThreadSummary[] | null = null;
   private readonly activeThreadRefresh = new ActiveThreadRefresh(
@@ -384,6 +387,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   ngOnDestroy(): void {
     this.destroyed = true;
+    this.refreshGeneration++;
+    this.cancelSetupRefresh?.();
     this.activeThreadRefresh.stop();
     this.stopFallbackPolling();
     if (this.systemPoller) clearInterval(this.systemPoller);
@@ -406,6 +411,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async refresh(showBusy = true): Promise<void> {
+    const generation = ++this.refreshGeneration;
+    const current = () => !this.destroyed && generation === this.refreshGeneration;
+    let entryDenied = false;
+    this.cancelSetupRefresh?.();
     if (this.sharedAppActive() || this.publicAppsActive()) {
       this.appReady = true;
       this.apiOnline = true;
@@ -421,16 +430,39 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (showBusy) this.busy = true;
     try {
       const ownerLoginRequest = this.ownerLoginChecked ? Promise.resolve() : this.loadOwnerLoginStatus();
-      const [threadsResult, setupResult, userResult, instanceContextResult] = await Promise.allSettled([
+      this.cancelSetupRefresh = startAppSetupRefresh(this.api.setupStatus(), {
+        apply: async (setup, setupCurrent) => {
+          if (!current() || !setupCurrent()) return;
+          this.setupStatus = setup;
+          if (this.isPairingRequiredFromSetup(setup)) {
+            entryDenied = true;
+            this.enterPairingRequired(setup);
+            this.renderNow();
+            return;
+          }
+          await this.refreshClaudeRuntimeReady(() => current() && setupCurrent());
+          if (!current() || !setupCurrent()) return;
+          if (this.runtimeGateActive() && this.canCreateThreadFromSidebar()) this.threadWizardOpen = true;
+          this.renderNow();
+        },
+        failed: error => {
+          if (!current()) return;
+          if (this.isPairingRequiredError(error)) { entryDenied = true; this.enterPairingRequired(); }
+          this.renderNow();
+        },
+      });
+      const [threadsResult, userResult, instanceContextResult] = await Promise.allSettled([
         firstValueFrom(this.api.threads({ includeRetired: this.showRetiredThreads })),
-        firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.currentUser()),
         firstValueFrom(this.api.instanceContext()),
       ]);
-      if (setupResult.status === "fulfilled") this.setupStatus = setupResult.value;
-      if (userResult.status === "fulfilled") this.currentUser = userResult.value.user;
-      await this.refreshClaudeRuntimeReady();
+      if (!current() || entryDenied) return;
+      // These protected endpoints, not optional setup diagnostics, authorize entry.
+      if (threadsResult.status === "rejected") throw threadsResult.reason;
+      if (userResult.status === "rejected") throw userResult.reason;
+      this.currentUser = userResult.value.user;
       await ownerLoginRequest;
+      if (!current() || entryDenied) return;
       if (this.runtimeGateActive() && this.canCreateThreadFromSidebar()) this.threadWizardOpen = true;
       if (instanceContextResult.status === "fulfilled") {
         this.instanceContext = instanceContextResult.value.instance;
@@ -442,9 +474,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         return;
       }
       this.pairingRequired = false;
-      if (userResult.status === "fulfilled") await this.bootstrapAttachmentEncryption();
+      await this.bootstrapAttachmentEncryption();
+      if (!current() || entryDenied || this.pairingRequired) return;
       this.appReady = true;
       if (await this.redirectPairedBrowserFromPairingPath()) return;
+      if (!current() || entryDenied) return;
       if (!this.uiRuntimeReady() && !this.onboardingActive) {
         this.apiOnline = true;
         this.threadWizardOpen = false;
@@ -458,24 +492,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         this.error = "";
         return;
       }
-      if (threadsResult.status === "rejected") {
-        if (this.isPairingRequiredError(threadsResult.reason)) {
-          this.apiOnline = true;
-          this.enterPairingRequired();
-          return;
-        }
-        throw threadsResult.reason;
-      }
       const payload = threadsResult.value;
       this.apiOnline = true;
       this.applyThreadListMeta(payload);
       this.trackThreadActivity(payload.threads);
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
       void refreshAppExtras(this.api, {
-        system: value => { if (!this.destroyed) { this.opsSystem = value; this.renderNow(); } },
-        timers: value => { if (!this.destroyed) { this.allTimers = value; this.renderNow(); } },
-        whatsapp: value => { if (!this.destroyed) { this.whatsappStatusDetails = value; this.renderNow(); } },
-        version: value => { if (!this.destroyed) { this.versionInfo = value; this.renderNow(); } },
+        system: value => { if (current()) { this.opsSystem = value; this.renderNow(); } },
+        timers: value => { if (current()) { this.allTimers = value; this.renderNow(); } },
+        whatsapp: value => { if (current()) { this.whatsappStatusDetails = value; this.renderNow(); } },
+        version: value => { if (current()) { this.versionInfo = value; this.renderNow(); } },
       });
       if (this.canonicalizeInstanceRoute()) return;
       if (this.canonicalizeCurrentThreadRoute()) return;
@@ -513,16 +539,21 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.syncThreadTextState(selected);
       this.renderNow();
       await this.loadSelectedThread(false);
+      if (!current() || entryDenied) return;
       this.updateDocumentTitle();
       this.error = "";
       this.connectSummaryStream();
     } catch (error) {
+      if (!current()) return;
+      if (this.isPairingRequiredError(error)) {
+        this.enterPairingRequired();
+        return;
+      }
       this.apiOnline = false;
       this.error = this.errorText(error);
       this.appReady = true;
     } finally {
-      this.busy = false;
-      this.renderNow();
+      if (current()) { this.busy = false; this.renderNow(); }
     }
   }
 
@@ -690,7 +721,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.claudeRuntimeChecked && this.codexStatusAuthoritative() && !this.agentRuntimeReady();
   }
 
-  private async refreshClaudeRuntimeReady(): Promise<void> {
+  private async refreshClaudeRuntimeReady(current = () => !this.destroyed): Promise<void> {
+    if (!current()) return;
     if (this.codexAgentReady() || !this.isAdminMode()) {
       this.claudeRuntimeChecked = true;
       return;
@@ -698,8 +730,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (Date.now() - this.claudeRuntimeCheckedAt < 15_000 && this.claudeRuntimeChecked) return;
     try {
       const result = await firstValueFrom(this.api.llmAccounts("claude-code"));
+      if (!current()) return;
       this.claudeRuntimeReady = result.enabled === true && (result.accounts || []).some((account) => account.state === "ready");
     } catch {
+      if (!current()) return;
       this.claudeRuntimeReady = false;
     }
     this.claudeRuntimeCheckedAt = Date.now();
