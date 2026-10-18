@@ -1,50 +1,38 @@
-# Durable timer compilation and registration evidence
+# Durable timer leaf build checkpoint
 
-Migration leaf source: `02609673e914759f026a3fb08e2994b40132e05e`.
-Admitted disposable base: `473cdd207886ac812f44bcd3836f54ff70f49cfc`.
-Only the eight owned `history_import/timers/` files and temporary
-`pub mod timers;` registration were added to that archive. All eleven existing
-manifest/lock/toolchain hashes remained unchanged. Every other tracked base file
-was compared byte-for-byte; the only allowed shared difference was that temporary
-registration line.
+Exact Core: `256449100fbb4882bb9a6675a3c9714310183fb7`.
+Owned source: `87904cb45d28e4d4e087f7226d18a7c516592864` authority subtree and
+input helper only. Disposable composition adds only temporary `pub mod authority;`
+to the timer module; manifests/lockfiles remain byte-identical with Core.
+Fixture-local unnumbered 0033 is not registered migration/upgrade credit.
 
-Executed through the admission wrapper with isolated home/target:
+Executed through required wrapper, isolated lane home/target, offline/locked:
 
 ```sh
-v2-cargo test --manifest-path "$ARCHIVE/v2/Cargo.toml" --offline --locked \
+v2-cargo test --manifest-path "$COMPOSITION/v2/Cargo.toml" --offline --locked \
   -p orkestr-v2-store-sqlite --features fixture-test-controls \
   history_import::timers -- --test-threads=1
-v2-cargo clippy --manifest-path "$ARCHIVE/v2/Cargo.toml" --offline --locked \
-  -p orkestr-v2-store-sqlite --features fixture-test-controls \
-  --all-targets -- -D warnings
+v2-cargo clippy --manifest-path "$COMPOSITION/v2/Cargo.toml" --offline --locked \
+  -p orkestr-v2-store-sqlite --features fixture-test-controls --all-targets \
+  -- -D warnings
 ```
 
-The leaf **compiled**. The first test run returned exit 101: six passed and two
-failed at ordinary `Store::open` during reopen/second-pool setup. The proposal
-schema had been installed only by the synthetic test harness; Core correctly
-refused it as an unregistered schema. Preflight was not weakened. Strict feature
-all-target clippy passed, exit 0. The selected test run filtered 162 other unit
-tests; they were **unexecuted**, not credited as passed.
+Compilation succeeded. Tests: **18 PASS, 2 FAIL**, command exit101, 175 filtered;
+3.57 seconds. All 14 existing timer tests and four new authority tests passed:
+immutable instructions/current owner auth, revoke/held provenance/fresh enable,
+terminal Stop, and atomic rollback when authority insertion fails.
 
-- Binary SHA256: `2697f39c75c9773de5c3fc8a192f67068fc37666d731ae2a1d90e464f9fb1c11`.
-- Owned input hash-manifest SHA256: `20d7948b332220a37dcba6b3d9e212e9784f09c6b7c8d9128e174141060b7802`.
-  This hashes compact sorted-key JSON mapping repository-relative owned paths to
-  SHA256 digests of their exact committed bytes.
+Both remaining tests fail at `Store::open` with `StoreError::Invalid`:
+weekly reopen and second-pool revoke race. Core's preflight compares the actual
+schema against its registered migration prefix; fixture-only 0033 is deliberately
+outside that prefix. These tests remain unchanged and unsatisfied. Do not bypass
+preflight, fabricate 0031/0032 or call this durable restart/race acceptance.
+Core's registered contiguous successor is the precise dependency for rerunning
+those two tests. Supervisor issuer/current-machine acceptance remains separately
+Core-owned; these leaf tests do not qualify that boundary.
 
-Core subsequently published registered successor
-`f93bc0f681acf4801e022b259d9695d524944141`: authoritative migration 0027,
-module registration and preflight union tests. Migration independently compared
-all eight owned leaf files against that committed successor: byte-identical.
-
-**Separately attributed Core execution:** eight of eight timer tests passed,
-including ordinary reopen and two-pool claim races; nine preflight and sixteen
-terminal selected tests passed; strict feature all-target clippy, formatting and
-whitespace checks passed. Core reports actual contiguous migration 26/27/28
-coverage without fake predecessors. These are Core's reported execution results,
-not a second Migration rerun. Independent registration review remains a gate.
-
-No production timer, credential, native input, provider or external effect was
-read or changed. Actual timer-to-runtime dispatch, process-kill windows and
-live migration are **unexecuted**. The claim receipt remains inert; a native
-admission bridge must atomically validate timer generation and retain Core Stop
-fences before any dispatch capability is introduced.
+Strict feature all-target Clippy: **PASS**, exit0, 10.14 seconds.
+Owned formatting/diff checks: PASS. Test binary SHA256:
+`4ab22072810de8e3bc6d0b7e911b3f72c6276015cc46a881a32a57721d030b75`.
+Private evidence retains archive and individual source hashes and exact results.
+No live timers, production stores, credentials or external dispatch were used.
