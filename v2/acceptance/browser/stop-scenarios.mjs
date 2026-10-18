@@ -110,10 +110,14 @@ export async function stopScenarios({page,conversation,fixture,report,signal,mod
 // Separate case: the runner must name and execute a reviewed canonical control
 // transition. A followup, Progress, fabricated 409 or revision setter is invalid.
 export async function staleControlScenario({page,conversation,transition,report,signal}) {
+  assert.equal(transition?.kind,'completed-proposal','correlated_completion_transition_required');
   assert.equal(typeof transition?.apply,'function','canonical_control_transition_required');
   assert.equal(typeof transition?.source,'string');assert(transition.source.length>0);
   const base=`/api/v2/conversations/${conversation}`,path=base+'/stop';
   await wait(()=>enabled(page,'Stop'),'owned_stop_not_advertised',signal);
+  const before=await read(page,base+'/execution');assert.equal(before.status,200);
+  assert.equal(before.body.phase,'running');assert.equal(before.body.capabilities.stop,true);
+  const retained=await draft(page);
   const cdp=await page.createCDPSession();let original,current,error;
   await cdp.send('Fetch.enable',{patterns:[{urlPattern:`*${path}`,requestStage:'Request'}]});
   cdp.on('Fetch.requestPaused',event=>{void(async()=>{
@@ -123,6 +127,10 @@ export async function staleControlScenario({page,conversation,transition,report,
     current=await read(page,base+'/execution');assert.equal(current.status,200);
     assert.equal(current.body.run_id,original.run_id);
     assert(current.body.control_revision>original.expected_control_revision,'control_state_must_advance');
+    assert.equal(current.body.phase,'awaiting_acceptance');
+    assert.equal(current.body.capabilities.stop,false);
+    assert.equal(current.body.acceptance_candidate?.run_id,original.run_id);
+    assert.equal(typeof current.body.acceptance_candidate?.completion_event_id,'string');
     await cdp.send('Fetch.continueRequest',{requestId:event.requestId});
   })().catch(cause=>{error=cause;void cdp.send('Fetch.failRequest',{requestId:event.requestId,errorReason:'Failed'}).catch(()=>{});});});
   try{
@@ -131,11 +139,13 @@ export async function staleControlScenario({page,conversation,transition,report,
     assert.equal(refused.status(),409);
     assert.deepEqual(JSON.parse(refused.request().postData()),original);
   }finally{await cdp.send('Fetch.disable').catch(()=>{});await cdp.detach();}
-  // A canonical transition may revoke Stop or make the run terminal. In that
-  // case no new request is legitimate; review is only enabled for a stoppable run.
+  // Completion is only a proposal: neither owner acceptance nor cancellation.
   await wait(()=>page.$eval('section[aria-label="Execution and resources"]',node=>node.innerText.includes('Stop not confirmed. Refresh execution status before retrying.')),'control_conflict_not_rendered',signal);
-  const reviewable=current.body.capabilities.stop&&['queued','starting','running'].includes(current.body.phase);
+  const reviewable=false;
   await wait(async()=>(await enabled(page,'Review updated Stop'))===reviewable,'control_conflict_review_mismatch',signal);
+  assert.equal(await enabled(page,'Stop'),false);
+  assert.equal(await draft(page),retained);
   report.checks.push({name:'stale_run_control',status:'passed',transition_source:transition.source,
-    stale_control_revision:409,review_available:reviewable,original_request_preserved:true});
+    stale_control_revision:409,review_available:reviewable,original_request_preserved:true,
+    phase:'awaiting_acceptance',owner_accepted:false,draft_preserved:true});
 }

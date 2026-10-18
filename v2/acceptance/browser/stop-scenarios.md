@@ -48,16 +48,21 @@ supply a reviewed successor hook before this scenario is executable. This UI
 module does not add a parallel peer, backend mutation or revision setter.
 
 `staleControlScenario({page,conversation,transition,report,signal})` is a separate
-fresh-run case. The runner supplies `transition.source` (exact reviewed source
-provenance) and `transition.apply()` implementing a canonical ordinary control
-state transition. The scenario pauses the mounted request, verifies the same run
-and strictly newer control revision, and requires an actual 409. It waits for the
-refusal notice and checks explicit review is available only if the resulting
-canonical phase/capability still allows Stop. A terminal or revoked-capability
-transition must keep review unavailable. No automatic retry or control override
-is allowed. The exact canonical transition remains a Core/Runtime handoff gate;
-Progress, followup intake, manual revision mutation and fabricated responses are
-not valid substitutes.
+fresh-run Running case. The runner supplies `transition.kind =
+"completed-proposal"`, `transition.source` (exact reviewed source provenance) and
+`transition.apply()` releasing the real peer's correlated completion proposal
+through the ordinary pump. The scenario pauses the mounted request and requires
+the same run, strictly newer control revision, AwaitingAcceptance with its typed
+matching completion candidate and Stop capability false, before requiring the
+actual stale Stop 409. It waits for the refusal notice and requires both Stop and
+Review updated Stop unavailable, while preserving the draft. No owner acceptance
+is sent and no cancellation is inferred. Starting-to-Running via native Started
+is a separate valid Store transition, not this mounted Running scenario.
+
+Core has identified this canonical transition; exact reviewed peer/pump barrier
+source remains a runner handoff prerequisite. Progress, followup intake, renewal,
+manual revision mutation and fabricated responses are not substitutes. No
+parallel fixture/backend implementation is added here.
 
 Legacy `expected_control_revision: None` remains distinct: strict projection CAS
 and explicit review are covered by the Rust legacy Stop regression. Do not use
