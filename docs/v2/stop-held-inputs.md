@@ -28,3 +28,22 @@ Upgrade applies historical Deep Stop boundaries to still-unconsumed rows only;
 no completed history is undone. Independent process/upgrade qualification is
 separate from authored transaction tests. Schema 26 is reserved for the delegated
 Worker task ledger and schema 27 for dormant timers.
+
+## Browser read registration contract
+
+The selected read path is
+`GET /api/v2/conversations/{id}/held-inputs?after_sequence=0&limit=50`.
+`after_sequence` defaults to zero and is an exclusive nonnegative inbox-sequence
+cursor; `limit` defaults to 50 and must be 1..100. Unknown or repeated query
+fields and malformed numbers must refuse rather than silently change the cut.
+The existing server lifecycle owner registers this route; this document does
+not activate it.
+
+The handler passes the exact current browser credential to
+`held_owner_inputs_authenticated`, preserves owner/conversation isolation and
+returns its `HeldOwnerInputPage` with `Cache-Control: no-store`. It must not use
+machine credentials from the browser or bypass the bound supervisor checks.
+Pages are individually authenticated reads, not a stable cross-page snapshot.
+No held-input Resume/Cancel request DTO or mutation transaction is published.
+The UI must keep those actions unavailable and cannot infer readiness from
+`eligible_input_available`.
