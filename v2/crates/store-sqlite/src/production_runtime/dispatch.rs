@@ -183,7 +183,18 @@ impl Store {
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
+        let parent_run = match row.get::<Option<String>, _>("worker_delegation_id") {
+            Some(delegation) => {
+                let parent: String = sqlx::query_scalar(
+                    "SELECT parent_run_id FROM worker_provider_delegations WHERE id=? AND admitted_run_id=?",
+                ).bind(delegation).bind(claim.provider.run.run_id.to_string())
+                 .fetch_one(&mut *tx).await.map_err(db)?;
+                Some(orkestr_v2_contracts::RunId(parent.parse().map_err(db)?))
+            }
+            None => None,
+        };
         let capability = ConsumedProviderDispatch {
+            parent_run,
             provider: claim.provider.clone(),
             message_id: orkestr_v2_contracts::MessageId(Uuid::parse_str(&message_id).map_err(db)?),
             source_event_id: orkestr_v2_contracts::EventId(

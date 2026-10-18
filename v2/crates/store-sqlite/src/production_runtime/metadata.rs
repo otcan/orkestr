@@ -46,7 +46,8 @@ impl ReadySessionTransition {
     ) -> Result<ConsumedProviderDispatch> {
         // Admission retains the immutable Ready snapshot; the live row is Busy.
         let expected = self.ready;
-        if dispatch.provider().binding != expected
+        if dispatch.parent_run != self.metadata.parent_run
+            || dispatch.provider().binding != expected
             || dispatch.namespace() != self.metadata.namespace()
             || dispatch.incarnation_id() != self.metadata.incarnation_id()
         {
