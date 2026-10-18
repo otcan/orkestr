@@ -45,7 +45,12 @@ function fakeExec({ failOn = "", onOrigin = true } = {}) {
 }
 
 test("check builds and tests the exact sha in a throwaway worktree and records the result", async () => {
-  const env = stateEnv({ ORKESTR_HOME: "/should/not/leak", GITHUB_TOKEN: "t" });
+  const privateKeys = [
+    "ORKESTR_HOME", "ORKESTR_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN",
+    "ORKESTR_CONNECTOR_ENCRYPTION_KEY", "ORKESTR_SECRET_KEY", "ORKESTR_SECURE_INPUT_KEY",
+  ];
+  const env = stateEnv({ ...Object.fromEntries(privateKeys.map((key) => [key, "synthetic-private-value"])), PATH: "/test/bin" });
+  const originalEnv = { ...env };
   const { exec, calls } = fakeExec();
   const { stdout, stderr } = io();
   const code = await releaseTrainCommand(["check", "--ref", "main", "--json"], { env, stdout, stderr, cwd: REPO }, { exec });
@@ -61,7 +66,11 @@ test("check builds and tests the exact sha in a throwaway worktree and records t
   ]);
   assert.ok(steps.every((call) => call.cwd === worktree));
   assert.equal(steps.find((call) => call.args.includes("test:ci")).env.TMPDIR, "/tmp");
-  assert.ok(steps.every((call) => call.env.ORKESTR_HOME === undefined && call.env.GITHUB_TOKEN === undefined));
+  for (const call of steps) {
+    for (const key of privateKeys) assert.equal(call.env[key], undefined, `${key} reached ${call.args.join(" ")}`);
+    assert.equal(call.env.PATH, env.PATH);
+  }
+  assert.deepEqual(env, originalEnv, "checking a release must not strip the operator's environment");
   const scan = steps.at(-1).args;
   assert.deepEqual(scan.slice(1, 7), ["--root", worktree, "--commit", SHA, "--policy-commit", SHA]);
   assert.ok(calls.some((call) => call.args.join(" ").includes(`worktree remove --force ${worktree}`)));

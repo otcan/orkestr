@@ -4,6 +4,7 @@
 
 - Preserve scoped WhatsApp account recovery, existing thread route fences, and dormant timer notification safeguards in the regular release.
 - Verify the running connector processes use the installed release before reporting activation success or pruning older releases.
+- Keep control-plane encryption keys out of every release-check build and dependency step.
 
 ## 0.1.0-alpha.212
 
