@@ -35,10 +35,14 @@ version change, migration substitution, or tracked shared-Store edit was used.
 The broker files came from the exact matching package inventory above; shared
 Python transport files must not replace newer integration files wholesale.
 
-The locked/offline `orkestr-runtime --lib claude` selection passed 36 tests,
-including three ordinary Store/owned synthetic-process cases: durable progress
+The locked/offline `orkestr-runtime --lib claude` selection passed 37 tests,
+including four ordinary Store/owned synthetic-process cases: durable progress
 and proposal, failed terminal result, and credential revocation after emitted
 system/init but before identity persistence. The latter appends neither Started
-nor output. Existing parser/codec tests cover identity, correlation, preparation,
+nor output. The fourth case holds an independent SQLite write transaction until
+the real observation call returns Busy/Unavailable, verifies pending identity is
+retained, then commits the exact observation outside the pump to model a lost
+success reply. Pump retry uses the same key and completes normally. This models
+a lost reply; it does not inject a network or disk failure. Existing parser/codec tests cover identity, correlation, preparation,
 actual-write ordering and bounded malformed input. This does not qualify HTTP,
 authenticated native execution, resume, or full release readiness.

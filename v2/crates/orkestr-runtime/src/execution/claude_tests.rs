@@ -11,9 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-async fn exercise(failure: bool, revoke_before_observation: bool) {
+async fn exercise(failure: bool, revoke_before_observation: bool, retry_observation: bool) {
     let root = std::path::PathBuf::from(std::env::var("ORKESTR_V2_HOME").unwrap()).join(format!(
-        "claude-owned-{}-{failure}-{revoke_before_observation}",
+        "claude-owned-{}-{failure}-{revoke_before_observation}-{retry_observation}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).unwrap();
@@ -162,6 +162,7 @@ for line in sys.stdin:
         .is_err());
     let (authority, mut pump) = ready.attach(bound.clone(), cap).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
+    let mut retried = false;
     loop {
         pump.flush().unwrap();
         if pump.awaiting_native_observation() && revoke_before_observation {
@@ -177,6 +178,44 @@ for line in sys.stdin:
             assert!(status.progress.is_none());
             assert!(status.acceptance_candidate.is_none());
             break;
+        }
+        if pump.awaiting_native_observation() && retry_observation && !retried {
+            use std::io::{BufRead, Write};
+            use std::process::{Command, Stdio};
+            // Independent ordinary SQLite writer causes a real transient refusal.
+            let mut lock = Command::new("/usr/bin/python3")
+                .arg("-c")
+                .arg("import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('BEGIN IMMEDIATE'); print('locked',flush=True); sys.stdin.readline(); c.rollback()")
+                .arg(root.join("state.sqlite3"))
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn().unwrap();
+            let mut ready = String::new();
+            std::io::BufReader::new(lock.stdout.take().unwrap())
+                .read_line(&mut ready)
+                .unwrap();
+            assert_eq!(ready.trim(), "locked");
+            let error = pump.step(&bound).await.unwrap_err();
+            assert!(matches!(
+                error,
+                crate::supervisor::Error::Store(
+                    orkestr_v2_application::runtime::RuntimeStoreError::Busy
+                        | orkestr_v2_application::runtime::RuntimeStoreError::Unavailable
+                )
+            ));
+            assert!(pump.awaiting_native_observation());
+            assert!(pump.pending().is_none());
+            lock.stdin.take().unwrap().write_all(b"release\n").unwrap();
+            assert!(lock.wait().unwrap().success());
+            // Commit the exact observation without delivering its success to the
+            // pump. Its next step must replay that key, not read another frame.
+            let key = format!("claude-observed:{}:{}", p.run.run_id, p.binding.generation);
+            bound
+                .observe_claude_session(&p, p.binding.native_session_id.as_deref().unwrap(), &key)
+                .await
+                .unwrap();
+            assert!(pump.awaiting_native_observation());
+            retried = true;
         }
         pump.step(&bound).await.unwrap();
         if pump.awaiting_native_observation() {
@@ -210,6 +249,7 @@ for line in sys.stdin:
         assert!(Instant::now() < deadline, "completion timeout");
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
+    assert_eq!(retried, retry_observation);
     authority.revoke().unwrap();
     drop(pump);
     drop(authority);
@@ -220,14 +260,19 @@ for line in sys.stdin:
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_claude_first_turn_persists_progress_and_proposal() {
-    exercise(false, false).await;
+    exercise(false, false, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_claude_failed_result_never_proposes_success() {
-    exercise(true, false).await;
+    exercise(true, false, false).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn claude_revoked_after_emitted_init_never_appends_started_or_output() {
-    exercise(false, true).await;
+    exercise(false, true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_observation_busy_and_lost_reply_preserve_original_identity() {
+    exercise(false, false, true).await;
 }
