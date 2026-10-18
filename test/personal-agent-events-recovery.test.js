@@ -202,3 +202,56 @@ test("an archive being compressed is never listed under its final .gz name", asy
   }
   assert.deepEqual(partial, [], "no listed .gz archive is ever incomplete");
 });
+
+test("a listed archive replaced by its .gz while scanning is read from the replacement", async (t) => {
+  const env = await fixture(t);
+  const { readRetainedArchive } = await import("../packages/core/src/personal-agent-events.js");
+  const { gzipSync } = await import("node:zlib");
+  const dir = path.dirname(dataPaths(env).events);
+  await fs.mkdir(dir, { recursive: true });
+  const listed = path.join(dir, "events-20261018-000000-1.jsonl");
+  await fs.writeFile(`${listed}.gz`, gzipSync(`${JSON.stringify({ eventId: "evt_replaced" })}\n`));
+  const seen = [];
+  for await (const event of readRetainedArchive(listed, false)) seen.push(event.eventId);
+  assert.deepEqual(seen, ["evt_replaced"]);
+});
+
+test("dispatch does not scan retained archives of the shared journal", async (t) => {
+  const env = await fixture(t);
+  const dir = path.dirname(dataPaths(env).events);
+  await fs.mkdir(dir, { recursive: true });
+  // An unreadable older archive: a scan of every retained archive would fail
+  // on it. Only the newest archive (readable here) is consulted.
+  await fs.writeFile(path.join(dir, "events-20261018-000000-1.jsonl.gz"), "not gzip");
+  await fs.writeFile(path.join(dir, "events-20261018-000001-2.jsonl"), "");
+  const [first] = await queueOnly(env, 1);
+  const result = await dispatchPersonalAgentEvents(env);
+  assert.equal(result.dispatched, 1);
+  const db = await openAgentJobDb(env);
+  assert.ok(db.prepare("select dispatched_at from personal_agent_event_outbox where event_id = ?").get(first.eventId).dispatched_at);
+});
+
+test("an event journaled before a crash and redispatched appears once in the feed", async (t) => {
+  const env = await fixture(t);
+  const [first] = await queueOnly(env, 1);
+  const db = await openAgentJobDb(env);
+  const payload = db.prepare("select payload_json from personal_agent_event_outbox where event_id = ?").get(first.eventId).payload_json;
+  const journal = dataPaths(env).events;
+  await fs.mkdir(path.dirname(journal), { recursive: true });
+  await fs.writeFile(journal, `${payload}\n`); // appended, then the process died before acknowledging
+  await dispatchPersonalAgentEvents(env);
+  const feed = await listPersonalAgentEvents({}, env);
+  assert.deepEqual(feed.events.map((event) => event.eventId), [first.eventId]);
+  assert.equal(feed.resetRequired, false);
+});
+
+test("the feed reads events from a compressed archive", async (t) => {
+  const env = await fixture(t);
+  const { rotateEvents } = await import("../packages/storage/src/store.js");
+  const queued = await queueOnly(env, 2);
+  await dispatchPersonalAgentEvents(env);
+  await rotateEvents(env, { force: true, compress: true, waitForCompression: true });
+  const feed = await listPersonalAgentEvents({}, env);
+  assert.equal(feed.resetRequired, false);
+  assert.deepEqual(feed.events.map((event) => event.eventId), queued.map((event) => event.eventId));
+});
