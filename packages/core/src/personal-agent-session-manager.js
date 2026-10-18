@@ -150,7 +150,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, resolveC
       if (!["final", "cancelled", "park", "expired"].includes(result?.type)) throw sessionError("agent_session_outcome_invalid");
       const current = owned(id);
       if (result.type === "final" && !current.nativeSessionId) throw sessionError("agent_session_native_session_missing");
-      fenced(row, { lifecycle: result.type === "cancelled" && row.lifecycle === "starting" ? "starting" : "ready", blockedReason: null }, true);
+      fenced(row, { lifecycle: !current.nativeSessionId || (result.type === "cancelled" && row.lifecycle === "starting") ? "starting" : "ready", blockedReason: null }, true);
       return result;
     });
   }

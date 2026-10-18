@@ -163,3 +163,14 @@ test("unavailable before native creation persists a blocked row with NULL native
   assert.equal(blocked.nativeSessionId, null);
   assert.equal(blocked.leaseToken, null);
 });
+
+test("parking before native creation never reports a ready NULL native session", async () => {
+  const h = sessionHarness();
+  const row = h.manager.ensure(sessionInput);
+  h.adapter.run = async () => ({ type: "park", approval: { approvalId: "synthetic-before-start" } });
+  assert.equal((await h.manager.runTurn(row.id, supervisor(), {})).type, "park");
+  const parked = h.manager.get(row.id);
+  assert.equal(parked.nativeSessionId, null);
+  assert.equal(parked.lifecycle, "starting");
+  assert.equal(parked.leaseToken, null);
+});

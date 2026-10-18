@@ -145,7 +145,8 @@ guess a binding or replay an effect. The empty-session cache is invalidated
 **before** `turn/start` dispatch: a lost acknowledgement must reconcile actual
 native state rather than bypassing the busy-turn check. Claude print mode cannot allocate a
 metadata-only session: its native ID is null/`starting` until the first real
-supervised turn reports it. No UUID is presented as a fabricated Claude ID.
+supervised turn reports it. Parking for approval before native creation also
+remains `starting`, never `ready` with a null native identity. No UUID is presented as a fabricated Claude ID.
 
 ## Storage and integration dependency
 
