@@ -139,17 +139,19 @@ export async function dispatchPersonalAgentEvents(env = process.env, { limit = 1
     // An interrupted earlier append may have left a partial record; fence it
     // off so the redispatched record is not glued onto the fragment.
     await terminateEventJournalTail(env);
-    const journaledIds = await readableEventIds(env);
-    let appended = false;
+    // A crash between append and acknowledgement leaves the record in the
+    // active journal (or the newest archive after a rotation), so only those
+    // are checked; never every retained archive of the shared journal. Several
+    // rotations before redispatch could still journal a copy twice; the feed
+    // keeps one copy per sequence number.
+    const journaledIds = await recentEventIds(env);
+    const mark = await journalMark(env);
     for (const row of pending) {
       const event = JSON.parse(row.payload_json);
-      if (!journaledIds.has(event.eventId)) {
-        await appendEvent(event, env);
-        appended = true;
-      }
+      if (!journaledIds.has(event.eventId)) await appendEvent(event, env);
     }
     // Acknowledge (and drop the payload of) only events the journal returns.
-    const readable = appended ? await readableEventIds(env) : journaledIds;
+    const readable = new Set([...journaledIds, ...await appendedEventIds(env, mark)]);
     let dispatched = 0;
     for (const row of pending) {
       if (!readable.has(JSON.parse(row.payload_json).eventId)) continue;
@@ -164,6 +166,45 @@ export async function dispatchPersonalAgentEvents(env = process.env, { limit = 1
   });
 }
 
+async function journalMark(env) {
+  const stat = await fs.promises.stat(dataPaths(env).events).catch((error) => {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  });
+  return stat ? { ino: stat.ino, size: stat.size } : { ino: null, size: 0 };
+}
+
+async function recentEventIds(env) {
+  const ids = new Set();
+  const add = (event) => { if (typeof event?.eventId === "string") ids.add(event.eventId); };
+  const newest = (await listEventArchives(env)).sort((a, b) => a.name.localeCompare(b.name)).at(-1);
+  if (newest) {
+    for await (const event of readRetainedArchive(path.join(path.dirname(dataPaths(env).events), newest.name), newest.compressed)) add(event);
+  }
+  try {
+    for await (const event of readJsonLines(dataPaths(env).events)) add(event);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  return ids;
+}
+
+// Ids journaled since the mark: only the appended region of the active file,
+// or a full scan if the file was rotated or replaced meanwhile.
+async function appendedEventIds(env, mark) {
+  const file = dataPaths(env).events;
+  const stat = await fs.promises.stat(file).catch((error) => {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!stat || (mark.ino !== null && (stat.ino !== mark.ino || stat.size < mark.size))) return readableEventIds(env);
+  const ids = new Set();
+  for await (const existing of readJsonLines(file, false, mark.ino === null ? 0 : mark.size)) {
+    if (typeof existing?.eventId === "string") ids.add(existing.eventId);
+  }
+  return ids;
+}
+
 async function readableEventIds(env) {
   const ids = new Set();
   for await (const existing of retainedEvents(env)) {
@@ -172,13 +213,37 @@ async function readableEventIds(env) {
   return ids;
 }
 
-async function* readJsonLines(filePath, compressed = false) {
-  let input = fs.createReadStream(filePath, { encoding: "utf8" });
-  if (compressed) input = input.pipe(createGunzip());
+async function* readJsonLines(filePath, compressed = false, start = 0) {
+  // Gzip is binary: decode text only after decompressing. pipe() does not
+  // forward source errors (e.g. ENOENT), so pass them on explicitly.
+  const raw = fs.createReadStream(filePath, compressed ? {} : { start });
+  let input = raw;
+  if (compressed) {
+    input = createGunzip();
+    raw.on("error", (error) => input.destroy(error));
+    raw.pipe(input);
+  }
+  input.setEncoding("utf8");
   const lines = createInterface({ input, crlfDelay: Infinity });
   for await (const line of lines) {
     if (!line) continue;
     try { yield JSON.parse(line); } catch { /* Ignore legacy/corrupt records without hiding later events. */ }
+  }
+}
+
+// Compression may replace a listed .jsonl archive with its .gz between listing
+// and opening; read the replacement instead of silently skipping the archive.
+export async function* readRetainedArchive(filePath, compressed) {
+  try {
+    yield* readJsonLines(filePath, compressed);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    if (compressed) return;
+    try {
+      yield* readJsonLines(`${filePath}.gz`, true);
+    } catch (fallback) {
+      if (fallback?.code !== "ENOENT") throw fallback;
+    }
   }
 }
 
@@ -187,11 +252,7 @@ async function* retainedEvents(env) {
   const files = archives.sort((a, b) => a.name.localeCompare(b.name));
   for (const archive of files) {
     const filePath = path.join(path.dirname(dataPaths(env).events), archive.name);
-    try {
-      yield* readJsonLines(filePath, archive.compressed);
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
+    yield* readRetainedArchive(filePath, archive.compressed);
   }
   try {
     yield* readJsonLines(dataPaths(env).events);
