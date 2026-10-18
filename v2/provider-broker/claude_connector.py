@@ -36,6 +36,15 @@ class ClaudeConfiguration:
             if not (path.is_file() if name == "executable" else path.is_dir()):
                 raise ValueError("invalid trusted Claude path")
 
+    def resumed_session(self, specification, account_environment=None):
+        # Private lifecycle spec only; caller additionally needs Core resume authority.
+        from claude_resume import ResumeSpec
+        if type(specification) is not ResumeSpec:
+            raise ValueError("invalid private resume specification")
+        native = specification._take(self)
+        self.validate()
+        return ClaudeOwnedSession(self, native, account_environment, resumed=True)
+
     def new_session(self, account_environment=None):
         self.validate()
         # Server-generated identity only; no resume/adoption or client UUID.
@@ -50,10 +59,18 @@ class ClaudeOwnedSession:
     exact UUID and terminal/result before any persistent follow-up. This object
     grants neither inference nor cancellation authority.
     """
-    def __init__(self, config, native, account_environment=None):
+    def __init__(self, config, native, account_environment=None, resumed=False):
         self._config, self.native = config, native
         self.workspace = config.workspace
         self._account_environment = account_environment
+        self.resumed = resumed
+        self._owned_child = None
+        self._retired = False
+
+    def owned_spawned(self, child):
+        if self._owned_child is not None:
+            raise ValueError("owned Claude process already issued")
+        self._owned_child = child
 
     def command(self):
         return [str(self._config.executable), "-p", "--input-format", "stream-json",
@@ -62,7 +79,8 @@ class ClaudeOwnedSession:
                 "--safe-mode", "--restricted", "--disable-slash-commands",
                 "--no-chrome", "--prompt-suggestions", "false", "--tools", "",
                 "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-                "--setting-sources", "", "--session-id", str(self.native)]
+                "--setting-sources", "",
+                "--resume" if self.resumed else "--session-id", str(self.native)]
 
     def environment(self):
         # Existing canonical auth stays INSIDE this trusted connector. No token,
