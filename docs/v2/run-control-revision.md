@@ -10,7 +10,9 @@ Stop may supply expected_control_revision alongside the original expected_revisi
 The write transaction authenticates the original browser credential, exact owner,
 conversation, run, bound supervisor and current execution authority. For a fresh
 request with a control revision it compares that exact run's control revision;
-it does not require the sampled projection revision still to be latest. A request
+the sampled projection must be nonnegative and no greater than the current
+projection. It need not still be latest: streaming progress may advance it. Future
+projection claims conflict before any cancellation writes. A request
 without it retains the legacy strict conversation-revision comparison.
 
 Both requested revisions and the request key are immutable idempotency input.
