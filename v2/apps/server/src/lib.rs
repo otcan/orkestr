@@ -24,6 +24,7 @@ pub mod control_dispatch;
 pub mod control_registry;
 mod execution;
 mod execution_accept;
+pub mod fast_execution;
 pub mod owned_children;
 pub mod owned_execution;
 mod provider_payload;
