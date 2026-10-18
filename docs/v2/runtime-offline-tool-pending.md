@@ -31,3 +31,27 @@ The disposable composition retains byte-identical lane manifests/lock and adds
 only a temporary private module registration. Three focused decoder tests pass:
 exact identity/source/lineage and ID kind, foreign identity/tool/extra-claim
 refusal, and UTF-8/request-ID bounds. No provider or sandbox process is launched.
+
+## Dedicated result writer (unregistered)
+
+The scoped writer composes against full Core
+`75cee9838cb45f7274c615b02e9457e58cc2def5`, including the reviewed `ca06e2d`
+result ledger and exports. `execution/offline_result.rs` consumes a private
+`CompletedToolDelivery`, compares its exact native call and parent admission
+with the retained pending call, and constructs one immutable response frame.
+Request ID kind, escaping and the 8192-byte UTF-8 text bound are preserved.
+
+`containment/offline_result.rs` checks the actual child Arc lineage and original
+run/session/owner/fence scope before each suffix. It invokes the dedicated Core
+result fence directly around one bounded nonblocking actual provider write;
+there is no nested inference fence or provider wait. Errors quarantine the child.
+Successful zero-byte writes retain the same offset. Core finish consumes the
+capability after the full frame is counted; only then is the broker prepared
+proof marked written. Neither operation means Worker completion or acceptance.
+
+Registration, trusted setup opt-in, pending-call routing, broker result-envelope
+submission, and public pump methods remain unimplemented. The writer must not be
+activated by simply registering these leaves. Five focused decoder/response
+checks pass in a disposable composition; this is not an actual-child result
+write, sandbox, cancellation race, or HTTP acceptance result. Strict all-target
+Clippy uses temporary dead-code allowances for the intentionally unwired leaves.
