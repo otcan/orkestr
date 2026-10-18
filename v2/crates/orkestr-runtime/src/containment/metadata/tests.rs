@@ -396,3 +396,16 @@ async fn pending_writes_defensively_refuse_attachment_without_returning_capabili
     c.no_reissue(&reservation).await;
     c.cleanup().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn direct_provider_child_cannot_open_broker_metadata() {
+    let case = Case::new().await;
+    assert!(matches!(
+        case.child.as_ref().unwrap().open_broker_metadata(),
+        Err(Error::Revoked)
+    ));
+    assert!(matches!(
+        case.child.as_ref().unwrap().flush_stdin(),
+        Err(Error::Revoked)
+    ));
+}
