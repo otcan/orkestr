@@ -6,6 +6,10 @@
 //! before returning any retained inactive text. No caller-provided cut attestation.
 use super::*;
 
+/// Combined limits across BOTH sources, including exact binary source framing.
+pub const MAX_RECOVERY_ROWS: usize = 100_000;
+pub const MAX_RECOVERY_SOURCE_BYTES: usize = 16 * 1024 * 1024;
+
 /// One verified inert ledger and the native conversation delta at a single cut.
 /// This is content recovery, not restoration of native execution state.
 #[derive(Debug, Clone)]
@@ -22,6 +26,7 @@ pub struct HistoryRecoveryBundle {
 /// Both namespaces must be fresh and distinct; original inactivity is retained.
 #[derive(Debug, Clone)]
 pub struct HistoryRecoveryRestoreRequest {
+    pub restore_id: Uuid,
     pub bundle: HistoryRecoveryBundle,
     pub original_namespace: Uuid,
     pub delta_namespace: Uuid,
@@ -29,6 +34,7 @@ pub struct HistoryRecoveryRestoreRequest {
 
 #[derive(Debug, Clone)]
 pub struct HistoryRecoveryRestoreReceipt {
+    pub restore_id: Uuid,
     pub bundle_digest: String,
     pub original: HistoryImportReceipt,
     pub native_delta: HistoryImportReceipt,
@@ -44,6 +50,24 @@ pub fn history_recovery_digest(bundle: &HistoryRecoveryBundle) -> Result<String>
     }
     let original = &bundle.original;
     let delta = &bundle.native_delta;
+    if original.namespace == delta.namespace
+        || original
+            .messages
+            .len()
+            .checked_add(delta.messages.len())
+            .is_none_or(|count| count > MAX_RECOVERY_ROWS)
+    {
+        return Err(HistoryError::Invalid);
+    }
+    let original_bytes = fingerprint::canonical(original)?;
+    let delta_bytes = fingerprint::canonical(delta)?;
+    if original_bytes
+        .len()
+        .checked_add(delta_bytes.len())
+        .is_none_or(|count| count > MAX_RECOVERY_SOURCE_BYTES)
+    {
+        return Err(HistoryError::Invalid);
+    }
     if history_source_digest(original)? != original.source_digest
         || history_source_digest(delta)? != delta.source_digest
     {
@@ -76,9 +100,8 @@ pub fn history_recovery_digest(bundle: &HistoryRecoveryBundle) -> Result<String>
     let mut digest = Sha256::new();
     digest.update(b"orkestr-history-recovery-v1\0");
     digest.update(receipt.owner_id.0.as_bytes());
-    for request in [original, delta] {
+    for (request, bytes) in [(original, original_bytes), (delta, delta_bytes)] {
         digest.update(request.namespace.as_bytes());
-        let bytes = fingerprint::canonical(request)?;
         digest.update((bytes.len() as u64).to_be_bytes());
         digest.update(bytes);
     }
@@ -89,7 +112,8 @@ pub fn history_recovery_digest(bundle: &HistoryRecoveryBundle) -> Result<String>
 
 impl HistoryRecoveryRestoreRequest {
     pub fn validate(&self) -> Result<()> {
-        if self.original_namespace.is_nil()
+        if self.restore_id.is_nil()
+            || self.original_namespace.is_nil()
             || self.delta_namespace.is_nil()
             || self.original_namespace == self.delta_namespace
             || history_recovery_digest(&self.bundle)? != self.bundle.bundle_digest

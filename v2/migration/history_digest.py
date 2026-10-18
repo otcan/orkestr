@@ -3,8 +3,8 @@ import hashlib
 import uuid
 
 
-def source_digest(request):
-    """Hash complete ordered Core HistoryImportRequest content, excluding namespace."""
+def source_bytes(request):
+    """Encode complete ordered Core history content, excluding namespace."""
     def identifier(value):
         parsed = uuid.UUID(value)
         if not parsed.int:
@@ -54,4 +54,9 @@ def source_digest(request):
             content.extend(value)
         if len(content) > 16 * 1024 * 1024:
             raise ValueError('byte limit')
-    return hashlib.sha256(content).hexdigest()
+    return bytes(content)
+
+
+def source_digest(request):
+    """Hash the exact binary Core history encoding."""
+    return hashlib.sha256(source_bytes(request)).hexdigest()

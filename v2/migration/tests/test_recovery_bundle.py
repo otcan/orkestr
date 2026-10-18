@@ -2,6 +2,7 @@ from copy import deepcopy
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core_history import prepare_import
 from recovery_bundle import make_bundle, validate_bundle
@@ -50,6 +51,30 @@ class RecoveryBundleTests(unittest.TestCase):
                 request['messages'] = {}
             with self.assertRaises((Invalid, ValueError)):
                 make_bundle(request, receipt, pages)
+
+
+    def test_source_namespace_collision_refused(self):
+        request, receipt, pages = self.sources()
+        pages[0]['conversation_id'] = request['namespace']
+        with self.assertRaisesRegex(Invalid, 'recovery_source_namespace_overlap'):
+            make_bundle(request, receipt, pages)
+
+    def test_combined_row_and_binary_byte_boundaries(self):
+        from history_digest import source_bytes
+        sources = self.sources()
+        payload = validate_bundle(make_bundle(*sources))
+        exact_bytes = sum(len(source_bytes(request)) for request in
+                          (payload['ledger']['request'], payload['native_delta']))
+        # Each source independently fits: the combined boundary must still refuse.
+        with patch('recovery_bundle.MAX_AGGREGATE_ROWS', 2), \
+             patch('recovery_bundle.MAX_AGGREGATE_SOURCE_BYTES', exact_bytes):
+            validate_bundle(make_bundle(*sources))
+        with patch('recovery_bundle.MAX_AGGREGATE_ROWS', 1):
+            with self.assertRaisesRegex(Invalid, 'recovery_aggregate_rows'):
+                make_bundle(*sources)
+        with patch('recovery_bundle.MAX_AGGREGATE_SOURCE_BYTES', exact_bytes - 1):
+            with self.assertRaisesRegex(Invalid, 'recovery_aggregate_source_bytes'):
+                make_bundle(*sources)
 
     def test_tamper_unknown_noncanonical_and_duplicate_refused(self):
         encoded = make_bundle(*self.sources())

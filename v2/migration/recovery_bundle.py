@@ -7,10 +7,12 @@ from copy import deepcopy
 import json
 from conversation_export import collect_pages
 from core_history import verify_import_receipt
-from history_digest import source_digest
+from history_digest import source_bytes, source_digest
 from snapshot import canonical, fields, need, sha
 
 MAX_BUNDLE_BYTES = 40 * 1024 * 1024
+MAX_AGGREGATE_ROWS = 100_000
+MAX_AGGREGATE_SOURCE_BYTES = 16 * 1024 * 1024
 
 
 def _request(value):
@@ -53,6 +55,11 @@ def make_bundle(ledger_request, current_receipt, native_pages):
         'source_watermark': native['last_sequence'], 'messages': native['messages']}
     delta['source_digest'] = source_digest(delta)
     delta = _request(delta)
+    need(ledger['namespace'] != delta['namespace'], 'recovery_source_namespace_overlap')
+    need(len(ledger['messages']) + len(delta['messages']) <= MAX_AGGREGATE_ROWS,
+         'recovery_aggregate_rows')
+    need(len(source_bytes(ledger)) + len(source_bytes(delta)) <= MAX_AGGREGATE_SOURCE_BYTES,
+         'recovery_aggregate_source_bytes')
     need(not ({m['message_id'] for m in ledger['messages']} & {m['message_id'] for m in delta['messages']}),
          'recovery_source_identity_overlap')
     payload = {'format_version': 1, 'kind': 'inert_history_and_native_delta',
