@@ -116,7 +116,7 @@ impl CodexRpc {
             "thread/start",
             json!({
                 "cwd":cwd,"approvalPolicy":"never","sandbox":"read-only",
-                "ephemeral":false
+                "ephemeral":false,"modelProvider":"openai"
             }),
         )
     }
@@ -177,7 +177,12 @@ impl CodexRpc {
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty() && s.len() <= 512)
                     .ok_or(Blocker::Protocol)?;
-                if result.pointer("/thread/ephemeral").and_then(Value::as_bool) != Some(false)
+                if result.get("modelProvider").and_then(Value::as_str) != Some("openai")
+                    || result
+                        .pointer("/thread/modelProvider")
+                        .and_then(Value::as_str)
+                        != Some("openai")
+                    || result.pointer("/thread/ephemeral").and_then(Value::as_bool) != Some(false)
                     || result.get("cwd").and_then(Value::as_str) != Some(cwd.as_str())
                     || result.pointer("/thread/cwd").and_then(Value::as_str) != Some(cwd.as_str())
                     || result.get("approvalPolicy").and_then(Value::as_str) != Some("never")
@@ -194,10 +199,7 @@ impl CodexRpc {
             }
             Request::Account => {
                 // API-key/Bedrock/unknown accounts cannot silently purchase compute.
-                if result
-                    .get("requiresOpenaiAuth")
-                    .and_then(Value::as_bool)
-                    .is_none()
+                if result.get("requiresOpenaiAuth").and_then(Value::as_bool) != Some(true)
                     || result.pointer("/account/type").and_then(Value::as_str) != Some("chatgpt")
                 {
                     return Err(Blocker::Unsupported);

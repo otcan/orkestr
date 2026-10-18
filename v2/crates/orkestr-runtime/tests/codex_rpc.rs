@@ -96,11 +96,11 @@ fn persistent_native_session_requires_authenticated_protocol_and_safe_policy() {
     assert_eq!(request["params"]["ephemeral"], false);
     assert_eq!(rpc.native_session(), None);
     // Caller/provider policy broadening is refused, leaving readiness unconfirmed.
-    assert_eq!(rpc.receive(r#"{"id":3,"result":{"cwd":"/synthetic/workspace","thread":{"id":"synthetic-thread","cwd":"/synthetic/workspace","ephemeral":false},"approvalPolicy":"never","sandbox":{"type":"dangerFullAccess"}}}"#), Err(Blocker::Protocol));
+    assert_eq!(rpc.receive(r#"{"id":3,"result":{"cwd":"/synthetic/workspace","modelProvider":"openai","thread":{"modelProvider":"openai","id":"synthetic-thread","cwd":"/synthetic/workspace","ephemeral":false},"approvalPolicy":"never","sandbox":{"type":"dangerFullAccess"}}}"#), Err(Blocker::Protocol));
     assert_eq!(rpc.native_session(), None);
     let valid = serde_json::json!({"id":3,"result":{
         "cwd":"/synthetic/workspace",
-        "thread":{"id":"synthetic-thread","cwd":"/synthetic/workspace","ephemeral":false},
+        "modelProvider":"openai","thread":{"modelProvider":"openai","id":"synthetic-thread","cwd":"/synthetic/workspace","ephemeral":false},
         "approvalPolicy":"never","sandbox":{"type":"readOnly"}
     }});
     for access in [
@@ -145,7 +145,7 @@ fn persistence_and_both_workspace_fields_are_required_before_confirmation() {
     }
     rpc.create_session(std::path::Path::new("/synthetic/workspace"))
         .unwrap();
-    let valid = json!({"id":3,"result":{"cwd":"/synthetic/workspace","thread":{"id":"synthetic-thread","cwd":"/synthetic/workspace","ephemeral":false},"approvalPolicy":"never","sandbox":{"type":"readOnly"}}});
+    let valid = json!({"id":3,"result":{"cwd":"/synthetic/workspace","modelProvider":"openai","thread":{"modelProvider":"openai","id":"synthetic-thread","cwd":"/synthetic/workspace","ephemeral":false},"approvalPolicy":"never","sandbox":{"type":"readOnly"}}});
     for pointer in [
         "/result/thread/ephemeral",
         "/result/thread/cwd",
@@ -172,6 +172,61 @@ fn persistence_and_both_workspace_fields_are_required_before_confirmation() {
                 .unwrap()
                 .remove(pointer.rsplit('/').next().unwrap());
         }
+        assert_eq!(rpc.receive(&missing.to_string()), Err(Blocker::Protocol));
+        assert!(rpc.native_session().is_none());
+    }
+    assert_eq!(rpc.receive(&valid.to_string()), Ok(None));
+    assert_eq!(rpc.native_session(), Some("synthetic-thread"));
+}
+
+#[test]
+fn chatgpt_login_without_openai_auth_requirement_is_not_subscription_readiness() {
+    for evidence in [
+        serde_json::json!(false),
+        serde_json::Value::Null,
+        serde_json::json!("true"),
+    ] {
+        let mut rpc = CodexRpc::default();
+        initialized(&mut rpc);
+        rpc.account_read().unwrap();
+        let frame = serde_json::json!({"id":2,"result":{"requiresOpenaiAuth":evidence,"account":{"type":"chatgpt"}}});
+        assert_eq!(rpc.receive(&frame.to_string()), Err(Blocker::Unsupported));
+        assert_eq!(rpc.readiness(), Readiness::Initialized);
+        assert!(rpc.native_session().is_none());
+    }
+}
+
+#[test]
+fn persistent_thread_requires_matching_explicit_openai_provider_proof() {
+    let mut rpc = CodexRpc::default();
+    initialized(&mut rpc);
+    rpc.account_read().unwrap();
+    rpc.receive(r#"{"id":2,"result":{"requiresOpenaiAuth":true,"account":{"type":"chatgpt"}}}"#)
+        .unwrap();
+    let request = rpc
+        .create_session(std::path::Path::new("/synthetic/workspace"))
+        .unwrap();
+    assert_eq!(request["params"]["modelProvider"], "openai");
+    let valid = serde_json::json!({"id":3,"result":{"cwd":"/synthetic/workspace","modelProvider":"openai","thread":{"modelProvider":"openai","id":"synthetic-thread","cwd":"/synthetic/workspace","ephemeral":false},"approvalPolicy":"never","sandbox":{"type":"readOnly"}}});
+    for pointer in ["/result/modelProvider", "/result/thread/modelProvider"] {
+        for replacement in [
+            serde_json::Value::Null,
+            serde_json::json!(false),
+            serde_json::json!("synthetic-external-provider"),
+            serde_json::json!(""),
+        ] {
+            let mut invalid = valid.clone();
+            *invalid.pointer_mut(pointer).unwrap() = replacement;
+            assert_eq!(rpc.receive(&invalid.to_string()), Err(Blocker::Protocol));
+            assert!(rpc.native_session().is_none());
+        }
+        let mut missing = valid.clone();
+        let parent = if pointer == "/result/modelProvider" {
+            &mut missing["result"]
+        } else {
+            &mut missing["result"]["thread"]
+        };
+        parent.as_object_mut().unwrap().remove("modelProvider");
         assert_eq!(rpc.receive(&missing.to_string()), Err(Blocker::Protocol));
         assert!(rpc.native_session().is_none());
     }

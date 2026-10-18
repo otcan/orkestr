@@ -44,3 +44,11 @@ Runtime reviewed the complete three-file delta before scoped adoption.
 Registration does not activate production containment or prove broker-server
 availability. Post-open BrokerMetadata/CommitExecution framing and actual
 provider composition still require their own source and execution review.
+
+Subscription readiness additionally requires account/read's
+`requiresOpenaiAuth: true` and `account.type: chatgpt`. Runtime pins
+`thread/start.params.modelProvider` to `openai` and requires explicit matching
+`modelProvider: openai` in both the response and its thread object. A logged-in
+account alone does not prove the selected model-provider route. Missing,
+external or mismatched provider evidence never publishes a native session.
+The broker must retain this sanitized provider proof when wrapping its replies.

@@ -26,7 +26,7 @@ fn ready_rpc(native: &str) -> CodexRpc {
         .unwrap();
     rpc.receive(
         &json!({"id":3,"result":{
-            "thread":{"id":native,"ephemeral":false,"cwd":"/synthetic/workspace"},
+            "modelProvider":"openai","thread":{"modelProvider":"openai","id":native,"ephemeral":false,"cwd":"/synthetic/workspace"},
             "cwd":"/synthetic/workspace","approvalPolicy":"never","sandbox":{"type":"readOnly"}
         }})
         .to_string(),
