@@ -78,7 +78,7 @@ def worker_http_stop_scope_and_streaming(case):
     wrong = dict(body, expected_control_revision=body["expected_control_revision"] + 1)
     assert case.request(case.path + "/stop", "POST", wrong)[0] == 409
     assert case.request(case.path + "/stop", "POST", body, extra={"x-orkestr-csrf": "wrong"})[0] == 403
-    assert case.request(case.path + "/stop", "POST", dict(body, provider_auth="forbidden"))[0] == 422
+    assert case.request(case.path + "/stop", "POST", dict(body, provider_auth="forbidden"))[0] == 400
     foreign = ordinary.Case()
     try:
         foreign.setup()
