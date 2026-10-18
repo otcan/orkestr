@@ -35,6 +35,7 @@ pub struct ClaudeRpc {
     terminal: bool,
     poisoned: bool,
     failure_seen: bool,
+    telemetry_ids: HashSet<String>,
 }
 
 impl ClaudeRpc {
@@ -55,6 +56,7 @@ impl ClaudeRpc {
             terminal: false,
             poisoned: false,
             failure_seen: false,
+            telemetry_ids: HashSet::new(),
         })
     }
 
@@ -102,7 +104,7 @@ impl ClaudeRpc {
         local_request_key: &str,
         line: &str,
     ) -> Result<Option<ClaudeObservation>, Blocker> {
-        if self.poisoned || self.terminal {
+        if self.poisoned {
             return Err(Blocker::Protocol);
         }
         if local_request_key != self.request_key {
@@ -131,6 +133,18 @@ impl ClaudeRpc {
         .flatten()
         {
             self.identity(alias.as_str().ok_or(Blocker::Protocol)?)?;
+        }
+        let kind = text(&value, "type")?;
+        // Closed sanitized housekeeping is permitted around the terminal frame;
+        // it never changes initialization, result, or semantic progress state.
+        if kind == "command_lifecycle"
+            || (kind == "rate_limit_event" && value.get("uuid").is_some())
+        {
+            telemetry::accept(&value, &mut self.telemetry_ids)?;
+            return Ok(None);
+        }
+        if self.terminal {
+            return Err(Blocker::Protocol);
         }
         let nested = match value.get("parent_tool_use_id") {
             None | Some(Value::Null) => false,
@@ -337,3 +351,5 @@ fn bounded(value: &Value, depth: usize, nodes: &mut usize) -> Result<(), Blocker
 #[cfg(test)]
 #[path = "claude_rpc/tests.rs"]
 mod tests;
+
+mod telemetry;

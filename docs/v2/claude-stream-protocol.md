@@ -69,14 +69,22 @@ newline delimiter. Limits apply to unknown fields as well as known fields:
 
 The frame bound applies before deserialization; the default JSON deserializer
 recursion guard and explicit tree bounds both apply. There is no accumulated
-event queue or content buffer. Only the bounded session/key and state flags
+event queue or content buffer. Only the bounded session/key, state flags, and at most 128 telemetry UUIDs
 survive a call. Payload persistence, if needed, is a separate authorized boundary.
 
 Any malformed, unknown, mismatched, oversized, replayed-terminal, or contradictory
 frame permanently quarantines the parser. Duplicate object keys, including
 escaped spellings of the same key, are rejected. Errors contain only a `Blocker` enum,
 never raw provider content or native identifiers. There is no reset or retry API.
-After a terminal result every additional frame is rejected, including a duplicate
+The closed broker-sanitized `command_lifecycle` and UUID-bearing
+`rate_limit_event` shape contains exactly `type`, matching `session_id`, and a
+valid `uuid`. These housekeeping frames may precede init or follow a terminal
+result and emit no observation. Duplicate telemetry UUIDs and more than 128
+telemetry frames poison the parser; no arbitrary control or tool frame is ignored.
+The broker must separately validate the native telemetry shape before discarding
+or reducing it to this closed form. This supports the selected CLI's lifecycle
+notifications without turning them into readiness or completion evidence.
+After a terminal result every other frame is rejected, including a duplicate
 result. The owner must not accept a proposal before checking subsequent framing,
 EOF, process lifecycle, durable fences, and application evidence.
 
