@@ -45,7 +45,6 @@ impl Store {
                 terminal_event: EventId(terminal.parse().map_err(db)?),
             }),
         };
-        self.validate_accepted_binding(&mut tx, &grant).await?;
         let link = grant.resume.as_ref().ok_or(RuntimeStoreError::Fenced)?;
         let existing: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM production_resume_metadata WHERE prior_run_id=?",
@@ -61,6 +60,7 @@ impl Store {
             .bind(&link.id).bind(prior_run.to_string()).bind(link.terminal_event.to_string()).bind(&c.id).bind(&c.incarnation)
             .bind(binding.session_id.to_string()).bind(i64::try_from(binding.generation).map_err(db)?)
             .execute(&mut *tx).await.map_err(db)?;
+        self.validate_accepted_binding(&mut tx, &grant).await?;
         tx.commit().await.map_err(db)?;
         Ok(grant)
     }
@@ -98,11 +98,11 @@ impl Store {
         if crate::runtime::binding(&row)? != grant.binding {
             return Err(RuntimeStoreError::Fenced);
         }
-        let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN production_readiness rd ON rd.session_id=r.session_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.session_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role='deep' AND r.native_session_id=? AND r.provider_kind=? AND r.binding_generation+1=? AND ((r.state='succeeded' AND EXISTS(SELECT 1 FROM production_acceptances a WHERE a.run_id=r.id AND a.event_id=?)) OR (r.state='cancelled' AND EXISTS(SELECT 1 FROM production_observations o JOIN production_cancellations pc ON pc.run_id=r.id JOIN production_control_outbox co ON co.run_id=r.id WHERE o.run_id=r.id AND o.event_id=? AND o.kind='stopped' AND o.receipt_state='cancelled' AND o.lease_generation=r.lease_generation AND o.dispatch_fence=r.dispatch_fence AND pc.inflight_status='unknown' AND co.state='acknowledged'))) AND rd.context_id=r.context_id AND rd.incarnation_id=r.incarnation_id AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation)")
+        let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN production_readiness rd ON rd.session_id=r.session_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.session_id=? AND r.context_id=? AND (r.incarnation_id=? OR EXISTS(SELECT 1 FROM production_resume_metadata rm WHERE rm.prior_run_id=r.id AND rm.context_id=r.context_id AND rm.incarnation_id=? AND rm.session_id=r.session_id)) AND r.role='deep' AND r.native_session_id=? AND r.provider_kind=? AND r.binding_generation+1=? AND ((r.state='succeeded' AND EXISTS(SELECT 1 FROM production_acceptances a WHERE a.run_id=r.id AND a.event_id=?)) OR (r.state='cancelled' AND EXISTS(SELECT 1 FROM production_observations o JOIN production_cancellations pc ON pc.run_id=r.id JOIN production_control_outbox co ON co.run_id=r.id WHERE o.run_id=r.id AND o.event_id=? AND o.kind='stopped' AND o.receipt_state='cancelled' AND o.lease_generation=r.lease_generation AND o.dispatch_fence=r.dispatch_fence AND pc.inflight_status='unknown' AND co.state='acknowledged'))) AND rd.context_id=r.context_id AND rd.incarnation_id=? AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation)")
             .bind(link.prior_run.to_string()).bind(c.owner.to_string()).bind(grant.binding.conversation_id.to_string())
             .bind(grant.binding.session_id.to_string()).bind(&c.id).bind(&c.incarnation)
-            .bind(grant.binding.native_session_id.as_ref()).bind(provider_name(c.provider)?)
-            .bind(i64::try_from(grant.binding.generation).map_err(db)?).bind(link.terminal_event.to_string()).bind(link.terminal_event.to_string())
+            .bind(&c.incarnation).bind(grant.binding.native_session_id.as_ref()).bind(provider_name(c.provider)?)
+            .bind(i64::try_from(grant.binding.generation).map_err(db)?).bind(link.terminal_event.to_string()).bind(link.terminal_event.to_string()).bind(&c.incarnation)
             .fetch_one(&mut *tx).await.map_err(db)?;
         if valid != 1 {
             return Err(RuntimeStoreError::Fenced);
