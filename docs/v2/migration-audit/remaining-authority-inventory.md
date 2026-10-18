@@ -10,8 +10,8 @@ for this increment. Actual prior private receipts remain outside this repository
 | Primary threads | Reviewed/executed fixed structural JSON aggregate | Persisted role/runtime/lifecycle/binding shape only; not active use/effective capabilities. |
 | Job engine | Reviewed/executed fixed table/run-state/provider/trigger buckets | Independent engine metadata only; empty jobs do not imply unused timers/connectors. |
 | Personal-agent capability | Source-reviewed authenticated GET plus strict capability_metadata adapter | Fixed enabled/storage-ready response is safe candidate; actual status observation unexecuted. No auth bypass or synthetic admin principal. |
-| Personal-agent memory | New family personal_memory in census.TABLES, reusable count_live transaction | Exact SELECT count(*) FROM personal_agent_memories; source table name validated below. Candidate awaiting independent review/execution. No content, category, consent, provenance or IDs read. Not external/main memory coverage. |
-| Independent timer registry | No approved inert selector in reviewed list/doctor | Existing features are present. list calls ensureDataDirs and reads prompt-bearing JSON; doctor probes prompt files/loads threads. Count-only authority-owned projection needed, not arbitrary registry reads. |
+| Personal-agent memory | New family personal_memory in census.TABLES, reusable count_live transaction | Exact SELECT count(*) FROM personal_agent_memories; source table name validated below. Independently reviewed and executed at exact 8be70df9; private receipt retained outside OSS. No content, category, consent, provenance or IDs read. Not external/main memory coverage. |
+| Independent timer registry | No approved inert selector in reviewed list/doctor | Existing features are present. list calls ensureDataDirs and reads prompt-bearing JSON; doctor probes prompt files/loads threads. A bounded structural parser is authorized after exact source path/schema validation; implementation and review remain pending. |
 | Gmail/calendar connections | Account GET explicitly excluded as mutation-bearing | Feature availability/usage unknown, not unavailable. Legacy credential migration can happen during list; safe metadata authority must bypass migration/token loading/refresh. |
 | Effective binding capabilities | Thread binding-object shape only | Nested capabilities/active routes unknown; no binding registry or route reads. Need fixed authority-owned enabled-class counts. |
 | Personal/external memory | Only the specific personal-agent table candidate above | Other memory authorities not established. Do not equate one job-store table with all memory. |
@@ -37,9 +37,7 @@ Cross-store coherence and workflow activity remain explicitly unestablished.
 ## Minimal outstanding authority requests
 
 An authorized personal-agent capability response can be validated directly; do
-not retrieve/synthesize authentication here. Root may independently review and
-execute the new memory-table count against its already verified jobs authority,
-writing only a private receipt. Do not call the migration initializer to make a
+not retrieve/synthesize authentication here. Root independently reviewed and executed the memory-table count against its verified jobs authority; the receipt remains private. Do not call the migration initializer to make a
 missing table appear. Timer/connector owners must supply fixed count projections
 inside their respective authorities with malformed/unknown buckets and no raw
 identities/prompts/paths. Main messaging holds and the personal skill-only
