@@ -1,4 +1,5 @@
 import { scopedNativeWorker, createPreservingNativeAuth } from './whatsapp-scoped-native-worker.js';
+import { authenticationFailureEvidence } from './whatsapp-auth-failure-evidence.js';
 import { autoConnectHomeChat } from "./whatsapp-auto-home-chat.js";
 import { chromeLockFromOtherHost, chromeLockHost, retireLoggedOutSession } from "./whatsapp-session-recovery.js";
 import fs from "node:fs/promises";
@@ -6507,6 +6508,11 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
     clearConnectedPageReadyFallbackTimer();
+    const evidence = authenticationFailureEvidence({
+      preservingProbe: Boolean(scopedStartup),
+      previous: accountStates.get(normalized) || {},
+      at: nowIso(),
+    });
     setAccountState(normalized, {
       state: "auth_failure",
       ready: false,
@@ -6515,11 +6521,11 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
       pairingCode: "",
       pairingCodeUpdatedAt: null,
       error: String(message || "WhatsApp authentication failed."),
-      verifiedLogoutAt: nowIso(),
+      verifiedLogoutAt: evidence.verifiedLogoutAt,
     });
     runtimes.delete(normalized);
-    await appendEvent({ type: "whatsapp_local_auth_failure", accountId: normalized }, env);
-    void clearWhatsAppAccountPaired(normalized, env).catch(() => {});
+    await appendEvent({ type: "whatsapp_local_auth_failure", accountId: normalized, failureKind: evidence.failureKind }, env);
+    if (evidence.clearPairedRegistration) void clearWhatsAppAccountPaired(normalized, env).catch(() => {});
     if (options.repairNotification !== false) {
       await notifyLocalWhatsAppPairingRequired({
         accountId: normalized,
