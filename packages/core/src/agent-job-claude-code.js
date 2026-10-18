@@ -25,6 +25,7 @@ import { chownTreeTo, claudeJobRuntimeOwner } from "./agent-job-claude-runtime.j
 import { nativeToolName, startPermissionBroker } from "./agent-job-permission-broker.js";
 import { claudeCodeCommand, claudeCodeEventSessionId, claudeCodeEventText, classifyClaudeCodeFailure } from "./claude-code-client.js";
 import { classifyClaudeCodeFailureCode, turnErrorClassification } from "./runtime-turn-error-class.js";
+import { personalAgentFeature } from "./personal-agent-feature.js";
 
 const HOOK_SCRIPT = fileURLToPath(new URL("./agent-job-claude-permission-hook.js", import.meta.url));
 const KILL_GRACE_MS = 2_000;
@@ -68,6 +69,7 @@ export function claudeJobArgs(input = {}) {
   ];
   if (/^[a-zA-Z0-9._:-]{1,120}$/.test(clean(input.model))) args.push("--model", clean(input.model));
   if (clean(input.resumeSessionRef)) args.push("--resume", clean(input.resumeSessionRef));
+  if (input.personalAgentSession && ["low", "medium", "high", "max"].includes(input.effort)) args.push("--effort", input.effort);
   return args;
 }
 
@@ -81,7 +83,7 @@ export function agentJobClaudeConfigDir(env = process.env) {
   return clean(env[AGENT_JOB_CLAUDE_CONFIG_ENV]) || clean(env.CLAUDE_CONFIG_DIR);
 }
 
-function childEnv(env, broker) {
+function childEnv(env, broker, managed = false) {
   const source = { ...process.env, ...env };
   const result = { HOME: clean(env.HOME) || os.homedir() };
   for (const key of INHERITED_ENV) if (source[key] !== undefined) result[key] = source[key];
@@ -93,11 +95,14 @@ function childEnv(env, broker) {
     // Nothing reaps a backgrounded task once this headless process exits.
     CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
     ...broker.env,
+    // Only an explicitly resolved personal-agent subscription profile may
+    // supply its OAuth token through the existing profile machinery.
+    ...(managed && env.CLAUDE_CODE_OAUTH_TOKEN ? { CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN } : {}),
   };
 }
 
 export function claudeJobPrompt(input = {}) {
-  if (clean(input.resumeSessionRef)) {
+  if (clean(input.resumeSessionRef) && !input.personalAgentSession) {
     return [
       `Orkestr resumed this job (${clean(input.resumeReason) || "new attempt"}).`,
       "Continue the original task from where you stopped. If a tool call was blocked for approval, retry it only if it is still needed: Orkestr now applies the person's decision.",
@@ -111,6 +116,7 @@ export function claudeJobPrompt(input = {}) {
     input.resumeSummary ? `\n\nResume context:\n${input.resumeSummary}` : "",
     Object.keys(input.inputs || {}).length ? `\n\nInputs:\n${JSON.stringify(input.inputs, null, 2)}` : "",
     input.triggerEvent ? `\n\nTrigger event:\n${JSON.stringify(input.triggerEvent, null, 2)}` : "",
+    input.personalAgentSession && input.approvedCalls ? `\n\n${approvedCallsText(input)}` : "",
     input.outputSchema ? `\n\nEnd with only a JSON value matching this schema:\n${JSON.stringify(input.outputSchema)}` : "",
   ].join("");
 }
@@ -172,9 +178,12 @@ async function runClaudeJobAttempt(ctx, jobInput) {
   const owner = await claudeJobRuntimeOwner(runtimeEnv, { configDir: agentJobClaudeConfigDir(runtimeEnv) });
   if (owner && (await fs.stat(workspace.path)).uid !== owner.uid) await chownTreeTo(owner, workspace.path);
   ctx.emit({ type: "workspace.ready", path: workspace.path, kind: workspace.kind });
-  const input = { ...jobInput, resumeSessionRef: clean(ctx.resume?.sessionRef), resumeReason: clean(ctx.resume?.reason) };
+  const managed = Boolean(ctx.personalAgentSession && personalAgentFeature(ctx.env));
+  const input = { ...jobInput, resumeSessionRef: clean(ctx.resume?.sessionRef), resumeReason: clean(ctx.resume?.reason), personalAgentSession: managed, effort: managed ? ctx.personalAgentSession.effort : "" };
   let stop = null; // { kind: "park"|"expired"|"cancelled"|"bypass"|"aborted", approval?, reason? }
   let proc = null;
+  let sessionAnnounced = false;
+  let sessionVerified = false;
   const toolsById = new Map();
   const toolUseNames = new Map(); // tool_use id -> provider tool name
 
@@ -188,7 +197,11 @@ async function runClaudeJobAttempt(ctx, jobInput) {
   const broker = await startPermissionBroker({
     owner,
     async authorize({ tool, args, callId }) {
-      if (stop) return { decision: "deny", reason: "the Orkestr job attempt is stopping" };
+      if (stop || ctx.signal?.aborted) return { decision: "deny", reason: "the Orkestr job attempt is stopping" };
+      // Hooks and stdout are independent channels. Every managed turn must
+      // verify its observed native identity and durably emit it before effects.
+      // Deny rather than wait: a hook can itself block the provider's stdout.
+      if (managed && !sessionVerified) return { decision: "deny", reason: "the Orkestr session identity is not persisted yet; retry after session start" };
       toolsById.set(callId, tool);
       ctx.emit({ type: "tool.requested", callId, tool });
       const verdict = await ctx.authorizeTool({ tool, args, callId });
@@ -211,9 +224,10 @@ async function runClaudeJobAttempt(ctx, jobInput) {
 
   const onAbort = () => terminate({ kind: ctx.signal.reason === "cancelled" ? "cancelled" : "aborted", reason: String(ctx.signal.reason || "aborted") });
   try {
+    if (managed && ctx.signal?.aborted) return { type: "cancelled", sessionRef: clean(input.resumeSessionRef) };
     proc = spawn(claudeCodeCommand(ctx.env), claudeJobArgs(input), {
       cwd: workspace.path,
-      env: childEnv(ctx.env, broker),
+      env: childEnv(ctx.env, broker, managed),
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -221,7 +235,6 @@ async function runClaudeJobAttempt(ctx, jobInput) {
     ctx.signal?.addEventListener("abort", onAbort, { once: true });
 
     let sessionRef = clean(input.resumeSessionRef);
-    let sessionAnnounced = false;
     let resultText = "";
     let lastText = "";
     let resultError = "";
@@ -230,10 +243,20 @@ async function runClaudeJobAttempt(ctx, jobInput) {
 
     const handleEvent = (event) => {
       const observed = claudeCodeEventSessionId(event);
+      if (managed && observed && ((input.resumeSessionRef && observed !== input.resumeSessionRef) || (sessionAnnounced && observed !== sessionRef))) {
+        terminate({ kind: "error", reason: "claude_code_native_identity_changed" });
+        return;
+      }
       if (observed) sessionRef = observed;
-      if (sessionRef && !sessionAnnounced) {
+      if (sessionRef && !sessionAnnounced && (!managed || observed)) {
+        // emit is the supervisor's synchronous prepared-store/journal write.
+        // The manager aborts its signal on a failed identity CAS; other
+        // supervisors may throw. Neither path may open the permission gate.
+        try { ctx.emit({ type: "session.started", sessionRef, resumed: sessionRef === input.resumeSessionRef }); }
+        catch { terminate({ kind: "error", reason: "claude_code_session_persistence_failed" }); return; }
+        if (ctx.signal?.aborted) return;
         sessionAnnounced = true;
-        ctx.emit({ type: "session.started", sessionRef, resumed: sessionRef === input.resumeSessionRef });
+        sessionVerified = Boolean(observed);
       }
       const type = clean(event.type).toLowerCase();
       if (type === "result") {

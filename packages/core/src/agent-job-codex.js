@@ -25,6 +25,7 @@ import { validateOutput } from "./agent-job-output.js";
 import { TASK_FAILED_INSTRUCTION, agentFailureError, agentReportedFailure, approvedCallsText, nativeAttemptError, nativeExecutorEnabled, nativeTimeoutError } from "./agent-job-native-interface.js";
 import { getAgentJobTool, listAgentJobTools } from "./agent-job-tools.js";
 import { CodexJobSession, classifyCodexJobError } from "./codex-job-session.js";
+import { personalAgentFeature } from "./personal-agent-feature.js";
 
 export const CODEX_NATIVE_TOOLS = Object.freeze(["codex.command", "codex.file_change", "codex.permissions", "codex.mcp"]);
 
@@ -46,6 +47,12 @@ function dynamicToolSpecs(names) {
   }));
 }
 
+// A persistent session exposes a stable tool catalog. Per-turn permission and
+// effect checks still decide every call, including newly denied tools.
+export function personalAgentCodexDynamicTools() {
+  return dynamicToolSpecs(listAgentJobTools().map(tool => tool.name).filter(name => !CODEX_NATIVE_TOOLS.includes(name)));
+}
+
 function outputInstruction(schema) {
   return schema
     ? `Finish with a final message that is only a JSON value matching this JSON Schema:\n${JSON.stringify(schema)}`
@@ -59,6 +66,12 @@ function developerInstructions(ctx, workspace) {
     "Commands and file changes may be denied by the job permissions. If a tool result says the run is paused for approval, end your turn.",
     TASK_FAILED_INSTRUCTION,
   ].join("\n");
+}
+
+// Set these on metadata-only creation too: the first empty loaded thread
+// cannot be resumed to replace its developer instructions before its turn.
+export function personalAgentCodexInstructions(cwd) {
+  return developerInstructions({ job: "personal-agent", runId: "supervised-session" }, { path: cwd });
 }
 
 function firstPrompt(input) {
@@ -196,18 +209,23 @@ export const codexJobAdapter = Object.freeze({
     const workspace = await ctx.prepareWorkspace(input);
     ctx.emit({ type: "workspace.ready", path: workspace.path, kind: workspace.kind });
     const session = new CodexJobSession({ env: ctx.env });
+    const managed = Boolean(ctx.personalAgentSession && personalAgentFeature(ctx.env));
     const stopRef = { stop: null, turns: 0 };
     try {
       const opened = await session.open({
         sessionRef: ctx.resume?.sessionRef || "",
         cwd: workspace.path,
         model: input.model || "",
-        developerInstructions: developerInstructions(ctx, workspace),
-        dynamicTools: dynamicToolSpecs(exposedTools(ctx)),
+        ...(managed ? { strictResume: true, effort: ctx.personalAgentSession.effort || "" } : {}),
+        developerInstructions: managed ? personalAgentCodexInstructions(workspace.path) : developerInstructions(ctx, workspace),
+        dynamicTools: managed ? personalAgentCodexDynamicTools() : dynamicToolSpecs(exposedTools(ctx)),
       });
       ctx.emit({ type: "session.started", sessionRef: opened.sessionRef, resumed: opened.resumed });
       ctx.fault("codex_session_started");
-      let text = opened.resumed ? resumePrompt(input, ctx.resume || { reason: "after an interruption" }) : firstPrompt(input);
+      // Persistent conversations receive a new ingress item on each turn;
+      // ordinary job retries keep their original resume-only prompt.
+      let text = managed ? [firstPrompt(input), approvedCallsText(input)].filter(Boolean).join("\n\n")
+        : opened.resumed ? resumePrompt(input, ctx.resume || { reason: "after an interruption" }) : firstPrompt(input);
       for (let repairs = 0; ; repairs += 1) {
         const turn = await runTurn(ctx, session, text, stopRef);
         if (stopRef.stop) return { type: stopRef.stop.type, approval: stopRef.stop.approval };
@@ -225,6 +243,7 @@ export const codexJobAdapter = Object.freeze({
         text = `Your final answer did not match the output schema (${invalid}). Reply with only the corrected JSON value.`;
       }
     } catch (error) {
+      if (ctx.personalAgentSession && personalAgentFeature(ctx.env) && String(error?.code || "").startsWith("personal_agent_native_")) throw error;
       if (error?.kind || error?.injectedCrash || error?.leaseLost) throw error;
       // Failures outside a turn (spawn, transport, RPC) are provider errors.
       const message = String(error?.message || error);
