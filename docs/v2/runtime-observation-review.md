@@ -95,3 +95,21 @@ Premature completion/approval before Started conflict; after proposal/Failed/Los
 new completion/Started/terminal evidence conflicts and Stopped remains Unavailable.
 Original terminal receipts survive all such refusals. No production start path,
 shared port, store schema, root manifest or lock changes are introduced.
+
+## Actual fixture cancellation harness
+
+The runtime cancellation module consumes Core adapter source 72784259 and its
+prerequisites without changing root membership or lock resolution. Three actual
+SQLite tests cover concurrent same-key cancellation at Candidate and Reserved,
+public control-envelope refusal for FAKE start/poll and supervisor polling,
+committed Stopped and original execution receipt replay after pool reopen, and
+pending Started identity retained across an unavailable writer followed by
+cancellation fencing. New or changed terminal evidence leaves canonical replay
+bytes unchanged. The execution-token Stopped assertion now expects Fenced.
+
+Wrapper locked/offline runtime validation: 50 default tests and 56 feature tests
+passed, zero ignored; strict feature all-target clippy, formatting and diff checks
+passed. Pool reopening and a closed writer are not process-crash or transport
+lost-ACK acceptance. Public projection checks do not substitute for Core's full
+SQL snapshots. Production starts remain blocked; independent cancellation process
+acceptance and session reuse are outside this checkpoint.
