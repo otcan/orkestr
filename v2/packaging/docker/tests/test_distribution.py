@@ -53,7 +53,8 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(service["cap_drop"], ["ALL"])
         self.assertEqual(service["volumes"], ["state:/state"])
         self.assertEqual(service["ports"][0]["host_ip"], "127.0.0.1")
-        self.assertTrue(config["networks"]["isolated"]["internal"])
+        self.assertFalse(config["networks"]["isolated"]["internal"])
+        self.assertEqual(manifest["network_policy"], "trusted-control-plane")
         self.assertEqual(manifest["files"]["server"], self.args["binary_sha256"])
         self.assertNotIn("network_mode", service)
         self.assertNotIn("privileged", service)
@@ -69,6 +70,12 @@ class DistributionTests(unittest.TestCase):
         self.assertTrue(config["services"]["server"]["read_only"])
         self.assertEqual(set(config["services"]["server"]["environment"]),
                          {"ORKESTR_V2_ORIGIN", "ORKESTR_V2_CONTAINER_BIND"})
+
+    def test_explicit_outbound_denied_alternative_remains_internal(self):
+        root = prepare.prepare(**{**self.args, "network_policy": "outbound-denied"})
+        config = json.loads((root / "compose.json").read_text())
+        self.assertTrue(config["networks"]["isolated"]["internal"])
+        self.assertEqual(entrypoint.verify(root)["network_policy"], "outbound-denied")
 
     def test_unknown_network_policy_fails_before_output(self):
         with self.assertRaisesRegex(RuntimeError, "network policy"):

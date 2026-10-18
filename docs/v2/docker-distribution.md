@@ -56,7 +56,10 @@ against the base; that is an actual-image gate.
 ## Isolation and lifecycle
 
 Each context generates a unique `v2-install-<random>` project and image tag, an
-explicit private named state volume, and an internal bridge. The only published
+explicit private named state volume, and a dedicated ordinary bridge.
+The trusted HTTP/control-plane server permits outbound routing; execution and
+providers remain unconfigured in this acceptance probe. This is not an untrusted
+executor sandbox. Executor network containment is a separate unpassed release gate. The only published
 host address is 127.0.0.1. There is no daemon socket, host path, provider credential,
 browser profile, legacy auth or service mount. Root is used only during image
 assembly to establish ownership of the empty `/state` directory. The runtime
@@ -180,8 +183,9 @@ reviewed enforceable egress policy; disabling masquerading alone is insufficient
 Compose bridge while retaining loopback-only publication, fresh state, runtime
 privilege restrictions and absence of host/socket/credential mounts. This policy
 **permits outbound network routing**; it is not an outbound-denied sandbox. No
-provider is configured or activated. The default remains `outbound-denied` and
-continues to use the internal bridge. Both policies are recorded in the artifact
+provider is configured or activated. The historical default was `outbound-denied`. The root-admitted product default
+is now `trusted-control-plane`, using an ordinary dedicated bridge. The explicit
+`outbound-denied` alternative continues to use an internal bridge. Both policies are recorded in the artifact
 manifest. Unknown policies are rejected before creating a context.
 
 This option is a concrete proposal for a root-admitted no-provider HTTP
@@ -217,3 +221,22 @@ was removed and the assigned loopback port could be rebound after cleanup.
 The admitted base remains cached; shared build caches were not pruned. Docker's
 build warning about the required BASE_IMAGE argument having no default is
 expected: the generator always supplies an explicit immutable digest.
+
+
+### Trusted control-plane product default
+
+Root's product decision supersedes the earlier default-denied proposal: the
+packaged HTTP/control-plane server is trusted and uses an ordinary dedicated
+Docker bridge with outbound routing allowed for future provider/connector
+routes. `--network-policy trusted-control-plane` is the default and is recorded
+in the artifact manifest. No host Python relay is used. Host publication remains
+127.0.0.1 only; exact browser origin and Runtime Host/auth behavior are unchanged.
+Nonroot UID, read-only root filesystem, capability drop, no-new-privileges,
+private state volume, no host mounts and no Docker socket remain required.
+
+Outbound permission does not configure providers or enable execution. The owned
+acceptance checkpoint uses zero configured providers and makes no inference
+calls. Untrusted executor network containment is a separate **unpassed** release
+gate; successful control-plane HTTP does not satisfy it. The internal alternative
+retains its recorded failed host-publication checkpoint and is not the default
+product topology. Native/current production is unchanged.

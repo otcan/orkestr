@@ -46,8 +46,8 @@ def elf_platform(binary):
 
 def prepare(binary, ui, output, binary_sha256, ui_inventory_sha256, source_commit,
             ui_source_commit, base_image, origin, port, bind_opt_in, required_glibc,
-            network_policy="outbound-denied"):
-    require(network_policy in ("outbound-denied", "diagnostic-egress-allowed"),
+            network_policy="trusted-control-plane"):
+    require(network_policy in ("trusted-control-plane", "outbound-denied", "diagnostic-egress-allowed"),
             "explicit supported network policy required")
     require(re.fullmatch(r"[^\s$;]+@sha256:[0-9a-f]{64}", base_image), "immutable inspected local base image digest required")
     require(1024 <= port <= 65535, "explicit unprivileged host port required")
@@ -109,8 +109,8 @@ if __name__ == "__main__":
     for name in ("binary", "ui", "output", "binary-sha256", "ui-inventory-sha256", "source-commit",
                  "ui-source-commit", "base-image", "origin", "bind-opt-in", "required-glibc"):
         parser.add_argument("--" + name, required=True)
-    parser.add_argument("--network-policy", choices=("outbound-denied", "diagnostic-egress-allowed"),
-                        default="outbound-denied", help="normal bridge permits outbound routing; requires explicit topology admission")
+    parser.add_argument("--network-policy", choices=("trusted-control-plane", "outbound-denied", "diagnostic-egress-allowed"),
+                        default="trusted-control-plane", help="trusted control plane allows outbound routing; executor containment is separate")
     parser.add_argument("--port", type=int, required=True)
     args = vars(parser.parse_args())
     try:
