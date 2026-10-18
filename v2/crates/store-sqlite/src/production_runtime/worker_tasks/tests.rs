@@ -297,5 +297,7 @@ async fn two_tasks_keep_distinct_instructions_and_native_bindings() {
 }
 
 mod auth_tests;
+mod durable_hold_tests;
 mod payload_tests;
 mod replay_tests;
+mod upgrade_tests;

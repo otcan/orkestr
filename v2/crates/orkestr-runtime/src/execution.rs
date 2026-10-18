@@ -4,6 +4,7 @@ pub(crate) mod cancellation_fence;
 mod claude_pump;
 mod claude_session;
 mod fence;
+mod lease_refresh;
 mod provider_write;
 mod pump;
 mod reuse;

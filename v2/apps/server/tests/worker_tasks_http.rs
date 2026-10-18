@@ -21,6 +21,6 @@ fn owner_tasks_have_distinct_native_bindings_bounded_dispatch_and_durable_contro
         String::from_utf8_lossy(&output.stdout)
             .matches("HTTP case passed:")
             .count(),
-        4
+        6
     );
 }

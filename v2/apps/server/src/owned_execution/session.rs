@@ -14,7 +14,7 @@ enum SessionExit {
 }
 
 impl ConfiguredExecution {
-    pub(super) async fn run(
+    pub(super) async fn run_codex(
         mut self,
         mut shutdown: watch::Receiver<bool>,
     ) -> Result<(), &'static str> {
@@ -94,6 +94,7 @@ impl ConfiguredExecution {
             return Ok(SessionExit::Shutdown);
         };
         let mut run = capability.provider().run.run_id.clone();
+        let mut liveness = liveness::RunningLease::capture(&self.store, &capability).await?;
         let mut worker = self.prepare_worker(&capability)?;
         let (mut authority, mut pump) = ready
             .attach(self.store.clone(), capability)
@@ -102,7 +103,7 @@ impl ConfiguredExecution {
             .control
             .register(self.store.clone(), &run)
             .map_err(|_| "execution control registration refused")?;
-        let mut deadline = Instant::now() + Duration::from_secs(45);
+        let mut budget = self.config.execution_budget.start(Instant::now());
         loop {
             self.maintain(heartbeat).await?;
             // Parent Stop serializes against both its own pump and a bounded
@@ -149,6 +150,7 @@ impl ConfiguredExecution {
                     return Ok(SessionExit::Shutdown);
                 };
                 run = capability.provider().run.run_id.clone();
+                liveness = liveness::RunningLease::capture(&self.store, &capability).await?;
                 worker = self.prepare_worker(&capability)?;
                 let (next_authority, next_pump) = pump
                     .attach_next(self.store.clone(), capability)
@@ -162,7 +164,7 @@ impl ConfiguredExecution {
                     .control
                     .register(self.store.clone(), &run)
                     .map_err(|_| "execution control registration refused")?;
-                deadline = Instant::now() + Duration::from_secs(45);
+                budget = self.config.execution_budget.start(Instant::now());
                 continue;
             }
             if status.phase == ExecutionPhase::AwaitingAcceptance {
@@ -186,11 +188,16 @@ impl ConfiguredExecution {
                 // killing a local helper is never reported as provider Stopped.
                 break;
             }
-            if *shutdown.borrow() || Instant::now() >= deadline {
+            let cancellation = if *shutdown.borrow() {
+                Some("isolated-runtime-shutdown")
+            } else {
+                budget.cancellation_key(Instant::now())
+            };
+            if let Some(key) = cancellation {
                 // Fence durably before local child cleanup; no success is inferred.
                 let receipt = self
                     .store
-                    .request_cancel(&self.owner, &run, "isolated-runtime-shutdown")
+                    .request_cancel(&self.owner, &run, key)
                     .await
                     .map_err(|_| "execution shutdown requires reconciliation")?;
                 run_control.disable();
@@ -215,6 +222,7 @@ impl ConfiguredExecution {
                 Err(_) => return Err("execution observation refused; reconciliation required"),
             };
             let phase = if committed {
+                budget.observed(Instant::now());
                 // A committed proposal/terminal event may change phase during
                 // this step. Publish availability from that result before HTTP
                 // acquires the same lock, not from the pre-step Running sample.
@@ -231,6 +239,27 @@ impl ConfiguredExecution {
             } else {
                 status.phase
             };
+            if phase == ExecutionPhase::Running
+                && liveness.due(Instant::now())
+                && pump.renewal_quiescent()
+            {
+                // Same scheduling lock as HTTP Stop and provider observation.
+                // Core rechecks auth/state inside the sealed transition. The
+                // transfer preserves this exact child, turn and event cursor.
+                // Keep selection available while HTTP waits on this lock;
+                // explicitly disable it before releasing a failed transfer.
+                let (next_authority, next_pump) =
+                    match liveness.refresh(self.store.clone(), pump).await {
+                        Ok(refreshed) => refreshed,
+                        Err(reason) => {
+                            run_control.disable();
+                            return Err(reason);
+                        }
+                    };
+                let _ = authority.revoke();
+                authority = next_authority;
+                pump = next_pump;
+            }
             // A persistence retry may retain an observation during this step.
             // Refuse new control handoff until that exact evidence is committed.
             run_control.set_available(phase == ExecutionPhase::Running && pump.pending().is_none());

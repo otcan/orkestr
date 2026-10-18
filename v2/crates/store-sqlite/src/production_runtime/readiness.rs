@@ -1,5 +1,25 @@
 use super::*;
 use crate::runtime::ledger::hash;
+pub(super) struct NativeReservation {
+    pub digest_domain: &'static str,
+    pub session_id: orkestr_v2_contracts::SessionId,
+    pub expected_generation: u64,
+    pub native_session_id: String,
+    pub protocol_version: String,
+    pub source_event_key: String,
+}
+impl From<NativeSessionConfirmation> for NativeReservation {
+    fn from(v: NativeSessionConfirmation) -> Self {
+        Self {
+            digest_domain: "production-readiness-v1",
+            session_id: v.session_id,
+            expected_generation: v.expected_generation,
+            native_session_id: v.native_session_id,
+            protocol_version: v.protocol_version,
+            source_event_key: v.source_event_key,
+        }
+    }
+}
 impl Store {
     /// Only a trusted protocol adapter may submit native readiness evidence.
     pub async fn confirm_native_session(
@@ -19,6 +39,28 @@ impl Store {
         input: NativeSessionConfirmation,
         worker_authorized: bool,
     ) -> Result<Binding> {
+        self.context()?.validate(tx).await?;
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM production_requested_native WHERE session_id=?",
+        )
+        .bind(input.session_id.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
+        if pending != 0 {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        self.register_native_reservation_in(tx, input.into(), worker_authorized)
+            .await
+    }
+    // Shared reservation writer. Calling this does not establish observed identity;
+    // the requested-Claude path records that distinction in the same transaction.
+    pub(super) async fn register_native_reservation_in(
+        &self,
+        tx: &mut SqliteConnection,
+        input: NativeReservation,
+        worker_authorized: bool,
+    ) -> Result<Binding> {
         let c = self.context()?;
         if input.native_session_id.is_empty()
             || input.native_session_id.len() > 512
@@ -29,7 +71,7 @@ impl Store {
             return Err(RuntimeStoreError::InvalidInput);
         }
         let digest = hash(
-            "production-readiness-v1",
+            input.digest_domain,
             &[
                 &input.session_id.to_string(),
                 &input.expected_generation.to_string(),

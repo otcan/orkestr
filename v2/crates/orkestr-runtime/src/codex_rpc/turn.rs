@@ -42,6 +42,14 @@ impl TurnStream {
             None
         }
     }
+    pub(crate) fn renewal_quiescent(&self) -> bool {
+        !self.poisoned
+            && self.acknowledged
+            && self.started
+            && self.terminal.is_none()
+            && self.events.is_empty()
+            && !self.interrupt_claimed
+    }
     pub fn terminal(&self) -> Option<&ProviderEvent> {
         self.terminal.as_ref()
     }

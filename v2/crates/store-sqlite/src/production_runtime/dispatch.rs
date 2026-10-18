@@ -66,6 +66,19 @@ impl Store {
         if ready != 1 {
             return Err(RuntimeStoreError::Fenced);
         }
+        // Timer disable/rollback fences even an already-admitted input. Keep
+        // cancellation authority usable so an owned process can still be stopped.
+        if p.run.purpose == AdmissionPurpose::Execution {
+            let held: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM ordinary_input_holds WHERE event_id=?")
+                    .bind(row.get::<String, _>("event_id"))
+                    .fetch_one(&mut *conn)
+                    .await
+                    .map_err(db)?;
+            if held != 0 {
+                return Err(RuntimeStoreError::Fenced);
+            }
+        }
         if p.run.role == Role::Worker {
             self.worker_lineage_in(conn, &row).await?;
         }

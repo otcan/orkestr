@@ -134,16 +134,24 @@ class Case:
 
     def stop(self):
         if self.process is not None:
-            if self.process.poll() is None:
-                self.trace()  # capture owned host identity before initiating cleanup
-                self.process.send_signal(signal.SIGINT)
+            process = self.process
+            try:
                 try:
-                    self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
-                    self.process.wait(timeout=3)
-            self.process.stderr.close()
-            self.process = None
+                    if process.poll() is None:
+                        self.trace()  # capture identity before initiating cleanup
+                finally:
+                    # A failed identity oracle still fails the test, but cannot
+                    # skip cleanup of this exact Popen-owned server.
+                    if process.poll() is None:
+                        process.send_signal(signal.SIGINT)
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=3)
+            finally:
+                process.stderr.close()
+                self.process = None
 
     def configure(self):
         # Real product broker and FD handoff, fixed synthetic native executable.
@@ -203,10 +211,12 @@ class Case:
         return self.native_probe.gone()
 
     def cleanup(self):
-        self.stop()
-        if self.trace():
-            wait_for(self.peer_gone, "normal shutdown must reap the owned synthetic native peer")
-        self.temp.cleanup()
+        try:
+            self.stop()
+            if self.trace():
+                wait_for(self.peer_gone, "normal shutdown must reap the owned synthetic native peer")
+        finally:
+            self.temp.cleanup()
 
 
 def success(case):

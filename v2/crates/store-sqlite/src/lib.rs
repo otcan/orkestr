@@ -23,10 +23,11 @@ mod production_runtime;
 mod replay;
 mod runtime;
 pub use production_runtime::{
-    BoundSessionMetadata, ConsumedOfflinePython, ConsumedProviderDispatch, ExecutionConsumption,
-    FastAdmissionInput, OfflinePythonAdmission, OfflinePythonConsumption, OfflinePythonDelegation,
-    OfflinePythonOutcome, OfflinePythonReceipt, OfflinePythonState, ProductionSupervisorStore,
-    ReadySessionTransition, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
+    BoundSessionMetadata, ClaudeProcessInitialization, ConsumedOfflinePython,
+    ConsumedProviderDispatch, ExecutionConsumption, FastAdmissionInput, OfflinePythonAdmission,
+    OfflinePythonConsumption, OfflinePythonDelegation, OfflinePythonOutcome, OfflinePythonReceipt,
+    OfflinePythonState, ProductionSupervisorStore, ReadySessionTransition, RunLeaseTransition,
+    RunRenewalAuthority, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
     WorkerDelegationResult, WorkerDelegationState, WorkerTaskClaim,
 };
 

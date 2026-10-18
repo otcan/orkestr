@@ -12,7 +12,9 @@ from reaping import REAPED_EXIT
 
 
 def main(configuration_path=None, account_environment=None):
-    if sys.argv[1:] != ["open-owned-session", "--protocol", PROTOCOL]:
+    arguments = sys.argv[1:]
+    resumed = arguments == ["resume-owned-session", "--protocol", PROTOCOL]
+    if not resumed and arguments != ["open-owned-session", "--protocol", PROTOCOL]:
         return 2
     def stop(_signal, _frame):
         raise Refused("owned Claude stopped")
@@ -21,7 +23,12 @@ def main(configuration_path=None, account_environment=None):
     try:
         config = ClaudeConfiguration.load(configuration_path or
             Path(__file__).with_name("claude-private.json"))
-        session = config.new_session(account_environment)
+        if resumed:
+            from claude_bootstrap import receive
+            specification = receive(config)
+            session = config.resumed_session(specification, account_environment)
+        else:
+            session = config.new_session(account_environment)
         with socket.socket(fileno=3) as handoff:
             if handoff.family != socket.AF_UNIX or handoff.type != socket.SOCK_STREAM:
                 raise Refused("invalid private handoff")

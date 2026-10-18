@@ -121,7 +121,14 @@ impl WorkerSchedule {
     pub async fn poll(&mut self) -> Result<WorkerProgress, &'static str> {
         if self.configuration.policy.owner_tasks() {
             let mut queue = self.queue.take().ok_or("Worker task scheduler closed")?;
-            let progress = queue.poll(self).await?;
+            let progress = queue.poll(self).await;
+            if progress.is_err() {
+                self.store
+                    .reconcile_worker_task_holds(&self.parent.run_id)
+                    .await
+                    .map_err(|_| "Worker task hold reconciliation unavailable")?;
+            }
+            let progress = progress?;
             self.queue = Some(queue);
             return Ok(progress);
         }

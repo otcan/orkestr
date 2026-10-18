@@ -22,8 +22,11 @@ class ClaudeProtocolTests(unittest.TestCase):
                 "message":{"role":"user","content":"synthetic durable input"}}}}
 
     def init(self):
-        return self.channel.provider({"type":"system","subtype":"init",
-            "session_id":self.native,"apiKey":"synthetic-private"})
+        self.channel.client({"id":100,"method":"BrokerMetadata","params":{
+            "owned_handle":self.handle,"frame":{"type":"control_request",
+            "request_id":"setup:1","request":{"subtype":"initialize","hooks":None}}}})
+        return self.channel.provider({"type":"control_response","response":{
+            "subtype":"success","request_id":"setup:1","response":{"private":"synthetic-private"}}})
 
     def test_terminal_does_not_authorize_continuation_or_replayed_result(self):
         self.assertNotIn("synthetic-private", str(self.init()))
@@ -47,6 +50,29 @@ class ClaudeProtocolTests(unittest.TestCase):
         request["method"] = "CancelExecution"
         with self.assertRaises(Refused):
             self.channel.client(request)
+
+    def test_setup_ack_correlation_and_closed_metadata(self):
+        self.init()
+        self.assertTrue(self.channel.initialized)
+        self.assertFalse(self.channel.system_seen)
+        with self.assertRaises(Refused):
+            self.channel.provider({"type":"control_response","response":{
+                "subtype":"success","request_id":"setup:1","response":{}}})
+
+    def test_unsolicited_init_is_not_metadata_readiness(self):
+        with self.assertRaises(Refused):
+            self.channel.provider({"type":"system","subtype":"init","session_id":self.native})
+        self.assertFalse(self.channel.initialized)
+
+    def test_metadata_cannot_submit_user_or_change_controls(self):
+        for inner in ({"subtype":"interrupt","hooks":None},
+                      {"subtype":"initialize","hooks":{}},
+                      {"subtype":"initialize","hooks":None,"model":"external"}):
+            with self.assertRaises(Refused):
+                self.channel.client({"id":10+len(self.channel.seen),"method":"BrokerMetadata",
+                    "params":{"owned_handle":self.handle,"frame":{"type":"control_request",
+                    "request_id":"setup:1","request":inner}}})
+        self.assertFalse(self.channel.initialized)
 
     def test_foreign_native_and_duplicate_message_refused(self):
         self.init()

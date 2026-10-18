@@ -36,10 +36,14 @@ class WorkerCase(ordinary.Case):
             return [dict(row) for row in db.execute(query, arguments)]
 
     def runs(self):
-        return self.rows("SELECT r.id,r.state,r.message_id,r.event_id,r.scope_sequence,"
+        rows = self.rows("SELECT r.id,r.state,r.message_id,r.event_id,r.scope_sequence,"
                          "r.dispatch_state,r.candidate_hash,r.reservation_hash,"
                          "b.id AS session_id,b.role,b.native_session_id,b.parent_session_id "
                          "FROM production_runs r JOIN session_bindings b ON b.id=r.session_id")
+        # Resolve namespace locators while the observed run still owns its peer,
+        # before callers can accept, stop, or revoke it and trigger cleanup.
+        self.trace()
+        return rows
 
     def role_state(self, role, state):
         found = [run for run in self.runs() if run["role"] == role and run["state"] == state]
@@ -253,8 +257,10 @@ def main():
                 test(case)
             finally:
                 item["elapsed_ms"] = round((time.monotonic() - beginning) * 1000, 3)
-                item["trace"] = case.trace()
-                case.cleanup()
+                try:
+                    item["trace"] = case.trace()
+                finally:
+                    case.cleanup()
             item["status"] = "passed"
             print("ordinary synthetic Worker HTTP case passed:", test.__name__, flush=True)
     finally:

@@ -72,14 +72,14 @@ for line in sys.stdin:
    yield line.decode()
 for line in frames():"#,
         );
-        let source = if stop_mode >= 4 {
+        let source = if (4..=9).contains(&stop_mode) {
             source.replace(" elif m!='initialized':", " elif m=='turn/interrupt':\n  reply={'id':f['id'],'result':{}}\n elif m!='initialized':")
                 .replace("   {'method':'turn/completed','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'completed'}}}", "")
                 + "\n if m=='turn/interrupt':\n  import time\n  while not os.path.exists('release-stop'): time.sleep(0.002)\n  emit({'method':'turn/completed','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'interrupted'}}})\n"
         } else {
             source
         };
-        let source = if stop_mode >= 7 {
+        let source = if (7..=9).contains(&stop_mode) {
             source.replace("  emit({'method':'turn/completed'", "  for i in range(32): emit({'method':'item/agentMessage/delta','params':{'threadId':'synthetic-native','turnId':'t1','itemId':'buffered','delta':'buffered progress'}})\n  emit({'method':'turn/completed'")
         } else {
             source
@@ -204,7 +204,12 @@ for line in frames():"#,
     else {
         panic!("unique dispatch")
     };
-    let (authority, mut pump) = ready.attach(bound.clone(), cap).unwrap();
+    let mut renewal = if (10..=11).contains(&stop_mode) {
+        Some(bound.authorize_running_renewal(&cap).await.unwrap())
+    } else {
+        None
+    };
+    let (mut authority, mut pump) = ready.attach(bound.clone(), cap).unwrap();
     let original_scope = pump.source.scope.clone();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -317,7 +322,58 @@ for line in frames():"#,
             .await
             .unwrap()
             .unwrap();
-        if stop_mode >= 4
+        if (10..=11).contains(&stop_mode)
+            && renewal.is_some()
+            && status.phase == orkestr_v2_contracts::ExecutionPhase::Running
+            && pump.renewal_quiescent()
+        {
+            let sequence = pump.cursor.next_control_sequence().unwrap();
+            let old = pump.admission.clone();
+            let old_scope = pump.source.scope.clone();
+            let before = std::fs::read(root.join("workspace/native-methods.log")).unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            bound.heartbeat_supervisor().await.unwrap();
+            if stop_mode == 11 {
+                bound
+                    .request_cancel(&owner, &old.run.run_id, "before-refresh")
+                    .await
+                    .unwrap();
+                assert!(pump
+                    .renew_lease(bound.clone(), renewal.as_mut().unwrap())
+                    .await
+                    .is_err());
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                assert_eq!(
+                    std::fs::read(root.join("workspace/native-methods.log")).unwrap(),
+                    before
+                );
+                authority.revoke().unwrap();
+                drop(authority);
+                drop(bound);
+                drop(store);
+                std::fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            let (next, refreshed) = pump
+                .renew_lease(bound.clone(), renewal.as_mut().unwrap())
+                .await
+                .unwrap();
+            authority.revoke().unwrap();
+            authority = next;
+            pump = refreshed;
+            assert_eq!(pump.source.scope, old_scope);
+            assert_eq!(
+                pump.admission.run.lease_generation,
+                old.run.lease_generation + 1
+            );
+            assert_eq!(pump.cursor.next_control_sequence().unwrap(), sequence);
+            assert_eq!(
+                std::fs::read(root.join("workspace/native-methods.log")).unwrap(),
+                before
+            );
+            renewal = None;
+        }
+        if (4..=9).contains(&stop_mode)
             && status.phase == orkestr_v2_contracts::ExecutionPhase::Running
             && status.progress.is_some()
         {
@@ -468,6 +524,9 @@ for line in frames():"#,
         assert!(Instant::now() < deadline);
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
+    if stop_mode == 10 {
+        assert!(renewal.is_none());
+    }
     assert!(matches!(
         bound.consume_execution(&reservation).await,
         Err(RuntimeStoreError::Fenced)
@@ -546,4 +605,14 @@ async fn buffered_progress_preserves_racing_completion_truth() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retained_durable_stopped_yields_single_use_original_scope_reap_proof() {
     exercise(true, 9).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn running_lease_refresh_preserves_same_child_sequence_and_retires_old_authority() {
+    exercise(true, 10).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_before_running_lease_refresh_quarantines_without_new_submission() {
+    exercise(true, 11).await;
 }

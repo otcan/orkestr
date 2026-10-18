@@ -497,3 +497,77 @@ fn duplicate_or_escaped_keys_cannot_replace_identity_or_result_flags() {
         Ok(Some(ClaudeObservation::Progress))
     );
 }
+
+#[test]
+fn closed_telemetry_before_init_and_after_result_never_changes_evidence() {
+    let mut p = parser();
+    for n in 1..=2 {
+        let v = json!({"type":"command_lifecycle","session_id":SESSION,
+            "uuid":format!("00000000-0000-4000-8000-{n:012}")});
+        assert_eq!(receive(&mut p, v), Ok(None));
+        assert!(!p.initialized);
+        assert!(!p.terminal_result_seen());
+    }
+    receive(&mut p, init(SESSION)).unwrap();
+    assert_eq!(
+        receive(
+            &mut p,
+            json!({"type":"rate_limit_event","session_id":SESSION,
+        "uuid":"00000000-0000-4000-8000-000000000003"})
+        ),
+        Ok(None)
+    );
+    assert_eq!(
+        receive(&mut p, result(SESSION, false)),
+        Ok(Some(ClaudeObservation::CompletedProposal))
+    );
+    assert_eq!(
+        receive(
+            &mut p,
+            json!({"type":"command_lifecycle","session_id":SESSION,
+        "uuid":"00000000-0000-4000-8000-000000000004"})
+        ),
+        Ok(None)
+    );
+    assert!(p.terminal_result_seen());
+    assert_eq!(p.finish(KEY), Ok(()));
+    assert_eq!(
+        receive(&mut p, result(SESSION, false)),
+        Err(Blocker::Protocol)
+    );
+}
+
+#[test]
+fn telemetry_foreign_extra_duplicate_and_bound_fail_closed() {
+    for mutate in 0..4 {
+        let mut p = parser();
+        let mut v = json!({"type":"command_lifecycle","session_id":SESSION,
+            "uuid":"00000000-0000-4000-8000-000000000001"});
+        match mutate {
+            0 => v["session_id"] = json!(OTHER),
+            1 => v["request"] = json!({"subtype":"permission"}),
+            2 => v["uuid"] = json!("invalid"),
+            _ => {
+                receive(&mut p, v.clone()).unwrap();
+            }
+        }
+        assert!(receive(&mut p, v).is_err());
+        assert_quarantined(&mut p);
+    }
+    let mut p = parser();
+    for n in 0..128 {
+        receive(
+            &mut p,
+            json!({"type":"command_lifecycle","session_id":SESSION,
+            "uuid":format!("00000000-0000-4000-8000-{n:012}")}),
+        )
+        .unwrap();
+    }
+    assert!(receive(
+        &mut p,
+        json!({"type":"command_lifecycle","session_id":SESSION,
+        "uuid":"00000000-0000-4000-8000-000000000128"})
+    )
+    .is_err());
+    assert_quarantined(&mut p);
+}

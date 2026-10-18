@@ -25,6 +25,19 @@ impl StoreFence {
             scope: super::execution_scope(cap)?,
         })
     }
+    pub(super) fn from_renewal(
+        store: Store,
+        transition: &orkestr_v2_store_sqlite::RunLeaseTransition,
+        scope: &ExecutionScope,
+    ) -> Self {
+        Self {
+            store,
+            #[cfg(all(test, feature = "fixture-test-controls"))]
+            armed_store: std::sync::Mutex::new(None),
+            provider: transition.current().clone(),
+            scope: scope.clone(),
+        }
+    }
     // Arm the exact fence already owned by the attached child, after Prepared.
     // This seam is absent from all non-test builds, even with the feature set.
     #[cfg(all(test, feature = "fixture-test-controls"))]
