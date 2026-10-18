@@ -181,7 +181,7 @@ test("proposed landing contract preserves scans and requires durable evidence ga
   }
   for (const gate of ["secret-policy", "dependency-policy"]) {
     const job = workflow.jobs[gate];
-    assert.equal(job.if, "${{ always() }}");
+    assert.equal(job.if, "${{ always() && !cancelled() }}");
     assert.ok(workflow.jobs[job.needs]);
     const step = job.steps[0];
     assert.match(step.env.RESULT, /\.result/);
