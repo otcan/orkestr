@@ -35,3 +35,20 @@ session revocation, progress, transaction rollback, claim-versus-Stop concurrenc
 delegated history preservation, and scoped clock-expiry reconciliation. These
 synthetic Store checks supplement the independently executed HTTP scenarios;
 they are not real-provider or full-release qualification.
+
+Core registration checkpoint
+----------------------------
+
+The canonical Core successor registers the task DTO and Store leaf from
+`2b9fbe589f779ef2ae183dec516f156859b97ba8` (including its baseline task modules),
+with migration 0031 contiguous after the existing 0026–0030 migrations. It does
+not import the helper's older shared migration dependencies or server wiring.
+The consumed-input hook uses the exact immutable task instructions and refuses
+missing or altered task payloads instead of substituting parent input.
+
+On this registered source, the required locked/offline wrapper passed all 26
+task Store tests and all nine preflight tests, including populated-prefix row/FK
+preservation and the actual old-task upgrade. Explicit parent/auth fences hold
+pending tasks in the originating transaction; elapsed clock expiry uses scoped
+negative reconciliation. Delegated historical evidence is retained. These are
+Store checks, not HTTP, native-provider or process acceptance.
