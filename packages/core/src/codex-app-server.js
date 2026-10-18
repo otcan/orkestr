@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { checkSetupCodexSubscription } from "./setups/setup-dispatch-guard.js";
-import { withThreadMessageMutation } from "./thread-message-mutation.js";
 import { resourceOwnerUserId } from "./policy.js";
 import { canonicalTurnParent, canonicalUserPatch, createSubmission, identityMetric, matchCanonicalInput, uniqueAcceptedSubmission } from "./codex-input-identity.js";
 import { appendEvent } from "../../storage/src/store.js";
@@ -82,6 +81,7 @@ import { recordRouterTraceEvent } from "./router-traces.js";
 import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-liveness.js";
 import { currentCodexGenerationMatches, generationScopedRuntimePatch, rolloutGenerationMode } from "./codex-generation.js";
 import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
+import { createThreadMessageSnapshot } from "./thread-message-snapshot.js";
 import { injectRuntimeFault, runtimeNowMs, runtimeStopPhaseFor } from "./runtime-fault-injection.js";
 import { recordRuntimeControlMetric } from "./observability.js";
 import { recordCodexInputDelivery, recordCodexUserInputRequest } from "./codex-input-observability.js";
@@ -2697,12 +2697,9 @@ function hydrationPatchChanged(existing, patch) {
   return false;
 }
 
-async function upsertHydratedCodexMessage(thread, input, messages, env = process.env, historyItems = []) {
-  return withThreadMessageMutation(thread.id, env, async () => {
-    const fresh = await listThreadMessages(thread.id, env);
-    messages.splice(0, messages.length, ...fresh);
-    return upsertHydratedCodexMessageLocked(thread, input, messages, env, historyItems);
-  });
+async function upsertHydratedCodexMessage(thread, input, snapshot, env = process.env, historyItems = []) {
+  return snapshot.run((messages) =>
+    upsertHydratedCodexMessageLocked(thread, input, messages, env, historyItems));
 }
 
 async function upsertHydratedCodexMessageLocked(thread, input, messages, env, historyItems) {
@@ -2783,7 +2780,9 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
     }
   }
   const turns = Array.isArray(codexThread?.turns) ? codexThread.turns : [];
-  const messages = await listThreadMessages(thread.id, env).catch(() => []);
+  const snapshot = createThreadMessageSnapshot(thread.id, env);
+  await snapshot.run(() => {});
+  const messages = snapshot.messages;
   let count = 0;
   let created = 0;
   let updated = 0;
@@ -2809,7 +2808,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           codexItemId: item.id || null,
           ...(timestamp ? { timestamp, createdAt: timestamp } : {}),
           ...codexAppServerMessageFields(codexThread.id, { turnId, itemId: item.id }),
-        }, messages, env, items).catch(() => null);
+        }, snapshot, env, items).catch(() => null);
         if (result) {
           if (result.created) created += 1;
           if (result.updated) updated += 1;
@@ -2840,7 +2839,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           ...codexAppServerMessageFields(codexThread.id, { turnId, itemId: item.id }),
           ...whatsappProjectionFields(whatsappParent, thread),
           ...(turnParent ? { parentMessageId: turnParent.id } : {}),
-        }, messages, env).catch(() => null);
+        }, snapshot, env).catch(() => null);
         if (result) {
           if (result.created) created += 1;
           if (result.updated) updated += 1;
