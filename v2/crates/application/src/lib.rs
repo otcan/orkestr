@@ -53,5 +53,5 @@ pub trait IntakeStore: Send + Sync {
         conversation: &ConversationId,
         after: i64,
         limit: u32,
-    ) -> impl Future<Output = Result<Vec<EventEnvelope>>> + Send;
+    ) -> impl Future<Output = Result<Vec<ConversationEvent>>> + Send;
 }
