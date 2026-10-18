@@ -161,6 +161,7 @@ impl State {
                 old.run_id == input.run_id
                     && old.request_key == input.request_key
                     && old.expected_revision == input.expected_revision
+                    && old.expected_control_revision == input.expected_control_revision
             })
     }
 }

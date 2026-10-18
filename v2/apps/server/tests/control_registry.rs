@@ -70,6 +70,7 @@ fn input(run: &RunId) -> ExecutionControlRequest {
     ExecutionControlRequest {
         run_id: run.clone(),
         expected_revision: 1,
+        expected_control_revision: None,
         request_key: "synthetic-stop".into(),
     }
 }
@@ -136,12 +137,14 @@ async fn closed_run_replays_only_the_original_request_and_receipt_without_delive
         .request(&f.owner, &f.conversation, &input(&run))
         .unwrap();
     replay.publish(receipt.clone()).unwrap();
-    for field in 0..2 {
+    for field in 0..3 {
         let mut changed = input(&run);
         if field == 0 {
             changed.expected_revision += 1;
-        } else {
+        } else if field == 1 {
             changed.request_key.push('x');
+        } else {
+            changed.expected_control_revision = Some(1);
         }
         assert!(f
             .registry
@@ -154,6 +157,37 @@ async fn closed_run_replays_only_the_original_request_and_receipt_without_delive
         replay.publish(changed),
         Err(RegistryError::Handoff(HandoffError::Conflict))
     );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn stable_control_revision_remains_part_of_exact_retired_replay() {
+    let f = Case::new().await;
+    let run = RunId(Uuid::new_v4());
+    let (control, receiver) = f.registry.register(f.store.clone(), &run).unwrap();
+    control.set_available(true);
+    let mut original = input(&run);
+    original.expected_control_revision = Some(7);
+    let request = f
+        .registry
+        .request(&f.owner, &f.conversation, &original)
+        .unwrap();
+    let receipt = f.receipt(&run);
+    request.publish(receipt.clone()).unwrap();
+    drop((control, receiver));
+    for changed in [None, Some(0), Some(-1), Some(8)] {
+        let mut altered = original.clone();
+        altered.expected_control_revision = changed;
+        assert!(f
+            .registry
+            .request(&f.owner, &f.conversation, &altered)
+            .is_none());
+    }
+    f.registry
+        .request(&f.owner, &f.conversation, &original)
+        .unwrap()
+        .publish(receipt)
+        .unwrap();
     f.close().await;
 }
 

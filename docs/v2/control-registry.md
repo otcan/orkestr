@@ -8,8 +8,9 @@ lifetime; dropping it refuses new Stop intent without claiming native exit.
 
 The registry allows at most 16 active entries and retains the last 64 retired
 entries for exact request replay. Active entries are never evicted. A retired
-entry accepts only its previously published run, request key, revision, and
-identical internal receipt. Replay does not redeliver an interrupt. Older
+entry accepts only its previously published run, request key, projection
+revision, optional run control revision, and identical internal receipt.
+Replay does not redeliver an interrupt. Older
 retired entries return unavailable after eviction. These bounds do not create
 a dispatch queue or persist across server restart.
 
