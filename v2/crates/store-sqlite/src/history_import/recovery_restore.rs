@@ -75,7 +75,15 @@ impl Store {
                 .execute(&mut *tx).await.map_err(unavailable)?;
         }
         codec::verify_children(&mut tx, owner, &receipt, false).await?;
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("recovery-restore-before-commit")
+            .await
+            .map_err(|_| HistoryError::Unavailable)?;
         tx.commit().await.map_err(unavailable)?;
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("recovery-restore-after-commit")
+            .await
+            .map_err(|_| HistoryError::Unavailable)?;
         Ok(receipt)
     }
 }
