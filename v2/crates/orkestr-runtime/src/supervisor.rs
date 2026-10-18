@@ -1,9 +1,7 @@
-//! Asynchronous core transactions surround prompt, nonblocking provider commands.
-use crate::ports::{Blocker, InterruptControl, Provider, ProviderAdmission};
-use orkestr_v2_application::runtime::{
-    CancelReceipt, ProviderEventInput, RunAdmission, RuntimeStore, RuntimeStoreError,
-};
-use orkestr_v2_contracts::{runtime::SessionRole, OwnerId};
+//! Short async core transactions around nonblocking provider operations.
+use crate::ports::{Blocker, InterruptControl, Provider};
+use orkestr_v2_application::runtime::{RuntimeStore, RuntimeStoreError};
+use orkestr_v2_contracts::{runtime::*, OwnerId, SessionId};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
@@ -11,33 +9,45 @@ pub enum Error {
     Provider(Blocker),
 }
 
-/// Admission alone does not prove authoritative role or fresh dispatch in port v0.
-/// Keep provider dispatch blocked until core supplies both guarantees.
+/// Admission is atomic in core; replay is NOT permission to dispatch again.
+/// Until core returns a per-call dispatch disposition, this path never starts
+/// a provider. Low-level fixture commands remain explicitly test-only.
 pub async fn start<S: RuntimeStore, P: Provider>(
     store: &S,
     _provider: &mut P,
-    owner: &OwnerId,
-    input: &RunAdmission,
-    _role: SessionRole,
-) -> Result<ProviderAdmission, Error> {
-    let _run = store.admit_run(owner, input).await.map_err(Error::Store)?;
+    claim: &InboxClaim,
+    binding: &SessionId,
+    expected_generation: u64,
+    request_key: &str,
+    expected_role: Role,
+) -> Result<RunAdmission, Error> {
+    let admission = store
+        .admit_run(claim, binding, expected_generation, request_key)
+        .await
+        .map_err(Error::Store)?;
+    if admission.owner_id != claim.owner_id
+        || admission.conversation_id != claim.conversation_id
+        || &admission.session_id != binding
+        || admission.role != expected_role
+        || admission.purpose != AdmissionPurpose::Execution
+    {
+        return Err(Error::Store(RuntimeStoreError::InvalidInput));
+    }
     Err(Error::Provider(Blocker::DispatchUnconfirmed))
 }
 
-/// One volatile cursor per run, retained across calls. This is not crash durability.
-/// Recovered runs require core reconciliation, never a fresh default cursor.
-/// Unavailable includes a committed write whose acknowledgement was lost. Retain
-/// the exact sequence and body: retry must return the original durable receipt.
+/// Retain one cursor per run/attempt, including transient errors. Recovered runs
+/// require reconciliation; a fresh cursor is not durable resume authority.
 pub struct PendingObservation {
-    binding: Option<(OwnerId, ProviderAdmission)>,
-    next_sequence: i64,
-    pending: Option<ProviderEventInput>,
+    admission: Option<RunAdmission>,
+    next_sequence: u64,
+    pending: Option<ProviderObservation>,
     refused: Option<RuntimeStoreError>,
 }
 impl Default for PendingObservation {
     fn default() -> Self {
         Self {
-            binding: None,
+            admission: None,
             next_sequence: 1,
             pending: None,
             refused: None,
@@ -45,8 +55,7 @@ impl Default for PendingObservation {
     }
 }
 impl PendingObservation {
-    /// A refused observation remains available for explicit reconciliation.
-    pub fn pending(&self) -> Option<&ProviderEventInput> {
+    pub fn pending(&self) -> Option<&ProviderObservation> {
         self.pending.as_ref()
     }
 }
@@ -54,16 +63,15 @@ impl PendingObservation {
 pub async fn step<S: RuntimeStore, P: Provider>(
     store: &S,
     provider: &mut P,
-    owner: &OwnerId,
-    admission: &ProviderAdmission,
+    admission: &RunAdmission,
     cursor: &mut PendingObservation,
 ) -> Result<bool, Error> {
-    if let Some((original_owner, original)) = &cursor.binding {
-        if original_owner != owner || original != admission {
+    if let Some(original) = &cursor.admission {
+        if original != admission {
             return Err(Error::Store(RuntimeStoreError::StaleLease));
         }
     } else {
-        cursor.binding = Some((owner.clone(), admission.clone()));
+        cursor.admission = Some(admission.clone());
     }
     if let Some(refusal) = cursor.refused {
         return Err(Error::Store(refusal));
@@ -73,35 +81,54 @@ pub async fn step<S: RuntimeStore, P: Provider>(
         .checked_add(1)
         .ok_or(Error::Store(RuntimeStoreError::InvalidInput))?;
     if cursor.pending.is_none() {
-        let Some(event) = provider.poll(admission).map_err(Error::Provider)? else {
+        let Some(kind) = provider.poll(admission).map_err(Error::Provider)? else {
             return Ok(false);
         };
-        cursor.pending = Some(ProviderEventInput {
+        cursor.pending = Some(ProviderObservation {
+            source_event_key: format!(
+                "runtime:{}:{}:{}:{}",
+                admission.run_id,
+                admission.attempt,
+                admission.lease_generation,
+                cursor.next_sequence
+            ),
             run_id: admission.run_id.clone(),
             session_id: admission.session_id.clone(),
             lease_generation: admission.lease_generation,
-            fence_generation: admission.fence_generation,
-            provider_sequence: cursor.next_sequence,
-            event,
+            kind,
         });
     }
-    let input = cursor
+    let observation = cursor
         .pending
         .as_ref()
         .expect("pending observation set above");
-    match store.append_provider_event(owner, input).await {
-        Ok(receipt) => {
-            if receipt.run.run_id != input.run_id || receipt.run.session_id != input.session_id {
-                return Err(Error::Store(RuntimeStoreError::InvalidInput));
-            }
+    if !observation.payload_is_bounded()
+        || (admission.purpose == AdmissionPurpose::CancellationAcknowledgement
+            && observation.kind != ObservationKind::Stopped)
+    {
+        return Err(Error::Store(RuntimeStoreError::InvalidInput));
+    }
+    match store
+        .record_observation(admission, &observation.source_event_key, observation)
+        .await
+    {
+        Ok(_) => {
             cursor.pending = None;
             cursor.next_sequence = next;
             Ok(true)
         }
         Err(error) => {
+            // Expired authority is a deliberate delivery discard, never an ACK
+            // or permission to repoll, readmit or start another provider turn.
+            if matches!(error, RuntimeStoreError::StaleLease | RuntimeStoreError::Expired) {
+                cursor.pending = None;
+            }
             if matches!(
                 error,
-                RuntimeStoreError::StaleLease | RuntimeStoreError::Fenced
+                RuntimeStoreError::StaleLease
+                    | RuntimeStoreError::Expired
+                    | RuntimeStoreError::Unauthorized
+                    | RuntimeStoreError::Conflict
             ) {
                 cursor.refused = Some(error);
             }
@@ -110,25 +137,44 @@ pub async fn step<S: RuntimeStore, P: Provider>(
     }
 }
 
-/// Return the persisted receipt even when interrupt is unsupported or fails.
-/// The provider never receives the cancellation fence as an execution admission.
+/// Preserve core's exact receipt and uncertain in-flight status after failure.
 pub async fn cancel<S: RuntimeStore, P: Provider>(
     store: &S,
     provider: &mut P,
     owner: &OwnerId,
-    admission: &ProviderAdmission,
-    expected_version: i64,
+    original: &RunAdmission,
+    request_key: &str,
 ) -> Result<(CancelReceipt, Result<(), Blocker>), RuntimeStoreError> {
+    if &original.owner_id != owner || original.purpose != AdmissionPurpose::Execution {
+        return Err(RuntimeStoreError::InvalidInput);
+    }
     let receipt = store
-        .request_cancel(owner, &admission.run_id, expected_version)
+        .request_cancel(owner, &original.run_id, request_key)
         .await?;
-    if receipt.run.run_id != admission.run_id
-        || receipt.run.session_id != admission.session_id
-        || receipt.run.fence_generation < admission.fence_generation
+    let token = &receipt.new_fenced_admission;
+    if token.owner_id != original.owner_id
+        || token.conversation_id != original.conversation_id
+        || token.run_id != original.run_id
+        || token.session_id != original.session_id
+        || token.role != original.role
+        || token.native_session_id != original.native_session_id
+        || token.attempt != original.attempt
+        || token.purpose != AdmissionPurpose::CancellationAcknowledgement
+        || token.lease_generation <= original.lease_generation
+        || token.dispatch_fence <= original.dispatch_fence
     {
         return Err(RuntimeStoreError::InvalidInput);
     }
-    let control = InterruptControl::for_admission(admission, receipt.run.fence_generation);
-    let result = provider.interrupt(&control);
+    // Already cancelled before dispatch needs no provider interrupt.
+    let result = if receipt.inflight_status == InflightStatus::NotDispatched
+        && receipt.state == RunState::Cancelled
+    {
+        Ok(())
+    } else {
+        provider.interrupt(&InterruptControl {
+            original: original.clone(),
+            cancellation: token.clone(),
+        })
+    };
     Ok((receipt, result))
 }

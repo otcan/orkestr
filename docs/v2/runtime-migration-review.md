@@ -1,48 +1,62 @@
-# Runtime source migration review
+# Runtime migration review proposal
 
-This proposal follows the explicit source-only v0 handoff from core commit
-e2de7312093fdffcd7a8b6111efa546af89bf929. Only contracts/application crate paths
-were restored from that origin, including their crate-local manifests. This
-supersedes the prior runtime proposal against port v2; it does not supersede core's
-other branches or claim that v0 implements later contracts.
+Status: source proposal against frozen port version 2, core commit
+`93460326d0e73e021e6dbc54a262a8c9a6eb8f0a`. No runtime SQLite implementation or
+migration exists. This document supersedes historical runtime store sketches;
+core owns all shared contracts, application ports, schema and durable authority.
 
-Runtime imports application ProviderAdmission, ProviderEvent and RuntimeStore,
-contracts UUID newtypes and SessionRole. Provider/Blocker/fake/parser remain in
-runtime. There is no runtime-owned shared port, persistent store, schema or SQL
-adapter. Crate-local path dependencies remain; no root manifest, lockfile,
-toolchain, domain/demo or CI changes are included.
+Runtime imports the ten native future-returning `RuntimeStore` methods and
+contracts-owned UUID IDs, admission, observation and lifecycle records. Both
+application port names denote the same trait. No async-trait dependency remains;
+crate-local application/contracts path dependencies await coordinator lock work.
+No Tokio or executor dependency is needed by the ready-future test spies.
 
-## Safety and outstanding shared guarantees
+The adapter proposal retains these invariants:
 
-High-level start calls admit_run but never provider.start: port v0 lacks a
-store-returned authoritative role and a fresh-versus-replay dispatch disposition.
-Caller role is ignored, and DispatchUnconfirmed blocks all dispatch until core
-provides these guarantees. Tests cover mismatched roles and identical replay.
-Direct fake provider calls are explicitly selected fixture behavior only.
+- Core-returned role is checked; caller expectations cannot assign authority.
+  `start` returns `DispatchUnconfirmed` even for a valid admission until core
+  specifies how a fresh dispatch differs from an idempotent replay. A replay
+  never blindly starts an active or completed run. Store admission must atomically
+  acknowledge the inbox handoff; runtime never creates a second claim/store.
+- Observation keys bind run, attempt, generation and local sequence. Transient
+  Unavailable retains identical key/body. Stale, expired or unauthorized refusals
+  latch reconciliation without polling again. This cursor is volatile, not a
+  durable recovery mechanism. CompletedProposal is evidence, never task success.
+- Durable cancellation precedes interruption. Original execution identity and
+  cancellation-acknowledgement purpose remain distinct. The fake rejects stop
+  tokens on start, preserves queued terminal evidence on a stop race and only
+  binds the cancellation token after the explicit interrupt command. Unknown
+  in-flight outcomes remain unknown when interruption fails.
+- Recovery, native binding confirmation, admission/ack transactions, lease
+  expiry and event dedup are core store responsibilities. No provider wait,
+  live inference, effect retry or automatic provider restart is introduced.
+  Unimplemented test-spy methods return Unavailable, not fabricated success.
 
-A pending observation retains its original owner, admission, sequence and body
-through Unavailable, including a write committed before its acknowledgement was
-lost. The identical retry must return the original event receipt; changed payload
-at that sequence must conflict. No repoll or sequence increment happens until
-acknowledgement. StaleLease/Fenced latch quarantine and retain original evidence
-for reconciliation. A new process cannot recover this volatile cursor by creating
-a default one; durable reconciliation remains unavailable.
+Required durable acceptance remains separate: concurrent role/native uniqueness,
+ordered competing claims and expiry/reclaim, admission rollback and idempotent
+handoff, changed-body dedup conflict, owner/scope isolation, atomic cancellation
+fence/control outbox, stale observation/effect rejection, and restart recovery
+preserving unknown dispatches for explicit reconciliation. Core must extend the
+shared journal/event DTO compatibly; runtime owns no alternate journal.
 
-The lost-ACK spy regression records a terminal event, returns Unavailable, then
-returns the same receipt for the identical retry without another accepted event.
-It is an authored protocol test, not evidence of SQLite durability or recovery.
-The completion-before-stop terminal preservation and fail-before-record retries
-remain covered by separate authored regressions.
+Verification status: 19 migrated Rust tests are defined, not compiled at this
+proposal head. Prior combined-base 16-test results do not transfer. Cargo and
+download work remain held until coordinator readmission. No formal approval,
+build pass, dispatch implementation or durable acceptance is claimed.
 
-Cancellation awaits the durable request_cancel receipt before provider interrupt;
-its new fence is an InterruptControl, never renewed execution authority. Unknown
-in-flight effects remain unknown. Atomic inbox admit/ack, single metadata journal,
-provider namespace/supervisor context and durable restart recovery still require
-core agreement and implementation. No live inference or task acceptance is implied.
+## Canonical observation clarification
 
-## Evidence
-
-19 Rust tests authored: 10 offline, 5 ordering, 4 retry. None executed at this
-migration head. No cargo, compilation, formatting or downloads run under the heavy
-hold. git diff --check passes. Root/lock integration remains coordinator-owned
-and gated on independent source review. Previous green CI does not transfer.
+This source revision restores only contracts/application paths from core
+93460326d0e73e021e6dbc54a262a8c9a6eb8f0a, superseding the intervening explicit
+v0 handoff. Runtime uses record_observation and shared ProviderObservation,
+ObservationKind and ObservationReceipt; no second port is introduced.
+Unavailable/Busy retain the identical event and key, including lost commit ACKs.
+StaleLease/Expired deliberately discard the queued delivery and latch refusal;
+this is not acknowledgement, restart or readmission. Conflict retains evidence
+and latches a visible blocker with no acknowledgement. Core must atomically
+validate lease/fence/expiry, derive payload digest, require matching event key,
+and return the original receipt on identical retry after durable commit.
+SQLite observation support remains Unavailable. The spy models receipt dedup,
+not durability. 21 tests are authored, unexecuted at this revision. No cargo,
+formatting, root/lock mutation or CI pass is claimed. Publication is held pending
+coordinator root/lock sequencing.
