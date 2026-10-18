@@ -46,8 +46,9 @@ Errors use existing ApiError: 400 `invalid_timer`, 401 `unauthorized`, 404
 `timer_not_found`, 409 `timer_conflict`, 503 `timer_unavailable`. Existing shared
 origin/Host/CSRF/body/deadline guard errors apply separately. Current credential
 is rechecked inside every Store transaction before replay; owner scoping avoids
-cross-owner reads. The shared adapter must return the exact existing credential
-representation, including the browser prefix, after existing auth policy.
+cross-owner reads. The private leaf adapter first awaits the shared `crate::owner`, then carries
+the exact existing browser `credential(headers)` or validated machine Bearer
+representation into transaction-time authentication. No parallel auth policy.
 
 Controller: at most32 process-local explicit grants, each at most one hour;
 fresh text and credential remain in memory only, never logged/persisted/exported.
@@ -57,18 +58,31 @@ most32 deliveries and five seconds; cadence skips missed intervals per Core.
 Explicit lifecycle `run(shutdown_receiver)` polls once per second, with skipped
 missed ticks, and clears grants at shutdown. No HTTP tick/run endpoint exists.
 Server restart, expiry, refusal or absent fresh owner text leaves execution
-unarmed, even if persisted schedule says enabled; owner must explicitly rearm.
+unarmed, even if persisted schedule says enabled; owner must disable with current revision, then explicitly enable with a fresh key.
+Exact historical enable retry never recreates a grant or extends its expiry.
 This bounded capability expires after one hour, so durable unattended timer
 execution beyond that remains a release gap rather than silently storing auth.
 
 Deep's minimal integration: register `timer_http` module, merge
-`timer_http::routes(controller.clone())` before existing guards/state, implement
-`owner_credential(&AppState,&HeaderMap)->Result<(OwnerId,String),Error>` through
-existing shared machine/browser auth, and own controller run/shutdown lifecycle.
+`timer_http::routes(controller.clone())` before existing guards/state, preserve the private leaf `owner_credential` adapter and existing browser
+credential helper unchanged, and own controller run/shutdown lifecycle.
 Do not bypass browser CSRF/Host/origin checks to satisfy the adapter.
 
-Added tests are UNEXECUTED pending exact registered disposable build admission:
+Synthetic loopback tests require the admitted disposable composition; results
+and immutable regression hashes are recorded separately. Coverage:
 actual ephemeral loopback route → explicit enable → fake-clock due → ordinary
 input → disable → SQL held oracle, exact replay/text conflict, client-time
 injection, revoked auth, and strict duplicate/claim field refusal. No production
 registry, live timer, provider, route or outbound channel is activated.
+
+
+Retry authority correction: Core `enable_timer_input_outcome` reports `duplicate`
+from the same transaction as the durable enable control lookup and writes.
+Only `duplicate=false` can create a process-local grant. Compatibility
+`enable_timer_input` still returns the unchanged receipt. Duplicate=true returns
+current metadata without replacing text, credential or expiry; expiry/restart
+requires a fresh canonical disable/enable transition. This avoids racing a
+separate preflight state read. Immutable regression source is commit
+`7445e04521552995f16af658d9c88b1239d4d2d2`; baseline two failures demonstrate
+renewal and expiry rearming, with a restart assertion and fresh-enable positive
+control retained unchanged for the corrected run.
