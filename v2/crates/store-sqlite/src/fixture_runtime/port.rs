@@ -62,8 +62,8 @@ impl RuntimeStore for FixtureSupervisorStore {
     ) -> Result<RunAdmission> {
         Err(RuntimeStoreError::Unavailable)
     }
-    async fn renew_lease(&self, _: &RunAdmission, _: u64) -> Result<RunAdmission> {
-        Err(RuntimeStoreError::Unavailable)
+    async fn renew_lease(&self, admission: &RunAdmission, generation: u64) -> Result<RunAdmission> {
+        self.renew(admission, generation).await
     }
     async fn append_provider_event(
         &self,

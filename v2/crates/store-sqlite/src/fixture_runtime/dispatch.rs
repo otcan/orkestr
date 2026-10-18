@@ -26,28 +26,21 @@ impl FixtureSupervisorStore {
             return Err(RuntimeStoreError::Fenced);
         }
         let canonical = envelope(&row)?;
-        if canonical.run.lease_generation != provider.run.lease_generation {
+        let (generation, deadline) = super::leases::current(conn, &provider.run.run_id).await?;
+        if generation != provider.run.lease_generation {
             return Err(RuntimeStoreError::StaleLease);
         }
         if canonical.run.dispatch_fence != provider.run.dispatch_fence {
             return Err(RuntimeStoreError::Fenced);
         }
-        if canonical != *provider {
-            return Err(RuntimeStoreError::Conflict);
-        }
+        super::leases::authenticate(conn, &row, provider).await?;
         if row.get::<&str, _>("state") != "starting" {
             return Err(RuntimeStoreError::Fenced);
         }
-        if canonical.run.lease_deadline_ms <= now(conn).await? {
+        if deadline <= now(conn).await? {
             return Err(RuntimeStoreError::Expired);
         }
-        let binding: i64 = sqlx::query_scalar("SELECT count(*) FROM session_bindings b JOIN fixture_readiness r ON r.session_id=b.id WHERE b.id=? AND b.owner_id=? AND b.conversation_id=? AND b.role='deep' AND b.provider_kind='explicit_fixture' AND b.provider_namespace=? AND b.native_session_id=? AND b.generation=? AND b.state='busy' AND r.context_id=? AND r.incarnation_id=? AND r.protocol_version=1")
-            .bind(canonical.run.session_id.to_string()).bind(self.owner.to_string()).bind(canonical.run.conversation_id.to_string())
-            .bind(&self.namespace).bind(&canonical.run.native_session_id).bind(i64::try_from(canonical.binding.generation).map_err(db)?)
-            .bind(self.context_id.to_string()).bind(self.incarnation_id.to_string()).fetch_one(&mut *conn).await.map_err(db)?;
-        if binding != 1 {
-            return Err(RuntimeStoreError::Fenced);
-        }
+        self.ready_in(conn, provider).await?;
         Ok(row)
     }
     pub(super) async fn reserve(

@@ -9,6 +9,7 @@ use uuid::Uuid;
 mod admission;
 mod dispatch;
 mod inspection;
+mod leases;
 mod observations;
 mod port;
 #[cfg(feature = "fixture-test-controls")]
@@ -217,3 +218,6 @@ mod observation_contract_tests;
 
 #[cfg(all(test, feature = "fixture-test-controls", unix))]
 mod observation_process_tests;
+
+#[cfg(test)]
+mod lease_tests;

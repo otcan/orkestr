@@ -50,10 +50,8 @@ impl FixtureSupervisorStore {
                 .map_err(db)?
                 .ok_or(RuntimeStoreError::NotFound)?;
         let canonical = envelope(&row)?;
-        if canonical != *provider
-            || input.run_id != canonical.run.run_id
-            || input.session_id != canonical.run.session_id
-        {
+        super::leases::authenticate(&mut tx, &row, provider).await?;
+        if input.run_id != canonical.run.run_id || input.session_id != canonical.run.session_id {
             return Err(RuntimeStoreError::Conflict);
         }
         let (kind, synthetic, progress) = match &input.event {
@@ -89,23 +87,20 @@ impl FixtureSupervisorStore {
         if row.get::<String, _>("incarnation_id") != self.incarnation_id.to_string() {
             return Err(RuntimeStoreError::Fenced);
         }
-        if input.lease_generation != canonical.run.lease_generation {
+        let (generation, deadline) = super::leases::current(&mut tx, &input.run_id).await?;
+        if input.lease_generation != generation || provider.run.lease_generation != generation {
             return Err(RuntimeStoreError::StaleLease);
         }
         if input.dispatch_fence != canonical.run.dispatch_fence {
             return Err(RuntimeStoreError::Fenced);
         }
-        if canonical.run.lease_deadline_ms <= now(&mut tx).await? {
+        if deadline <= now(&mut tx).await? {
             return Err(RuntimeStoreError::Expired);
         }
         if row.get::<&str, _>("dispatch_state") != "delivery_unknown" {
             return Err(RuntimeStoreError::Fenced);
         }
-        let ready: i64 = sqlx::query_scalar("SELECT count(*) FROM session_bindings b JOIN fixture_readiness r ON r.session_id=b.id WHERE b.id=? AND b.owner_id=? AND b.conversation_id=? AND b.role='deep' AND b.state='busy' AND b.generation=? AND b.provider_kind='explicit_fixture' AND b.provider_namespace=? AND b.native_session_id=? AND r.context_id=? AND r.incarnation_id=? AND r.protocol_version=1")
-            .bind(canonical.run.session_id.to_string()).bind(owner.to_string()).bind(canonical.run.conversation_id.to_string()).bind(canonical.binding.generation as i64).bind(&self.namespace).bind(&canonical.run.native_session_id).bind(self.context_id.to_string()).bind(self.incarnation_id.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
-        if ready != 1 {
-            return Err(RuntimeStoreError::Fenced);
-        }
+        self.ready_in(&mut tx, provider).await?;
         // Unsupported new evidence cannot be persisted, but a changed replay
         // above must still conflict rather than masquerade as a retryable outage.
         if matches!(
