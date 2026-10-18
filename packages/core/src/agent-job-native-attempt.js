@@ -80,7 +80,7 @@ export function authorizeNativeToolCall(rc, { tool, args = {}, callId = "" }) {
 }
 
 // ctx.emit: one NATIVE_EVENT_TYPES event -> one redacted journal checkpoint.
-function journal(rc, provider) {
+export function agentJobAttemptJournal(rc, provider) {
   let seq = 0;
   let progress = 0;
   const write = (kind, data) => tx(rc.db, () => appendCheckpointSync(rc.db, rc.run.id, rc.attempt, kind, data));
@@ -118,7 +118,7 @@ export function nativeAttemptContext(rc, providerRef, signal) {
     prepareWorkspace: (input = {}) => prepareAgentJobWorkspace({ home: rc.home, baseDir: rc.baseDir, job: rc.run.job, runId: rc.run.id, inputs: input.inputs }),
     resume: previous ? { ...previous, reason: resumeReason(rc.db, rc.run.id) } : null,
     signal,
-    emit: journal(rc, provider),
+    emit: agentJobAttemptJournal(rc, provider),
     authorizeTool: (call) => authorizeNativeToolCall(rc, call),
     executeTool: (call) => executeToolCall(rc, call),
     toolDecision: (tool) => agentJobToolDecision(rc.spec, tool),

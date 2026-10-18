@@ -7,6 +7,8 @@
 // agent-job-provider-probes.js) and register here; with no probe registered a
 // provider counts as not connected (fail closed).
 import { agentJobTestProvidersAllowed } from "./agent-job-spec.js";
+import { discoverLocalModel } from "./agent-job-openai-compatible-health.js";
+import { personalAgentFeature } from "./personal-agent-feature.js";
 
 const probes = new Map();
 
@@ -28,8 +30,15 @@ export function setAgentJobProviderProbe(provider, probe, { ifAbsent = false } =
 //               claude-code: `claude auth status`)
 //   runnable  - connected AND Orkestr has a job executor for it
 // Jobs are admitted and started only on runnable providers.
-export async function agentJobProviderStatus(provider, env = process.env) {
+export async function agentJobProviderStatus(provider, env = process.env, providerRef = {}) {
   const id = String(provider || "");
+  if (id === "openai-compatible") {
+    // The flag gates the local provider before any probe; a registered probe
+    // (overlay or test fixture) is honoured like every other provider, and the
+    // pinned loopback endpoint is discovered only when none is registered.
+    if (!personalAgentFeature(env)) return { provider: id, connected: false, runnable: false, reason: "personal_agent_disabled" };
+    if (!probes.has(id)) return { provider: id, ...await discoverLocalModel(env, providerRef) };
+  }
   if (id === "simulated") {
     return agentJobTestProvidersAllowed(env)
       ? { provider: id, connected: true, runnable: true, reason: "test_fixture" }
@@ -47,7 +56,7 @@ export async function agentJobProviderStatus(provider, env = process.env) {
   }
 }
 
-export async function agentJobProviderStatuses(env = process.env, candidates = ["codex", "claude-code"]) {
+export async function agentJobProviderStatuses(env = process.env, candidates = ["codex", "claude-code", ...(personalAgentFeature(env) ? ["openai-compatible"] : [])]) {
   return Promise.all(candidates.map((provider) => agentJobProviderStatus(provider, env)));
 }
 
@@ -59,7 +68,7 @@ export const executorUnavailableHint =
   "the provider is logged in, but this Orkestr install has no job executor for it yet (the built-in codex and claude-code executors are off when ORKESTR_AGENT_JOB_CODEX_EXECUTOR=0 or ORKESTR_AGENT_JOB_CLAUDE_CODE_EXECUTOR=0; see docs/spec/agent-job-runner.md)";
 
 export function providerNotConnectedError(provider, reason = "provider_not_connected") {
-  const hint = reason === "job_executor_unavailable" ? executorUnavailableHint : connectProviderHint;
+  const hint = provider === "openai-compatible" ? "Check the personalAgent flag, loopback endpoint and installed model; no cloud fallback was attempted." : reason === "job_executor_unavailable" ? executorUnavailableHint : connectProviderHint;
   return Object.assign(new Error(`provider_not_connected: ${provider} (${reason}); ${hint}`), {
     code: "provider_not_connected",
     statusCode: 409,

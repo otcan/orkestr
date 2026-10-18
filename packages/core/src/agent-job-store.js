@@ -8,6 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { assertTestStoragePath } from "../../storage/src/test-storage-isolation.js";
+import { migratePersonalAgentEntities } from "./agent-job-entities-migration.js";
+import { personalAgentFeature } from "./personal-agent-feature.js";
 
 export const RUN_TERMINAL_STATES = Object.freeze(["succeeded", "failed", "cancelled", "skipped"]);
 export const RUN_ACTIVE_STATES = Object.freeze(["pending", "running", "retrying", "awaiting_approval"]);
@@ -118,7 +120,11 @@ export async function openAgentJobDb(env = process.env) {
   // FULL: an admitted run must survive power loss, not only a process crash (G1).
   db.exec("pragma synchronous = FULL");
   db.exec("pragma busy_timeout = 10000");
+  db.exec("pragma foreign_keys = ON");
   db.exec(schema);
+  // Additive Personal Agent tables only when the feature is switched on, so
+  // installs with it off keep their store schema unchanged (OP-03).
+  if (personalAgentFeature(env)) migratePersonalAgentEntities(db, { dryRun: false });
   databases.set(dbPath, db);
   return db;
 }

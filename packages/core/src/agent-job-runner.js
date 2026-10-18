@@ -9,7 +9,8 @@ import { classifyAdapterError, getAgentJobAdapter } from "./agent-job-adapters.j
 import { finalizeRunSync, recordNotificationsSync } from "./agent-job-audit.js";
 import { LeaseLost, ensureUnknownEffectApprovals, executeToolCall, reconcileDispatchedEffects } from "./agent-job-effects.js";
 import { faultsFrom, injectFault } from "./agent-job-faults.js";
-import { runNativeAttempt } from "./agent-job-native-attempt.js";
+import { agentJobAttemptJournal, runNativeAttempt } from "./agent-job-native-attempt.js";
+import { runLocalJobStep } from "./agent-job-local-step.js";
 import { agentJobProviderStatus } from "./agent-job-providers.js";
 import { expireApprovalSync, failEffectSync, listApprovalsSync, listEffectsSync, pendingApprovalForRunSync, redactValue } from "./agent-job-ledger.js";
 import { validateOutput } from "./agent-job-output.js";
@@ -123,6 +124,7 @@ async function runAttempt(rc, adapter, providerRef) {
     triggerEvent: rc.run.trigger.event ?? null,
     outputSchema: rc.spec.task.outputSchema,
     model: providerRef.model,
+    baseUrl: providerRef.baseUrl,
     tools: rc.spec.permissions.tools,
   };
   const ctx = { runId: rc.run.id, job: rc.run.job, attempt: rc.attempt, provider: providerRef.provider, env: rc.env };
@@ -130,11 +132,15 @@ async function runAttempt(rc, adapter, providerRef) {
   if (typeof adapter.run === "function" && adapter.capabilities?.toolLoop === "native") {
     return runNativeAttempt(rc, adapter, providerRef, input, deadline);
   }
+  const emit = adapter.id === "openai-compatible" ? agentJobAttemptJournal(rc, adapter.id) : null;
   for (let steps = 0; steps < MAX_STEPS; steps += 1) {
     const run = getRunSync(rc.db, rc.run.id);
     if (run.cancelRequestedAt) return { type: "cancelled" };
     const transcript = listCheckpointsSync(rc.db, rc.run.id, ["message", "tool_result"]).map((entry) => entry.data);
-    const step = await withDeadline(adapter.step(ctx, { input, transcript }), deadline);
+    const step = adapter.id === "openai-compatible"
+      ? await runLocalJobStep(rc, adapter, input, transcript, deadline, emit)
+      : await withDeadline(adapter.step(ctx, { input, transcript }), deadline);
+    if (step.type === "cancelled") return step;
     if (step.type === "final") return step;
     if (step.type === "message") {
       tx(rc.db, () => appendCheckpointSync(rc.db, rc.run.id, rc.attempt, "message", { stepIndex: step.stepIndex, text: redactValue(String(step.text || ""), rc.secretValues).slice(0, 4000) }));
@@ -146,6 +152,7 @@ async function runAttempt(rc, adapter, providerRef) {
     if (["park", "expired", "cancelled"].includes(result.status)) return { type: result.status, approval: result.approval };
     tx(rc.db, () => appendCheckpointSync(rc.db, rc.run.id, rc.attempt, "tool_result", {
       stepIndex: step.stepIndex, tool: step.tool, status: result.status, ref: result.ref ?? null, error: result.error ?? null,
+      ...(adapter.id === "openai-compatible" ? { args: redactValue(step.args, rc.secretValues), wireName: step.wireName, result: redactValue(result.result ?? null, rc.secretValues) } : {}),
     }));
   }
   throw Object.assign(new Error("max_steps_exceeded"), { kind: "task", retryable: false });
@@ -194,7 +201,7 @@ async function driveLeased(rc, options) {
       return finalize(rc, { state: "failed", reason: exhaustedReason(attempts) });
     }
 
-    const chain = [{ provider: rc.spec.agent.provider, model: rc.spec.agent.model }, ...rc.spec.agent.fallback];
+    const chain = [{ provider: rc.spec.agent.provider, model: rc.spec.agent.model, baseUrl: rc.spec.agent.baseUrl }, ...rc.spec.agent.fallback];
     const providerIndex = Math.min(run.providerIndex, chain.length - 1);
     const providerRef = chain[providerIndex];
     const n = (attempts.at(-1)?.n || 0) + 1;
@@ -210,7 +217,10 @@ async function driveLeased(rc, options) {
     let outcome;
     try {
       // Never start an attempt on a provider that is not connected.
-      const status = await agentJobProviderStatus(providerRef.provider, rc.env);
+      // Pinned older local specs may contain fallback chains. OP-10 has not
+      // authorized escalation yet, so reject before even probing a provider.
+      if (chain.some(ref => ref.provider === "openai-compatible") && chain.length > 1) throw Object.assign(new Error("local_fallback_not_supported"), { kind: "task", retryable: false });
+      const status = await agentJobProviderStatus(providerRef.provider, rc.env, providerRef);
       if (!status.runnable) throw Object.assign(new Error(`provider_not_connected:${providerRef.provider}:${status.reason}`), { kind: "provider", retryable: false });
       const adapter = getAgentJobAdapter(providerRef.provider, rc.env);
       if (!adapter) throw Object.assign(new Error(`provider_not_available:${providerRef.provider}`), { kind: "provider", retryable: false });

@@ -30,6 +30,7 @@ import { AttachmentEncryptionModule } from "./modules/attachment-encryption/atta
 import { VagentModule } from "./modules/vagent/vagent.module.js";
 import { LlmAccountsModule } from "./modules/llm-accounts/llm-accounts.module.js";
 import { ProviderQuotaModule } from "./modules/provider-quota/provider-quota.module.js";
+import { PersonalAgentModule } from "./modules/personal-agent/personal-agent.module.js";
 import { SetupsModule } from "./modules/setups/setups.module.js";
 import { VaultModule } from "./modules/vault/vault.module.js";
 
@@ -66,6 +67,7 @@ import { VaultModule } from "./modules/vault/vault.module.js";
     VagentModule,
     LlmAccountsModule,
     ProviderQuotaModule,
+    PersonalAgentModule,
     SetupsModule,
     VaultModule,
   ],

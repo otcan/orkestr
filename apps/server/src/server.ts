@@ -757,7 +757,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   mailboxVmRelayPoll.unref?.();
   const brokerClientHeartbeat = startBrokerClientHeartbeat(serverEnv);
   // Agent Job runs resume on start instead of failing (runtime guarantee G1).
-  installAgentJobProviderProbes();
+  installAgentJobProviderProbes(env);
   const agentJobScheduler = startAgentJobScheduler(serverEnv, {
     track: (task) => background.track(task),
     report: (detail: any) => reportServerError(serverEnv, detail),
