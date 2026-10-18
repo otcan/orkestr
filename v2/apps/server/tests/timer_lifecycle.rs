@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 #[tokio::test]
-async fn ordinary_binary_delivers_once_and_restart_never_rearms_an_old_enable() {
+async fn ordinary_durable_timer_binary_logout_restart_crash_and_revocation() {
     let directory = std::env::temp_dir().join(format!("v2-timer-seed-{}", Uuid::new_v4()));
     std::fs::create_dir(&directory).unwrap();
     let database = directory.join("seed.sqlite3");
@@ -30,6 +30,8 @@ async fn ordinary_binary_delivers_once_and_restart_never_rearms_an_old_enable() 
         .unwrap();
     let once = Uuid::new_v4();
     let interval = Uuid::new_v4();
+    let disabled = Uuid::new_v4();
+    let revoked = Uuid::new_v4();
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -41,7 +43,24 @@ async fn ordinary_binary_delivers_once_and_restart_never_rearms_an_old_enable() 
                 due_ms: now + 8_000,
             },
         ),
-        (interval, TimerSchedule::Interval { every_ms: 60_000 }),
+        (
+            interval,
+            TimerSchedule::Interval {
+                every_ms: 7 * 86_400_000,
+            },
+        ),
+        (
+            disabled,
+            TimerSchedule::Once {
+                due_ms: now + 8_000,
+            },
+        ),
+        (
+            revoked,
+            TimerSchedule::Once {
+                due_ms: now + 20_000,
+            },
+        ),
     ] {
         store
             .import_dormant_timer(
@@ -70,6 +89,8 @@ async fn ordinary_binary_delivers_once_and_restart_never_rearms_an_old_enable() 
             .arg(conversation.to_string())
             .arg(once.to_string())
             .arg(interval.to_string())
+            .arg(disabled.to_string())
+            .arg(revoked.to_string())
             .env_clear()
             .env("PATH", "/usr/local/bin:/usr/bin:/bin")
             .env("PYTHONDONTWRITEBYTECODE", "1")

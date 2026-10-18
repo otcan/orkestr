@@ -1,5 +1,7 @@
 //! Leaf router. Deep owns registration under existing auth/origin/CSRF guard.
-mod controller;
+pub mod durable;
+mod owner_controller;
+pub use owner_controller::DurableOwnerController;
 pub mod dto;
 use crate::{AppState, Error};
 use axum::{
@@ -11,7 +13,6 @@ use axum::{
     routing::{get, post},
     Extension, Json, Router,
 };
-pub use controller::{Clock, SystemClock, TimerController};
 use orkestr_v2_contracts::OwnerId;
 use orkestr_v2_store_sqlite::{
     history_import::{
@@ -76,9 +77,10 @@ fn namespace(id: String) -> Result<Uuid, Error> {
 fn body<T>(value: Result<Json<T>, JsonRejection>) -> Result<T, Error> {
     value.map(|v| v.0).map_err(|_| error(HistoryError::Invalid))
 }
-async fn detail(controller: &TimerController, owner: &OwnerId, value: TimerDetail) -> dto::Detail {
+async fn detail(controller: &DurableOwnerController, value: TimerDetail) -> dto::Detail {
     let receipt = value.receipt;
-    let armed = controller.armed(owner, &receipt).await;
+    let ready = controller.ready.load(std::sync::atomic::Ordering::Acquire);
+    let armed = value.durable_authority && ready;
     dto::Detail {
         namespace: receipt.namespace,
         source_digest: receipt.source_digest,
@@ -109,7 +111,11 @@ async fn detail(controller: &TimerController, owner: &OwnerId, value: TimerDetai
         next_due_ms: receipt.next_due_ms,
         controller_armed: armed,
         controller_hold: if receipt.state == TimerState::Enabled && !armed {
-            Some("explicit_owner_rearm_required")
+            Some(if value.durable_authority {
+                "scheduler_unavailable"
+            } else {
+                "durable_owner_enable_required"
+            })
         } else {
             None
         },
@@ -117,7 +123,7 @@ async fn detail(controller: &TimerController, owner: &OwnerId, value: TimerDetai
 }
 async fn read(
     State(s): State<AppState>,
-    Extension(c): Extension<TimerController>,
+    Extension(c): Extension<DurableOwnerController>,
     headers: HeaderMap,
     Path(id): Path<String>,
     query: Result<Query<dto::Read>, QueryRejection>,
@@ -129,11 +135,11 @@ async fn read(
         .dormant_timer_detail(&credential, &owner, namespace(id)?)
         .await
         .map_err(error)?;
-    Ok(Json(detail(&c, &owner, receipt).await))
+    Ok(Json(detail(&c, receipt).await))
 }
 async fn enable(
     State(s): State<AppState>,
-    Extension(c): Extension<TimerController>,
+    Extension(c): Extension<DurableOwnerController>,
     headers: HeaderMap,
     Path(id): Path<String>,
     query: Result<Query<dto::Read>, QueryRejection>,
@@ -155,11 +161,11 @@ async fn enable(
         .dormant_timer_detail(&credential, &owner, receipt.namespace)
         .await
         .map_err(error)?;
-    Ok(Json(detail(&c, &owner, value).await))
+    Ok(Json(detail(&c, value).await))
 }
 async fn control(
     State(s): State<AppState>,
-    Extension(c): Extension<TimerController>,
+    Extension(c): Extension<DurableOwnerController>,
     headers: HeaderMap,
     Path(id): Path<String>,
     query: Result<Query<dto::Read>, QueryRejection>,
@@ -187,15 +193,15 @@ async fn control(
         )
         .await
         .map_err(error)?;
-    c.disarm(&owner, namespace).await;
+
     let value = s
         .store
         .dormant_timer_detail(&credential, &owner, receipt.namespace)
         .await
         .map_err(error)?;
-    Ok(Json(detail(&c, &owner, value).await))
+    Ok(Json(detail(&c, value).await))
 }
-pub fn routes(controller: TimerController) -> Router<AppState> {
+pub fn routes(controller: DurableOwnerController) -> Router<AppState> {
     Router::new()
         .route("/api/v2/timers/{namespace}", get(read))
         .route("/api/v2/timers/{namespace}/enable", post(enable))

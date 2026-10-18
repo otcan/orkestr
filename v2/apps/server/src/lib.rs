@@ -35,6 +35,7 @@ mod provider_payload;
 mod resource_health;
 mod routes;
 pub mod stop_execution;
+pub mod timer_bootstrap;
 pub mod timer_http;
 mod timer_lifecycle;
 mod worker_discovery;
@@ -50,12 +51,15 @@ pub struct AppState {
     authority: Arc<String>,
     auth_window: Arc<Mutex<(Instant, u32)>>,
     resources: resource_health::ResourceSampler,
-    timers: timer_http::TimerController,
+    timers: timer_http::DurableOwnerController,
 }
 impl AppState {
     /// The ordinary server owns the bounded controller task and its shutdown.
-    pub fn start_timers(&self) -> timer_lifecycle::TimerTask {
-        timer_lifecycle::TimerTask::start(self.timers.clone())
+    pub fn start_timers(&self, supervisor: Store) -> timer_lifecycle::TimerTask {
+        timer_lifecycle::TimerTask::start(
+            timer_http::durable::DurableTimerController::new(supervisor),
+            self.timers.ready.clone(),
+        )
     }
     pub fn new(
         store: Store,
@@ -81,7 +85,7 @@ impl AppState {
             return Err("origin cannot contain user information");
         }
         Ok(Self {
-            timers: timer_http::TimerController::new(store.clone()),
+            timers: timer_http::DurableOwnerController::new(store.clone()),
             store,
             executions: execution_registry::ExecutionRegistry::default(),
             bootstrap_token: Arc::new(bootstrap_token),

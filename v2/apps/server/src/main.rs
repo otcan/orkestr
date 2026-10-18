@@ -80,7 +80,12 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
     }
     let execution = execution.map(ConfiguredExecutions::start);
-    let timers = timer_state.start_timers();
+    let mut timers = match std::env::var_os("ORKESTR_V2_TIMER_CONFIG") {
+        Some(file) => Some(timer_state.start_timers(
+            orkestr_v2_server::timer_bootstrap::load(&store, &home, &PathBuf::from(file)).await?,
+        )),
+        None => None,
+    };
     let (shutdown, mut requested) = tokio::sync::watch::channel(false);
     let mut serving = tokio::spawn(async move {
         axum::serve(listener, app)
@@ -92,11 +97,15 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let completed = tokio::select! {
         result = &mut serving => Some(result),
         _ = tokio::signal::ctrl_c() => None,
+        _ = async { match &mut timers { Some(timers) => timers.stopped().await, None => std::future::pending::<()>().await } } => None,
     };
     // An open SSE connection must not delay the owned execution fence/cleanup.
     // Stop accepting HTTP and stop the supervisor before waiting for HTTP drain.
     let _ = shutdown.send(true);
-    let timer_cleanup = timers.shutdown().await;
+    let timer_cleanup = match timers {
+        Some(timers) => timers.shutdown().await,
+        None => Ok(()),
+    };
     let cleanup = match execution {
         Some(execution) => execution.shutdown().await,
         None => Ok(()),
