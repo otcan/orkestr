@@ -1,0 +1,114 @@
+# UI first-slice feasibility and implementation handoff
+
+Status: light research completed on 2026-10-18; implementation/build admission
+pending. This report does not establish a working UI or native application.
+Baseline: plan `a7ba6d5999c570c21cc717d78c83cf53622c22c9`, product ADR 0003
+at `2d48f841fea794c494b93c14db2d549c5eab9c89`.
+
+## Framework and platform
+
+Use Dioxus's supported mobile WebView renderer and shared Rust components with
+CSS. Do not enable the experimental WGPU/native renderer. The official
+[mobile guide](https://dioxuslabs.com/learn/0.7/guides/platforms/mobile/)
+documents WebView support. Native packaging does not mean native UIKit widgets.
+
+Candidate dependency pin: `dioxus = "=0.7.10"`, whose
+[published features](https://docs.rs/crate/dioxus/0.7.10/features) include web
+and mobile. This is a research candidate, not a verified compatible dependency
+set. Resolve exact compatible tooling/transitive versions with the coordinator
+after admission; commit the shared lockfile through its owner. Select one
+renderer per build, with explicit web/mobile Cargo features. Keep privileged
+server/runtime dependencies out of the UI graph; import Core's contracts.
+
+The [official iOS bundling instructions](https://dioxuslabs.com/learn/0.7/tutorial/bundle/)
+require macOS, Xcode, an iOS SDK/simulator runtime, and Rust iOS targets.
+Use `aarch64-apple-ios-sim` on Apple Silicon and validate the selected simulator
+architecture against the actual host/tooling. The mobile guide includes an
+apparently inconsistent historical M1/x86_64 example; do not copy it as a
+verified instruction. Record actual SDK, Rust, Dioxus CLI and simulator versions
+when a macOS runner is available. `dx serve --ios` is an upstream example,
+not a command verified for this repository.
+
+Host probe: `uname -srm` returned Linux x86_64; `command -v dx`,
+`command -v xcodebuild`, and `command -v xcrun` found no executables on PATH.
+No packages, Apple targets, SDKs or CLI tools were installed. No cargo commands
+were run while this lane was queued. Linux cannot provide the required iOS
+simulator evidence. Signing, TestFlight and owner installation are outside this
+slice; a macOS simulator build remains blocked, rather than passed or waived.
+
+## Component and transport boundaries
+
+Build `v2/apps/ui` after admission. Separate shell/navigation, conversation,
+composer, run/status presentation and transport/projection modules. Use
+Assistant, Projects, Attention, History and Settings navigation. A project
+opens its canonical conversation; fast/deep/worker details appear under Work
+rather than creating additional main chats. Missing optional integrations do
+not block project creation. Resource readiness comes from the server; local
+OXRM must say unverified/blocked until provisioner evidence exists.
+
+Use Core's published fixture DTOs until the server exists. Do not invent a
+second public schema or imply fixtures are durable storage. Fixture mode must
+have a persistent visible synthetic-data label. Once available, use versioned
+JSON HTTP commands and authenticated SSE against the actual server.
+
+Keep drafts keyed by canonical conversation identity, independently of stream
+and request state. Typing remains enabled while a run is busy. Persisted
+acceptance and rendered model text are separate states. Retain the same
+client request key and submitted payload when retrying an uncertain request;
+an edited follow-up receives a new key. Clear only the submitted draft revision
+after acceptance, preserving text typed during the request. Never synthesize
+acceptance from a local animation or network timeout.
+
+Apply snapshots and events using authoritative sequence/message identities.
+Deduplicate replay, reconnect from the last applied sequence, and explicitly
+resnapshot on a stale cursor. Bound retained/rendered history and stream
+buffers; pagination must preserve focus and scroll position. Connection loss
+marks displayed status as stale rather than declaring a run stopped.
+
+Stop calls the cancellation API directly. Show cancel requested separately
+from confirmed cancelled, plus uncertain/already-dispatched effects. A rejected
+or timed-out command cannot mark a run terminal. Completion labels come from
+canonical state/evidence, never from assistant prose containing “done”.
+
+## Native security and usability gates
+
+The iOS app is a client of the self-hosted server, never the provider host.
+Provider credentials and native provider session identifiers stay server-side.
+Do not persist credentials in JavaScript local storage, URLs or logs. Native
+device-token storage requires an audited Keychain boundary, revocation/logout,
+and a server-supported device-auth contract before native auth is accepted.
+Web uses the server's v2-scoped HttpOnly session and CSRF/origin policy.
+Cross-origin WebView API access, TLS, session expiry and native reconnect need
+explicit integration tests; do not weaken server origin policy to make a demo
+work. The concrete native auth/Keychain bridge is pending, not implemented.
+
+Keep drafts in memory initially; durable local drafts require an explicit
+retention/storage decision. Opt-in memory remains a separate server operation.
+Avoid exposing message text in background notifications or device logs.
+
+| Gate | Required evidence | Current status |
+|---|---|---|
+| Web build | Pinned locked WASM build on exact PR head | Pending admission |
+| Busy input | Type/edit/send during a 30-second fake deep turn | Pending implementation |
+| Reconnect | Duplicate replay, stale cursor, offline retry, draft preservation | Pending implementation |
+| History | 10,000 messages, bounded rendering and stable scroll/focus | Pending implementation |
+| Stop | Canonical requested/confirmed/uncertain outcomes through real API | Pending server/UI |
+| iOS build | macOS simulator build, exact versions and captured command result | Blocked: host/toolchain |
+| Keyboard | Software/hardware keyboard, IME composition, multiline submit, safe area and rotation | Pending simulator/device |
+| Accessibility | Labels, landmarks, focus order, VoiceOver, Dynamic Type, contrast | Pending browser/simulator/device |
+| Lifecycle | Suspend/resume, auth expiry, cursor resync, retained unsent input | Pending native implementation |
+| Native auth | Keychain storage, revocation, TLS/origin contract | Pending design and tests |
+
+Announce bounded status changes through a polite live region, not every token.
+Keep Stop keyboard-accessible and ensure stream updates do not steal composer
+focus. Enter submission must respect IME composition; multiline editing needs
+an explicit send action on touch devices. A mobile browser screenshot cannot
+close any simulator or device gate.
+
+## Next admitted work
+
+Obtain Core's contract/fixture commit, agree dependency and workspace changes
+with the coordinator, then implement the shell, projection and composer tests.
+Build/test only through the host-provided locked build wrapper with the assigned
+isolated UI target/home. Report exact commit, commands, counts and CI separately
+from runnable-server and native acceptance. No live inference is needed.
