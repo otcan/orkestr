@@ -1,6 +1,9 @@
 //! Actual broker/FD transport with a fixed synthetic executable and ordinary Core.
 use super::*;
+#[path = "host_identity.rs"]
+mod host_identity;
 use crate::containment::ChildDirectories;
+use host_identity::HostIdentity;
 use orkestr_v2_application::{runtime::*, IntakeStore};
 use orkestr_v2_contracts::{
     ConversationId, ExecutionAcceptanceRequest, ExecutionPhase, MessageInput, OwnerId,
@@ -18,6 +21,7 @@ struct Case {
     bound: Store,
     owner: OwnerId,
     conversation: ConversationId,
+    native: std::sync::Mutex<Option<HostIdentity>>,
 }
 impl Case {
     async fn new(label: &str) -> Self {
@@ -59,6 +63,7 @@ impl Case {
             bound,
             owner,
             conversation,
+            native: std::sync::Mutex::new(None),
         }
     }
     async fn ready(&self) -> ReadyCodex {
@@ -115,7 +120,14 @@ impl Case {
             );
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
-        preparing.confirm().await.unwrap()
+        let ready = preparing.confirm().await.unwrap();
+        let trace = self.trace();
+        *self.native.lock().unwrap() = Some(HostIdentity::observe(
+            &native,
+            trace[0]["pid_namespace"].as_u64().unwrap(),
+            trace[0]["process_start"].as_u64().unwrap(),
+        ));
+        ready
     }
     async fn claim(&self, number: u8) -> (Binding, InboxClaim) {
         self.store
@@ -235,9 +247,9 @@ impl Case {
             .collect()
     }
     async fn cleanup(self) {
-        let pid = self.trace()[0]["pid"].as_u64().unwrap();
+        let native = self.native.lock().unwrap().unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
-        while std::path::Path::new(&format!("/proc/{pid}")).exists() {
+        while !native.gone() {
             assert!(
                 Instant::now() < deadline,
                 "owned synthetic child must be reaped"
@@ -313,7 +325,10 @@ async fn exercise(cancel_before_transfer: bool) {
         assert_eq!(trace.iter().filter(|row| row["kind"] == "spawn").count(), 1);
         assert_eq!(trace.iter().filter(|row| row["kind"] == "ready").count(), 1);
         assert_eq!(trace.iter().filter(|row| row["kind"] == "turn").count(), 2);
-        assert!(trace.iter().all(|row| row["pid"] == trace[0]["pid"]));
+        assert!(trace.iter().all(|row| row["pid"] == trace[0]["pid"]
+            && row["pid_namespace"] == trace[0]["pid_namespace"]
+            && row["process_start"] == trace[0]["process_start"]));
+        assert!(!case.native.lock().unwrap().unwrap().gone());
         authority.revoke().unwrap();
         drop(next);
     }
