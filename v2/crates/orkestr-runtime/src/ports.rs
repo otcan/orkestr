@@ -1,5 +1,5 @@
 //! Runtime-owned process capabilities; all durable authority belongs to core.
-pub use orkestr_v2_contracts::runtime::{ObservationKind, RunAdmission};
+pub use orkestr_v2_application::runtime::{ProviderEvent, RunAdmission};
 
 /// A cancellation token can control an existing turn, never admit a new one.
 #[derive(Clone, Debug)]
@@ -17,6 +17,7 @@ pub enum Blocker {
     QueueFull,
     FixtureOnly,
     Protocol,
+    PayloadUnavailable,
     /// Core admission replay cannot yet distinguish a fresh provider dispatch.
     DispatchUnconfirmed,
 }
@@ -24,7 +25,7 @@ pub enum Blocker {
 /// Commands return promptly; ingress never waits here. Core owns durable checks.
 pub trait Provider {
     fn start(&mut self, admission: &RunAdmission) -> Result<(), Blocker>;
-    fn poll(&mut self, admission: &RunAdmission) -> Result<Option<ObservationKind>, Blocker>;
+    fn poll(&mut self, admission: &RunAdmission) -> Result<Option<ProviderEvent>, Blocker>;
     fn interrupt(&mut self, control: &InterruptControl) -> Result<(), Blocker>;
     fn resume(&mut self, _admission: &RunAdmission) -> Result<(), Blocker> {
         Err(Blocker::Unsupported)

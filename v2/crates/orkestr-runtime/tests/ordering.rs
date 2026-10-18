@@ -4,8 +4,8 @@ use orkestr_runtime::{
     ports::*,
     supervisor::{self, Error},
 };
-use orkestr_v2_application::runtime::RuntimeStoreError;
-use orkestr_v2_contracts::runtime::{InflightStatus, Role};
+use orkestr_v2_application::runtime::{InflightStatus, RuntimeStoreError};
+use orkestr_v2_contracts::runtime::Role;
 use support::*;
 struct SpyProvider<'a> {
     store: &'a Spy,
@@ -17,11 +17,11 @@ impl Provider for SpyProvider<'_> {
         self.starts += 1;
         Ok(())
     }
-    fn poll(&mut self, _: &RunAdmission) -> Result<Option<ObservationKind>, Blocker> {
+    fn poll(&mut self, _: &RunAdmission) -> Result<Option<ProviderEvent>, Blocker> {
         Ok(if self.hung {
             None
         } else {
-            Some(ObservationKind::Started)
+            Some(ProviderEvent::Started)
         })
     }
     fn interrupt(&mut self, control: &InterruptControl) -> Result<(), Blocker> {
@@ -59,7 +59,7 @@ fn mismatched_authoritative_role_never_starts_provider() {
     assert_eq!(p.starts, 0);
 }
 #[test]
-fn identical_admission_replay_never_blindly_dispatches() {
+fn fresh_then_identical_admission_replay_never_blindly_dispatches() {
     let store = Spy::new(admission(Role::Deep, 10));
     let mut p = SpyProvider {
         store: &store,
@@ -83,6 +83,30 @@ fn identical_admission_replay_never_blindly_dispatches() {
     assert_eq!(p.starts, 0);
 }
 #[test]
+fn replay_only_admission_never_starts_provider() {
+    let store = Spy::new(admission(Role::Deep, 10));
+    store.state.lock().unwrap().admission_replay = true;
+    let mut p = SpyProvider {
+        store: &store,
+        starts: 0,
+        hung: true,
+    };
+    assert_eq!(
+        ready(supervisor::start(
+            &store,
+            &mut p,
+            &claim(&store.a),
+            &store.a.session_id,
+            1,
+            "replay",
+            Role::Deep
+        )),
+        Err(Error::Provider(Blocker::DispatchUnconfirmed))
+    );
+    assert_eq!(p.starts, 0);
+}
+
+#[test]
 fn running_needs_provider_event() {
     let store = Spy::new(admission(Role::Deep, 10));
     let mut p = SpyProvider {
@@ -91,10 +115,22 @@ fn running_needs_provider_event() {
         hung: true,
     };
     let mut pending = supervisor::PendingObservation::default();
-    assert!(!ready(supervisor::step(&store, &mut p, &store.a, &mut pending)).unwrap());
+    assert!(!ready(supervisor::step(
+        &store,
+        &mut p,
+        &provider_admission(&store.a),
+        &mut pending
+    ))
+    .unwrap());
     assert!(store.state.lock().unwrap().calls.is_empty());
     p.hung = false;
-    assert!(ready(supervisor::step(&store, &mut p, &store.a, &mut pending)).unwrap());
+    assert!(ready(supervisor::step(
+        &store,
+        &mut p,
+        &provider_admission(&store.a),
+        &mut pending
+    ))
+    .unwrap());
     assert_eq!(store.state.lock().unwrap().calls, vec!["record"]);
 }
 #[test]
@@ -128,8 +164,136 @@ fn late_provider_event_cannot_bypass_store_fence() {
     };
     let mut pending = supervisor::PendingObservation::default();
     assert_eq!(
-        ready(supervisor::step(&store, &mut p, &store.a, &mut pending)),
+        ready(supervisor::step(
+            &store,
+            &mut p,
+            &provider_admission(&store.a),
+            &mut pending
+        )),
         Err(Error::Store(RuntimeStoreError::StaleLease))
     );
-    assert!(pending.pending().is_some());
+    assert!(pending.pending().is_none());
+}
+
+#[test]
+fn worker_admission_is_blocked_before_consuming_any_deep_claim() {
+    let store = Spy::new(admission(Role::Worker, 10));
+    let mut p = SpyProvider {
+        store: &store,
+        starts: 0,
+        hung: true,
+    };
+    assert_eq!(
+        ready(supervisor::start(
+            &store,
+            &mut p,
+            &claim(&store.a),
+            &store.a.session_id,
+            1,
+            "worker",
+            Role::Worker
+        )),
+        Err(Error::Store(RuntimeStoreError::InvalidInput))
+    );
+    assert_eq!(p.starts, 0);
+    assert!(store.state.lock().unwrap().calls.is_empty());
+    // Even a faulty store response cannot manufacture a deep role.
+    assert_eq!(
+        ready(supervisor::start(
+            &store,
+            &mut p,
+            &claim(&store.a),
+            &store.a.session_id,
+            1,
+            "deep",
+            Role::Deep
+        )),
+        Err(Error::Store(RuntimeStoreError::InvalidInput))
+    );
+    assert_eq!(p.starts, 0);
+}
+#[test]
+fn deep_binding_must_match_claim_consumer_before_admission() {
+    let store = Spy::new(admission(Role::Deep, 10));
+    let mut p = SpyProvider {
+        store: &store,
+        starts: 0,
+        hung: true,
+    };
+    let other = admission(Role::Deep, 11).session_id;
+    assert_eq!(
+        ready(supervisor::start(
+            &store,
+            &mut p,
+            &claim(&store.a),
+            &other,
+            1,
+            "deep",
+            Role::Deep
+        )),
+        Err(Error::Store(RuntimeStoreError::InvalidInput))
+    );
+    assert_eq!(p.starts, 0);
+    assert!(store.state.lock().unwrap().calls.is_empty());
+}
+
+#[test]
+fn active_terminal_and_uncertain_admissions_never_dispatch() {
+    use orkestr_v2_application::runtime::{AdmissionDisposition, RunState};
+    for disposition in [
+        AdmissionDisposition::Replay,
+        AdmissionDisposition::ReconciliationRequired,
+    ] {
+        for state in [RunState::Running, RunState::Succeeded] {
+            let store = Spy::new(admission(Role::Deep, 10));
+            {
+                let mut spy = store.state.lock().unwrap();
+                spy.disposition = Some(disposition);
+                spy.run_state = Some(state);
+            }
+            let mut p = SpyProvider {
+                store: &store,
+                starts: 0,
+                hung: true,
+            };
+            assert_eq!(
+                ready(supervisor::start(
+                    &store,
+                    &mut p,
+                    &claim(&store.a),
+                    &store.a.session_id,
+                    1,
+                    "replay",
+                    Role::Deep
+                )),
+                Err(Error::Provider(Blocker::DispatchUnconfirmed))
+            );
+            assert_eq!(p.starts, 0);
+            assert_eq!(store.state.lock().unwrap().calls, vec!["admitted"]);
+        }
+    }
+}
+
+#[test]
+fn mismatched_provider_binding_never_dispatches() {
+    let store = Spy::new(admission(Role::Deep, 10));
+    store.state.lock().unwrap().faulty_binding = true;
+    let mut p = SpyProvider {
+        store: &store,
+        starts: 0,
+        hung: true,
+    };
+    assert_eq!(
+        ready(supervisor::start(
+            &store,
+            &mut p,
+            &claim(&store.a),
+            &store.a.session_id,
+            1,
+            "mismatch",
+            Role::Deep
+        )),
+        Err(Error::Store(RuntimeStoreError::InvalidInput))
+    );
+    assert_eq!(p.starts, 0);
 }

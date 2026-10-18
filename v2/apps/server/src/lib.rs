@@ -1,4 +1,5 @@
 //! Local API with separate machine Bearer and browser cookie authentication.
+mod static_ui;
 use axum::{
     extract::{DefaultBodyLimit, State},
     http::{header, HeaderMap, StatusCode},
@@ -10,6 +11,7 @@ use axum::{
 use orkestr_v2_application::StoreError;
 use orkestr_v2_contracts::*;
 use orkestr_v2_store_sqlite::Store;
+pub use static_ui::with_static_ui;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -19,8 +21,6 @@ use uuid::Uuid;
 mod auth;
 mod browser;
 mod routes;
-mod static_ui;
-pub use static_ui::with_static_ui;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -114,6 +114,17 @@ pub(crate) fn unauthorized() -> Error {
         "Authentication required",
     )
 }
+/// Machine credentials and Bearer authority cannot be used by Origin-bearing clients.
+pub(crate) fn machine_request(headers: &HeaderMap) -> Result<(), Error> {
+    if headers.contains_key(header::ORIGIN) {
+        return Err(Error(
+            StatusCode::FORBIDDEN,
+            "machine_origin_rejected",
+            "Machine authentication requires no Origin header",
+        ));
+    }
+    Ok(())
+}
 pub(crate) async fn owner(state: &AppState, headers: &HeaderMap) -> Result<OwnerId, Error> {
     if headers.contains_key(header::COOKIE) {
         if headers.contains_key(header::AUTHORIZATION) {
@@ -121,11 +132,12 @@ pub(crate) async fn owner(state: &AppState, headers: &HeaderMap) -> Result<Owner
         }
         return browser::owner(state, headers).await;
     }
+    machine_request(headers)?;
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
-        .filter(|s| s.len() <= 256)
+        .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
         .ok_or_else(unauthorized)?;
     state
         .store

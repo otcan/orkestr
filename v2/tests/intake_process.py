@@ -273,7 +273,11 @@ class IntakeAcceptance(unittest.TestCase):
             self.assertEqual(self.browser_request("POST", "/browser/session", CREDENTIALS,
                                                  headers=headers)[0], 403)
         cookie, csrf = self.browser_login()
-        self.assertEqual(self.browser_request("GET", "/browser/session", cookie=cookie)[0], 200)
+        status, _, headers = self.browser_request("GET", "/browser/session", cookie=cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertEqual(self.browser_request("GET", "/browser/session", cookie=cookie,
+                         headers={"Host": "foreign.test"})[0], 403)
         path = f"/conversations/{self.conversation}/messages"
         message = {"client_message_id": "browser-request", "text": "Synthetic browser input"}
         for supplied, headers in [(None, {}), ("wrong", {}), (csrf, {"Origin": None}),
@@ -296,6 +300,15 @@ class IntakeAcceptance(unittest.TestCase):
         raw_token = cookie.split("=", 1)[1]
         self.assertEqual(self.request("GET", "/projects", authenticated=False,
                          headers={"Authorization": "Bearer " + raw_token})[0], 401)
+        # A browser namespace prefix must never become machine Bearer authority.
+        before = self.counts()
+        path = f"/conversations/{self.conversation}/messages"
+        status, _ = self.request("POST", path,
+                                 {"client_message_id": "prefixed-cookie-bypass", "text": "synthetic"},
+                                 authenticated=False,
+                                 headers={"Authorization": "Bearer browser:" + raw_token})
+        self.assertEqual(status, 401)
+        self.assertEqual(self.counts(), before)
         machine_cookie = "orkestr_v2_session=" + self.token
         self.assertEqual(self.browser_request("GET", "/browser/session", cookie=machine_cookie)[0], 401)
         # Successful login rotates and revokes the prior cookie in server storage.
@@ -308,6 +321,28 @@ class IntakeAcceptance(unittest.TestCase):
         with closing(sqlite3.connect(self.home / "core.sqlite3")) as db, db:
             db.execute("UPDATE auth_sessions SET expires_at=0")
         self.assertEqual(self.browser_request("GET", "/browser/session", cookie=new_cookie)[0], 401)
+
+    def test_origin_bearing_machine_issuance_and_authority_are_rejected(self):
+        with closing(sqlite3.connect(self.home / "core.sqlite3")) as db:
+            before = db.execute("SELECT count(*) FROM auth_sessions").fetchone()[0]
+        for origin in [BASE, "null", "https://foreign.test"]:
+            for path in ["/machine/session", "/session"]:
+                status, body = self.request("POST", path, CREDENTIALS, authenticated=False,
+                                            headers={"Origin": origin})
+                self.assertEqual(status, 403, body)
+                self.assertNotIn("token", body)
+            self.assertEqual(self.request("GET", "/projects", headers={"Origin": origin})[0], 403)
+            self.assertEqual(self.request("POST", f"/conversations/{self.conversation}/messages",
+                             {"client_message_id": "origin-machine", "text": "Synthetic"},
+                             headers={"Origin": origin})[0], 403)
+        self.assertEqual(self.counts(), [0, 0, 0, 0])
+        with closing(sqlite3.connect(self.home / "core.sqlite3")) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM auth_sessions").fetchone()[0], before)
+        # An explicitly non-browser machine request still obtains and uses Bearer authority.
+        status, body = self.request("POST", "/machine/session", CREDENTIALS, authenticated=False)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(self.request("GET", "/projects", authenticated=False,
+                         headers={"Authorization": "Bearer " + body["token"]})[0], 200)
 
 
 if __name__ == "__main__":

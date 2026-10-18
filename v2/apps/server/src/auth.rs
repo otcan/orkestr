@@ -81,8 +81,10 @@ pub async fn setup(
 }
 pub async fn session(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: Result<Json<Credentials>, JsonRejection>,
 ) -> Result<Json<SessionResponse>, Error> {
+    machine_request(&headers)?;
     let owner = verify_credentials(&state, body).await?;
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     state.store.save_session(&token, &owner).await?;

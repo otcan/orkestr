@@ -3,5 +3,8 @@
   "run_id": "00000000-0000-4000-8000-000000000006",
   "session_id": "00000000-0000-4000-8000-000000000007",
   "lease_generation": 1,
-  "kind": {"kind": "started"}
+  "kind": {
+    "kind": "started"
+  },
+  "dispatch_fence": 1
 }
