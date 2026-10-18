@@ -175,3 +175,30 @@ test("an event larger than the configured journal limit is refused before it is 
   await dispatchPersonalAgentEvents(env);
   assert.equal((await listPersonalAgentEvents({}, env)).events.length, 1);
 });
+
+test("an archive being compressed is never listed under its final .gz name", async (t) => {
+  const env = await fixture(t);
+  const { listEventArchives, rotateEvents } = await import("../packages/storage/src/store.js");
+  const { gunzipSync } = await import("node:zlib");
+  const { randomBytes } = await import("node:crypto");
+  const journal = dataPaths(env).events;
+  await fs.mkdir(path.dirname(journal), { recursive: true });
+  // Incompressible content keeps gzip busy long enough to observe the window.
+  const line = () => `${JSON.stringify({ type: "fixture", blob: randomBytes(3072).toString("base64") })}\n`;
+  await fs.writeFile(journal, Array.from({ length: 1200 }, line).join(""));
+  await rotateEvents(env, { force: true, compress: true, waitForCompression: false });
+  const dir = path.dirname(journal);
+  const partial = [];
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const archives = await listEventArchives(env);
+    for (const archive of archives.filter((entry) => entry.compressed)) {
+      const bytes = await fs.readFile(path.join(dir, archive.name)).catch(() => null);
+      if (!bytes) continue;
+      try { gunzipSync(bytes); } catch { partial.push(archive.name); }
+    }
+    if (partial.length || (archives.length && archives.every((entry) => entry.compressed))) break;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.deepEqual(partial, [], "no listed .gz archive is ever incomplete");
+});

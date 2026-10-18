@@ -237,7 +237,16 @@ async function rotateEventsQueued(eventsPath, env = process.env, options = {}) {
 
 async function gzipEventArchive(archivePath) {
   const compressedPath = `${archivePath}.gz`;
-  await pipeline(createReadStream(archivePath), createGzip(), createWriteStream(compressedPath, { mode: 0o600 }));
+  // Readers list archives by name; expose the .gz only once it is complete.
+  // The temporary name does not match eventArchivePattern.
+  const partialPath = `${compressedPath}.partial-${process.pid}-${Date.now()}`;
+  try {
+    await pipeline(createReadStream(archivePath), createGzip(), createWriteStream(partialPath, { mode: 0o600 }));
+    await fs.rename(partialPath, compressedPath);
+  } catch (error) {
+    await fs.unlink(partialPath).catch(() => undefined);
+    throw error;
+  }
   await fs.unlink(archivePath).catch(() => undefined);
   return compressedPath;
 }
