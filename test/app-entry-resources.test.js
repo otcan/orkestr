@@ -47,16 +47,18 @@ async function setupLoader() {
   })).startAppSetupRefresh;
 }
 
-async function shellHarness() {
+async function shellHarness(firstRunPath) {
   const source = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
   const file = ts.createSourceFile("app.ts", source, ts.ScriptTarget.Latest, true);
   const declaration = file.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === "AppComponent");
-  const refresh = declaration.members.find(node => node.name?.getText(file) === "refresh").getText(file);
+  const methods = ["refresh", ...(firstRunPath ? ["shouldAutoOpenFirstRunWizard", "openFirstRunWizard"] : [])];
+  const refresh = declaration.members.filter(node => methods.includes(node.name?.getText(file))).map(node => node.getText(file)).join("\n");
   const compiled = ts.transpileModule(`class Harness { ${refresh} }; exports.Harness = Harness;`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
   const exports = {};
-  vm.runInNewContext(compiled, { exports, firstValueFrom: rxjs.firstValueFrom, refreshAppExtras: await extrasLoader(), startAppSetupRefresh: await setupLoader() });
+  const location = { pathname: firstRunPath || "/", search: "" };
+  vm.runInNewContext(compiled, { exports, location, history: { replaceState: (_state, _title, url) => { location.pathname = url; } }, firstValueFrom: rxjs.firstValueFrom, refreshAppExtras: await extrasLoader(), startAppSetupRefresh: await setupLoader() });
   const pending = new rxjs.Subject();
   const app = Object.assign(new exports.Harness(), {
     api: {
@@ -79,7 +81,19 @@ async function shellHarness() {
     isPairingRequiredError: error => error?.message === "browser_pairing_required",
     renderNow: () => {}, errorText: error => String(error), enterPairingRequired: () => { app.pairingRequired = true; },
   });
-  return { app, pending };
+  if (firstRunPath) {
+    delete app.shouldAutoOpenFirstRunWizard;
+    Object.assign(app, {
+      onboardingActive: true, threads: [],
+      isUserMode: () => false, canCreateThreadFromSidebar: () => true,
+      codexStatusAuthoritative: () => Boolean(app.setupStatus?.connectors?.some(item => item.id === "codex")),
+      agentRuntimeReady: () => false, codexAgentReady: () => false,
+      readOnboardingFlag: () => false,
+      locationPathParts: () => location.pathname.split("/").filter(Boolean), appPath: value => value,
+      runtimeGateActive: () => Boolean(app.appReady && app.setupStatus && !app.pairingRequired),
+    });
+  }
+  return { app, pending, location };
 }
 
 test("conversations render before optional requests, preserving the attachment setup gate", async () => {
@@ -198,6 +212,53 @@ test("setup failure does not discard authenticated conversation data", async () 
   assert.equal(app.appReady, true);
   assert.equal(app.error, "");
   pending.complete();
+});
+
+test("delayed setup opens the first-run wizard from bare /setup while explicit sections remain Setup", async () => {
+  for (const path of ["/setup", "/setup/system"]) {
+    const { app, pending, location } = await shellHarness(path);
+    const setup = new rxjs.Subject();
+    app.api.setupStatus = () => setup;
+    await app.refresh();
+    assert.equal(app.onboardingActive, true, "core response alone cannot decide first-run state");
+    setup.next({ connectors: [{ id: "codex", state: "partial" }], agentRuntime: { ready: false } });
+    await new Promise(resolve => setImmediate(resolve));
+    pending.complete();
+    assert.equal(app.onboardingActive, path !== "/setup");
+    assert.equal(location.pathname, path === "/setup" ? "/" : path);
+    assert.equal(app.threadWizardOpen, true);
+  }
+});
+
+test("first-run setup arriving during owner login waits for entry and cannot override a denial", async () => {
+  for (const denied of [false, true]) {
+    const { app, pending, location } = await shellHarness("/setup");
+    const setup = new rxjs.Subject();
+    let finishOwner;
+    app.appReady = true; // A prior render must not authorize this refresh's transition.
+    app.ownerLoginChecked = false;
+    app.loadOwnerLoginStatus = () => new Promise(resolve => { finishOwner = resolve; });
+    app.api.setupStatus = () => setup;
+    const refresh = app.refresh();
+    await new Promise(resolve => setImmediate(resolve));
+    setup.next({ connectors: [{ id: "codex", state: "partial" }], agentRuntime: { ready: false } });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(app.onboardingActive, true);
+    assert.notEqual(app.threadWizardOpen, true);
+    assert.equal(location.pathname, "/setup");
+    // The protected entry check also rejects a setup denial received as data.
+    if (denied) app.isPairingRequiredFromSetup = () => true;
+    finishOwner(); await refresh;
+    pending.complete();
+    assert.equal(location.pathname, denied ? "/setup" : "/");
+    assert.equal(app.onboardingActive, denied);
+    if (denied) {
+      assert.equal(app.pairingRequired, true);
+      assert.notEqual(app.threadWizardOpen, true);
+    } else {
+      assert.equal(app.threadWizardOpen, true);
+    }
+  }
 });
 
 test("rejected protected thread or user requests cannot open conversations before setup", async () => {

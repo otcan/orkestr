@@ -414,6 +414,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const generation = ++this.refreshGeneration;
     const current = () => !this.destroyed && generation === this.refreshGeneration;
     let entryDenied = false;
+    let entryReady = false;
     this.cancelSetupRefresh?.();
     if (this.sharedAppActive() || this.publicAppsActive()) {
       this.appReady = true;
@@ -442,7 +443,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
           }
           await this.refreshClaudeRuntimeReady(() => current() && setupCurrent());
           if (!current() || !setupCurrent()) return;
-          if (this.runtimeGateActive() && this.canCreateThreadFromSidebar()) this.threadWizardOpen = true;
+          if (entryReady && !entryDenied && !this.pairingRequired) {
+            // Setup can finish after the core entry path. Reconcile first run
+            // before the runtime gate sets threadWizardOpen and masks it.
+            if (this.shouldAutoOpenFirstRunWizard()) this.openFirstRunWizard();
+            if (this.runtimeGateActive() && this.canCreateThreadFromSidebar()) this.threadWizardOpen = true;
+          }
           this.renderNow();
         },
         failed: error => {
@@ -463,7 +469,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.currentUser = userResult.value.user;
       await ownerLoginRequest;
       if (!current() || entryDenied) return;
-      if (this.runtimeGateActive() && this.canCreateThreadFromSidebar()) this.threadWizardOpen = true;
       if (instanceContextResult.status === "fulfilled") {
         this.instanceContext = instanceContextResult.value.instance;
         void this.loadInstanceAccounts();
@@ -507,7 +512,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (this.canonicalizeCurrentThreadRoute()) return;
       this.seedReadStateIfNeeded(this.threads);
       if (this.normalizeUserModeView()) return;
+      entryReady = true;
       if (this.shouldAutoOpenFirstRunWizard()) this.openFirstRunWizard();
+      if (this.runtimeGateActive() && this.canCreateThreadFromSidebar()) this.threadWizardOpen = true;
       if (this.onboardingActive && this.setupStatus?.setupState === "ready" && this.codexAgentReady()) {
         this.onboardingActive = false;
         this.activePanel = "instanceSettings";
