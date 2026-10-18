@@ -2322,6 +2322,8 @@ if [ -r "$env_file" ]; then
   . "$env_file"
   set +a
 fi
+# The env file belongs to the control plane; these keys are never agent credentials.
+unset ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
 socket="${ORKESTR_CODEX_APP_SERVER_SOCKET:-${ORKESTR_HOME:-/opt/orkestr/data}/run/codex-app-server.sock}"
 codex_bin="${ORKESTR_CODEX_BIN:-codex}"
 mkdir -p "$(dirname "$socket")"
@@ -2343,6 +2345,8 @@ if [ -r "$env_file" ]; then
   . "$env_file"
   set +a
 fi
+# The env file belongs to the control plane; these keys are never agent credentials.
+unset ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
 codex_bin="${ORKESTR_CODEX_BIN:-codex}"
 service_name="${ORKESTR_CODEX_APP_SERVER_SERVICE_NAME:-orkestr-codex}"
 service_name="${service_name%.service}"
@@ -2403,6 +2407,7 @@ Documentation=https://github.com/otcan/orkestr
 [Service]
 Type=oneshot
 EnvironmentFile=-$env_file
+UnsetEnvironment=ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
 ExecStart=/usr/local/bin/orkestr-refresh-codex-app-server
 EOF
 
@@ -2438,6 +2443,7 @@ User=$run_user
 Group=$group_name
 WorkingDirectory=$repo_dir
 EnvironmentFile=-$env_file
+UnsetEnvironment=ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
 ExecStart=/usr/local/bin/orkestr-codex-app-server
 Restart=on-failure
 RestartSec=3
