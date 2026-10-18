@@ -25,9 +25,10 @@ mod runtime;
 pub use production_runtime::{
     BoundSessionMetadata, ClaudeProcessInitialization, ConsumedOfflinePython,
     ConsumedProviderDispatch, ExecutionConsumption, FastAdmissionInput, OfflinePythonAdmission,
-    OfflinePythonConsumption, OfflinePythonDelegation, OfflinePythonOutcome, OfflinePythonReceipt,
-    OfflinePythonState, ProductionSupervisorStore, ReadySessionTransition, RunLeaseTransition,
-    RunRenewalAuthority, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
+    OfflinePythonConsumption, OfflinePythonDelegation, OfflinePythonNativeRequestId,
+    OfflinePythonOutcome, OfflinePythonParent, OfflinePythonReceipt, OfflinePythonState,
+    ProductionSupervisorStore, ReadySessionTransition, RunLeaseTransition, RunRenewalAuthority,
+    TimerSchedulerIssuer, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
     WorkerDelegationResult, WorkerDelegationState,
 };
 
