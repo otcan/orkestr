@@ -1,3 +1,4 @@
+mod execution_panel;
 mod history;
 mod transport;
 mod views;

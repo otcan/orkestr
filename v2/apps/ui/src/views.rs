@@ -252,7 +252,7 @@ pub fn Conversation(
                     li { key: "{message.message_id}", strong { "{message.actor_kind}" } p { "{message.text}" } }
                 }
             }
-            button { disabled: true, title: "Cancellation API is not implemented", "Stop unavailable" }
+            crate::execution_panel::ExecutionPanel {}
             form { onsubmit: move |event| {
                 event.prevent_default();
                 if sending() { return; }
