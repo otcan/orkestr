@@ -73,6 +73,8 @@ pub trait RuntimeStore: Send + Sync {
     /// Reserve only a fresh candidate under the authorized supervisor-bound handle.
     /// Atomically validate owner/scope/role/session/attempt, Execution purpose,
     /// live store-clock lease/fence and never-dispatched state; persist reservation.
+    /// Verify and consume the admission-issued candidate key in this transaction;
+    /// trusting the caller's FreshCandidate enum alone is forbidden.
     /// Concurrent contenders have one winner. Repeated requests never issue another
     /// reservation; changed content conflicts. Replays do not drive automatic dispatch.
     /// No supervisor-context enforcement means Unavailable, not an unbound grant.

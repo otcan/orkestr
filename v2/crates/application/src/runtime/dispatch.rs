@@ -15,6 +15,10 @@ pub struct RunAdmissionResult {
     /// Role/scope/purpose must be validated from the durable binding, not caller input.
     pub admission: RunAdmission,
     pub disposition: AdmissionDisposition,
+    /// Store-issued unpredictable one-use locator, present only on FreshCandidate.
+    /// Admission persists its verifier bound to attempt and supervisor incarnation;
+    /// identical admission replay must NOT return the locator. Never log/serialize it.
+    pub candidate_key: Option<String>,
 }
 /// Store-issued reservation locator, not a bearer credential or dispatch permission.
 /// Every use must revalidate its association and bound supervisor authority in store.

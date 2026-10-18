@@ -11,6 +11,12 @@ ReconciliationRequired. FreshCandidate describes DB insertion only, never actual
 provider delivery or permission to start. At most one concurrent inserting call
 returns it; replay never returns it, including terminal replay or Execution purpose.
 
+Only the insertion response carries an unpredictable one-use candidate_key;
+admission persists its verifier bound to run/attempt/supervisor incarnation.
+Admission replay never returns that key. Claim must atomically validate and consume
+it: a caller-supplied FreshCandidate enum is not authority. Lost admission ACK
+requires reconciliation rather than reissuing the candidate key.
+
 claim_provider_dispatch atomically reserves this attempt under a core-authorized
 supervisor context. Caller-created structs cannot grant authority: validate against
 bound context, durable identity/state, role, store clock, lease/fence and request
