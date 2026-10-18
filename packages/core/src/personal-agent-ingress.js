@@ -107,7 +107,8 @@ export async function acceptPersonalAgentMessage(request, input = {}, env = proc
       threadId: null,
       runId,
       causationId: null,
-      idempotencyKey: `${conversation.id}:${actorUserId}:${idempotencyKey}`,
+      // Fixed length, so any accepted client key fits the event key bound.
+      idempotencyKey: `pa-ingress:${sha256(JSON.stringify([conversation.id, actorUserId, idempotencyKey]))}`,
       taskId,
       data: { conversationId: conversation.id, messageId, inboxItemId, scopeKind: scope.kind, causalSequence: sequence },
     }, { source: "personal_agent_ingress", env });

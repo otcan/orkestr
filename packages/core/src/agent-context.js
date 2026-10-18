@@ -89,7 +89,12 @@ Use dynamic discovery for live Orkestr context:
   failed turn) is delivered into this thread once. Add \`--continuous\` to keep
   watching, \`--payload none\` for a notification without the text, and use
   \`orkestr watch list\` / \`orkestr watch cancel <id>\`. Workers already
-  report finals starting with DONE or BLOCKED to their parent automatically.
+  report substantive finals starting with DONE or BLOCKED to their parent automatically.
+  Never use DONE/BLOCKED/FAILED for acknowledgements. Do not acknowledge relayed
+  reports or send confirmation loops. Use NO_REPLY when no new action is needed.
+  Explicit CLI reports use --report-kind result|blocked|failed|decision and a
+  stable --report-key for the artifact revision; --report-kind ack is recorded
+  internally without starting another turn. Do not send both CLI and final copies.
 - Runtime settings are included in \`orkestr whereiam --json\` and can also be
   inspected with \`orkestr settings --json\`. Use those settings for managed
   desktop slugs, Gmail/Outlook auth routes, and permission-routing behavior.

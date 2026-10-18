@@ -893,7 +893,7 @@ function handoffPrompt(parent, worker, input = {}) {
     "Task:",
     task || "No task was supplied. Wait for parent/root instructions before making changes.",
     "",
-    "Reporting: when a task is finished, start your final answer with `DONE`; if you cannot finish, start it with `BLOCKED` and the reason. Orkestr forwards those finals (and failed turns) to the parent automatically, so you do not need `orkestr send`. Other replies stay in this thread.",
+    "Reporting: when a task is finished, start your final answer with `DONE`; if you cannot finish, start it with `BLOCKED` and the reason. Orkestr forwards those finals (and failed turns) to the parent automatically, so you do not need `orkestr send`. Reserve DONE/BLOCKED/FAILED for substantive changed outcomes, never acknowledgements. Do not acknowledge reports or send confirmation loops; use NO_REPLY if no new action is needed. Other replies stay in this thread.",
     "",
     policy.promptText,
   ].join("\n");

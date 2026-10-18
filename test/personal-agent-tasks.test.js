@@ -74,13 +74,14 @@ test("lifecycle enforces allowed transitions, reasons, terminal immutability, an
   await assert.rejects(() => transitionPersonalAgentTask({ taskId: task.id, to: "blocked", actor }, env), {
     code: "personal_agent_task_transition_reason_required",
   });
-  const start = { taskId: task.id, to: "running", actor, idempotencyKey: "start-1" };
+  const start = { taskId: task.id, to: "running", actor, idempotencyKey: "start-1", evidence: { admission: { runId: "run-fixture" } } };
   assert.equal((await transitionPersonalAgentTask(start, env)).task.state, "running");
   assert.equal((await transitionPersonalAgentTask({
     idempotencyKey: "start-1",
     actor: { origin: "agent_job", kind: "system", id: "controller" },
     to: "running",
     taskId: task.id,
+    evidence: { admission: { runId: "run-fixture" } },
   }, env)).replayed, true);
   await assert.rejects(() => transitionPersonalAgentTask({ ...start, to: "blocked" }, env), {
     code: "personal_agent_task_idempotency_conflict",
@@ -109,7 +110,7 @@ test("worker completion text or incomplete evidence cannot mark a task succeeded
   const { env, db } = await fixture(t);
   const task = (await createPersonalAgentTask(contract, env)).task;
   const system = { kind: "system", id: "controller", origin: "agent_job" };
-  await transitionPersonalAgentTask({ taskId: task.id, to: "running", actor: system }, env);
+  await transitionPersonalAgentTask({ taskId: task.id, to: "running", actor: system, evidence: { admission: { runId: "run-fixture" } } }, env);
   const completion = { status: "succeeded", summary: "done", acceptanceResults: [{ criterionId: "verified", passed: true }] };
   await assert.rejects(() => transitionPersonalAgentTask({
     taskId: task.id,
@@ -165,4 +166,107 @@ test("task APIs remain unavailable and do not create Personal Agent tables while
   await assert.rejects(() => createPersonalAgentTask(contract, env), { statusCode: 404, code: "personal_agent_disabled" });
   const db = await openAgentJobDb(env);
   assert.equal(db.prepare("select count(*) as count from sqlite_master where type = 'table' and name like 'personal_agent_%'").get().count, 0);
+});
+
+// PR #61 review findings (ORK-538): regression tests.
+test("a start needs admitted execution or an explicit owner start, and binds the admission", async (t) => {
+  const { env } = await fixture(t);
+  const task = (await createPersonalAgentTask(contract, env)).task;
+  const system = { kind: "system", id: "controller", origin: "agent_job" };
+  await assert.rejects(() => transitionPersonalAgentTask({ taskId: task.id, to: "running", actor: system, evidence: {} }, env), {
+    code: "personal_agent_task_start_unadmitted",
+  }, "no admission evidence");
+  for (const kind of ["worker", "connector", "assistant"]) {
+    await assert.rejects(() => transitionPersonalAgentTask({ taskId: task.id, to: "running", actor: { kind, id: "x", origin: "thread" }, evidence: { admission: { runId: "run-1" } } }, env), {
+      code: "personal_agent_task_start_unadmitted",
+    }, `${kind} cannot mark its own task running`);
+  }
+  await assert.rejects(() => transitionPersonalAgentTask({ taskId: task.id, to: "running", actor: { kind: "owner", id: "owner", origin: "web" }, evidence: { explicit: true } }, env), {
+    code: "personal_agent_task_start_unadmitted",
+  }, "an explicit owner start still needs a reason");
+  assert.equal((await getPersonalAgentTask(task.id, env)).state, "queued");
+
+  const started = await transitionPersonalAgentTask({ taskId: task.id, to: "running", actor: system, evidence: { admission: { runId: "run-1", threadId: "thread-1" } } }, env);
+  assert.deepEqual([started.task.state, started.task.runId, started.task.threadId], ["running", "run-1", "thread-1"]);
+  await transitionPersonalAgentTask({ taskId: task.id, to: "blocked", actor: system, reason: "waiting" }, env);
+  await assert.rejects(() => transitionPersonalAgentTask({ taskId: task.id, to: "running", actor: system, evidence: { admission: { runId: "run-other" } } }, env), {
+    code: "personal_agent_task_admission_conflict",
+  }, "a restart cannot silently swap the bound run");
+
+  const ownerTask = (await createPersonalAgentTask({ ...contract, idempotencyKey: "owner-start" }, env)).task;
+  const ownerStart = await transitionPersonalAgentTask({ taskId: ownerTask.id, to: "running", actor: { kind: "owner", id: "owner", origin: "web" }, reason: "starting it myself", evidence: { explicit: true } }, env);
+  assert.equal(ownerStart.task.state, "running");
+});
+
+test("task creation persists the supplied execution thread and compares it on retry", async (t) => {
+  const { env, db } = await fixture(t);
+  const created = await createPersonalAgentTask({ ...contract, threadId: "thread-exec-1" }, env);
+  assert.equal(created.task.threadId, "thread-exec-1");
+  assert.equal(db.prepare("select thread_id from personal_agent_tasks where id = ?").get(created.task.id).thread_id, "thread-exec-1");
+  assert.equal((await createPersonalAgentTask({ ...contract, threadId: "thread-exec-1" }, env)).created, false);
+  await assert.rejects(() => createPersonalAgentTask({ ...contract, threadId: "thread-exec-2" }, env), {
+    code: "personal_agent_task_idempotency_conflict",
+  });
+  await assert.rejects(() => createPersonalAgentTask(contract, env), { code: "personal_agent_task_idempotency_conflict" }, "dropping the thread is a different request");
+});
+
+test("a reused transition key with a different completion or next action is a conflict", async (t) => {
+  const { env } = await fixture(t);
+  const task = (await createPersonalAgentTask(contract, env)).task;
+  const system = { kind: "system", id: "controller", origin: "agent_job" };
+  const begin = { taskId: task.id, to: "running", actor: system, evidence: { admission: { runId: "run-1" } }, nextAction: "Check the artifact", idempotencyKey: "begin" };
+  await transitionPersonalAgentTask(begin, env);
+  assert.equal((await transitionPersonalAgentTask(begin, env)).replayed, true);
+  await assert.rejects(() => transitionPersonalAgentTask({ ...begin, nextAction: "Something else" }, env), { code: "personal_agent_task_idempotency_conflict" });
+  const finish = {
+    taskId: task.id, to: "succeeded", actor: system, idempotencyKey: "finish",
+    completion: { status: "succeeded", summary: "Verified", acceptanceResults: [{ criterionId: "verified", passed: true }] },
+    evidence: { verified: true, verifiedBy: "test-verifier", references: ["artifact:fixture"] },
+  };
+  await transitionPersonalAgentTask(finish, env);
+  assert.equal((await transitionPersonalAgentTask(finish, env)).replayed, true);
+  await assert.rejects(() => transitionPersonalAgentTask({ ...finish, completion: { ...finish.completion, summary: "A different summary" } }, env), {
+    code: "personal_agent_task_idempotency_conflict",
+  });
+  await assert.rejects(() => transitionPersonalAgentTask({
+    ...finish, completion: { ...finish.completion, acceptanceResults: [{ criterionId: "verified", passed: true, note: "changed" }] },
+  }, env), { code: "personal_agent_task_idempotency_conflict" });
+  assert.equal((await getPersonalAgentTask(task.id, env)).completion.summary, "Verified");
+});
+
+test("transition tables created before request_json gain the column without losing rows", async (t) => {
+  const { env, db } = await fixture(t);
+  const task = (await createPersonalAgentTask(contract, env)).task;
+  const { migratePersonalAgentTaskLifecycle } = await import("../packages/core/src/agent-job-entities-migration.js");
+  db.exec("alter table personal_agent_task_transitions drop column request_json");
+  assert.equal(db.prepare("pragma table_info(personal_agent_task_transitions)").all().some((column) => column.name === "request_json"), false);
+  migratePersonalAgentTaskLifecycle(db, { dryRun: false });
+  migratePersonalAgentTaskLifecycle(db, { dryRun: false });
+  assert.equal(db.prepare("pragma table_info(personal_agent_task_transitions)").all().some((column) => column.name === "request_json"), true);
+  assert.equal((await listPersonalAgentTaskTransitions(task.id, env)).length, 1, "existing transitions are kept");
+});
+
+test("an identical create retry still replays after admission binds a thread", async (t) => {
+  const { env } = await fixture(t);
+  const created = (await createPersonalAgentTask(contract, env)).task;
+  await transitionPersonalAgentTask({ taskId: created.id, to: "running", actor: { kind: "system", id: "controller", origin: "agent_job" }, evidence: { admission: { threadId: "thread-bound-later" } } }, env);
+  const retry = await createPersonalAgentTask(contract, env);
+  assert.deepEqual([retry.created, retry.task.id, retry.task.threadId], [false, created.id, "thread-bound-later"]);
+  await assert.rejects(() => createPersonalAgentTask({ ...contract, threadId: "thread-bound-later" }, env), {
+    code: "personal_agent_task_idempotency_conflict",
+  }, "the creation input had no thread");
+});
+
+test("a legacy transition without request_json still replays the same bare command", async (t) => {
+  const { env, db } = await fixture(t);
+  const task = (await createPersonalAgentTask(contract, env)).task;
+  const system = { kind: "system", id: "controller", origin: "agent_job" };
+  const block = { taskId: task.id, to: "blocked", actor: system, reason: "waiting", idempotencyKey: "legacy-block" };
+  await transitionPersonalAgentTask(block, env);
+  db.prepare("update personal_agent_task_transitions set request_json = null where task_id = ?").run(task.id);
+  assert.equal((await transitionPersonalAgentTask(block, env)).replayed, true);
+  await assert.rejects(() => transitionPersonalAgentTask({ ...block, nextAction: "Different" }, env), {
+    code: "personal_agent_task_idempotency_conflict",
+  }, "a legacy row cannot prove a nextAction");
+  assert.equal((await createPersonalAgentTask(contract, env)).created, false, "a legacy creation row compares as no thread");
 });

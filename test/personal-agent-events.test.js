@@ -143,12 +143,15 @@ test("task lifecycle events are atomic with transitions and do not copy task con
     to: "running",
     actor: { kind: "system", id: "controller-fixture", origin: "agent_job" },
     idempotencyKey: "task-start-fixture",
+    // A start must prove admitted execution (task lifecycle, #66).
+    evidence: { admission: { runId: "run-fixture" } },
   }, env);
   const feed = await listPersonalAgentEvents({}, env);
   assert.deepEqual(feed.events.map((event) => event.type), ["task.created", "task.state_changed"]);
   assert.equal(feed.events[0].data.state, "queued");
   assert.equal(feed.events[1].data.from, "queued");
   assert.equal(feed.events[1].data.to, "running");
+  assert.equal(feed.events[1].runId, "run-fixture", "the transition event carries the admitted run");
   assert.doesNotMatch(JSON.stringify(feed.events), /sensitive task title|sensitive outcome|private next action/);
   assert.equal(db.prepare("select count(*) as count from personal_agent_event_outbox where dispatched_at is not null and payload_json is null").get().count, 2);
 });
