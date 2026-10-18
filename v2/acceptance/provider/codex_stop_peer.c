@@ -6,6 +6,9 @@
 #ifndef ACK_ONLY
 #define ACK_ONLY 0
 #endif
+#ifndef STOP_PROGRESS_BURST
+#define STOP_PROGRESS_BURST 0
+#endif
 static void trace(const char *kind) {
  FILE *f=fopen("synthetic-native-trace.jsonl","a"); if(!f)exit(2);
  fprintf(f,"{\"kind\":\"%s\",\"pid\":%ld}\n",kind,(long)getpid());fclose(f);
@@ -33,6 +36,7 @@ int main(void) {
    if(++interrupts!=1||turns!=1)return 2;
    trace("interrupt");
    printf("{\"id\":%ld,\"result\":{}}\n",id);
+   for(int chunk=0;chunk<STOP_PROGRESS_BURST;chunk++)printf("{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"synthetic-stop-session\",\"turnId\":\"synthetic-stop-turn\",\"delta\":\"synthetic buffered progress\"}}\n");
    if(!ACK_ONLY)printf("{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"synthetic-stop-session\",\"turn\":{\"id\":\"synthetic-stop-turn\",\"status\":\"interrupted\"}}}\n");
   } else return 2;
   fflush(stdout);

@@ -140,9 +140,10 @@ must never be reported as real provider evidence.
 `codex_stop.py` is a separate attended activation against an explicitly reviewed
 Stop-capable server. It requires a fresh preparation and asks the native provider
 for a harmless number list without tools. After real streamed progress and a live
-Stop capability, it submits revision-guarded owner intent. Only an explicit
-revision conflict with no committed cancellation permits a bounded refresh;
-uncertain delivery never triggers a new intent.
+Stop capability, it submits owner intent with both the original snapshot revision
+and its explicit positive run control revision. It makes one submission: any
+conflict or uncertain delivery fails the acceptance, without refreshing the run,
+precondition or intent. Only an identical successful receipt may be replayed.
 
 ```sh
 python3 -B v2/acceptance/provider/codex_stop.py \
@@ -171,3 +172,9 @@ PID in each case. The terminal variant must pass the driver. The ACK-only varian
 must fail with `provider_stop_unconfirmed`, zero stopped observations, pending
 control, and complete normal cleanup. Never use a real provider identity for
 these synthetic tests.
+
+Also compile a terminal variant with `-DSTOP_PROGRESS_BURST=32`. It emits 32 valid
+current-turn progress deltas between interrupt acknowledgement and terminal
+interruption. The same acceptance must pass, preserving bounded output retention
+without losing the later explicit terminal evidence. Keep the failing baseline
+receipt when testing a runtime repair; do not relabel this fixture as a provider.

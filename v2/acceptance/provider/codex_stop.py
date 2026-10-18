@@ -53,32 +53,27 @@ def wait_streaming(candidate, path):
 
 
 def request_stop(candidate, path, status):
-    # A rejected revision has no durable intent. Refresh at most eight times;
-    # never replace or retry a request after a successful/uncertain handoff.
+    # Streaming progress must not invalidate the original run control snapshot.
+    # One submission proves this contract; conflict or uncertainty never refreshes
+    # the intent, changes its run, or silently substitutes a newer precondition.
     run = status["run_id"]
-    for conflict in range(9):
-        require(status["run_id"] == run, "stop_refresh_changed_run")
-        require(status["phase"] == "running" and status["capabilities"]["stop"], "stop_window_closed")
-        request = {"run_id": status["run_id"], "expected_revision": status["revision"],
-                   "request_key": "acceptance-stop:" + uuid.uuid4().hex}
-        code, receipt, headers = candidate.browser(path + "/stop", method="POST", body=request)
-        if code == 409:
-            require(receipt.get("code") == "revision_conflict", "stop_conflict_not_revision")
-            require(ledger(candidate.root)["cancellations"] == 0, "conflict_already_committed")
-            require(conflict < 8, "stop_revision_conflict_limit")
-            code, status, _ = candidate.browser(path + "/execution")
-            require(code == 200, "stop_refresh_failed")
-            continue
-        require(code == 200 and receipt.get("outcome") == "requested_unknown", "stop_handoff_unconfirmed")
-        require("no-store" in headers.get("Cache-Control", ""), "stop_receipt_not_private")
-        require(set(receipt) == {"schema_version", "conversation_id", "run_id", "request_key",
-                                 "requested_revision", "revision", "outcome"}, "private_control_disclosed")
-        require(receipt["run_id"] == request["run_id"] and receipt["request_key"] == request["request_key"]
-                and receipt["requested_revision"] == request["expected_revision"], "stop_receipt_mismatch")
-        code, replay, _ = candidate.browser(path + "/stop", method="POST", body=request)
-        require(code == 200 and replay == receipt, "stop_receipt_replay_changed")
-        return request, receipt, conflict
-    raise Refused("stop_revision_conflict_limit")
+    control_revision = status.get("control_revision")
+    require(type(control_revision) is int and control_revision > 0, "explicit_control_revision_required")
+    require(status["phase"] == "running" and status["capabilities"]["stop"], "stop_window_closed")
+    request = {"run_id": run, "expected_revision": status["revision"],
+               "expected_control_revision": control_revision,
+               "request_key": "acceptance-stop:" + uuid.uuid4().hex}
+    code, receipt, headers = candidate.browser(path + "/stop", method="POST", body=request)
+    require(code != 409, "stop_precondition_conflict")
+    require(code == 200 and receipt.get("outcome") == "requested_unknown", "stop_handoff_unconfirmed")
+    require("no-store" in headers.get("Cache-Control", ""), "stop_receipt_not_private")
+    require(set(receipt) == {"schema_version", "conversation_id", "run_id", "request_key",
+                             "requested_revision", "revision", "outcome"}, "private_control_disclosed")
+    require(receipt["run_id"] == run and receipt["request_key"] == request["request_key"]
+            and receipt["requested_revision"] == request["expected_revision"], "stop_receipt_mismatch")
+    code, replay, _ = candidate.browser(path + "/stop", method="POST", body=request)
+    require(code == 200 and replay == receipt, "stop_receipt_replay_changed")
+    return request, receipt, 0
 
 
 def wait_stopped(candidate, path, run):
