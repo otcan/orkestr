@@ -34,23 +34,11 @@ export function sessionStore({ now = Date.now } = {}) {
     return clone(row);
   }
   return {
-    transaction(fn) {
-      if (fn.constructor?.name === "AsyncFunction") throw error("personal_agent_session_async_transaction", 400);
-      const before = clone([...rows]);
-      try {
-        const result = fn();
-        if (result && typeof result.then === "function") throw error("personal_agent_session_async_transaction", 400);
-        return result;
-      } catch (failure) {
-        rows.clear();
-        for (const [id, row] of before) rows.set(id, row);
-        throw failure;
-      }
-    },
+    conversation: id => resolveSessionConversation(id, { ownerUserId: "owner" }),
     create(input) {
-      if (typeof input.ownerUserId !== "string" || !input.ownerUserId.trim()) throw error("personal_agent_session_owner_required", 400);
       if (rows.has(input.id)) throw new Error("duplicate session");
-      return persist({ ...input, scopeId: input.scopeId ?? null, modelProfile: input.modelProfile ?? {},
+      const { ownerUserId: _transientOwner, ...record } = input;
+      return persist({ ...record, scopeId: input.scopeId ?? null, modelProfile: input.modelProfile ?? {},
         nativeSessionId: input.nativeSessionId ?? null, forkFromSessionId: input.forkFromSessionId ?? null,
         lifecycle: input.lifecycle ?? "starting", blockedReason: input.blockedReason ?? null, heartbeatAt: input.heartbeatAt ?? null,
         version: 0, leaseToken: null, leaseExpiresAt: null });
@@ -68,7 +56,6 @@ export function sessionStore({ now = Date.now } = {}) {
     update(id, { expectedVersion, leaseToken, patch }) {
       const row = required(id);
       if (row.version !== expectedVersion || leaseToken == null || row.leaseToken !== leaseToken || row.leaseExpiresAt <= now()) return null;
-      if (patch.ownerUserId !== undefined && patch.ownerUserId !== row.ownerUserId) throw error("personal_agent_session_owner_immutable", 409);
       const next = { ...row };
       for (const key of ["lifecycle", "blockedReason", "nativeSessionId", "heartbeatAt", "modelProfile"]) if (patch[key] !== undefined) next[key] = key === "lifecycle" ? patch[key] ?? row[key] : patch[key];
       next.leaseToken = patch.releaseLease ? null : leaseToken;
@@ -99,6 +86,6 @@ export function sessionHarness(options = {}) {
     async run(row, ctx) { calls.push(["run", row.id]); ctx.emit({ type: "session.started", sessionRef: row.nativeSessionId || `native-${++sequence}` }); return { type: "final", output: { text: "synthetic result" } }; },
   };
   const store = options.store || sessionStore({ now: options.now });
-  const settings = { store, resolveConversation: resolveSessionConversation, ownerUserId: "owner", runtimes: { codex: adapter }, env: { ORKESTR_PERSONAL_AGENT_ENABLED: "1" }, ...options };
+  const settings = { store, resolveConversation: resolveSessionConversation, ownerUserId: "owner", authorizeOwner: owner => owner === "owner", runtimes: { codex: adapter }, env: { ORKESTR_PERSONAL_AGENT_ENABLED: "1" }, ...options };
   return { store, adapter, calls, manager: createPersonalAgentSessionManager(settings), another: () => createPersonalAgentSessionManager(settings) };
 }

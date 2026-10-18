@@ -27,7 +27,7 @@ test("project/global binding, owner and profile validation fail before native ca
     assert.throws(() => h.manager.ensure(input));
   }
   const other = createPersonalAgentSessionManager({ store: h.store, ownerUserId: "other", env: { ORKESTR_PERSONAL_AGENT_ENABLED: "1" } });
-  assert.throws(() => other.get(project.id), /not_found/);
+  assert.throws(() => other.get(project.id), /owner_required/);
   assert.deepEqual(h.calls, []);
 });
 

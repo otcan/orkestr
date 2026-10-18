@@ -5,13 +5,13 @@ import { sessionBlockedReason, sessionError, sessionId, sessionProfile, sessionS
 
 // Native IDs are persisted synchronously before their announcement/effects.
 // Lane A supplies the prepared SQLite store; no schema is created here.
-export function createPersonalAgentSessionManager({ store, ownerUserId, resolveConversation, runtimes, env = process.env, now = Date.now, newId = randomUUID, leaseMs = 30_000 } = {}) {
+export function createPersonalAgentSessionManager({ store, ownerUserId, authorizeOwner, resolveConversation, runtimes, env = process.env, now = Date.now, newId = randomUUID, leaseMs = 30_000 } = {}) {
   sessionId(ownerUserId);
   if (!Number.isSafeInteger(leaseMs) || leaseMs < 100) throw sessionError("agent_session_lease_invalid", 400);
   const enabled = () => { if (!personalAgentFeature(env)) throw sessionError("personal_agent_disabled", 404); };
-  const { atomic, conversation, owned, available, claim, currentLease, fenced, time } = sessionAccess({ store, ownerUserId, resolveConversation, enabled, now, leaseMs });
-  // The session pins the authenticated owner; conversations have no owner column.
-  const runtimeRow = row => ({ ...row, ...storedSessionProfile(row) });
+  const { conversation, owned, available, claim, currentLease, fenced, time } = sessionAccess({ store, ownerUserId, authorizeOwner, resolveConversation, enabled, now, leaseMs });
+  // Transient account/profile authorization context, never persisted ownership.
+  const runtimeRow = row => ({ ...row, ...storedSessionProfile(row), ownerUserId });
   async function leased(id, operation) {
     const row = claim(id);
     const controller = new AbortController();
@@ -40,7 +40,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, resolveC
     if (!status.available) throw sessionError(status.reason === "rate_limited" ? "agent_session_rate_limited" : status.reason === "authentication_required" ? "agent_session_auth_required" : "agent_session_runtime_unavailable", 503);
     return adapter;
   }
-  function ensureWithinTransaction({ conversationId, scope: rawScope, role, profile: rawProfile, forkFromSessionId = null }) {
+  function ensure({ conversationId, scope: rawScope, role, profile: rawProfile, forkFromSessionId = null }) {
     const scope = sessionScope(rawScope);
     const profile = sessionProfile(rawProfile);
     if (!["fast", "deep", "worker"].includes(role)) throw sessionError("agent_session_role_invalid", 400);
@@ -61,7 +61,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, resolveC
     }
     const stamp = time();
     try {
-      return store.create({ id: `ags_${newId()}`, ownerUserId, conversationId, scopeKind: scope.kind, scopeId: scope.id, role,
+      return store.create({ id: `ags_${newId()}`, conversationId, scopeKind: scope.kind, scopeId: scope.id, role,
         provider: profile.provider, accountProfileId: profile.accountProfileId, modelProfile: { model: profile.model, effort: profile.effort },
         nativeSessionId: null, forkFromSessionId, lifecycle: "starting", blockedReason: null, heartbeatAt: null, createdAt: stamp, updatedAt: stamp });
     } catch (error) {
@@ -72,11 +72,10 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, resolveC
     }
   }
 
-  function ensure(input) { return atomic(() => ensureWithinTransaction(input)); }
-
   async function startOrResume(id) {
     return leased(id, async (row, signal) => {
       const adapter = await runtime(row);
+      currentLease(row);
       const parent = row.forkFromSessionId && !row.nativeSessionId ? owned(row.forkFromSessionId) : null;
       // Fork only idle parents, with the same fence used for normal turns.
       const open = parent
@@ -169,14 +168,12 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, resolveC
       return result;
     },
     changeProfile(id, input) {
-      return atomic(() => {
-        const profile = sessionProfile(input);
-        const row = owned(id);
-        available(row);
-        // Different credentials/providers cannot resume the old native ID.
-        if (row.provider !== profile.provider || row.accountProfileId !== profile.accountProfileId) throw sessionError("agent_session_profile_rebind_required");
-        return fenced(claim(id), { modelProfile: { model: profile.model, effort: profile.effort } }, true);
-      });
+      const profile = sessionProfile(input);
+      const row = owned(id);
+      available(row);
+      // Different credentials/providers cannot resume the old native ID.
+      if (row.provider !== profile.provider || row.accountProfileId !== profile.accountProfileId) throw sessionError("agent_session_profile_rebind_required");
+      return fenced(claim(id), { modelProfile: { model: profile.model, effort: profile.effort } }, true);
     },
   });
 }

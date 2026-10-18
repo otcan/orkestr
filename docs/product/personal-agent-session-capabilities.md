@@ -158,47 +158,57 @@ conversation migration, and is gated by `personalAgentFeature(env)`. Schema
 changes and their compatibility tests remain with that owner.
 
 The manager consumes Lane A's prepared synchronous store surface:
-`transaction(fn)`, `create(input)`, `get(id)`, `list({conversationId, scopeKind, scopeId?, roles?, lifecycles?})`,
-`acquireLease(id, {expectedVersion, ttlMs})` and
-`update(id, {expectedVersion, leaseToken, patch})`. The env-based public wrappers
-can prepare this store asynchronously before constructing the manager; the
-native event callback cannot await persistence. The manager does not emulate an
-async transaction with a synchronous callback. Creation, read-plus-claim,
-heartbeat/write fencing and profile replacement use short synchronous
-`transaction(fn)` callbacks. Store methods participate in the same
-`BEGIN IMMEDIATE` when called inside that wrapper; they must not open a nested
-transaction. Expected version/token predicates still guard every update. A null CAS result
-fails closed. Every successful mutation increments the store-managed version.
-Missing mutation IDs throw 404; `get` returns null for a missing row.
-A new row defaults to `starting`, version 0 and nullable native/lease fields.
-Lease tokens fence writers; the store API has no separate holder ID.
-Heartbeat updates use `leaseTtlMs`; release uses `releaseLease`. Lease expiry is
-numeric epoch milliseconds; the other timestamps are ISO strings.
+`create(input)`, `get(id)`, `list({conversationId, scopeKind, scopeId?, roles?, lifecycles?})`,
+`acquireLease(id, {expectedVersion, ttlMs})`,
+`update(id, {expectedVersion, leaseToken, patch})`, and
+`conversation(id) -> {id, scopeKind, scopeId} | null`. The conversation lookup
+projects #68's `scope_kind` and `project_id`: global/null or project/project ID.
+`findRole`/`findNative` lookups may be supplied by #70; this manager uses the
+existing list and SQLite uniqueness constraints instead.
 
-Canonical session rows use `modelProfile: {model, effort}`, separate provider and
-account-profile fields and immutable `ownerUserId` on the **session row**. The
-owner comes from authenticated owner context, never message/tool input. Canonical
-conversations have no owner column. Global `scopeId` is SQL NULL, never
-a sentinel. `resolveConversation(id, {ownerUserId})` is an injected, synchronous,
-trusted authorization projection returning `{id, scopeKind, scopeId}` or null;
-it must map canonical conversation scope and apply actual owner authorization.
-Absent/revoked lookup fails closed. No forged HTTP owner identity is used.
-Access requires both the pinned session owner and the trusted conversation
-projection to match; a permissive projection cannot bypass the session check.
-Model and effort live in `modelProfile` and are projected into native runtime
-context. No production resolver is supplied here.
+There is **no runtime-owned transaction adapter** or `transaction(fn)` requirement.
+Each canonical SQLite mutation owns its short `BEGIN IMMEDIATE`, validates the
+canonical conversation/scope inside that transaction, and fences changes with
+version/token predicates. Provider awaits never hold a database transaction.
+The env-based wrappers prepare the store asynchronously; native event callbacks
+persist synchronously before forwarding an event. A null CAS result fails closed.
+Every successful mutation increments version. Missing mutation IDs throw 404;
+`get` returns null for a missing row. New rows default to `starting`, version 0
+and nullable native/lease fields. Lease tokens fence writers, with no separate
+holder ID. Heartbeats use `leaseTtlMs`, release uses `releaseLease`; lease expiry
+is numeric epoch milliseconds and other timestamps are ISO strings.
+
+Canonical rows use `modelProfile: {model, effort}` with separate provider and
+account-profile fields. Neither sessions nor conversations persist an owner
+column in this single-user app contract. `ownerUserId` comes from the trusted
+factory context, never a message/tool argument. A mandatory synchronous
+`authorizeOwner(ownerUserId) -> boolean` must verify the authenticated app owner;
+missing, asynchronous or revoked authorization fails closed before storage/native
+access. Native account/profile resolution receives that owner transiently, without
+writing it to SQLite. This is an application trust boundary, not durable ownership
+or isolation against root-capable runtimes.
+
+`store.conversation(id)` is authoritative for scope before creation and every
+mutation. An optional synchronous `resolveConversation(id, {ownerUserId})` may
+further restrict access, but cannot supply or override canonical scope. IDs/scope,
+role, provider/account and fork lineage cannot change under an in-flight lease.
+Model/effort updates preserve conversation/session/native IDs; changing provider
+or account requires explicit rebind. No production owner authorizer or supervisor
+composition is supplied by this foundation.
 
 Active fast/deep uniqueness includes starting/ready/busy/blocked; stopped rows
-remain historical and cannot resume. The database enforces native tuple uniqueness
-across all conversations and lifecycles. Concurrent role creation returns only a
-matching unique winner. Acquisition must reject a busy row or an existing lease
-token, even after expiry. Expired busy sessions remain `busy` and require explicit
-reconciliation; the manager and fake never perform automatic takeover. Tests use a fake of the prepared CAS store with matching
-defaults, immutable owner, mutation errors, lease CAS, synchronous rollback and
-list filters. They do not establish SQLite durability,
-DDL/trigger enforcement or process-level locking. Worker 1's #70 owns that
-implementation and depends on #68's canonical conversations. This runtime PR
-remains based on main and does not import unmerged DDL or ingress code.
+remain historical and cannot resume. SQLite enforces non-null native tuple
+uniqueness across all conversations and lifecycles. Concurrent role creation
+returns only a matching unique winner. The manager never acquires an existing
+lease token or a busy row, even after expiry. Expired busy sessions stay `busy`
+until explicit native reconciliation CAS-updates/releases them. Expiry alone is
+never evidence that the provider stopped. #70 must enforce this in its acquisition
+predicate too; the earlier expiry-takeover implementation is not compatible.
+Tests use a fake prepared CAS store with no outer transaction or owner column.
+They demonstrate defaults, authorization, scope checks, fencing and filters;
+they do not establish SQLite durability, triggers or process-level locking.
+Worker 1 owns that implementation in #70 after #68; this runtime PR copies no
+unmerged DDL or ingress code.
 
 **Not yet wired:** the schema owner's SQLite adapter/durability tests and the
 asynchronous supervisor consuming canonical ordered inbox items. This PR is a
@@ -212,12 +222,13 @@ future operations rather than automatic recovery guesses.
 
 The real SQLite composition remains unverified until the schema lane is integrated.
 Required tests cover flag-off startup without session DDL, dry-run without writes,
-post-#68 foreign keys and scope validation, repeated idempotent migration,
-immutable owner enforcement, and rollback of grouped lease/heartbeat/version
-writes. A previous flag-off reader must still open the additive database without
-changing session rows. Rolling back code must preserve rows and native lineage.
-An ownerless pre-release session table cannot silently infer owners from
-conversations; incompatible shapes must fail closed pending a reviewed migration.
+post-#68 foreign keys and exact scope validation on create/every mutation,
+immutable session/conversation/provider/account bindings, valid profile JSON,
+repeated idempotent migration, expired-busy acquisition refusal, and rollback of
+CAS lease/heartbeat/version writes within the store's transactions. A previous
+flag-off reader must still open the additive database without changing session
+rows. Rolling back code preserves rows/native lineage. This contract adds no owner
+column or owner backfill; authorization remains in the authenticated app context.
 
 ## Acceptance and rollback
 

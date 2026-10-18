@@ -3,25 +3,29 @@ import { sessionError, sessionId } from "./personal-agent-session-records.js";
 export const activeSessionLifecycles = ["starting", "ready", "busy", "blocked"];
 export const storedSessionProfile = row => ({ provider: row.provider, accountProfileId: row.accountProfileId, model: row.modelProfile?.model, effort: row.modelProfile?.effort ?? null });
 
-// The prepared store groups synchronous reads/mutations in BEGIN IMMEDIATE.
-// CAS still fences each write; a provider await never holds a transaction.
-// resolveConversation is a trusted, owner-authorized projection of the canonical
-// conversation, which has no owner column. Session rows pin the trusted owner.
-export function sessionAccess({ store, ownerUserId, resolveConversation, enabled, now, leaseMs }) {
+// Each prepared SQLite mutation owns its transaction and scope validation.
+// Owner authorization is supplied by the single-user app, never a row column.
+export function sessionAccess({ store, ownerUserId, authorizeOwner, resolveConversation, enabled, now, leaseMs }) {
   const time = () => new Date(now()).toISOString();
-  function atomic(fn) {
+  function authorized() {
     enabled();
-    if (typeof store?.transaction !== "function") throw sessionError("agent_session_store_unavailable", 503);
-    return store.transaction(fn);
+    if (typeof authorizeOwner !== "function" || authorizeOwner(ownerUserId) !== true) throw sessionError("agent_session_owner_required", 403);
   }
   function conversation(id) {
-    enabled();
-    return resolveConversation?.(sessionId(id), { ownerUserId }) || null;
+    authorized();
+    if (typeof store?.conversation !== "function") throw sessionError("agent_session_store_unavailable", 503);
+    const canonical = store.conversation(sessionId(id));
+    if (resolveConversation) {
+      const access = resolveConversation(id, { ownerUserId });
+      if (!access || typeof access.then === "function") return null;
+    }
+    if (canonical && (canonical.id !== id || !(canonical.scopeKind === "global" && canonical.scopeId === null || canonical.scopeKind === "project" && typeof canonical.scopeId === "string" && canonical.scopeId.length > 0))) throw sessionError("agent_session_scope_unavailable", 404);
+    return canonical;
   }
   function owned(id) {
-    enabled();
+    authorized();
     const row = store.get(sessionId(id));
-    if (!row || row.ownerUserId !== ownerUserId) throw sessionError("agent_session_not_found", 404);
+    if (!row || row.id !== id) throw sessionError("agent_session_not_found", 404);
     const scope = conversation(row.conversationId);
     if (!scope) throw sessionError("agent_session_not_found", 404);
     if (scope.id !== row.conversationId || scope.scopeKind !== row.scopeKind || scope.scopeId !== row.scopeId) throw sessionError("agent_session_scope_unavailable", 404);
@@ -33,39 +37,42 @@ export function sessionAccess({ store, ownerUserId, resolveConversation, enabled
     if (row.lifecycle === "busy") throw sessionError("agent_session_reconciliation_required");
   }
   function claim(id) {
-    return atomic(() => {
-      const row = owned(id);
-      // Neither this manager nor the store may assume an expired provider turn
-      // stopped. Explicit reconciliation is required before a future claim.
-      available(row);
-      const result = store.acquireLease(id, { expectedVersion: row.version, ttlMs: leaseMs });
-      if (!result || result.leaseToken !== result.session.leaseToken) throw sessionError("agent_session_lease_conflict");
-      return result.session;
-    });
+    const row = owned(id);
+    // Expiry alone never proves that a native turn has stopped.
+    available(row);
+    const result = store.acquireLease(id, { expectedVersion: row.version, ttlMs: leaseMs });
+    if (!result || result.leaseToken !== result.session.leaseToken) throw sessionError("agent_session_lease_conflict");
+    sameBinding(row, result.session);
+    return result.session;
+  }
+  function sameBinding(before, after) {
+    for (const key of ["id", "conversationId", "scopeKind", "scopeId", "role", "provider", "accountProfileId", "forkFromSessionId"]) {
+      if (before[key] !== after[key]) throw sessionError("agent_session_binding_changed");
+    }
   }
   function currentLease(row) {
     const current = owned(row.id);
+    sameBinding(row, current);
     if (current.leaseToken !== row.leaseToken || !Number.isSafeInteger(current.leaseExpiresAt) || current.leaseExpiresAt <= now()) throw sessionError("agent_session_lease_lost");
     return current;
   }
   function fenced(row, patch, release = false) {
-    return atomic(() => {
-      const current = currentLease(row);
-      let result;
-      try {
-        result = store.update(row.id, { expectedVersion: current.version, leaseToken: row.leaseToken,
-          patch: { ...patch, releaseLease: release, heartbeatAt: time() } });
-      } catch (error) {
-        // SQLite's native-identity unique constraint is the final authority,
-        // including sessions in other conversations and stopped sessions.
-        if (error?.code === "agent_session_native_identity_reused" || /UNIQUE constraint failed: personal_agent_sessions\.provider, personal_agent_sessions\.account_profile_id, personal_agent_sessions\.native_session_id/.test(String(error?.message))) {
-          throw sessionError("agent_session_native_identity_reused");
-        }
-        throw error;
+    const current = currentLease(row);
+    let result;
+    try {
+      result = store.update(row.id, { expectedVersion: current.version, leaseToken: row.leaseToken,
+        patch: { ...patch, releaseLease: release, heartbeatAt: time() } });
+    } catch (error) {
+      // SQLite's native-identity unique constraint is the final authority,
+      // including sessions in other conversations and stopped sessions.
+      if (error?.code === "agent_session_native_identity_reused" || /UNIQUE constraint failed: personal_agent_sessions\.provider, personal_agent_sessions\.account_profile_id, personal_agent_sessions\.native_session_id/.test(String(error?.message))) {
+        throw sessionError("agent_session_native_identity_reused");
       }
-      if (!result) throw sessionError("agent_session_lease_lost");
-      return result;
-    });
+      throw error;
+    }
+    if (!result) throw sessionError("agent_session_lease_lost");
+    sameBinding(current, result);
+    return result;
   }
-  return { atomic, conversation, owned, available, claim, currentLease, fenced, time };
+  return { conversation, owned, available, claim, currentLease, fenced, time };
 }
