@@ -40,6 +40,8 @@ pub enum FixtureCheckpoint {
     ReserveAfterCommit,
     ConsumeBeforeCommit,
     ConsumeAfterCommit,
+    ObservationBeforeCommit,
+    ObservationAfterCommit,
 }
 impl FixtureCheckpoint {
     fn name(self) -> &'static str {
@@ -51,6 +53,8 @@ impl FixtureCheckpoint {
             Self::ReserveAfterCommit => "reserve-after-commit",
             Self::ConsumeBeforeCommit => "consume-before-commit",
             Self::ConsumeAfterCommit => "consume-after-commit",
+            Self::ObservationBeforeCommit => "observation-before-commit",
+            Self::ObservationAfterCommit => "observation-after-commit",
         }
     }
 }
