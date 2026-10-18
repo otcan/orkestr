@@ -8,6 +8,7 @@ pub enum ConversationEvent {
     MessageAccepted(EventEnvelope),
     FixtureProviderObserved(FixtureProviderObservedEnvelope),
     FixtureCancellationRequested(FixtureCancellationRequestedEnvelope),
+    FixtureProviderStopped(FixtureProviderStoppedEnvelope),
 }
 impl ConversationEvent {
     pub fn sequence(&self) -> i64 {
@@ -15,6 +16,7 @@ impl ConversationEvent {
             Self::MessageAccepted(e) => e.sequence,
             Self::FixtureProviderObserved(e) => e.sequence,
             Self::FixtureCancellationRequested(e) => e.sequence,
+            Self::FixtureProviderStopped(e) => e.sequence,
         }
     }
     pub fn sse_name(&self) -> &'static str {
@@ -22,6 +24,7 @@ impl ConversationEvent {
             Self::MessageAccepted(_) => "message_accepted",
             Self::FixtureProviderObserved(_) => "fixture_provider_observed",
             Self::FixtureCancellationRequested(_) => "fixture_cancellation_requested",
+            Self::FixtureProviderStopped(_) => "fixture_provider_stopped",
         }
     }
 }
@@ -71,6 +74,7 @@ impl<'de> Deserialize<'de> for ConversationEvent {
             Message(EventEnvelope),
             Fixture(FixtureProviderObservedEnvelope),
             Cancellation(FixtureCancellationRequestedEnvelope),
+            Stopped(FixtureProviderStoppedEnvelope),
         }
         match Wire::deserialize(d)? {
             Wire::Message(e)
@@ -86,6 +90,11 @@ impl<'de> Deserialize<'de> for ConversationEvent {
             }
             Wire::Cancellation(e) if e.schema_version == 3 => {
                 Ok(Self::FixtureCancellationRequested(e))
+            }
+            Wire::Stopped(e)
+                if e.schema_version == 4 && e.payload_ref_or_safe_payload.run_sequence > 0 =>
+            {
+                Ok(Self::FixtureProviderStopped(e))
             }
             _ => Err(de::Error::custom("event variant/schema mismatch")),
         }
