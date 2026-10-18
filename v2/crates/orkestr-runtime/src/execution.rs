@@ -3,13 +3,13 @@
 pub(crate) mod cancellation_fence;
 mod claude_pump;
 mod claude_session;
-pub use claude_pump::ClaudePump;
-pub use claude_session::{PreparingClaude, ReadyClaude};
 mod fence;
 mod provider_write;
 mod pump;
 mod reuse;
 mod session;
+pub use claude_pump::ClaudePump;
+pub use claude_session::{PreparingClaude, ReadyClaude};
 pub use pump::{CodexPump, StopFailure, StoppingCodex};
 pub use session::{PreparingCodex, ReadyCodex, SetupFailure};
 #[cfg(test)]

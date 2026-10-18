@@ -2,10 +2,6 @@
 //! No inference frames, credentials, environment or executable selection here.
 #[allow(dead_code, reason = "owned transport composition is under review")]
 pub(crate) mod channel;
-#[allow(
-    dead_code,
-    reason = "single-turn Claude composition is being integrated"
-)]
 pub(crate) mod claude;
 use crate::ports::Blocker;
 use orkestr_v2_application::runtime::ProviderKind;
