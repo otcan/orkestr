@@ -96,3 +96,15 @@ existing eight-frame sink bound and resume buffered lines as writes drain; no
 queue cap increase or prefix replay. Production private config must select the
 canonical native Codex ELF directly, never a JS shim or symlink. Synthetic test
 executables are intentionally fixtures, not installation account evidence.
+
+Closed control extension (not yet admitted by Runtime): `CancelExecution` has the
+same owned-handle envelope, with only `turn/interrupt {threadId,turnId}` inside.
+Both native IDs must equal this child's active turn. One attempt is latched before
+write; metadata cannot submit it, arbitrary signals/methods refuse. The parent
+must submit only from a sealed control wrapper under Core's cancellation fence
+using the receipt's new fenced admission and original immutable binding. The
+server trusts its exclusive parent pipe, not JSON as proof of that receipt.
+A further `CommitExecution` is allowed only after a terminal completed/failed/
+interrupted observation and with a previously unseen durable message ID; each
+requires a fresh consumed capability and current execution fence in Runtime.
+Unknown/lost reply is not terminal, and never authorizes a retry or restart.

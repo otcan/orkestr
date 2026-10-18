@@ -60,6 +60,9 @@ class Channel:
         self.native = None
         self.committed = False
         self.turn = None
+        self.terminal = False
+        self.messages = set()
+        self.cancelled = False
 
     def client(self, request):
         exact(request, ("id", "method", "params"))
@@ -82,7 +85,7 @@ class Channel:
                     "identity": identity, "metadata_only": True, "owned_handle": self.handle}}
         exact(params, ("owned_handle", "frame"))
         require(params["owned_handle"] == self.handle)
-        require(method in ("BrokerMetadata", "CommitExecution"))
+        require(method in ("BrokerMetadata", "CommitExecution", "CancelExecution"))
         frame = params["frame"]
         require(self.pending is None)
         require(isinstance(frame, dict))
@@ -91,12 +94,26 @@ class Channel:
             if kind == "initialized":
                 self.stage = "initialized"
                 return frame, {"id": outer, "result": {"owned_handle": self.handle, "frame": None}}
+        elif method == "CancelExecution":
+            # Parent must hold Core cancellation fence for the ORIGINAL binding
+            # and receipt.new_fenced_admission. JSON is not issuer evidence.
+            require(self.committed and self.turn is not None and not self.terminal and not self.cancelled)
+            exact(frame, ("id", "method", "params"))
+            require(type(frame["id"]) is int and frame["id"] > 0 and frame["method"] == "turn/interrupt")
+            exact(frame["params"], ("threadId", "turnId"))
+            require(frame["params"] == {"threadId": self.native, "turnId": self.turn})
+            self.cancelled = True  # a lost acknowledgement never permits retry
+            kind = "turn/interrupt"
         else:
             # Only trusted Runtime may send this on its exclusively owned pipe,
             # after consuming the real Core capability under the durable fence.
             # This server cannot authenticate Core authority from JSON.
-            require(self.stage == "ready" and not self.committed)
+            require(self.stage == "ready" and (not self.committed or self.terminal))
             self.validate_turn(frame)
+            message = frame["params"]["clientUserMessageId"]
+            require(message not in self.messages and len(self.messages) < 256)
+            self.messages.add(message)
+            self.turn, self.terminal, self.cancelled = None, False, False
             self.committed = True  # latch BEFORE a possible partial provider write
             kind = "turn/start"
         self.pending = (outer, frame["id"], kind)
@@ -169,6 +186,9 @@ class Channel:
                 require(turn_id == self.turn)
             else:
                 self.turn = turn_id
+            if frame["method"] == "turn/completed":
+                require(clean["turn"]["status"] in ("completed", "failed", "interrupted"))
+                self.terminal = True
             frame = {"method": frame["method"], "params": clean}
             return {"method": "BrokerOutput", "params": {"owned_handle": self.handle, "frame": frame}}
         require(self.pending is not None)
@@ -212,5 +232,8 @@ class Channel:
             require(self.turn is None or self.turn == result["turn"]["id"])
             self.turn = result["turn"]["id"]
             frame = {"id": inner, "result": {"turn": {"id": self.turn, "status": "inProgress"}}}
+        elif kind == "turn/interrupt":
+            exact(result, ())
+            frame = {"id": inner, "result": {}}
         self.pending = None
         return {"id": outer, "result": {"owned_handle": self.handle, "frame": frame}}
