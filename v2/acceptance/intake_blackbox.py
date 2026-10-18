@@ -1,6 +1,7 @@
 """Independent probes for core intake. Synthetic owned processes and data only."""
 import argparse
 import concurrent.futures
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -86,7 +87,7 @@ class IntakeProbes(unittest.TestCase):
 
     def counts(self):
         uri = (self.home / "core.sqlite3").as_uri() + "?mode=ro"
-        with sqlite3.connect(uri, uri=True) as db:
+        with closing(sqlite3.connect(uri, uri=True)) as db:
             db.execute("PRAGMA query_only=ON")
             db.execute("BEGIN")
             counts = tuple(db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
@@ -155,7 +156,7 @@ class IntakeProbes(unittest.TestCase):
         self.stop()
         legacy = self.root / "legacy-wal-synthetic"
         legacy.mkdir()
-        with sqlite3.connect(legacy / "core.sqlite3") as writer:
+        with closing(sqlite3.connect(legacy / "core.sqlite3")) as writer:
             self.assertEqual(writer.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
             writer.execute("PRAGMA wal_autocheckpoint=0")
             writer.execute("CREATE TABLE synthetic_legacy(value TEXT)")
