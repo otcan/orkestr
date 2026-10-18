@@ -1,3 +1,4 @@
+mod about;
 mod acceptance_button;
 mod execution_panel;
 mod execution_poll;
@@ -178,6 +179,7 @@ fn App() -> Element {
                 } else if tab() == "Attention" {
                     p { "Approvals, blockers and task attention are unavailable. No pending-work count is inferred." }
                 } else {
+                    about::About {}
                     p { "Provider setup and memory controls are unavailable. External integrations are optional." }
                 }
             }
