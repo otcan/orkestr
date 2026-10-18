@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 mod auth;
 mod browser;
+mod resource_health;
 mod routes;
 
 #[derive(Clone)]
@@ -29,6 +30,7 @@ pub struct AppState {
     origin: Arc<String>,
     authority: Arc<String>,
     auth_window: Arc<Mutex<(Instant, u32)>>,
+    resources: resource_health::ResourceSampler,
 }
 impl AppState {
     pub fn new(
@@ -60,6 +62,7 @@ impl AppState {
             origin: Arc::new(origin),
             authority: Arc::new(authority),
             auth_window: Arc::new(Mutex::new((Instant::now(), 0))),
+            resources: resource_health::ResourceSampler::new(),
         })
     }
 }
@@ -194,6 +197,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/machine/session",post(auth::session))
         .route("/api/v2/browser/session",post(browser::login).get(browser::session).delete(browser::logout))
         .route("/api/v2/projects",get(routes::projects).post(routes::create_project))
+        .route("/api/v2/resources",get(resource_health::resources))
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
         .route("/api/v2/conversations/{id}/messages",post(routes::message))
         .route("/api/v2/conversations/{id}/events",get(routes::events))

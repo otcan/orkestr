@@ -1,6 +1,8 @@
 //! Version 0 HTTP contracts. No storage or provider dependencies.
 mod cancellation;
 mod events;
+mod resource_health;
+pub use resource_health::*;
 mod stopped;
 pub use cancellation::*;
 pub use stopped::*;
