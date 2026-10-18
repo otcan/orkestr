@@ -52,3 +52,32 @@ runner-specific launch race. No speculative production or test fix, skip, or
 assertion weakening was applied. Remaining evidence needed is reproduction in
 the CI shard environment with launch/readiness and owned process-group state
 captured around the signal.
+
+## Frozen-dependency full-file follow-up
+
+Both exact source archives subsequently installed the existing frozen dependencies
+with `npm ci --offline --ignore-scripts --no-audit --no-fund`. Each installed
+612 packages; no network fallback or lock resolution was required. Both lockfiles
+retained SHA256
+`932f82cdafd2c613a48bb22e01bb4912cded16f1ceea07ba5e14040aaef45236`.
+
+The unmodified full detached-turn file, with all original imports and repository
+bootstrap, passed 8/8 on each head, zero skipped. The integration command also
+set the workflow's `ORKESTR_BROWSER_LAUNCH_DISABLED=1`,
+`ORKESTR_RECOVER_RUNNING_ON_START=0` and `ORKESTR_TEST_CONCURRENCY=1`.
+The earlier missing-dependency limitation is resolved for these archived runs.
+
+A narrow test-only diagnostic helper now takes a bounded pre-signal snapshot of
+the owned wrapper's recorded identity, Linux stat/direct-child IDs and output
+byte count. It neither waits for readiness nor retries the signal. Only an
+original SIGTERM assertion failure emits that snapshot plus bounded exit/signal
+artifacts, post-exit identity and stderr byte count, then rethrows the same
+assertion. It does not read prompts, raw provider output or unrelated processes.
+Extra snapshot reads can perturb scheduling; passing diagnostic runs cannot
+exclude the original race.
+
+The diagnostic full file passed 8/8 on both pinned source/dependency trees. An
+external, intentionally failing assertion probe exercised the failure-only
+branch and verified its fields and rethrow. That expected failure is diagnostic
+validation, not a regression pass. Syntax and diff checks passed. No production
+helper or signal behavior changed, and no assertion was weakened or skipped.

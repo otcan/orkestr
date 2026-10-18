@@ -19,6 +19,8 @@ import { createLlmAccountProfile, updateLlmAccountProfileState } from "../packag
 import { resetClaudeCodeRuntimeForTest, startClaudeCodeThread } from "../packages/core/src/runtime-claude-code-adapter.js";
 import { createThread, getThread, listThreadMessages } from "../packages/core/src/threads.js";
 
+import { detachedSignalIdentity, detachedSignalFailure } from "./helpers/detached-turn-signal-diagnostics.js";
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 async function tempHome(t, name) {
@@ -109,9 +111,16 @@ test("a recycled pid is never mistaken for the turn process", async (t) => {
     assert.equal(detachedTurnProcessAlive({ ...record, procStartTime: "1" }), false);
     assert.equal(await detachedTurnState({ ...record, procStartTime: "1" }), "gone");
   }
+  // Snapshot only; no readiness wait or retry that could hide the launch race.
+  const beforeSignal = detachedSignalIdentity(record);
   process.kill(-record.pgid, "SIGTERM");
   const status = await closed;
-  assert.equal(status.signal, "SIGTERM");
+  try {
+    assert.equal(status.signal, "SIGTERM");
+  } catch (error) {
+    t.diagnostic(JSON.stringify(detachedSignalFailure(record, beforeSignal, status)));
+    throw error;
+  }
   assert.equal(await detachedTurnState(record), "exited");
   // The wrapper records the signal so an unexpected turn end can be traced.
   assert.match(await fs.readFile(`${record.paths.exit}.signals`, "utf8"), /^TERM \d+$/m);
