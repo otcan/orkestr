@@ -162,3 +162,23 @@ Filesystem isolation now requires the included reviewed Linux
 unsupported platforms (including macOS pending implementation), and ambiguous
 filesystem identity. Consumer wiring tests mock that API; they do not establish
 mount-alias correctness. No host mounts are modified by these tests.
+
+### Populated schema 14 to 15 compatibility probe
+
+`python3 -B v2/local-install/tests/cross_revision.py --help` describes the explicit
+old/new binary hashes, source revisions, UI, private parent and assigned port.
+The older executable must create exactly migrations 1–14; the successor must
+migrate to exactly 1–15. This probe is **unexecuted pending a pinned schema-15
+successor artifact**. A version-label switch does not satisfy it.
+
+The probe creates synthetic owner/message history under the old package, stops
+it, preserves a verified SQLite backup and complete stopped rollback home, then
+upgrades the working package and checks session/history/idempotency after genuine
+migration. An older-server refusal is attempted only on a separate disposable
+copy of the migrated database; the database inventory must remain unchanged.
+Rollback starts the old executable against the untouched pre-migration full-home
+copy and checks its original owner/history. It never downgrades the migrated
+working database, activates a dormant import, or rebinds an owner. Private backup,
+rollback state and evidence are intentionally retained under the supplied private
+parent for review; they contain synthetic auth and must not be published. No
+providers or production resources are used. Failed probes retain diagnostics.
