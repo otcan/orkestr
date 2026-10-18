@@ -1,0 +1,13 @@
+# Independent durable timer authority source review
+
+Reviewed Core `63323d62a698747900a45db9962b5fb8354117f3`, including adopted helper `6e5988bfd02e1424454fd818b28425b59f8b91f9`. No blocking finding in this bounded source review. This is not scheduler, HTTP, native execution, restart, or process acceptance.
+
+The authority subtree and extracted input helper match original `87904cb45` byte-for-byte. Independent byte comparison also confirms migration 0033 equals its SQL proposal. Registration adds the immutable authority table to the real contiguous migration inventory and updates preflight's supported maximum and explicit empty-new-table oracle; it does not substitute placeholder predecessors.
+
+Owner enable authenticates inside the immediate transaction before historical lookup. Exact replay returns the original authority without rearming; changed instruction, conversation, or sampled revision conflicts. Fresh enable, Stop watermark, generation guard, and immutable instruction insertion commit together. Revoke uses canonical Disable and holds previously admitted inputs. Creator browser logout intentionally does not revoke a separately authorized durable timer grant.
+
+The private scheduler issuer captures the bound supervisor context and namespace. Every admission checks exact local context, incarnation, generation, owner and machine credential, then validates current credential expiry and supervisor lease under BEGIN IMMEDIATE. A restarted process needs a newly authorized issuer. Admission derives time from SQLite and due time, generation and instruction from durable rows; callers cannot supply work text or a clock through this port. Current enabled state, target ownership, Stop watermark, cadence, claim and ordinary intake dedupe are checked in the same transaction.
+
+The supplied six authority tests were source-reviewed, including changed replay/logout, revoke/re-enable, Stop, two-pool revoke serialization, reopen and insertion-failure rollback. Their direct synthetic clock helper explicitly bypasses issuer acceptance and must not be described as an end-to-end scheduler test. The issuer test separately checks local namespace, unbound refusal and machine revocation. Core's reported timer 20/20, preflight 9/9 and strict lint results remain author evidence; Verification did not rerun Cargo or build a binary for this review.
+
+Controller registration, actual machine-session renewal/restart integration, autonomous scheduling and HTTP/provider behavior remain separate gates. Existing helper controller ownership is unchanged.
