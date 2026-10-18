@@ -51,6 +51,30 @@ second public schema or imply fixtures are durable storage. Fixture mode must
 have a persistent visible synthetic-data label. Once available, use versioned
 JSON HTTP commands and authenticated SSE against the actual server.
 
+Core's announced intake contract (fixture paths/version/commit still pending):
+
+- Setup posts username/password credentials with `x-orkestr-bootstrap`.
+  Session posts the same credentials and returns a Bearer token, token type,
+  43,200-second expiry and the global canonical conversation ID.
+- Commands use Bearer Authorization, with a same-origin Origin guard; no
+  cookie session is currently offered. Keep the browser token in memory for
+  this slice; reload requires sign-in. Bootstrap-token delivery to the owner
+  needs a secure local setup flow, never a URL parameter or log entry.
+- Projects list returns `projects` and `next_cursor`. Creation submits
+  `client_request_id` and `name`; use returned project/conversation IDs.
+  Resource states are `local_git: not_provisioned` and
+  `local_oxrm: unverified`, not successful provisioning.
+- Snapshot returns conversation ID, scope, messages, last sequence and next
+  cursor, with `after`/`limit` pagination capped at 100. Bind field types and
+  cursor handling to the published fixtures rather than guessing them.
+- Message request/receipt remains canonical API v0. SSE accepts a sequence
+  through `Last-Event-ID` or `after`. Browser EventSource cannot attach the
+  required Authorization header: use authenticated fetch-stream parsing with
+  cancellation, bounded buffers and reconnect. Never put the token in a query.
+
+Implement against the exact published contract commit once received. An
+announced response shape alone does not prove server or client acceptance.
+
 Keep drafts keyed by canonical conversation identity, independently of stream
 and request state. Typing remains enabled while a run is busy. Persisted
 acceptance and rendered model text are separate states. Retain the same
@@ -77,7 +101,8 @@ Provider credentials and native provider session identifiers stay server-side.
 Do not persist credentials in JavaScript local storage, URLs or logs. Native
 device-token storage requires an audited Keychain boundary, revocation/logout,
 and a server-supported device-auth contract before native auth is accepted.
-Web uses the server's v2-scoped HttpOnly session and CSRF/origin policy.
+The announced server uses Bearer auth rather than a browser cookie session;
+retain the web token only in memory and honor the server's origin policy.
 Cross-origin WebView API access, TLS, session expiry and native reconnect need
 explicit integration tests; do not weaken server origin policy to make a demo
 work. The concrete native auth/Keychain bridge is pending, not implemented.
