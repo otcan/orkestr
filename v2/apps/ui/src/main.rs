@@ -8,8 +8,8 @@ mod history;
 mod host_resources_view;
 mod progress_view;
 mod stop_button;
-#[allow(dead_code)]
 mod timer_detail_view;
+mod timer_screen;
 mod transport;
 mod views;
 mod worker_tasks_panel;
@@ -133,7 +133,7 @@ fn App() -> Element {
                 } }
             } else {
                 nav { "aria-label": "Main",
-                    for name in ["Assistant", "Projects", "Attention", "History", "Workers", "Host resources", "Settings"] {
+                    for name in ["Assistant", "Projects", "Attention", "History", "Timers", "Workers", "Host resources", "Settings"] {
                         button { "aria-current": if tab() == name { "page" } else { "false" }, onclick: move |_| {
                             tab.set(name.into());
                             if name == "Assistant" { current.set(global()); }
@@ -185,6 +185,8 @@ fn App() -> Element {
                     }
                 } else if tab() == "History" {
                     history::History { key: "{current()}", id: current(), csrf: csrf(), session_scope, onexpired: expired }
+                } else if tab() == "Timers" {
+                    timer_screen::Timers { key:"{current()}-{session_scope.read().generation()}", conversation:current(),csrf:csrf(),session_scope,onexpired:expired }
                 } else if tab() == "Workers" {
                     workers_view::WorkersView { key: "{current()}-{session_scope.read().generation()}", id: current(), csrf: csrf(), session_scope, workers, execution: worker_execution, onexpired: expired }
                 } else if tab() == "Host resources" {

@@ -128,3 +128,5 @@ test('worker task history accepts only canonical exact-parent query and cookie r
     while(!messages.length)await new Promise(resolve=>setImmediate(resolve));
     stop();await run;assert.equal(messages[0].body.can_create,false);assert.ok(signal.aborted);
 });
+
+test('timer GET is exact and refuses query or guessed discovery',async()=>{const timer='/api/v2/timers/00000000-0000-4000-8000-000000000001';for(const path of [timer+'?now=1','/api/v2/timers',timer+'/tick'])await assert.rejects(execute({recv:async()=>({path})},()=>assert.fail('no fetch')));let first=true,stop;const messages=[];const ch={recv:()=>first?(first=false,Promise.resolve({path:timer})):new Promise(r=>stop=r),send:m=>messages.push(m)};const run=execute(ch,async(url,o)=>{assert.equal(url,timer);assert.equal(o.credentials,'same-origin');return new Response('{"state":"paused"}');});while(!messages.length)await new Promise(r=>setImmediate(r));stop();await run;assert.equal(messages[0].body.state,'paused');});
