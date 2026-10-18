@@ -18,7 +18,8 @@ pub(super) async fn execution(
 ) -> Result<()> {
     credential(store, token)?;
     let row = store.production_authorized_run(conn, parent).await?;
-    if parent.run.purpose != AdmissionPurpose::Execution
+    if parent.run.role == Role::Fast
+        || parent.run.purpose != AdmissionPurpose::Execution
         || !matches!(row.get::<&str, _>("state"), "starting" | "running")
         || row.get::<&str, _>("dispatch_state") != "delivery_unknown"
     {
