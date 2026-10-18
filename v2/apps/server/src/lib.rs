@@ -5,7 +5,7 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     middleware,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use orkestr_v2_application::StoreError;
@@ -35,12 +35,14 @@ mod routes;
 pub mod stop_execution;
 mod worker_discovery;
 pub mod worker_execution;
+pub mod worker_tasks;
 
 #[derive(Clone)]
 pub struct AppState {
     pub store: Store,
     execution_store: Option<Store>,
     execution_control: Option<control_registry::ControlRegistry>,
+    worker_task_access: Option<worker_tasks::WorkerTaskAccess>,
     bootstrap_token: Arc<String>,
     origin: Arc<String>,
     authority: Arc<String>,
@@ -80,6 +82,7 @@ impl AppState {
             store,
             execution_store: None,
             execution_control: None,
+            worker_task_access: None,
             bootstrap_token: Arc::new(bootstrap_token),
             origin: Arc::new(origin),
             authority: Arc::new(authority),
@@ -223,6 +226,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
         .route("/api/v2/conversations/{id}/execution",get(execution::status))
         .route("/api/v2/conversations/{id}/workers",get(worker_discovery::list))
+        .route("/api/v2/conversations/{id}/worker-tasks",get(worker_tasks::list).post(worker_tasks::create))
+        .route("/api/v2/conversations/{id}/worker-tasks/{task}/hold",post(worker_tasks::hold))
+        .route("/api/v2/conversations/{id}/worker-tasks/{task}/payload",delete(worker_tasks::remove))
         .route("/api/v2/conversations/{id}/stop",post(execution::stop))
         .route("/api/v2/conversations/{id}/accept",post(execution_accept::accept))
         .route("/api/v2/conversations/{id}/payloads/{payload}",get(provider_payload::read).delete(provider_payload::remove))

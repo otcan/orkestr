@@ -47,7 +47,9 @@ mod terminal_restart;
 mod terminal_retirement;
 mod worker;
 mod worker_discovery;
+mod worker_tasks;
 pub use worker::*;
+pub use worker_tasks::WorkerTaskClaim;
 mod worker_tool;
 pub use worker_tool::*;
 #[cfg(test)]

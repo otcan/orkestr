@@ -30,6 +30,7 @@ pub struct ConfiguredExecution {
     token: String,
     directory: PathBuf,
     control: crate::control_registry::ControlRegistry,
+    tasks: crate::worker_tasks::WorkerTaskAccess,
     children: crate::owned_children::ChildSet,
     initial_grant: Option<BoundSessionMetadata>,
 }
@@ -102,6 +103,10 @@ impl ConfiguredExecution {
             owner.clone(),
             config.conversation_id.clone(),
         );
+        let tasks = crate::worker_tasks::WorkerTaskAccess::new(
+            owner.clone(),
+            config.conversation_id.clone(),
+        );
         Ok(Self {
             config,
             store: bound,
@@ -109,6 +114,7 @@ impl ConfiguredExecution {
             token,
             directory,
             control,
+            tasks,
             children: crate::owned_children::ChildSet::default(),
             initial_grant,
         })
@@ -119,7 +125,7 @@ impl ConfiguredExecution {
     pub fn install_control(&self, mut state: crate::AppState) -> crate::AppState {
         state.execution_store = Some(self.store.clone());
         state.execution_control = Some(self.control.clone());
-        state
+        state.with_worker_task_access(self.tasks.clone())
     }
 
     pub fn start(self) -> ExecutionTask {
