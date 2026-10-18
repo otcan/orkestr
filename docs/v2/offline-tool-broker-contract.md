@@ -1,6 +1,6 @@
 # Offline Python broker contract
 
-Status: trusted constructor-only channel hooks; executable profile selection is
+Status: separate fixed executable opt-in is implemented; production selection is
 not enabled. No dynamic tool is advertised by default, and this document does
 not authorize provider requests or tool execution. Core delivery integration and
 reviewed Runtime/launcher composition remain prerequisites for activation.
@@ -61,9 +61,8 @@ Stop races and actual provider result acceptance are unexecuted in this slice.
 `Channel(workspace, expected_native=None, offline_python=False)` now exposes the
 trusted constructor flag. Only opted-in Worker metadata accepts experimentalApi
 true and the exact singleton advertisement on thread/start or thread/resume.
-The flag is never read from browser/OpenOwnedSession JSON or environment. Current
-executable entrypoints do not select it. An eventual opt-in immutable broker
-inventory must include `offline_tool.py` and `offline_route.py`; default package
+The flag is never read from browser/OpenOwnedSession JSON or environment. The separate Worker entry selects it; default
+entrypoints do not. The opt-in immutable broker inventory includes `offline_tool.py` and `offline_route.py`; default package
 imports do not require them.
 
 Active native tool calls are forwarded in sanitized BrokerOutput. One pending
@@ -86,3 +85,23 @@ turn's interrupted terminal is accepted; completed/failed terminals still refuse
 This protocol transition is not cancellation authority or proof of sandbox reap.
 Runtime must use its issued control capability, retire outstanding tool state,
 refuse subsequent result writes and establish owned cleanup before completion.
+
+## Fixed executable handoff
+
+`worker_server.py open-owned-worker-session --protocol orkestr-v2-provider-broker-v1`
+is the separate trusted opt-in entry. A private immutable installer wrapper pins
+that entry; Runtime selects that reviewed launcher only from its issued Worker
+composition. No resume entry, extra arguments, client-selected path or environment
+switch is accepted. The sibling `worker-broker-private.json` has the existing
+closed Configuration schema; it remains private and outside the public inventory.
+`worker-package.json` lists the exact eight Python source dependencies and hashes.
+Root must independently provision/review the native executable, package, account
+selection and filesystem/process/egress boundary; this manifest activates none.
+The default server entry remains offline_python=false.
+
+The new entry reuses the existing fd3 sole-writer transfer and owned reaping path.
+An actual synthetic subprocess regression exercises Worker Open/initialize with
+experimentalApi=true, SCM_RIGHTS handoff and clean EOF retirement. Inventory-only
+imports and wrong-argv refusal are separately checked. Actual sandbox dispatch,
+Core result suffix fencing and ordinary HTTP/native Worker acceptance remain
+outside these entrypoint tests.
