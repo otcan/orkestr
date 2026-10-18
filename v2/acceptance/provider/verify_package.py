@@ -16,11 +16,15 @@ PACKAGE_FILES = {"broker_launcher": "launcher", "broker_config": "broker-private
                  "broker_server": "server.py", "broker_configuration": "configuration.py",
                  "broker_protocol": "protocol.py", "broker_transport": "transport.py",
                  "broker_codex_bootstrap": "codex_bootstrap.py",
+                 "broker_reaping": "reaping.py",
                  "broker_inventory": "codex-package.json"}
 PACKAGE = frozenset(PACKAGE_FILES)
 INVENTORY_MODULES = frozenset({"broker_server", "broker_configuration", "broker_protocol",
                                "broker_transport", "broker_codex_bootstrap"})
-VERSION_NAMES = {1: NAMES, 2: NAMES | {"broker_codex_bootstrap", "broker_inventory"}}
+VERSION_NAMES = {1: NAMES, 2: NAMES | {"broker_codex_bootstrap", "broker_inventory"},
+                 3: NAMES | {"broker_codex_bootstrap", "broker_inventory",
+                             "broker_reaping", "lifetime_launcher"}}
+LIFETIME_LAUNCHER = Path("/usr/bin/bwrap")
 LIMIT = 512 * 1024 * 1024
 
 
@@ -113,6 +117,10 @@ def verify(manifest_path):
         require(isinstance(artifact["sha256"], str)
                 and re.fullmatch("[a-f0-9]{64}", artifact["sha256"]), "artifact_pin_required")
         path = protected(artifact["path"])
+        # The reviewed reaping module invokes this fixed path. A hash of some
+        # other executable would not pin the dependency actually being used.
+        if name == "lifetime_launcher":
+            require(path == LIFETIME_LAUNCHER, "lifetime_launcher_path_mismatch")
         require(path not in paths, "artifact_alias_refused")
         paths.add(path)
         if name in PACKAGE:
@@ -121,14 +129,15 @@ def verify(manifest_path):
             package_files.add(path.name)
         digest, _ = read_protected(path)
         require(digest == artifact["sha256"], "artifact_hash_mismatch")
-        if name in {"server_binary", "provider_native", "python_interpreter", "broker_launcher"}:
+        if name in {"server_binary", "provider_native", "python_interpreter",
+                    "broker_launcher", "lifetime_launcher"}:
             require(path.stat().st_mode & 0o111, "artifact_not_executable")
         hashes[name] = digest
     # No additional importable source, bytecode cache, symlink or subdirectory.
     # The interpreter/stdlib are an explicitly trusted system boundary.
     require({entry.name for entry in package.iterdir()} == package_files,
             "unexpected_broker_package_entry")
-    if version == 2:
+    if version >= 2:
         verify_inventory(manifest, hashes)
     return {"schema_version": version, "status": "verified", "mode": manifest["mode"],
             "server_source": manifest["server_source"], "broker_source": manifest["broker_source"],
@@ -138,7 +147,7 @@ def verify(manifest_path):
 
 
 def verify_inventory(manifest, hashes):
-    """Bind the reviewed five-module inventory to every installed module pin."""
+    """Bind the version's complete source inventory to installed module pins."""
     digest, raw = read_protected(manifest["artifacts"]["broker_inventory"]["path"],
                                  32 * 1024, retain=True)
     require(digest == hashes["broker_inventory"], "artifact_hash_mismatch")
@@ -149,8 +158,9 @@ def verify_inventory(manifest, hashes):
     # This is source metadata, never authorization to activate or resume a session.
     require(isinstance(inventory["activation"], str)
             and 0 < len(inventory["activation"]) <= 512, "invalid_broker_inventory")
-    exact(inventory["files"], {PACKAGE_FILES[name] for name in INVENTORY_MODULES})
-    for name in INVENTORY_MODULES:
+    modules = INVENTORY_MODULES | ({"broker_reaping"} if manifest["schema_version"] == 3 else set())
+    exact(inventory["files"], {PACKAGE_FILES[name] for name in modules})
+    for name in modules:
         require(inventory["files"][PACKAGE_FILES[name]] == hashes[name],
                 "broker_inventory_pin_mismatch")
 

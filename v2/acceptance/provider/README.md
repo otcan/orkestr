@@ -36,13 +36,22 @@ both `broker_codex_bootstrap` and `broker_inventory` artifacts, with canonical
 paths to `codex_bootstrap.py` and `codex-package.json` inside the package and
 their reviewed SHA-256 digests. Schema 2 requires all five modules and checks
 that the source inventory's module hashes equal the installed artifact pins.
+
+The lifetime-contained broker requires `schema_version: 3`, adding
+`broker_reaping` for the package's `reaping.py` and `lifetime_launcher` for the
+actual `/usr/bin/bwrap` executable. All six imported modules must match the
+reviewed source inventory. The fixed launcher path, its digest, and its root
+ownership and ancestor permissions are checked; pinning a different copy does
+not qualify the executable that the reviewed broker invokes. This verifies
+immutable inputs only. Namespace startup and complete process cleanup still
+require actual synthetic acceptance on the execution host.
 Its activation text is metadata, never permission to launch or resume a session.
 
 The manifest, all artifacts, and every ancestor must be root-owned with no
 group/other write permission. Files must have one link, canonical paths, bounded
 sizes, stable identity while read, and the reviewed digest. The broker directory
-must contain exactly the six schema-1 files or eight schema-2 files, including
-every listed imported Python module and, for schema 2, the source inventory.
+must contain exactly six schema-1, eight schema-2 or nine schema-3 files, including
+every listed imported Python module and, for schema 2 or 3, the source inventory.
 The launcher must use a fixed isolated interpreter and disable bytecode writes.
 The OS, root operator, and interpreter standard library remain trusted; this is
 not same-UID filesystem isolation or protection against a hostile root.

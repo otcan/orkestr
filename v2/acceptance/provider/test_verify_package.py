@@ -144,6 +144,63 @@ class PackageTests(unittest.TestCase):
         self.save()
         self.refused("unexpected_broker_package_entry")
 
+    def add_lifetime_inventory(self):
+        self.add_inventory()
+        self.manifest["schema_version"] = 3
+        module = self.package / "reaping.py"
+        module.write_text("synthetic lifetime fixture")
+        module.chmod(0o400)
+        digest = hashlib.sha256(module.read_bytes()).hexdigest()
+        self.manifest["artifacts"]["broker_reaping"] = {"path": str(module), "sha256": digest}
+        self.inventory["files"]["reaping.py"] = digest
+        # Read the actual fixed dependency without launching it or changing it.
+        launcher = Path("/usr/bin/bwrap")
+        self.assertTrue(launcher.is_file(), "lifetime package tests require installed bubblewrap")
+        self.manifest["artifacts"]["lifetime_launcher"] = {
+            "path": str(launcher), "sha256": hashlib.sha256(launcher.read_bytes()).hexdigest()}
+        self.save_inventory()
+
+    def test_complete_lifetime_inventory_binds_six_modules_and_actual_launcher(self):
+        self.add_lifetime_inventory()
+        receipt = verify(self.path)
+        self.assertEqual(receipt["schema_version"], 3)
+        self.assertIn("broker_reaping", receipt["artifacts"])
+        self.assertIn("lifetime_launcher", receipt["artifacts"])
+        self.assertFalse(receipt["provider_started"])
+
+    def test_lifetime_dependency_cannot_be_missing_unpinned_or_substituted(self):
+        self.add_lifetime_inventory()
+        launcher = self.manifest["artifacts"].pop("lifetime_launcher")
+        self.save()
+        self.refused("invalid_manifest_shape")
+        self.manifest["artifacts"]["lifetime_launcher"] = {**launcher, "sha256": "0" * 64}
+        self.save()
+        self.refused("artifact_hash_mismatch")
+        substitute = self.root / "different-bwrap"
+        substitute.write_text("synthetic substitute")
+        substitute.chmod(0o500)
+        self.manifest["artifacts"]["lifetime_launcher"] = {
+            "path": str(substitute), "sha256": hashlib.sha256(substitute.read_bytes()).hexdigest()}
+        self.save()
+        self.refused("lifetime_launcher_path_mismatch")
+
+    def test_lifetime_module_inventory_cannot_be_incomplete_or_changed(self):
+        self.add_lifetime_inventory()
+        self.inventory["files"].pop("reaping.py")
+        self.save_inventory()
+        self.refused("invalid_manifest_shape")
+        self.inventory["files"]["reaping.py"] = "0" * 64
+        self.save_inventory()
+        self.refused("broker_inventory_pin_mismatch")
+
+    def test_old_manifest_cannot_hide_new_lifetime_module(self):
+        self.add_lifetime_inventory()
+        self.manifest["schema_version"] = 2
+        del self.manifest["artifacts"]["lifetime_launcher"]
+        del self.manifest["artifacts"]["broker_reaping"]
+        self.save()
+        self.refused("unexpected_broker_package_entry")
+
 
 if __name__ == "__main__":
     unittest.main()
