@@ -77,3 +77,12 @@ The production parent covers seven actual SIGKILL windows and fresh-process
 expiry/takeover, without private authority reconstruction. Strict feature-enabled
 all-target store clippy passed. These results establish the bounded storage
 slice, not full provider or release acceptance.
+
+`Store::execution_status(owner, conversation)` now returns an optional canonical
+read snapshot. The server must derive owner from its authenticated session, never
+request JSON. No queued input and no admitted run yields None. Migration 0009
+maintains a durable conversation revision transactionally with inbox and production
+run changes, independently of event replay cursors. An identical admission replay
+does not advance it. Queue age uses the accepted event timestamp and store clock;
+progress/resources remain absent, and Stop/steer capabilities remain false.
+No routes or control receipts are activated by this read method.

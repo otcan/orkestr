@@ -62,6 +62,7 @@ async fn rows(root: &Path) -> Vec<String> {
     let mut tx = conn.begin().await.unwrap();
     let mut result = Vec::new();
     for table in [
+        "execution_revisions",
         "production_supervisors",
         "production_readiness",
         "production_runs",

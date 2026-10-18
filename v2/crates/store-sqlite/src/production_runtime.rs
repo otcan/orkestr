@@ -11,6 +11,7 @@ mod dispatch;
 #[cfg(all(test, unix))]
 mod process_tests;
 mod readiness;
+mod status;
 #[cfg(test)]
 mod tests;
 
