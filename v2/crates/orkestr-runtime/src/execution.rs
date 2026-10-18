@@ -1,6 +1,7 @@
 //! By-value bridge from Core's committed dispatch to the owned transport.
 //! This does not construct a supervisor, credentials, or a permissive fence.
 mod fence;
+mod provider_write;
 mod pump;
 mod session;
 pub use pump::CodexPump;
@@ -47,21 +48,20 @@ fn execution_scope(
     )
 }
 
+fn turn_frame(capability: &ConsumedProviderDispatch, request_id: u64) -> serde_json::Value {
+    let provider = capability.provider();
+    json!({"id":request_id,"method":"turn/start","params":{
+        "threadId":provider.binding.native_session_id,
+        "clientUserMessageId":capability.message_id().to_string(),
+        "input":[{"type":"text","text":capability.text(),"text_elements":[]}]}})
+}
+
 impl ConsumedTurn for CodexTurn {
     fn broker_lineage(&self) -> Option<std::sync::Arc<()>> {
         self.broker.as_ref().map(|b| b.lineage.clone())
     }
     fn into_submission(self) -> (ExecutionScope, Vec<u8>) {
-        let provider = self.capability.provider();
-        let frame = json!({
-            "id": self.request_id,
-            "method": "turn/start",
-            "params": {
-                "threadId": provider.binding.native_session_id,
-                "clientUserMessageId": self.capability.message_id().to_string(),
-                "input": [{"type":"text", "text":self.capability.text(), "text_elements":[]}]
-            }
-        });
+        let frame = turn_frame(&self.capability, self.request_id);
         let bytes = match self.broker {
             Some(broker) => broker.wrap(frame),
             None => frame.to_string().into_bytes(),

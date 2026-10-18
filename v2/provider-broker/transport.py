@@ -1,6 +1,8 @@
 """Bounded nonblocking stdio pump; provider shares Runtime-owned process group."""
 from collections import deque
 import os
+import array
+import socket
 import selectors
 import subprocess
 from protocol import MAX_FRAME, Refused, decode, encode, require
@@ -9,10 +11,11 @@ MAX_PENDING = 8
 
 
 class Pump:
-    def __init__(self, config, channel, incoming=0, outgoing=1):
+    def __init__(self, config, channel, incoming=0, outgoing=1, handoff=None):
         self.config, self.channel = config, channel
         self.incoming, self.outgoing = incoming, outgoing
         self.child = None
+        self.handoff = handoff
         self.buffers = {}
         self.queues = {outgoing: deque()}
         self.selector = selectors.DefaultSelector()
@@ -31,7 +34,21 @@ class Pump:
                                       close_fds=True)
         for pipe in (self.child.stdin, self.child.stdout):
             os.set_blocking(pipe.fileno(), False)
-        self.queues[self.child.stdin.fileno()] = deque()
+        if self.handoff is None:
+            self.queues[self.child.stdin.fileno()] = deque()
+        else:
+            # Only the trusted parent receives the sole provider writer. No
+            # provider request is ever buffered/written by this broker mode.
+            writer = self.child.stdin
+            try:
+                rights = array.array("i", [writer.fileno()])
+                sent = self.handoff.sendmsg([b"provider-stdin-v1"],
+                    [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights)])
+                require(sent == len(b"provider-stdin-v1"))
+            finally:
+                writer.close()
+                self.handoff.close()
+            self.child.stdin = None
         self.watch(self.child.stdout.fileno(), selectors.EVENT_READ)
 
     def watch(self, fd, events):
@@ -47,7 +64,11 @@ class Pump:
             if self.child is None:
                 self.launch()
             if provider is not None:
-                self.queue(self.child.stdin.fileno(), provider)
+                if self.handoff is None:
+                    self.queue(self.child.stdin.fileno(), provider)
+                else:
+                    self.queue(self.outgoing, {"method": "BrokerPrepared", "params": {
+                        "owned_handle": self.channel.handle, "request_id": value["id"]}})
             if response is not None:
                 self.queue(self.outgoing, response)
         else:
@@ -130,7 +151,8 @@ class Pump:
                 # A pipe close failure must not skip owned-child termination.
                 for pipe in (self.child.stdin, self.child.stdout):
                     try:
-                        pipe.close()
+                        if pipe is not None:
+                            pipe.close()
                     except OSError:
                         pass
                 try:

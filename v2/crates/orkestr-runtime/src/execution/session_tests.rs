@@ -6,10 +6,10 @@ use orkestr_v2_store_sqlite::{ExecutionConsumption, Store};
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
-async fn exercise(real_broker: bool) {
+async fn exercise(real_broker: bool, stop_mode: u8) {
     let root =
         std::path::PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").unwrap()).join(format!(
-            "owned-broker-composition-{}-{real_broker}",
+            "owned-broker-composition-{}-{real_broker}-{stop_mode}",
             std::process::id()
         ));
     std::fs::create_dir_all(&root).unwrap();
@@ -57,6 +57,21 @@ for line in sys.stdin:
             .replace("  assert r['method']=='CommitExecution'","  assert r['method']=='turn/start'")
             .replace(" emit({'id':r['id'],'result':{'owned_handle':handle,'frame':reply}})"," if reply is not None: emit(reply)")
             .replace("emit({'method':'BrokerOutput','params':{'owned_handle':handle,'frame':frame}})","emit(frame)");
+        let source = source.replace(" r=json.loads(line)", " r=json.loads(line)\n with open('native-methods.log','a') as log: log.write(r['method']+'\\n')");
+        let source = source.replace(
+            "for line in sys.stdin:",
+            r#"def frames():
+ buffer=b''
+ while True:
+  chunk=os.read(0,4096)
+  if not chunk: return
+  with open('native-bytes.log','ab') as audit: audit.write(chunk)
+  buffer+=chunk
+  while b'\n' in buffer:
+   line,buffer=buffer.split(b'\n',1)
+   yield line.decode()
+for line in frames():"#,
+        );
         std::fs::write(&provider, source).unwrap();
         std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
         let config = root.join("synthetic-private.json");
@@ -105,7 +120,12 @@ for line in sys.stdin:
         &root.join("tmp"),
     )
     .unwrap();
-    let mut setup = session::PreparingCodex::open(
+    let open = if real_broker {
+        session::PreparingCodex::open
+    } else {
+        session::PreparingCodex::open_legacy
+    };
+    let mut setup = open(
         bound.clone(),
         grant,
         &launcher,
@@ -124,13 +144,20 @@ for line in sys.stdin:
         .await
         .unwrap()
         .deep;
+    if real_broker {
+        std::fs::write(root.join("workspace/native-bytes.log"), b"").unwrap();
+    }
     store
         .admit(
             &owner,
             &conversation,
             &MessageInput {
                 client_message_id: "input:1".into(),
-                text: "durable synthetic broker input".into(),
+                text: if stop_mode == 2 {
+                    "x".repeat(30000)
+                } else {
+                    "durable synthetic broker input".into()
+                },
             },
         )
         .await
@@ -163,6 +190,52 @@ for line in sys.stdin:
     let (authority, mut pump) = ready.attach(bound.clone(), cap).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
+        if (stop_mode == 1 && pump.prepared_for_provider_write())
+            || (stop_mode == 2 && pump.provider_offset() > 0)
+        {
+            let prefix = pump.provider_offset();
+            if stop_mode == 2 {
+                assert!(prefix > 0 && prefix < 30000);
+                while std::fs::metadata(root.join("workspace/native-bytes.log"))
+                    .unwrap()
+                    .len()
+                    != prefix as u64
+                {
+                    assert!(Instant::now() < deadline);
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+            }
+            // Durable cancellation commits immediately before the next actual
+            // provider write. The broker has registered, but owns no writer.
+            let receipt = bound
+                .request_cancel(&owner, &result.provider.run.run_id, "before-native-write")
+                .await
+                .unwrap();
+            assert_eq!(receipt.state, RunState::CancelRequested);
+            assert!(pump.step(&bound).await.is_err());
+            assert!(
+                !std::fs::read_to_string(root.join("workspace/native-methods.log"))
+                    .unwrap()
+                    .lines()
+                    .any(|method| method == "turn/start")
+            );
+            if stop_mode == 2 {
+                let bytes = std::fs::read(root.join("workspace/native-bytes.log")).unwrap();
+                assert_eq!(bytes.len(), prefix);
+                assert!(!bytes.contains(&b'\n')); // incomplete frame, never replayed
+            }
+            assert!(matches!(
+                bound.consume_execution(&reservation).await,
+                Err(RuntimeStoreError::Fenced)
+            ));
+            authority.revoke().unwrap();
+            drop(pump);
+            drop(authority);
+            drop(bound);
+            drop(store);
+            std::fs::remove_dir_all(root).unwrap();
+            return;
+        }
         // The pump owns the attached child and flushes only under the issued fence.
         pump.flush().unwrap();
         pump.step(&bound).await.unwrap();
@@ -206,9 +279,19 @@ for line in sys.stdin:
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn same_owned_broker_setup_consume_attach_and_durable_progress() {
-    exercise(false).await;
+    exercise(false, 0).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn standalone_broker_and_ordinary_store_preserve_same_child_dispatch() {
-    exercise(true).await;
+    exercise(true, 0).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn committed_stop_after_broker_prepared_before_native_write_delivers_zero_turn_bytes() {
+    exercise(true, 1).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn committed_stop_after_actual_partial_prefix_quarantines_without_suffix_or_redispatch() {
+    exercise(true, 2).await;
 }

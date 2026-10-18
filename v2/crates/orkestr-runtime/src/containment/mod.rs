@@ -6,6 +6,7 @@ mod environment;
 mod framing;
 pub mod metadata;
 mod process;
+mod provider_fd;
 mod scope;
 mod sys;
 

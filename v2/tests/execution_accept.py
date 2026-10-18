@@ -32,6 +32,12 @@ def request(payload, changes=None, target=path):
         return reply.status, json.loads(reply.read()), reply.headers
 
 
+status_request = urllib.request.Request(origin + f"/api/v2/conversations/{conversation}/execution", headers={"Cookie": "orkestr_v2_session=" + token})
+with urllib.request.urlopen(status_request, timeout=5) as reply:
+    projection = json.load(reply)
+assert projection["revision"] == revision
+assert projection["acceptance_candidate"] == {"run_id": run, "completion_event_id": completion}
+
 for headers, status in [({"x-orkestr-csrf": None}, 403),
                         ({"Origin": "https://foreign.test"}, 403),
                         ({"Host": "foreign.test"}, 403),

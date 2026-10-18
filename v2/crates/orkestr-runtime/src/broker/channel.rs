@@ -9,7 +9,23 @@ pub(crate) struct BrokerChannel {
     pending: Option<(u64, Option<u64>)>,
     poisoned: bool,
     execution_claimed: bool,
+    preparation: Option<Preparation>,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Preparation {
+    Awaiting,
+    Prepared,
+    Writing,
+    Written,
+}
+
+/// Correlation proof only; no Clone, serialization, provider bytes or authority.
+/// Actual writes separately require the issuer capability and current fence.
+pub(crate) struct PreparedRequest {
+    outer: u64,
+    lineage: std::sync::Arc<()>,
+}
+
 impl OwnedMetadataHandle {
     pub(crate) fn into_channel(self) -> BrokerChannel {
         BrokerChannel {
@@ -19,10 +35,48 @@ impl OwnedMetadataHandle {
             pending: None,
             poisoned: false,
             execution_claimed: false,
+            preparation: None,
         }
     }
 }
 impl BrokerChannel {
+    /// Enable only for the actual-FD transport before submitting any setup.
+    /// There is no downgrade after this selection.
+    pub(crate) fn require_prepared(&mut self) -> Result<(), Blocker> {
+        if self.poisoned || self.pending.is_some() || self.next != 2 || self.preparation.is_some() {
+            self.poisoned = true;
+            return Err(Blocker::Protocol);
+        }
+        self.preparation = Some(Preparation::Awaiting);
+        Ok(())
+    }
+    pub(crate) fn take_prepared(&mut self) -> Result<PreparedRequest, Blocker> {
+        if self.poisoned || self.preparation != Some(Preparation::Prepared) {
+            return Err(Blocker::Protocol);
+        }
+        let outer = self.pending.ok_or(Blocker::Protocol)?.0;
+        let lineage = self.lineage.clone().ok_or(Blocker::Protocol)?;
+        self.preparation = Some(Preparation::Writing);
+        Ok(PreparedRequest { outer, lineage })
+    }
+    /// Consume only after all bounded, individually fenced suffix writes finish.
+    /// No provider response/acknowledgement is awaited inside a Core fence.
+    pub(crate) fn finish_provider_write(&mut self, proof: PreparedRequest) -> Result<(), Blocker> {
+        if self.poisoned
+            || self.preparation != Some(Preparation::Writing)
+            || self.pending.map(|p| p.0) != Some(proof.outer)
+            || !self
+                .lineage
+                .as_ref()
+                .is_some_and(|lineage| std::sync::Arc::ptr_eq(lineage, &proof.lineage))
+        {
+            self.poisoned = true;
+            return Err(Blocker::Protocol);
+        }
+        self.preparation = Some(Preparation::Written);
+        Ok(())
+    }
+
     /// Only setup frames produced by the trusted protocol state machine.
     /// Containment separately validates metadata authority before submission.
     pub(crate) fn metadata(&mut self, frame: Value) -> Result<BrokerMetadataRequest, Blocker> {
@@ -64,6 +118,9 @@ impl BrokerChannel {
         let outer = self.next;
         self.next += 1;
         self.pending = Some((outer, Some(inner_id)));
+        if self.preparation.is_some() {
+            self.preparation = Some(Preparation::Awaiting);
+        }
         Ok(BrokerExecutionEnvelope {
             lineage,
             handle: self.handle.clone(),
@@ -86,6 +143,9 @@ impl BrokerChannel {
         }
         self.next += 1;
         self.pending = Some((id, inner));
+        if self.preparation.is_some() {
+            self.preparation = Some(Preparation::Awaiting);
+        }
         Ok(bytes)
     }
     /// Unwrap only the current owned pipe's correlated reply/notification.
@@ -107,6 +167,28 @@ impl BrokerChannel {
         let value: Value = serde_json::from_slice(bytes).map_err(|_| Blocker::Protocol)?;
         let object = value.as_object().ok_or(Blocker::Protocol)?;
         if object.len() != 2 {
+            return Err(Blocker::Protocol);
+        }
+        if value.get("method").and_then(Value::as_str) == Some("BrokerPrepared") {
+            let params = value
+                .get("params")
+                .and_then(Value::as_object)
+                .ok_or(Blocker::Protocol)?;
+            if self.preparation != Some(Preparation::Awaiting)
+                || params.len() != 2
+                || params.get("owned_handle").and_then(Value::as_str) != Some(&self.handle)
+                || params.get("request_id").and_then(Value::as_u64) != self.pending.map(|p| p.0)
+                || self.pending.is_none()
+            {
+                return Err(Blocker::Protocol);
+            }
+            self.preparation = Some(Preparation::Prepared);
+            return Ok(None);
+        }
+        if self.pending.is_some()
+            && self.preparation.is_some()
+            && self.preparation != Some(Preparation::Written)
+        {
             return Err(Blocker::Protocol);
         }
         if value.get("method").and_then(Value::as_str) == Some("BrokerOutput") {
@@ -247,5 +329,63 @@ mod tests {
         assert!(c.metadata(json!({"id":4,"method":"turn/start"})).is_err());
         let mut c = channel();
         assert!(c.receive(json!({"method":"BrokerOutput","params":{"owned_handle":"foreign","frame":{"method":"turn/started"}}}).to_string().as_bytes()).is_err());
+    }
+    #[test]
+    fn actual_fd_preparation_is_correlated_once_and_write_precedes_reply() {
+        let mut c = channel();
+        c.require_prepared().unwrap();
+        c.metadata(json!({"method":"initialized"})).unwrap();
+        assert!(c.take_prepared().is_err());
+        let prepared = json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":2}});
+        assert_eq!(c.receive(prepared.to_string().as_bytes()).unwrap(), None);
+        let proof = c.take_prepared().unwrap();
+        assert!(c.take_prepared().is_err());
+        c.finish_provider_write(proof).unwrap();
+        assert_eq!(
+            c.receive(
+                json!({"id":2,"result":{"owned_handle":"synthetic_owned","frame":null}})
+                    .to_string()
+                    .as_bytes()
+            )
+            .unwrap(),
+            None
+        );
+        c.metadata(json!({"id":3,"method":"account/read","params":{"refreshToken":false}}))
+            .unwrap();
+        assert!(c.take_prepared().is_err());
+    }
+    #[test]
+    fn actual_fd_foreign_duplicate_or_early_completion_poisons() {
+        for bad in [
+            json!({"method":"BrokerPrepared","params":{"owned_handle":"foreign","request_id":2}}),
+            json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":3}}),
+            json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":2,"extra":true}}),
+            json!({"id":2,"result":{"owned_handle":"synthetic_owned","frame":null}}),
+        ] {
+            let mut c = channel();
+            c.require_prepared().unwrap();
+            c.metadata(json!({"method":"initialized"})).unwrap();
+            assert!(c.receive(bad.to_string().as_bytes()).is_err());
+            assert!(c.take_prepared().is_err());
+        }
+        let mut c = channel();
+        c.require_prepared().unwrap();
+        c.metadata(json!({"method":"initialized"})).unwrap();
+        let prepared = json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":2}}).to_string();
+        c.receive(prepared.as_bytes()).unwrap();
+        assert!(c.receive(prepared.as_bytes()).is_err());
+    }
+    #[test]
+    fn actual_fd_write_proof_cannot_cross_child_lineage() {
+        let mut a = channel();
+        let mut b = channel();
+        for c in [&mut a, &mut b] {
+            c.require_prepared().unwrap();
+            c.metadata(json!({"method":"initialized"})).unwrap();
+            c.receive(json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":2}}).to_string().as_bytes()).unwrap();
+        }
+        let foreign = a.take_prepared().unwrap();
+        let _own = b.take_prepared().unwrap();
+        assert!(b.finish_provider_write(foreign).is_err());
     }
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Dedicated trusted connector entry; no listener or client config flags."""
 import signal
+import socket
 import sys
 from pathlib import Path
 from configuration import Configuration
@@ -21,7 +22,13 @@ def main(configuration_path=None):
     signal.signal(signal.SIGINT, stop)
     try:
         config = Configuration.load(path)
-        Pump(config, Channel(config.workspace)).run()
+        # Launcher exclusively passes a private connected Unix socket at fd 3.
+        # No path/listener, environment selector or legacy write fallback.
+        with socket.socket(fileno=3) as handoff:
+            if handoff.family != socket.AF_UNIX or handoff.type != socket.SOCK_STREAM:
+                raise Refused("invalid private handoff")
+            handoff.getpeername()
+            Pump(config, Channel(config.workspace), handoff=handoff).run()
         return 0
     except Exception:
         # Never print provider output, private paths, account data or tokens.

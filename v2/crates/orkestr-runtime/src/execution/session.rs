@@ -47,6 +47,8 @@ pub struct PreparingCodex {
     rpc: CodexRpc,
     phase: Phase,
     failed: bool,
+    actual_fd: bool,
+    writing: Option<super::provider_write::PendingWrite>,
 }
 impl PreparingCodex {
     pub fn open(
@@ -56,18 +58,38 @@ impl PreparingCodex {
         workspace: &Path,
         directories: ChildDirectories,
     ) -> Result<Self, SetupFailure> {
+        Self::open_mode(store, grant, launcher, workspace, directories, true)
+    }
+    #[cfg(test)]
+    pub(super) fn open_legacy(
+        store: Store,
+        grant: BoundSessionMetadata,
+        launcher: &Path,
+        workspace: &Path,
+        directories: ChildDirectories,
+    ) -> Result<Self, SetupFailure> {
+        Self::open_mode(store, grant, launcher, workspace, directories, false)
+    }
+    fn open_mode(
+        store: Store,
+        grant: BoundSessionMetadata,
+        launcher: &Path,
+        workspace: &Path,
+        directories: ChildDirectories,
+        actual_fd: bool,
+    ) -> Result<Self, SetupFailure> {
         if grant.provider() != ProviderKind::Codex
             || workspace.canonicalize().ok().as_deref() != Some(workspace)
         {
             return Err(Blocker::Protocol.into());
         }
         let binding = grant.binding().clone();
-        let (authority, child) = TrustedLauncher::configured(launcher)?.open_metadata(
-            store,
-            grant,
-            directories,
-            TransportBounds::default(),
-        )?;
+        let launcher = TrustedLauncher::configured(launcher)?;
+        let (authority, child) = if actual_fd {
+            launcher.open_metadata_fd(store, grant, directories, TransportBounds::default())?
+        } else {
+            launcher.open_metadata(store, grant, directories, TransportBounds::default())?
+        };
         let open = child.open_broker_metadata()?;
         Ok(Self {
             authority,
@@ -79,9 +101,14 @@ impl PreparingCodex {
             rpc: CodexRpc::default(),
             phase: Phase::Open,
             failed: false,
+            actual_fd,
+            writing: None,
         })
     }
     fn queue(&mut self, frame: serde_json::Value) -> Result<(), SetupFailure> {
+        if self.actual_fd {
+            self.writing = Some(super::provider_write::PendingWrite::new(&frame)?);
+        }
         let request = self
             .channel
             .as_mut()
@@ -111,6 +138,24 @@ impl PreparingCodex {
         }
         let child = self.child.as_ref().ok_or(Blocker::Protocol)?;
         child.flush_stdin()?;
+        if self.actual_fd {
+            if !child.receive_provider_writer()? {
+                return Ok(false);
+            }
+            if let Some(writing) = self.writing.as_mut() {
+                if writing.prepared() {
+                    let done = writing
+                        .write(self.channel.as_mut().ok_or(Blocker::Protocol)?, |bytes| {
+                            child.write_provider_metadata(bytes)
+                        })?;
+                    if done {
+                        self.writing = None;
+                    } else {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
         let bytes = match child.poll_stdout()? {
             Output::Pending => return Ok(false),
             Output::Frame(bytes) => bytes,
@@ -123,7 +168,11 @@ impl PreparingCodex {
                 .ok_or(Blocker::Protocol)?
                 .receive(&bytes)?;
             self.open = None;
-            self.channel = Some(handle.into_channel());
+            let mut channel = handle.into_channel();
+            if self.actual_fd {
+                channel.require_prepared()?;
+            }
+            self.channel = Some(channel);
             let initialize = self.rpc.initialize()?;
             self.queue(initialize)?;
             self.phase = Phase::Initialize;
@@ -134,6 +183,17 @@ impl PreparingCodex {
             .as_mut()
             .ok_or(Blocker::Protocol)?
             .receive(&bytes)?;
+        if self.actual_fd
+            && serde_json::from_slice::<serde_json::Value>(&bytes)
+                .ok()
+                .is_some_and(|v| v["method"] == "BrokerPrepared")
+        {
+            self.writing
+                .as_mut()
+                .ok_or(Blocker::Protocol)?
+                .prepare(self.channel.as_mut().ok_or(Blocker::Protocol)?)?;
+            return Ok(false);
+        }
         match self.phase {
             Phase::Initialize => {
                 let frame = response.ok_or(Blocker::Protocol)?;
@@ -198,6 +258,7 @@ impl PreparingCodex {
             child,
             channel: self.channel.take().ok_or(Blocker::Protocol)?,
             rpc: self.rpc,
+            actual_fd: self.actual_fd,
         })
     }
 }
@@ -207,6 +268,7 @@ pub struct ReadyCodex {
     child: ReadyMetadataChild,
     channel: BrokerChannel,
     rpc: CodexRpc,
+    actual_fd: bool,
 }
 
 impl ReadyCodex {
@@ -240,6 +302,15 @@ impl ReadyCodex {
             .map_err(SubmissionFailure::Protocol)?;
         let stream = crate::codex_rpc::TurnStream::new(native, request_id)
             .map_err(SubmissionFailure::Protocol)?;
+        let raw = super::turn_frame(&capability, request_id);
+        let writing = if self.actual_fd {
+            Some(
+                super::provider_write::PendingWrite::new(&raw)
+                    .map_err(SubmissionFailure::Protocol)?,
+            )
+        } else {
+            None
+        };
         let envelope = self
             .channel
             .reserve_execution(request_id)
@@ -263,7 +334,9 @@ impl ReadyCodex {
             .map_err(|failure| SubmissionFailure::Transport(failure.cause))?;
         Ok((
             authority,
-            super::pump::CodexPump::new(child, scope, provider, stream).with_broker(self.channel),
+            super::pump::CodexPump::new(child, scope, provider, stream)
+                .with_broker(self.channel)
+                .with_provider_write(writing),
         ))
     }
 }

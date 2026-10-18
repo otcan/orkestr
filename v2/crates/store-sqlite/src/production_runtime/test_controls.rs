@@ -16,6 +16,7 @@ pub enum ProductionCheckpoint {
     CancelAfterCommit,
     StoppedBeforeCommit,
     StoppedAfterCommit,
+    StopAfterAuthentication,
     AcceptanceAfterAuthentication,
     AcceptanceBeforeCommit,
     AcceptanceAfterCommit,
@@ -36,6 +37,7 @@ impl ProductionCheckpoint {
             Self::CancelAfterCommit => "cancel-after-commit",
             Self::StoppedBeforeCommit => "stopped-before-commit",
             Self::StoppedAfterCommit => "stopped-after-commit",
+            Self::StopAfterAuthentication => "stop-after-authentication",
             Self::AcceptanceAfterAuthentication => "acceptance-after-authentication",
             Self::AcceptanceBeforeCommit => "acceptance-before-commit",
             Self::AcceptanceAfterCommit => "acceptance-after-commit",
@@ -124,6 +126,7 @@ impl Store {
         if matches!(
             armed.stage,
             ProductionCheckpoint::AcceptanceAfterAuthentication
+                | ProductionCheckpoint::StopAfterAuthentication
         ) {
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
             while tokio::time::Instant::now() < deadline {
