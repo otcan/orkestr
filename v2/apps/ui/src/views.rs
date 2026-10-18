@@ -55,11 +55,10 @@ pub fn Auth(onlogin: EventHandler<SessionResponse>) -> Element {
 }
 
 #[component]
-pub fn Projects(token: String, mut projects: Signal<Vec<Project>>, onopen: EventHandler<String>, onexpired: EventHandler<()>) -> Element {
-    let mut name = use_signal(String::new);
+pub fn Projects(token: String, mut projects: Signal<Vec<Project>>, mut pending: Signal<Option<ProjectInput>>, onopen: EventHandler<String>, onexpired: EventHandler<()>) -> Element {
+    let mut name = use_signal(move || pending().map(|p| p.name).unwrap_or_default());
     let mut status = use_signal(|| "Loading projects…".to_string());
     let mut busy = use_signal(|| false);
-    let mut pending = use_signal(|| None::<ProjectInput>);
     let load_token = token.clone();
     use_future(move || {
         let token = load_token.clone();
@@ -100,7 +99,11 @@ pub fn Projects(token: String, mut projects: Signal<Vec<Project>>, onopen: Event
                             if !projects.read().iter().any(|p| p.project_id == project.project_id) { projects.write().push(project); }
                             name.set(String::new()); status.set("Project created; resources are not yet provisioned.".into());
                         }
-                        Err(error) => { if error.status == 401 { onexpired.call(()); } status.set(error.message); }
+                        Err(error) => {
+                            if error.status == 401 { onexpired.call(()); }
+                            if matches!(error.status, 400 | 403 | 404 | 409 | 422) { pending.set(None); }
+                            status.set(error.message);
+                        }
                     }
                     busy.set(false);
                 });
@@ -185,7 +188,13 @@ pub fn Conversation(id: String, token: String, mut drafts: Signal<BTreeMap<Strin
                             drafts.write().entry(id).or_default().accepted();
                             status.set(format!("Input durably accepted at sequence {}. No model result is implied.", receipt.sequence));
                         }
-                        Err(error) => { if error.status == 401 { onexpired.call(()); } status.set(error.message); }
+                        Err(error) => {
+                            if error.status == 401 { onexpired.call(()); }
+                            if matches!(error.status, 400 | 403 | 404 | 409 | 422) {
+                                drafts.write().entry(id).or_default().pending = None;
+                            }
+                            status.set(error.message);
+                        }
                     }
                     sending.set(false);
                 });

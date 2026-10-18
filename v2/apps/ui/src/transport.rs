@@ -51,7 +51,10 @@ pub async fn snapshot(id: &str, token: &str) -> Result<Projection, Failure> {
     let mut projection = Projection::default();
     let mut after = 0;
     let mut initial_watermark = None;
+    let mut pages = 0;
     loop {
+        pages += 1;
+        if pages > 1000 { return Err("History changed too quickly or exceeds the current scan limit; retry snapshot".to_string().into()); }
         let page: ConversationSnapshot = request("GET", &format!("/api/v2/conversations/{id}?after={after}&limit=100"), Value::Null, token, "").await?;
         if page.conversation_id.to_string() != id { return Err("Snapshot scope mismatch".to_string().into()); }
         let watermark = *initial_watermark.get_or_insert(page.last_sequence);

@@ -1,7 +1,7 @@
 mod transport;
 mod views;
 use dioxus::prelude::*;
-use orkestr_v2_contracts::Project;
+use orkestr_v2_contracts::{Project, ProjectInput};
 use orkestr_v2_ui::Draft;
 use std::collections::BTreeMap;
 
@@ -14,6 +14,7 @@ fn App() -> Element {
     let mut current = use_signal(String::new);
     let mut projects = use_signal(Vec::<Project>::new);
     let drafts = use_signal(BTreeMap::<String, Draft>::new);
+    let pending_project = use_signal(|| None::<ProjectInput>);
     let mut tab = use_signal(|| "Assistant".to_string());
     let mut notice = use_signal(|| "Sign in to your local server.".to_string());
     let mut refresh = use_signal(|| 0_u64);
@@ -48,7 +49,7 @@ fn App() -> Element {
                     }, "Forget local sign-in" }
                 }
                 if tab() == "Projects" {
-                    views::Projects { token: token(), projects, onexpired: expired,
+                    views::Projects { token: token(), projects, pending: pending_project, onexpired: expired,
                         onopen: move |id: String| { current.set(id); tab.set("Assistant".into()); }
                     }
                 } else if tab() == "Assistant" {
