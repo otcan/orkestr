@@ -99,7 +99,20 @@ impl Store {
             ));
         }
         if let Some((conversation, expected, control)) = guard {
-            let actual: i64 = if let Some(control) = control {
+            let projection: i64 = sqlx::query_scalar(
+                "SELECT revision FROM execution_revisions WHERE conversation_id=?",
+            )
+            .bind(conversation.to_string())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+            // A sampled projection may lag streaming progress, but cannot claim
+            // a future cut. Otherwise the resulting receipt would precede its
+            // own requested revision even with a valid exact-run control CAS.
+            if expected < 0 || expected > projection {
+                return Err(RuntimeStoreError::Conflict);
+            }
+            if let Some(control) = control {
                 let current: i64 = sqlx::query_scalar(
                     "SELECT revision FROM production_control_revisions WHERE run_id=?",
                 )
@@ -110,20 +123,11 @@ impl Store {
                 if control <= 0 || current != control {
                     return Err(RuntimeStoreError::Conflict);
                 }
-                expected
-            } else {
-                sqlx::query_scalar(
-                    "SELECT revision FROM execution_revisions WHERE conversation_id=?",
-                )
-                .bind(conversation.to_string())
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(db)?
-            };
-            if expected < 0 || actual != expected {
+            } else if projection != expected {
                 return Err(RuntimeStoreError::Conflict);
             }
         }
+
         context.validate(&mut tx).await?;
         if row.get::<String, _>("incarnation_id") != context.incarnation.clone()
             || !matches!(row.get::<&str, _>("state"), "starting" | "running")

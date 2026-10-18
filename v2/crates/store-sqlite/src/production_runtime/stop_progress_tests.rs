@@ -96,6 +96,18 @@ async fn streaming_progress_preserves_exact_run_control_cas_and_original_replay(
         Err(RuntimeStoreError::Conflict)
     ));
     request.expected_control_revision = status.control_revision;
+    let before_future = super::tests::snapshot(&f.store).await;
+    for future in [after.revision + 1, i64::MAX] {
+        request.expected_revision = future;
+        assert!(matches!(
+            f.handle
+                .stop_execution_authenticated(&f.token, &f.conversation, &request)
+                .await,
+            Err(RuntimeStoreError::Conflict)
+        ));
+        assert_eq!(before_future, super::tests::snapshot(&f.store).await);
+    }
+    request.expected_revision = status.revision;
     let receipt = f
         .handle
         .stop_execution_authenticated(&f.token, &f.conversation, &request)
@@ -107,6 +119,20 @@ async fn streaming_progress_preserves_exact_run_control_cas_and_original_replay(
         .await
         .unwrap();
     assert_eq!(receipt, replay);
+    assert!(receipt.is_valid());
+    let before_changed_replay = super::tests::snapshot(&f.store).await;
+    request.expected_revision = i64::MAX;
+    assert!(matches!(
+        f.handle
+            .stop_execution_authenticated(&f.token, &f.conversation, &request)
+            .await,
+        Err(RuntimeStoreError::Conflict)
+    ));
+    assert_eq!(
+        before_changed_replay,
+        super::tests::snapshot(&f.store).await
+    );
+    request.expected_revision = status.revision;
     request.expected_control_revision = after.control_revision.map(|r| r + 1);
     assert!(matches!(
         f.handle
