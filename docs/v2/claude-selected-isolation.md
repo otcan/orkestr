@@ -32,7 +32,7 @@ be qualified inside this profile. Control initialize ACK is process readiness
 only; the separate Core requested-native/verified-native contract remains open.
 The selected-account callback and executable wrapper remain root-private and
 must be independently reviewed/staged; no actual selected-account launch was run
-by this lane. Inventory includes claude_selected.py and claude_state.py (twelve files total).
+by this lane. Inventory includes claude_selected.py and claude_state.py (thirteen files total).
 
 Synthetic tests use only a fake token. An actual namespace process verifies its
 single selected environment, absence of unrelated inherited secrets/API keys,
@@ -43,7 +43,7 @@ and concurrent-replacement assumptions remain those of the authenticated profile
 
 ## Immutable compatibility probe handoff
 
-Stage exactly the twelve files and SHA-256 values in
+Stage exactly the thirteen files and SHA-256 values in
 `v2/provider-broker/authenticated-package.json`, retaining the `isolation/`
 package layout. The entry is `isolation.claude_selected.SelectedClaudeProfile`;
 there is no standalone account-selection CLI. The trusted private launcher
@@ -98,3 +98,40 @@ imports the shared class, prepares resume and proves the spec cannot be reused.
 Fresh `exec_native` refuses any existing workspace transcript before native
 launch and consumes the selected-account capability on that failed attempt.
 Existing history requires the explicit private resume entry.
+
+
+## Selected-account revalidation and refresh contract
+
+`isolation.selected_subscription.SelectedSubscription(profile, identity, resolver)`
+is an opt-in trusted launcher boundary. `identity` pins exactly owner_id,
+account_id and credential_revision from server-private account selection. The
+resolver rereads that same selected canonical account and returns exactly those
+fields plus provider=`claude-code`, auth_mode=`subscription`,
+authentication_method=`subscription_token`, state=`ready`, and token. Its result
+never crosses a public Runtime or browser DTO. `acquire()` returns the existing
+profile-bound one-use `SelectedAccount`; its transfer rereads the resolver and
+requires unchanged identity, revision, ready state and token before creating the
+sealed memfd. Missing, revoked, changed, foreign or failed resolution refuses
+with a fixed error. There is no inherited environment or alternate-account path.
+
+Source inspection of `packages/core/src/llm-account-profiles.js` identifies the
+existing managed path: `resolveLlmAccountProfile` selects owner/profile/provider
+and requires ready; `claudeSubscriptionTokenForRuntime` rereads the selected
+profile, rejects revocation and revision changes, and returns its configured
+subscription token. `setClaudeSubscriptionToken` is explicit owner-scoped
+rotation: it increments revision and changes state to login_required pending
+verification. `startClaudeCodeLogin` refuses the subscription_token method with
+rotation_required. This source path contains no automatic refresh-token exchange.
+Do not present reacquisition of the unchanged token as OAuth refresh.
+
+The private root adapter must perform the equivalent exact ready-state and
+revision checks, including on the final reread. It must not forward the broader
+V1 execution environment, credentialRoot, diagnostics account payload or settings.
+Native auth/expiry failure is an unavailable selected account: quarantine the
+owned process, retain delivery uncertainty, and never retry its consumed input.
+An independently authorized rotation/reverification may support a later newly
+admitted turn using a new server-selected revision; it cannot restore the old
+capability. Live refresh, mid-turn account revocation monitoring and ordinary
+server launcher integration remain separate qualification gates. Rechecking
+before memfd transfer does not eliminate the concurrent post-check revocation
+window or replace Core's actual-write and cancellation fences.

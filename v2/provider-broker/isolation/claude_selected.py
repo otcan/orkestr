@@ -9,16 +9,16 @@ from .claude_state import state_root, projects
 
 class SelectedAccount:
     """Single-use callback result, bound to one private profile object."""
-    __slots__=("_profile","_token")
+    __slots__=("_profile","_token","_check")
 
-    def __init__(self, profile, callback):
+    def __init__(self, profile, callback, *, _check=None):
         selected=callback()
         if not isinstance(selected,dict) or set(selected)!={"CLAUDE_CODE_OAUTH_TOKEN"}:
             raise ValueError("selected subscription required")
         token=selected["CLAUDE_CODE_OAUTH_TOKEN"]
         if not isinstance(token,str) or not 0<len(token.encode())<=16384 or "\0" in token or "\n" in token:
             raise ValueError("invalid selected subscription")
-        self._profile,self._token=profile,token
+        self._profile,self._token,self._check=profile,token,_check
 
     def __reduce__(self):raise TypeError("private account capability")
     def __copy__(self):raise TypeError("private account capability")
@@ -26,8 +26,10 @@ class SelectedAccount:
 
     def _take(self, profile):
         token,self._token=self._token,None
+        check,self._check=self._check,None
         if profile is not self._profile or token is None:
             raise ValueError("selected account already consumed or foreign")
+        if check is not None:check()
         fd=os.memfd_create("selected-account",os.MFD_CLOEXEC|os.MFD_ALLOW_SEALING)
         try:
             os.write(fd,token.encode());os.lseek(fd,0,os.SEEK_SET)

@@ -25,6 +25,7 @@ import sys
 sys.path.insert(0,sys.argv[1])
 from unittest.mock import patch
 from isolation.claude_selected import SelectedClaudeProfile
+from isolation.selected_subscription import SelectedSubscription
 from claude_resume import ResumeSpec, _SEAL
 import claude_bootstrap
 assert claude_bootstrap.ResumeSpec is ResumeSpec
