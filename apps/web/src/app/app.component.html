@@ -399,10 +399,7 @@
     } @else if (activePanel === "files") {
       <ork-files-page></ork-files-page>
     } @else if (activePanel === "instanceSettings") {
-      @if (isAdminMode()) {
-        <ork-system-resources></ork-system-resources>
-      }
-      <ork-instance-settings-page></ork-instance-settings-page>
+      <ork-instance-settings-page [showSystemResources]="isAdminMode()"></ork-instance-settings-page>
     } @else if (activePanel === "instanceTimers") {
       <ork-user-timers-page></ork-user-timers-page>
     } @else if (activePanel === "instanceDesktops") {

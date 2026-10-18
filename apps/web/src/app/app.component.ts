@@ -11,7 +11,6 @@ import { AttachmentPreviewService } from "./attachment-preview.service";
 import { FirstThreadWizardComponent } from "./first-thread-wizard.component";
 import { FilesPageComponent } from "./files-page.component";
 import { InstanceSettingsPageComponent } from "./instance-settings-page.component";
-import { SystemResourcesComponent } from "./system-resources.component";
 import { refreshAppExtras } from "./app-refresh-extras";
 import { OnboardingPageComponent } from "./onboarding-page.component";
 import { OwnerLoginPageComponent } from "./owner-login-page.component";
@@ -93,7 +92,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, SystemResourcesComponent, OnboardingPageComponent, OwnerLoginPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, VaultPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent, WhatsAppSelfChatCardComponent],
+  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, OwnerLoginPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, VaultPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent, WhatsAppSelfChatCardComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
