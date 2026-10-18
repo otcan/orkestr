@@ -79,7 +79,7 @@ test("project resources and Integration Hub follow frozen read-only contract dis
     read("OrkestrApp/ProjectsListView.swift"),
     read("OrkestrApp/HistoryMemorySettingsView.swift"),
   ]);
-  const models = await read("OrkestrMobileCore/Sources/OrkestrMobileCore/PersonalAgentResourceModels.swift");
+  const models = await read("OrkestrMobileCore/Sources/OrkestrMobileCore/PersonalAgentModels.swift");
   const capability = await read("OrkestrMobileCore/Sources/OrkestrMobileCore/PersonalAgentModels.swift");
   assert.match(capability, /projectResources: Bool\?/);
   assert.match(capability, /integrationHub: Bool\?/);
