@@ -112,6 +112,17 @@ pub(crate) fn unauthorized() -> Error {
         "Authentication required",
     )
 }
+/// Machine credentials and Bearer authority cannot be used by Origin-bearing clients.
+pub(crate) fn machine_request(headers: &HeaderMap) -> Result<(), Error> {
+    if headers.contains_key(header::ORIGIN) {
+        return Err(Error(
+            StatusCode::FORBIDDEN,
+            "machine_origin_rejected",
+            "Machine authentication requires no Origin header",
+        ));
+    }
+    Ok(())
+}
 pub(crate) async fn owner(state: &AppState, headers: &HeaderMap) -> Result<OwnerId, Error> {
     if headers.contains_key(header::COOKIE) {
         if headers.contains_key(header::AUTHORIZATION) {
@@ -119,6 +130,7 @@ pub(crate) async fn owner(state: &AppState, headers: &HeaderMap) -> Result<Owner
         }
         return browser::owner(state, headers).await;
     }
+    machine_request(headers)?;
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())

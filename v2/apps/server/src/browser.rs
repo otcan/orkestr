@@ -65,6 +65,9 @@ fn same_origin(state: &AppState, headers: &HeaderMap) -> Result<(), Error> {
     Ok(())
 }
 pub(crate) async fn owner(state: &AppState, headers: &HeaderMap) -> Result<OwnerId, Error> {
+    if single(headers, "host") != Some(state.authority.as_str()) {
+        return Err(forbidden("host_rejected"));
+    }
     if headers.contains_key(header::AUTHORIZATION) {
         return Err(unauthorized());
     }
@@ -141,7 +144,10 @@ pub async fn session(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, Error> {
     let owner = owner(&state, &headers).await?;
-    body(&state, &owner, &token(&headers)?).await
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        body(&state, &owner, &token(&headers)?).await?,
+    ))
 }
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, Error> {
     owner(&state, &headers).await?;
