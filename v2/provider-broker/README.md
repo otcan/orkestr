@@ -138,3 +138,18 @@ possibly written prefix. Stop remains uncertain until interrupt acknowledgement
 or owned-process cleanup. Synthetic server tests prove handoff, parent-only
 writes and stop-before-write zero delivery; real Store fence race coverage and
 ordinary HTTP composition are separate Runtime gates, not claimed here.
+
+### Separate Claude launcher checkpoint (not registered)
+
+`claude_connector.py` defines a server-private canonical account reference and a
+fresh server-generated UUID per stream-JSON process. Its fixed specification
+requests no tools, no project settings or MCP servers, no prompt permission
+bypass, and no inherited API-key environment. It never resumes an existing
+session and is not selected by Codex JSON. The generic sole-writer transfer can
+carry this process's stdin, but there is no registered Claude broker channel yet.
+Installed Claude CLI option compatibility, subscription entitlement validation,
+strict UUID/readiness/output correlation, persistent follow-up and issued fenced
+Stop remain unexecuted/unimplemented integration gates. Synthetic launcher tests
+validate the specification only; they do not prove Claude execution. Root must
+review immutable native executable/configuration and package inventory before
+activation. Existing six-file Codex package imports are unchanged.
