@@ -72,3 +72,13 @@ interactive driver test is ignored by default and is exercised as a child by the
 protocol test. This does not execute the JavaScript factory or any mounted browser
 scenario. Rebuild and qualify the fixture executable against the final registered
 server source before browser use.
+
+Fixture authority uses a real 60-second Store claim per run. No clock override or
+heartbeat is implemented. The harness must record claim/run timing and keep all
+provider append operations within that deadline; an expired operation is a failed
+scenario, never renewed implicitly. Longer scenarios require an explicitly
+reviewed ordinary Store heartbeat before execution.
+
+The JavaScript process owner cleans up failed startup and protocol operations with
+TERM, bounded KILL escalation and awaited process/stdio closure. Run its negative
+regressions with `node --test v2/acceptance/browser/fixture-driver.test.mjs`.
