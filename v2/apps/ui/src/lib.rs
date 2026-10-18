@@ -221,4 +221,5 @@ pub fn is_replay_item(item: &StreamItem) -> bool {
 pub mod held_inputs;
 
 pub mod timer_labels;
+pub mod timers;
 pub mod worker_tasks;

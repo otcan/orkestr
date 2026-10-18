@@ -35,3 +35,16 @@ fn enabled_schedule_is_not_armed_after_restart_and_never_claims_execution() {
         assert!(controller_notice(state, true).contains("Already admitted work"));
     }
 }
+
+#[test]
+fn utc_schedule_labels_do_not_use_browser_local_time() {
+    use orkestr_v2_ui::timer_labels::{schedule_label, utc_time};
+    use orkestr_v2_ui::timers::Schedule;
+    assert_eq!(utc_time(1000), "1970-01-01 00:00:01 UTC");
+    assert_eq!(utc_time(1709164800000), "2024-02-29 00:00:00 UTC");
+    assert!(schedule_label(&Schedule::UtcClock {
+        weekly: true,
+        minute_of_day: 90
+    })
+    .contains("01:30 UTC"));
+}
