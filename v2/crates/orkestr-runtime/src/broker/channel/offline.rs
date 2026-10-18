@@ -142,6 +142,33 @@ mod tests {
         assert!(c.tool_result(json!({"id":"request","result":{}})).is_err());
         assert!(feed(&mut c, call("native")).is_err());
     }
+    fn cancelled_tool() -> BrokerChannel {
+        let mut c = active();
+        feed(&mut c, call("native")).unwrap();
+        c.cancellation(json!({"id":99,"method":"turn/interrupt","params":{"threadId":"native","turnId":"turn"}})).unwrap();
+        feed(&mut c,json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":3}})).unwrap();
+        let proof = c.take_prepared().unwrap();
+        c.finish_provider_write(proof).unwrap();
+        feed(&mut c,json!({"id":3,"result":{"owned_handle":"synthetic_owned","frame":{"id":99,"result":{}}}})).unwrap();
+        c
+    }
+    fn terminal(turn: &str, status: &str) -> Value {
+        json!({"method":"BrokerOutput","params":{"owned_handle":"synthetic_owned","frame":{"method":"turn/completed","params":{"turn":{"id":turn,"status":status}}}}})
+    }
+    #[test]
+    fn retired_tool_accepts_only_exact_interrupted_terminal_after_cancel_write_and_ack() {
+        let mut c = cancelled_tool();
+        assert!(feed(&mut c, terminal("turn", "interrupted"))
+            .unwrap()
+            .is_some());
+        assert!(c.pending_offline_python().is_none());
+        assert!(c.tool_result(json!({"id":"request","result":{}})).is_err());
+        for status in ["completed", "failed"] {
+            assert!(feed(&mut cancelled_tool(), terminal("turn", status)).is_err());
+        }
+        assert!(feed(&mut cancelled_tool(), terminal("foreign", "interrupted")).is_err());
+        assert!(feed(&mut cancelled_tool(), call("native")).is_err());
+    }
     #[test]
     fn foreign_native_duplicate_and_pending_terminal_refused() {
         let mut c = active();
