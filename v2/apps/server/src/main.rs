@@ -54,14 +54,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
     }
     let execution = execution.map(ConfiguredExecution::start);
-    let served = axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await;
+    let (shutdown, mut requested) = tokio::sync::watch::channel(false);
+    let mut serving = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = requested.changed().await;
+            })
+            .await
+    });
+    let completed = tokio::select! {
+        result = &mut serving => Some(result),
+        _ = tokio::signal::ctrl_c() => None,
+    };
+    // An open SSE connection must not delay the owned execution fence/cleanup.
+    // Stop accepting HTTP and stop the supervisor before waiting for HTTP drain.
+    let _ = shutdown.send(true);
     if let Some(execution) = execution {
         execution.shutdown().await;
     }
-    served?;
+    if let Some(result) = completed {
+        result??;
+    } else {
+        match tokio::time::timeout(std::time::Duration::from_secs(2), &mut serving).await {
+            Ok(result) => result??,
+            Err(_) => {
+                serving.abort();
+                let _ = serving.await;
+            }
+        }
+    }
     Ok(())
 }

@@ -86,6 +86,8 @@ commits schema-9 acceptance. Logical payload removal never rewrites the journal.
 Setup is bounded to 15 seconds; an admitted run to 45 seconds. Timeout/shutdown
 requests a durable fence before local cleanup. Local child exit is not proof of
 provider Stop. Unexpected loss stays uncertain and requires reconciliation.
+Shutdown signals the owned supervisor before waiting for HTTP connections, and
+HTTP drain is bounded to two seconds; an open SSE stream cannot retain the child.
 The channel intentionally processes one turn; persistent follow-up, actual Stop,
 OS/credential isolation and real-provider acceptance remain separate work.
 
@@ -102,7 +104,9 @@ removal. It separately verifies default-disabled startup, queued-input refusal,
 revoked startup authentication and ongoing revocation before dispatch. A fifth
 case revokes the machine session during an active synthetic turn with a queued
 follow-up: the owned native process exits, the follow-up is retained, and no
-provider completion or Stopped receipt is fabricated. It uses
+provider completion or Stopped receipt is fabricated. A sixth case keeps a valid
+SSE connection open during shutdown, verifies bounded clean server exit and child
+cleanup, and checks the durable cancellation intent without a Stopped receipt. It uses
 an environment allowlist, the product broker and an explicitly synthetic native
 peer. The broker transfers its sole native stdin writer to Runtime before any
 native request; the executable test exercises the normal fenced writes. It never

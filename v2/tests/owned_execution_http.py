@@ -179,6 +179,8 @@ class Case:
 
     def cleanup(self):
         self.stop()
+        if self.trace():
+            wait_for(self.peer_gone, "normal shutdown must reap the owned synthetic native peer")
         self.temp.cleanup()
 
 
@@ -254,7 +256,29 @@ def revoked_in_flight(case):
     assert case.request(case.path + "/execution")[1]["phase"] not in ("completed", "cancelled")
 
 
-for scenario in ["success", "revoked_after_start", "revoked_in_flight", "revoked_at_start", "queued_at_start"]:
+def shutdown_with_open_events(case):
+    case.stop()
+    case.configure()
+    (case.workspace / "hold-first").touch()
+    case.start(configured=True)
+    assert case.message()[0] == 202
+    wait_for(lambda: case.phase("running"), "synthetic turn must be active before shutdown")
+    request = urllib.request.Request(case.origin + case.path + "/events", headers={
+        "Origin": case.origin, "Cookie": case.cookie})
+    with opener.open(request, timeout=3) as stream:
+        assert stream.status == 200
+        # Keep this valid SSE connection open while requesting ordinary shutdown.
+        case.process.send_signal(signal.SIGINT)
+        assert case.process.wait(timeout=5) == 0
+        wait_for(case.peer_gone, "open SSE must not retain the owned native child")
+    with sqlite3.connect(case.home / "core.sqlite3") as db:
+        assert db.execute("SELECT state FROM production_runs").fetchone()[0] == "cancel_requested"
+        assert db.execute("SELECT count(*) FROM production_cancellations").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM production_observations WHERE kind='stopped'").fetchone()[0] == 0
+
+
+for scenario in ["success", "revoked_after_start", "revoked_in_flight", "shutdown_with_open_events",
+                 "revoked_at_start", "queued_at_start"]:
     case = Case()
     try:
         case.setup()
@@ -264,6 +288,8 @@ for scenario in ["success", "revoked_after_start", "revoked_in_flight", "revoked
             revoked_after_start(case)
         elif scenario == "revoked_in_flight":
             revoked_in_flight(case)
+        elif scenario == "shutdown_with_open_events":
+            shutdown_with_open_events(case)
         else:
             if scenario == "queued_at_start":
                 assert case.message()[0] == 202
