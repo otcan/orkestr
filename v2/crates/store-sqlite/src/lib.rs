@@ -8,7 +8,12 @@ use sqlx::{
 };
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
+mod conversation_export;
 pub mod fixture_runtime;
+pub use conversation_export::{
+    ConversationExport, ConversationExportError, ConversationExportLimits,
+    ConversationExportReceipt,
+};
 mod intake;
 mod paths;
 mod preflight;
