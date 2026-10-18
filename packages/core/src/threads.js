@@ -43,6 +43,7 @@ const activeInputStates = new Set(["queued", "pending_delivery", "awaiting_ack",
 const whatsappSources = new Set(["whatsapp", "whatsapp_inbound", "whatsapp_client"]);
 const retiredLifecycleState = "retired";
 const messageStringFields = [
+  "reportKind", "reportKey", "reportSourceThreadId", "reportCauseMessageId", "reportFingerprint",
   "connector",
   "externalId",
   "chatId",
