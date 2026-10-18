@@ -4,7 +4,9 @@ Prepared source, not executed browser evidence. The aa8 16-case receipt remains
 pinned; it proved Stop unavailable and does not cover this successor.
 
 Server prerequisite is reviewed ordinary owned Stop source
-`abee5d1c4bc345a3461e1e3b536fea14ce6a95e4` or its reviewed successor. Coordinator
+a reviewed successor to `abee5d1c4bc345a3461e1e3b536fea14ce6a95e4`
+including the exact-run control-revision Store fix and matching UI consumer.
+The original abee artifact failed real streaming Stop and is not qualified here. Coordinator
 must register a matching source server/UI pair before the browser helper uses
 this module. UI needs `web,execution-controls`, produced by the existing bundle
 script with `UI_EXECUTION_CONTROLS=1` and `UI_SERVER_CANDIDATE=<exact registered
@@ -34,10 +36,32 @@ signals it. The runner owns shutdown and cleanup in every failure path.
 After browser setup/login, call
 `stopScenarios({page, conversation, fixture, report, signal, mode})`. It sends the
 peer's exact first synthetic input from the actual composer, then preserves a
-separate draft. A request-stage pause admits one ordinary followup over the real
-cookie-authenticated message route, asserts the same run/new revision, and lets
-the stale mounted Stop reach the server. Require real 409, no native interrupt,
-explicit Review updated Stop, then a fresh request key/revision.
+separate draft. A request-stage pause invokes `fixture.advanceProgress()` from
+an independently reviewed synthetic native peer barrier, waits for a new durable
+progress payload reference, then admits one ordinary followup through the real
+cookie-authenticated message route. Both operations must advance the full
+projection while preserving the exact run and positive control revision. The
+original mounted Stop must succeed with 200 despite both projection movements;
+its request key and both sampled revisions must remain unchanged. The current
+fixed abee peer has no additional Progress barrier: the root fixture owner must
+supply a reviewed successor hook before this scenario is executable. This UI
+module does not add a parallel peer, backend mutation or revision setter.
+
+`staleControlScenario({page,conversation,transition,report,signal})` is a separate
+fresh-run case. The runner supplies `transition.source` (exact reviewed source
+provenance) and `transition.apply()` implementing a canonical ordinary control
+state transition. The scenario pauses the mounted request, verifies the same run
+and strictly newer control revision, and requires an actual 409. It waits for the
+refusal notice and checks explicit review is available only if the resulting
+canonical phase/capability still allows Stop. A terminal or revoked-capability
+transition must keep review unavailable. No automatic retry or control override
+is allowed. The exact canonical transition remains a Core/Runtime handoff gate;
+Progress, followup intake, manual revision mutation and fabricated responses are
+not valid substitutes.
+
+Legacy `expected_control_revision: None` remains distinct: strict projection CAS
+and explicit review are covered by the Rust legacy Stop regression. Do not use
+that behavior as evidence for the new per-run streaming scenario.
 
 The real 200 public receipt is dropped at response stage after commit. Require
 `requested_unknown` and no Cancelled before terminal evidence. In terminal mode,
