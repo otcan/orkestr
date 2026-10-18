@@ -12,8 +12,9 @@ import uuid
 
 def main():
     assert sys.argv[1:] == ["app-server", "--listen", "stdio://"]
-    assert set(os.environ) == {"PATH", "LANG", "LC_ALL", "HOME", "TMPDIR", "CODEX_HOME"}
+    assert set(os.environ) == {"PATH", "LANG", "LC_ALL", "HOME", "TMPDIR", "CODEX_HOME", "PWD"}
     assert os.environ["HOME"] == os.environ["CODEX_HOME"]
+    assert os.environ["PWD"] == os.getcwd()
     workspace = Path.cwd()
     # Only synthetic fixture ordering. Product role/parent authority is verified
     # independently against Store bindings; this counter grants no product rights.
