@@ -28,6 +28,20 @@ export function sessionScope(input = {}) {
   throw sessionError("agent_session_scope_invalid", 400);
 }
 
+// Only known integrity codes become public diagnoses; provider prose is never
+// persisted. Native identity reuse retains the existing public reason.
+export function sessionIntegrityReason(error) {
+  switch (error?.code) {
+    case "agent_session_native_identity_changed": return "native_identity_changed";
+    case "agent_session_native_identity_reused": return "native_session_unavailable";
+    case "agent_session_identity_invalid": return "native_identity_invalid";
+    case "agent_session_outcome_invalid": return "outcome_invalid";
+    case "agent_session_native_session_missing": return "native_session_missing";
+    case "agent_session_persistence_failed": return "persistence_failed";
+    default: return null;
+  }
+}
+
 // Provider prose and stack traces are never persisted in the public status.
 export function sessionBlockedReason(error) {
   const code = String(error?.code || "");

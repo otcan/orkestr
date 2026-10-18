@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { personalAgentFeature } from "./personal-agent-feature.js";
 import { activeSessionLifecycles, sessionAccess, storedSessionProfile } from "./personal-agent-session-access.js";
-import { sessionBlockedReason, sessionError, sessionId, sessionProfile, sessionScope } from "./personal-agent-session-records.js";
+import { sessionBlockedReason, sessionError, sessionId, sessionIntegrityReason, sessionProfile, sessionScope } from "./personal-agent-session-records.js";
 
 // Native IDs are persisted synchronously before their announcement/effects.
 // Lane A supplies the prepared SQLite store; no schema is created here.
@@ -15,14 +15,18 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
   async function leased(id, operation, { blockOnFailure = true, cancelSignal } = {}) {
     const row = claim(id);
     const controller = new AbortController();
-    let lost = false, admitted = false;
+    let lost = false, admitted = false, setBusy = false;
     const timer = setInterval(() => {
       try { fenced(row, { leaseTtlMs: leaseMs }); }
       catch { lost = true; controller.abort("lease_lost"); }
     }, Math.max(25, Math.floor(leaseMs / 3)));
     timer.unref?.();
     try {
-      const result = await operation(row, controller.signal, patch => fenced(row, patch), () => { admitted = true; });
+      const result = await operation(row, controller.signal, patch => {
+        const updated = fenced(row, patch);
+        if (patch.lifecycle === "busy") setBusy = true;
+        return updated;
+      }, () => { admitted = true; });
       if (lost) throw sessionError("agent_session_lease_lost");
       return result;
     } catch (error) {
@@ -32,11 +36,17 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
       // our own token/expiry/CAS history before any cleanup write.
       if (lost) throw sessionError("agent_session_lease_lost");
       const current = currentLease(row);
-      // Classify every awaited failure here: our own fence always wins over
-      // caller cancellation, which wins over refusal/provider failure cleanup.
-      // In particular, discovery can fail before runTurn reaches its abort check.
+      // Integrity failures cannot become successful cancellations. An uncertain
+      // own fence has already failed above and is never retried for cleanup.
+      const integrityReason = sessionIntegrityReason(error);
+      if (blockOnFailure && admitted && integrityReason) {
+        fenced(row, { lifecycle: "blocked", blockedReason: integrityReason }, true);
+        throw error;
+      }
+      // Discovery cancellation leaves status untouched. Once this turn set busy,
+      // restore the same starting/ready state as normal cancellation finalization.
       if (cancelSignal?.aborted) {
-        fenced(row, {}, true);
+        fenced(row, setBusy ? { lifecycle: row.lifecycle === "starting" || !current.nativeSessionId ? "starting" : "ready" } : {}, true);
         return { type: "cancelled" };
       }
       // Eligibility refusals borrow a fence, but must not rewrite status. Once
@@ -128,10 +138,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
       if (row.forkFromSessionId && !row.nativeSessionId) throw sessionError("agent_session_fork_not_started");
       admit();
       const adapter = await runtime(row);
-      if (ctx.signal.aborted) {
-        fenced(row, {}, true);
-        return { type: "cancelled" };
-      }
+      ctx.signal.throwIfAborted();
       update({ lifecycle: "busy" });
       const failed = new AbortController();
       const signal = AbortSignal.any([ctx.signal, leaseSignal, failed.signal]);
@@ -174,23 +181,20 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
           return ctx.emit(event);
         },
       }, input).catch(error => {
-        // Normalize a native abort into the normal turn finalization below,
-        // which restores an already-busy session. Fence/persistence checks still
-        // precede that write; all escaping failures are classified by leased().
-        if (ctx.signal.aborted) return { type: "cancelled" };
-        throw error;
+        // Preserve an earlier durable-identity/persistence error even when the
+        // native executor subsequently propagates the resulting AbortError.
+        throw persistenceError || error;
       });
       if (persistenceError) throw persistenceError;
       if (leaseSignal.aborted) throw sessionError("agent_session_lease_lost");
-      // A late provider success cannot turn an owner cancellation into a reply.
-      if (ctx.signal.aborted) {
-        fenced(row, { lifecycle: row.lifecycle === "starting" ? "starting" : "ready", blockedReason: null }, true);
-        return { type: "cancelled" };
-      }
-      if (!["final", "cancelled", "park", "expired"].includes(result?.type)) throw sessionError("agent_session_outcome_invalid");
+      const outcomeType = result?.type;
+      if (!["final", "cancelled", "park", "expired"].includes(outcomeType)) throw sessionError("agent_session_outcome_invalid");
       const current = owned(id);
-      if (result.type === "final" && !current.nativeSessionId) throw sessionError("agent_session_native_session_missing");
-      fenced(row, { lifecycle: !current.nativeSessionId || (result.type === "cancelled" && row.lifecycle === "starting") ? "starting" : "ready", blockedReason: null }, true);
+      if (outcomeType === "final" && !current.nativeSessionId) throw sessionError("agent_session_native_session_missing");
+      // Validate integrity first; a late success still cannot become a reply
+      // after owner cancellation. All cancellation cleanup belongs to leased().
+      ctx.signal.throwIfAborted();
+      fenced(row, { lifecycle: !current.nativeSessionId || (outcomeType === "cancelled" && row.lifecycle === "starting") ? "starting" : "ready", blockedReason: null }, true);
       return result;
     }, { cancelSignal: ctx.signal });
   }

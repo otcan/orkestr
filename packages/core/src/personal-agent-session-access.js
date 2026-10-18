@@ -69,7 +69,7 @@ export function sessionAccess({ store, ownerUserId, authorizeOwner, resolveConve
       if (error?.code === "agent_session_native_identity_reused" || /UNIQUE constraint failed: personal_agent_sessions\.provider, personal_agent_sessions\.account_profile_id, personal_agent_sessions\.native_session_id/.test(String(error?.message))) {
         throw sessionError("agent_session_native_identity_reused");
       }
-      throw error;
+      throw sessionError("agent_session_persistence_failed", 503);
     }
     if (!result) {
       failedFences.add(row);
