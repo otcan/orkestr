@@ -19,6 +19,8 @@ import { createLlmAccountProfile, updateLlmAccountProfileState } from "../packag
 import { resetClaudeCodeRuntimeForTest, startClaudeCodeThread } from "../packages/core/src/runtime-claude-code-adapter.js";
 import { createThread, getThread, listThreadMessages } from "../packages/core/src/threads.js";
 
+import { detachedSignalIdentity, detachedSignalFailure } from "./helpers/detached-turn-signal-diagnostics.js";
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 async function tempHome(t, name) {
@@ -109,12 +111,59 @@ test("a recycled pid is never mistaken for the turn process", async (t) => {
     assert.equal(detachedTurnProcessAlive({ ...record, procStartTime: "1" }), false);
     assert.equal(await detachedTurnState({ ...record, procStartTime: "1" }), "gone");
   }
+  // Snapshot only; no readiness wait or retry that could hide the launch race.
+  const beforeSignal = detachedSignalIdentity(record);
   process.kill(-record.pgid, "SIGTERM");
   const status = await closed;
-  assert.equal(status.signal, "SIGTERM");
+  try {
+    assert.equal(status.signal, "SIGTERM");
+  } catch (error) {
+    t.diagnostic(JSON.stringify(detachedSignalFailure(record, beforeSignal, status)));
+    throw error;
+  }
   assert.equal(await detachedTurnState(record), "exited");
   // The wrapper records the signal so an unexpected turn end can be traced.
   assert.match(await fs.readFile(`${record.paths.exit}.signals`, "utf8"), /^TERM \d+$/m);
+});
+
+test("a turn stopped before the scoped wrapper starts is still recorded as exited", async (t) => {
+  const home = await tempHome(t, "prescope");
+  const fakeSystemdRun = path.join(home, "systemd-run");
+  // Like `systemd-run --scope` while it is still creating the scope: the
+  // wrapper has not been exec'd yet, so it cannot record anything itself.
+  await fs.writeFile(fakeSystemdRun, `#!/bin/sh
+sleep 2
+while [ $# -gt 0 ]; do case "$1" in --*) shift;; *) break;; esac; done
+exec "$@"
+`, { mode: 0o755 });
+  const env = { ORKESTR_HOME: home, ORKESTR_CLAUDE_DETACHED_POLL_MS: "10", ORKESTR_CLAUDE_DETACHED_SCOPE: "1", ORKESTR_SYSTEMD_RUN_BIN: fakeSystemdRun };
+  const facade = spawnDetachedClaudeTurn({
+    command: "/bin/sh", args: ["-c", "read -r p; sleep 5"], cwd: home, childEnv: { PATH: process.env.PATH },
+    prompt: "x", threadId: "t6", attemptId: "a6", env,
+  });
+  const { closed } = collect(facade);
+  const record = await readDetachedTurnRecord("t6", "a6", env);
+  process.kill(-record.pgid, "SIGTERM");
+  assert.equal((await closed).signal, "SIGTERM");
+  assert.equal(await detachedTurnState(record), "exited", "not mistaken for a lost turn");
+  const exit = JSON.parse(await fs.readFile(record.paths.exit, "utf8"));
+  assert.deepEqual([exit.code, exit.observedBy], [143, "server"]);
+  assert.match(await fs.readFile(`${record.paths.exit}.signals`, "utf8"), /^TERM \d+$/m);
+});
+
+test("the wrapper's own exit record is kept when it ran", async (t) => {
+  const home = await tempHome(t, "wrapper-exit");
+  const env = { ORKESTR_HOME: home, ORKESTR_CLAUDE_DETACHED_POLL_MS: "10", ORKESTR_CLAUDE_DETACHED_SCOPE: "0" };
+  const facade = spawnDetachedClaudeTurn({
+    command: "/bin/sh", args: ["-c", "read -r p; exit 3"], cwd: home, childEnv: { PATH: process.env.PATH },
+    prompt: "x", threadId: "t7", attemptId: "a7", env,
+  });
+  const { closed } = collect(facade);
+  const record = await readDetachedTurnRecord("t7", "a7", env);
+  assert.deepEqual(await closed, { code: 3, signal: null });
+  const exit = JSON.parse(await fs.readFile(record.paths.exit, "utf8"));
+  assert.equal(exit.code, 3);
+  assert.equal(exit.observedBy, undefined, "written by the wrapper, not replaced by the server");
 });
 
 test("detached turns run in their own systemd scope and keep the wrapper pid", async (t) => {

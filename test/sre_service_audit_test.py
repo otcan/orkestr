@@ -165,6 +165,7 @@ class AuditTests(unittest.TestCase):
     def test_unsafe_state_directory_rejected(self):
         unsafe = os.path.join(self.tmp.name, "unsafe")
         os.mkdir(unsafe, 0o755)
+        os.chmod(unsafe, 0o755)  # Establish the unsafe fixture even under umask 077.
         with self.assertRaises(ValueError):
             AuditStore(unsafe)
 

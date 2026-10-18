@@ -1,0 +1,12 @@
+{
+  "format": "orkestr-v2-claude-package-v1",
+  "entry": "claude_server.py",
+  "files": {
+    "claude_server.py": "cba2f4cf53fa70dcdb62f89db2058ae3cdce376e99f003afff2250cb1b9aeae0",
+    "claude_connector.py": "fbffb0a62ceb630c791a51d2a954a86ba5f7b3627b90b5290ef6f83910de7327",
+    "claude_protocol.py": "f3680a20352f4c54e1c1d5d1ca46ec1a96475f40e5066d39fad48cb6a9c4106a",
+    "protocol.py": "97fbf47df6c55d2979e9551e81cf2c13d3db9e8100ae0597cbec309e34f30549",
+    "transport.py": "7cfd3094381170a88e14d6ec2aab7f96da45d7721d67be89e67906d590a901b9"
+  },
+  "activation": "held-installed-cli-and-runtime-composition-review"
+}

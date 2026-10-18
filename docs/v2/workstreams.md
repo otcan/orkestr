@@ -1,12 +1,12 @@
 # Orkestr 2.0 execution program
 
-Status: plan ready for first implementation, 2026-10-18. Canonical integration branch: `v2/rust-rewrite`. Follow [architecture](README.md), [first implementation](first-implementation.md), and [migration](migration.md). All task IDs below are backlog IDs, not claims that Jira issues or code already exist.
+Status: full web release implementation authorized, 2026-10-18. Active integration branch: `v2/s0-contract-integration`. The [full release program](full-release.md) supersedes older scope and scheduling below: web first, all used workflow parity, existing lanes reused, then gated production replacement and public release. Follow [architecture](README.md), [first implementation](first-implementation.md), and [migration](migration.md). Task IDs remain stable backlog identifiers, not claims that a Jira issue or completed code exists.
 
 ## Delivery model
 
 Build a replacement in successive end-to-end increments, not a file-by-file translation. Keep 1.x available as the behavioral reference. Do not wait for a complete inventory of every optional integration before starting an isolated core. Freeze the first-slice contracts first; extend them through reviewed changes.
 
-Use five NEW threads. Existing features workers, their branches and pending PRs retain their assignments.
+Reuse the five existing primary threads plus the existing Isolation, Installation and Migration helpers. Existing features workers, their branches and pending PRs retain their assignments.
 
 | New thread | Initial ownership | Branch |
 |---|---|---|
@@ -18,7 +18,7 @@ Use five NEW threads. Existing features workers, their branches and pending PRs 
 
 Each uses an isolated worktree based on the finalized plan commit. Do not check out a new branch in a live worker's worktree. No shared build target directory with concurrent writers. Coordinator owns the root workspace membership, lockfile resolution and contract-change integration; Core owns the first database schema. Other workers propose schema changes rather than creating parallel databases.
 
-Provision only the development permissions needed for this repo. No new WhatsApp chats, inherited live channel routes, desktops, production credentials or external service projects just to create these threads. Use configured subscription runtimes; no API overflow or paid compute purchase. Read host capacity and existing load before admitting work. Initially allow at most two new implementation model turns concurrently and one heavy build on the shared host; review/coordination is brief and scheduled. Increase only with measured headroom, not because the token allowance is large. Do not stop old workers to make space.
+Provision only the development permissions needed for this repo. No new WhatsApp chats, inherited live channel routes, desktops, production credentials or external service projects just to create these threads. Use configured subscription runtimes; no API overflow or paid compute purchase. Read host capacity and existing load before admitting work. Parallel agent implementation is explicitly authorized across the existing lanes. Admit heavy builds through the host build-capacity wrapper with separate targets and measured headroom; reduce build concurrency under pressure. Model concurrency and compiler concurrency are separate budgets. Do not stop unrelated workers to make space.
 
 Thread creation and start must return actual IDs, delivered message IDs, runtime/account-route metadata without credentials, branch/worktree and running/queued status. Reuse an exact named v2 thread if bootstrap is retried; do not create duplicates. Record private runtime IDs in private tracking, never in this public repo.
 
@@ -32,7 +32,7 @@ Thread creation and start must return actual IDs, delivered message IDs, runtime
 | V2-010 | Core + Coordinator | Actual Cargo workspace, stable rust-toolchain, lockfile, minimal server/CLI, deterministic tests and v2-only CI. Clean-checkout build; CI cannot publish a production image or trigger release. | V2-003 |
 | V2-040 | UI | Dioxus spike against the shared contracts: editable composer while streaming, cursor reconnect, long history, keyboard/IME, screen-reader semantics, iOS simulator build feasibility. Document render model and actual limitations. | V2-003; fake API permitted |
 
-M0 gate: shared contracts and a real build/test artifact, not empty crates or unchecked README commands. Dioxus is the chosen frontend; failure of a measured gate is an architecture issue to resolve, not a reason to hide the failure. iOS investigation runs now, not after backend completion.
+M0 gate: shared contracts and a real build/test artifact, not empty crates or unchecked README commands. Dioxus is the chosen frontend; failure of a measured gate is an architecture issue to resolve, not a reason to hide the failure. Native iOS is a subsequent milestone and does not block web delivery.
 
 ## M1: local offline vertical slice
 
@@ -49,7 +49,7 @@ M0 gate: shared contracts and a real build/test artifact, not empty crates or un
 
 M1 gate: the executable scenario and acceptance cases in first-implementation.md pass from a clean local installation. It must be possible to send a follow-up, stop a fake worker, restart the server and inspect the surviving messages/result without any external provider account. The fixture mode is explicit and cannot masquerade as production inference.
 
-## M2: real personal-agent execution and first iOS client
+## M2: real personal-agent execution
 
 | ID | Owner | Work and acceptance | Dependencies |
 |---|---|---|---|
@@ -61,7 +61,7 @@ M1 gate: the executable scenario and acceptance cases in first-implementation.md
 | V2-045 | UI | iOS native bundle using shared Dioxus UI: safe auth/device storage, connect to local/VPS host, conversation/work/approval navigation, suspend/reconnect. Unsigned simulator build first; signing/TestFlight are separate gates. | V2-040/041/030 |
 | V2-042 | UI | Work view, workers/lineage, exact approval preview, hold/cancel, acceptance evidence, files/artifacts and resource status. | V2-015/023/041 |
 
-M2 gate: owner-configured test profile completes a harmless real subscription-backed flow with different fast/deep native session IDs, an independent worker, mid-run follow-up and restart/cancel evidence. Fake CI results, login metadata and CLI help do not satisfy real execution acceptance. Native iOS navigation must run in a simulator; public native release also requires on-device checks. Report each provider separately.
+M2 gate: owner-configured test profile completes a harmless real subscription-backed flow with different fast/deep native session IDs, an independent worker, mid-run follow-up and restart/cancel evidence. Fake CI results, login metadata and CLI help do not satisfy real execution acceptance. Report Codex and Claude separately. V2-045 native iOS work follows the web release and retains its own simulator and device acceptance requirements.
 
 ## M3: complete product surfaces and optional integrations
 
@@ -72,7 +72,7 @@ M2 gate: owner-configured test profile completes a harmless real subscription-ba
 | V2-032 | Runtime | Optional WhatsApp adapter and multi-identity routing, owner/automation attribution, durable delivery, uncertain-send reconciliation and loop suppression. Fake tests first, channel ownership handoff only by approval. | V2-015/035 |
 | V2-033 | Runtime + Core | Local Git/worktree service, verified local OXRM workspace contract, pooled desktop isolation/leases; then optional GitHub/Jira/mail/calendar connectors. Each gets own parity/health/permission tests and explicit blockers. | V2-035/023 |
 | V2-043 | UI | Integration Hub, multiple identities, global/project settings, providers/quotas, search/history and memory controls; user-facing task/data projection without duplicate authorities. | V2-021/035/041 |
-| V2-044 | UI + Verification | Input/draft preservation, large histories, reconnect, attachments, dark/light contrast, accessibility and localized text. Real iPhone Safari plus native iOS acceptance. | V2-042/043/045 |
+| V2-044 | UI + Verification | Input/draft preservation, large histories, reconnect, attachments, dark/light contrast, accessibility and localized text. Mobile Safari web acceptance; native iOS acceptance follows separately. | V2-042/043 |
 | V2-034 | Coordinator | Clean Docker Compose distribution, safe local bind, versioned images/artifacts, backups/doctor, OSS/managed separation and dependency/license inventory. External runtimes/services are explicit dependencies. | V2-010, packaging starts in M1 |
 
 M3 gate: a fresh v2 installation works without 1.x. Required first-party functionality is Rust; every retained non-Rust service or temporary bridge is disclosed. Optional integration absence cannot disable core chat, work or local projects. Android follows the proven iOS client contract and is tracked separately, not a precondition for local evaluation.
@@ -97,7 +97,7 @@ Coordinator creates one dedicated v2 tracking epic and maps the stable backlog I
 
 ## Review, integration and reporting
 
-The owner has authorized planning and the first implementation: do not request another architecture approval before writing code. For the first wave, create reviewable PRs targeting `v2/rust-rewrite`, never `main`. Coordinator may integrate independently reviewed, passing changes into the v2 branch under existing repository rules. This is not release approval.
+The owner has authorized the full release program: do not request another architecture approval before writing code. Keep development PRs on the v2 integration track. Coordinator may integrate independently reviewed, passing changes there under existing repository rules. Mainline, version tags and deployment follow the release train only after the full-release gates pass; authorization is not permission to skip qualification.
 
 Every milestone requires exact commit, actual test commands/results, known skipped/pending cases, provider evidence level and reproducible local instructions. Test authors do not self-approve their own PR; coordinator or another lane reviews the Verification lane's changes. Do not weaken policy, remove tests, change security settings or force-push to obtain green CI. Any exception is reported, not hidden.
 

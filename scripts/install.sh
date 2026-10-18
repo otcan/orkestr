@@ -663,20 +663,28 @@ codex_cli_version() {
   echo "${ORKESTR_CODEX_VERSION:-0.154.0}"
 }
 
+run_codex_command() {
+  # Keep installer keys in the parent, including during capability/login probes.
+  (
+    unset ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
+    "$@"
+  )
+}
+
 codex_command_supports_app_server() {
   local command
   command="$1"
   [ -n "$command" ] || return 1
   [ "$command" != "__orkestr_codex_disabled_on_macos__" ] || return 1
-  "$command" --version >/dev/null 2>&1 || return 1
-  "$command" app-server --help >/dev/null 2>&1 || return 1
+  run_codex_command "$command" --version >/dev/null 2>&1 || return 1
+  run_codex_command "$command" app-server --help >/dev/null 2>&1 || return 1
 }
 
 codex_command_supports_external_app_server() {
   local command
   command="$1"
   codex_command_supports_app_server "$command" || return 1
-  "$command" app-server proxy --help >/dev/null 2>&1 || return 1
+  run_codex_command "$command" app-server proxy --help >/dev/null 2>&1 || return 1
 }
 
 codex_bypasses_approvals() {
@@ -816,14 +824,14 @@ run_codex_login_if_requested() {
   if ! have codex; then
     return 0
   fi
-  if codex login status >/dev/null 2>&1; then
+  if run_codex_command codex login status >/dev/null 2>&1; then
     echo "Codex login: connected"
     return 0
   fi
   local do_login
   prompt_yes_no do_login "Codex is installed but not logged in. Run codex login now" "0"
   if [ "$do_login" = "1" ]; then
-    codex login || true
+    run_codex_command codex login || true
   fi
 }
 
@@ -843,8 +851,8 @@ configure_codex_interactively() {
     if have codex; then
       ORKESTR_CODEX_BIN="${ORKESTR_CODEX_BIN:-$(command -v codex)}"
       export ORKESTR_CODEX_BIN
-      if codex --version >/dev/null 2>&1; then
-        echo "Codex CLI: $(codex --version 2>/dev/null | head -1)"
+      if run_codex_command codex --version >/dev/null 2>&1; then
+        echo "Codex CLI: $(run_codex_command codex --version 2>/dev/null | head -1)"
         run_codex_login_if_requested
       else
         cat >&2 <<'EOF'
@@ -2322,6 +2330,8 @@ if [ -r "$env_file" ]; then
   . "$env_file"
   set +a
 fi
+# The env file belongs to the control plane; these keys are never agent credentials.
+unset ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
 socket="${ORKESTR_CODEX_APP_SERVER_SOCKET:-${ORKESTR_HOME:-/opt/orkestr/data}/run/codex-app-server.sock}"
 codex_bin="${ORKESTR_CODEX_BIN:-codex}"
 mkdir -p "$(dirname "$socket")"
@@ -2343,6 +2353,8 @@ if [ -r "$env_file" ]; then
   . "$env_file"
   set +a
 fi
+# The env file belongs to the control plane; these keys are never agent credentials.
+unset ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
 codex_bin="${ORKESTR_CODEX_BIN:-codex}"
 service_name="${ORKESTR_CODEX_APP_SERVER_SERVICE_NAME:-orkestr-codex}"
 service_name="${service_name%.service}"
@@ -2403,6 +2415,7 @@ Documentation=https://github.com/otcan/orkestr
 [Service]
 Type=oneshot
 EnvironmentFile=-$env_file
+UnsetEnvironment=ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
 ExecStart=/usr/local/bin/orkestr-refresh-codex-app-server
 EOF
 
@@ -2438,6 +2451,7 @@ User=$run_user
 Group=$group_name
 WorkingDirectory=$repo_dir
 EnvironmentFile=-$env_file
+UnsetEnvironment=ORKESTR_CONNECTOR_ENCRYPTION_KEY ORKESTR_SECRET_KEY ORKESTR_SECURE_INPUT_KEY
 ExecStart=/usr/local/bin/orkestr-codex-app-server
 Restart=on-failure
 RestartSec=3
@@ -2775,8 +2789,8 @@ register_codex_connectors_mcp() {
     bearer_env="ORKESTR_CONNECTORS_MCP_BEARER_TOKEN"
   fi
   [ -x "$codex_command" ] || command -v "$codex_command" >/dev/null 2>&1 || return 0
-  runuser -u "$run_user" -- env CODEX_HOME="$codex_home" "$codex_command" mcp remove orkestr_connectors >/dev/null 2>&1 || true
-  runuser -u "$run_user" -- env CODEX_HOME="$codex_home" "$codex_command" mcp add orkestr_connectors \
+  run_codex_command runuser -u "$run_user" -- env CODEX_HOME="$codex_home" "$codex_command" mcp remove orkestr_connectors >/dev/null 2>&1 || true
+  run_codex_command runuser -u "$run_user" -- env CODEX_HOME="$codex_home" "$codex_command" mcp add orkestr_connectors \
     --url "$mcp_url" \
     --bearer-token-env-var "$bearer_env" >/dev/null
 }
