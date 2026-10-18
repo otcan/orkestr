@@ -95,6 +95,8 @@ pub(super) async fn snapshot(store: &Store) -> Vec<String> {
     let mut tx = store.pool.begin().await.unwrap();
     let mut result = Vec::new();
     for (table,projection) in [
+        ("execution_revisions","conversation_id,revision"),
+        ("production_run_leases","run_id,generation,lease_deadline_ms,dispatch_fence,purpose"),
         ("production_supervisors","context_id,owner_id,provider_kind,namespace,supervisor_key,incarnation_id,generation,lease_deadline_ms"),
         ("production_readiness","session_id,context_id,incarnation_id,protocol_version,source_event_key,evidence_digest"),
         ("production_runs","id,context_id,incarnation_id,owner_id,conversation_id,session_id,native_session_id,provider_kind,binding_generation,message_id,event_id,scope_sequence,claim_generation,request_key,input_digest,lease_generation,dispatch_fence,lease_deadline_ms,attempt,state,dispatch_state,candidate_hash,reservation_hash,reserve_key"),

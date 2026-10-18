@@ -11,6 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 pub(super) fn checkpoint(name: &str) {
+    if cfg!(feature = "fixture-test-controls") {
+        return;
+    }
     if std::env::var("CORE_PRODUCTION_CHECKPOINT").ok().as_deref() != Some(name) {
         return;
     }
@@ -62,6 +65,8 @@ async fn rows(root: &Path) -> Vec<String> {
     let mut tx = conn.begin().await.unwrap();
     let mut result = Vec::new();
     for table in [
+        "execution_revisions",
+        "production_run_leases",
         "production_supervisors",
         "production_readiness",
         "production_runs",
@@ -116,6 +121,26 @@ async fn child() {
         // or reservation is serialized or reconstructed across processes.
         std::fs::write(root.join("public.json"),serde_json::to_vec(&json!({"owner":claim.owner_id.to_string(),"conversation":claim.conversation_id.to_string(),"message":claim.message_id.to_string(),"event":claim.event_id.to_string(),"session":claim.consumer_session_id.to_string(),"sequence":claim.scope_sequence,"claim_generation":claim.claim_generation,"claim_deadline":claim.lease_deadline_ms,"binding_generation":b.generation,"predecessor":c.incarnation,"context_deadline":deadline})).unwrap()).unwrap();
         let checkpoint = std::env::var("CORE_PRODUCTION_CHECKPOINT").unwrap();
+        #[cfg(feature = "fixture-test-controls")]
+        let mut f = f;
+        #[cfg(feature = "fixture-test-controls")]
+        {
+            use crate::ProductionCheckpoint::*;
+            let stage = match checkpoint.as_str() {
+                "admit-before-ack" => AdmitBeforeAck,
+                "admit-before-commit" => AdmitBeforeCommit,
+                "admit-after-commit" => AdmitAfterCommit,
+                "reserve-before-commit" => ReserveBeforeCommit,
+                "reserve-after-commit" => ReserveAfterCommit,
+                "consume-before-commit" => ConsumeBeforeCommit,
+                "consume-after-commit" => ConsumeAfterCommit,
+                _ => panic!("unknown checkpoint"),
+            };
+            f.handle
+                .production_arm_checkpoint(stage, root.join("marker"))
+                .await
+                .unwrap();
+        }
         if checkpoint.starts_with("admit-") {
             std::fs::write(
                 root.join("before.json"),

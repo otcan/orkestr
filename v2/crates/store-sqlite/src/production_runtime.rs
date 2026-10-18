@@ -8,9 +8,15 @@ mod admission;
 mod capability;
 pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};
 mod dispatch;
+mod fence;
+pub(crate) mod inspection;
+mod leases;
 #[cfg(all(test, unix))]
 mod process_tests;
 mod readiness;
+mod status;
+#[cfg(feature = "fixture-test-controls")]
+pub(crate) mod test_controls;
 #[cfg(test)]
 mod tests;
 
@@ -103,6 +109,8 @@ impl Store {
             .execute(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;
         Ok(Store {
+            #[cfg(feature = "fixture-test-controls")]
+            production_checkpoint: None,
             pool: self.pool.clone(),
             authority: Some(Context {
                 owner: OwnerId(Uuid::parse_str(&owner).map_err(db)?),
@@ -121,6 +129,8 @@ impl Store {
     }
     pub async fn reattach_supervisor(&self, store: &Store) -> Result<ProductionSupervisorStore> {
         let result = Store {
+            #[cfg(feature = "fixture-test-controls")]
+            production_checkpoint: None,
             pool: store.pool.clone(),
             authority: Some(self.context()?.clone()),
         };
