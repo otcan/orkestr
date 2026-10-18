@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 //! Ready-future spies only. Unimplemented methods explicitly return Unavailable.
-use async_trait::async_trait;
 use orkestr_v2_application::runtime::{Result, RuntimeStore, RuntimeStoreError};
 use orkestr_v2_contracts::{runtime::*, *};
 use std::{
@@ -74,7 +73,6 @@ impl Spy {
         }
     }
 }
-#[async_trait]
 impl RuntimeStore for Spy {
     async fn claim_next(
         &self,
