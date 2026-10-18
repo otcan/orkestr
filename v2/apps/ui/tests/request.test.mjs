@@ -32,7 +32,7 @@ test('authenticated GET uses bearer header and omits JSON body',async()=>{
 });
 
 test('non-API URLs fail before fetch',async()=>{
-    for(const path of ['https://example.invalid/api/v2/session','//example.invalid/api/v2/session','/api/v1/session']) {
+    for(const path of ['https://example.invalid/api/v2/session','//example.invalid/api/v2/session','/api/v1/session','/api/v2/../../session','/api/v2/%2e%2e/session','/api/v2/session#token','/api/v2/unknown','/api/v2/projects?token=synthetic']) {
         await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
     }
 });
@@ -58,4 +58,14 @@ test('JSON split across UTF-8 chunks decodes correctly',async()=>{
         start(controller) { for(const byte of bytes) controller.enqueue(Uint8Array.of(byte)); controller.close(); }
     }));
     assert.deepEqual((await execute({recv:async()=>base},async()=>response)).body,{text:'日本語'});
+});
+
+
+test('canonical snapshot pagination remains a relative API request',async()=>{
+    const path = '/api/v2/conversations/00000000-0000-4000-8000-000000000003?after=7&limit=100';
+    const result = await execute({recv:async()=>({...base,method:'GET',path,body:null})},async(actual)=>{
+        assert.equal(actual,path);
+        return new Response('{"messages":[]}');
+    });
+    assert.deepEqual(result.body,{messages:[]});
 });

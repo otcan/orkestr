@@ -1,6 +1,7 @@
 // Audited platform bridge: only fixed same-origin API paths from Rust.
 const input = await dioxus.recv();
-if (!/^\/api\/v2\//.test(input.path)) throw new Error("Invalid API path");
+const route = /^\/api\/v2\/(?:setup|session|projects|conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:\/messages)?)(?:\?after=[0-9]+&limit=100)?$/;
+if (!route.test(input.path)) throw new Error("Invalid API path");
 const headers = {"Content-Type": "application/json"};
 if (input.token) headers.Authorization = `Bearer ${input.token}`;
 if (input.bootstrap) headers["x-orkestr-bootstrap"] = input.bootstrap;
