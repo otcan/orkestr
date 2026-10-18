@@ -453,11 +453,18 @@
             @if (shouldShowCodexNotice()) {
               <span class="branch-pill">{{ codexRuntimeNoticeTitle() }}</span>
             }
+            <ork-thread-system-usage [summary]="opsSystem"></ork-thread-system-usage>
             @if (deploymentVersionLabel()) {
-              <span class="version-pill" [title]="deploymentVersionTitle()" aria-label="Orkestr deployment version">
-                <strong>{{ deploymentTrackLabel() }}</strong>
-                <em>{{ deploymentVersionLabel() }}</em>
-              </span>
+              <details class="deployment-version">
+                <summary class="version-pill" [title]="deploymentVersionTitle()" aria-label="Show installed Orkestr version">
+                  <strong>{{ deploymentTrackLabel() }}</strong>
+                  <em>{{ deploymentVersionLabel() }}</em>
+                </summary>
+                <div class="deployment-version-details" role="region" aria-label="Installed Orkestr version">
+                  <p>OSS version <code>{{ versionInfo?.version || "Unavailable" }}</code></p>
+                  <pre>{{ deploymentVersionTitle() }}</pre>
+                </div>
+              </details>
             }
             </div>
           </details>
