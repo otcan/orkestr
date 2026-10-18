@@ -30,3 +30,11 @@ configuration or real-provider activation is enabled here.
 Validation uses an owned synthetic native executable behind the actual Python
 Claude broker, FD handoff and ordinary Store. It proves success/progress and
 failed-result transitions, not subscription entitlement or live-provider behavior.
+
+The unregistered `server/src/claude_execution` factory supplies opaque
+PreparingClaudeExecution / ReadyClaudeExecution / LiveClaudeExecution wrappers.
+It retains the bound Store and owned Authority; parent-driven `tick` pumps durable
+observations and Drop quarantines the owned process without asserting cancellation.
+The shared server factory owner can register this narrow module after source
+review. Its separate executable integration tests exercise the same success and
+failure flows through the wrapper; they do not invoke an HTTP route or real model.
