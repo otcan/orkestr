@@ -102,7 +102,12 @@ impl WorkerSchedule {
             .authorize_worker_metadata(&self.credential, &self.parent.run_id, &binding)
             .await
             .map_err(|_| "Worker metadata authority refused")?;
-        let setup = PreparingCodex::open_retained(
+        let open = if self.configuration.offline_python.is_some() {
+            PreparingCodex::open_worker_offline_python_retained
+        } else {
+            PreparingCodex::open_retained
+        };
+        let setup = open(
             self.store.clone(),
             grant,
             &self.configuration.launcher,
@@ -197,6 +202,19 @@ impl WorkerSchedule {
             return Err("Worker consumed identity mismatch");
         }
         let run = capability.provider().run.run_id.clone();
+        let tools = match &self.configuration.offline_python {
+            Some(dispatcher) => Some(
+                tools::WorkerTools::prepare(
+                    self.store.clone(),
+                    self.credential.clone(),
+                    &capability,
+                    dispatcher.clone(),
+                    self.configuration.children.clone(),
+                )
+                .await?,
+            ),
+            None => None,
+        };
         let (authority, pump) = ready
             .attach(self.store.clone(), capability)
             .map_err(|_| "Worker attachment is uncertain; automatic replay refused")?;
@@ -217,6 +235,7 @@ impl WorkerSchedule {
                 run,
                 control,
                 controls,
+                tools,
             })),
             WorkerProgress::Running,
         ))

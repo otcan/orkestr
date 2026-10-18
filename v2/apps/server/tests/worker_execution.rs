@@ -10,6 +10,9 @@ mod control_registry;
 #[path = "../src/owned_children.rs"]
 #[allow(dead_code)]
 mod owned_children;
+#[path = "../src/offline_python/mod.rs"]
+#[allow(dead_code)]
+mod offline_python;
 #[path = "../src/stop_execution/mod.rs"]
 #[allow(dead_code)]
 mod stop_execution;
