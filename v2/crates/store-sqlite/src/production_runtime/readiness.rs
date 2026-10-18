@@ -62,6 +62,7 @@ impl Store {
         worker_authorized: bool,
     ) -> Result<Binding> {
         let c = self.context()?;
+        c.require_provider_context()?;
         if input.native_session_id.is_empty()
             || input.native_session_id.len() > 512
             || input.native_session_id.chars().any(char::is_control)

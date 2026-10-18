@@ -52,6 +52,7 @@ mod terminal_retirement;
 mod worker;
 mod worker_discovery;
 pub use worker::*;
+mod timer_supervisor;
 mod timer_issuer;
 pub use timer_issuer::TimerSchedulerIssuer;
 mod worker_tool;
