@@ -7,7 +7,6 @@ use std::time::Instant;
 
 impl ConfiguredExecution {
     pub(super) async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<(), &'static str> {
-        let _availability = self.control.lifetime();
         self.current().await?;
         self.config.verify_launcher()?;
         let conversation = &self.config.conversation_id;
@@ -71,12 +70,17 @@ impl ConfiguredExecution {
         let (mut authority, mut pump) = ready
             .attach(self.store.clone(), capability)
             .map_err(|_| "execution attachment is uncertain; automatic replay refused")?;
-        let (mut control_sender, mut controls) = self.control.register(self.store.clone(), &run)?;
+        let (mut run_control, mut controls) = self
+            .control
+            .register(self.store.clone(), &run)
+            .map_err(|_| "execution control registration refused")?;
         let mut deadline = Instant::now() + Duration::from_secs(45);
         loop {
             self.maintain(&mut heartbeat).await?;
+            // Parent Stop serializes against both its own pump and a bounded
+            // Worker step. Lock order is always Deep then Worker.
+            let schedule = run_control.serialize().await;
             Self::poll_worker(&mut worker).await;
-            let schedule = self.control.serialize().await;
             let status = self
                 .store
                 .execution_status(&self.owner, conversation)
@@ -86,11 +90,10 @@ impl ConfiguredExecution {
             if status.run_id.as_ref() != Some(&run) {
                 return Err("execution scope changed; reconciliation required");
             }
-            self.control.set_available(
-                &run,
-                status.phase == ExecutionPhase::Running && pump.pending().is_none(),
-            );
+            run_control
+                .set_available(status.phase == ExecutionPhase::Running && pump.pending().is_none());
             if status.phase == ExecutionPhase::CancelRequested {
+                run_control.disable();
                 drop(schedule);
                 drop(worker.take());
                 return self
@@ -118,7 +121,10 @@ impl ConfiguredExecution {
                 let _ = authority.revoke();
                 authority = next_authority;
                 pump = next_pump;
-                (control_sender, controls) = self.control.register(self.store.clone(), &run)?;
+                (run_control, controls) = self
+                    .control
+                    .register(self.store.clone(), &run)
+                    .map_err(|_| "execution control registration refused")?;
                 deadline = Instant::now() + Duration::from_secs(45);
                 continue;
             }
@@ -150,8 +156,8 @@ impl ConfiguredExecution {
                     .request_cancel(&self.owner, &run, "isolated-runtime-shutdown")
                     .await
                     .map_err(|_| "execution shutdown requires reconciliation")?;
-                self.control.disable();
-                control_sender
+                run_control.disable();
+                run_control
                     .publish(receipt)
                     .map_err(|_| "execution shutdown handoff requires reconciliation")?;
                 drop(schedule);

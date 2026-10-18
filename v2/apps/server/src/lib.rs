@@ -21,6 +21,7 @@ use uuid::Uuid;
 mod auth;
 mod browser;
 pub mod control_dispatch;
+pub mod control_registry;
 mod execution;
 mod execution_accept;
 pub mod owned_children;
@@ -34,7 +35,7 @@ pub mod worker_execution;
 pub struct AppState {
     pub store: Store,
     execution_store: Option<Store>,
-    execution_control: Option<owned_execution::control::ControlGate>,
+    execution_control: Option<control_registry::ControlRegistry>,
     bootstrap_token: Arc<String>,
     origin: Arc<String>,
     authority: Arc<String>,

@@ -95,18 +95,30 @@ pub(crate) async fn stop(
         "Stop unavailable",
     ))?;
     let credential = browser::credential(&headers)?;
-    let _schedule = match &state.execution_control {
-        Some(control) => Some(control.serialize().await),
-        None => None,
-    };
-    let sender = match &state.execution_control {
-        Some(control) => Some(control.sender(&owner, &conversation, &input).ok_or(Error(
+    let requested = match &state.execution_control {
+        Some(control) => Some(control.request(&owner, &conversation, &input).ok_or(Error(
             StatusCode::SERVICE_UNAVAILABLE,
             "control_unavailable",
             "Stop unavailable",
         ))?),
         None => None,
     };
+    let _schedule = match &requested {
+        Some(control) => Some(control.serialize().await),
+        None => None,
+    };
+    // Selection is not authority. The exact owned run may have retired while
+    // this request waited for its bounded native step to release the lock.
+    if requested
+        .as_ref()
+        .is_some_and(|control| !control.is_permitted())
+    {
+        return Err(Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "control_unavailable",
+            "Stop unavailable",
+        ));
+    }
     let (receipt, issued_control) = store
         .stop_execution_control_authenticated(&credential, &conversation, &input)
         .await
@@ -123,11 +135,8 @@ pub(crate) async fn stop(
             "Stop unavailable",
         ));
     }
-    if let Some(control) = &state.execution_control {
-        control.committed(&input);
-    }
-    if let Some(sender) = sender {
-        sender.publish(issued_control).map_err(|_| {
+    if let Some(control) = requested {
+        control.publish(issued_control).map_err(|_| {
             Error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "control_unavailable",

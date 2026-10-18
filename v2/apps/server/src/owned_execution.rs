@@ -3,7 +3,6 @@ mod admission;
 mod config;
 #[cfg(all(test, unix))]
 mod config_tests;
-pub(crate) mod control;
 mod session;
 mod stopping;
 mod worker;
@@ -27,7 +26,7 @@ pub struct ConfiguredExecution {
     owner: OwnerId,
     token: String,
     directory: PathBuf,
-    control: control::ControlGate,
+    control: crate::control_registry::ControlRegistry,
     children: crate::owned_children::ChildSet,
 }
 pub struct ExecutionTask {
@@ -78,7 +77,10 @@ impl ConfiguredExecution {
             )
             .await
             .map_err(|_| "execution supervisor authorization refused")?;
-        let control = control::ControlGate::new(owner.clone(), config.conversation_id.clone());
+        let control = crate::control_registry::ControlRegistry::new(
+            owner.clone(),
+            config.conversation_id.clone(),
+        );
         Ok(Self {
             config,
             store: bound,

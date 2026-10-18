@@ -12,7 +12,6 @@ impl ConfiguredExecution {
         pump: CodexPump,
         heartbeat: &mut Instant,
     ) -> Result<(), &'static str> {
-        self.control.disable();
         // The durable cancellation may become visible immediately before the
         // HTTP caller publishes its exact receipt. Await that bounded handoff;
         // a lost caller/process never reconstructs authority from the status.
