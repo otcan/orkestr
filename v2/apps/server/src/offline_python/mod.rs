@@ -6,7 +6,8 @@ use orkestr_runtime::worker_sandbox::{
 use orkestr_v2_application::runtime::{ProviderAdmission, RuntimeStoreError};
 use orkestr_v2_store_sqlite::{
     ConsumedOfflinePython, OfflinePythonConsumption, OfflinePythonDelegation, OfflinePythonOutcome,
-    OfflinePythonReceipt, Store,
+    OfflinePythonOutput, OfflinePythonReceipt, OfflinePythonResultPreparation,
+    OfflinePythonResultReservation, Store,
 };
 use std::{
     sync::{Arc, OnceLock},
@@ -55,6 +56,8 @@ pub enum UnknownReason {
     SpawnDeadline,
 }
 pub enum OfflinePythonResult {
+    /// One private native result reservation, computed from actual bounded output.
+    Prepared(OfflinePythonResultReservation),
     Finished {
         receipt: OfflinePythonReceipt,
         output: Option<WorkerOutput>,
@@ -105,7 +108,29 @@ impl OfflinePythonDispatcher {
     pub async fn run(
         &self,
         delegation: OfflinePythonDelegation,
+        signals: OfflinePythonSignals,
+    ) -> OfflinePythonResult {
+        self.run_inner(delegation, signals, Box::new(()), false)
+            .await
+    }
+
+    /// Opt-in ordinary Worker callsite. Retained ownership survives cancellation
+    /// of this future until the actual blocking sandbox child has been waited.
+    pub async fn run_native(
+        &self,
+        delegation: OfflinePythonDelegation,
+        signals: OfflinePythonSignals,
+        retained: Box<dyn Send + 'static>,
+    ) -> OfflinePythonResult {
+        self.run_inner(delegation, signals, retained, true).await
+    }
+
+    async fn run_inner(
+        &self,
+        delegation: OfflinePythonDelegation,
         mut signals: OfflinePythonSignals,
+        retained: Box<dyn Send + 'static>,
+        native_result: bool,
     ) -> OfflinePythonResult {
         let (total, active) = GATES.get_or_init(|| {
             (
@@ -162,6 +187,7 @@ impl OfflinePythonDispatcher {
             // This permit remains owned through physical cleanup even if run's
             // future is dropped. No unconstrained blocking-pool queue is created.
             let _permit = permit;
+            let _retained = retained;
             if Instant::now() >= spawn_deadline {
                 return Execution {
                     started: false,
@@ -241,6 +267,29 @@ impl OfflinePythonDispatcher {
             return unknown(&launch, UnknownReason::Authority(error));
         }
         match execution.result {
+            Ok(output) if native_result => {
+                let output = OfflinePythonOutput {
+                    stdout: output.stdout,
+                    stderr: output.stderr,
+                    exit_code: output.exit_code,
+                    signal: output.signal,
+                };
+                match self
+                    .store
+                    .prepare_offline_python_result(&self.credential, &launch, &output)
+                    .await
+                {
+                    Ok(OfflinePythonResultPreparation::Reserved(reservation)) => {
+                        OfflinePythonResult::Prepared(reservation)
+                    }
+                    Ok(OfflinePythonResultPreparation::ReconciliationRequired) => {
+                        OfflinePythonResult::ReconciliationRequired {
+                            delegation_id: launch.id(),
+                        }
+                    }
+                    Err(error) => unknown(&launch, UnknownReason::Authority(error)),
+                }
+            }
             Ok(output) => {
                 let outcome = if output.exit_code == Some(0) && output.signal.is_none() {
                     OfflinePythonOutcome::Completed

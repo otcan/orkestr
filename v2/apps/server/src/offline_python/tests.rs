@@ -5,6 +5,7 @@ use orkestr_v2_store_sqlite::{
     ConsumedProviderDispatch, ExecutionConsumption, OfflinePythonAdmission, OfflinePythonState,
 };
 use std::{path::PathBuf, sync::atomic::Ordering};
+mod native;
 
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 struct Case {
