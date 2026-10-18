@@ -126,3 +126,24 @@ synthetic context, without accessing a daemon. No image build/container run,
 base compatibility, volume ownership propagation, bridge reachability or Docker
 Desktop acceptance has been executed at this source checkpoint. Independent
 source review and coordinator admission precede those owned image operations.
+
+## Actual Linux checkpoint
+
+The coordinator independently reviewed `d7d3868d` and admitted the narrow base
+pull plus owned image probe. The actual build used Python 3.12 slim Bookworm,
+immutable digest and exact image/Compose/artifact identities recorded in
+`v2/packaging/docker/checkpoint.json`. Base inspection reported Linux amd64,
+glibc 2.36; the admitted debug server requires glibc 2.34. Its full source is
+`8bd994132e790d38fbc01ca2c8be3d353ad9661a`; the historical UI is from
+`e9ea830e61614b792e77c8df01d968818530f567`. This remains mixed-source debug
+packaging evidence, not release candidate or current browser acceptance.
+
+The image built successfully without build networking. Compose startup and
+in-container health passed, but host `127.0.0.1:19842` HTTP health returned
+connection refused. **Docker acceptance failed.** Internal bridge publication
+needs investigation; no host networking fallback or isolation weakening was
+applied. Static HTTP verification could not execute. The probe's finalizer
+removed its container, state volume, network and image tag. Independent resource
+queries found zero remaining project resources; the private context was removed.
+The explicitly pulled shared base remains cached. No provider, production mount,
+daemon socket mount, restore apply or existing workload change occurred.
