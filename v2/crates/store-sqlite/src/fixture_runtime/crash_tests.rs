@@ -11,6 +11,10 @@ use std::{
 };
 
 pub(super) fn checkpoint(name: &str) {
+    #[cfg(feature = "fixture-test-controls")]
+    if name != "consume-after-reply-before-io" {
+        return;
+    }
     if std::env::var("ORKESTR_FIXTURE_TEST_CHECKPOINT")
         .ok()
         .as_deref()
@@ -111,7 +115,8 @@ async fn checkpoint_child() {
         .fetch_one(&store.pool)
         .await
         .unwrap();
-    let handle = FixtureSupervisorStore {
+    #[allow(unused_mut)]
+    let mut handle = FixtureSupervisorStore {
         store: store.clone(),
         owner: OwnerId(Uuid::parse_str(&row.get::<String, _>("owner_id")).unwrap()),
         namespace: row.get("namespace"),
@@ -119,8 +124,30 @@ async fn checkpoint_child() {
         context_id: Uuid::parse_str(&row.get::<String, _>("context_id")).unwrap(),
         incarnation_id: Uuid::parse_str(&row.get::<String, _>("incarnation_id")).unwrap(),
         generation: row.get("generation"),
+        #[cfg(feature = "fixture-test-controls")]
+        checkpoint: None,
     };
     let name = std::env::var("ORKESTR_FIXTURE_TEST_CHECKPOINT").unwrap();
+    #[cfg(feature = "fixture-test-controls")]
+    {
+        use super::test_controls::FixtureCheckpoint::*;
+        let stage = match name.as_str() {
+            "admit-before-ack" => Some(AdmitBeforeAck),
+            "admit-before-commit" => Some(AdmitBeforeCommit),
+            "admit-after-commit" => Some(AdmitAfterCommit),
+            "reserve-before-commit" => Some(ReserveBeforeCommit),
+            "reserve-after-commit" => Some(ReserveAfterCommit),
+            "consume-before-commit" => Some(ConsumeBeforeCommit),
+            "consume-after-commit" => Some(ConsumeAfterCommit),
+            _ => None,
+        };
+        if let Some(stage) = stage {
+            handle
+                .fixture_arm_checkpoint(stage, root.join("checkpoint"))
+                .await
+                .unwrap();
+        }
+    }
     if name.starts_with("admit-") {
         let row = sqlx::query("SELECT * FROM reasoning_inbox")
             .fetch_one(&store.pool)
@@ -196,7 +223,11 @@ async fn checkpoint_child() {
 
 #[tokio::test]
 async fn killed_admission_before_commit_rolls_back_and_lost_ack_never_reissues_candidate() {
-    for point in ["admit-before-commit", "admit-after-commit"] {
+    let mut points = vec!["admit-before-commit", "admit-after-commit"];
+    if cfg!(feature = "fixture-test-controls") {
+        points.push("admit-before-ack");
+    }
+    for point in points {
         let f = fixture().await;
         crash(&f, point, None).await;
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM fixture_runs")
@@ -204,7 +235,7 @@ async fn killed_admission_before_commit_rolls_back_and_lost_ack_never_reissues_c
             .await
             .unwrap();
         let replay = f.admit().await;
-        if point == "admit-before-commit" {
+        if point != "admit-after-commit" {
             assert_eq!(count, 0);
             assert_eq!(replay.disposition, AdmissionDisposition::FreshCandidate);
         } else {

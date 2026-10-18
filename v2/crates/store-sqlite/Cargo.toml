@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Explicit offline harness only; never enabled by server bootstrap.
+fixture-test-controls = []
+
 [dependencies]
 orkestr-v2-contracts = { path = "../contracts" }
 orkestr-v2-domain = { path = "../orkestr-domain" }
