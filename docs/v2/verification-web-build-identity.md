@@ -1,0 +1,5 @@
+# Web build identity source review
+
+Independent review of exact UI `be4bc7a7ad5e41b39306dbedeb059d8420ee85c3` found no bounded source blocker. Settings mounts About, which renders the complete retained compile-time record verbatim and reports only web identity. Parsing requires exact record arity, marker, component, package-version equality, terminator and lowercase 40-hex source; explicit unknown yields no fabricated source, while malformed records expose an error and no source. Version remains `CARGO_PKG_VERSION`; this leaf changes no manifests or server identity.
+
+This is source review only. The two supplied parser tests and reported lint remain author evidence. Actual clean release-WASM byte retention, mounted About rendering, matching server health identity and package/source verification remain separate artifact/browser gates. A producer-controlled embedded record is an identity assertion, not a signature or proof of source cleanliness; packaging must independently bind source, bytes and version and reject unknown records. No prior pair is relabeled by this review.
