@@ -23,6 +23,7 @@ pub struct StoppingCodex {
     next_sequence: u64,
     pending: Option<ProviderEventInput>,
     retained: Vec<ProviderEvent>,
+    omitted_nonterminal: u64,
     failed: bool,
     stopped: bool,
 }
@@ -76,6 +77,7 @@ impl CodexPump {
                 next_sequence,
                 pending: None,
                 retained: Vec::new(),
+                omitted_nonterminal: 0,
                 failed: false,
                 stopped: false,
             }),
@@ -93,6 +95,12 @@ impl CodexPump {
 impl StoppingCodex {
     pub fn retained(&self) -> &[ProviderEvent] {
         &self.retained
+    }
+    /// Nonterminal samples omitted after the bounded retention window filled.
+    /// These are not acknowledged durable observations. Reading continues so
+    /// genuine terminal evidence can still be reconciled.
+    pub fn omitted_nonterminal(&self) -> u64 {
+        self.omitted_nonterminal
     }
     pub fn pending(&self) -> Option<&ProviderEventInput> {
         self.pending.as_ref()
@@ -188,11 +196,17 @@ impl StoppingCodex {
                         | ProviderEvent::Failed
                         | ProviderEvent::Lost
                 );
-                if self.retained.len() >= 16 {
+                // Keep at most fifteen nonterminal samples, reserving the
+                // sixteenth slot for terminal truth. A full sample window must
+                // not prevent draining legitimate buffered progress to Stopped.
+                if terminal || self.retained.len() < 15 {
+                    self.retained.push(event);
+                } else if let Some(count) = self.omitted_nonterminal.checked_add(1) {
+                    self.omitted_nonterminal = count;
+                } else {
                     self.quarantine();
                     return Err(supervisor::Error::Provider(Blocker::QueueFull));
                 }
-                self.retained.push(event);
                 if terminal {
                     self.quarantine();
                     return Err(supervisor::Error::Provider(Blocker::Busy));
