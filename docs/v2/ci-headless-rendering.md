@@ -17,3 +17,9 @@ This evidence must be reported as **CI headless rendering**. Authoring this job,
 JavaScript syntax checks and workflow policy checks do not establish a browser
 pass. Managed-desktop, interactive authentication, physical-device and native
 iOS acceptance remain separate pending gates.
+
+Worker branch pushes do not independently launch these checks: each V2 pull
+request checks its exact head. Push checks remain on `v2/rust-rewrite`, and
+manual dispatch remains available. Per-workflow/per-PR concurrency cancels only
+superseded PR runs; manual and integration push runs use unique run IDs and are
+never cancelled by that group. There are no skip-as-success conditions.
