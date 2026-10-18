@@ -57,6 +57,27 @@ class AuthenticatedIsolationTests(unittest.TestCase):
         self.assertEqual(AUTHENTICATED.tunnel_seconds,900)
         self.assertEqual(AUTHENTICATED.tunnel_bytes,64*1024**2)
 
+    def test_role_state_alias_and_top_level_types_refuse_unchanged(self):
+        with tempfile.TemporaryDirectory(prefix="state-alias-synthetic-") as tmp:
+            base=Path(tmp);root=base/"state";root.mkdir()
+            target=base/"unmounted-target";target.write_bytes(b"synthetic-original")
+            with patch("isolation.authenticated.private_path",return_value=str(root)):
+                for nested in (False,True):
+                    if nested:
+                        (root/"sessions").mkdir()
+                    alias=root/"sessions"/"rollout" if nested else root/"state_5.sqlite"
+                    os.link(target,alias)
+                    with self.assertRaises(ValueError):private_state(root)
+                    self.assertEqual(target.read_bytes(),b"synthetic-original")
+                    alias.unlink()
+                    if nested:(root/"sessions").rmdir()
+                (root/"sessions").touch()
+                with self.assertRaises(ValueError):private_state(root)
+                (root/"sessions").unlink()
+                (root/"state_5.sqlite").mkdir()
+                with self.assertRaises(ValueError):private_state(root)
+                self.assertEqual(target.read_bytes(),b"synthetic-original")
+
     def test_actual_private_namespace_proxy_and_selected_mounts(self):
         with tempfile.TemporaryDirectory(prefix="authenticated-profile-synthetic-") as tmp:
             root=Path(tmp);auth=root/"auth.json";auth.write_text('synthetic-selected-account')

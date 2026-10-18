@@ -39,6 +39,10 @@ def private_state(path):
     for item in root.iterdir():
         if item.name not in allowed or item.is_symlink():
             raise ValueError("unexpected private native state")
+        info=item.lstat()
+        expected_directory=item.name in ("sessions","archived_sessions")
+        if not (stat.S_ISDIR(info.st_mode) if expected_directory else stat.S_ISREG(info.st_mode)):
+            raise ValueError("private native state type refused")
         if item.name=="auth.json" and (not item.is_file() or item.stat().st_size!=0):
             raise ValueError("account copies forbidden in private state")
     count=0
@@ -49,6 +53,8 @@ def private_state(path):
             info=item.lstat()
             if count>10000 or stat.S_ISLNK(info.st_mode) or info.st_uid not in (0,os.geteuid()) or info.st_mode & 0o022:
                 raise ValueError("unsafe private native state")
+            if stat.S_ISREG(info.st_mode) and info.st_nlink!=1:
+                raise ValueError("private native state hardlink refused")
             if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
                 raise ValueError("unsafe private native state")
     return str(root)

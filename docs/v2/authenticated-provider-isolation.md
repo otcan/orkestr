@@ -115,3 +115,10 @@ against this revision is **unexecuted** by this lane; root owns the existing
 fake-auth/disconnected-endpoint probe and must repin the full seven-file inventory.
 No account read, inference or authenticated network access is authorized by this
 compatibility test.
+
+Writable-state validation rejects every regular file with link count other than
+one, including nested session artifacts. Top-level sessions/archived_sessions
+must be directories; database/index/auth-placeholder entries must be regular
+files. Refusal tests preserve an unmounted hardlink target byte-for-byte. This
+pre-bind validation still assumes a controlled canonical parent and no concurrent
+replacement by a same-UID actor; it is not a race-proof filesystem authority.
