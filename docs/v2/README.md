@@ -1,86 +1,110 @@
-# Orkestr 2.0: Rust-first rewrite
+# Orkestr 2.0: full Rust application rewrite
 
-Status: **active development design**, 2026-10-18. Branch: `v2/rust-rewrite`.
-Decision owner: Orkestr project. This is an isolated experimental track, **not** a production release.
+Status: implementation plan authorized for an isolated development track, 2026-10-18. Integration branch: `v2/rust-rewrite`. This is not a production release or a declaration that the application already exists.
 
-## Decision
+## 1. Decision and precedence
 
-Build a new Rust application around **one personal agent, durable projects, layered conversations, explicit task orchestration, contextual memory, and observable workers**. This is a full product rewrite, not a port of each old controller and screen.
+Build a new first-party Orkestr application in Rust: domain, durable orchestration, HTTP API, CLI, and shared Dioxus user interface. This is a replacement application, not an indefinitely dependent Rust facade around NestJS. Deliver it incrementally on its own branch and test it beside the existing installation before any cutover. Preserve 1.x source, data and running work.
 
-Use the existing 1.x implementation as the compatibility and behavior reference, not as the new internal architecture. The Rust domain and services become the new source of truth once local acceptance and reversible migration pass. No functionality is removed from 1.x before demonstrated parity or an explicit product decision to retire it.
+Product requirements follow [ADR 0003 at commit 2d48f841](https://github.com/otcan/orkestr/blob/2d48f841fea794c494b93c14db2d549c5eab9c89/docs/adr/0003-opinionated-personal-agent.md), including its latest self-hosted-baseline correction. The owner's subsequent instruction explicitly authorizes a full rewrite and NEW implementation threads. That changes the implementation strategy, not the product's permission, consent or durability requirements.
 
-## Technology choices
+This revision replaces the initial v2 draft's incompatible assumptions:
 
-| Boundary | V2 target | Decision |
+- A small local model is NOT the mandatory router or the authoritative assistant. Fast and deep roles use distinct persistent supported Codex/Claude Code sessions; explicitly selected model/API/local alternatives remain possible.
+- iOS is a first-class client, with feasibility and build work starting in the first implementation wave. It is not deferred behind an indefinite PWA-only phase.
+- The ordinary UI is one global main conversation plus one main conversation per project, not a mandatory tree of worker chats.
+- Local Git/workspaces form the project baseline. Local OXRM integration must be verified. External GitHub, Jira and WhatsApp are optional plugins, not prerequisites for creating a shopping list.
+- There is no verified Rust demo at the plan baseline. A README containing cargo commands is not implementation evidence.
+
+Existing ADR 0001/0002 and runtime specifications remain behavioral/security references. Their no-rewrite/in-place-storage implementation constraints still apply to 1.x but do not prohibit a separate v2 database and application. No existing worker is retasked, retired or merged by this plan.
+
+## 2. Technology decisions
+
+| Boundary | Decision | Reason / constraint |
 |---|---|---|
-| Domain, orchestration, policy, session lifecycle | Rust | Chosen |
-| Async runtime and HTTP/WebSocket/SSE | Tokio + Axum | Chosen, version-pin at implementation |
-| Local data and migrations | SQLite + SQLx | Chosen for single-user/self-hosted first; PostgreSQL is not required for initial launch |
-| Durable events | transactional event journal + typed projections + outbox | Chosen: make transitions auditable, crash-recoverable, replayable |
-| Rust web frontend | Dioxus + CSS, served by v2 API | Preferred, gated by PoC for accessibility, bundle size, long conversation virtualization, input/streaming reliability |
-| Desktop | Web/PWA first; Tauri shell only if needed | Later |
-| iOS | Responsive web/PWA first; native shell only after proven fit | Later; do not assume Dioxus mobile parity |
-| Model routing | Local LLM for lightweight continuity and routing; remote models on demand | Decisioning cannot bypass user policy, budget, or approval |
-| Executors | Process adapters for Codex, Claude Code, local OpenAI-compatible models | Existing subscriptions remain the user's own credentials |
-| External integrations | 1.x adapters via versioned bridge initially; replace deliberately | WhatsApp and browser state must not be mutated by a prototype |
+| Application/domain | Rust, pinned stable toolchain | Explicit types and state machines; no claim that compilation proves business correctness |
+| API and async runtime | Axum + Tokio | One modular server, no microservice fleet or message broker in the initial deployment |
+| Persistence | SQLite + SQLx | Single-instance local-first store; short transactions, WAL, migration checks and durable outbox; no simultaneous PostgreSQL implementation |
+| Frontend | Dioxus 0.7 family + CSS, exact compatible versions pinned in implementation | Shared Rust components and API models for web and iOS; own API remains independent of Dioxus server-function internals |
+| Native clients | Dioxus mobile for iOS, desktop target as a packaging option; Android after iOS | Use supported WebView rendering, not an experimental custom renderer. A native bundle does not imply SwiftUI/UIKit widgets |
+| Provider execution | Isolated process adapters, Codex app-server stdio and Claude structured protocol | Feature-detect installed capabilities; explicit account selection and bounded sessions; never expose provider control sockets to the network |
+| Public client protocol | Versioned JSON HTTP + cursor-based SSE; WebSocket only when needed | Reconnect, backpressure and compatibility testable without a particular UI framework |
+| Packaging | Separate Docker Compose project and local CLI | Runs on the owner's computer or self-owned VPS. iOS is a client, not a CLI/agent host |
+| Integrations | Versioned capability/plugin protocol | Rust first-party adapters. Existing specialist services may remain isolated external processes; no rewrite of Chromium, Git, Codex, Claude or OXRM for language purity |
 
-## Product model
+Dioxus is the selected implementation path, not an invitation for parallel frontend-framework experiments. Its first milestone must prove input, streaming, accessibility and iOS build behavior. A failed gate requires a documented architectural correction, not silently replacing Rust with a TypeScript UI or claiming mobile readiness from a web screenshot. Small platform bindings and browser interop are permitted and inventoried.
 
-1. **Personal agent**: primary conversational entrypoint with independent routing/planning and human-visible work decisions.
-2. **Workspace/project**: long-lived context; optionally linked repository, virtual desk, connected apps, resource policy and budgets.
-3. **Conversation**: a durable graph node, not just a list row. Parent-child and fork relationships are explicit, immutable events. Cross-links do not mean shared access.
-4. **Task**: owner-approved or policy-permitted objective with immutable intent, lifecycle, timeouts, dependencies, origin, and traceable effects.
-5. **Worker session**: ephemeral or persistent executor binding, model/provider, operating context, checkpoints, leases and bounded concurrency.
-6. **Memory**: attributed, scoped, permissioned facts and project summaries. Explicit correction/deletion semantics, provenance and consent. Do not treat model summaries as the audit log.
-7. **Effect / approval**: external side effects guarded by policies and idempotency/reconciliation. A text reply is not execution authorization.
-8. **Event journal**: append-only ordered facts for transitions; derived views are rebuildable and carry a schema version.
+Rust's compiler prevents important memory/data-race errors; it does not prevent duplicated effects, faulty authorization, deadlocks or incorrect workflow design. Tests and deterministic control are the basis of trust. Abundant inference capacity is a development resource, not a correctness argument.
 
-### Required separation of concerns
+## 3. Product structure
+
+The owner enters a global Assistant and can open Projects. Each project has exactly one default visible conversation. Fast conversation and deep reasoning have separate persistent native sessions behind that transcript. Long work uses independently supervised worker runs. The owner can continue speaking while reasoning or execution is busy.
+
+Resources belong to projects: repository/worktrees, structured data, task presentation, plugin bindings and scoped desktop leases. Worker reuse, fork or fresh creation records lineage and the pinned context used. A provider session ID never becomes the canonical project or conversation ID.
+
+Navigation: **Assistant, Projects, Attention, History, Settings/Integration Hub**. Within a project: **Conversation, Work, Files, Data, Activity**. Worker/process details are inspectable under Work, not competing top-level chats. Replace old interaction structure; preserve useful outcomes and historical records.
+
+Local onboarding is installation, first-admin creation, one verified provider connection, then the global conversation. Missing optional integrations must not block the first project. The task/run/effect/approval records in v2 are the execution authority. OXRM is an intended unified user-facing project/data surface only after its actual API and synchronization model have been established; it is not a second execution authority.
+
+## 4. Architecture and dependency boundaries
+
+Start with a modest Cargo workspace under `v2/`:
 
 ```text
-UI (Dioxus / PWA)
-       |
-API & real-time projections (Axum, typed contracts)
-       |
-Application services
-  |       |         |          |
-Project  Conversation Task       Memory
-  \       |         |          /
-        Domain + event journal
-                  |
-     Policy / approvals / outbox
-                  |
-    Runtime adapters and connectors
-  (Codex, Claude, local, WhatsApp, browsers)
+crates/contracts       typed public IDs, DTOs, event envelopes; web-safe
+crates/domain          pure decisions, validation and transition rules
+crates/application     use cases and storage/runtime/capability ports
+crates/store-sqlite     transactions, migrations, outbox, snapshots
+crates/runtime         provider adapters, supervision and scheduling
+crates/plugins         manifests, connection/binding registry and brokers
+apps/server            Axum composition root and authenticated API
+apps/cli               local start/doctor/export/import commands
+apps/ui                shared Dioxus UI; web and mobile feature targets
 ```
 
-Avoid one central "god agent" that performs effects. The personal agent proposes and delegates; deterministic services enforce permissions, idempotency, resource scope, and replay.
+The domain does not import SQLx, Axum, Dioxus or connector implementations. Application code depends on domain and abstract ports; adapters implement those ports. Server composes implementations. UI imports contracts, not the database or privileged runtime. Avoid creating a crate for every noun; add boundaries only where tests and ownership justify them.
 
-## V2 UI: intentionally not a 1.x replica
+A message transaction stores the authenticated input, ordered event and reasoning-inbox item before returning acceptance. An unavailable model cannot block this transaction. Fast rendering and deep reasoning are independently scheduled. No database transaction is held while waiting for a model, subprocess, network call or UI client.
 
-- **Home**: ongoing personal conversation plus a short, ranked set of actual active projects, pending approvals, and important outcomes.
-- **Project**: project conversation, child conversations/forks, tasks and workers, resources, Git context, memory and virtual desk.
-- **Conversation**: streaming messages with nested context navigation and provenance; no raw agent logs mixed into user conversation.
-- **Work**: queued/running/blocked/completed tasks with real state and actionable recovery.
-- **Review**: approvals, external effects, audit evidence, and run comparisons.
-- **Settings**: identities, providers, integrations, routing, resource and budget policies.
-- Separate the **public marketing website** from the personal-agent application; do not rewrite unrelated public pages for the sake of language purity.
+Use transactional current-state tables plus an append-only metadata event journal and outbox, not a distributed event-sourcing platform. Replay reconstructs state/projections and never re-executes tools. Tokens are streamed in bounded batches; every token need not become a database transaction.
 
-## Behavioral invariants
+A task progresses to running only with supervisor admission evidence; completion requires acceptance evidence. Models propose state changes. Deterministic services authorize and apply them. Resource grants may narrow from instance to project to run, never widen implicitly.
 
-- Preserve original message, parent-child/fork links, worker/session IDs, timestamps, audit records, approvals and remote effect keys. Schema migrations must be idempotent.
-- Every admitted task has an audit trail. Retry never silently repeats a non-idempotent external action.
-- Distinguish queued vs running based on confirmed worker admission, not UI inference.
-- External-channel delivery must use an outbox and idempotency keys. No accidental duplicate WhatsApp messages.
-- A local model is a planner, not an authority to weaken access, approve effects or change budgets.
-- Policies are least-privilege, default deny; inherited grants may only narrow unless expressly reauthorized.
-- Memory has scope, provenance, correction/deletion paths, retention and tests; private records do not leak into other projects.
-- Never render replayed provider messages as new user requests. Never silently revive cancelled campaigns.
+## 5. Reliability, privacy and external effects
 
-## Definition of done
+Per-scope inbox order, session leases and resource fences prevent concurrent mutation of the same work. Separate sessions permit concurrency across independent work; one native session has at most one active turn unless an installed protocol proves otherwise. Stale workers cannot publish canonical completion or dispatch new effects.
 
-V2 must pass the offline and actual local acceptance matrix in [migration.md](migration.md), including real provider sessions, interrupted runs, approvals, restart recovery, user-level isolation, and duplicate suppression. It must boot from a clean install with a dedicated data directory; run with real credentials only after attended owner setup; import a copy of existing history without changing 1.x; present an accessible, usable UI; and support rollback. **Do not merge this branch to main merely because a prototype compiles.**
+Cancellation and deployment holds act in the control plane before waiting for reasoning. A clear Stop control is always available. Conservative handling of recognized owner stop instructions may establish a hold immediately; ambiguous wording must not be represented as a guaranteed stop. Already-dispatched external actions remain in-flight/uncertain until reconciled, not falsely rolled back.
 
-## Tracking
+Approvals bind the exact effect, target, argument digest, scope, expiry and one-time consumption. Unknown external outcomes are quarantined, not retried blindly. Remote idempotency/reconciliation is required before claiming duplicate prevention across a network failure; no general exactly-once promise.
 
-See [workstreams.md](workstreams.md) for the full rewrite plan. See [migration.md](migration.md) for local-first cutover/rollback. The starter workspace at [`v2/`](../../v2/) proves only domain transitions, not durable storage or production readiness.
+Raw messages, artifacts, short-lived model context, curated memory and audit metadata are separate data classes. Personal memory requires explicit owner consent, provenance, correction, forget and export. Replay must respect deletions. Keep removable sensitive payloads out of immutable journal metadata and explain backup retention. A successful task does not automatically authorize a new personal memory.
+
+The API checks actor and scope on every operation. Provider credentials stay server-side, out of UI/WASM, logs and repo. Worker worktrees are not sandboxes: untrusted execution additionally needs OS/container containment, restricted mounts and egress, no host Docker socket, and a capability broker. A separate plugin process is not by itself a security boundary. Third-party executable plugins stay disabled until containment is verified.
+
+## 6. Scope of a full rewrite
+
+Reimplement core conversations, project/resource model, tasks, session/worker management, scheduling, evidence/approvals, consented memory, settings, auth, API, UI, local installation and import/export. Rebuild selected connector functionality behind the plugin contract, with a parity ledger for everything used today.
+
+Preserve behavior where essential, not old screens or implementation accidents. Every existing capability is marked: replace, bridge temporarily, retain as an external service, intentionally defer, or propose retirement. A used capability cannot disappear silently. The public marketing site and unrelated applications remain outside this rewrite.
+
+A legacy bridge is temporary, separately deployable and versioned. It can expose a snapshot/read-only projection first. No core v2 launch may require a running NestJS server. End-to-end parity means running on a fresh installation without 1.x, apart from explicitly retained external services. See [workstreams.md](workstreams.md).
+
+## 7. Delivery and actual status
+
+The first deliverable is a locally runnable Rust server and Rust UI, with durable messages, a fake busy reasoning session, a separate worker, reliable Stop, evidence-backed results and restart recovery. Fake adapters prove software behavior, not real provider support. A second acceptance step uses a separately configured real local subscription session.
+
+The first-wave contracts and tests are in [first-implementation.md](first-implementation.md); complete migration gates are in [migration.md](migration.md). NEW development threads implement this track. The owner tests the candidate locally before deciding to replace the old installation. Mainline merge, production deployment, channel takeover, credential reuse and destructive migration remain separate approval gates.
+
+At plan revision, the branch contains planning files only. Implementation reports must cite actual commits, tests and artifacts; do not claim a working demo from documentation alone.
+
+## Primary technical references
+
+Checked 2026-10-18. These establish framework/protocol capabilities, not Orkestr implementation status:
+
+- [Dioxus current guide](https://dioxuslabs.com/learn/0.7/) and [crate documentation](https://docs.rs/dioxus/latest/dioxus/).
+- [Axum](https://docs.rs/axum/latest/axum/) and [SQLx](https://docs.rs/sqlx/latest/sqlx/).
+- [Rust concurrency limitations](https://doc.rust-lang.org/nomicon/races.html).
+- [Codex app-server protocol](https://developers.openai.com/codex/app-server/).
+- [Claude programmatic execution](https://code.claude.com/docs/en/headless). Do not assume a mode recommended for API automation supports subscription credentials; verify the installed mode and permissions.
+- [SQLite consistent backup](https://sqlite.org/backup.html).
