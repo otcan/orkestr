@@ -148,3 +148,58 @@ async fn exact_worker_status_never_replaces_deep_and_revocation_refuses_read() {
         Err(RuntimeStoreError::Unauthorized)
     ));
 }
+
+#[tokio::test]
+async fn attachment_checks_consumed_durable_parent_even_with_identical_ready_binding() {
+    for substitute_parent in [false, true] {
+        let f = setup().await;
+        let (parent, input) = running(&f).await;
+        let WorkerDelegationResult::Fresh(delegation) = f
+            .handle
+            .delegate_worker(&f.token, &parent.run.run_id, &input)
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let admission = f.handle.admit_worker(&f.token, delegation).await.unwrap();
+        let DispatchClaimResult::Reserved(reservation) = f
+            .handle
+            .claim_provider_dispatch(&admission, "attachment")
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let ExecutionConsumption::Dispatch(capability) =
+            f.handle.consume_execution(&reservation).await.unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(capability.parent_run.as_ref(), Some(&parent.run.run_id));
+        // Isolate the attachment boundary: both transitions carry the exact same
+        // confirmed Ready binding/context; only the retained setup parent differs.
+        let ready = capability.provider().binding.clone();
+        let transition = crate::production_runtime::metadata::ReadySessionTransition {
+            metadata: crate::production_runtime::metadata::BoundSessionMetadata {
+                context: f.handle.context().unwrap().clone(),
+                binding: ready.clone(),
+                parent_run: Some(if substitute_parent {
+                    RunId(Uuid::new_v4())
+                } else {
+                    parent.run.run_id.clone()
+                }),
+                resume: None,
+            },
+            ready,
+        };
+        let before = ledger(&f.store).await;
+        let result = transition.attach_execution(*capability);
+        if substitute_parent {
+            assert!(matches!(result, Err(RuntimeStoreError::Fenced)));
+        } else {
+            assert!(result.is_ok());
+        }
+        assert_eq!(ledger(&f.store).await, before);
+    }
+}
