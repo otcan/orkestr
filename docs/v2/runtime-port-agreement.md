@@ -1,4 +1,7 @@
-# Runtime port v4: canonical shared handoff
+# Runtime port v5: canonical shared handoff
+
+Revision v5 at the end of this document is authoritative where it supersedes
+historical signatures, DTO placement and replay policies below.
 
 The required V2-012/020 contract supersedes internal runtime ports v0, v1 and v2. HTTP intake
 contract version 0, HTTP event schema 1, and migration `0001_intake.sql` remain
@@ -284,3 +287,43 @@ This handoff offers no durable rejected-evidence storage API; runtime must repor
 that limitation rather than claim evidence was persisted. Unavailable/Busy keeps
 the identical pending delivery for bounded retry. No automatic provider restart
 or effect replay is authorized by either outcome.
+
+## Authoritative revision v5: contiguous delivery and lost ACK
+
+This section supersedes earlier record_observation signatures and authority-before-
+dedup rules in this historical agreement. The sole durable provider delivery port
+is now application::runtime::RuntimeStore::append_provider_event(owner,
+&ProviderAdmission, &ProviderEventInput) -> impl Future<Output =
+Result<ProviderEventReceipt>> + Send. No second record/append port exists.
+
+Application-owned ProviderAdmission contains run: RunAdmission and binding: Binding;
+ProviderEventInput contains typed run/session IDs, u64 lease_generation,
+dispatch_fence and sequence, plus ProviderEvent. ProviderEvent variants are Started,
+Progress(String), ApprovalRequested, CompletedProposal { synthetic }, Failed,
+Stopped and Lost. ProviderEventReceipt contains canonical EventId, scope_sequence,
+sequence, resulting state and duplicate. Native references and progress text stay
+application-only. No application serde_json dependency or caller digest is added.
+
+Authenticate owner and run/session association before looking up the committed
+(run_id, sequence). An identical semantic replay returns the original receipt even
+if its old lease has expired or fence advanced, without a new transition or write.
+Changed input under that sequence conflicts. For a new sequence, require next
+contiguous integer starting at one, checked i64 bounds, live lease/fence and legal
+transition. Semantic identity includes original run/session/lease/fence/sequence
+and typed event; core derives the digest using a versioned canonical encoding.
+Do not renew/rewrite the input to retry a lost acknowledgement.
+
+Progress must be at most 8192 UTF-8 bytes on every adapter path. append must persist
+progress in a scoped removable payload store before committing metadata containing
+only its reference. That payload port is not implemented: progress append remains
+Unavailable, never raw journal text. ApprovalRequested is informational only.
+CompletedProposal never transitions to Succeeded. Cancellation control receipts
+must never authorize provider start/poll; an execution envelope must have Execution
+purpose and matching binding. New Stopped may acknowledge only current cancellation
+authority; it must never overwrite prior terminal evidence. Unavailable preserves
+exact pending input; Fenced/StaleLease are explicit refusal, never success.
+
+The SQLite adapter only exposes an Unavailable stub for this operation. Contiguous
+sequence/digest/receipt semantics, payload persistence and all durable runtime
+acceptance cases remain unimplemented. This source revision is for migration and
+independent review; source definitions are not passing store acceptance.

@@ -121,12 +121,12 @@ impl RuntimeStore for Store {
     async fn renew_lease(&self, _: &RunAdmission, _: u64) -> Result<RunAdmission> {
         Err(RuntimeStoreError::Unavailable)
     }
-    async fn record_observation(
+    async fn append_provider_event(
         &self,
-        _: &RunAdmission,
-        _: &str,
-        _: &ProviderObservation,
-    ) -> Result<ObservationReceipt> {
+        _: &OwnerId,
+        _: &ProviderAdmission,
+        _: &ProviderEventInput,
+    ) -> Result<ProviderEventReceipt> {
         Err(RuntimeStoreError::Unavailable)
     }
     async fn request_cancel(&self, _: &OwnerId, _: &RunId, _: &str) -> Result<CancelReceipt> {
