@@ -132,7 +132,8 @@ async fn registered_store_long_due_logout_restart_and_machine_revoke() {
 }
 #[tokio::test]
 async fn ordinary_store_refuses_and_shutdown_is_joinable_without_tick() {
-    let (store, bound, _, _, _, dir) = fixture().await;
+    let (store, _bound, _, _, _, dir) = fixture().await;
+    let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
     let mut ordinary = DurableTimerController::new(store.clone());
     assert!(matches!(
         ordinary.tick().await,

@@ -131,6 +131,10 @@ def main():
         case.process.wait(timeout=3)
         case.process.stderr.close()
         case.process = None
+        # A killed live supervisor cannot be stolen: wait for its real DB lease.
+        deadline = db_rows("SELECT lease_deadline_ms FROM production_supervisors WHERE namespace='orkestr:durable-timers'")[0][0]
+        while time.time() * 1000 <= deadline:
+            time.sleep(min(0.5, (deadline - time.time() * 1000) / 1000 + 0.01))
         case.start()
         assert ledger() == committed
         assert db_rows("SELECT * FROM durable_timer_authorities ORDER BY namespace,generation") == grant_rows

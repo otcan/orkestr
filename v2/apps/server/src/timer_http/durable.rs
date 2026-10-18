@@ -1,4 +1,4 @@
-//! Restart-safe controller leaf. Deep owns supervisor bootstrap and joined lifecycle.
+//! Restart-safe controller with authenticated supervisor lifecycle.
 //! No browser credentials, instruction cache, caller clock or HTTP dispatch port.
 use orkestr_v2_application::runtime::RuntimeStoreError;
 use orkestr_v2_store_sqlite::{history_import::HistoryError, Store};
@@ -76,14 +76,23 @@ impl DurableTimerController {
     ) -> Result<(), HistoryError> {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut renewal = tokio::time::Instant::now();
         loop {
             if *shutdown.borrow() {
-                return Ok(());
+                return self
+                    .supervisor
+                    .retire_timer_supervisor()
+                    .await
+                    .map_err(|_| HistoryError::Unauthorized);
             }
             tokio::select! {
-                changed=shutdown.changed()=>{if changed.is_err() || *shutdown.borrow(){return Ok(());}},
+                changed=shutdown.changed()=>{if changed.is_err() || *shutdown.borrow(){return self.supervisor.retire_timer_supervisor().await.map_err(|_| HistoryError::Unauthorized);}},
                 _=interval.tick()=>{
                     self.supervisor.heartbeat_supervisor().await.map_err(|_| HistoryError::Unauthorized)?;
+                    if renewal.elapsed() >= Duration::from_secs(3600) {
+                        self.supervisor.renew_timer_supervisor_credential().await.map_err(|_| HistoryError::Unauthorized)?;
+                        renewal = tokio::time::Instant::now();
+                    }
                     self.tick().await?;
                 }
             }

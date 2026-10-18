@@ -1,7 +1,4 @@
 //! Trusted local scheduler configuration, never an HTTP/browser selector.
-use orkestr_v2_application::runtime::{
-    ProductionSupervisorConfig, ProductionTakeover, ProviderKind,
-};
 use orkestr_v2_store_sqlite::Store;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -67,15 +64,7 @@ pub async fn load(store: &Store, home: &Path, path: &Path) -> Result<Store, &'st
         .map_err(|_| "invalid timer machine credential")?
         .trim();
     store
-        .authorize_supervisor(
-            token,
-            ProductionSupervisorConfig {
-                provider: ProviderKind::Codex,
-                namespace: "orkestr:durable-timers".into(),
-                supervisor_key: "ordinary-timer-scheduler".into(),
-                takeover: ProductionTakeover::First,
-            },
-        )
+        .authorize_timer_supervisor(token)
         .await
         .map_err(|_| "timer supervisor bootstrap refused")
 }
