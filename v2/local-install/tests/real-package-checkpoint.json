@@ -8,13 +8,17 @@
     "real stopped SQLite API backup/integrity/hash/message count",
     "real restart/session/history/receipt persistence",
     "same-binary version-label package switch/restart/history; no cross-version schema claim",
-    "final stopped doctor/port released; synthetic directory cleanup"
+    "final stopped doctor/port released; synthetic directory cleanup",
+    "included reviewed Linux path guard executed in source/package/install/doctor/backup/restart paths"
   ],
+  "path_guard_sha256": "14024a788eca7a1f5fc5c99e62e5cbaca2f8371dfc5c180deb627238eaa3ab28",
+  "path_guard_source_commit": "faa82e23caaf556a2b55e00475659d3a613f050b",
   "scope": "mixed-revision installation/HTTP checkpoint; not current candidate browser/execution acceptance",
-  "snapshot_database_sha256": "0c713ac90b0a9e96042b25b5573bb89e6756e071cde7c7bec4eda3278cf16baf",
+  "snapshot_database_sha256": "84d87bb23886fdc36f6ea78c0838251576ad674c0df5ce06527e7cd044d0c3c4",
   "snapshot_message_count": 1,
   "source_commit_declared": "c8358b7fdd6fadbd3853a9067157f4c3876d394e",
   "status": "passed",
+  "tooling_commit": "3479313cf127f7e4bda591442376f4bbc7dd7c00",
   "ui_file_count": 10,
   "ui_index_sha256": "a1deffd301c9678a710aa8b5fd6315250a8cc788e714fc86a25a07b193ca7e79",
   "ui_inventory_sha256": "451288dc9def9a20c3750716c142107553375c86a1935158342592c8f39b537f",
@@ -27,7 +31,7 @@
     "live providers",
     "remote CI",
     "cross-version schema compatibility",
-    "mount/inode alias isolation"
+    "privileged bind-mount alias probe"
   ],
   "wasm_sha256": {
     "orkestr_v2_ui_bg.wasm": "4b191a94f6c9dcb9b4963873050f4bb54dfb7337ed2b7939fd72a406d8d6edb5"

@@ -39,10 +39,26 @@ The first real run exposed a port probe rejecting TIME_WAIT after a successful
 stop. SO_REUSEADDR fixes restart probing without SO_REUSEPORT or killing an
 occupant. Mock regression checks both socket configuration and busy refusal.
 Snapshot validation now rejects a manifest symlink before reading it; its
-synthetic regression passes. Final result: 31/31 lightweight tests and the full
+synthetic regression passes. Initial result: 31/31 lightweight tests and the full
 real HTTP probe passed; no owned child or synthetic installation remains.
 
 Unexecuted gates: macOS, Docker, browser interaction/bootstrap handoff, live
-providers, remote CI, cross-version schemas, mount/inode alias isolation, and
+providers, remote CI, cross-version schemas, privileged bind-mount alias probing, and
 restore apply. Restore apply requires reviewed schema/instance binding and
 dormant-work/auth policy; user permission is not the missing dependency.
+
+The changed-path lifecycle was rerun successfully with launcher/tooling commit
+`3479313cf127f7e4bda591442376f4bbc7dd7c00` and the reviewed Linux identity guard
+from `faa82e23caaf556a2b55e00475659d3a613f050b` included in each package. The
+evidence JSON now records that run, its guard hash and the unchanged producer
+binary/UI hashes. The guard actually executed during package assembly, fresh
+installation, existing-home doctor/lifecycle checks, backup, and package switch.
+A fresh private parent and the assigned loopback port were used; binary identity
+and port availability were rechecked before launch. All eight lifecycle checks
+passed, the validated snapshot contained one synthetic message, both normal
+restart and same-binary package-switch restart preserved history, and final
+owned stop/port release and synthetic directory cleanup completed. No restore
+apply, privileged mount probe, browser interaction or cross-version schema test
+was performed. The combined lightweight suite at this tooling revision had
+already passed 74/74 tests. This remains the historical mixed-revision
+installation/HTTP checkpoint, not current PR80 browser/execution acceptance.

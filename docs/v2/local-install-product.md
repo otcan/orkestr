@@ -214,6 +214,7 @@ leaves, unsupported-filesystem refusal, and mount-topology change detection.
 After canonical-return and packaged-home wiring fixes, the combined lightweight
 suite passed **74/74** tests. This includes 27 helper tests and 16 consumer API
 wiring tests. Restore-preview rejects aliases before opening the snapshot.
-No host mounts or namespaces changed; optional private-mount and actual-server
-probes were not rerun for this integration. The earlier HTTP checkpoint remains
-evidence only for its recorded revision.
+No host mounts or namespaces changed; the optional private-mount probe was not
+rerun here. The changed-path actual-server lifecycle subsequently passed with
+this guard included; see the updated HTTP checkpoint for tooling and historical
+binary/UI identities. It remains installation evidence for those revisions only.
