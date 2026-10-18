@@ -19,6 +19,15 @@ pub enum RuntimeStoreError {
 }
 pub type Result<T> = std::result::Result<T, RuntimeStoreError>;
 
+/// Per-call result, deliberately not serialized or persisted as an idempotent receipt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunAdmissionResult {
+    pub admission: RunAdmission,
+    /// True only for the invocation that commits the first admission/session turn.
+    /// False for EVERY identical replay, including an original Execution admission.
+    pub is_new: bool,
+}
+
 /// The full port is published, but no SQLite runtime adapter exists yet.
 /// Implementations must return Unavailable for any unimplemented operation.
 /// Unsupported provider commands are a separate runtime capability blocker.
@@ -53,14 +62,21 @@ pub trait RuntimeStore: Send + Sync {
 
     /// Validate ownership/claim/generation/fence, persist Starting and acknowledge claim
     /// in the SAME transaction, closing the admit/ack crash gap. RunId is store assigned.
-    /// Identical request replay returns original admission; changed replay conflicts.
+    /// Identical replay returns the original admission with is_new=false; changed
+    /// semantic input conflicts. Only the inserting invocation returns is_new=true.
+    /// Compute this flag per transaction; never persist/replay a true result.
+    /// Concurrent identical admissions have at most one true result. Original
+    /// Execution purpose on a replay does not authorize provider start.
+    /// Crash after admission and before start leaves unknown dispatch requiring
+    /// reconciliation, never automatic provider restart. Runtime validates scope,
+    /// session and authoritative role before dispatch; cancellation purpose cannot start.
     async fn admit_run(
         &self,
         claim: &InboxClaim,
         binding_id: &SessionId,
         expected_generation: u64,
         request_key: &str,
-    ) -> Result<RunAdmission>;
+    ) -> Result<RunAdmissionResult>;
 
     /// Confirm opaque native identity with event-key dedup; reject cross-role aliasing.
     /// Return updated admission. A missing identity never means a session is Ready.
