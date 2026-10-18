@@ -200,12 +200,16 @@ export async function listPersonalAgentEvents({ afterCursor = null, limit = 100 
   const after = parseCursor(afterCursor);
   const pageSize = Math.max(1, Math.min(200, Number(limit) || 100));
   const db = await openAgentJobDb(env);
-  const highWater = Number(db.prepare("select coalesce(max(seq), 0) as seq from personal_agent_event_outbox").get().seq);
+  // One statement, so both aggregates come from the same snapshot even while
+  // another process publishes or queues events.
+  const snapshot = db.prepare(`select coalesce(max(seq), 0) as high,
+    min(case when dispatched_at is null then seq end) as first_pending
+    from personal_agent_event_outbox`).get();
+  const highWater = Number(snapshot.high);
   if (after > highWater) fail("personal_agent_event_cursor_ahead", 409);
   // Page only the contiguous dispatched prefix; rows still in the outbox
   // (beyond one dispatch batch, or awaiting a readable append) keep hasMore.
-  const firstPending = db.prepare("select min(seq) as seq from personal_agent_event_outbox where dispatched_at is null").get().seq;
-  const visible = firstPending == null ? highWater : Number(firstPending) - 1;
+  const visible = snapshot.first_pending == null ? highWater : Math.min(highWater, Number(snapshot.first_pending) - 1);
 
   const bySequence = new Map();
   for await (const event of retainedEvents(env)) {
