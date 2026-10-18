@@ -2,13 +2,14 @@
   "format": "orkestr-v2-claude-package-v1",
   "entry": "claude_server.py",
   "files": {
-    "claude_server.py": "1b527275f2d0f18b43d988144dc24000f56b6f1f574882b69abe36c775d9e04c",
+    "claude_server.py": "e66ed5ce8f13d9b4e589783c2bc3144973c6c2c8db634a8bb3a7d63130cf37f0",
     "claude_connector.py": "3a2afb5d5be4abca7d0abc43706ce1d1aff233ecadd03e82caa5a9c46cf75a29",
     "claude_protocol.py": "edcca49eab866db1ccfec89487509b1e2d7268e51f45fc434b8bba28f0a73061",
     "protocol.py": "1f49f3c50e76f0f5cf9a9db9d1d696d400b2fd4ca0be66d7e6bc341c282a6156",
-    "transport.py": "3a19bee01f149bac64d274bc684482db74a293dc59815786982bcf0e39d19432",
+    "transport.py": "b0d4536e434be49c5a5af1b79631224379436d83d95257a187b7993e9706ac4e",
     "claude_resume.py": "ecc014ec6578791adc2086b3d83dc161c61fbdffa043c957b0cc919c9a2d2850",
-    "claude_bootstrap.py": "5fda8c272078640696b7ec2069829454f348fc13db586b7ca6916d75df236244"
+    "claude_bootstrap.py": "5fda8c272078640696b7ec2069829454f348fc13db586b7ca6916d75df236244",
+    "reaping.py": "7599807704548ab3c0056a15cf5a392b6475b28658ae30ad8f6d303f8bb43590"
   },
   "activation": "held-installed-cli-and-runtime-composition-review"
 }

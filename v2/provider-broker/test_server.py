@@ -47,7 +47,7 @@ class ServerTests(unittest.TestCase):
     def owned_case(self, commit, stop_before_write=False):
         with tempfile.TemporaryDirectory(prefix="provider-broker-synthetic-") as root:
             root = Path(root).resolve()
-            for name in ["configuration.py", "protocol.py", "transport.py", "server.py"]:
+            for name in ["configuration.py", "protocol.py", "transport.py", "server.py", "reaping.py"]:
                 shutil.copy(Path(__file__).with_name(name), root / name)
             for name in ["account", "workspace", "home", "tmp"]:
                 (root / name).mkdir()
@@ -142,7 +142,7 @@ class ServerTests(unittest.TestCase):
                     child.stdin.close()
                 else:
                     child.stdin.close()
-                    self.assertEqual(child.wait(timeout=5), 0)
+                    self.assertEqual(child.wait(timeout=5), 73)
                 with self.assertRaises(ProcessLookupError):
                     os.kill(inspection["pid"], 0)  # observation only; never signals
             finally:
