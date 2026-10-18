@@ -1,6 +1,7 @@
 """Synthetic context and mocked Docker checks. No Docker daemon/server is used."""
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
@@ -172,6 +173,25 @@ class DistributionTests(unittest.TestCase):
         with patch.object(probe, "run", side_effect=command) as run, patch.object(probe.socket, "socket"):
             with self.assertRaises(subprocess.CalledProcessError):
                 probe.probe(**args)
+        calls = [call.args for call in run.call_args_list]
+        self.assertIn("down", calls[-2])
+        self.assertIn("--volumes", calls[-2])
+        self.assertEqual(calls[-1][:2], ("image", "rm"))
+
+    def test_acceptance_failure_still_tears_down_owned_resources(self):
+        args = self.probe_args()
+        def command(*items):
+            return args["reviewed_image_id"] if items[:2] == ("image", "inspect") else ""
+        health = io.BytesIO(b"{}"); health.status = 200
+        index = io.BytesIO((args["context"] / "ui/index.html").read_bytes()); index.status = 200
+        callback = Mock(side_effect=RuntimeError("synthetic acceptance failure"))
+        with patch.object(probe, "run", side_effect=command) as run, \
+             patch.object(probe.socket, "socket"), \
+             patch.object(probe.urllib.request, "build_opener") as opener:
+            opener.return_value.open.side_effect = [health, index]
+            with self.assertRaisesRegex(RuntimeError, "acceptance failure"):
+                probe.probe(**args, acceptance=callback)
+        callback.assert_called_once()
         calls = [call.args for call in run.call_args_list]
         self.assertIn("down", calls[-2])
         self.assertIn("--volumes", calls[-2])

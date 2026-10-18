@@ -17,7 +17,7 @@ def run(*args):
     return subprocess.run([*DOCKER, *args], text=True, capture_output=True, check=True, timeout=75).stdout.strip()
 
 
-def probe(context, reviewed_image_id, reviewed_compose_sha256):
+def probe(context, reviewed_image_id, reviewed_compose_sha256, acceptance=None):
     context = Path(context).resolve()
     compose = context / "compose.json"
     if hashlib.sha256(compose.read_bytes()).hexdigest() != reviewed_compose_sha256:
@@ -57,7 +57,10 @@ def probe(context, reviewed_image_id, reviewed_compose_sha256):
         with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(manifest["origin"] + "/", timeout=3) as response:
             if hashlib.sha256(response.read()).hexdigest() != manifest["files"]["ui/index.html"]:
                 raise RuntimeError("container served UI differs from packaged artifact")
-        return {"status": "passed", "scope": "owned container health/static HTTP only", "image": reviewed_image_id}
+        result = {"status": "passed", "scope": "owned container health/static HTTP only", "image": reviewed_image_id}
+        if acceptance is not None:
+            result["candidate_acceptance"] = acceptance(context, name, image, manifest)
+        return result
     finally:
         # Only the unique prechecked project and its reviewed owned image are touched.
         # If down fails, retain image and surface cleanup failure for operator inspection.
