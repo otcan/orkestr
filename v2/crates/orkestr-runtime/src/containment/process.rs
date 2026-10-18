@@ -64,27 +64,45 @@ pub(super) fn start_reaper(active: Arc<AtomicUsize>) -> Result<Sender<Child>, Er
     Ok(sender)
 }
 
-struct Live {
-    child: Option<Child>,
-    framing: Framing,
+pub(super) struct Live {
+    pub(super) child: Option<Child>,
+    pub(super) framing: Framing,
 }
 
 pub(super) struct Process {
-    live: Mutex<Live>,
+    pub(super) live: Mutex<Live>,
     reaper: Sender<Child>,
-    workspace: std::path::PathBuf,
-    max_frame: usize,
+    pub(super) workspace: std::path::PathBuf,
+    pub(super) max_frame: usize,
 }
 
 impl Process {
     pub fn spawn(executor: &Executor) -> Result<Arc<Self>, Error> {
-        let mut command = Command::new(&executor.program);
+        Self::spawn_config(
+            &executor.program,
+            &executor.args,
+            &executor.directories,
+            executor.bounds,
+            &executor.shared.active,
+            &executor.shared.reaper,
+        )
+    }
+
+    pub(super) fn spawn_config(
+        program: &std::path::Path,
+        args: &[std::ffi::OsString],
+        directories: &super::ChildDirectories,
+        bounds: super::TransportBounds,
+        active: &Arc<AtomicUsize>,
+        reaper: &Sender<Child>,
+    ) -> Result<Arc<Self>, Error> {
+        let mut command = Command::new(program);
         command
-            .args(&executor.args)
+            .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        executor.directories.configure(&mut command);
+        directories.configure(&mut command);
         sys::configure_command(&mut command);
         #[cfg(unix)]
         {
@@ -92,7 +110,7 @@ impl Process {
             command.process_group(0);
         }
         let mut child = command.spawn().map_err(|_| Error::Io)?;
-        executor.shared.active.fetch_add(1, Ordering::AcqRel);
+        active.fetch_add(1, Ordering::AcqRel);
         let input = child.stdin.take().ok_or(Error::Io);
         let output = child.stdout.take().ok_or(Error::Io);
         let pipes = input.and_then(|input| output.map(|output| (input, output)));
@@ -105,18 +123,18 @@ impl Process {
             Ok(pipes) => pipes,
             Err(error) => {
                 let _ = sys::signal_group(child.id(), Signal::Kill);
-                let _ = executor.shared.reaper.send(child);
+                let _ = reaper.send(child);
                 return Err(error);
             }
         };
         Ok(Arc::new(Self {
             live: Mutex::new(Live {
                 child: Some(child),
-                framing: Framing::new(input, output, executor.bounds),
+                framing: Framing::new(input, output, bounds),
             }),
-            reaper: executor.shared.reaper.clone(),
-            workspace: executor.directories.workspace().to_owned(),
-            max_frame: executor.bounds.max_frame_bytes,
+            reaper: reaper.clone(),
+            workspace: directories.workspace().to_owned(),
+            max_frame: bounds.max_frame_bytes,
         }))
     }
 
@@ -233,7 +251,10 @@ impl OwnedChild {
     }
 }
 
-fn validate_metadata(frame: &[u8], workspace: &std::path::Path) -> Result<Vec<u8>, Error> {
+pub(super) fn validate_metadata(
+    frame: &[u8],
+    workspace: &std::path::Path,
+) -> Result<Vec<u8>, Error> {
     // Bound before JSON parsing, even when a caller bypasses framing limits.
     if frame.len() > 1048576 {
         return Err(Error::FrameTooLarge);
