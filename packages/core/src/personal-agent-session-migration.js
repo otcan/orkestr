@@ -56,14 +56,14 @@ export function migratePersonalAgentSessions(db, { dryRun = true } = {}) {
   const plan = planPersonalAgentSessionMigration(db);
   if (dryRun) return plan;
   if (plan.prerequisiteMissing) throw new Error("personal_agent_session_conversations_required");
-  if (plan.tablePresent && (plan.missingColumns.length || !plan.schemaCompatible || plan.missingTriggers.length)) {
+  if (plan.tablePresent && (plan.missingColumns.length || !plan.schemaCompatible)) {
     throw new Error("personal_agent_session_schema_incompatible");
   }
 
   db.exec("begin immediate");
   try {
     const current = planPersonalAgentSessionMigration(db);
-    if (current.prerequisiteMissing || (current.tablePresent && (!current.schemaCompatible || current.missingColumns.length || current.missingTriggers.length))) {
+    if (current.prerequisiteMissing || (current.tablePresent && (!current.schemaCompatible || current.missingColumns.length))) {
       throw new Error("personal_agent_session_schema_incompatible");
     }
     db.exec(`create table if not exists ${tableName} (
@@ -97,7 +97,9 @@ export function migratePersonalAgentSessions(db, { dryRun = true } = {}) {
       where native_session_id is not null`);
     db.exec("create index if not exists personal_agent_sessions_scope_lifecycle on personal_agent_sessions(scope_kind, scope_id, lifecycle, updated_at)");
     db.exec("create index if not exists personal_agent_sessions_lease on personal_agent_sessions(lease_expires_at) where lease_token is not null");
-    db.exec(`create trigger if not exists personal_agent_sessions_scope_insert
+    db.exec("drop trigger if exists personal_agent_sessions_scope_insert");
+    db.exec("drop trigger if exists personal_agent_sessions_scope_update");
+    db.exec(`create trigger personal_agent_sessions_scope_insert
       before insert on personal_agent_sessions
       when not exists (
         select 1 from personal_agent_conversations c where c.id = new.conversation_id
@@ -106,7 +108,7 @@ export function migratePersonalAgentSessions(db, { dryRun = true } = {}) {
             or (c.scope_kind = 'project' and c.project_id = new.scope_id))
       )
       begin select raise(abort, 'personal_agent_session_scope_mismatch'); end`);
-    db.exec(`create trigger if not exists personal_agent_sessions_scope_update
+    db.exec(`create trigger personal_agent_sessions_scope_update
       before update of conversation_id, scope_kind, scope_id on personal_agent_sessions
       when not exists (
         select 1 from personal_agent_conversations c where c.id = new.conversation_id
@@ -120,5 +122,5 @@ export function migratePersonalAgentSessions(db, { dryRun = true } = {}) {
     try { db.exec("rollback"); } catch {}
     throw error;
   }
-  return { ...plan, dryRun: false, tablePresent: true, missingColumns: [] };
+  return { ...plan, dryRun: false, tablePresent: true, missingColumns: [], missingTriggers: [] };
 }

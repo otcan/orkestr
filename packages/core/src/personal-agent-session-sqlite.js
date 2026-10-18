@@ -83,9 +83,9 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
     },
     acquireLease(sessionId, { expectedVersion, ttlMs }) {
       if (!Number.isSafeInteger(ttlMs) || ttlMs < 1) throw sessionError("personal_agent_session_invalid_lease_ttl", 400);
-      const at = now();
       const token = crypto.randomBytes(24).toString("base64url");
       return tx(db, () => {
+        const at = now();
         const current = getStatement.get(sessionId);
         if (!current) throw sessionError("personal_agent_session_not_found", 404);
         const result = insertLeaseStatement.run(token, at + ttlMs, new Date(at).toISOString(), sessionId, expectedVersion);
@@ -94,8 +94,11 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
       });
     },
     update(sessionId, { expectedVersion, leaseToken, patch }) {
-      const at = now();
+      if (patch.leaseTtlMs !== undefined && (!Number.isSafeInteger(patch.leaseTtlMs) || patch.leaseTtlMs < 1)) {
+        throw sessionError("personal_agent_session_invalid_lease_ttl", 400);
+      }
       return tx(db, () => {
+        const at = now();
         const current = getStatement.get(sessionId);
         if (!current) throw sessionError("personal_agent_session_not_found", 404);
         const next = {
@@ -107,7 +110,6 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
           leaseToken: patch.releaseLease ? null : leaseToken,
           leaseExpiresAt: patch.releaseLease ? null : at + (patch.leaseTtlMs ?? Math.max(1, current.lease_expires_at - at)),
         };
-        if (!Number.isSafeInteger(next.leaseExpiresAt) && next.leaseExpiresAt !== null) throw sessionError("personal_agent_session_invalid_lease_ttl", 400);
         const result = updateStatement.run(
           next.lifecycle, next.blockedReason, next.nativeSessionId, next.heartbeatAt, next.modelProfileJson,
           next.leaseToken, next.leaseExpiresAt, new Date(at).toISOString(), sessionId, expectedVersion, leaseToken, at,
