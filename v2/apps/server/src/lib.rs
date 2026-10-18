@@ -1,4 +1,4 @@
-//! Minimal authenticated local API. Bearer sessions avoid ambient cookie authority.
+//! Local API with separate machine Bearer and browser cookie authentication.
 use axum::{
     extract::{DefaultBodyLimit, State},
     http::{header, HeaderMap, StatusCode},
@@ -17,6 +17,7 @@ use std::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 mod auth;
+mod browser;
 mod routes;
 
 #[derive(Clone)]
@@ -24,6 +25,7 @@ pub struct AppState {
     pub store: Store,
     bootstrap_token: Arc<String>,
     origin: Arc<String>,
+    authority: Arc<String>,
     auth_window: Arc<Mutex<(Instant, u32)>>,
 }
 impl AppState {
@@ -35,10 +37,26 @@ impl AppState {
         if bootstrap_token.len() < 32 {
             return Err("bootstrap token needs at least 32 characters");
         }
+        let uri: axum::http::Uri = origin.parse().map_err(|_| "invalid origin")?;
+        if !matches!(uri.scheme_str(), Some("http" | "https"))
+            || uri.path_and_query().is_some_and(|p| p.as_str() != "/")
+            || origin.ends_with('/')
+        {
+            return Err("origin must be an http(s) origin without path");
+        }
+        let authority = uri
+            .authority()
+            .ok_or("origin needs authority")?
+            .as_str()
+            .to_owned();
+        if authority.contains('@') {
+            return Err("origin cannot contain user information");
+        }
         Ok(Self {
             store,
             bootstrap_token: Arc::new(bootstrap_token),
             origin: Arc::new(origin),
+            authority: Arc::new(authority),
             auth_window: Arc::new(Mutex::new((Instant::now(), 0))),
         })
     }
@@ -95,6 +113,12 @@ pub(crate) fn unauthorized() -> Error {
     )
 }
 pub(crate) async fn owner(state: &AppState, headers: &HeaderMap) -> Result<OwnerId, Error> {
+    if headers.contains_key(header::COOKIE) {
+        if headers.contains_key(header::AUTHORIZATION) {
+            return Err(unauthorized());
+        }
+        return browser::owner(state, headers).await;
+    }
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -117,6 +141,16 @@ async fn guard(
             return Error(StatusCode::FORBIDDEN, "origin_rejected", "Origin rejected")
                 .into_response();
         }
+    }
+    if let Err(error) = browser::guard(
+        &state,
+        request.method(),
+        request.uri().path(),
+        request.headers(),
+    )
+    .await
+    {
+        return error.into_response();
     }
     let mut response = match tokio::time::timeout(Duration::from_secs(10), next.run(request)).await
     {
@@ -143,6 +177,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false})) }))
         .route("/api/v2/setup",post(auth::setup))
         .route("/api/v2/session",post(auth::session))
+        .route("/api/v2/machine/session",post(auth::session))
+        .route("/api/v2/browser/session",post(browser::login).get(browser::session).delete(browser::logout))
         .route("/api/v2/projects",get(routes::projects).post(routes::create_project))
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
         .route("/api/v2/conversations/{id}/messages",post(routes::message))
