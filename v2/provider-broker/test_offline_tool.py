@@ -38,3 +38,23 @@ class OfflineToolTests(unittest.TestCase):
             if mutation=='extra':bad['result']['command']='shell'
             if mutation=='oversize':bad['result']['contentItems'][0]['text']='x'*8193
             with self.assertRaises(Refused):validate_result(bad,7)
+
+    def test_tool_result_outer_preserves_native_correlation(self):
+        from offline_tool import validate_submission
+        native={'id':'native-request','result':{'contentItems':[
+            {'type':'inputText','text':'bounded'}],'success':True}}
+        outer={'id':11,'method':'ToolResult','params':{
+            'owned_handle':'synthetic-owned','frame':native}}
+        clean=validate_submission(outer,'synthetic-owned','native-request')
+        self.assertEqual(clean['id'],11)
+        self.assertEqual(clean['params']['frame']['id'],'native-request')
+        outer['params']['frame']['result']['contentItems'][0]['text']='changed'
+        self.assertEqual(clean['params']['frame']['result']['contentItems'][0]['text'],'bounded')
+        for mutation in ('handle','native','method','extra'):
+            bad=copy.deepcopy(clean)
+            if mutation=='handle':bad['params']['owned_handle']='foreign'
+            if mutation=='native':bad['params']['frame']['id']='replacement'
+            if mutation=='method':bad['method']='BrokerMetadata'
+            if mutation=='extra':bad['params']['command']='shell'
+            with self.assertRaises(Refused):
+                validate_submission(bad,'synthetic-owned','native-request')

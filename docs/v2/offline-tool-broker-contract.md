@@ -32,8 +32,16 @@ text item, at most 8192 UTF-8 bytes, and success is a boolean. No image, audio,
 URL, command, path or environment extension is admitted. Runtime derives this
 result from the sealed dispatch outcome, not caller-supplied arbitrary bytes.
 
-The result envelope name and Prepared correlation remain an explicit Runtime
-interface prerequisite. Python must never write or queue the native result:
+The agreed outer envelope is
+`{id:<fresh outer>,method:"ToolResult",params:{owned_handle,frame:<native result>}}`.
+`BrokerPrepared` uses that fresh outer ID and exact owned handle. The inner frame
+retains the pending native request ID; no replacement native ID is allocated.
+`validate_submission` checks this closed shape only. Runtime owns monotonic outer
+IDs, pending-call/turn/child lineage and duplicate history. Routing remains
+unregistered pending Core's completed-result capability and dedicated current
+delivery fence. Preparation grants no authority.
+
+Python must never write or queue the native result:
 Runtime retains the sole provider stdin writer and performs every bounded
 suffix under the exact current purpose-specific Core fence. Waiting for native
 acknowledgements stays outside SQLite callbacks. A partial/uncertain write is
