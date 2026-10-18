@@ -38,7 +38,7 @@ pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
             });
         },
             h2 { if setup() { "Create first administrator" } else { "Sign in" } }
-            p { "Browser cookie session with CSRF-protected writes. Browser integration and security review remain pending. Native device auth is unavailable." }
+            p { "Sign in to your local assistant." }
             label { r#for: "username", "Username" }
             input { id: "username", autocomplete: "username", required: true, value: "{username}", oninput: move |e| username.set(e.value()) }
             label { r#for: "password", "Password" }
@@ -197,9 +197,7 @@ pub fn Conversation(
                         match sequence {
                             None => {
                                 resync = true;
-                                status.set(
-                                    "Unexpected event contract; history resync required.".into(),
-                                );
+                                status.set("History changed unexpectedly. Reloading…".into());
                             }
                             Some(sequence) if sequence > cursor => {
                                 match transport::snapshot(&id, &csrf, cursor, previous, sequence)

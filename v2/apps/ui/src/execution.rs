@@ -26,49 +26,88 @@ pub struct Sample {
 pub struct Execution {
     sample: Option<Sample>,
     connected: bool,
+    generation: u64,
+    scope: Option<(String, String)>,
+    received_ms: Option<u64>,
+    authorized: bool,
+    control_error: Option<String>,
 }
 impl Execution {
     pub const STALE_MS: u64 = 15_000;
+    /// Select explicitly, even when returning to the same run. Late responses retain old generation.
+    pub fn select(&mut self, conversation: &str, run: &str) -> u64 {
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("selection generation exhausted");
+        self.scope = Some((conversation.into(), run.into()));
+        self.sample = None;
+        self.received_ms = None;
+        self.connected = false;
+        self.authorized = false;
+        self.control_error = None;
+        self.generation
+    }
+    /// now_ms is client-monotonic elapsed time, never a wall-clock/server timestamp.
     pub fn apply(
         &mut self,
-        conversation: &str,
+        generation: u64,
         now_ms: u64,
         sample: Sample,
     ) -> Result<(), &'static str> {
-        if sample.conversation != conversation
+        if generation != self.generation
+            || self.scope.as_ref() != Some(&(sample.conversation.clone(), sample.run.clone()))
             || sample.run.is_empty()
-            || sample.observed_ms > now_ms
+            || self.received_ms.is_some_and(|last| now_ms < last)
             || sample
                 .progress
                 .is_some_and(|(done, total)| total == 0 || done > total)
             || sample.cpu_percent.is_some_and(|cpu| cpu > 100)
-            || self.sample.as_ref().is_some_and(|old| {
-                sample.revision <= old.revision || sample.observed_ms < old.observed_ms
-            })
+            || self
+                .sample
+                .as_ref()
+                .is_some_and(|old| sample.revision <= old.revision)
         {
             return Err("Invalid or regressing execution observation");
         }
         self.sample = Some(sample);
         self.connected = true;
+        self.received_ms = Some(now_ms);
+        self.authorized = true;
         Ok(())
     }
     pub fn disconnected(&mut self) {
         self.connected = false;
     }
+    pub fn authorization_lost(&mut self) {
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("selection generation exhausted");
+        self.authorized = false;
+    }
+    /// A failed request is visible and retryable, never a successful stop.
+    pub fn control_failed(&mut self) {
+        self.control_error = Some("Stop not confirmed. Check connection and retry.".into());
+    }
+    pub fn control_error(&self) -> Option<&str> {
+        self.control_error.as_deref()
+    }
     pub fn fresh(&self, now_ms: u64) -> bool {
         self.connected
-            && self.sample.as_ref().is_some_and(|s| {
-                now_ms >= s.observed_ms && now_ms - s.observed_ms <= Self::STALE_MS
-            })
+            && self
+                .received_ms
+                .is_some_and(|received| now_ms >= received && now_ms - received <= Self::STALE_MS)
     }
-    pub fn can_stop(&self, now_ms: u64) -> bool {
-        self.fresh(now_ms)
+    pub fn can_stop(&self, _now_ms: u64) -> bool {
+        self.authorized
             && self.sample.as_ref().is_some_and(|s| {
                 s.stop_supported && matches!(s.phase, Phase::Queued | Phase::Running)
             })
     }
     pub fn can_steer(&self, now_ms: u64) -> bool {
-        self.fresh(now_ms)
+        self.authorized
+            && self.fresh(now_ms)
             && self
                 .sample
                 .as_ref()
@@ -76,7 +115,7 @@ impl Execution {
     }
     pub fn summary(&self, now_ms: u64) -> String {
         match &self.sample {
-            None => "Execution status unavailable: awaiting server contract.".into(),
+            None => "Execution unavailable. Connect a provider to get started.".into(),
             Some(s) if !self.fresh(now_ms) => format!(
                 "Status stale; last confirmed {:?}. Reconnecting does not confirm completion.",
                 s.phase
@@ -104,7 +143,7 @@ impl Execution {
                     .map(|v| format!("{} MiB", v / 1_048_576))
                     .unwrap_or_else(|| "unavailable".into())
             ),
-            None => "CPU unavailable · RAM unavailable (no current server sample)".into(),
+            None => "CPU unavailable · RAM unavailable".into(),
         }
     }
 }

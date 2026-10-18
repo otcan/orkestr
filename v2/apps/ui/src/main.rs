@@ -39,8 +39,7 @@ fn App() -> Element {
                 global.set(session.global_conversation_id.clone());
                 current.set(session.global_conversation_id);
                 csrf.set(session.csrf_token);
-                notice
-                    .set("Session resumed. Browser integration validation remains pending.".into());
+                notice.set("Signed in.".into());
             }
             Err(error) => {
                 if error.status != 401 {
@@ -57,9 +56,9 @@ fn App() -> Element {
     rsx! {
         style { "{include_str!(\"style.css\")}" }
         main {
-            header { h1 { "Orkestr" } p { "Local assistant · durable intake" } }
-            p { class: "notice", "Browser cookie/CSRF client source. Independent security review and real browser acceptance remain pending. Native credential storage and device auth are unavailable." }
-            p { class: "notice", "Intake only: models, runs, Stop, approvals and memory are unavailable. Local Git is not provisioned; OXRM is unverified." }
+            header { h1 { "Orkestr" } p { "Local assistant" } }
+            p { class: "notice", "Preview: messages are saved locally. Provider execution is not connected." }
+            p { class: "notice", "Execution, Stop, approvals and memory are unavailable. Project resources are not connected." }
             p { role: "status", "{notice}" }
             if resuming() {
                 p { role: "status", "Checking browser session…" }
@@ -68,7 +67,7 @@ fn App() -> Element {
                     global.set(session.global_conversation_id.to_string());
                     current.set(session.global_conversation_id.to_string());
                     csrf.set(session.csrf_token);
-                    notice.set("Browser session created. Browser acceptance and independent security review remain pending.".into());
+                    notice.set("Signed in.".into());
                 } }
             } else {
                 nav { "aria-label": "Main",
@@ -115,7 +114,7 @@ fn App() -> Element {
                 } else if tab() == "Attention" {
                     p { "Approvals, blockers and task attention are unavailable. No pending-work count is inferred." }
                 } else {
-                    p { "Server API v0 with browser sessions. Provider setup, device auth and opt-in memory controls are unavailable. Optional external integrations are not required." }
+                    p { "Provider setup and memory controls are unavailable. External integrations are optional." }
                 }
             }
         }

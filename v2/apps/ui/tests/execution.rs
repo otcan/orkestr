@@ -19,16 +19,15 @@ fn sample() -> Sample {
     }
 }
 #[test]
-fn stale_disconnect_and_request_never_claim_stopped_or_enable_controls() {
+fn stale_telemetry_and_cancel_request_never_claim_stopped() {
     let mut state = Execution::default();
+    let generation = state.select("synthetic-conversation", "synthetic-run");
     assert!(!state.can_stop(1000));
-    state
-        .apply("synthetic-conversation", 1000, sample())
-        .unwrap();
+    state.apply(generation, 1000, sample()).unwrap();
     assert!(state.can_stop(1000) && state.can_steer(1000));
     assert!(state.summary(1000).contains("2/10"));
     assert!(state.resources(1000).contains("1 MiB"));
-    assert!(!state.can_stop(17000));
+    assert!(state.can_stop(17000));
     assert!(state.summary(17000).contains("stale"));
     assert!(!state.resources(17000).contains("25%"));
     state.disconnected();
@@ -36,38 +35,33 @@ fn stale_disconnect_and_request_never_claim_stopped_or_enable_controls() {
     let mut pending = sample();
     pending.revision = 2;
     pending.phase = Phase::CancellationRequested;
-    state
-        .apply("synthetic-conversation", 1000, pending)
-        .unwrap();
+    state.apply(generation, 1000, pending).unwrap();
     assert!(!state.can_stop(1000));
     assert!(!state.summary(1000).contains("Cancelled"));
     let mut confirmed = sample();
     confirmed.revision = 3;
     confirmed.phase = Phase::Cancelled;
-    state
-        .apply("synthetic-conversation", 1000, confirmed)
-        .unwrap();
+    state.apply(generation, 1000, confirmed).unwrap();
     assert!(state.summary(1000).contains("Cancelled"));
 }
 #[test]
 fn invalid_or_out_of_order_samples_preserve_confirmed_status() {
     let mut state = Execution::default();
-    state
-        .apply("synthetic-conversation", 1000, sample())
-        .unwrap();
+    let generation = state.select("synthetic-conversation", "synthetic-run");
+    state.apply(generation, 1000, sample()).unwrap();
     let before = state.summary(1000);
     for i in 0..6 {
         let mut bad = sample();
         bad.revision = 2;
         match i {
             0 => bad.conversation = "wrong".into(),
-            1 => bad.observed_ms = 1001,
+            1 => bad.run = "wrong-run".into(),
             2 => bad.revision = 1,
             3 => bad.progress = Some((11, 10)),
             4 => bad.cpu_percent = Some(101),
             _ => bad.run.clear(),
         }
-        assert!(state.apply("synthetic-conversation", 1000, bad).is_err());
+        assert!(state.apply(generation, 1000, bad).is_err());
         assert_eq!(state.summary(1000), before);
     }
 }
@@ -116,4 +110,56 @@ fn ten_thousand_history_rows_keep_render_window_bounded() {
         start.elapsed() < std::time::Duration::from_secs(5),
         "10k history processing exceeded generous local regression budget"
     );
+}
+
+#[test]
+fn navigation_new_run_and_skew_use_selection_generation_and_client_time() {
+    let mut state = Execution::default();
+    let first = state.select("synthetic-conversation", "synthetic-run");
+    let mut old = sample();
+    old.revision = 900;
+    old.observed_ms = u64::MAX;
+    state.apply(first, 1000, old.clone()).unwrap();
+    assert!(state.fresh(1000));
+    let second = state.select("other-project", "other-run");
+    assert!(!state.can_stop(1000));
+    let mut new = sample();
+    new.conversation = "other-project".into();
+    new.run = "other-run".into();
+    new.observed_ms = 0;
+    state.apply(second, 1001, new).unwrap();
+    assert!(state.fresh(1001));
+    assert!(state.apply(first, 1002, old).is_err());
+    let third = state.select("synthetic-conversation", "next-run");
+    let mut next = sample();
+    next.run = "next-run".into();
+    next.observed_ms = u64::MAX;
+    state.apply(third, 1003, next.clone()).unwrap();
+    next.revision = 2;
+    next.observed_ms = 0;
+    state.apply(third, 1004, next.clone()).unwrap();
+    next.revision = 3;
+    assert!(state.apply(third, 1003, next).is_err());
+    assert!(state.fresh(1004));
+}
+#[test]
+fn hung_provider_or_stream_loss_keeps_stop_retryable_until_authority_lost() {
+    let mut state = Execution::default();
+    let generation = state.select("synthetic-conversation", "synthetic-run");
+    state.apply(generation, 1000, sample()).unwrap();
+    // No model output for ten minutes, then stream disconnect: control is independent.
+    assert!(state.can_stop(601000));
+    assert!(!state.fresh(601000));
+    state.disconnected();
+    assert!(state.can_stop(601000));
+    state.control_failed();
+    assert!(state.control_error().unwrap().contains("not confirmed"));
+    assert!(state.can_stop(601000));
+    assert!(state.summary(601000).contains("Running"));
+    state.authorization_lost();
+    assert!(!state.can_stop(601000));
+    let mut late = sample();
+    late.revision = 2;
+    assert!(state.apply(generation, 601001, late).is_err());
+    assert!(!state.can_stop(601001));
 }
