@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
+import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
 import {scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 
@@ -15,6 +16,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   if (!Array.isArray(heldIds) || heldIds.some(id => typeof id !== 'string' || !id.trim()))
     throw new Error('group_held_inputs_invalid');
   const heldInputIds = new Set(heldIds);
+  const fencedThreads = scopedRouteMembership(config);
   if (config.appendDebugFooter === true && !['shouldAppendWhatsAppDebugFooter', 'stripWhatsAppDebugFooter', 'whatsappDebugFooter'].every(k => typeof formatter?.[k] === 'function'))
     throw new Error('group_footer_formatter_required');
   const progressSince = Date.parse(config.forwardProgressSince || '');
@@ -74,7 +76,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   }
 
   async function routeInput(input, group) {
-    if (routeFence && group.threadId === config.routeControl.threadId) {
+    if (routeFence && fencedThreads.has(group.threadId)) {
       const active = routeFence.current();
       if (active?.route !== config.routeControl.routeId || !Number.isFinite(Date.parse(input.created_at)) || Date.parse(input.created_at) < Date.parse(active.since)) return;
     }
