@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 
 import dormant_checkpoint
+import upgrade_authority
 from stopped_copy import copy_home
 from install_state import files
 
@@ -42,8 +43,8 @@ def verify_schema(home, count, checksums=None):
 
 
 def migration_edge(old, new):
-    require(type(old) is int and type(new) is int and (old,new) in {(14,15),(14,17),(14,20),(17,20),(14,24),(17,24),(14,28),(17,28)},
-            "unsupported migration edge; admitted edges: 14->15/17/20/24/28 and 17->20/24/28")
+    require(type(old) is int and type(new) is int and (old,new) in {(14,15),(14,17),(14,20),(17,20),(14,24),(17,24),(14,28),(17,28),(14,31),(17,31)},
+            "unsupported migration edge; admitted edges: 14->15/17/20/24/28/31 and 17->20/24/28/31")
     return old,new
 
 
@@ -61,7 +62,7 @@ def selected_package(args, side, binary, output, schema):
 def exercise(args):
     successor = getattr(args, 'new_schema', 15)
     predecessor, successor = migration_edge(getattr(args, 'old_schema', 14), successor)
-    require(successor!=28 or bool(getattr(args,'sqlx_checksums',None)), 'schema28 requires exact Core SQLx checksums; use candidate accept_upgrade with migrations-dir')
+    require(successor not in (28,31) or bool(getattr(args,'sqlx_checksums',None)), 'schema28/31 requires exact Core SQLx checksums; use candidate accept_upgrade with migrations-dir')
     old, new = Path(args.old_binary).resolve(), Path(args.new_binary).resolve()
     require(sha256(old) == args.old_sha256 and sha256(new) == args.new_sha256, 'pinned artifact mismatch')
     require(args.old_source != args.new_source and args.old_sha256 != args.new_sha256, 'distinct revisions required')
@@ -103,11 +104,14 @@ def exercise(args):
             preflight=root/'preflight-copy'
             copy_home(home,preflight)
             source_before=files(home/'data')
+            authority_before=upgrade_authority.snapshot(preflight) if successor==31 else None
             invoke(new_entry,'upgrade',preflight,'--package',new_package)
             process=launch(new_entry,preflight,client,log)
             verify_history(client,path,receipt,message)
             invoke(new_entry,'stop',preflight);require(process.wait(timeout=10)==0,'preflight copy stop');process=None
             verify_schema(preflight,successor,getattr(args,'sqlx_checksums',None))
+            if authority_before is not None:
+                evidence['preflight_authority']=upgrade_authority.verify(authority_before,upgrade_authority.snapshot(preflight))
             require(files(home/'data')==source_before,'copy-upgrade preflight changed original database/WAL/SHM')
             evidence['copy_upgrade_preflight']={'schema_versions':list(range(1,successor+1)),
                 'original_database_inventory_unchanged':True,'foreign_keys_checked':True}
@@ -118,12 +122,16 @@ def exercise(args):
             require(client.request('POST', path+'/messages', message) == (200, receipt), 'upgraded idempotency')
             invoke(new_entry, 'stop', home); require(process.wait(timeout=10) == 0, 'new stop'); process = None
             verify_schema(home,successor,getattr(args,'sqlx_checksums',None))
+            if authority_before is not None:
+                evidence['migration_authority']=upgrade_authority.verify(authority_before,upgrade_authority.snapshot(home))
             evidence['checks'].append(f'new executable migrated populated{predecessor} to{successor}; original session/history/idempotency retained')
             process = launch(new_entry, home, client, log)
             verify_history(client, path, receipt, message)
             require(client.request('POST', path+'/messages', message) == (200, receipt), 'successor reopen idempotency')
             invoke(new_entry, 'stop', home); require(process.wait(timeout=10) == 0, 'successor reopen stop'); process = None
             verify_schema(home,successor,getattr(args,'sqlx_checksums',None))
+            if authority_before is not None:
+                evidence['reopen_authority']=upgrade_authority.verify(authority_before,upgrade_authority.snapshot(home))
             evidence['checks'].append('successor reopened migrated home with original history/idempotency and unchanged schema')
             evidence['successor_dormant_restore']=dormant_checkpoint.exercise(
                 new_entry,new_package,home,root,args.port,root/'preserved-snapshot',list(range(1,successor+1)))

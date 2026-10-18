@@ -50,7 +50,7 @@ class UpgradePlanTests(unittest.TestCase):
         self.assertEqual(args.new_schema,24)
 
     def test_future_inventory_inspection_never_admits_execution(self):
-        for successor in (25,26):
+        for successor in (25,26,32,33):
             self.new['schema']['migrations'].update({f'{i:04d}_fixture.sql':'d'*64 for i in range(25,successor+1)})
             with patch.object(accept_upgrade.package_candidate,'verify',side_effect=[self.old,self.new]),patch.object(accept_upgrade.receipt,'sha',side_effect=lambda p:('e'*64 if str(p).startswith('/old') else 'f'*64)),patch.object(accept_upgrade,'source_inventory',return_value='1'*64),patch.object(accept_upgrade,'sqlx_inventory',return_value={}):
                 plan=accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,successor,Path('/core-migrations'))
@@ -90,3 +90,18 @@ class UpgradePlanTests(unittest.TestCase):
                 else:
                     with self.assertRaisesRegex(RuntimeError,'exact Core sources'):
                         accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,28)
+
+    def test_schema31_requires_reviewed_inventory_and_sqlx_checksums(self):
+        self.new['schema']['migrations'].update({f'{i:04d}_fixture.sql':'d'*64 for i in range(25,32)})
+        for digest in (accept_upgrade.SCHEMA31_INVENTORY,'0'*64):
+            with patch.object(accept_upgrade.package_candidate,'verify',side_effect=[self.old,self.new]),patch.object(accept_upgrade.receipt,'sha',side_effect=lambda p:('e'*64 if str(p).startswith('/old') else 'f'*64)),patch.object(accept_upgrade,'source_inventory',return_value=digest),patch.object(accept_upgrade,'sqlx_inventory',return_value={str(i):'a'*96 for i in range(1,32)}):
+                if digest==accept_upgrade.SCHEMA31_INVENTORY:
+                    plan=accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,31,Path('/core'))
+                    self.assertTrue(plan['execution_edge_admitted'])
+                    self.assertEqual(len(plan['sqlx_checksums']),31)
+                else:
+                    with self.assertRaisesRegex(RuntimeError,'reviewed Core413'):
+                        accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,31,Path('/core'))
+        with patch.object(accept_upgrade.package_candidate,'verify',side_effect=[self.old,self.new]),patch.object(accept_upgrade.receipt,'sha',side_effect=lambda p:('e'*64 if str(p).startswith('/old') else 'f'*64)):
+            with self.assertRaisesRegex(RuntimeError,'exact Core sources'):
+                accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,31)

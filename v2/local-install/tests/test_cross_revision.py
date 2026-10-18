@@ -25,12 +25,12 @@ class UpgradeInventoryTests(unittest.TestCase):
                 database.close()
 
     def test_supported_edges(self):
-        for edge in ((14,15),(14,17),(14,20),(17,20),(14,24),(17,24),(14,28),(17,28)):
+        for edge in ((14,15),(14,17),(14,20),(17,20),(14,24),(17,24),(14,28),(17,28),(14,31),(17,31)):
             self.assertEqual(cross_revision.migration_edge(*edge),edge)
 
     def test_unsupported_edges_refused_before_artifact_access(self):
         from types import SimpleNamespace
-        for edge in ((20,17),(17,17),(17,21),(15,20),(True,20)):
+        for edge in ((20,17),(17,17),(17,21),(17,32),(14,32),(15,20),(True,20)):
             with self.assertRaisesRegex(RuntimeError,'unsupported migration edge'):
                 cross_revision.exercise(SimpleNamespace(old_schema=edge[0],new_schema=edge[1]))
 
