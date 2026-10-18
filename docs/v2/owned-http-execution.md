@@ -88,8 +88,11 @@ requests a durable fence before local cleanup. Local child exit is not proof of
 provider Stop. Unexpected loss stays uncertain and requires reconciliation.
 Shutdown signals the owned supervisor before waiting for HTTP connections, and
 HTTP drain is bounded to two seconds; an open SSE stream cannot retain the child.
-The channel intentionally processes one turn; persistent follow-up, actual Stop,
-OS/credential isolation and real-provider acceptance remain separate work.
+The same child remains quiescent while awaiting owner acceptance and after
+accepted completion, with current-session checks and supervisor heartbeats.
+It spends no old execution authority while waiting. This checkpoint admits one
+turn; the sealed next-run attachment, actual Stop, OS/credential isolation and
+real-provider acceptance remain separate work.
 
 Focused verification (only synthetic executables and temporary state):
 

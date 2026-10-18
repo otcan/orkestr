@@ -70,17 +70,35 @@ impl ConfiguredExecution {
             .map_err(|_| "execution attachment is uncertain; automatic replay refused")?;
         let deadline = Instant::now() + Duration::from_secs(45);
         loop {
+            self.maintain(&mut heartbeat).await?;
             let status = self
                 .store
                 .execution_status(&self.owner, conversation)
                 .await
                 .map_err(|_| "execution status unavailable")?
                 .ok_or("execution status missing")?;
+            if status.run_id.as_ref() != Some(&run) {
+                return Err("execution scope changed; reconciliation required");
+            }
             if matches!(
                 status.phase,
-                ExecutionPhase::AwaitingAcceptance
-                    | ExecutionPhase::Completed
-                    | ExecutionPhase::Failed
+                ExecutionPhase::AwaitingAcceptance | ExecutionPhase::Completed
+            ) {
+                // Hold the same child while the owner decides and after accepted
+                // completion. No old execution fence is spent while quiescent.
+                // The typed next-run attachment is supplied by Runtime separately.
+                if *shutdown.borrow() {
+                    break;
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {},
+                    _ = shutdown.changed() => {},
+                }
+                continue;
+            }
+            if matches!(
+                status.phase,
+                ExecutionPhase::Failed
                     | ExecutionPhase::Blocked
                     | ExecutionPhase::Cancelled
                     | ExecutionPhase::CancelRequested
@@ -97,7 +115,6 @@ impl ConfiguredExecution {
                     .map_err(|_| "execution shutdown requires reconciliation")?;
                 break;
             }
-            self.maintain(&mut heartbeat).await?;
             if pump.pending().is_none() {
                 pump.flush().map_err(|_| "execution write fence refused")?;
             }
@@ -115,8 +132,8 @@ impl ConfiguredExecution {
         }
         let _ = authority.revoke();
         drop(pump);
-        // One owned channel admits one turn. Completion remains AwaitingAcceptance
-        // until the separate cookie-authenticated owner decision succeeds.
+        // Until Runtime's typed next attachment is composed, no second dispatch
+        // can be fabricated from this completed channel or its old capability.
         Ok(())
     }
 }

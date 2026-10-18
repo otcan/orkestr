@@ -193,6 +193,7 @@ def success(case):
         code, body, _ = case.request(case.path + "/execution")
         return body if code == 200 and body["phase"] == "awaiting_acceptance" else None
     status = wait_for(proposed, "durable provider proposal deadline")
+    assert not case.peer_gone(), "proposal must retain the owned native child"
     assert status["capabilities"] == {"stop": False, "steer": False}
     payload_path = case.path + "/payloads/" + status["progress"]["payload_id"]
     code, payload, headers = case.request(payload_path)
@@ -219,6 +220,7 @@ def success(case):
     assert code == 200 and receipt["outcome"] == "succeeded"
     assert case.request(case.path + "/accept", "POST", accept)[:2] == (200, receipt)
     assert case.request(case.path + "/execution")[1]["phase"] == "completed"
+    assert not case.peer_gone(), "owner acceptance must retain the same native child"
     assert case.request(payload_path, "DELETE")[0] == 204
     assert case.request(payload_path)[1]["text"] is None
 
