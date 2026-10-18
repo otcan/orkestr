@@ -30,21 +30,22 @@ const STDERR_TAIL_BYTES = 8192;
 const READ_CHUNK_BYTES = 256 * 1024;
 
 // The wrapper keeps running while Claude runs so it can record the exit code.
-// It ignores SIGHUP (inherited by Claude, like nohup) and traps INT/TERM with a
-// no-op handler so a group signal stops Claude while the wrapper survives long
-// enough to write exit.json. Trapped (not ignored) signals reset to default in
-// the exec'd Claude process, so Ctrl-C style interrupts still reach it.
+// It ignores SIGHUP (inherited by Claude, like nohup) and records every exit
+// through an EXIT trap. INT/TERM are terminal even before Claude is spawned:
+// a logging-only trap could swallow cancellation and then launch the child.
+// Trapped (not ignored) signals reset to default in the exec'd Claude process,
+// so group interrupts still reach it.
 // Received INT/TERM signals are appended to exit.json.signals (one line per
 // signal with a unix timestamp) so an unexpected end of a turn can be traced.
 const WRAPPER_SCRIPT = [
   "trap '' HUP",
   "p=$1; o=$2; e=$3; x=$4; shift 4",
-  "trap 'printf \"INT %s\\n\" \"$(date +%s)\" >>\"$x.signals\"' INT",
-  "trap 'printf \"TERM %s\\n\" \"$(date +%s)\" >>\"$x.signals\"' TERM",
+  "finish() { c=$?; trap - EXIT; printf '{\"code\":%s,\"at\":%s}\\n' \"$c\" \"$(date +%s)\" >\"$x.tmp\" && mv \"$x.tmp\" \"$x\"; exit \"$c\"; }",
+  "trap finish EXIT",
+  "trap 'printf \"INT %s\\n\" \"$(date +%s)\" >>\"$x.signals\"; exit 130' INT",
+  "trap 'printf \"TERM %s\\n\" \"$(date +%s)\" >>\"$x.signals\"; exit 143' TERM",
   "\"$@\" <\"$p\" >>\"$o\" 2>>\"$e\"",
-  "c=$?",
-  "printf '{\"code\":%s,\"at\":%s}\\n' \"$c\" \"$(date +%s)\" >\"$x.tmp\" && mv \"$x.tmp\" \"$x\"",
-  "exit \"$c\"",
+  "exit \"$?\"",
 ].join("\n");
 
 function clean(value = "") {
