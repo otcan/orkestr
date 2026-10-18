@@ -1,6 +1,6 @@
 # Orkestr 2.0 Rust implementation
 
-This directory is reserved for the isolated Rust application. The existing TypeScript/NestJS/Angular implementation remains unchanged outside the v2 track.
+This directory is reserved for the isolated Rust application. The existing 1.x implementation remains unchanged outside the v2 track.
 
 ## Verified initial implementation, 2026-10-18
 
@@ -18,7 +18,7 @@ cargo run --locked -p orkestr-v2-store-sqlite --example durable -- /tmp/orkestr-
 
 Use a fresh, explicitly chosen demo database path. Repeating the last command checks idempotency; it does not execute external actions. Read the [store limitations](crates/orkestr-store-sqlite/README.md) before using the library. This is trusted offline metadata storage, not the authenticated M1 execution authority.
 
-The separate [Dioxus fixture spike](../docs/v2/dioxus-spike.md), revision `dcf099b1f2086ed59ed5764114c70201dcb323fa`, passed six fixture tests and the WASM web build/check. Browser input/IME, accessibility and iOS gates remain unverified. There is no integrated UI/server or verified provider adapter yet. The authenticated Axum API, admission/evidence contracts and supervised runtime remain work for the managed v2 lanes.
+The separate [Dioxus fixture spike](../docs/v2/dioxus-spike.md), revision `dcf099b1f2086ed59ed5764114c70201dcb323fa`, passed six fixture tests and the WASM web compilation check. Browser input/IME, accessibility and iOS gates remain unverified. There is no integrated UI/server or verified provider adapter yet. The authenticated Axum API, admission/evidence contracts and supervised runtime remain work for the managed v2 lanes.
 
 ## Plan
 
