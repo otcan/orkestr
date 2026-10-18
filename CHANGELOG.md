@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-alpha.213
+
+- Preserve scoped WhatsApp account recovery, existing thread route fences, and dormant timer notification safeguards in the regular release.
+- Verify the running connector processes use the installed release before reporting activation success or pruning older releases.
+
 ## 0.1.0-alpha.212
 
 - Accepted Codex messages release the delivery queue after a short, bounded wait. Slow notification handlers in the same or another thread no longer hold up subsequent steering messages.
