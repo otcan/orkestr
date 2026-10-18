@@ -1,6 +1,7 @@
 # First implementation and lane handoff
 
-This fills the previously missing plan link. The first frozen subset is
+The full M1 specification remains [first-implementation.md](first-implementation.md).
+The first internal, offline storage subset is
 [event-contract-v1.md](event-contract-v1.md). It is intentionally narrower than M1:
 durable metadata graph/tasks, deterministic replay, no real execution or UI server.
 Initial scaffold verification: commit `02d607ee`, Rust 1.99.1, formatter, Clippy

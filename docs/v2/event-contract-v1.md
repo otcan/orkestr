@@ -1,7 +1,14 @@
 # Local journal contract v1
 
 Status: first implementation boundary, not a public authenticated API. Tracking: #72,
-V2-003 and the graph/journal portion of V2-013. Baseline: `fffa3d8c`.
+V2-003 and the graph/journal portion of V2-013. Source baseline: `fffa3d8c`.
+
+This is an internal offline record format, NOT the public M1 envelope in
+[first-implementation.md](first-implementation.md). It does not freeze away the
+required owner/scope/actor/version/causation fields or typed IDs. Its graph kinds
+are prototype/history nodes, not permission scopes or default conversation rules.
+Before exposing it through an API, introduce the full scoped command/event
+contract and an explicit conversion; never deserialize this record as authority.
 
 ## Scope and authority
 
