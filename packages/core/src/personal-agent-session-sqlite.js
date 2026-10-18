@@ -88,7 +88,9 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
         const at = now();
         const current = getStatement.get(sessionId);
         if (!current) throw sessionError("personal_agent_session_not_found", 404);
-        const result = insertLeaseStatement.run(token, at + ttlMs, new Date(at).toISOString(), sessionId, expectedVersion);
+        const leaseExpiresAt = at + ttlMs;
+        if (!Number.isSafeInteger(leaseExpiresAt)) throw sessionError("personal_agent_session_invalid_lease_ttl", 400);
+        const result = insertLeaseStatement.run(token, leaseExpiresAt, new Date(at).toISOString(), sessionId, expectedVersion);
         if (result.changes !== 1) return null;
         return { session: toSession(getStatement.get(sessionId)), leaseToken: token };
       });
@@ -101,6 +103,12 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
         const at = now();
         const current = getStatement.get(sessionId);
         if (!current) throw sessionError("personal_agent_session_not_found", 404);
+        const leaseExpiresAt = patch.releaseLease
+          ? null
+          : at + (patch.leaseTtlMs ?? Math.max(1, current.lease_expires_at - at));
+        if (leaseExpiresAt !== null && !Number.isSafeInteger(leaseExpiresAt)) {
+          throw sessionError("personal_agent_session_invalid_lease_ttl", 400);
+        }
         const next = {
           lifecycle: patch.lifecycle ?? current.lifecycle,
           blockedReason: patch.blockedReason === undefined ? current.blocked_reason : patch.blockedReason,
@@ -108,7 +116,7 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
           heartbeatAt: patch.heartbeatAt === undefined ? current.heartbeat_at : patch.heartbeatAt,
           modelProfileJson: patch.modelProfile === undefined ? current.model_profile_json : JSON.stringify(patch.modelProfile),
           leaseToken: patch.releaseLease ? null : leaseToken,
-          leaseExpiresAt: patch.releaseLease ? null : at + (patch.leaseTtlMs ?? Math.max(1, current.lease_expires_at - at)),
+          leaseExpiresAt,
         };
         const result = updateStatement.run(
           next.lifecycle, next.blockedReason, next.nativeSessionId, next.heartbeatAt, next.modelProfileJson,

@@ -270,6 +270,40 @@ test("invalid lease renewal TTL is rejected without consuming the current lease"
   }
 });
 
+test("lease expiry overflow is rejected before acquire or renewal writes", async () => {
+  const clock = 8_000_000_000_000_000;
+  const overflowingTtl = Number.MAX_SAFE_INTEGER - clock + 1;
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-session-overflow-ttl-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: "1" };
+  try {
+    const db = await openAgentJobDb(env);
+    conversationFixture(db);
+    migratePersonalAgentSessions(db, { dryRun: false });
+    const store = await openPersonalAgentSessionStore({ env, now: () => clock });
+    store.create(session("ses_acquire_overflow", { role: "worker" }));
+    store.create(session("ses_renew_overflow", { role: "worker" }));
+
+    assert.throws(() => store.acquireLease("ses_acquire_overflow", {
+      expectedVersion: 0,
+      ttlMs: overflowingTtl,
+    }), { code: "personal_agent_session_invalid_lease_ttl" });
+    assert.equal(store.get("ses_acquire_overflow").version, 0);
+    assert.equal(store.get("ses_acquire_overflow").leaseToken, null);
+
+    const lease = store.acquireLease("ses_renew_overflow", { expectedVersion: 0, ttlMs: 100 });
+    const before = store.get("ses_renew_overflow");
+    assert.throws(() => store.update("ses_renew_overflow", {
+      expectedVersion: before.version,
+      leaseToken: lease.leaseToken,
+      patch: { leaseTtlMs: overflowingTtl },
+    }), { code: "personal_agent_session_invalid_lease_ttl" });
+    assert.deepEqual(store.get("ses_renew_overflow"), before);
+  } finally {
+    await closeAgentJobDbs();
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
 test("update checks lease expiry using the clock sampled after acquiring the write lock", async () => {
   let clock = 1000;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-session-lock-clock-"));
