@@ -56,6 +56,8 @@ pub(super) fn run_state(row: &SqliteRow) -> RunState {
         "running" => RunState::Running,
         "awaiting_acceptance" => RunState::AwaitingAcceptance,
         "failed" => RunState::Failed,
+        "cancel_requested" => RunState::CancelRequested,
+        "cancelled" => RunState::Cancelled,
         _ => RunState::Blocked,
     }
 }
@@ -215,11 +217,12 @@ impl FixtureSupervisorStore {
             .bind(i64::try_from(claim.claim_generation).map_err(db)?).bind(request_key).bind(digest)
             .bind(self.generation).bind(deadline).bind(verifier).fetch_one(&mut *tx).await.map_err(db)?;
         sqlx::query(
-            "INSERT INTO fixture_run_leases(run_id,generation,lease_deadline_ms) VALUES(?,?,?)",
+            "INSERT INTO fixture_run_leases(run_id,generation,lease_deadline_ms,dispatch_fence) VALUES(?,?,?,?)",
         )
         .bind(run_id.to_string())
         .bind(1_i64)
         .bind(deadline)
+        .bind(self.generation)
         .execute(&mut *tx)
         .await
         .map_err(db)?;

@@ -257,3 +257,61 @@ async fn data_constraint_upgrade_failure_in_live_wal_preserves_source_and_sideca
     refused_unchanged(&dir).await;
     conn.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn populated_observation_prefix_upgrade_preserves_rows_and_issued_history() {
+    let dir = Directory::new();
+    let mut conn = populated_dispatch_prefix(&dir).await;
+    for migration in sqlx::migrate!("./migrations").iter().skip(4).take(2) {
+        conn.apply(migration).await.unwrap();
+    }
+    sqlx::raw_sql("INSERT INTO events(id,owner_id,conversation_id,sequence,kind,schema_version) VALUES('observed','owner','conversation',2,'fixture_provider_observed',2);
+    INSERT INTO outbox(event_id) VALUES('observed');
+    INSERT INTO fixture_observations VALUES('observed','run',1,'digest','started',NULL,1,1,'running');
+    UPDATE fixture_runs SET state='running'; UPDATE conversations SET sequence=2;
+    INSERT INTO fixture_run_leases VALUES('run',2,9999999999999);").execute(&mut conn).await.unwrap();
+    let checksums: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap();
+    let before: Vec<(String, String, i64, String)> =
+        sqlx::query_as("SELECT id,kind,sequence,occurred_at FROM events ORDER BY sequence")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap();
+    conn.close().await.unwrap();
+    let store = Store::open(&dir.db()).await.unwrap();
+    let after: Vec<(String, String, i64, String)> =
+        sqlx::query_as("SELECT id,kind,sequence,occurred_at FROM events ORDER BY sequence")
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(before, after);
+    let after_checksums: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT checksum FROM _sqlx_migrations WHERE version<=6 ORDER BY version",
+    )
+    .fetch_all(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(checksums, after_checksums);
+    let issued: Vec<(i64, String, i64)> = sqlx::query_as(
+        "SELECT generation,purpose,dispatch_fence FROM fixture_run_leases ORDER BY generation",
+    )
+    .fetch_all(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        issued,
+        vec![(1, "execution".into(), 1), (2, "execution".into(), 1)]
+    );
+    let links: i64 = sqlx::query_scalar("SELECT count(*) FROM fixture_observations o JOIN events e ON e.id=o.event_id JOIN outbox b ON b.event_id=e.id JOIN fixture_runs r ON r.id=o.run_id JOIN reasoning_inbox i ON i.admitted_fixture_run_id=r.id WHERE o.kind='started' AND o.receipt_state='running' AND r.state='running' AND i.state='consumed'").fetch_one(&store.pool).await.unwrap();
+    assert_eq!(links, 1);
+    assert!(sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&store.pool)
+        .await
+        .unwrap()
+        .is_empty());
+    store.close().await;
+    Store::open(&dir.db()).await.unwrap().close().await;
+}

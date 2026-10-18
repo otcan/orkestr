@@ -242,20 +242,23 @@ async fn undispatched_candidate_cannot_accept_provider_evidence() {
 }
 
 #[tokio::test]
-async fn progress_and_stopped_remain_unavailable_without_payload_or_cancel_authority() {
+async fn progress_unavailable_and_stopped_fenced_without_payload_or_cancel_authority() {
     let f = fixture().await;
     let p = consumed(&f).await;
     let before = snapshot(&f).await;
-    for event in [
-        ProviderEvent::Progress("synthetic text".into()),
-        ProviderEvent::Stopped,
+    for (event, expected) in [
+        (
+            ProviderEvent::Progress("synthetic text".into()),
+            RuntimeStoreError::Unavailable,
+        ),
+        (ProviderEvent::Stopped, RuntimeStoreError::Fenced),
     ] {
         assert_eq!(
             f.handle
                 .append_provider_event(&f.owner, &p, &input(&p, 1, event))
                 .await
                 .unwrap_err(),
-            RuntimeStoreError::Unavailable
+            expected
         );
         assert!(
             before == snapshot(&f).await,

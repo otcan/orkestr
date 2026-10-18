@@ -8,7 +8,7 @@ pub(super) async fn events(
     after: i64,
     limit: u32,
 ) -> Result<Vec<ConversationEvent>> {
-    let rows = sqlx::query("SELECT e.*,o.run_sequence,o.kind AS observation_kind,o.synthetic,r.id AS run_id,r.session_id,r.message_id AS source_message_id,r.event_id AS source_event_id FROM events e LEFT JOIN fixture_observations o ON o.event_id=e.id LEFT JOIN fixture_runs r ON r.id=o.run_id WHERE e.conversation_id=? AND e.owner_id=? AND e.sequence>? ORDER BY e.sequence LIMIT ?")
+    let rows = sqlx::query("SELECT e.*,o.run_sequence,o.kind AS observation_kind,o.synthetic,o.receipt_state,c.inflight_status AS cancel_outcome,r.id AS run_id,r.session_id,r.message_id AS source_message_id,r.event_id AS source_event_id FROM events e LEFT JOIN fixture_observations o ON o.event_id=e.id LEFT JOIN fixture_cancellations c ON c.event_id=e.id LEFT JOIN fixture_runs r ON r.id=coalesce(o.run_id,c.run_id) WHERE e.conversation_id=? AND e.owner_id=? AND e.sequence>? ORDER BY e.sequence LIMIT ?")
         .bind(conversation.to_string()).bind(owner.to_string()).bind(after).bind(limit.clamp(1,100)).fetch_all(pool).await.map_err(db)?;
     rows.iter()
         .map(|r| {
@@ -36,6 +36,72 @@ pub(super) async fn events(
                             message_id,
                         },
                     }))
+                }
+                ("fixture_cancellation_requested", 3) => {
+                    let outcome = match r.try_get::<&str, _>("cancel_outcome").map_err(db)? {
+                        "not_dispatched" => FixtureCancellationOutcome::NotDispatched,
+                        "unknown" => FixtureCancellationOutcome::Unknown,
+                        _ => return Err(StoreError::Unavailable),
+                    };
+                    Ok(ConversationEvent::FixtureCancellationRequested(
+                        FixtureCancellationRequestedEnvelope {
+                            event_id,
+                            schema_version: 3,
+                            owner_id: owner.clone(),
+                            scope: scope.clone(),
+                            aggregate_id: conversation.clone(),
+                            aggregate_version: sequence,
+                            sequence,
+                            occurred_at,
+                            source_message_id: MessageId(parse(
+                                r.try_get("source_message_id").map_err(db)?,
+                            )?),
+                            source_event_id: EventId(parse(
+                                r.try_get("source_event_id").map_err(db)?,
+                            )?),
+                            payload_ref_or_safe_payload: FixtureCancellationRequested {
+                                kind: FixtureCancellationTag::FixtureCancellationRequested,
+                                run_id: RunId(parse(r.try_get("run_id").map_err(db)?)?),
+                                session_id: SessionId(parse(r.try_get("session_id").map_err(db)?)?),
+                                outcome,
+                            },
+                        },
+                    ))
+                }
+                ("fixture_provider_stopped", 4) => {
+                    if r.try_get::<&str, _>("observation_kind").map_err(db)? != "stopped"
+                        || r.try_get::<&str, _>("receipt_state").map_err(db)? != "cancelled"
+                    {
+                        return Err(StoreError::Unavailable);
+                    }
+                    Ok(ConversationEvent::FixtureProviderStopped(
+                        FixtureProviderStoppedEnvelope {
+                            event_id,
+                            schema_version: 4,
+                            owner_id: owner.clone(),
+                            scope: scope.clone(),
+                            aggregate_id: conversation.clone(),
+                            aggregate_version: sequence,
+                            sequence,
+                            occurred_at,
+                            source_message_id: MessageId(parse(
+                                r.try_get("source_message_id").map_err(db)?,
+                            )?),
+                            source_event_id: EventId(parse(
+                                r.try_get("source_event_id").map_err(db)?,
+                            )?),
+                            payload_ref_or_safe_payload: FixtureProviderStopped {
+                                kind: FixtureStoppedTag::FixtureProviderStopped,
+                                run_id: RunId(parse(r.try_get("run_id").map_err(db)?)?),
+                                session_id: SessionId(parse(r.try_get("session_id").map_err(db)?)?),
+                                run_sequence: u64::try_from(
+                                    r.try_get::<i64, _>("run_sequence").map_err(db)?,
+                                )
+                                .map_err(db)?,
+                                receipt_state: FixtureStoppedReceiptState::Cancelled,
+                            },
+                        },
+                    ))
                 }
                 ("fixture_provider_observed", 2) => {
                     let observation = match r.try_get::<&str, _>("observation_kind").map_err(db)? {
