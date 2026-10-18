@@ -43,6 +43,10 @@ const replacements = {
   "non-unique namesake": "create index personal_agent_conversations_global on personal_agent_conversations(scope_kind)",
   "unique on the wrong column": "create unique index personal_agent_conversations_global on personal_agent_conversations(id) where scope_kind = 'global'",
   "unique without the global predicate": "create unique index personal_agent_conversations_global on personal_agent_conversations(scope_kind, id)",
+  // Literals compare under BINARY: neither of these matches 'global' rows.
+  "uppercase-literal": "create unique index personal_agent_conversations_global on personal_agent_conversations(scope_kind) where scope_kind = 'GLOBAL'",
+  "spaced-literal": "create unique index personal_agent_conversations_global on personal_agent_conversations(scope_kind) where scope_kind = 'g l o b a l'",
+  "case-insensitive": "create unique index personal_agent_conversations_global on personal_agent_conversations(scope_kind collate nocase) where scope_kind = 'global'",
 };
 
 for (const [label, replacement] of Object.entries(replacements)) {
@@ -137,4 +141,57 @@ test("the maximum client idempotency key is accepted and replays to the same rec
   assert.equal(replay.inboxItemId, first.inboxItemId);
   await assert.rejects(() => acceptPersonalAgentMessage(owner, { ...input, idempotencyKey: "k".repeat(513) }, env),
     { code: "personal_agent_ingress_idempotency_required" });
+});
+
+test("an equivalent spelling of the canonical index is valid and is not rebuilt", (t) => {
+  const db = migrated(t);
+  db.exec("drop index personal_agent_conversations_global");
+  db.exec(`CREATE UNIQUE INDEX "personal_agent_conversations_global" ON personal_agent_conversations ( "scope_kind" COLLATE BINARY )
+    WHERE   "Scope_Kind"='global'`);
+  const before = indexSql(db, "personal_agent_conversations_global");
+  assert.deepEqual(planPersonalAgentIngressMigration(db).invalidIndexes, []);
+  migratePersonalAgentIngress(db, { dryRun: false });
+  assert.equal(indexSql(db, "personal_agent_conversations_global"), before);
+});
+
+test("a case-insensitive project index is repaired so case-distinct projects keep separate conversations", (t) => {
+  const db = migrated(t);
+  db.exec("insert into personal_agent_projects (id) values ('case-sensitive'), ('CASE-SENSITIVE')");
+  db.exec("drop index personal_agent_conversations_project");
+  db.exec("create unique index personal_agent_conversations_project on personal_agent_conversations(project_id collate nocase) where scope_kind = 'project'");
+  assert.deepEqual(planPersonalAgentIngressMigration(db).invalidIndexes, ["personal_agent_conversations_project"]);
+  migratePersonalAgentIngress(db, { dryRun: false });
+  insertConversation(db, "pac_lower", "project", "case-sensitive");
+  insertConversation(db, "pac_upper", "project", "CASE-SENSITIVE");
+  assert.throws(() => insertConversation(db, "pac_again", "project", "case-sensitive"), /UNIQUE constraint failed/);
+});
+
+test("a case-insensitive replay identity constraint is incompatible", (t) => {
+  const db = migrated(t);
+  db.exec("pragma foreign_keys = OFF");
+  db.exec("drop table personal_agent_reasoning_inbox");
+  db.exec("drop table personal_agent_messages");
+  db.exec(`create table personal_agent_messages (id text primary key, conversation_id text not null, actor_user_id text not null,
+    actor_origin text not null, channel text not null, idempotency_key text not null collate nocase, payload_hash text not null, body text not null,
+    task_id text, run_id text, event_id text not null unique, event_cursor text not null, causal_sequence integer not null,
+    created_at text not null, unique (conversation_id, actor_user_id, idempotency_key), unique (conversation_id, causal_sequence))`);
+  const plan = planPersonalAgentIngressMigration(db);
+  assert.equal(plan.schemaCompatible, false);
+  assert.deepEqual(plan.missingConstraints, ["personal_agent_messages(conversation_id,actor_user_id,idempotency_key)"]);
+  assert.throws(() => migratePersonalAgentIngress(db, { dryRun: false }), { message: "personal_agent_ingress_schema_incompatible" });
+});
+
+test("a namesake index owned by another table fails closed and is never dropped", (t) => {
+  const db = migrated(t);
+  db.exec("drop index personal_agent_conversations_global");
+  db.exec("create table unrelated_fixture (id text)");
+  db.exec("create unique index personal_agent_conversations_global on unrelated_fixture(id)");
+  const before = indexSql(db, "personal_agent_conversations_global");
+  const plan = planPersonalAgentIngressMigration(db);
+  assert.equal(plan.schemaCompatible, false);
+  assert.deepEqual(plan.foreignIndexes, ["personal_agent_conversations_global"]);
+  assert.throws(() => migratePersonalAgentIngress(db, { dryRun: false }), { message: "personal_agent_ingress_schema_incompatible" });
+  assert.equal(indexSql(db, "personal_agent_conversations_global"), before);
+  db.exec("insert into unrelated_fixture (id) values ('x')");
+  assert.throws(() => db.exec("insert into unrelated_fixture (id) values ('x')"), /UNIQUE constraint failed/);
 });
