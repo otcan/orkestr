@@ -8,3 +8,6 @@ license.workspace = true
 serde_json.workspace = true
 orkestr-v2-application = { path = "../application" }
 orkestr-v2-contracts = { path = "../contracts" }
+
+[dev-dependencies]
+async-trait = "=0.1.89"

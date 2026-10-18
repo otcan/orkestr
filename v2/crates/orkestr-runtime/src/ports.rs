@@ -1,20 +1,11 @@
-//! Proposed application ports; durable implementation belongs to the core store.
-//! Every method must finish its transaction before calling a provider.
-pub use orkestr_v2_application::runtime::{ProviderAdmission, ProviderEvent};
+//! Runtime-owned process capabilities; all durable authority belongs to core.
+pub use orkestr_v2_contracts::runtime::{ObservationKind, RunAdmission};
 
-/// A cancellation fence authorizes control only, never a new execution admission.
+/// A cancellation token can control an existing turn, never admit a new one.
 #[derive(Clone, Debug)]
 pub struct InterruptControl {
-    pub original: ProviderAdmission,
-    pub fence_generation: i64,
-}
-impl InterruptControl {
-    pub fn for_admission(original: &ProviderAdmission, fence_generation: i64) -> Self {
-        Self {
-            original: original.clone(),
-            fence_generation,
-        }
-    }
+    pub original: RunAdmission,
+    pub cancellation: RunAdmission,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,21 +17,22 @@ pub enum Blocker {
     QueueFull,
     FixtureOnly,
     Protocol,
+    /// Core admission replay cannot yet distinguish a fresh provider dispatch.
+    DispatchUnconfirmed,
 }
 
-/// Provider methods return promptly. Pending work is polled by a supervisor,
-/// outside ingress transactions. Completion remains a proposal, never success.
+/// Commands return promptly; ingress never waits here. Core owns durable checks.
 pub trait Provider {
-    fn start(&mut self, admission: &ProviderAdmission) -> Result<(), Blocker>;
-    fn poll(&mut self, admission: &ProviderAdmission) -> Result<Option<ProviderEvent>, Blocker>;
+    fn start(&mut self, admission: &RunAdmission) -> Result<(), Blocker>;
+    fn poll(&mut self, admission: &RunAdmission) -> Result<Option<ObservationKind>, Blocker>;
     fn interrupt(&mut self, control: &InterruptControl) -> Result<(), Blocker>;
-    fn resume(&mut self, _admission: &ProviderAdmission) -> Result<(), Blocker> {
+    fn resume(&mut self, _admission: &RunAdmission) -> Result<(), Blocker> {
         Err(Blocker::Unsupported)
     }
-    fn fork(&mut self, _admission: &ProviderAdmission) -> Result<(), Blocker> {
+    fn fork(&mut self, _admission: &RunAdmission) -> Result<(), Blocker> {
         Err(Blocker::Unsupported)
     }
-    fn steer(&mut self, _admission: &ProviderAdmission, _text: &str) -> Result<(), Blocker> {
+    fn steer(&mut self, _admission: &RunAdmission, _text: &str) -> Result<(), Blocker> {
         Err(Blocker::Unsupported)
     }
 }
