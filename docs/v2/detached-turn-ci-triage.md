@@ -81,3 +81,25 @@ external, intentionally failing assertion probe exercised the failure-only
 branch and verified its fields and rethrow. That expected failure is diagnostic
 validation, not a regression pass. Syntax and diff checks passed. No production
 helper or signal behavior changed, and no assertion was weakened or skipped.
+
+After `npm run build:server` supplied the server artifact normally downloaded by
+CI, the unmodified integration archive ran the actual command:
+
+```sh
+ORKESTR_BROWSER_LAUNCH_DISABLED=1 ORKESTR_RECOVER_RUNNING_ON_START=0 \
+ORKESTR_TEST_CONCURRENCY=1 npm run test:ci -- --shard 3/4
+```
+
+Result: **966 passed, zero failed, two skipped**, 968 tests, two suites,
+111828.888497 ms. The original recycled-PID case did not reproduce. The runner
+selected 129/516 files with concurrency one, force-exit and 300000 ms test timeout.
+An initial run lacking compiled server artifacts had 864 pass/70 fail/3 skipped;
+it was not an equivalent CI environment and is not passing evidence. Its source
+was temporarily instrumented during execution; only the subsequent restored,
+fully built run is credited as the unmodified integration shard comparison.
+The local build is not an attestation of the downloaded CI artifact.
+
+Core run 39151853860/job 117747213636 independently shows the same original
+signal assertion after 5019.101996 ms. That corroborates repeated CI failure but
+still provides no root cause. The diagnosis remains unresolved; the diagnostic
+patch is for gathering evidence on a subsequent failing CI execution.
