@@ -14,6 +14,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from owned_native_probe import OwnedNativeProbe
 
 binary = Path(sys.argv[1]).resolve(strict=True)
 peer = Path(__file__).with_name("owned_execution_peer.py").resolve(strict=True)
@@ -52,6 +53,7 @@ class Case:
         self.cookie = None
         self.csrf = None
         self.bootstrap = "synthetic-bootstrap-token-ordinary-http-only"
+        self.native_probe = OwnedNativeProbe(self.root / "synthetic-provider")
 
     def request(self, path, method="GET", body=None, browser=True, extra=None):
         headers = {}
@@ -133,6 +135,7 @@ class Case:
     def stop(self):
         if self.process is not None:
             if self.process.poll() is None:
+                self.trace()  # capture owned host identity before initiating cleanup
                 self.process.send_signal(signal.SIGINT)
                 try:
                     self.process.wait(timeout=5)
@@ -175,9 +178,11 @@ class Case:
 
     def trace(self):
         path = self.workspace / "synthetic-peer.jsonl"
-        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        rows = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        return self.native_probe.observe(self.process.pid if self.process else None, rows)
 
     def revoke_machine(self):
+        self.trace()  # an auth fence may clean the native immediately
         # This is the test's newly created disposable database, never host state.
         with sqlite3.connect(self.home / "core.sqlite3") as db:
             db.execute("DELETE FROM auth_sessions WHERE token_hash=?",
@@ -190,15 +195,12 @@ class Case:
 
     def phase(self, expected):
         code, body, _ = self.request(self.path + "/execution")
+        self.trace()
         return body if code == 200 and body["phase"] == expected else None
 
     def peer_gone(self):
-        pid = self.trace()[0]["pid"]
-        try:
-            os.kill(pid, 0)
-            return False
-        except ProcessLookupError:
-            return True
+        self.trace()
+        return self.native_probe.gone()
 
     def cleanup(self):
         self.stop()

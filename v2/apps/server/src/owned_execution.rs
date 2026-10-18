@@ -1,8 +1,11 @@
 //! Explicit, one-conversation isolated acceptance composition. No HTTP configuration.
 mod admission;
+mod bootstrap;
 mod config;
 #[cfg(all(test, unix))]
 mod config_tests;
+mod directory;
+mod retirement;
 mod session;
 mod stopping;
 mod worker;
@@ -11,7 +14,7 @@ use orkestr_v2_application::runtime::{
     ProductionSupervisorConfig, ProductionTakeover, ProviderKind,
 };
 use orkestr_v2_contracts::OwnerId;
-use orkestr_v2_store_sqlite::Store;
+use orkestr_v2_store_sqlite::{BoundSessionMetadata, Store};
 use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
@@ -28,6 +31,7 @@ pub struct ConfiguredExecution {
     directory: PathBuf,
     control: crate::control_registry::ControlRegistry,
     children: crate::owned_children::ChildSet,
+    initial_grant: Option<BoundSessionMetadata>,
 }
 pub struct ExecutionTask {
     shutdown: watch::Sender<bool>,
@@ -55,28 +59,45 @@ impl ConfiguredExecution {
             .execution_status(&owner, &config.conversation_id)
             .await
             .map_err(|_| "execution conversation is unavailable to this owner")?;
-        if status.is_some() {
-            return Err(
-                "queued or existing execution requires reconciliation; automatic startup refused",
-            );
-        }
-        let directory = home.join("owned-execution");
-        // A prior runtime directory is evidence to reconcile, never silently reuse.
-        private_create(&directory)?;
-        private_create(&directory.join("home"))?;
-        private_create(&directory.join("tmp"))?;
-        let bound = store
-            .authorize_supervisor(
-                &token,
-                ProductionSupervisorConfig {
-                    provider: ProviderKind::Codex,
-                    namespace: config.namespace.clone(),
-                    supervisor_key: config.supervisor_key.clone(),
-                    takeover: ProductionTakeover::First,
-                },
-            )
-            .await
-            .map_err(|_| "execution supervisor authorization refused")?;
+        let mut supervisor = ProductionSupervisorConfig {
+            provider: ProviderKind::Codex,
+            namespace: config.namespace.clone(),
+            supervisor_key: config.supervisor_key.clone(),
+            takeover: ProductionTakeover::First,
+        };
+        let (bound, initial_grant, directory) = if let Some(status) = status {
+            if status.phase != orkestr_v2_contracts::ExecutionPhase::Completed
+                || config.worker.is_some()
+            {
+                return Err(
+                    "existing execution requires reconciliation; automatic startup refused",
+                );
+            }
+            // Discovery is read evidence only. Core requires the exact sealed
+            // graceful-retirement record, not natural lease expiry or status.
+            let (prior_run, incarnation_id) = store
+                .terminal_supervisor_candidate(&token, &supervisor, &config.conversation_id)
+                .await
+                .map_err(|_| "execution restart discovery refused")?
+                .ok_or("execution lacks graceful retirement; automatic startup refused")?;
+            if status.run_id.as_ref() != Some(&prior_run) {
+                return Err("execution restart predecessor changed");
+            }
+            let directory = directory::existing(home)?;
+            supervisor.takeover = ProductionTakeover::ExpiredPredecessor { incarnation_id };
+            let (bound, grant) = store
+                .reattach_terminal_supervisor(&token, supervisor, &prior_run)
+                .await
+                .map_err(|_| "execution exact predecessor reattachment refused")?;
+            (bound, Some(grant), directory)
+        } else {
+            let directory = directory::create(home)?;
+            let bound = store
+                .authorize_supervisor(&token, supervisor)
+                .await
+                .map_err(|_| "execution supervisor authorization refused")?;
+            (bound, None, directory)
+        };
         let control = crate::control_registry::ControlRegistry::new(
             owner.clone(),
             config.conversation_id.clone(),
@@ -89,6 +110,7 @@ impl ConfiguredExecution {
             directory,
             control,
             children: crate::owned_children::ChildSet::default(),
+            initial_grant,
         })
     }
 
@@ -130,23 +152,11 @@ impl ConfiguredExecution {
     }
 }
 
-fn private_create(path: &Path) -> Result<(), &'static str> {
-    let mut builder = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder
-        .create(path)
-        .map_err(|_| "fresh private execution directory required")
-}
-
 impl ExecutionTask {
     pub async fn shutdown(self) -> Result<(), &'static str> {
         let _ = self.shutdown.send(true);
         let mut task = self.task;
-        if tokio::time::timeout(Duration::from_secs(2), &mut task)
+        if tokio::time::timeout(Duration::from_secs(8), &mut task)
             .await
             .is_err()
         {

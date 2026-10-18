@@ -151,6 +151,25 @@ impl PendingControl {
         authority: Authority,
         pump: CodexPump,
     ) -> Result<ActiveControl, StopFailure> {
+        self.dispatch_mode(authority, pump, false)
+    }
+
+    /// Deep recovery only, with the reviewed descendant-aware broker package.
+    /// Worker callers retain `dispatch` and its immediate terminal cleanup.
+    pub fn dispatch_retiring(
+        self,
+        authority: Authority,
+        pump: CodexPump,
+    ) -> Result<ActiveControl, StopFailure> {
+        self.dispatch_mode(authority, pump, true)
+    }
+
+    fn dispatch_mode(
+        self,
+        authority: Authority,
+        pump: CodexPump,
+        retain_terminal: bool,
+    ) -> Result<ActiveControl, StopFailure> {
         let stopping = StopExecution::begin(
             &self.receipt.new_fenced_admission.owner_id,
             &self.receipt.new_fenced_admission.run_id,
@@ -159,12 +178,18 @@ impl PendingControl {
             pump,
             &self.receipt,
         )?;
+        let stopping = if retain_terminal {
+            stopping.retaining_terminal()
+        } else {
+            stopping
+        };
         Ok(ActiveControl {
             stopping: Some(stopping),
             deadline: Instant::now() + Duration::from_secs(2),
             progress: StopProgress::Pending,
             pending: None,
             retained: Vec::new(),
+            retain_terminal,
         })
     }
 }
@@ -179,9 +204,24 @@ pub struct ActiveControl {
     progress: StopProgress,
     pending: Option<ProviderEventInput>,
     retained: Vec<ProviderEvent>,
+    retain_terminal: bool,
 }
 
 impl ActiveControl {
+    /// Consume only this exact committed Stopped handoff. ACK, timeout, signal
+    /// death and an ordinary broker exit can never become replacement evidence.
+    pub fn retire_broker(
+        mut self,
+    ) -> Result<orkestr_runtime::containment::RetiringBroker, orkestr_runtime::containment::Error>
+    {
+        if !self.retain_terminal || self.progress != StopProgress::Stopped {
+            return Err(orkestr_runtime::containment::Error::AuthorityProtocol);
+        }
+        self.stopping
+            .take()
+            .ok_or(orkestr_runtime::containment::Error::AuthorityProtocol)?
+            .retire_broker()
+    }
     pub fn pending(&self) -> Option<&ProviderEventInput> {
         self.stopping
             .as_ref()
@@ -194,6 +234,12 @@ impl ActiveControl {
             .map_or(&self.retained, StopExecution::retained)
     }
     pub async fn tick(&mut self) -> StopProgress {
+        if matches!(
+            self.progress,
+            StopProgress::Stopped | StopProgress::ReconciliationRequired
+        ) {
+            return self.progress;
+        }
         if let Some(stopping) = self.stopping.as_mut() {
             self.progress = if Instant::now() >= self.deadline {
                 StopProgress::ReconciliationRequired
@@ -208,7 +254,9 @@ impl ActiveControl {
                 self.retained = stopping.retained().to_vec();
                 // Initiates owned cleanup; Runtime retains process/reaper
                 // ownership. No successful native termination is inferred here.
-                self.stopping = None;
+                if !self.retain_terminal || self.progress == StopProgress::ReconciliationRequired {
+                    self.stopping = None;
+                }
             }
         }
         self.progress

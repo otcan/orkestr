@@ -7,15 +7,18 @@ import sys
 import time
 
 assert sys.argv[1:] == ["app-server", "--listen", "stdio://"]
-assert set(os.environ) == {"PATH", "LANG", "LC_ALL", "HOME", "TMPDIR", "CODEX_HOME"}
+assert set(os.environ) == {"PATH", "LANG", "LC_ALL", "HOME", "TMPDIR", "CODEX_HOME", "PWD"}
 assert os.environ["HOME"] == os.environ["CODEX_HOME"]
+assert os.environ["PWD"] == os.getcwd()
 trace = Path.cwd() / "synthetic-peer.jsonl"
 turn = 0
 
 
 def record(kind):
     with trace.open("a") as stream:
-        stream.write(json.dumps({"kind": kind, "pid": os.getpid()}) + "\n")
+        stream.write(json.dumps({"kind": kind, "pid": os.getpid(),
+            "pid_namespace": Path("/proc/self/ns/pid").stat().st_ino,
+            "process_start": int(Path("/proc/self/stat").read_text().rsplit(") ", 1)[1].split()[19])}) + "\n")
 
 
 def emit(value):

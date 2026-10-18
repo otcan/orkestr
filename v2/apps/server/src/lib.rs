@@ -24,6 +24,7 @@ pub mod control_dispatch;
 pub mod control_registry;
 mod execution;
 mod execution_accept;
+mod held_inputs;
 pub mod owned_children;
 pub mod owned_execution;
 mod provider_payload;
@@ -218,6 +219,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/conversations/{id}/stop",post(execution::stop))
         .route("/api/v2/conversations/{id}/accept",post(execution_accept::accept))
         .route("/api/v2/conversations/{id}/payloads/{payload}",get(provider_payload::read).delete(provider_payload::remove))
+        .route("/api/v2/conversations/{id}/held-inputs",get(held_inputs::read))
         .route("/api/v2/conversations/{id}/messages",post(routes::message))
         .route("/api/v2/conversations/{id}/events",get(routes::events))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })
