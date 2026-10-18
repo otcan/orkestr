@@ -14,6 +14,24 @@ private actor FixtureTransport: PersonalAgentTransport {
 }
 
 final class PersonalAgentAPIClientTests: XCTestCase {
+    func testCapabilityFeatureFlagsAreOptionalAndRequireExplicitTrue() throws {
+        let missing = try JSONDecoder().decode(PersonalAgentCapability.self, from: Data(#"{"enabled":true,"capability":true,"assistant":{"available":false,"reason":"not_configured"}}"#.utf8))
+        XCTAssertNil(missing.features?.projectResources)
+        XCTAssertNil(missing.features?.integrationHub)
+
+        let advertised = try JSONDecoder().decode(PersonalAgentCapability.self, from: Data(#"{"enabled":true,"capability":true,"assistant":{"available":false,"reason":"not_configured"},"features":{"projectResources":true,"integrationHub":false}}"#.utf8))
+        XCTAssertEqual(advertised.features?.projectResources, true)
+        XCTAssertEqual(advertised.features?.integrationHub, false)
+    }
+
+    func testFrozenResourceAndPluginEnumsDecodeExactWireValues() throws {
+        XCTAssertEqual(try JSONDecoder().decode(ProvisioningState.self, from: Data(#""needs_approval""#.utf8)), .needsApproval)
+        XCTAssertEqual(try JSONDecoder().decode(BlockerCode.self, from: Data(#""local_service_unavailable""#.utf8)), .localServiceUnavailable)
+        XCTAssertEqual(try JSONDecoder().decode(HealthState.self, from: Data(#""degraded""#.utf8)), .degraded)
+        XCTAssertEqual(try JSONDecoder().decode(ResourceKind.self, from: Data(#""whatsapp_conversation""#.utf8)), .whatsappConversation)
+        XCTAssertEqual(try JSONDecoder().decode(PluginIsolation.self, from: Data(#""host_privileged""#.utf8)), .hostPrivileged)
+    }
+
     func testTransportRejectsPlainHTTPOutsideLoopback() throws {
         XCTAssertThrowsError(try URLSessionPersonalAgentTransport(baseURL: URL(string: "http://server.example.test")!, session: .shared))
         XCTAssertNoThrow(try URLSessionPersonalAgentTransport(baseURL: URL(string: "https://server.example.test")!, session: .shared))

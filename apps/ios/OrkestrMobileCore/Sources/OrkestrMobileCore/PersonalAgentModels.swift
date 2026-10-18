@@ -19,12 +19,24 @@ public struct PersonalAgentCapability: Codable, Equatable, Sendable {
     public let capability: Bool
     public let reason: String?
     public let assistant: AssistantCapability
+    public let features: PersonalAgentFeatureFlags?
 
-    public init(enabled: Bool, capability: Bool, reason: String? = nil, assistant: AssistantCapability) {
+    public init(enabled: Bool, capability: Bool, reason: String? = nil, assistant: AssistantCapability, features: PersonalAgentFeatureFlags? = nil) {
         self.enabled = enabled
         self.capability = capability
         self.reason = reason
         self.assistant = assistant
+        self.features = features
+    }
+}
+
+/// Optional capability discovery flags. Missing flags are intentionally treated as unavailable.
+public struct PersonalAgentFeatureFlags: Codable, Equatable, Sendable {
+    public let projectResources: Bool?
+    public let integrationHub: Bool?
+    public init(projectResources: Bool? = nil, integrationHub: Bool? = nil) {
+        self.projectResources = projectResources
+        self.integrationHub = integrationHub
     }
 }
 

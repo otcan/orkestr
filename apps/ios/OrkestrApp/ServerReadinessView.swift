@@ -6,7 +6,6 @@ enum ServerReadiness {
     case stale(Date)
     case disabled(String)
     case storageUnavailable
-    case assistantUnavailable(String)
     case ready
 
     var title: String {
@@ -16,14 +15,13 @@ enum ServerReadiness {
         case .stale: return "Showing stale data"
         case .disabled: return "Personal Agent disabled"
         case .storageUnavailable: return "Storage unavailable"
-        case .assistantUnavailable: return "Assistant unavailable"
         case .ready: return "Connected"
         }
     }
 
     var featureVisible: Bool {
         switch self {
-        case .storageUnavailable, .assistantUnavailable, .ready, .stale:
+        case .storageUnavailable, .ready, .stale:
             return true
         case .loading, .offline, .disabled:
             return false
@@ -44,7 +42,6 @@ enum ServerReadiness {
         case .stale(let date): return "Last verified update: \(date.formatted(date: .abbreviated, time: .shortened)). Refresh before relying on this information."
         case .disabled(let reason): return reason
         case .storageUnavailable: return "The Personal Agent storage prerequisites are unavailable. Work and memory are not assumed to be empty."
-        case .assistantUnavailable(let reason): return reason
         case .ready: return "Owner-scoped server data is available."
         }
     }
@@ -55,7 +52,6 @@ enum ServerReadiness {
         case .offline, .storageUnavailable: return "wifi.slash"
         case .stale: return "clock.badge.exclamationmark"
         case .disabled: return "pause.circle"
-        case .assistantUnavailable: return "exclamationmark.bubble"
         case .ready: return "checkmark.circle"
         }
     }

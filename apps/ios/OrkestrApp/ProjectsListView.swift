@@ -3,11 +3,15 @@ import OrkestrMobileCore
 
 struct ProjectsListView: View {
     let client: PersonalAgentAPIClient?
+    let featureFlags: PersonalAgentFeatureFlags?
     @State private var projects: [PersonalAgentProject] = []
     @State private var loading = false
     @State private var loadFailed = false
 
-    init(client: PersonalAgentAPIClient? = nil) { self.client = client }
+    init(client: PersonalAgentAPIClient? = nil, featureFlags: PersonalAgentFeatureFlags? = nil) {
+        self.client = client
+        self.featureFlags = featureFlags
+    }
 
     var body: some View {
         List {
@@ -34,7 +38,7 @@ struct ProjectsListView: View {
                 Section("Projects") {
                     ForEach(projects) { project in
                         NavigationLink {
-                            ProjectDetailView(project: project)
+                            ProjectDetailView(project: project, projectResourcesAvailable: featureFlags?.projectResources == true)
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(project.title).foregroundStyle(OrkestrTheme.text)
@@ -79,6 +83,7 @@ struct ProjectDetailView: View {
     }
 
     let project: PersonalAgentProject
+    var projectResourcesAvailable = false
     @State private var selectedPanel = Panel.conversation
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -100,7 +105,7 @@ struct ProjectDetailView: View {
             .accessibilityLabel("Project sections")
             AgentPanel(title: selectedPanel.rawValue) {
                 if selectedPanel == .resources {
-                    ProjectResourcesPlaceholderView()
+                    ProjectResourcesPlaceholderView(featureAvailable: projectResourcesAvailable)
                 } else {
                     UnavailableNote(message: "\(selectedPanel.rawValue) data for this project has not been loaded from the server.")
                 }
@@ -115,24 +120,16 @@ struct ProjectDetailView: View {
 }
 
 private struct ProjectResourcesPlaceholderView: View {
-    private let resources = ["GitHub repository", "Jira project", "OXRM workspace", "WhatsApp conversation"]
+    let featureAvailable: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            UnavailableNote(message: "Provisioning status and blockers will appear here when the ORK-563 project-resource contract is available. No provider state is inferred.")
-            ForEach(resources, id: \.self) { resource in
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "circle.dashed")
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(resource).foregroundStyle(OrkestrTheme.text)
-                        Text("State and blocker details not loaded")
-                            .font(.caption)
-                            .foregroundStyle(OrkestrTheme.muted)
-                    }
-                }
-                .accessibilityElement(children: .combine)
-            }
+            UnavailableNote(message: featureAvailable
+                ? "Project resource status is advertised, but this app is not connected to the read endpoint yet."
+                : "Project resource status not available yet. This server has not advertised projectResources.")
+            Text("Provisioning and health are separate contract fields; no project resource or state is inferred.")
+                .font(.caption)
+                .foregroundStyle(OrkestrTheme.muted)
         }
     }
 }

@@ -22,6 +22,7 @@ struct AssistantView: View {
                 ServerReadinessView(state: readiness, onRetry: onRetry)
                 AgentPanel(title: "Global conversation") {
                     UnavailableNote(message: "Connect an authenticated Orkestr server to load conversation history.")
+                    UnavailableNote(message: "Session status unavailable; fast/deep selection is not connected yet.")
                     TextField("Message the assistant", text: $draft, axis: .vertical)
                         .lineLimit(2...5)
                         .textFieldStyle(.roundedBorder)

@@ -24,13 +24,15 @@ test("native shell names each ADR 0003 mobile destination without product fixtur
     assert.ok(projects.includes(term) || detail.includes(term), `missing project panel ${term}`);
   for (const term of ["Approvals", "History", "Memory", "Settings"])
     assert.ok(attention.includes(term) || library.includes(term), `missing section ${term}`);
-  for (const state of ["loading", "offline", "stale", "disabled", "storageUnavailable", "assistantUnavailable", "ready"])
+  for (const state of ["loading", "offline", "stale", "disabled", "storageUnavailable", "ready"])
     assert.ok(readiness.includes(`case .${state}`), `missing server state ${state}`);
   for (const source of [assistant, projects, attention, library]) {
     assert.match(source, /UnavailableNote/);
   }
   assert.match(rootView, /ServerReadinessView/);
   assert.match(rootView, /\.stale\(lastEnabledCapabilityAt\)/);
+  assert.doesNotMatch(rootView, /result\.assistant\.available/);
+  assert.match(assistant, /Session status unavailable; fast\/deep selection is not connected yet/);
 });
 
 test("typed client stays on ADR 0002 routes and has no private origin or embedded credential", async () => {
@@ -50,7 +52,7 @@ test("typed client stays on ADR 0002 routes and has no private origin or embedde
   const readiness = await read("OrkestrApp/ServerReadinessView.swift");
   assert.match(readiness, /var featureVisible/);
   assert.match(readiness, /case \.loading, \.offline, \.disabled:[\s\S]*?return false/);
-  assert.match(readiness, /case \.storageUnavailable, \.assistantUnavailable, \.ready, \.stale:[\s\S]*?return true/);
+  assert.match(readiness, /case \.storageUnavailable, \.ready, \.stale:[\s\S]*?return true/);
   assert.match(client, /scheme == "https" \|\| \(scheme == "http" && loopback\)/);
 });
 
@@ -72,18 +74,33 @@ test("native palette mirrors the existing web design tokens", async () => {
   assert.match(nativeTheme, /mirror apps\/web\/src\/app-interface\.css design tokens/);
 });
 
-test("project resources and Integration Hub are honest contract-pending placeholders", async () => {
+test("project resources and Integration Hub follow frozen read-only contract discovery", async () => {
   const [projects, library] = await Promise.all([
     read("OrkestrApp/ProjectsListView.swift"),
     read("OrkestrApp/HistoryMemorySettingsView.swift"),
   ]);
-  for (const resource of ["GitHub repository", "Jira project", "OXRM workspace", "WhatsApp conversation"])
-    assert.ok(projects.includes(resource), `missing project resource slot ${resource}`);
-  assert.match(projects, /ORK-563 project-resource contract/);
-  assert.match(projects, /State and blocker details not loaded/);
+  const models = await read("OrkestrMobileCore/Sources/OrkestrMobileCore/PersonalAgentResourceModels.swift");
+  const capability = await read("OrkestrMobileCore/Sources/OrkestrMobileCore/PersonalAgentModels.swift");
+  assert.match(capability, /projectResources: Bool\?/);
+  assert.match(capability, /integrationHub: Bool\?/);
+  assert.match(projects, /featureFlags\?\.projectResources == true/);
+  assert.match(projects, /Project resource status not available yet/);
+  assert.match(projects, /not connected to the read endpoint yet/);
+  for (const value of ["local_git", "oxrm_workspace", "github_repo", "jira_project", "whatsapp_conversation", "desktop_pool", "plugin_resource"])
+    assert.ok(models.includes(`= "${value}"`) || models.includes(`case ${value}`), `missing resource kind ${value}`);
+  for (const value of ["pending", "provisioning", "needs_connection", "needs_approval", "ready", "failed"])
+    assert.ok(new RegExp(`\\b${value}\\b`).test(models), `missing provisioning state ${value}`);
+  for (const value of ["connection_missing", "approval_required", "local_service_unavailable", "reconcile_conflict", "unknown"])
+    assert.ok(models.includes(`= "${value}"`) || models.includes(`case ${value}`), `missing blocker code ${value}`);
+  for (const value of ["unknown", "healthy", "degraded", "unhealthy"])
+    assert.ok(models.includes(value), `missing health state ${value}`);
+  for (const dto of ["ResourceBinding", "PluginPackage", "Connection", "Capability", "InstanceBinding", "ProjectPluginBinding"])
+    assert.ok(models.includes(`struct ${dto}`), `missing DTO ${dto}`);
   for (const layer of ["Plugin packages", "Connections", "Capabilities", "Global and project bindings", "Resource instances"])
     assert.ok(library.includes(layer), `missing Integration Hub layer ${layer}`);
-  assert.match(library, /ORK-566 contracts/);
+  assert.match(library, /featureFlags\?\.integrationHub == true/);
+  assert.match(library, /Integration Hub not available yet/);
+  assert.match(library, /not connected to its read endpoints yet/);
   assert.match(library, /does not connect, enable, provision, or infer integrations/);
   assert.doesNotMatch(projects + library, /\/api\/personal-agent\/(?:resources|integrations|plugins)/);
 });
