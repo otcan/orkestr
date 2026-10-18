@@ -156,7 +156,16 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
           }
           return ctx.emit(event);
         },
-      }, input);
+      }, input).catch(error => {
+        // Native executors propagate guarded workspace/tool aborts. An owner
+        // cancellation is terminal, not a runtime outage; own fence failure
+        // still takes precedence and must never trigger a cleanup retry.
+        if (persistenceError) throw persistenceError;
+        if (leaseSignal.aborted) throw sessionError("agent_session_lease_lost");
+        currentLease(row);
+        if (ctx.signal.aborted) return { type: "cancelled" };
+        throw error;
+      });
       if (persistenceError) throw persistenceError;
       if (leaseSignal.aborted) throw sessionError("agent_session_lease_lost");
       // A late provider success cannot turn an owner cancellation into a reply.
