@@ -65,5 +65,30 @@ its exact durable completion event and revision. Test a fresh synthetic role
 session, then historical receipt replay, before any follow-up on that role.
 Never adopt a V1 native session or use another account as a substitute.
 
+`prepare_http.py` prepares that private configuration without activating it.
+Create a fresh mode-0700 state root containing only empty mode-0700 `workspace`,
+`provider-home`, and `provider-tmp` directories. The pinned broker configuration
+must select exactly those paths and the manifest's native executable. After the
+complete package has been reviewed and installed:
+
+```sh
+python3 -B v2/acceptance/provider/prepare_http.py \
+  --manifest /opt/example-acceptance/manifest.json \
+  --state-root /srv/example-acceptance
+```
+
+The script launches the pinned ordinary server with execution disabled and a
+deliberate environment allowlist. Through loopback HTTP it sets up a fresh
+synthetic owner, obtains separate machine and cookie sessions, checks that no
+execution exists, and stops its server. It then writes mode-0600 `execution.json`,
+`machine-token`, `synthetic-session.json`, and a metadata-only `prepared.json`.
+No message is admitted and no provider launcher is invoked. It refuses a reused
+state root; failed preparation must be inspected rather than retried in place.
+Keep the synthetic session files private. They must never enter Git or logs.
+
+An attended continuation must separately review the exact configuration digest,
+actual-write/Stop implementation and private launcher before setting
+`ORKESTR_V2_EXECUTION_CONFIG`. Preparation does not make that activation safe.
+
 The current broker supports Codex only. Claude's stream parser is not a launched
 or stoppable provider path; Claude acceptance remains pending that composition.
