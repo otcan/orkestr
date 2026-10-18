@@ -1,0 +1,124 @@
+{
+  "artifact_identity": {
+    "paired_receipt_sha256": "71312838a2c2cbe4593718b1ee53856bf3338941af12445c6b3e99b282028547",
+    "required_glibc": "2.39",
+    "server_sha256": "0f7e9235c01eb67ce5bf55c4f6f79d2d11d1b0b7ca17130cac561f8559ee1b37",
+    "web_features": [
+      "web",
+      "execution-controls"
+    ],
+    "web_inventory_sha256": "53f37e5d9cf1b185171ba1b5afe1b2289135e63fed1be62c72246016a89be3cb"
+  },
+  "backup_sha256": "0fea1c9c74806d9d7f256d1068b5ef8ace5e610dacd59832597140a0161cee8e",
+  "candidate_manifest_sha256": "48ab63269d56a7cee45c10bf223a2d4b707544b203d2268b126a772c1ea72d24",
+  "checks": [
+    "Exact package install and source/schema metadata",
+    "Synthetic auth/history/idempotency",
+    "All UI asset hashes",
+    "Live backup exclusion",
+    "Five read-only health latency samples",
+    "Stopped SQLite backup and exact migration inventory",
+    "Same-package dormant apply/refusal/rollback",
+    "Original-home restart/history"
+  ],
+  "docker": {
+    "reason": "Server ELF requires GLIBC_2.39; previously admitted Python slim Bookworm base provides glibc2.36. Compatible pinned base admission pending.",
+    "status": "blocked before build/run"
+  },
+  "health_latency": {
+    "coverage": {
+      "crash": "unexecuted",
+      "health": "observed",
+      "latency": "observed",
+      "restart": "unexecuted",
+      "revocation": "unexecuted"
+    },
+    "duration_ms": 428.118,
+    "health_recovery_transitions": 0,
+    "latency_ms": {
+      "max": 0.671,
+      "p50": 0.545,
+      "p95": 0.671
+    },
+    "latency_threshold_passed": null,
+    "longest_consecutive_failures": 0,
+    "max_latency_ms": null,
+    "samples": [
+      {
+        "elapsed_ms": 0.527,
+        "observed_at": "2026-10-18T20:40:09.104773+00:00",
+        "offset_ms": 24.969,
+        "ok": true,
+        "sample": 0
+      },
+      {
+        "elapsed_ms": 0.559,
+        "observed_at": "2026-10-18T20:40:09.205369+00:00",
+        "offset_ms": 125.563,
+        "ok": true,
+        "sample": 1
+      },
+      {
+        "elapsed_ms": 0.671,
+        "observed_at": "2026-10-18T20:40:09.306001+00:00",
+        "offset_ms": 226.192,
+        "ok": true,
+        "sample": 2
+      },
+      {
+        "elapsed_ms": 0.545,
+        "observed_at": "2026-10-18T20:40:09.406757+00:00",
+        "offset_ms": 326.952,
+        "ok": true,
+        "sample": 3
+      },
+      {
+        "elapsed_ms": 0.541,
+        "observed_at": "2026-10-18T20:40:09.507374+00:00",
+        "offset_ms": 427.567,
+        "ok": true,
+        "sample": 4
+      }
+    ],
+    "scope": "HTTP health latency only; no browser/provider/load or schema-compatibility claim",
+    "started_at": "2026-10-18T20:40:09.079801+00:00",
+    "successes": 5
+  },
+  "owned_home_removed": true,
+  "schema_versions": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17
+  ],
+  "scope": "Linux x86_64 same-source fresh native package; explicit initialization, no existing-state migration",
+  "source_commit": "aa8e19a3d99e3fb83c3c421e8b61f5be4f5a8c2a",
+  "status": "passed",
+  "unexecuted": [
+    "Browser interaction",
+    "Providers",
+    "Cross-version upgrade",
+    "Dormant activation",
+    "Executor isolation",
+    "Docker candidate acceptance",
+    "Unattended soak",
+    "Crash recovery",
+    "Session revocation",
+    "Remote CI",
+    "Production deployment"
+  ],
+  "version": "2.0.0-rc.1"
+}
