@@ -20,6 +20,16 @@ pub enum RuntimeStoreError {
 }
 pub type Result<T> = std::result::Result<T, RuntimeStoreError>;
 
+/// Per-call outcome, not a persisted dispatch permission that can be replayed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunAdmissionResult {
+    /// Core validates owner, scope, session and role against the durable binding.
+    pub admission: RunAdmission,
+    /// True only for the unique invocation committing insertion of this attempt.
+    /// Every identical replay returns false, including active and terminal runs.
+    pub is_new: bool,
+}
+
 /// The full port is published, but no SQLite runtime adapter exists yet.
 /// Implementations must return Unavailable for any unimplemented operation.
 /// Unsupported provider commands are a separate runtime capability blocker.
@@ -54,14 +64,19 @@ pub trait RuntimeStore: Send + Sync {
 
     /// Validate ownership/claim/generation/fence, persist Starting and acknowledge claim
     /// in the SAME transaction, closing the admit/ack crash gap. RunId is store assigned.
-    /// Identical request replay returns original admission; changed replay conflicts.
+    /// Identical replay returns the original admission with is_new=false; changed
+    /// replay conflicts. Exactly one concurrent insertion may return is_new=true.
+    /// Never persist/replay true. Admission.role comes from the durable binding,
+    /// never caller assertion. Runtime validates owner/scope/session/expected role
+    /// and Execution purpose before any dispatch; replay never calls provider.start.
+    /// Missing dispatch after commit is unknown work for reconciliation, not retry.
     async fn admit_run(
         &self,
         claim: &InboxClaim,
         binding_id: &SessionId,
         expected_generation: u64,
         request_key: &str,
-    ) -> Result<RunAdmission>;
+    ) -> Result<RunAdmissionResult>;
 
     /// Confirm opaque native identity with event-key dedup; reject cross-role aliasing.
     /// Return updated admission. A missing identity never means a session is Ready.
