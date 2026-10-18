@@ -4,6 +4,12 @@
 #[path = "../src/control_dispatch.rs"]
 #[allow(dead_code)]
 mod control_dispatch;
+#[path = "../src/control_registry.rs"]
+#[allow(dead_code)]
+mod control_registry;
+#[path = "../src/owned_children.rs"]
+#[allow(dead_code)]
+mod owned_children;
 #[path = "../src/stop_execution/mod.rs"]
 #[allow(dead_code)]
 mod stop_execution;
