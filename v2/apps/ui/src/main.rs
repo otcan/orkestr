@@ -7,6 +7,7 @@ mod progress_view;
 mod stop_button;
 mod transport;
 mod views;
+mod workers_view;
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{Project, ProjectInput};
 use orkestr_v2_ui::{session_scope::SessionScope, Draft};
@@ -29,6 +30,8 @@ fn App() -> Element {
     // Owner-scoped high-water marks outlive keyed conversation and tab remounts.
     let mut execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut host_resources = use_signal(orkestr_v2_ui::host_resources::HostResources::default);
+    let mut workers = use_signal(orkestr_v2_ui::workers::Workers::default);
+    let mut worker_execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut tab = use_signal(|| "Assistant".to_string());
     let mut notice = use_signal(|| "Sign in to your local server.".to_string());
     let mut refresh = use_signal(|| 0_u64);
@@ -47,6 +50,8 @@ fn App() -> Element {
             Ok(session) => {
                 execution.write().authorization_lost();
                 host_resources.write().clear_owner();
+                workers.write().clear_owner();
+                worker_execution.write().authorization_lost();
                 session_scope
                     .write()
                     .activate(&session.global_conversation_id, &mut drafts.write());
@@ -68,6 +73,8 @@ fn App() -> Element {
     let mut expired = move |_| {
         execution.write().authorization_lost();
         host_resources.write().clear_owner();
+        workers.write().clear_owner();
+        worker_execution.write().authorization_lost();
         session_scope.write().invalidate();
         projects.set(Vec::new());
         pending_project.set(None);
@@ -81,7 +88,7 @@ fn App() -> Element {
         style { "{include_str!(\"style.css\")}" }
         main {
             header { h1 { "Orkestr" } p { "Local assistant" } }
-            p { class: "notice", "Stop, steering, approvals and memory are unavailable. Project resources are not connected." }
+            p { class: "notice", "Controls are available only when shown for a connected run. Steering, approvals and memory are unavailable. Project resources are not connected." }
             p { role: "status", "{notice}" }
             if resuming() {
                 p { role: "status", "Checking browser session…" }
@@ -92,6 +99,8 @@ fn App() -> Element {
                     if logging_out() { return; }
                     execution.write().authorization_lost();
                     host_resources.write().clear_owner();
+                workers.write().clear_owner();
+                worker_execution.write().authorization_lost();
                     session_scope.write().activate(&session.global_conversation_id, &mut drafts.write());
                     projects.set(Vec::new()); pending_project.set(None); refresh += 1;
                     tab.set("Assistant".into());
@@ -102,7 +111,7 @@ fn App() -> Element {
                 } }
             } else {
                 nav { "aria-label": "Main",
-                    for name in ["Assistant", "Projects", "Attention", "History", "Host resources", "Settings"] {
+                    for name in ["Assistant", "Projects", "Attention", "History", "Workers", "Host resources", "Settings"] {
                         button { "aria-current": if tab() == name { "page" } else { "false" }, onclick: move |_| {
                             tab.set(name.into());
                             if name == "Assistant" { current.set(global()); }
@@ -120,6 +129,8 @@ fn App() -> Element {
                                 Ok(_) => {
                                     execution.write().authorization_lost();
                                     host_resources.write().clear_owner();
+                workers.write().clear_owner();
+                worker_execution.write().authorization_lost();
                                     session_scope.write().invalidate();
                                     projects.set(Vec::new()); pending_project.set(None);
                                     global.set(String::new()); current.set(String::new()); refresh += 1;
@@ -150,6 +161,8 @@ fn App() -> Element {
                     }
                 } else if tab() == "History" {
                     history::History { key: "{current()}", id: current(), csrf: csrf(), session_scope, onexpired: expired }
+                } else if tab() == "Workers" {
+                    workers_view::WorkersView { key: "{current()}-{session_scope.read().generation()}", id: current(), csrf: csrf(), session_scope, workers, execution: worker_execution, onexpired: expired }
                 } else if tab() == "Host resources" {
                     host_resources_view::HostResourcesView { key: "{session_scope.read().generation()}", session_scope, resources: host_resources, onexpired: expired }
                 } else if tab() == "Attention" {
