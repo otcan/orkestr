@@ -39,7 +39,7 @@ structured; chat text is evidence/context, not its source of truth.
 | Task | A bounded outcome, criteria, lifecycle, and execution/resource references | New `personal_agent_tasks` table in that same store (OP-03); it is not an Agent Job run |
 | Thread / Subthread | Conversation and execution context | Existing thread records; workers and child threads retain `parentThreadId`; task-agent threads use `threadKind` and parent binding |
 | Workspace | Repository, branch/worktree, or virtual desk attachment | Existing worker/worktree and desktop lease/resource systems; task stores references, not copied workspace state |
-| Memory | Owner-approved, provenance-bearing durable fact/preference/decision | OP-07 storage contract; not implicit thread transcript retention and not introduced by OP-03 |
+| Memory | Owner-approved, provenance-bearing durable personal/project memory | `personal_agent_memories` in the existing `agent-jobs.sqlite` Agent Job store; Lane A owns its schema and additive migration, Lane B owns memory services/retrieval/context assembly |
 | Decision | Owner instruction, delegated context, automation, or untrusted input with provenance | Existing messages/runtime context plus correlated events; preserve source and trust class, never promote arbitrary agent/web text to owner instruction |
 | Event | Append-only fact about a message, task, run, tool/effect, approval, or artifact | Existing `events.jsonl`, `orkestr-events`, Agent Job checkpoints/effects and connector outbox; OP-05 adds the common envelope and cursor feed, not another event bus |
 | Action | Proposed or performed tool/external effect | Existing Agent Job `effects` ledger and policy decision path |
@@ -57,6 +57,95 @@ add organization, tenant, or plugin abstractions. IDs are opaque stable strings.
 Project and task records carry timestamps and a JSON payload for additive
 contract evolution, while identity, status, relation, and idempotency fields
 used for constraints and queries are first-class columns.
+
+### OP-07 memory record and storage contract
+
+Memory is opt-in durable product state, not transcript retention. The only
+persisted content is content the owner explicitly asks to remember or approves
+as a proposed memory. Neither Lane B nor the migration scans private threads,
+copies message bodies, or promotes worker, connector, or web content into owner
+memory without explicit owner confirmation.
+
+The canonical categories are `preference`, `fact`, `decision`, `commitment`,
+`open_loop`, and `project_summary`. `content_json` is category-validated
+structured content owned by the memory service. The table contract is:
+
+```sql
+create table if not exists personal_agent_memories (
+  id text primary key,
+  idempotency_key text unique,
+  category text not null check (category in
+    ('preference', 'fact', 'decision', 'commitment', 'open_loop', 'project_summary')),
+  scope_kind text not null check (scope_kind in ('owner', 'project')),
+  scope_id text,
+  content_json text not null,
+  provenance_json text not null,
+  source_event_id text,
+  source_cursor text,
+  consented_by text not null,
+  consented_at text not null,
+  created_at text not null,
+  updated_at text not null,
+  check ((scope_kind = 'owner' and scope_id is null) or
+         (scope_kind = 'project' and scope_id is not null)),
+  check (category <> 'project_summary' or scope_kind = 'project'),
+  foreign key (scope_id) references personal_agent_projects(id) on delete restrict
+);
+create index if not exists personal_agent_memories_scope_category
+  on personal_agent_memories(scope_kind, scope_id, category, updated_at);
+```
+
+Owner scope uses `scope_kind='owner'` and a null `scope_id`; project scope uses
+the existing Project ID. A `project_summary` must be project-scoped. Other
+categories may use owner or project scope. Task-scoped commitments/open loops
+use their owning project scope and carry the Task ID in structured content;
+they do not create a second task store. Retrieval for a project may combine
+owner-scoped records and records for that exact project only. It must never
+include records belonging to another project, and it must not infer permission
+to read source threads from a memory reference.
+
+`provenance_json` records the source kind and actor, origin/channel, capture
+time, and whether the content was directly owner-authored or owner-confirmed.
+It may include opaque task/project references, but never source message text,
+credentials, or copied thread content. `source_event_id` and `source_cursor`
+reference the canonical OP-05 event envelope when available; until then they
+may be null. These are references to that envelope, not a second event schema.
+Only consented records are stored or returned by retrieval. A pending memory
+suggestion is transient until the owner accepts it. Arbitrary assistant,
+worker, connector, and web text is untrusted evidence, not consent.
+
+The provenance value is versioned JSON with `sourceKind`, `actorId`, `origin`,
+`capturedAt`, and `trust` (`owner_authored` or `owner_confirmed`); an optional
+opaque `taskId` may scope commitments/open loops. It is descriptive provenance,
+not an authorization grant. Consent columns identify the owner and the time of
+the current content's explicit approval.
+
+The memory service must provide these owner operations:
+
+- **Create/consent:** require an explicit owner save instruction or approval;
+  record `consented_by` and `consented_at`; deduplicate retries with the
+  idempotency key. Do not persist declined suggestions.
+- **Correct:** replace `content_json` and provenance atomically on the same
+  record, refresh consent actor/time and `updated_at`, and reference the
+  correction event when available. Do not retain the superseded value in the
+  memory table or in correction metadata.
+- **Forget:** delete the memory row and its searchable content. Any OP-05 audit
+  event may retain only the opaque memory ID and operation metadata, never its
+  content or provenance payload. Do not keep a hidden tombstone containing the
+  forgotten value.
+- **Export:** return a deterministic owner-scoped JSON export of current
+  consented records, including category, scope, content, provenance, consent
+  time, timestamps, and opaque event references. Do not export source thread
+  messages or forgotten values.
+
+Lane A owns this record contract and the idempotent additive migration in the
+existing Agent Job store. It runs only when `personalAgentFeature(env)` is on;
+there is no new database, feature flag, event envelope, or production
+migration. Lane B owns capture/consent orchestration, validation, retrieval,
+correction/forget/export services, and bounded context assembly against this
+contract. Tests must use synthetic fixtures and prove scope isolation,
+provenance retention, explicit consent, correction/forget/export behavior,
+restart durability, and that untrusted source text is never promoted.
 
 ### Task lifecycle and truth boundary
 
@@ -214,9 +303,10 @@ Lane B owns the local-runtime environment variable names and exports
 The capability endpoint delegates its `assistant` field to this helper once the
 OP-09 change is available. Until then it returns
 `{ available: false, reason: "not_configured" }`. Lane A alone owns
-`ORKESTR_PERSONAL_AGENT_ENABLED`, the Project/Task schemas, and the correlated
-event envelope; Lane B does not add task, memory, or event schemas. OP-07 memory
-implementation waits on these contracts and its storage design.
+`ORKESTR_PERSONAL_AGENT_ENABLED`, Project/Task/Memory schemas and their
+migrations, and the correlated event envelope. Lane B implements memory
+services against the OP-07 record contract above and does not add competing
+schemas or event formats.
 
 Lane B's `b09f00bb` change passes the pinned provider config to
 `agentJobProviderStatus` during admission and exports the existing native
