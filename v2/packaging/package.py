@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "local-install"))
 from install_state import PACKAGE_FORMAT, files, fresh_path, package, unprivileged, write_json
 from helper import require
 
-TOOLS = ("helper.py", "install_state.py", "launcher.py", "recovery.py")
+TOOLS = ("helper.py", "install_state.py", "launcher.py", "recovery.py", "path_identity.py")
 
 
 def assemble(binary, output, version, source_commit, ui=None):
