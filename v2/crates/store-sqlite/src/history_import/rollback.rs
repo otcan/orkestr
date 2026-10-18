@@ -21,7 +21,15 @@ impl Store {
                 return Err(HistoryError::Conflict);
             }
         }
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("history-rollback-before-commit")
+            .await
+            .map_err(|_| HistoryError::Unavailable)?;
         tx.commit().await.map_err(unavailable)?;
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("history-rollback-after-commit")
+            .await
+            .map_err(|_| HistoryError::Unavailable)?;
         Ok(HistoryRollbackReceipt {
             schema_version: 1,
             owner_id: owner.clone(),

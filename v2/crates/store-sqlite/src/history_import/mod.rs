@@ -95,7 +95,15 @@ impl Store {
                 .await?
                 .1
         };
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("history-import-before-commit")
+            .await
+            .map_err(|_| HistoryError::Unavailable)?;
         tx.commit().await.map_err(unavailable)?;
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("history-import-after-commit")
+            .await
+            .map_err(|_| HistoryError::Unavailable)?;
         Ok(receipt)
     }
 }
