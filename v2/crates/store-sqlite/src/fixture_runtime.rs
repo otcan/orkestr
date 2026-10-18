@@ -205,3 +205,6 @@ mod tests;
 
 #[cfg(test)]
 mod inspection_tests;
+
+#[cfg(test)]
+mod guard_tests;
