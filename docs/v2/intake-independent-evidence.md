@@ -54,3 +54,34 @@ review remain open. Core's green CI does not waive the isolation failure.
 Coordinator must independently review these authored probes at their own exact
 head before integration. Runtime's duplicated provisional ports must reconcile
 with the shared typed application boundary; spy order is not durability evidence.
+
+## Read-only archive comparison and CI count verification
+
+Archive `ef759a48f9d6861b05165f726e2afe2837acaf6e` was inspected as reference
+only. Its reported 25 tests were not rerun and are not managed-core evidence.
+No archive store code was copied. Comparison is against core
+`f8e1af18b5c88df753623e3a69f7240f56080a0e`; its store-open implementation is
+unchanged from the tested intake head above.
+
+| Valuable negative case from archive | Managed-core evidence / next probe |
+|---|---|
+| Foreign schema, future version, altered accepted schema refused without changing database or sidecars | Pending. Core opens a writable WAL pool before SQLx migrations; no explicit application identity/schema preflight is present. Assert byte-for-byte preservation on refusal, including an unrelated database whose tables do not collide with migration names. |
+| Future version present only in uncheckpointed WAL | Pending. Refusal must inspect the effective database, not just the main-file header; preserve live WAL/SHM and keep the synthetic writer open. |
+| Database symlink refusal | Independently failed as recorded above. Add sidecar and physical-alias cases under an explicit policy. |
+| Crash before commit and after commit before acknowledgement | Pending at those precise boundaries. Existing kill-after-receipt coverage does not establish either boundary. Require deterministic test-only handshakes; no timing-based assumption. |
+| Projection write failure rolls back journal/projection | Core's inbox-trigger failure covers a related admission transaction rollback; not runtime projection recovery. |
+| Corrupt/future journal records preserve prior projection; wrong worker and competing claims fail atomically | Pending runtime/recovery schema and typed-store implementation. Do not map archive task semantics onto intake-only tables. |
+| WAL/FULL/foreign-key policy on actual store connections | Configured in source. An external SQLite connection cannot verify another connection's FULL/foreign-key settings; own-handle evidence remains needed. |
+
+CI run 39132698484 was independently queried: completed/success, exact head
+`28c4779346a2d6e46abed5305cd4b6ee7deac060`. Job 117690927129 logs confirm
+one domain test, two fixture tests and one process-runner test: **4 Rust tests**.
+The runner logs **7 Python tests, OK**. These are nested counts, not 11 independent
+acceptance cases. The successful run does not cover the later interface commit.
+
+Authentication scrutiny found owner identity derived from the authenticated
+Bearer session, hashed expiring session storage, bootstrap gating and rejected
+actor injection. Independent narrow auth probes passed as recorded above.
+Cross-owner fixture coverage, browser/device session persistence/revocation and
+transport-level slow-header limits remain pending; none is implied by a green
+intake CI. M1 remains pending.
