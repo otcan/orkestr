@@ -6,6 +6,7 @@ pub(super) async fn ensure(
     conversation: &ConversationId,
 ) -> Result<RoleBindings> {
     let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+    store.check_context_in(&mut tx, owner).await?;
     scope(&mut tx, owner, conversation).await?;
     let mut records = Vec::new();
     for role in ["fast", "deep"] {
@@ -37,6 +38,7 @@ pub(super) async fn worker(
         return Err(RuntimeStoreError::InvalidInput);
     }
     let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+    store.check_context_in(&mut tx, owner).await?;
     scope(&mut tx, owner, conversation).await?;
     let parent_id = parent.map(ToString::to_string);
     let fingerprint = super::super::digest(&format!(

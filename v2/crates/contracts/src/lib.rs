@@ -1,6 +1,10 @@
 //! Version 0 HTTP contracts. No storage or provider dependencies.
 mod cancellation;
+mod execution;
+pub use execution::*;
 mod events;
+mod production_events;
+pub use production_events::*;
 mod resource_health;
 pub use resource_health::*;
 mod stopped;
@@ -146,3 +150,8 @@ pub struct SessionResponse {
 pub struct SetupResponse {
     pub global_conversation_id: ConversationId,
 }
+
+mod production_cancellation;
+pub use production_cancellation::*;
+mod production_stopped;
+pub use production_stopped::*;

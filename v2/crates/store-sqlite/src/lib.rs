@@ -12,12 +12,27 @@ pub mod fixture_runtime;
 mod intake;
 mod paths;
 mod preflight;
+mod production_runtime;
 mod replay;
 mod runtime;
+pub use production_runtime::{
+    BoundSessionMetadata, ConsumedProviderDispatch, ExecutionConsumption,
+    ProductionSupervisorStore, ReadySessionTransition,
+};
+
+pub use production_runtime::inspection::{
+    ProductionAttemptInspection, ProductionDispatchState, ProductionScopeInspection,
+};
+#[cfg(feature = "fixture-test-controls")]
+pub use production_runtime::test_controls::ProductionCheckpoint;
 
 #[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,
+    authority: Option<production_runtime::Context>,
+    #[cfg(feature = "fixture-test-controls")]
+    production_checkpoint:
+        Option<std::sync::Arc<production_runtime::test_controls::ArmedCheckpoint>>,
 }
 fn db(_: impl std::fmt::Display) -> StoreError {
     StoreError::Unavailable
@@ -52,7 +67,12 @@ impl Store {
             .run(&pool)
             .await
             .map_err(db)?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            authority: None,
+            #[cfg(feature = "fixture-test-controls")]
+            production_checkpoint: None,
+        })
     }
     pub async fn close(&self) {
         self.pool.close().await;

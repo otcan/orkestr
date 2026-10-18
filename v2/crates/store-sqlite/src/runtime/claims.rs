@@ -12,6 +12,7 @@ pub(super) async fn next(
         return Err(RuntimeStoreError::InvalidInput);
     }
     let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+    store.check_context_in(&mut tx, owner).await?;
     scope(&mut tx, owner, conversation).await?;
     let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM session_bindings WHERE id=? AND owner_id=? AND conversation_id=? AND role='deep' AND state IN ('starting','ready','busy')")
         .bind(consumer.to_string()).bind(owner.to_string()).bind(conversation.to_string())
