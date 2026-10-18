@@ -28,6 +28,15 @@ pub struct StoppingCodex {
     stopped: bool,
 }
 
+impl StoppingCodex {
+    /// Cleanup evidence remains separate from durable cancellation evidence.
+    pub fn retire_broker(
+        self,
+    ) -> Result<crate::containment::RetiringBroker, crate::containment::Error> {
+        self.pump.retire_broker()
+    }
+}
+
 impl CodexPump {
     /// Caller first commits authenticated cancellation. This consumes the pump,
     /// preserves its execution read identity, and never acquires execution rights.

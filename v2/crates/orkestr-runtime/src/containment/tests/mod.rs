@@ -130,3 +130,5 @@ impl ConsumedTurn for SyntheticConsumed {
 mod durable_races;
 mod scope_cases;
 mod transport_cases;
+
+mod retirement_cases;

@@ -159,6 +159,13 @@ impl CodexPump {
         self.source.writing = writing;
         self
     }
+    /// Consume the owned broker for descendant-aware cleanup. The returned
+    /// evidence is not a Core continuation grant and never confirms Stopped.
+    pub fn retire_broker(
+        self,
+    ) -> Result<crate::containment::RetiringBroker, crate::containment::Error> {
+        self.source.child.retire_broker()
+    }
     pub fn flush(&mut self) -> Result<(), crate::containment::Error> {
         if self.source.failed.is_some() {
             return Err(crate::containment::Error::Revoked);
