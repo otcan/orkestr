@@ -58,3 +58,45 @@ The unregistered Rust checkpoint has not been compiled or executed. Real Store
 recovery export/restore, process-crash acceptance for these methods and portable
 return to the legacy authority are unexecuted. Existing isolated dormant-import
 and native-delta preservation tests remain separately documented.
+
+## Schema-20 implementation source checkpoint
+
+Against exact Core schema handoff `bcd93cd3595b14eab817b65b97b56876afe37e26`,
+new owned files implement recovery capture, transaction-local receipt validation,
+restore and whole-bundle rollback. No shared registration or schema edits are
+included. Core must register these internal sibling modules together:
+`recovery_export` (public DTOs), `recovery_codec`, `recovery_capture`,
+`recovery_restore`, `recovery_rollback`, and test-only `recovery_store_tests`.
+The individual rollback hold and sole insertion helper extraction must accompany
+them; adopting the hold requires schema 20, not schema 16 alone.
+
+Restore authenticates before looking up an outer receipt. Both ledgers, their
+associations and the immutable outer receipt commit together. Restore replay
+verifies exact recorded children/content and returns the initial receipt without
+reactivation. Rollback authenticates before replay, verifies the outer semantic
+fingerprint and both children before changing either, retains all rows and returns
+a persisted exact rollback receipt on identical replay. An inactive original stays
+inactive. Occupied or swapped targets, changed input, tampered content/activity and
+independently linked children refuse. The shared insertion helper remains the sole
+history row writer. No runtime/execution tables are written.
+
+The explicit recovery capture closes its query-only/trusted-schema-off connection
+and rechecks current credential/conversation ownership outside the cut before
+returning retained inactive text. It has a 60-second timeout, raw count/byte
+preflights before loading text, complete fingerprint verification and aggregate
+limits. Source namespace for the native delta is its conversation UUID; collision
+with the original source namespace refuses. A single Store cut does not establish
+legacy or multi-authority coherence.
+
+Rollback request keys use 1..=128 exact UTF-8 bytes without control characters,
+consistent with the existing durable stop-receipt key bound; no normalization.
+The history contract previously had no request key. This explicit choice needs
+Core confirmation rather than inference from credential length limits.
+
+Five new actual Store tests cover inactive-source capture, native delta content,
+reopen/replay/whole-bundle rollback, credential revocation, occupied/swapped targets,
+second-child abort atomicity, individual-child rollback hold and tampered content
+or activity. These Rust tests and the new Rust methods are **unexecuted** pending
+bounded build admission against schema 20 with temporary internal registration.
+The Python suite remains 115/115 PASS; rustfmt and diff checks PASS. Actual recovery
+process-kill/crash acceptance is unexecuted and remains a separate verification gate.

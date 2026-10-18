@@ -123,3 +123,18 @@ impl HistoryRecoveryRestoreRequest {
         Ok(())
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct HistoryRecoveryRollbackRequest {
+    pub restore_id: Uuid,
+    pub expected_revision: i64,
+    /// Exact UTF-8, 1..=128 bytes, no control characters or normalization.
+    pub request_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryRecoveryRollbackReceipt {
+    pub restore_id: Uuid,
+    pub revision: i64,
+    pub active: bool,
+}
