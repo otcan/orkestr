@@ -141,7 +141,7 @@ async fn exercise(
     )
     .unwrap();
     let script = if pump_progress == Some(true) {
-        r#"import sys,json; r=json.loads(sys.stdin.readline()); print(json.dumps({'id':r['id'],'result':{'turn':{'id':'t1','status':'inProgress'}}}),flush=True); print(json.dumps({'method':'item/agentMessage/delta','params':{'threadId':'synthetic-native','turnId':'t1','delta':'synthetic progress'}}),flush=True); print(json.dumps({'method':'turn/completed','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'completed'}}}),flush=True); sys.stdin.read()"#
+        r#"import sys,json; r=json.loads(sys.stdin.readline()); print(json.dumps({'id':r['id'],'result':{'turn':{'id':'t1','status':'inProgress'}}}),flush=True); print(json.dumps({'method':'turn/started','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'inProgress'}}}),flush=True); print(json.dumps({'method':'item/agentMessage/delta','params':{'threadId':'synthetic-native','turnId':'t1','delta':'synthetic progress'}}),flush=True); print(json.dumps({'method':'turn/completed','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'completed'}}}),flush=True); sys.stdin.read()"#
     } else {
         r#"import sys,json; r=json.loads(sys.stdin.readline()); print(json.dumps({'id':r['id'],'result':{'turn':{'id':'t1','status':'inProgress'}}}),flush=True); print(json.dumps({'method':'turn/started','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'inProgress'}}}),flush=True); print(json.dumps({'method':'turn/completed','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'completed'}}}),flush=True); sys.stdin.read()"#
     };
@@ -170,7 +170,7 @@ async fn exercise(
         "synthetic-native"
     });
     let result = submit_codex(cap, &mut rpc, &child);
-    if let Some(progress) = pump_progress {
+    if let Some(_progress) = pump_progress {
         result.unwrap();
         child.flush_stdin(&scope).unwrap();
         let mut pump = super::pump::CodexPump::new(
@@ -182,26 +182,6 @@ async fn exercise(
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             let outcome = pump.step(&bound).await;
-            if progress && pump.pending().is_some() {
-                assert!(matches!(
-                    outcome,
-                    Err(crate::supervisor::Error::Store(
-                        RuntimeStoreError::Unavailable
-                    ))
-                ));
-                let original = pump.pending().unwrap().clone();
-                for _ in 0..3 {
-                    assert!(pump.step(&bound).await.is_err());
-                    assert_eq!(pump.pending(), Some(&original));
-                }
-                let status = store
-                    .execution_status(&owner, &conversation)
-                    .await
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(status.phase, orkestr_v2_contracts::ExecutionPhase::Starting);
-                break;
-            }
             outcome.unwrap();
             let status = store
                 .execution_status(&owner, &conversation)
@@ -210,6 +190,31 @@ async fn exercise(
                 .unwrap();
             if status.phase == orkestr_v2_contracts::ExecutionPhase::AwaitingAcceptance {
                 assert!(pump.pending().is_none());
+                if pump_progress == Some(true) {
+                    let payload_id = status
+                        .progress
+                        .as_ref()
+                        .expect("durable progress reference")
+                        .payload_id
+                        .clone();
+                    let payload = store
+                        .provider_payload(&owner, &conversation, &payload_id)
+                        .await
+                        .unwrap();
+                    assert_eq!(payload.text.as_deref(), Some("synthetic progress"));
+                    store
+                        .remove_provider_payload(&owner, &conversation, &payload_id)
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        store
+                            .provider_payload(&owner, &conversation, &payload_id)
+                            .await
+                            .unwrap()
+                            .text,
+                        None
+                    );
+                }
                 break;
             }
             assert!(Instant::now() < deadline, "bounded durable pump");
@@ -328,6 +333,6 @@ async fn ordinary_output_pump_journals_started_and_completion_proposal() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ordinary_output_pump_retains_unavailable_progress_without_reading_terminal() {
+async fn ordinary_output_pump_commits_progress_before_completion_proposal() {
     exercise(false, "subscription:local", false, Some(true)).await;
 }
