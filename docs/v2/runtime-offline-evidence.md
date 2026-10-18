@@ -89,3 +89,21 @@ regression test command via v2-cargo with --locked stopped before compile becaus
 this lane awaits the coordinator-owned lockfile. These new Rust tests are pending,
 not passing acceptance. Formal review still needs a distinct reviewer identity;
 the shared PR-owning account cannot formally approve its own PR.
+
+
+Shared-port migration checkpoint:
+
+- Consumed the coordinator combined candidate `aec7475b` by non-force merge.
+  At that exact head, the offline locked runtime command passed 16 tests
+  (10 protocol/fake, 3 ordering, 3 retry). These are not store durability tests.
+- Imported core provider-event additions from `e2de7312` and replaced the
+  provisional synchronous store with native asynchronous `RuntimeStore` calls.
+  Runtime uses shared UUID IDs and separate lease/fence generations. Provider
+  traits, parser and fake remain runtime-owned; no persistence adapter was added.
+- Cancellation carries a distinct interrupt-control envelope and returns the
+  persisted cancellation receipt even when interruption fails. Its new fence
+  cannot become execution admission. Refused stale/fenced observations are held
+  for explicit reconciliation rather than retried as newly authorized events.
+- The migrated tests use ready-future spies, stable sequence/payload retries and
+  typed `Unavailable`/`Fenced`/`StaleLease` errors. They remain unexecuted pending
+  the coordinator-owned dependency lock update. No live inference was run.

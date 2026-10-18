@@ -1,6 +1,8 @@
 //! Controllable FAKE provider. Explicit fixture mode, bounded queues, no timers,
 //! threads, inference, persistence or implicit fallback to synthetic results.
-use crate::ports::{Admission, Blocker, Provider, ProviderEvent};
+use crate::ports::{Blocker, InterruptControl, Provider, ProviderAdmission, ProviderEvent};
+use orkestr_v2_application::runtime::MAX_PROVIDER_PROGRESS_BYTES;
+use orkestr_v2_contracts::SessionId;
 use std::collections::{HashMap, VecDeque};
 
 pub const LABEL: &str = "FAKE — synthetic test provider; no model inference";
@@ -9,13 +11,13 @@ const MAX_SESSIONS: usize = 64;
 
 #[derive(Debug)]
 struct Turn {
-    admission: Admission,
+    admission: ProviderAdmission,
     events: VecDeque<ProviderEvent>,
     terminal: bool,
 }
 
 pub struct FakeProvider {
-    turns: HashMap<String, Turn>,
+    turns: HashMap<SessionId, Turn>,
 }
 impl FakeProvider {
     pub fn fixture_only(explicit_fixture_mode: bool) -> Result<Self, Blocker> {
@@ -27,11 +29,16 @@ impl FakeProvider {
         })
     }
     /// Empty queue means busy indefinitely: deterministic tests control progress.
-    pub fn emit(&mut self, admission: &Admission, event: ProviderEvent) -> Result<(), Blocker> {
+    pub fn emit(
+        &mut self,
+        admission: &ProviderAdmission,
+        event: ProviderEvent,
+    ) -> Result<(), Blocker> {
         if matches!(event, ProviderEvent::Completed { synthetic: false }) {
             return Err(Blocker::FixtureOnly);
         }
-        if matches!(&event, ProviderEvent::Progress(text) if text.len() > 8192) {
+        if matches!(&event, ProviderEvent::Progress(text) if text.len() > MAX_PROVIDER_PROGRESS_BYTES)
+        {
             return Err(Blocker::QueueFull);
         }
         let turn = self.checked(admission)?;
@@ -51,7 +58,7 @@ impl FakeProvider {
         turn.events.push_back(event);
         Ok(())
     }
-    fn checked(&mut self, admission: &Admission) -> Result<&mut Turn, Blocker> {
+    fn checked(&mut self, admission: &ProviderAdmission) -> Result<&mut Turn, Blocker> {
         let turn = self
             .turns
             .get_mut(&admission.session_id)
@@ -63,14 +70,14 @@ impl FakeProvider {
     }
 }
 impl Provider for FakeProvider {
-    fn start(&mut self, admission: &Admission) -> Result<(), Blocker> {
+    fn start(&mut self, admission: &ProviderAdmission) -> Result<(), Blocker> {
         if self.turns.contains_key(&admission.session_id) {
             return Err(Blocker::Busy);
         }
         if self
             .turns
             .values()
-            .any(|turn| turn.admission.native_session_id == admission.native_session_id)
+            .any(|turn| turn.admission.native_session_ref == admission.native_session_ref)
         {
             return Err(Blocker::Busy);
         }
@@ -87,7 +94,7 @@ impl Provider for FakeProvider {
         );
         Ok(())
     }
-    fn poll(&mut self, admission: &Admission) -> Result<Option<ProviderEvent>, Blocker> {
+    fn poll(&mut self, admission: &ProviderAdmission) -> Result<Option<ProviderEvent>, Blocker> {
         let turn = self.checked(admission)?;
         let event = turn.events.pop_front();
         if turn.terminal && turn.events.is_empty() {
@@ -95,25 +102,16 @@ impl Provider for FakeProvider {
         }
         Ok(event)
     }
-    fn interrupt(&mut self, admission: &Admission) -> Result<(), Blocker> {
-        // The cancellation fence may be newer, but may never target another run.
-        let turn = self
-            .turns
-            .get_mut(&admission.session_id)
-            .ok_or(Blocker::UnknownSession)?;
-        if admission.run_id != turn.admission.run_id
-            || admission.native_session_id != turn.admission.native_session_id
-            || admission.role != turn.admission.role
-            || admission.generation < turn.admission.generation
-        {
+    fn interrupt(&mut self, control: &InterruptControl) -> Result<(), Blocker> {
+        let admission = &control.original;
+        let turn = self.checked(admission)?;
+        if control.fence_generation < admission.fence_generation {
             return Err(Blocker::StaleLease);
         }
-        // Completion may already be waiting for persistence. Never replace that
-        // evidence with a fabricated stop confirmation or rebind its generation.
         if turn.terminal {
             return Err(Blocker::Busy);
         }
-        turn.admission = admission.clone();
+        // Keep original execution identity. The new fence is control-only.
         turn.events.clear();
         turn.events.push_back(ProviderEvent::Stopped);
         turn.terminal = true;
