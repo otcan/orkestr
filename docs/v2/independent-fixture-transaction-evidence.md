@@ -218,3 +218,46 @@ required wrapper with `--locked --offline -p orkestr-v2-store-sqlite --features
 fixture-test-controls --test independent_transactions --test independent_crash
 -- -D warnings`. Package formatting and git diff checks passed. No exact-head CI
 result is claimed for this verification update.
+
+### Existing cross-project IDs and unconfirmed deep readiness
+
+Two more independently authored probes run against the unchanged exact Core
+44ecdb30 archive. No Core df911ff7 guard test was imported or counted as these
+independent probes. Same wrapper command and isolated target/home as above:
+`test --locked --offline -p orkestr-v2-store-sqlite --features
+fixture-test-controls --test independent_transactions`.
+
+Result: **9 transaction tests passed, 0 failed, 0 ignored** (0.21s). Strict clippy
+for that integration target, package formatting and diff checks also passed.
+The crash file is unchanged; this update does not claim a new crash-suite rerun.
+
+- **R02 existing cross-project identifiers:** two actual projects under the same
+  synthetic owner each receive a message, event, readiness-confirmed deep binding
+  and live claim through public APIs. Substituting project B's message ID, event
+  ID, or both into project A's claim refuses with StaleLease before admission and
+  Conflict after admission. Both projects' scoped projections remain unchanged
+  after every refusal; B has no attempt for that request key. Original A and B
+  claims each still admit/reserve/consume using their own authority. No invented
+  foreign identifiers are used in these six substitutions.
+- **R08 unconfirmed deep binding:** a real project gets an unconfigured Starting
+  deep binding and a live claim. Two admission attempts return Unavailable, with
+  zero attempts/acks and no attempt inspection result. Explicit readiness
+  confirmation then allows the **same original claim and request key** to admit,
+  reserve and consume. Refusals therefore did not spend the claim or issue usable
+  attempt authority.
+
+These specifically complete the previously listed cross-project message/event
+and unconfirmed-deep-binding cases. R02's remaining binding-field/error matrix,
+R08's other unavailable/error paths, process recovery and broader lifecycle
+acceptance remain pending. Runtime separately owns Candidate/DeliveryUnknown
+predecessor takeover variants; no credit is transferred from that lane here.
+No guard defect was observed. Independent coordinator review is requested for the
+new authored delta, and no CI result is claimed.
+
+Current source SHA256:
+
+- main: `66483bed24d538cd1161bba7fbe31380b24077e1e2b9463fe8595ad87a256226`
+- negative module: `3c9518ace24b4bf6bed160880be7b7cbccda5c0c28c624fbc449f4d1a219714a`
+
+Executed transaction binary SHA256:
+`582316f4ffbe88b5c20639eeff96c642b620bd14800f563266d610f954ec3968`.

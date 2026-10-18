@@ -1,5 +1,5 @@
-//! Independent public-API checks; install as a runtime integration test at the pinned candidate.
-//! These do not assert row counts, process recovery or injected lost transport replies.
+//! Independent public-API checks installed as a store integration test at the pinned candidate.
+//! Scoped projections establish fixture state; these do not establish process recovery.
 use orkestr_v2_application::{runtime::*, IntakeStore};
 use orkestr_v2_contracts::MessageInput;
 use orkestr_v2_store_sqlite::{fixture_runtime::*, Store};
