@@ -1,7 +1,8 @@
 # UI first-slice feasibility and implementation handoff
 
-Status: light research completed on 2026-10-18; implementation/build admission
-pending. This report does not establish a working UI or native application.
+Status: implementation admission active on 2026-10-18. Intake UI source is
+authored; Rust/WASM compilation awaits coordinator-owned workspace and lock
+resolution. This report does not establish a working UI or native application.
 Baseline: plan `a7ba6d5999c570c21cc717d78c83cf53622c22c9`, product ADR 0003
 at `2d48f841fea794c494b93c14db2d549c5eab9c89`.
 
@@ -12,11 +13,11 @@ CSS. Do not enable the experimental WGPU/native renderer. The official
 [mobile guide](https://dioxuslabs.com/learn/0.7/guides/platforms/mobile/)
 documents WebView support. Native packaging does not mean native UIKit widgets.
 
-Candidate dependency pin: `dioxus = "=0.7.10"`, whose
-[published features](https://docs.rs/crate/dioxus/0.7.10/features) include web
-and mobile. This is a research candidate, not a verified compatible dependency
-set. Resolve exact compatible tooling/transitive versions with the coordinator
-after admission; commit the shared lockfile through its owner. Select one
+Authored manifest pin: `dioxus = "=0.7.3"`, with explicit web and mobile
+features. The earlier research candidate was superseded by the reference-source
+compatibility choice; this dependency set has not been compiled in this lane.
+Resolve transitive versions with the coordinator and commit the shared lockfile
+through its owner. Select one
 renderer per build, with explicit web/mobile Cargo features. Keep privileged
 server/runtime dependencies out of the UI graph; import Core's contracts.
 
@@ -38,7 +39,7 @@ slice; a macOS simulator build remains blocked, rather than passed or waived.
 
 ## Component and transport boundaries
 
-Build `v2/apps/ui` after admission. Separate shell/navigation, conversation,
+Source is implemented in `v2/apps/ui`. Separate shell/navigation, conversation,
 composer, run/status presentation and transport/projection modules. Use
 Assistant, Projects, Attention, History and Settings navigation. A project
 opens its canonical conversation; fast/deep/worker details appear under Work
