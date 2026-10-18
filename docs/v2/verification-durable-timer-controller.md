@@ -1,0 +1,13 @@
+# Independent durable timer controller leaf review
+
+Reviewed corrected source `32e3d0f9e092597b9aebd9e6ad170b6b47c64be1`, evidence head `9ee9b7008d37cce27dbbc07ca45b9e4f320babdf`, against the independently reviewed Core `e3857e9b79c4b030cc0c3e36e4b5a74e9aefce39` APIs. The two controller files are unchanged between those heads. No blocking finding in this bounded leaf source review.
+
+Each pass discovers at most 32 current namespaces, obtains a fresh namespace issuer and uses Store-clock admission. Only the bound Store and cursor persist locally; no owner text or browser credential cache is introduced. Conflict/not-found defers; authorization or storage failure terminates the supervised future. An error or five-second timeout leaves the prior cursor unchanged; already committed occurrences remain governed by Store cadence and transactional dedupe, rather than counters returned by the interrupted pass.
+
+Full pages advance the exclusive UUID keyset; short or empty pages wrap. At exactly a multiple of 32 namespaces an empty pass is needed before returning to the first page. This is bounded and does not invent authority. Continuous insertion/deletion is not a snapshot-wide enumeration guarantee.
+
+Polling is one-second with skipped missed ticks; five seconds is the whole-pass timeout, not the polling interval. Shutdown is checked between passes. Once a tick branch is selected, shutdown does not cancel that pass: it can continue admitting until the pass finishes or times out. The mounting owner must await the run future before claiming quiescence and must surface its errors. Dropping or aborting an unjoined future is not this lifecycle contract. The leaf neither bootstraps nor renews its supervisor lease.
+
+Reviewed all four supplied tests. They cover pure cursor wrap, unbound refusal/already-signalled shutdown, long-due discovery across creator logout and live-handle pool reattachment, machine revocation, and a real Store-clock once admission followed by reopened-pool non-admission. The shutdown test does not exercise shutdown during an active pass; reopened pools do not establish new-process restart. Core transaction checks support retries, but this leaf has no independent lost-reply or crash test. No supplied tests were rerun by Verification for this source review; author controller 4/4 and lint evidence remain separately attributed.
+
+Shared mounting, owner durable enable/read routes, active-pass joined shutdown, binary restart/crash, long-running supervisor renewal, and actual provider behavior remain independent gates. Existing ephemeral HTTP controller behavior is unchanged; helper/controller and shared factory ownership remain with their assigned owners.
