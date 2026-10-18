@@ -3,6 +3,7 @@
 mod fence;
 mod provider_write;
 mod pump;
+mod reuse;
 mod session;
 pub use pump::CodexPump;
 pub use session::{PreparingCodex, ReadyCodex, SetupFailure};

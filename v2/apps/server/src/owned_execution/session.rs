@@ -64,11 +64,11 @@ impl ConfiguredExecution {
         let Some(capability) = self.next(&mut shutdown, &mut heartbeat).await? else {
             return Ok(());
         };
-        let run = capability.provider().run.run_id.clone();
-        let (authority, mut pump) = ready
+        let mut run = capability.provider().run.run_id.clone();
+        let (mut authority, mut pump) = ready
             .attach(self.store.clone(), capability)
             .map_err(|_| "execution attachment is uncertain; automatic replay refused")?;
-        let deadline = Instant::now() + Duration::from_secs(45);
+        let mut deadline = Instant::now() + Duration::from_secs(45);
         loop {
             self.maintain(&mut heartbeat).await?;
             let status = self
@@ -80,13 +80,28 @@ impl ConfiguredExecution {
             if status.run_id.as_ref() != Some(&run) {
                 return Err("execution scope changed; reconciliation required");
             }
-            if matches!(
-                status.phase,
-                ExecutionPhase::AwaitingAcceptance | ExecutionPhase::Completed
-            ) {
-                // Hold the same child while the owner decides and after accepted
-                // completion. No old execution fence is spent while quiescent.
-                // The typed next-run attachment is supplied by Runtime separately.
+            if status.phase == ExecutionPhase::Completed {
+                // Only explicit committed owner acceptance releases the binding.
+                // Inputs received during an active turn remain ordered in Core;
+                // neither queued text nor browser JSON can mint a new capability.
+                let Some(capability) = self.next(&mut shutdown, &mut heartbeat).await? else {
+                    break;
+                };
+                run = capability.provider().run.run_id.clone();
+                let (next_authority, next_pump) = pump
+                    .attach_next(self.store.clone(), capability)
+                    .map_err(|_| "execution continuation is uncertain; automatic replay refused")?;
+                // The typed transfer retired the old local authority atomically.
+                // Revoking a retained handle cannot signal the transferred child.
+                let _ = authority.revoke();
+                authority = next_authority;
+                pump = next_pump;
+                deadline = Instant::now() + Duration::from_secs(45);
+                continue;
+            }
+            if status.phase == ExecutionPhase::AwaitingAcceptance {
+                // Hold the same child while the owner decides. No old execution
+                // fence is spent and no subsequent inbox item is claimed early.
                 if *shutdown.borrow() {
                     break;
                 }
@@ -132,8 +147,6 @@ impl ConfiguredExecution {
         }
         let _ = authority.revoke();
         drop(pump);
-        // Until Runtime's typed next attachment is composed, no second dispatch
-        // can be fabricated from this completed channel or its old capability.
         Ok(())
     }
 }

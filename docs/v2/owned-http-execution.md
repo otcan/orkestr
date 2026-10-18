@@ -6,8 +6,8 @@ required. Without `ORKESTR_V2_EXECUTION_CONFIG`, startup remains
 `execution=disabled`; creating a browser session never activates a provider.
 
 This checkpoint supplies the server factory, not production activation. Runtime's
-actual downstream provider-write fence and sealed interruption must be reviewed
-before a real subscription provider is used. The current ordinary server keeps
+actual downstream provider-write fence is composed; sealed interruption remains
+a separate server gate. The current ordinary server keeps
 Stop unavailable (503, advertised capability false). The real broker and its
 actual native-stdin FD handoff are exercised with a fixed synthetic executable,
 without a real provider or credentials.
@@ -90,15 +90,29 @@ Shutdown signals the owned supervisor before waiting for HTTP connections, and
 HTTP drain is bounded to two seconds; an open SSE stream cannot retain the child.
 The same child remains quiescent while awaiting owner acceptance and after
 accepted completion, with current-session checks and supervisor heartbeats.
-It spends no old execution authority while waiting. This checkpoint admits one
-turn; the sealed next-run attachment, actual Stop, OS/credential isolation and
-real-provider acceptance remain separate work.
+It spends no old execution authority while waiting. After committed owner
+acceptance, the factory claims the earliest remaining input and consumes a new
+Core run grant. `CodexPump::attach_next` requires the same owner, conversation,
+native session and the next binding generation. It transfers the existing child
+under the new durable fence and retires the old local authority atomically.
+Retained old handles cannot revoke the transferred process. No setup, spawn or
+metadata replay occurs. Every failure consumes the new grant and quarantines the
+child; uncertain delivery never creates a retry grant.
+
+Messages arriving while a turn runs remain in durable order until acceptance.
+The server advertises `steer=false`; this is an ordered follow-up path. Native
+request IDs increase, prior native turn IDs are retired, and late old replies or
+notifications quarantine the channel. Broker correlation retains a bounded
+session history and refuses continuation at its limit; this checkpoint does not
+silently replace or reconnect that child. Actual Stop, OS/credential isolation,
+restart/recovery and real-provider multi-turn acceptance remain separate gates.
 
 Focused verification (only synthetic executables and temporary state):
 
 ```sh
 cargo test --locked -p orkestr-v2-server --lib owned_execution
 cargo test --locked -p orkestr-v2-server --test owned_execution
+cargo test --locked -p orkestr-runtime execution::reuse
 ```
 
 The executable test uses the real default-feature server binary and HTTP setup,
@@ -114,3 +128,12 @@ an environment allowlist, the product broker and an explicitly synthetic native
 peer. The broker transfers its sole native stdin writer to Runtime before any
 native request; the executable test exercises the normal fenced writes. It never
 reads a canonical provider home or launches a real provider.
+
+Two additional executable cases verify accepted two-turn reuse and three inputs
+arriving during an active turn. They assert one native PID/readiness/session,
+distinct consumed run grants, FIFO delivery, and duplicate intake receipt replay
+without another dispatch. The Runtime tests additionally revoke a retained old
+authority after transfer, refuse next-run admission before acceptance, and cancel
+the next durable run immediately before transfer to prove no new native bytes
+are delivered. Revocation initiates cleanup; the tests independently wait for the
+owned synthetic child to disappear instead of assuming synchronous reaping.

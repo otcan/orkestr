@@ -7,6 +7,7 @@ mod framing;
 pub mod metadata;
 mod process;
 mod provider_fd;
+mod reuse;
 mod scope;
 mod sys;
 
