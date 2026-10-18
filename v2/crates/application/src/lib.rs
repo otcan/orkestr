@@ -1,4 +1,5 @@
 //! Application storage port. Adapters own transactions; no provider is awaited on admission.
+pub mod runtime;
 use orkestr_v2_contracts::*;
 use std::future::Future;
 #[derive(Debug)]

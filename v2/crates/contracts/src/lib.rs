@@ -1,4 +1,5 @@
 //! Version 0 HTTP contracts. No storage or provider dependencies.
+pub mod runtime;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
