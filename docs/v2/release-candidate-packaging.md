@@ -4,9 +4,11 @@ This automation prepares `2.0.0-rc.1` from one exact clean source revision. It d
 not publish, deploy, configure providers or read existing application homes.
 Supported scope is Linux x86_64 with the existing native host path checks and
 Linux amd64 Docker base. macOS, ARM and executor isolation are not implied.
-No qualified same-revision release pair has been supplied yet: actual candidate
-build, native/Docker acceptance and soak remain **unexecuted**. Earlier mixed-source
-installation checkpoints do not satisfy this gate.
+The same-source aa8 checkpoint has completed bounded native and Docker acceptance,
+schema14→17 upgrade/refusal/rollback, and a finite attended probe. Its committed
+checkpoint records pin the artifacts and limitations. This is historical schema17
+evidence; final Core20 package acceptance and the production 72-hour window remain
+**unexecuted**. Earlier mixed-source checkpoints do not satisfy the same-source gate.
 
 The coordinator/build owner owns the admitted build slot and workflow registration.
 Do not start a duplicate build. All commands below are explicit owner/CI invocations,
@@ -231,8 +233,9 @@ environment and freshness gates plus independent inspection of the raw logs.
 The currently implemented supervisor adapter owns **fresh synthetic native
 state** and deliberately emits `environment: synthetic_owned`. It does not attach
 to or restart an existing daily-use service and cannot satisfy the production
-soak gate. An approved persistent daily-use launcher/lifecycle adapter, exact
-configuration identity and owner-approved daily-use routing remain prerequisites
+soak gate. The persistent foreground adapter below supplies isolated lifecycle and
+monitor attachment commands. Candidate gates, exact configuration identity
+and owner-approved daily-use routing remain prerequisites
 before that environment can honestly be recorded. Do not relabel synthetic
 records or concatenate separate successful runs. No production monitor or
 72-hour window has been started by this implementation.
@@ -260,7 +263,8 @@ glibc base. Do not rebuild or relabel stale aa8 as Core20.
 4. Run `cross_revision.py --new-schema 20` with retained schema14 source31d8 and
    new Core20 artifacts; then separately extend/use the harness for a pinned
    populated schema17 aa8→20 case after Core confirms supported migration edges.
-   Current harness insists old14 and cannot honestly claim17→20 yet. Preserve
+   The harness now supports explicit `--old-schema 17 --new-schema 20`; its synthetic
+   inventory/edge tests pass, but the actual17→20 run remains unexecuted. Preserve
    complete stopped pre-upgrade homes/backups; use only disposable migrated
    copies for old-binary refusal. Never downgrade a migrated live database.
 5. After review of segmented monitoring, run a short fresh owned segmented probe
@@ -271,3 +275,67 @@ glibc base. Do not rebuild or relabel stale aa8 as Core20.
    persistent daily-use adapter/window. Production soak, crash/revocation,
    providers, executor containment and production deployment remain separate
    unpassed gates unless supported by new exact evidence.
+
+
+## Persistent isolated lifecycle adapter (opt-in, source preparation)
+
+`v2/packaging/candidate/persistent.py` reuses the native launcher and segmented
+journal. It creates a fresh persistent V2 home and private plan; it does not
+install a service, change V1, copy credentials, or configure providers/routing.
+The foreground adapter owns its child process group. SIGINT/SIGTERM attempts a
+bounded graceful stop, retaining home and logs. Unexpected exit, hash changes,
+health/resource failure or interrupted monitoring invalidates the window.
+Cleanup failure cannot finalize a passing window. A hung child is reported;
+there is no unconditional kill-tree guarantee.
+
+Example template (all paths and port are explicitly assigned by the operator):
+
+```sh
+python3 -B v2/packaging/candidate/persistent.py --plan "$PRIVATE_PLAN" prepare \
+  --candidate "$VERIFIED_CANDIDATE" --home "$FRESH_V2_HOME" --port "$V2_PORT"
+python3 -B v2/packaging/candidate/persistent.py --plan "$PRIVATE_PLAN" start \
+  --validator "$RELEASE_VALIDATOR" --evidence "$CANDIDATE_EVIDENCE" \
+  --scope "$RELEASE_SCOPE" --artifact-root "$RELEASE_ARTIFACTS" \
+  --max-latency-ms 1000 --max-rss-bytes 1073741824
+```
+
+Start runs the canonical validator at `candidate` stage for the pinned revision
+before spawning. Missing/failed gates refuse start. Plan, installed config,
+candidate and installed release inventories are checked. Provider environment
+is excluded by the native launcher. No schema upgrade command is implicit in
+this adapter; prepare always requires a fresh home. A newly built server can
+still initialize its declared schema in that fresh home.
+
+For a bounded attached monitor, add `--journal-dir "$FRESH_WINDOW" --samples 60
+--interval 1` to start. This attaches only to the adapter's exact newly launched
+child, reusing the existing journal, `/proc` resource collector and proxy-free
+health sampler. It records gate-input hashes and exact source/artifact/config
+hashes. The monitored child stops at the sample limit; the home persists.
+Without a journal the foreground launcher continues until explicit stop or an
+incident. Existing arbitrary processes and old windows cannot be attached or
+resumed. Each start is a new observation window; restart invalidates continuity.
+
+These windows are explicitly `controlled_project_owned`, **not**
+`daily_use_production`. The release validator therefore cannot accept these as
+72-hour production evidence. Preparing this adapter starts no service/window;
+actual daily-use qualification remains gated on the complete candidate plan,
+review and real monitored use. Disposable tests do not execute those gates.
+
+In another shell, use the same private plan:
+
+```sh
+python3 -B v2/packaging/candidate/persistent.py --plan "$PRIVATE_PLAN" health
+python3 -B v2/packaging/candidate/persistent.py --plan "$PRIVATE_PLAN" logs
+python3 -B v2/packaging/candidate/persistent.py --plan "$PRIVATE_PLAN" stop
+# Wait for the foreground adapter to exit; live backup refuses its inherited lock.
+python3 -B v2/packaging/candidate/persistent.py --plan "$PRIVATE_PLAN" backup \
+  --output "$FRESH_STOPPED_BACKUP"
+```
+
+Logs remain under the isolated home's `logs` directory. Backup uses the native
+exclusive stopped-state SQLite snapshot implementation; never copy a live DB.
+Restore/apply and schema changes remain separate reviewed operations. Retain the
+pre-upgrade backup and untouched old-schema rollback home when running
+`cross_revision.py --old-schema 17 --new-schema 20`; never start the schema17
+binary against migrated live20 state. Only its disposable refusal copy is opened
+by the old binary. Same-binary rollback is not cross-version compatibility.

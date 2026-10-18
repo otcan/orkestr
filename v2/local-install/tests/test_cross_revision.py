@@ -23,3 +23,22 @@ class UpgradeInventoryTests(unittest.TestCase):
                 self.assertEqual(cross_revision.versions(home), list(range(1,16)))
             finally:
                 database.close()
+
+    def test_supported_edges(self):
+        for edge in ((14,15),(14,17),(14,20),(17,20)):
+            self.assertEqual(cross_revision.migration_edge(*edge),edge)
+
+    def test_unsupported_edges_refused_before_artifact_access(self):
+        from types import SimpleNamespace
+        for edge in ((20,17),(17,17),(17,21),(15,20),(True,20)):
+            with self.assertRaisesRegex(RuntimeError,'unsupported migration edge'):
+                cross_revision.exercise(SimpleNamespace(old_schema=edge[0],new_schema=edge[1]))
+
+    def test_schema17_and20_inventory(self):
+        for count in (17,20):
+            with tempfile.TemporaryDirectory() as raw:
+                home=Path(raw);(home/'data').mkdir()
+                with sqlite3.connect(home/'data/core.sqlite3') as db:
+                    db.execute('CREATE TABLE _sqlx_migrations(version INTEGER,success INTEGER)')
+                    db.executemany('INSERT INTO _sqlx_migrations VALUES (?,1)',[(i,) for i in range(1,count+1)])
+                self.assertEqual(cross_revision.versions(home),list(range(1,count+1)))
