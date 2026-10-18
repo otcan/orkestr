@@ -72,6 +72,15 @@ impl Store {
             tx.commit().await.map_err(db)?;
             return Ok(result);
         }
+        let held: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM production_held_inputs WHERE event_id=?")
+                .bind(input.source_event_id.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db)?;
+        if held != 0 {
+            return Err(RuntimeStoreError::Fenced);
+        }
         c.validate(&mut tx).await?;
         let binding_row = sqlx::query("SELECT b.* FROM session_bindings b JOIN production_readiness r ON r.session_id=b.id WHERE b.id=? AND b.owner_id=? AND b.conversation_id=? AND r.context_id=? AND r.incarnation_id=? AND b.provider_kind=? AND b.provider_namespace=?")
             .bind(input.fast_binding_id.to_string()).bind(c.owner.to_string()).bind(&conversation)
