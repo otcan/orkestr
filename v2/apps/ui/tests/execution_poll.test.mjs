@@ -97,3 +97,18 @@ test('Worker discovery uses bounded canonical keyset read without authority head
         await assert.rejects(execute({recv:async()=>({path:base+query})},()=>assert.fail('no fetch')),/Invalid status path/);
     }
 });
+
+test('held input uses canonical exclusive inbox cursor and never sends mutation authority',async()=>{
+    const base=path.replace('/execution','/held-inputs');
+    for(const cursor of ['0','8','9223372036854775807']) {
+        const target=base+'?after_sequence='+cursor+'&limit=50';let first=true,cancel;const messages=[];
+        const run=execute({recv:()=>first?(first=false,Promise.resolve({path:target})):new Promise(resolve=>{cancel=resolve;}),send:m=>messages.push(m)},async(url,options)=>{
+            assert.equal(url,target);assert.equal(options.credentials,'same-origin');assert.equal(options.method,'GET');assert.equal(options.headers,undefined);
+            return new Response('{"held":[],"eligible_input_available":false}');
+        });
+        while(!messages.length) await new Promise(resolve=>setImmediate(resolve));cancel();await run;assert.deepEqual(messages[0].body.held,[]);
+    }
+    for(const query of ['?after_sequence=-1&limit=50','?after_sequence=0&limit=101','?after_sequence=0&limit=50&resume=true','?after_sequence=0&after_sequence=1&limit=50']) {
+        await assert.rejects(execute({recv:async()=>({path:base+query})},()=>assert.fail('no fetch')),/Invalid status path/);
+    }
+});
