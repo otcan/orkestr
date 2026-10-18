@@ -8,6 +8,42 @@ pub struct TimerSchedulerIssuer {
 }
 
 impl Store {
+    /// Metadata-only restart discovery. Each namespace still needs a separate
+    /// issuer and a fresh guarded admission; discovery grants no timer authority.
+    pub async fn timer_scheduler_candidates(
+        &self,
+        after: Option<Uuid>,
+        limit: u16,
+    ) -> crate::history_import::Result<Vec<Uuid>> {
+        use crate::history_import::HistoryError;
+        if !(1..=32).contains(&limit) || after.is_some_and(|id| id.is_nil()) {
+            return Err(HistoryError::Invalid);
+        }
+        let context = self.context().map_err(|_| HistoryError::Unauthorized)?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| HistoryError::Unavailable)?;
+        context
+            .validate(&mut tx)
+            .await
+            .map_err(|_| HistoryError::Unauthorized)?;
+        let namespaces: Vec<String> = sqlx::query_scalar(
+            "SELECT a.namespace FROM durable_timer_authorities a JOIN dormant_timers t ON t.owner_id=a.owner_id AND t.namespace=a.namespace AND t.generation=a.generation WHERE a.owner_id=? AND t.state='enabled' AND a.namespace>? ORDER BY a.namespace LIMIT ?",
+        )
+        .bind(context.owner.to_string())
+        .bind(after.map(|id| id.to_string()).unwrap_or_default())
+        .bind(i64::from(limit))
+        .fetch_all(&mut *tx).await.map_err(|_| HistoryError::Unavailable)?;
+        let result = namespaces
+            .into_iter()
+            .map(|id| Uuid::parse_str(&id).map_err(|_| HistoryError::Unavailable))
+            .collect();
+        tx.commit().await.map_err(|_| HistoryError::Unavailable)?;
+        result
+    }
+
     /// Trusted configuration selects the timer namespace. Browser input must not
     /// call this issuer path. Persisted timer grants independently authorize work.
     pub async fn authorize_timer_scheduler(&self, namespace: Uuid) -> Result<TimerSchedulerIssuer> {
@@ -101,3 +137,7 @@ mod tests {
         std::fs::remove_dir_all(f.root).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "timer_candidate_tests.rs"]
+mod candidate_tests;
