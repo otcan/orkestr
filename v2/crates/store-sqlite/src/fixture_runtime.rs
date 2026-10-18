@@ -208,3 +208,6 @@ mod inspection_tests;
 
 #[cfg(test)]
 mod guard_tests;
+
+#[cfg(test)]
+mod observation_contract_tests;
