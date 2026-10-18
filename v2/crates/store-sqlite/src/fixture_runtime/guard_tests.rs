@@ -6,7 +6,7 @@ use orkestr_v2_contracts::{ConversationId, EventId, MessageId, RunId, SessionId}
 
 // All columns, including private verifiers, compared in memory without formatting
 // snapshots into assertion output. One transaction gives a consistent before/after.
-async fn snapshot(f: &Fixture) -> Vec<String> {
+pub(super) async fn snapshot(f: &Fixture) -> Vec<String> {
     let mut tx = f.b.pool.begin().await.unwrap();
     let mut result = Vec::new();
     for table in [
@@ -16,6 +16,9 @@ async fn snapshot(f: &Fixture) -> Vec<String> {
         "fixture_observations",
         "reasoning_inbox",
         "session_bindings",
+        "conversations",
+        "events",
+        "outbox",
     ] {
         let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
             .fetch_all(&mut *tx)
