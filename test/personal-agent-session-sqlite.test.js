@@ -153,6 +153,89 @@ test("session lease acquisition and updates use version/token CAS across store h
   }
 });
 
+test("invalid lease renewal TTL is rejected without consuming the current lease", async () => {
+  let clock = 1_800_000_000_000;
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-session-invalid-ttl-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: "1" };
+  try {
+    const db = await openAgentJobDb(env);
+    conversationFixture(db);
+    migratePersonalAgentSessions(db, { dryRun: false });
+    const store = await openPersonalAgentSessionStore({ env, now: () => clock });
+    store.create(session("ses_invalid_ttl", { role: "worker" }));
+    const lease = store.acquireLease("ses_invalid_ttl", { expectedVersion: 0, ttlMs: 1000 });
+
+    for (const leaseTtlMs of [0, -1]) {
+      assert.throws(() => store.update("ses_invalid_ttl", {
+        expectedVersion: store.get("ses_invalid_ttl").version,
+        leaseToken: lease.leaseToken,
+        patch: { leaseTtlMs },
+      }), { code: "personal_agent_session_invalid_lease_ttl" });
+    }
+
+    const released = store.update("ses_invalid_ttl", {
+      expectedVersion: 1, leaseToken: lease.leaseToken, patch: { releaseLease: true },
+    });
+    assert.equal(released.leaseToken, null);
+    assert.ok(store.acquireLease("ses_invalid_ttl", { expectedVersion: released.version, ttlMs: 1000 }));
+  } finally {
+    await closeAgentJobDbs();
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("update checks lease expiry using the clock sampled after acquiring the write lock", async () => {
+  let clock = 1000;
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-session-lock-clock-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: "1" };
+  try {
+    const db = await openAgentJobDb(env);
+    conversationFixture(db);
+    migratePersonalAgentSessions(db, { dryRun: false });
+    const store = await openPersonalAgentSessionStore({ env, now: () => clock });
+    store.create(session("ses_clock_fence", { role: "worker" }));
+    const lease = store.acquireLease("ses_clock_fence", { expectedVersion: 0, ttlMs: 100 });
+    assert.equal(lease.session.leaseExpiresAt, 1100);
+    const exec = db.exec.bind(db);
+    db.exec = sql => {
+      const result = exec(sql);
+      if (sql === "begin immediate") clock = 1200;
+      return result;
+    };
+
+    assert.equal(store.update("ses_clock_fence", {
+      expectedVersion: 1,
+      leaseToken: lease.leaseToken,
+      patch: { nativeSessionId: "native-after-expiry" },
+    }), null);
+    assert.equal(store.get("ses_clock_fence").nativeSessionId, null);
+  } finally {
+    await closeAgentJobDbs();
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("session migration repairs same-name scope triggers before accepting an existing schema", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    conversationFixture(db);
+    migratePersonalAgentSessions(db, { dryRun: false });
+    db.exec(`drop trigger personal_agent_sessions_scope_insert;
+      drop trigger personal_agent_sessions_scope_update;
+      create trigger personal_agent_sessions_scope_insert before insert on personal_agent_sessions begin select 1; end;
+      create trigger personal_agent_sessions_scope_update before update of conversation_id, scope_kind, scope_id on personal_agent_sessions begin select 1; end`);
+
+    migratePersonalAgentSessions(db, { dryRun: false });
+    const insert = db.prepare(`insert into personal_agent_sessions
+      (id,conversation_id,scope_kind,scope_id,role,provider,account_profile_id,model_profile_json,lifecycle,version,created_at,updated_at)
+      values (?,?,?,?,?,?,?,?,?,0,'now','now')`);
+    assert.throws(() => insert.run(
+      "ses_wrong_scope_after_rerun", "conv_project", "global", null,
+      "worker", "codex", "acct", "{}", "starting",
+    ), /personal_agent_session_scope_mismatch/);
+  } finally { db.close(); }
+});
+
 test("flag-gated Agent Job initializer creates sessions after ingress and is idempotent", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-session-init-"));
   const env = { ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: "1" };
