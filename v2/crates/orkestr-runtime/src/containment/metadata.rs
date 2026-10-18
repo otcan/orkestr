@@ -213,6 +213,7 @@ impl MetadataChild {
     /// Only the trusted fixed-launcher module can construct this marker.
     pub(super) fn mark_broker_launcher(mut self, _: super::broker::BrokerLaunch) -> Self {
         self.broker_launcher = true;
+        self.process.broker_launcher.store(true, Ordering::Release);
         self
     }
 
@@ -232,6 +233,9 @@ impl MetadataChild {
                 state.broker_open_attempted = true;
                 let grant = state.grant.as_ref().ok_or(Error::Revoked)?;
                 let mut codec = crate::broker::BrokerOpen::from_metadata(grant)
+                    .map_err(|_| Error::InvalidFrame)?;
+                codec
+                    .bind_lineage(self.process.broker_lineage.clone())
                     .map_err(|_| Error::InvalidFrame)?;
                 let frame = codec.request().map_err(|_| Error::InvalidFrame)?;
                 if frame.len() > self.process.max_frame {
@@ -387,6 +391,7 @@ impl ReadyMetadataChild {
                 run.dispatch_fence,
             )?;
             let (turn, fence) = prepare(cap)?;
+            let lineage = turn.broker_lineage();
             let (scope, frame) = turn.into_submission();
             if scope != expected {
                 return Err(Error::WrongScope);
@@ -394,12 +399,8 @@ impl ReadyMetadataChild {
             if frame.len() > self.child.process.max_frame {
                 return Err(Error::FrameTooLarge);
             }
-            let value: serde_json::Value =
-                serde_json::from_slice(&frame).map_err(|_| Error::InvalidFrame)?;
-            if value.get("method").and_then(serde_json::Value::as_str) != Some("turn/start") {
-                return Err(Error::InvalidFrame);
-            }
-            let canonical = serde_json::to_vec(&value).map_err(|_| Error::InvalidFrame)?;
+            let canonical =
+                super::broker_frames::turn(&frame, lineage.as_ref(), &self.child.process)?;
             let shared = Arc::new(Shared {
                 scope: scope.clone(),
                 fence,
@@ -442,5 +443,6 @@ impl ReadyMetadataChild {
     }
 }
 
+mod broker_admission;
 #[cfg(test)]
 mod tests;

@@ -5,7 +5,7 @@ use super::{
 use serde_json::Value;
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     mpsc::{self, Sender},
     Arc, Mutex,
 };
@@ -74,6 +74,8 @@ pub(super) struct Process {
     reaper: Sender<Child>,
     pub(super) workspace: std::path::PathBuf,
     pub(super) max_frame: usize,
+    pub(super) broker_launcher: AtomicBool,
+    pub(super) broker_lineage: Arc<()>,
 }
 
 impl Process {
@@ -135,6 +137,8 @@ impl Process {
             reaper: reaper.clone(),
             workspace: directories.workspace().to_owned(),
             max_frame: bounds.max_frame_bytes,
+            broker_launcher: AtomicBool::new(false),
+            broker_lineage: Arc::new(()),
         }))
     }
 
@@ -187,16 +191,13 @@ impl OwnedChild {
         reason = "Runtime consumed-capability adapter is registered separately"
     )]
     pub(crate) fn enqueue_turn<D: ConsumedTurn>(&self, dispatch: D) -> Result<(), TurnFailure> {
+        let lineage = dispatch.broker_lineage();
         let (scope, frame) = dispatch.into_submission();
         let result = (|| {
             if frame.len() > self.process.max_frame {
                 return Err(Error::FrameTooLarge);
             }
-            let value: Value = serde_json::from_slice(&frame).map_err(|_| Error::InvalidFrame)?;
-            if value.get("method").and_then(Value::as_str) != Some("turn/start") {
-                return Err(Error::InvalidFrame);
-            }
-            let canonical = serde_json::to_vec(&value).map_err(|_| Error::InvalidFrame)?;
+            let canonical = super::broker_frames::turn(&frame, lineage.as_ref(), &self.process)?;
             self.enqueue(&scope, &canonical)
         })();
         result.map_err(|cause| TurnFailure { cause })
