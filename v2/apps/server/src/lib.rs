@@ -18,6 +18,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 mod auth;
 mod routes;
+mod static_ui;
+pub use static_ui::with_static_ui;
 
 #[derive(Clone)]
 pub struct AppState {

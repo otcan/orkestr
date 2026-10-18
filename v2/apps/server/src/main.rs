@@ -34,7 +34,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         home.display(),
         listener.local_addr()?
     );
-    axum::serve(listener, router(state))
+    let mut app = router(state);
+    if let Some(dist) = std::env::var_os("ORKESTR_V2_UI_DIST") {
+        app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
+    }
+    axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
