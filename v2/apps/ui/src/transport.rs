@@ -161,14 +161,20 @@ pub struct StreamItem {
     pub status: u16,
     pub event: String,
     pub id: Option<String>,
-    pub body: Option<orkestr_v2_contracts::EventEnvelope>,
+    pub body: Option<orkestr_v2_contracts::ConversationEvent>,
 }
 
 pub async fn event(id: &str, cursor: i64) -> Result<StreamItem, Failure> {
     let eval = document::eval(include_str!("stream.js"));
     eval.send(json!({"path":format!("/api/v2/conversations/{id}/events"),"cursor":cursor}))
         .map_err(|_| Failure::from("Stream bridge unavailable".to_string()))?;
-    eval.join().await.map_err(|_| {
+    let raw: Value = eval.join().await.map_err(|_| {
         Failure::from("Disconnected; reconnecting from last applied cursor".to_string())
-    })
+    })?;
+    Ok(serde_json::from_value(raw).unwrap_or(StreamItem {
+        status: 200,
+        event: "resync_required".into(),
+        id: None,
+        body: None,
+    }))
 }

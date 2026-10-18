@@ -60,3 +60,14 @@ test('malformed known event JSON requires resync rather than repeat decoding',as
     assert.deepEqual(result,{status:200,event:'resync_required'});
     assert.equal(cancelled,true);
 });
+
+test('canonical metadata fixture and legacy intake retain distinct SSE names and bodies',async()=>{
+    for (const [name,file] of [['fixture_provider_observed','fixture-provider-observed.json'],['message_accepted','event.json']]) {
+        const fixture = JSON.parse(await readFile(new URL('../../../fixtures/'+file,import.meta.url),'utf8'));
+        const {result,cancelled} = await run([`id: ${fixture.sequence}\nevent: ${name}\ndata: ${JSON.stringify(fixture)}\n\n`]);
+        assert.equal(result.event,name);
+        assert.equal(result.id,String(fixture.sequence));
+        assert.deepEqual(result.body,fixture);
+        assert.equal(cancelled,true);
+    }
+});

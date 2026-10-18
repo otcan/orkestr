@@ -178,23 +178,37 @@ pub fn Conversation(
                         resync = true;
                         status.set("Cursor requires history resync.".into());
                     }
-                    Ok(item) if item.event == "message_accepted" => {
-                        if let Some(event) = item.body {
-                            if event.schema_version != 1
-                                || event.aggregate_id.to_string() != id
-                                || item.id.as_deref() != Some(&event.sequence.to_string())
-                                || event.payload_ref_or_safe_payload.kind != "message_accepted"
-                            {
-                                status.set("Unexpected event contract; reload required.".into());
-                                return;
+                    Ok(item)
+                        if item.event == "message_accepted"
+                            || item.event == "fixture_provider_observed" =>
+                    {
+                        let previous = projection.read().clone();
+                        let sequence = item.body.as_ref().and_then(|event| {
+                            orkestr_v2_ui::replay_sequence(
+                                &previous,
+                                &item.event,
+                                item.id.as_deref(),
+                                event,
+                            )
+                            .ok()
+                        });
+                        match sequence {
+                            None => {
+                                resync = true;
+                                status.set(
+                                    "Unexpected event contract; history resync required.".into(),
+                                );
                             }
-                            if event.sequence > cursor {
-                                let previous = projection.read().clone();
+                            Some(sequence) if sequence > cursor => {
                                 match transport::snapshot(&id, &csrf, cursor, previous).await {
-                                    Ok(snapshot) => {
+                                    Ok(snapshot) if snapshot.watermark >= sequence => {
                                         cursor = snapshot.watermark;
                                         projection.set(snapshot);
-                                        status.set("Accepted input synchronized. Model execution unavailable.".into());
+                                        status.set("Journal synchronized. Runtime metadata is synthetic; execution and Stop remain unavailable.".into());
+                                    }
+                                    Ok(_) => {
+                                        resync = true;
+                                        status.set("Snapshot has not reached journal event; resync required.".into());
                                     }
                                     Err(error) => {
                                         if error.status == 401 {
@@ -205,8 +219,7 @@ pub fn Conversation(
                                     }
                                 }
                             }
-                        } else {
-                            resync = true;
+                            Some(_) => {}
                         }
                     }
                     Ok(_) => status.set(
