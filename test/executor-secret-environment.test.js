@@ -34,7 +34,10 @@ if (process.argv.includes('stdio://')) {
     const input = JSON.parse(line);
     if (input.id) process.stdout.write(JSON.stringify({id: input.id, result: {}}) + '\\n');
   });
-} else if (process.argv.includes('login')) console.log('Logged in using ChatGPT');
+} else if (process.argv.includes('login')) {
+  if (process.argv.includes('status') && process.env.PROBE_LOGIN_STATUS_FAIL === '1') process.exit(1);
+  console.log('Logged in using ChatGPT');
+}
 else if (process.argv.includes('--version')) console.log('codex-test');
 `;
 
@@ -89,6 +92,38 @@ function checkReceipts(rows, count) {
     assert.equal(row.providerAuthPreserved, true);
   }
 }
+
+test("installer and deployer capability, login and MCP setup children keep keys only in their parent", { timeout: 10_000 }, async t => {
+  const { env } = await fixture(t);
+  for (const [index, source] of sources.entries()) {
+    const text = await fs.readFile(source, "utf8");
+    const functions = ["run_codex_command", "codex_command_supports_external_app_server"];
+    if (index === 0) functions.push("codex_command_supports_app_server", "run_codex_login_if_requested", "configure_codex_interactively", "register_codex_connectors_mcp");
+    const shell = [
+      "set -eu",
+      ...functions.map(name => generatedFunction(text, name)),
+      'codex_command_supports_external_app_server "$ORKESTR_CODEX_BIN"',
+      ...(index === 0 ? [
+        'codex() { "$ORKESTR_CODEX_BIN" "$@"; }',
+        "have() { :; }",
+        "is_interactive_terminal() { :; }",
+        "is_macos() { return 1; }",
+        'prompt_yes_no() { printf -v "$1" "%s" 1; }',
+        "configure_codex_interactively",
+        'runuser() { test "$1" = -u && test "$2" = fixture-executor && test "$3" = -- || return 1; shift 3; "$@"; }',
+        "env_file_value() { :; }", // No host config reads or identity changes.
+        "register_codex_connectors_mcp",
+      ] : []),
+      ...keys.map(key => `test -n "\${${key}:-}"`),
+    ].join("\n");
+    await fs.writeFile(env.PROBE_FILE, "");
+    await exec("bash", ["-c", shell], { env: {
+      ...env, systemd: "0", PROBE_LOGIN_STATUS_FAIL: "1", run_user: "fixture-executor",
+      ORKESTR_CONNECTORS_MCP_URL: "https://connectors.example.invalid",
+    }, timeout: 5_000 });
+    checkReceipts(await receipts(env), index === 0 ? 9 : 2);
+  }
+});
 
 for (const fromFile of [false, true]) {
   test(`install then update regenerate safe Codex wrappers (${fromFile ? "env file" : "inherited env"})`, { timeout: 15_000 }, async t => {
