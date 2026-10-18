@@ -49,7 +49,7 @@ test("OP-22: cleanup failures remain blocking even when the known-gap child is T
 
 test("OP-22: normal CI discovers every acceptance test; pending cases have OP owners", () => {
   const discovered = discoverTestFiles();
-  for (const name of ["personal-agent-acceptance", "personal-agent-acceptance-gaps", "personal-agent-acceptance-harness"]) {
+  for (const name of ["personal-agent-acceptance", "personal-agent-acceptance-gaps", "personal-agent-acceptance-harness", "personal-agent-migration-acceptance"]) {
     assert.ok(discovered.includes(`test/${name}.test.js`));
   }
   assert.equal(new Set(pendingCases.map(([id]) => id)).size, pendingCases.length);
