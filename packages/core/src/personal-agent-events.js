@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createGunzip } from "node:zlib";
 import { createInterface } from "node:readline";
-import { appendEvent, listEventArchives, terminateEventJournalTail } from "../../storage/src/store.js";
+import { appendEvent, eventJournalMaxEventBytes, listEventArchives, terminateEventJournalTail } from "../../storage/src/store.js";
 import { dataPaths } from "../../storage/src/paths.js";
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { requirePersonalAgentOwner } from "./personal-agent-capability.js";
@@ -91,6 +91,11 @@ function eventFingerprint(event) {
 export function queuePersonalAgentEvent(db, input, { source = "personal_agent", env = process.env } = {}) {
   if (!personalAgentFeature(env)) fail("personal_agent_disabled", 404);
   const event = normalizeInput(input);
+  // The journal must keep the whole record (with ts and cursor) intact, or
+  // the row could never be read back and acknowledged.
+  const limit = Math.min(maxEventBytes, eventJournalMaxEventBytes(env));
+  const envelope = { ts: nowIso(), ...event, cursor: cursorFor(Number.MAX_SAFE_INTEGER) };
+  if (Buffer.byteLength(JSON.stringify(envelope)) > limit) fail("personal_agent_event_too_large", 413);
   const sourceKey = text(source, "personal_agent_event_source_invalid", 120);
   const fingerprint = eventFingerprint(event);
   const prior = db.prepare(`select event_id, seq, payload_hash from personal_agent_event_outbox
@@ -115,7 +120,8 @@ export async function appendPersonalAgentEvent(input, env = process.env) {
   const db = await openAgentJobDb(env);
   let result;
   tx(db, () => { result = queuePersonalAgentEvent(db, input, { env }); });
-  await dispatchPersonalAgentEvents(env);
+  // Committed; a pending outbox row is retried by the next dispatch.
+  await dispatchPersonalAgentEvents(env).catch(() => {});
   return result;
 }
 
@@ -233,6 +239,11 @@ export async function listPersonalAgentEvents({ afterCursor = null, limit = 100 
     if (ordered[index][0] !== ordered[index - 1][0] + 1) {
       return { events: [], cursor: afterCursor, currentCursor: cursorFor(highWater), resetRequired: true, hasMore: false };
     }
+  }
+  // Everything retained fits on this page but stops short of the dispatched
+  // prefix: the newest journal records are gone.
+  if (ordered.length <= pageSize && (ordered.at(-1)?.[0] ?? after) < visible) {
+    return { events: [], cursor: afterCursor, currentCursor: cursorFor(highWater), resetRequired: true, hasMore: false };
   }
   const events = ordered.slice(0, pageSize).map(([, event]) => event);
   const hasMore = ordered.length > events.length || visible < highWater;
