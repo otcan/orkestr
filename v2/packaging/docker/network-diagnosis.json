@@ -1,0 +1,40 @@
+{
+  "base_digest": "python@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258",
+  "base_image_id": "sha256:4f228bc1cbcfc794e4878312cfc241d368eff55a21c08d1e2bb263116c4ef524",
+  "compose_sha256": "bb89ca1be4cade7ad9c86b083e515bcf742bc7b6604da6f9d538076142fc8973",
+  "container_health": "healthy",
+  "daemon_mode": "[\"name=apparmor\",\"name=seccomp,profile=builtin\",\"name=cgroupns\"]",
+  "effective_ports": {
+    "19822/tcp": null
+  },
+  "host_http": {
+    "error": "<urlopen error [Errno 111] Connection refused>"
+  },
+  "host_listener_present": false,
+  "image_id": "sha256:7436c18e957df9dbb850df528342b72aebd62205a1cf5e9a6d4dcfb64dd72576",
+  "inside_health": "200 {\"contract_version\":0,\"fixture_mode\":false,\"product\":\"orkestr-v2\",\"status\":\"ok\"}",
+  "interpretation": "Docker accepted requested binding but installed no effective published port for sole internal bridge; not an HTTP proxy failure. No rootless security option reported. No daemon/firewall changes made.",
+  "owned_bridge": {
+    "driver": "bridge",
+    "gateway_present": true,
+    "host_connected_route_present": true,
+    "internal": true
+  },
+  "owned_image_removed": true,
+  "private_context_removed": true,
+  "project_resources_remaining": {
+    "container": "",
+    "network": "",
+    "volume": ""
+  },
+  "requested_port_bindings": {
+    "19822/tcp": [
+      {
+        "HostIp": "127.0.0.1",
+        "HostPort": "19842"
+      }
+    ]
+  },
+  "source_review_commit": "d7d3868d",
+  "status": "reproduced-publication-suppressed"
+}

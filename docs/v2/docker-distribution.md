@@ -147,3 +147,29 @@ removed its container, state volume, network and image tag. Independent resource
 queries found zero remaining project resources; the private context was removed.
 The explicitly pulled shared base remains cached. No provider, production mount,
 daemon socket mount, restore apply or existing workload change occurred.
+
+### Reproduced publication diagnosis
+
+A second fresh owned run reproduced the failure. Sanitized inspect evidence is
+in `v2/packaging/docker/network-diagnosis.json`. Docker accepted the requested
+127.0.0.1:19842 binding in HostConfig, but effective NetworkSettings reported
+`19822/tcp: null`. No host listener existed. The owned internal bridge had a
+gateway and a connected host route. Inside-container HTTP returned 200; the host
+request explicitly disabled proxies and was refused. Daemon security options
+reported AppArmor/seccomp/cgroup namespaces, without rootless mode. These facts
+locate the failure at publication on the sole internal bridge, before HTTP;
+they do not establish any need to change host firewall rules. No daemon or
+firewall changes were attempted. Owned cleanup again left zero resources.
+
+Proposed minimum policy-preserving alternative, **not implemented or approved**:
+retain the server's sole internal bridge and add an explicit host-side loopback
+relay, supervised by the packaging launcher, that forwards only to the owned
+container's inspected internal address/port. The host can route to that bridge;
+actual direct reachability still needs a bounded test. The relay would bind only
+the assigned loopback port, fail on occupants, disable proxies, and terminate
+with the owned project. Container egress isolation remains unchanged. This adds
+a host Python runtime/process requirement and replaces Docker port publication;
+it therefore requires independent design/source review before implementation.
+Simply changing `internal` to false would remove the egress boundary and is not
+proposed. A fully Docker-native ingress alternative needs an independently
+reviewed enforceable egress policy; disabling masquerading alone is insufficient.
