@@ -190,9 +190,18 @@ pub trait RuntimeStore: Send + Sync {
         lease: &Lease,
         lease_seconds: u32,
     ) -> impl Future<Output = Result<Lease>> + Send;
-    /// Atomically validate owner, active lease, scope fence and lifecycle, then journal.
-    /// Sequence/payload conflicts fail; identical retries return the original receipt.
+    /// Authenticate the caller and validate owner/run/session association before dedup lookup.
+    /// Never disclose an existing receipt to another principal or mismatched association.
+    /// An identical already-committed semantic input returns its original receipt even
+    /// after lease expiry or fence advancement, without any new transition or write.
+    /// Changed content at an existing sequence conflicts; core computes the canonical digest.
+    /// Unseen events require current owner/session/run, live lease, fence and lifecycle
+    /// authority, checked atomically with contiguous sequence admission and journaling.
+    /// Unavailable is retryable with identical input; StaleLease/Fenced explicitly refuse
+    /// new authority. Preserve refused evidence for reconciliation, never fabricate Stopped.
+    /// A newer cancellation fence is control-only, never execution start/poll authority.
     /// Progress is bounded by MAX_PROVIDER_PROGRESS_BYTES. Approval is never granted here.
+    /// Completed is proposal evidence only and must never directly establish Succeeded.
     fn append_provider_event(
         &self,
         owner: &OwnerId,
