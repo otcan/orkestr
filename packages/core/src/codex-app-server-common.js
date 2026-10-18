@@ -26,6 +26,7 @@ import { taskAgentDeveloperInstructions, taskAgentModelRole } from "./task-agent
 import { setupDeveloperInstructions } from "./setups/setup-codex-instructions.js";
 import { currentCodexGenerationId, resolveCurrentCodexGeneration } from "./codex-generation.js";
 import { updateThreadRuntime } from "./runtime-record-update.js";
+import { codexContextOverrides } from "./codex-context-policy.js";
 
 export const appServerTransports = new Set(["app-server", "codex-app-server"]);
 export const tmuxTransports = new Set(["tmux", "legacy", "codex-tmux"]);
@@ -497,6 +498,7 @@ export function codexInputText(message) {
 
 export function threadStartParams(thread, env = process.env) {
   const params = {
+    ...codexContextOverrides(thread, env),
     cwd: clean(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath) || null,
     approvalPolicy: approvalPolicyForThread(thread, env) || "on-request",
     sandbox: codexSandboxForThread(thread, env),

@@ -232,8 +232,9 @@ test("workspace tracker and partial-work summary report only paths and changed-f
 test("standing notice asks for pacing and a final summary; terminated turns get a resumable notice", () => {
   assert.match(CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE, /never request run_in_background/);
   assert.match(CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE, /one-line progress update/);
-  assert.match(CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE, /tool call and sub-agent task short/);
-  assert.match(CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE, /finish one coherent phase, report it/);
+  assert.match(CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE, /at most 30 seconds of sleep/);
+  assert.match(CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE, /finish each authorized phase and continue/);
+  assert.doesNotMatch(CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE, /let the user's next message continue/);
   assert.match(CLAUDE_CODE_HEADLESS_RUNTIME_NOTICE, /what is partial \(with branch and worktree paths\)/);
   const prompt = (thread, options) => {
     const args = claudeCodeArgs(thread, { sessionId: "s1", ...options }, {});

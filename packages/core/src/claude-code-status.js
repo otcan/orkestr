@@ -1,6 +1,7 @@
 // Pure status payload for a Claude Code thread. The adapter owns live process
 // state (the active supervisor and the account profile state); this module only
 // shapes it for the runtime status API.
+import { turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -20,7 +21,7 @@ export function claudeCodeStatusPayload({ thread = {}, supervisor = null, starti
   const staleWorkingSince = supervisor ? (supervisor.staleWorkingSince || null) : null;
   const staleWorkingReason = staleWorking ? "semantic_inactivity" : null;
 
-  return {
+  const status = {
     state,
     status: state,
     runtimeState: state,
@@ -50,4 +51,5 @@ export function claudeCodeStatusPayload({ thread = {}, supervisor = null, starti
     tokenUsage: thread.claudeTokenUsage || null,
     rateLimits: thread.claudeRateLimits || null,
   };
+  return { ...status, turnLifecycle: turnLifecycleFromRuntimeStatus(status) };
 }

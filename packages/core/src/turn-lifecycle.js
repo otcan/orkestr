@@ -26,7 +26,8 @@ export function normalizeTurnLifecycle(input = {}) {
   const awaitingApproval = state === "awaiting_approval" || input.awaitingApproval === true;
   const planning = state === "planning";
   const queued = state === "queued" || pendingCount > 0 || awaitingAckCount > 0;
-  const running = planning || state === "running" || state === "working" || runningCount > 0 || Boolean(activeTurnId && !awaitingApproval);
+  const running = planning || state === "running" || state === "working" ||
+    (input.executionActive !== false && (runningCount > 0 || Boolean(activeTurnId && !awaitingApproval)));
   const terminal = turnLifecycleTerminalStates.has(state);
   return {
     state,
@@ -49,9 +50,14 @@ export function normalizeTurnLifecycle(input = {}) {
 
 export function turnLifecycleFromRuntimeStatus(status = {}, messages = []) {
   const runtimeState = lower(status.state || status.status);
+  // Persisted delivery rows are not evidence of live execution. Keep their
+  // counts visible for diagnosis without resurrecting a confirmed idle turn.
+  const confirmedIdle = status.working === false && !status.foregroundWorking &&
+    !status.backgroundWork && !status.typingActive && !status.activeTurnId && !status.turnId &&
+    ["ready", "completed", "failed", "failed_auth", "interrupted", "sleeping", "none", "blocked"].includes(runtimeState);
   const latestRunning = [...(Array.isArray(messages) ? messages : [])].reverse()
     .find((message) => lower(message.role) === "user" && lower(message.state) === "running") || null;
-  const progressState = lower(status.progress?.stateHint);
+  const progressState = confirmedIdle ? "" : lower(status.progress?.stateHint);
   const state = runtimeState === "awaiting_approval" || progressState === "awaiting_approval"
     ? "awaiting_approval"
     : progressState === "planning"
@@ -69,8 +75,9 @@ export function turnLifecycleFromRuntimeStatus(status = {}, messages = []) {
               : "ready";
   return normalizeTurnLifecycle({
     state,
-    activeTurnId: status.activeTurnId || status.turnId || latestRunning?.codexTurnId || "",
-    activeMessageId: latestRunning?.id || "",
+    executionActive: confirmedIdle ? false : undefined,
+    activeTurnId: confirmedIdle ? "" : status.activeTurnId || status.turnId || latestRunning?.codexTurnId || latestRunning?.executorTurnId || "",
+    activeMessageId: confirmedIdle ? "" : latestRunning?.id || "",
     pendingCount: status.pendingCount,
     runningCount: status.runningCount,
     awaitingAckCount: status.awaitingAckCount,
