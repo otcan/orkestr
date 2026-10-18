@@ -16,7 +16,9 @@ mod cancellation_tests;
 mod capability;
 pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};
 mod dispatch;
+mod fast;
 mod fence;
+pub use fast::FastAdmissionInput;
 pub(crate) mod inspection;
 mod leases;
 mod metadata;
@@ -33,8 +35,17 @@ mod readiness;
 mod recovery;
 #[cfg(test)]
 mod recovery_tests;
+mod resume_metadata;
+mod retirement;
+#[cfg(test)]
+mod retirement_tests;
 mod status;
 mod stop;
+mod stopped_metadata;
+mod worker;
+pub use worker::*;
+mod worker_tool;
+pub use worker_tool::*;
 #[cfg(test)]
 mod stop_tests;
 #[cfg(feature = "fixture-test-controls")]
@@ -192,3 +203,6 @@ impl Context {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod stop_progress_tests;

@@ -8,7 +8,9 @@ use orkestr_v2_contracts::MessageId;
 /// DeliveryUnknown has already committed when this object becomes observable.
 pub struct ConsumedProviderDispatch {
     pub(super) provider: ProviderAdmission,
+    pub(super) parent_run: Option<orkestr_v2_contracts::RunId>,
     pub(super) message_id: MessageId,
+    pub(super) source_event_id: orkestr_v2_contracts::EventId,
     pub(super) text: String,
     pub(super) namespace: String,
     pub(super) incarnation: String,
@@ -19,6 +21,9 @@ impl ConsumedProviderDispatch {
     }
     pub fn message_id(&self) -> &MessageId {
         &self.message_id
+    }
+    pub fn source_event_id(&self) -> &orkestr_v2_contracts::EventId {
+        &self.source_event_id
     }
     pub fn text(&self) -> &str {
         &self.text

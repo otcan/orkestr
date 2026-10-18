@@ -60,11 +60,14 @@ impl Store {
         if p.run.lease_deadline_ms <= now(conn).await? {
             return Err(RuntimeStoreError::Expired);
         }
-        let ready:i64=sqlx::query_scalar("SELECT count(*) FROM session_bindings b JOIN production_readiness r ON r.session_id=b.id WHERE b.id=? AND b.owner_id=? AND b.conversation_id=? AND b.role='deep' AND b.state='busy' AND b.generation=? AND b.provider_kind=? AND b.provider_namespace=? AND b.native_session_id=? AND r.context_id=? AND r.incarnation_id=?")
-            .bind(p.run.session_id.to_string()).bind(c.owner.to_string()).bind(p.run.conversation_id.to_string()).bind(i64::try_from(p.binding.generation).map_err(db)?)
-            .bind(provider_name(c.provider)?).bind(&c.namespace).bind(&p.run.native_session_id).bind(&c.id).bind(&c.incarnation).fetch_one(conn).await.map_err(db)?;
+        let ready:i64=sqlx::query_scalar("SELECT count(*) FROM session_bindings b JOIN production_readiness r ON r.session_id=b.id WHERE b.id=? AND b.owner_id=? AND b.conversation_id=? AND b.role=? AND b.state='busy' AND b.generation=? AND b.provider_kind=? AND b.provider_namespace=? AND b.native_session_id=? AND r.context_id=? AND r.incarnation_id=?")
+            .bind(p.run.session_id.to_string()).bind(c.owner.to_string()).bind(p.run.conversation_id.to_string()).bind(match p.run.role { Role::Deep => "deep", Role::Fast => "fast", Role::Worker => "worker" }).bind(i64::try_from(p.binding.generation).map_err(db)?)
+            .bind(provider_name(c.provider)?).bind(&c.namespace).bind(&p.run.native_session_id).bind(&c.id).bind(&c.incarnation).fetch_one(&mut *conn).await.map_err(db)?;
         if ready != 1 {
             return Err(RuntimeStoreError::Fenced);
+        }
+        if p.run.role == Role::Worker {
+            self.worker_lineage_in(conn, &row).await?;
         }
         Ok(row)
     }
@@ -180,9 +183,23 @@ impl Store {
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
+        let parent_run = match row.get::<Option<String>, _>("worker_delegation_id") {
+            Some(delegation) => {
+                let parent: String = sqlx::query_scalar(
+                    "SELECT parent_run_id FROM worker_provider_delegations WHERE id=? AND admitted_run_id=?",
+                ).bind(delegation).bind(claim.provider.run.run_id.to_string())
+                 .fetch_one(&mut *tx).await.map_err(db)?;
+                Some(orkestr_v2_contracts::RunId(parent.parse().map_err(db)?))
+            }
+            None => None,
+        };
         let capability = ConsumedProviderDispatch {
+            parent_run,
             provider: claim.provider.clone(),
             message_id: orkestr_v2_contracts::MessageId(Uuid::parse_str(&message_id).map_err(db)?),
+            source_event_id: orkestr_v2_contracts::EventId(
+                row.get::<String, _>("event_id").parse().map_err(db)?,
+            ),
             text,
             namespace: context.namespace.clone(),
             incarnation: context.incarnation.clone(),

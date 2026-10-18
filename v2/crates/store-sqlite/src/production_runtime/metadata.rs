@@ -1,11 +1,14 @@
 //! Pre-run setup authority is distinct from a consumed inference grant.
 use super::*;
+use orkestr_v2_contracts::RunId;
 
 /// Issued only for a current, owner-scoped Starting binding. No run identity,
 /// cloning, serialization or public constructor. Setup commands never grant inference.
 pub struct BoundSessionMetadata {
-    context: Context,
-    binding: Binding,
+    pub(super) context: Context,
+    pub(super) binding: Binding,
+    pub(super) parent_run: Option<RunId>,
+    pub(super) resume: Option<super::resume_metadata::ResumeLink>,
 }
 impl BoundSessionMetadata {
     pub fn binding(&self) -> &Binding {
@@ -25,8 +28,8 @@ impl BoundSessionMetadata {
 /// Ready binding. Consumers must also require a matching consumed dispatch;
 /// neither this link nor the metadata grant authorizes inference by itself.
 pub struct ReadySessionTransition {
-    metadata: BoundSessionMetadata,
-    ready: Binding,
+    pub(super) metadata: BoundSessionMetadata,
+    pub(super) ready: Binding,
 }
 impl ReadySessionTransition {
     pub fn metadata(&self) -> &BoundSessionMetadata {
@@ -43,7 +46,8 @@ impl ReadySessionTransition {
     ) -> Result<ConsumedProviderDispatch> {
         // Admission retains the immutable Ready snapshot; the live row is Busy.
         let expected = self.ready;
-        if dispatch.provider().binding != expected
+        if dispatch.parent_run != self.metadata.parent_run
+            || dispatch.provider().binding != expected
             || dispatch.namespace() != self.metadata.namespace()
             || dispatch.incarnation_id() != self.metadata.incarnation_id()
         {
@@ -53,11 +57,14 @@ impl ReadySessionTransition {
     }
 }
 impl Store {
-    async fn validate_metadata(
+    pub(super) async fn validate_metadata(
         &self,
         tx: &mut SqliteConnection,
         grant: &BoundSessionMetadata,
     ) -> Result<()> {
+        if grant.resume.is_some() {
+            return self.validate_resume_metadata(tx, grant).await;
+        }
         let c = self.context()?;
         c.validate(tx).await?;
         if c.id != grant.context.id
@@ -85,6 +92,18 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
+        if current.role == Role::Worker {
+            let parent = grant.parent_run.as_ref().ok_or(RuntimeStoreError::Fenced)?;
+            let row = self.worker_parent_current_in(tx, parent).await?;
+            let parent_session: String = row.get("session_id");
+            if current.parent_session_id.as_ref().map(ToString::to_string) != Some(parent_session)
+                || current.conversation_id.to_string() != row.get::<String, _>("conversation_id")
+            {
+                return Err(RuntimeStoreError::Fenced);
+            }
+        } else if grant.parent_run.is_some() {
+            return Err(RuntimeStoreError::Fenced);
+        }
         Ok(())
     }
     pub async fn authorize_session_metadata(
@@ -94,6 +113,31 @@ impl Store {
         let grant = BoundSessionMetadata {
             context: self.context()?.clone(),
             binding: binding.clone(),
+            parent_run: None,
+            resume: None,
+        };
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        self.validate_metadata(&mut tx, &grant).await?;
+        tx.commit().await.map_err(db)?;
+        Ok(grant)
+    }
+    /// Trusted scheduler only: setup authority remains bound to a live consumed
+    /// Deep parent at every setup action and readiness commit.
+    pub async fn authorize_worker_metadata(
+        &self,
+        credential: &str,
+        parent: &RunId,
+        binding: &Binding,
+    ) -> Result<BoundSessionMetadata> {
+        self.worker_credential(credential)?;
+        if binding.role != Role::Worker {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        let grant = BoundSessionMetadata {
+            context: self.context()?.clone(),
+            binding: binding.clone(),
+            parent_run: Some(parent.clone()),
+            resume: None,
         };
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         self.validate_metadata(&mut tx, &grant).await?;
@@ -134,6 +178,9 @@ impl Store {
         grant: BoundSessionMetadata,
         evidence: NativeSessionConfirmation,
     ) -> Result<ReadySessionTransition> {
+        if grant.resume.is_some() {
+            return self.confirm_resumed_metadata(grant, evidence).await;
+        }
         if evidence.session_id != grant.binding.session_id
             || evidence.expected_generation != grant.binding.generation
         {
@@ -141,10 +188,10 @@ impl Store {
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         self.validate_metadata(&mut tx, &grant).await?;
+        let ready = self
+            .confirm_native_session_in(&mut tx, evidence, grant.parent_run.is_some())
+            .await?;
         tx.commit().await.map_err(db)?;
-        // confirm_native_session rechecks context and exact generation in its
-        // write transaction. Replacement between these transactions is refused.
-        let ready = self.confirm_native_session(evidence).await?;
         Ok(ReadySessionTransition {
             metadata: grant,
             ready,

@@ -19,6 +19,7 @@ async fn stop_revision_cas_and_request_replay_are_atomic_and_owner_scoped() {
         .unwrap()
         .revision;
     let mut input = ExecutionControlRequest {
+        expected_control_revision: None,
         run_id: run.provider.run.run_id.clone(),
         expected_revision: revision - 1,
         request_key: "stop".into(),
@@ -102,6 +103,7 @@ async fn authenticated_stop_checks_original_browser_credential_before_fresh_and_
         .await
         .unwrap();
     let input = ExecutionControlRequest {
+        expected_control_revision: None,
         run_id: run.provider.run.run_id,
         expected_revision: f
             .store
@@ -144,6 +146,20 @@ async fn authenticated_stop_checks_original_browser_credential_before_fresh_and_
             .unwrap(),
         receipt
     );
+    let before_control = snapshot(&f.store).await;
+    let (public, control) = f
+        .handle
+        .stop_execution_control_authenticated(&browser, &f.conversation, &input)
+        .await
+        .unwrap();
+    assert_eq!(public, receipt);
+    assert_eq!(
+        control.new_fenced_admission.purpose,
+        AdmissionPurpose::CancellationAcknowledgement
+    );
+    assert_eq!(control.new_fenced_admission.run_id, input.run_id);
+    assert_eq!(control.state, RunState::Cancelled);
+    assert_eq!(snapshot(&f.store).await, before_control);
     f.store.revoke_session(&browser).await.unwrap();
     let other = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
     let attached = f.handle.reattach_supervisor(&other).await.unwrap();
@@ -157,6 +173,12 @@ async fn authenticated_stop_checks_original_browser_credential_before_fresh_and_
     assert!(matches!(
         attached
             .stop_execution_authenticated(&browser, &f.conversation, &input)
+            .await,
+        Err(RuntimeStoreError::Unauthorized)
+    ));
+    assert!(matches!(
+        attached
+            .stop_execution_control_authenticated(&browser, &f.conversation, &input)
             .await,
         Err(RuntimeStoreError::Unauthorized)
     ));
@@ -177,6 +199,7 @@ async fn stop_public_authentication_checkpoint_refuses_logout_before_write_lock(
         .await
         .unwrap();
     let input = ExecutionControlRequest {
+        expected_control_revision: None,
         run_id: run.provider.run.run_id,
         expected_revision: f
             .store

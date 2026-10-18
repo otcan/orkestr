@@ -77,6 +77,11 @@ impl Store {
         let row=sqlx::query("SELECT r.* FROM production_runs r JOIN production_observations o ON o.run_id=r.id JOIN events e ON e.id=o.event_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND o.event_id=? AND o.kind='completed_proposal' AND o.receipt_state='awaiting_acceptance' AND e.kind='provider_observed' AND e.schema_version=5 AND e.owner_id=r.owner_id AND e.conversation_id=r.conversation_id")
             .bind(input.run_id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(input.completion_event_id.to_string())
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
+        let descendants:i64=sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN worker_provider_delegations d ON d.id=r.worker_delegation_id WHERE d.parent_run_id=? AND r.state NOT IN ('cancelled','succeeded')")
+            .bind(input.run_id.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
+        if descendants != 0 {
+            return Err(RuntimeStoreError::Busy);
+        }
         if row.get::<&str, _>("state") != "awaiting_acceptance" {
             return Err(RuntimeStoreError::Fenced);
         }
