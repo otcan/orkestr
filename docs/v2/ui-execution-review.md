@@ -4,7 +4,12 @@ The web UI reads removable provider output through the reviewed owner-scoped
 `GET /api/v2/conversations/:id/payloads/:payload_id` route. It checks the
 conversation, run and payload identities, renders text as plain text, and treats
 `text: null` as removed. Explicit removal uses the same path with DELETE and
-CSRF. A failed removal never claims success.
+CSRF. A failed removal never claims success. While mounted, the selected output
+is revalidated every five seconds after each bounded request (ten-second timeout,
+1 MiB response limit). Failed revalidation hides unverified text. A validated
+tombstone or successful deletion permanently clears this mounted payload; a
+delayed earlier read cannot restore it. Read and deletion channels are separately
+cancelled on unmount, with owner/selection and payload identity checks.
 
 Acceptance is an explicit owner action. The exact completion event and run come
 from a validated production completion proposal or the canonical optional
