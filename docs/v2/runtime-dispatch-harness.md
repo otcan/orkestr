@@ -33,6 +33,15 @@ quarantined reservations, preserved unknown delivery and isolation from another
 supervisor key. A fenced predecessor cannot inspect or dispatch. The dropped reply
 is a controlled application result, not a process or transport crash.
 
+Core guard-test successor `df911ff7` is included without implementation changes.
+Two further real-store cases independently expire Candidate and DeliveryUnknown
+contexts before exact-predecessor takeover. Candidate becomes Quarantined;
+DeliveryUnknown remains unknown. Both retain consumed inbox evidence, remove
+verifiers and refuse old dispatch envelopes. Another namespace with the same
+supervisor key retains identical attempt/scope snapshots and can still consume
+its own reservation exactly once. These tests use public controls/projections,
+without SQL access or a process-recovery claim.
+
 ## Earlier volatile protocol harness
 
 On Runtime branch checkpoint `8e8a83c5`,

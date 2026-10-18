@@ -147,6 +147,9 @@ async fn consume_then_fake(
 #[cfg(feature = "fixture-test-controls")]
 #[path = "fixture_dispatch/controlled.rs"]
 mod controlled;
+#[cfg(feature = "fixture-test-controls")]
+#[path = "fixture_dispatch/takeover.rs"]
+mod takeover;
 
 #[tokio::test]
 async fn independent_admission_reservation_consumption_have_one_winner_and_one_fake_start() {
