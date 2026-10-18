@@ -31,7 +31,7 @@ impl PendingOfflinePythonCall {
     pub fn source(&self) -> &str {
         &self.source
     }
-    pub(super) fn matches_lineage(&self, lineage: &Arc<()>) -> bool {
+    pub(crate) fn matches_lineage(&self, lineage: &Arc<()>) -> bool {
         Arc::ptr_eq(&self.lineage, lineage)
     }
     pub(super) fn decode(
