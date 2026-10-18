@@ -24,6 +24,9 @@ fn published_contracts_roundtrip() {
     fixture::<runtime::ProviderObservation>(include_str!(
         "../../../fixtures/provider-observation-completed-proposal.json"
     ));
+    fixture::<runtime::ProviderObservation>(include_str!(
+        "../../../fixtures/provider-observation-progress-ref.json"
+    ));
 }
 #[test]
 fn reject_actor_injection_and_invalid_identifiers() {
@@ -32,4 +35,16 @@ fn reject_actor_injection_and_invalid_identifiers() {
     )
     .is_err());
     assert!(serde_json::from_str::<ConversationId>(r#""provider-native-session-id""#).is_err());
+}
+
+#[test]
+fn observation_rejects_unfenced_and_embedded_progress_text() {
+    let body = include_str!("../../../fixtures/provider-observation-progress-ref.json");
+    let original: serde_json::Value = serde_json::from_str(body).unwrap();
+    let mut unfenced = original.clone();
+    unfenced.as_object_mut().unwrap().remove("dispatch_fence");
+    assert!(serde_json::from_value::<runtime::ProviderObservation>(unfenced).is_err());
+    let mut embedded = original;
+    embedded["kind"] = serde_json::json!({"kind":"progress", "text":"synthetic provider output"});
+    assert!(serde_json::from_value::<runtime::ProviderObservation>(embedded).is_err());
 }
