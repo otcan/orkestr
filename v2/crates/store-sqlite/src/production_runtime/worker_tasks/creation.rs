@@ -9,6 +9,20 @@ impl Store {
         conversation: &ConversationId,
         request: &WorkerTaskCreateRequest,
     ) -> Result<WorkerTaskReceipt> {
+        self.create_worker_task_if_available_authenticated(credential, conversation, request, true)
+            .await
+    }
+
+    /// The trusted server can refuse fresh intent when its scheduler is absent.
+    /// An identical historical receipt is still returned after current auth.
+    /// Availability never bypasses the durable owner/parent/control checks.
+    pub async fn create_worker_task_if_available_authenticated(
+        &self,
+        credential: &str,
+        conversation: &ConversationId,
+        request: &WorkerTaskCreateRequest,
+        scheduler_available: bool,
+    ) -> Result<WorkerTaskReceipt> {
         if !request.is_valid() {
             return Err(RuntimeStoreError::InvalidInput);
         }
@@ -36,6 +50,9 @@ impl Store {
             let result = receipt(&row)?;
             tx.commit().await.map_err(db)?;
             return Ok(result);
+        }
+        if !scheduler_available {
+            return Err(RuntimeStoreError::Unavailable);
         }
         let parent = self
             .worker_parent_current_in(&mut tx, &request.parent_run_id)

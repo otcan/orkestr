@@ -90,6 +90,9 @@ pub struct WorkerTaskList {
     pub schema_version: u32,
     pub conversation_id: ConversationId,
     pub parent_run_id: RunId,
+    /// Current owner/parent eligibility. HTTP also requires an owned scheduler.
+    /// This observation grants no authority and can change between requests.
+    pub can_create: bool,
     pub tasks: Vec<WorkerTaskStatus>,
 }
 impl WorkerTaskStatus {
@@ -115,6 +118,7 @@ impl WorkerTaskList {
             && !self.conversation_id.0.is_nil()
             && !self.parent_run_id.0.is_nil()
             && self.tasks.len() <= MAX_WORKER_TASKS_PER_PARENT
+            && (!self.can_create || self.tasks.len() < MAX_WORKER_TASKS_PER_PARENT)
             && self.tasks.iter().enumerate().all(|(index, task)| {
                 task.is_valid()
                     && task.task.conversation_id == self.conversation_id

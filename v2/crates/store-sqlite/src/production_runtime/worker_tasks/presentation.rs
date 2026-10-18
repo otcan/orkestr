@@ -19,6 +19,17 @@ impl Store {
         if exists != 1 {
             return Err(RuntimeStoreError::NotFound);
         }
+        let eligible = match self.worker_parent_current_in(&mut tx, parent).await {
+            Ok(_) => true,
+            Err(
+                RuntimeStoreError::Unauthorized
+                | RuntimeStoreError::Fenced
+                | RuntimeStoreError::StaleLease
+                | RuntimeStoreError::Expired
+                | RuntimeStoreError::NotFound,
+            ) => false,
+            Err(error) => return Err(error),
+        };
         let rows = sqlx::query("SELECT t.*,CASE WHEN length(CAST(p.title AS BLOB))<=160 THEN p.title END AS title,p.task_id AS payload_present,d.admitted_run_id,r.state AS run_state FROM worker_tasks t LEFT JOIN worker_task_payloads p ON p.task_id=t.id LEFT JOIN worker_provider_delegations d ON d.id=t.delegation_id LEFT JOIN production_runs r ON r.id=d.admitted_run_id WHERE t.owner_id=? AND t.conversation_id=? AND t.parent_run_id=? ORDER BY t.ordinal LIMIT 33")
             .bind(context.owner.to_string()).bind(conversation.to_string()).bind(parent.to_string())
             .fetch_all(&mut *tx).await.map_err(db)?;
@@ -75,6 +86,7 @@ impl Store {
             schema_version: 1,
             conversation_id: conversation.clone(),
             parent_run_id: parent.clone(),
+            can_create: eligible && tasks.len() < MAX_WORKER_TASKS_PER_PARENT,
             tasks,
         };
         if !result.is_valid() {

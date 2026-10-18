@@ -4,6 +4,7 @@ use std::{io::Read, path::PathBuf};
 
 /// Trusted bootstrap composition only, not Deserialize or an HTTP request type.
 /// Paths and digest come from the already reviewed private server configuration.
+#[derive(Clone)]
 pub struct WorkerConfiguration {
     pub policy: WorkerPolicy,
     pub launcher: PathBuf,
@@ -12,6 +13,7 @@ pub struct WorkerConfiguration {
     pub directory: PathBuf,
     pub controls: crate::control_registry::ControlRegistry,
     pub children: crate::owned_children::ChildSet,
+    pub tasks: crate::worker_tasks::WorkerTaskAccess,
 }
 
 impl WorkerConfiguration {
