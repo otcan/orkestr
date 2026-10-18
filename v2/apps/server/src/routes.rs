@@ -155,8 +155,8 @@ pub async fn events(
     let stream = async_stream::stream! {
         loop {
             for envelope in batch.drain(..) {
-                after=envelope.sequence;
-                match Event::default().event("message_accepted").id(after.to_string()).json_data(&envelope) {
+                after=envelope.sequence();
+                match Event::default().event(envelope.sse_name()).id(after.to_string()).json_data(&envelope) {
                     Ok(event) => yield Ok::<_,Infallible>(event), Err(_) => return,
                 }
             }

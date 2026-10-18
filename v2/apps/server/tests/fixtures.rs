@@ -48,3 +48,38 @@ fn observation_rejects_unfenced_and_embedded_progress_text() {
     embedded["kind"] = serde_json::json!({"kind":"progress", "text":"synthetic provider output"});
     assert!(serde_json::from_value::<runtime::ProviderObservation>(embedded).is_err());
 }
+
+#[test]
+fn canonical_replay_preserves_legacy_bytes_and_distinguishes_fixture_metadata() {
+    let legacy = include_str!("../../../fixtures/event.json");
+    let envelope: EventEnvelope = serde_json::from_str(legacy).unwrap();
+    let union: ConversationEvent = serde_json::from_str(legacy).unwrap();
+    assert_eq!(
+        serde_json::to_vec(&envelope).unwrap(),
+        serde_json::to_vec(&union).unwrap()
+    );
+    assert_eq!(union.sse_name(), "message_accepted");
+    let body = include_str!("../../../fixtures/fixture-provider-observed.json");
+    fixture::<ConversationEvent>(body);
+    let union: ConversationEvent = serde_json::from_str(body).unwrap();
+    assert_eq!(union.sse_name(), "fixture_provider_observed");
+    for (original, wrong_version) in [(legacy, 2), (body, 1)] {
+        let mut value: serde_json::Value = serde_json::from_str(original).unwrap();
+        value["schema_version"] = wrong_version.into();
+        assert!(serde_json::from_value::<ConversationEvent>(value).is_err());
+    }
+    for mutation in ["raw", "kind", "synthetic"] {
+        let mut value: serde_json::Value = serde_json::from_str(body).unwrap();
+        match mutation {
+            "raw" => value["payload_ref_or_safe_payload"]["text"] = "forbidden".into(),
+            "kind" => value["payload_ref_or_safe_payload"]["kind"] = "message_accepted".into(),
+            _ => value["payload_ref_or_safe_payload"]["observation"]
+                .as_object_mut()
+                .unwrap()
+                .remove("synthetic")
+                .map(|_| ())
+                .unwrap(),
+        }
+        assert!(serde_json::from_value::<ConversationEvent>(value).is_err());
+    }
+}
