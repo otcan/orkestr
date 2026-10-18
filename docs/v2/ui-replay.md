@@ -94,3 +94,12 @@ identity/schema/sequence/receipt cases fail closed, and snapshot failure/retry
 preserves text and cursor atomically. Combined local validation: 45 Rust UI tests,
 29 Node bridge tests, locked offline WASM, strict UI Clippy and workspace format.
 Adapter activation and live mixed browser rendering still require separate proof.
+
+Schema 8 compatibility imports exact progress contract/fixture from
+`4c592ca3438dce85c803d674c512b4b03ccd0d9d`. The existing `provider_observed`
+stream name remains unchanged. Progress is a typed reference, never inline text;
+the UI announces availability without guessing a payload route. Schema 5 progress,
+schema 8 completion, nil/invalid references and injected text fail closed.
+Progress references also exercise atomic multi-page reconciliation failure/retry.
+The previously exported Host resources browser bundle remains pinned to e6b5441a;
+this source change does not retroactively update that artifact.
