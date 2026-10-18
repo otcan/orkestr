@@ -62,3 +62,32 @@ class OfflineRouteTests(unittest.TestCase):
         result['id']='7'
         native,_=request(channel,result,'ToolResult',9)
         self.assertEqual(native['id'],'7')
+
+
+    def test_issued_cancel_retires_pending_only_interrupted_terminal_allowed(self):
+        for status in ('interrupted','completed','failed'):
+            channel=active();channel.provider(call())
+            control={'id':8,'method':'turn/interrupt','params':{
+                'threadId':'synthetic-native','turnId':'synthetic-turn'}}
+            request(channel,control,'CancelExecution',8)
+            self.assertIsNone(channel.offline_route.pending)
+            channel.provider({'id':8,'result':{}})
+            with self.assertRaises(Refused):channel.provider(call())
+            result={'id':7,'result':{'contentItems':[{'type':'inputText','text':'late'}],'success':True}}
+            with self.assertRaises(Refused):request(channel,result,'ToolResult',9)
+            terminal={'method':'turn/completed','params':{'threadId':'synthetic-native',
+                'turn':{'id':'synthetic-turn','status':status}}}
+            if status=='interrupted':
+                self.assertIsNotNone(channel.provider(terminal));self.assertTrue(channel.terminal)
+                self.assertIn((int,7),channel.offline_route.ids)
+            else:
+                with self.assertRaises(Refused):channel.provider(terminal)
+
+    def test_foreign_cancel_does_not_retire_pending(self):
+        channel=active();channel.provider(call())
+        control={'id':8,'method':'turn/interrupt','params':{
+            'threadId':'synthetic-native','turnId':'foreign-turn'}}
+        with self.assertRaises(Refused):request(channel,control,'CancelExecution',8)
+        self.assertEqual(channel.offline_route.pending,7)
+        with self.assertRaises(Refused):channel.provider({'method':'turn/completed','params':{
+            'threadId':'synthetic-native','turn':{'id':'foreign-turn','status':'interrupted'}}})

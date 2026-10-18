@@ -78,3 +78,11 @@ it never proves native acknowledgement, Worker completion or inference start.
 Actual writer failures require quarantine rather than another ToolResult attempt.
 Core's result-delivery leaf exists, but no Store capability is reconstructed or
 verified from JSON by this Python layer.
+
+A validated exact-turn CancelExecution retires any pending tool correlation
+without removing its burned request/call history. Later ToolResult and native
+calls refuse. When cancellation retired a pending tool, only the exact active
+turn's interrupted terminal is accepted; completed/failed terminals still refuse.
+This protocol transition is not cancellation authority or proof of sandbox reap.
+Runtime must use its issued control capability, retire outstanding tool state,
+refuse subsequent result writes and establish owned cleanup before completion.
