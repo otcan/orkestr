@@ -29,7 +29,23 @@ fn private_file(path: &Path, home: &Path, cap: u64) -> Result<Vec<u8>, &'static 
     {
         return Err("timer file must be private and owned by data-home owner");
     }
-    let bytes = std::fs::read(path).map_err(|_| "timer private file unavailable")?;
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|_| "timer private file unavailable")?;
+    let opened = file
+        .metadata()
+        .map_err(|_| "timer private file unavailable")?;
+    if opened.dev() != meta.dev()
+        || opened.ino() != meta.ino()
+        || opened.uid() != owner
+        || opened.mode() & 0o777 != 0o600
+        || opened.nlink() != 1
+    {
+        return Err("timer private file changed during open");
+    }
+    let mut bytes = Vec::new();
+    file.take(cap + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "timer private file unavailable")?;
     if bytes.len() as u64 > cap {
         return Err("timer private file exceeds limit");
     }
@@ -63,3 +79,7 @@ pub async fn load(store: &Store, home: &Path, path: &Path) -> Result<Store, &'st
         .await
         .map_err(|_| "timer supervisor bootstrap refused")
 }
+
+#[cfg(all(test, unix))]
+#[path = "timer_bootstrap_tests.rs"]
+mod tests;

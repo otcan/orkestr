@@ -220,7 +220,7 @@ async fn timer_loopback_enable_due_input_disable_held_and_refusals() {
         .1,
         enabled
     );
-    let mut changed = enable;
+    let mut changed = enable.clone();
     changed["text"] = "Different fresh text".into();
     assert_eq!(
         request(address, "POST", &format!("{path}/enable"), &token, changed)
@@ -236,6 +236,32 @@ async fn timer_loopback_enable_due_input_disable_held_and_refusals() {
         request(address, "POST", &format!("{path}/control"), &token, control).await;
     assert_eq!(status, 200);
     assert_eq!(disabled["controller_armed"], false);
+    // Historical successful Enable cannot rearm a disabled generation or change revision.
+    let (status, retry) = request(
+        address,
+        "POST",
+        &format!("{path}/enable"),
+        &token,
+        enable.clone(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(retry, disabled);
+    let mut changed_after_disable = enable;
+    changed_after_disable["text"] = "Different immutable owner instruction".into();
+    assert_eq!(
+        request(
+            address,
+            "POST",
+            &format!("{path}/enable"),
+            &token,
+            changed_after_disable
+        )
+        .await
+        .0,
+        409
+    );
+
     // Read-only synthetic DB oracle checks route-created native input is held.
     let result=std::process::Command::new("python3").arg("-c").arg("import sqlite3,sys; c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); assert c.execute('select count(*) from durable_timer_authorities').fetchone()==(1,); assert c.execute('select count(*) from messages').fetchone()==(0,)").arg(&database).status().unwrap();
     assert!(result.success());
