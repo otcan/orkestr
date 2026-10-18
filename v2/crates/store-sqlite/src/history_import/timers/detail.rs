@@ -18,7 +18,7 @@ impl Store {
         let mut tx = self.history_transaction(credential, owner, false).await?;
         let row = row(&mut tx, owner, namespace).await?;
         let conversation: Option<String> = row.get("conversation_id");
-        let durable_authority: i64 = sqlx::query_scalar("SELECT count(*) FROM durable_timer_authorities a JOIN dormant_timers t ON t.owner_id=a.owner_id AND t.namespace=a.namespace AND t.generation=a.generation WHERE a.owner_id=? AND a.namespace=? AND t.state='enabled'")
+        let durable_authority: i64 = sqlx::query_scalar("SELECT count(*) FROM durable_timer_authorities a JOIN dormant_timers t ON t.owner_id=a.owner_id AND t.namespace=a.namespace AND t.generation=a.generation WHERE a.owner_id=? AND a.namespace=? AND t.state='enabled' AND a.stop_sequence=(SELECT COALESCE(max(e.sequence),0) FROM production_stop_boundaries b JOIN events e ON e.id=b.event_id WHERE b.owner_id=a.owner_id AND b.conversation_id=a.conversation_id)")
             .bind(owner.to_string()).bind(namespace.to_string()).fetch_one(&mut *tx).await.map_err(unavailable)?;
         let detail = TimerDetail {
             durable_authority: durable_authority == 1,

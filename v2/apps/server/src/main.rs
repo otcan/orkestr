@@ -64,6 +64,12 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(execution) = &execution {
         state = execution.install_control(state)?;
     }
+    let timer_supervisor = match std::env::var_os("ORKESTR_V2_TIMER_CONFIG") {
+        Some(file) => Some(
+            orkestr_v2_server::timer_bootstrap::load(&store, &home, &PathBuf::from(file)).await?,
+        ),
+        None => None,
+    };
     eprintln!(
         "orkestr-v2-server schema=1 home={} bind={} execution={} connections=none",
         home.display(),
@@ -80,12 +86,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
     }
     let execution = execution.map(ConfiguredExecutions::start);
-    let mut timers = match std::env::var_os("ORKESTR_V2_TIMER_CONFIG") {
-        Some(file) => Some(timer_state.start_timers(
-            orkestr_v2_server::timer_bootstrap::load(&store, &home, &PathBuf::from(file)).await?,
-        )),
-        None => None,
-    };
+    let mut timers = timer_supervisor.map(|supervisor| timer_state.start_timers(supervisor));
     let (shutdown, mut requested) = tokio::sync::watch::channel(false);
     let mut serving = tokio::spawn(async move {
         axum::serve(listener, app)
