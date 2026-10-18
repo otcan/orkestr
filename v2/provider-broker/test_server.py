@@ -23,7 +23,7 @@ for line in sys.stdin:
   print(json.dumps({"id":v["id"],"result":{"requiresOpenaiAuth":True,"account":{"type":"chatgpt"}}}),flush=True)
  elif v.get("method")=="thread/start":
   cwd=str(Path(__file__).with_name("workspace"))
-  print(json.dumps({"id":v["id"],"result":{"thread":{"id":"synthetic-native","ephemeral":False,"cwd":cwd},"cwd":cwd,"approvalPolicy":"never","sandbox":{"type":"readOnly","networkAccess":False}}}),flush=True)
+  print(json.dumps({"id":v["id"],"result":{"thread":{"id":"synthetic-native","ephemeral":False,"cwd":cwd,"modelProvider":"openai"},"modelProvider":"openai","cwd":cwd,"approvalPolicy":"never","sandbox":{"type":"readOnly","networkAccess":False}}}),flush=True)
  elif v.get("method")=="turn/start":
   with Path(__file__).with_name("turns.txt").open("a") as output: output.write("one-turn\n")
   print(json.dumps({"id":v["id"],"result":{"turn":{"id":"synthetic-turn","status":"inProgress"}}}),flush=True)
@@ -89,7 +89,7 @@ class ServerTests(unittest.TestCase):
                     send(3, {"method":"initialized"})
                     send(4, {"id":2,"method":"account/read","params":{"refreshToken":False}})
                     send(5, {"id":3,"method":"thread/start","params":{
-                        "cwd":str(root / "workspace"),"approvalPolicy":"never","sandbox":"read-only","ephemeral":False}})
+                        "cwd":str(root / "workspace"),"approvalPolicy":"never","sandbox":"read-only","ephemeral":False,"modelProvider":"openai"}})
                     reply = send(6, turn(), "CommitExecution")
                     self.assertEqual(reply["result"]["frame"]["result"]["turn"]["id"], "synthetic-turn")
                     child.stdin.write(encode({"id":7,"method":"CommitExecution","params":{
