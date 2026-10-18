@@ -24,12 +24,21 @@ pub struct Exit {
 }
 
 pub(super) fn start_reaper(active: Arc<AtomicUsize>) -> Result<Sender<Child>, Error> {
+    start_reaper_retained(active, Box::new(()))
+}
+
+pub(super) fn start_reaper_retained(
+    active: Arc<AtomicUsize>,
+    resources: Box<dyn Send + 'static>,
+) -> Result<Sender<Child>, Error> {
     // At most maximum_children outstanding Child values, including reaper work:
     // the capacity slot is released only after wait, never on handle drop.
     let (sender, receiver) = mpsc::channel::<Child>();
     std::thread::Builder::new()
         .name("contained-reaper".into())
         .spawn(move || {
+            // Keep caller capacity/scratch alive until all owned children are waited.
+            let _resources = resources;
             let mut pending = Vec::new();
             let mut disconnected = false;
             loop {
@@ -180,10 +189,9 @@ impl Process {
         live.framing.close();
         live.handoff = None;
         live.provider_writer = None;
-        if result.is_ok() {
-            if let Some(child) = live.child.take() {
-                self.reaper.send(child).map_err(|_| Error::Io)?;
-            }
+        // Even if signalling fails, preserve wait ownership and retained resources.
+        if let Some(child) = live.child.take() {
+            self.reaper.send(child).map_err(|_| Error::Io)?;
         }
         result
     }

@@ -49,14 +49,15 @@ impl TrustedLauncher {
         })
     }
 
-    pub(crate) fn open_metadata_fd(
+    pub(crate) fn open_metadata_fd_retained(
         &self,
         store: Store,
         grant: BoundSessionMetadata,
         directories: ChildDirectories,
         bounds: TransportBounds,
+        resources: Box<dyn Send + 'static>,
     ) -> Result<(MetadataAuthority, MetadataChild), Error> {
-        let authority = MetadataAuthority::new(store, grant)?;
+        let authority = MetadataAuthority::new_retained(store, grant, resources)?;
         let child = authority
             .issue_executor(&self.executable, &launch_arguments(), directories, bounds)?
             .spawn_with_provider_fd()?;

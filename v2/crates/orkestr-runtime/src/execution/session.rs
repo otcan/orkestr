@@ -58,7 +58,26 @@ impl PreparingCodex {
         workspace: &Path,
         directories: ChildDirectories,
     ) -> Result<Self, SetupFailure> {
-        Self::open_mode(store, grant, launcher, workspace, directories, true)
+        Self::open_retained(store, grant, launcher, workspace, directories, Box::new(()))
+    }
+    /// Opaque resources are released only after the owned reaper finishes, including setup failures.
+    pub fn open_retained(
+        store: Store,
+        grant: BoundSessionMetadata,
+        launcher: &Path,
+        workspace: &Path,
+        directories: ChildDirectories,
+        resources: Box<dyn Send + 'static>,
+    ) -> Result<Self, SetupFailure> {
+        Self::open_mode(
+            store,
+            grant,
+            launcher,
+            workspace,
+            directories,
+            true,
+            resources,
+        )
     }
     #[cfg(test)]
     pub(super) fn open_legacy(
@@ -68,8 +87,17 @@ impl PreparingCodex {
         workspace: &Path,
         directories: ChildDirectories,
     ) -> Result<Self, SetupFailure> {
-        Self::open_mode(store, grant, launcher, workspace, directories, false)
+        Self::open_mode(
+            store,
+            grant,
+            launcher,
+            workspace,
+            directories,
+            false,
+            Box::new(()),
+        )
     }
+    #[allow(clippy::too_many_arguments)]
     fn open_mode(
         store: Store,
         grant: BoundSessionMetadata,
@@ -77,6 +105,7 @@ impl PreparingCodex {
         workspace: &Path,
         directories: ChildDirectories,
         actual_fd: bool,
+        resources: Box<dyn Send + 'static>,
     ) -> Result<Self, SetupFailure> {
         if grant.provider() != ProviderKind::Codex
             || workspace.canonicalize().ok().as_deref() != Some(workspace)
@@ -86,7 +115,13 @@ impl PreparingCodex {
         let binding = grant.binding().clone();
         let launcher = TrustedLauncher::configured(launcher)?;
         let (authority, child) = if actual_fd {
-            launcher.open_metadata_fd(store, grant, directories, TransportBounds::default())?
+            launcher.open_metadata_fd_retained(
+                store,
+                grant,
+                directories,
+                TransportBounds::default(),
+                resources,
+            )?
         } else {
             launcher.open_metadata(store, grant, directories, TransportBounds::default())?
         };
