@@ -237,7 +237,9 @@ test("final replies require a persisted native identity and a recognized native 
   const row = h.manager.ensure(sessionInput);
   h.adapter.run = async () => ({ type: "final" });
   await assert.rejects(h.manager.runTurn(row.id, supervisor(), {}), /native_session_missing/);
-  await h.manager.startOrResume(row.id);
+  // A blocked row requires explicit reconciliation; use an independent
+  // admitted session to check the separate invalid-outcome failure.
+  const other = await h.manager.startOrResume(h.manager.ensure({ ...sessionInput, role: "worker" }).id);
   h.adapter.run = async () => ({ type: "invented" });
-  await assert.rejects(h.manager.runTurn(row.id, supervisor(), {}), /outcome_invalid/);
+  await assert.rejects(h.manager.runTurn(other.id, supervisor(), {}), /outcome_invalid/);
 });

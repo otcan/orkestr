@@ -15,14 +15,14 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
   async function leased(id, operation, { blockOnFailure = true } = {}) {
     const row = claim(id);
     const controller = new AbortController();
-    let lost = false;
+    let lost = false, admitted = false;
     const timer = setInterval(() => {
       try { fenced(row, { leaseTtlMs: leaseMs }); }
       catch { lost = true; controller.abort("lease_lost"); }
     }, Math.max(25, Math.floor(leaseMs / 3)));
     timer.unref?.();
     try {
-      const result = await operation(row, controller.signal, patch => fenced(row, patch));
+      const result = await operation(row, controller.signal, patch => fenced(row, patch), () => { admitted = true; });
       if (lost) throw sessionError("agent_session_lease_lost");
       return result;
     } catch (error) {
@@ -31,8 +31,10 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
       // A child's error does not identify this session's fence. Revalidate
       // our own token/expiry/CAS history before any cleanup write.
       if (lost) throw sessionError("agent_session_lease_lost");
-      currentLease(row);
-      fenced(row, blockOnFailure ? { lifecycle: "blocked", blockedReason: sessionBlockedReason(error) } : {}, true);
+      const current = currentLease(row);
+      // Eligibility refusals borrow a fence, but must not rewrite status. Once
+      // admitted, retain any specific diagnosis already stored by supervision.
+      fenced(row, blockOnFailure && admitted ? { lifecycle: "blocked", blockedReason: current.blockedReason ?? sessionBlockedReason(error) } : {}, true);
       throw error;
     } finally { clearInterval(timer); }
   }
@@ -76,23 +78,30 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
   }
 
   async function startOrResume(id) {
-    return leased(id, async (row, signal) => {
-      const adapter = await runtime(row);
-      currentLease(row);
+    return leased(id, async (row, signal, _update, admit) => {
+      if (row.lifecycle === "blocked") throw sessionError("agent_session_reconnect_required");
       const parent = row.forkFromSessionId && !row.nativeSessionId ? owned(row.forkFromSessionId) : null;
+      const open = async (source, dispatchSignal = signal) => {
+        admit(); // Local eligibility (including the parent fence) is established.
+        const adapter = await runtime(row);
+        currentLease(row);
+        dispatchSignal.throwIfAborted();
+        if (source) currentLease(source);
+        return adapter.open(runtimeRow(row), { ...(source ? { parent: runtimeRow(source) } : {}), signal: dispatchSignal });
+      };
       // Fork only idle parents, with the same fence used for normal turns.
-      // A failed fork belongs to the child; leave a still-fenced parent idle.
-      const open = parent
-        ? () => leased(parent.id, async (source, parentSignal) => {
+      // A refused fork leaves both sessions' existing status untouched.
+      const result = parent
+        ? await leased(parent.id, async (source, parentSignal) => {
           if (source.lifecycle !== "ready") throw sessionError("agent_session_reconciliation_required");
-          currentLease(row);
-          signal.throwIfAborted();
-          const result = await adapter.open(runtimeRow(row), { parent: runtimeRow(source), signal: AbortSignal.any([signal, parentSignal]) });
+          // The parent heartbeat also cancels a dispatch waiting on discovery.
+          const combined = AbortSignal.any([signal, parentSignal]);
+          combined.throwIfAborted();
+          const result = await open(source, combined);
           fenced(source, {}, true);
           return result;
         }, { blockOnFailure: false })
-        : () => adapter.open(runtimeRow(row), { signal });
-      const result = await open();
+        : await open();
       if (result.nativeSessionId) sessionId(result.nativeSessionId);
       if (row.nativeSessionId && result.nativeSessionId !== row.nativeSessionId) throw sessionError("agent_session_native_identity_changed");
       if (!result.nativeSessionId && result.lifecycle !== "starting") throw sessionError("agent_session_native_session_missing");
@@ -107,14 +116,15 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
       if (typeof ctx?.[key] !== "function") throw sessionError("agent_session_supervisor_required", 403);
     }
     if (!ctx.signal || ctx.signal.aborted) throw sessionError("agent_session_cancelled");
-    return leased(id, async (row, leaseSignal, update) => {
+    return leased(id, async (row, leaseSignal, update, admit) => {
+      if (row.lifecycle === "blocked") throw sessionError("agent_session_reconnect_required");
+      if (row.forkFromSessionId && !row.nativeSessionId) throw sessionError("agent_session_fork_not_started");
+      admit();
       const adapter = await runtime(row);
       if (ctx.signal.aborted) {
         fenced(row, {}, true);
         return { type: "cancelled" };
       }
-      if (row.lifecycle === "blocked") throw sessionError("agent_session_reconnect_required");
-      if (row.forkFromSessionId && !row.nativeSessionId) throw sessionError("agent_session_fork_not_started");
       update({ lifecycle: "busy" });
       const failed = new AbortController();
       const signal = AbortSignal.any([ctx.signal, leaseSignal, failed.signal]);

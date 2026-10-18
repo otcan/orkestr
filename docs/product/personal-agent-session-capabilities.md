@@ -153,7 +153,12 @@ new connector module and never infers authentication from a selected profile.
   lease is not stolen: reconciliation must establish that the old native turn
   stopped before a future recovery operation can release it. Forks also refuse
   parents that are not ready, including blocked parents with uncertain native
-  state; holding a fresh lease alone does not establish native readiness. Cancellation and
+  state; holding a fresh lease alone does not establish native readiness.
+  Both `startOrResume` and `runTurn` refuse already blocked sessions until an
+  explicit reconciliation clears that state. Eligibility refusals release a
+  valid fence without writing lifecycle or diagnosis. Only admitted failures
+  may block a session, preserving any existing specific diagnosis.
+  Cancellation and
   lease loss reach the native signal; cancelled late output is discarded and
   later tool callbacks refused. The current supervisor remains responsible for
   its own durable job/effect lease and final admission/output validation.
