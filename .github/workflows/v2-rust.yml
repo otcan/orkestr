@@ -36,15 +36,11 @@ jobs:
       - name: Install namespace test prerequisite
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y bubblewrap apparmor-profiles apparmor-utils
-      - name: Permit Bubblewrap user namespaces on disposable hosted runner
+          sudo apt-get install --no-install-recommends -y bubblewrap apparmor
+      - name: Qualify hosted-runner lifetime namespace policy
         run: |
-          # Use Ubuntu's executable-specific profile; never disable global userns policy.
-          test "$RUNNER_ENVIRONMENT" = "github-hosted"
-          sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
-          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
-          sudo aa-status
-          sysctl kernel.apparmor_restrict_unprivileged_userns
+          python3 -B -m unittest discover -s tests -p test_ci_lifetime_namespace.py -v
+          python3 tests/ci_lifetime_namespace.py
       - name: Probe unprivileged provider lifetime namespaces
         run: python3 tests/probe_lifetime_namespaces.py
       - name: Install pinned Rust
