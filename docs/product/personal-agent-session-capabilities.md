@@ -4,8 +4,10 @@ Measured on 2026-10-18 against installed runtime commands. Codex used a
 disposable app-server and empty temporary runtime home; Claude used only the
 operator-identified direct binary with `--version` and `--help`, as the runtime
 OS user and with `CLAUDE_CONFIG_DIR` unset. No inference turn, login, model
-download or live thread modification was performed. Codex authentication used
-the existing CLI status helper; no credential files were inspected directly.
+download or live thread modification was performed. The original Codex
+authentication observation used the existing CLI status helper; no credential
+files were inspected directly. The reproduction script no longer repeats that
+live-profile check: it reports authentication as unverified for both providers.
 
 ## Installed inventory
 
@@ -78,11 +80,21 @@ were changed.
 ### Reproduce without inference
 
 ```sh
-node scripts/personal-agent-session-probe.mjs --run-no-inference
-ORKESTR_SESSION_PROBE=1 node --test test/personal-agent-session-installed.test.js
+node scripts/personal-agent-session-probe.mjs --run-no-inference --codex-bin /absolute/path/to/verified/codex
+ORKESTR_SESSION_PROBE=1 ORKESTR_SESSION_PROBE_CODEX_BIN=/absolute/path/to/verified/codex node --test test/personal-agent-session-installed.test.js
 ```
 
-These reproduction commands probe **Codex only**. They never execute Claude,
+Identify a direct Codex binary before supplying that path. The script does not
+verify an arbitrary executable's implementation. It ignores `ORKESTR_CODEX_BIN`
+and never resolves a PATH fallback; without an explicit absolute probe binary it
+returns `direct_binary_required` without executing a provider. Every Codex
+command, including version, uses a disposable HOME/CODEX_HOME and an allowlisted
+child environment. Ambient profile variables and credentials are excluded,
+including from the shared app-server client's inherited environment. Neither
+`codex login status` nor any auth/status command is run. Live Codex auth is
+UNVERIFIED by this script; the historical observation above is not a fresh check.
+
+These reproduction commands probe **Codex metadata only**. They never execute Claude,
 including a configured wrapper or a PATH fallback, and never run Claude
 `auth status`. Claude reports `manual_metadata_verification_required` with
 `auth.verified=false`; this says nothing about whether Claude is installed.
@@ -93,7 +105,7 @@ do not substitute the configured wrapper or call diagnostics. LIVE Claude auth
 remains UNVERIFIED. No wrapper-free live authentication probe is added here.
 
 Without the opt-in, the installed test is skipped in CI. The script emits only
-sanitized Codex version/authentication booleans, schema property names and RPC result
+sanitized Codex version, unverified-auth markers, schema property names and RPC result
 classifications. It does not emit account identities, native IDs, paths, raw
 provider errors or credentials. It closes its own child and removes its own
 temporary directory, including generated schemas and empty native sessions.

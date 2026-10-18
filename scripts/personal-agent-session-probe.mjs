@@ -6,35 +6,43 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { CodexJobClient } from "../packages/core/src/codex-job-client.js";
-import { codexCommand, codexLoginStatus } from "../packages/connectors/src/codex.js";
 
 const exec = promisify(execFile);
 const options = { timeout: 15_000, maxBuffer: 2 * 1024 * 1024 };
 const safeVersion = value => String(value || "").match(/(?:codex-cli\s+)?\d+\.\d+\.\d+(?:[-.][A-Za-z0-9]+)*/)?.[0] || "unknown";
 
-export async function probeInstalledSessions(env = process.env) {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-session-probe-"));
-  const codexBin = codexCommand(env);
+export async function probeInstalledSessions(env = process.env, { codexBinary = env.ORKESTR_SESSION_PROBE_CODEX_BIN } = {}) {
   // Configured Claude commands can be wrappers that mutate a live profile even
   // for --version/--help. This generic probe cannot establish a safe direct
   // binary, and must never invoke one or inspect live authentication.
-  const result = { inferenceTurns: 0, codex: {}, claude: {
+  const result = { inferenceTurns: 0, codex: { auth: { verified: false } }, claude: {
     blocked: "manual_metadata_verification_required", auth: { verified: false },
   } };
+  // The operator must identify a direct binary explicitly. Never resolve the
+  // configured runtime wrapper or a PATH fallback, even for version/help.
+  if (typeof codexBinary !== "string" || !path.isAbsolute(codexBinary)) {
+    result.codex.blocked = "direct_binary_required";
+    return result;
+  }
+  const codexBin = codexBinary;
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-session-probe-"));
+  // commandEnv in the shared client merges process.env. Shadow EVERY inherited
+  // key with undefined (spawn omits it), then allow only this disposable env.
+  const isolated = { ...Object.fromEntries(Object.keys(process.env).map(key => [key, undefined])),
+    PATH: env.PATH || process.env.PATH, HOME: temporary, CODEX_HOME: path.join(temporary, "codex"),
+    XDG_CONFIG_HOME: path.join(temporary, "config"), XDG_CACHE_HOME: path.join(temporary, "cache"),
+    XDG_DATA_HOME: path.join(temporary, "data"), TMPDIR: temporary,
+    ORKESTR_CODEX_BIN: codexBin, ORKESTR_CODEX_APP_SERVER_MODE: "stdio", ORKESTR_CODEX_APP_SERVER_SOCKET: "",
+    ORKESTR_CODEX_APP_SERVER_TIMEOUT_MS: "10000" };
   let client;
   try {
     try {
-      const version = await exec(codexBin, ["--version"], { ...options, env });
-      result.codex.version = safeVersion(version.stdout);
-      const status = await codexLoginStatus({ env });
-      result.codex.auth = { authenticated: status.connected, subscription: status.authMode === "chatgpt", reason: status.reason };
-      // The app-server uses an empty disposable home, NOT the host profile.
-      const isolated = { PATH: env.PATH || process.env.PATH, HOME: temporary, CODEX_HOME: path.join(temporary, "codex"),
-        ORKESTR_CODEX_BIN: codexBin, ORKESTR_CODEX_APP_SERVER_MODE: "stdio", ORKESTR_CODEX_APP_SERVER_SOCKET: "",
-        ORKESTR_CODEX_APP_SERVER_TIMEOUT_MS: "10000", OPENAI_API_KEY: "", CODEX_API_KEY: "" };
       await fs.mkdir(isolated.CODEX_HOME, { recursive: true });
+      const version = await exec(codexBin, ["--version"], { ...options, env: isolated, cwd: temporary });
+      result.codex.version = safeVersion(version.stdout);
+      // The app-server uses an empty disposable home, NOT the host profile.
       const schemas = path.join(temporary, "schemas");
-      await exec(codexBin, ["app-server", "generate-json-schema", "--experimental", "--out", schemas], { ...options, env: isolated });
+      await exec(codexBin, ["app-server", "generate-json-schema", "--experimental", "--out", schemas], { ...options, env: isolated, cwd: temporary });
       result.codex.protocol = {};
       for (const name of ["ThreadStart", "ThreadResume", "ThreadFork", "TurnSteer", "TurnInterrupt", "TurnStart", "ThreadSettingsUpdate"]) {
         const schema = JSON.parse(await fs.readFile(path.join(schemas, "v2", `${name}Params.json`), "utf8"));
@@ -82,8 +90,12 @@ export async function probeInstalledSessions(env = process.env) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (process.argv.length !== 3 || process.argv[2] !== "--run-no-inference") {
-    console.error("Opt in with --run-no-inference. No prompts, model turns, login or downloads are performed.");
+  const args = process.argv.slice(2);
+  if (args[0] !== "--run-no-inference" || !(args.length === 1 ||
+    (args.length === 3 && args[1] === "--codex-bin" && path.isAbsolute(args[2])))) {
+    console.error("Opt in with --run-no-inference [--codex-bin /verified/direct/binary]. No auth/status, prompts, model turns, login or downloads are performed.");
     process.exitCode = 2;
-  } else console.log(JSON.stringify(await probeInstalledSessions(), null, 2));
+  } else console.log(JSON.stringify(await probeInstalledSessions(process.env, {
+    codexBinary: args[2] || process.env.ORKESTR_SESSION_PROBE_CODEX_BIN,
+  }), null, 2));
 }
