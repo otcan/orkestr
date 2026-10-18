@@ -84,16 +84,18 @@ struct ProjectDetailView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            if horizontalSizeClass == .regular {
-                Picker("Project panel", selection: $selectedPanel) {
-                    ForEach(Panel.allCases) { panel in Text(panel.rawValue).tag(panel) }
+            Group {
+                if horizontalSizeClass == .regular {
+                    Picker("Project panel", selection: $selectedPanel) {
+                        ForEach(Panel.allCases) { panel in Text(panel.rawValue).tag(panel) }
+                    }
+                    .pickerStyle(.segmented)
+                } else {
+                    Picker("Project panel", selection: $selectedPanel) {
+                        ForEach(Panel.allCases) { panel in Text(panel.rawValue).tag(panel) }
+                    }
+                    .pickerStyle(.menu)
                 }
-                .pickerStyle(.segmented)
-            } else {
-                Picker("Project panel", selection: $selectedPanel) {
-                    ForEach(Panel.allCases) { panel in Text(panel.rawValue).tag(panel) }
-                }
-                .pickerStyle(.menu)
             }
             .accessibilityLabel("Project sections")
             AgentPanel(title: selectedPanel.rawValue) {
