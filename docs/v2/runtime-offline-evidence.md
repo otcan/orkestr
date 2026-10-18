@@ -15,6 +15,7 @@ From the repository root, use the assigned host cargo wrapper and lane-specific
 $V2_CARGO test --manifest-path v2/Cargo.toml -p orkestr-runtime
 $V2_CARGO clippy --manifest-path v2/Cargo.toml -p orkestr-runtime --all-targets -- -D warnings
 $V2_CARGO fmt --manifest-path v2/Cargo.toml -p orkestr-runtime -- --check
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s v2/tools/tests -v
 python3 v2/tools/probe_codex.py --scratch-parent "$ORKESTR_V2_HOME/probes"
 ```
 
@@ -24,6 +25,12 @@ exclusive native session use, stale generation rejection, bounded queues,
 stop priority, unsupported operations, protocol identity/status validation,
 admission before provider start, explicit started evidence and cancellation
 fence before interruption. Ordering tests use a spy, not a durable store.
+
+Four additional Python tests pass with all subprocess calls mocked: the probe
+sends only initialize, excludes credential variables and existing profile paths,
+refuses version mismatch before launch, kills/reaps its child on timeout, and
+does not print raw metadata or RPC errors. These tests launch no provider and
+add no Cargo dependencies. They do not change the provider evidence level.
 
 Codex 0.163.0: isolated stdio `initialize` RPC returned successfully. Printed
 only version, success and response field names (`codexHome`, `platformFamily`,
