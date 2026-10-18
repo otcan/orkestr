@@ -1,9 +1,9 @@
 # Offline Python broker contract
 
-Status: unregistered wire validators only. No dynamic tool is advertised by the
-current broker, and this document does not authorize provider requests or tool
-execution. Runtime agreement and the Core-issued Worker/tool authority remain
-prerequisites for wiring.
+Status: trusted constructor-only channel hooks; executable profile selection is
+not enabled. No dynamic tool is advertised by default, and this document does
+not authorize provider requests or tool execution. Core delivery integration and
+reviewed Runtime/launcher composition remain prerequisites for activation.
 
 The proposed trusted launcher profile opts into exactly one experimental
 `dynamicTools` function, `orkestr_offline_python`. Its arguments are exactly
@@ -54,3 +54,27 @@ DynamicToolCallParams and DynamicToolCallResponse. The validators intentionally
 admit a smaller text-only subset. Synthetic unit tests exercise only these
 validators; ordinary Worker admission, native tool invocation, sandbox dispatch,
 Stop races and actual provider result acceptance are unexecuted in this slice.
+
+
+## Opt-in channel hook
+
+`Channel(workspace, expected_native=None, offline_python=False)` now exposes the
+trusted constructor flag. Only opted-in Worker metadata accepts experimentalApi
+true and the exact singleton advertisement on thread/start or thread/resume.
+The flag is never read from browser/OpenOwnedSession JSON or environment. Current
+executable entrypoints do not select it. An eventual opt-in immutable broker
+inventory must include `offline_tool.py` and `offline_route.py`; default package
+imports do not require them.
+
+Active native tool calls are forwarded in sanitized BrokerOutput. One pending
+call and at most 128 unique typed request IDs/call IDs are retained per child.
+Duplicate/foreign calls, default-session calls and terminal output with a pending
+call refuse. Active-turn progress notifications remain independently correlated.
+ToolResult latches the pending response before returning its native bytes for
+BrokerPrepared; no native acknowledgement is expected for a JSON-RPC response.
+The immediate outer result with frame:null may coalesce with Prepared. Runtime
+must retain it until the actual full result suffix write and Core finish succeed;
+it never proves native acknowledgement, Worker completion or inference start.
+Actual writer failures require quarantine rather than another ToolResult attempt.
+Core's result-delivery leaf exists, but no Store capability is reconstructed or
+verified from JSON by this Python layer.
