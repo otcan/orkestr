@@ -432,5 +432,3 @@ mod tests {
 }
 
 // Intake validation coexists with the internal offline journal contract.
-mod validation;
-pub use validation::{message, project, request_key, ValidationError};
