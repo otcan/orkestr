@@ -46,3 +46,31 @@ path equivalence), retain that expectation across the outstanding request, and
 leave native readiness unconfirmed on refusal. Add missing/malformed field cases
 and a valid persistent same-workspace control. Ordinary execution/lease/cancel
 and real-provider gates remain pending. There is no production activation here.
+
+## Correction independently verified
+
+Exact correction `7d1fa052d2b59d1f76078696724364e5ba2c18ca` was re-queried as
+PR76 head and reviewed. Pending thread state retains the requested normalized
+absolute workspace. Before publishing the locator, both returned workspace fields
+must equal it and ephemeral must explicitly be false. Real filesystem
+canonicalization/symlink containment remains trusted Executor responsibility;
+this module's normalization is lexical, not an OS containment proof.
+
+The unchanged two independent regressions from `17543337` passed against an exact
+isolated archive of `7d1fa052`. Six supplied protocol tests also passed in that run;
+those are independently executed author tests, not independently authored cases.
+The independent test was then strengthened with the otherwise-valid thread.cwd,
+a successful persistent same-workspace control, and separate missing/type/value
+mutations of each of the three fields: **4 independent tests passed**, zero
+failures/ignored. This avoids a different missing field masking a refusal check.
+All tests used the assigned wrapper, verification target/home, locked/offline,
+without changing implementation/manifests/lock or launching a provider.
+
+The original P2 persistence/workspace finding is closed at this exact correction.
+No subscription entitlement, actual native readiness, durable production dispatch,
+provider execution, lease/cancel/recovery or containment acceptance transfers from
+these metadata tests. The historical 0/2 failure above remains accurate at `831198ae`.
+
+Strict selected independent-test clippy with `-D warnings` passed; pinned wrapper
+formatting and repository diff checks passed. No broader package clippy result
+is claimed from this selected target.
