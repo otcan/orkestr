@@ -4,14 +4,13 @@ import { sessionHarness, sessionInput, sessionProfile, supervisor } from "./fixt
 
 // Contract tests against the prepared CAS API. SQLite durability and concurrent
 // processes remain the schema lane's integration tests, not claims of this fake.
-test("canonical session rows use modelProfile and NULL global scope with immutable persisted ownership", async () => {
+test("canonical session rows use modelProfile and NULL global scope without an owner column", async () => {
   const h = sessionHarness();
   const created = h.manager.ensure(sessionInput);
   assert.equal(created.scopeId, null);
   assert.deepEqual(created.modelProfile, { model: sessionProfile.model, effort: sessionProfile.effort });
-  for (const key of ["profile", "model", "effort"]) assert.equal(Object.hasOwn(created, key), false);
-  assert.equal(typeof h.store.transaction, "function");
-  assert.equal(created.ownerUserId, "owner");
+  for (const key of ["profile", "model", "effort", "ownerUserId"]) assert.equal(Object.hasOwn(created, key), false);
+  assert.equal(h.store.transaction, undefined);
   h.adapter.open = async row => {
     assert.equal(row.ownerUserId, "owner");
     assert.equal(row.model, sessionProfile.model);
@@ -23,7 +22,7 @@ test("canonical session rows use modelProfile and NULL global scope with immutab
   const changed = h.manager.changeProfile(opened.id, { ...sessionProfile, model: "gpt-next" });
   assert.equal(changed.version, opened.version + 2);
   assert.equal(changed.nativeSessionId, opened.nativeSessionId);
-  assert.equal(h.store.get(created.id).ownerUserId, "owner");
+  assert.equal(Object.hasOwn(h.store.get(created.id), "ownerUserId"), false);
 });
 
 test("missing or revoked trusted conversation access prevents all native calls", async () => {
