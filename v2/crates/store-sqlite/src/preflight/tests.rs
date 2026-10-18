@@ -166,3 +166,88 @@ async fn supported_earlier_migration_prefix_is_identified_then_upgraded() {
     let reopened = Store::open(&dir.db()).await.unwrap();
     reopened.close().await;
 }
+
+async fn populated_dispatch_prefix(dir: &Directory) -> SqliteConnection {
+    let mut conn = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(dir.db())
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal),
+    )
+    .await
+    .unwrap();
+    conn.ensure_migrations_table().await.unwrap();
+    let migrator = sqlx::migrate!("./migrations");
+    for migration in migrator.iter().take(4) {
+        conn.apply(migration).await.unwrap();
+    }
+    sqlx::raw_sql("INSERT INTO owners(id,username,password_hash) VALUES('owner','synthetic','synthetic');
+    INSERT INTO conversations(id,owner_id,sequence) VALUES('conversation','owner',1);
+    INSERT INTO messages VALUES('message','owner','conversation','input','digest','synthetic','owner',1);
+    INSERT INTO events(id,owner_id,conversation_id,message_id,sequence) VALUES('event','owner','conversation','message',1);
+    INSERT INTO outbox(event_id) VALUES('event');
+    INSERT INTO fixture_supervisors VALUES('context','owner','synthetic','key','incarnation',1,9999999999999);
+    INSERT INTO session_bindings(id,owner_id,conversation_id,role,provider_kind,provider_namespace,native_session_id,state) VALUES('session','owner','conversation','deep','explicit_fixture','synthetic','synthetic-native','busy');
+    INSERT INTO fixture_readiness VALUES('session','context','incarnation',1);
+    INSERT INTO fixture_runs VALUES('run','context','incarnation','owner','conversation','session','synthetic-native',1,'message','event',1,1,'run-key','digest',1,1,9999999999999,1,'starting','delivery_unknown',NULL,NULL,NULL);
+    INSERT INTO reasoning_inbox(conversation_id,sequence,message_id,event_id,state,claimant_session_id,claim_generation,claim_deadline_ms,admitted_fixture_run_id) VALUES('conversation',1,'message','event','consumed','session',1,9999999999999,'run');").execute(&mut conn).await.unwrap();
+    conn
+}
+
+#[tokio::test]
+async fn populated_dispatch_prefix_upgrade_preserves_inbound_links_and_checksums() {
+    let dir = Directory::new();
+    let mut conn = populated_dispatch_prefix(&dir).await;
+    let legacy: (String, String, i64, String) =
+        sqlx::query_as("SELECT id,message_id,sequence,occurred_at FROM events")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+    let checksums: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap();
+    conn.close().await.unwrap();
+    let store = Store::open(&dir.db()).await.unwrap();
+    let after: (String, String, i64, String) =
+        sqlx::query_as("SELECT id,message_id,sequence,occurred_at FROM events")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(legacy, after);
+    let after_checksums: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT checksum FROM _sqlx_migrations WHERE version<=4 ORDER BY version",
+    )
+    .fetch_all(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(checksums, after_checksums);
+    assert!(sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&store.pool)
+        .await
+        .unwrap()
+        .is_empty());
+    let links: i64 = sqlx::query_scalar("SELECT count(*) FROM reasoning_inbox i JOIN fixture_runs r ON r.id=i.admitted_fixture_run_id JOIN events e ON e.id=r.event_id JOIN outbox o ON o.event_id=e.id WHERE i.event_id=e.id AND r.message_id=e.message_id").fetch_one(&store.pool).await.unwrap();
+    assert_eq!(links, 1);
+    store.close().await;
+    Store::open(&dir.db()).await.unwrap().close().await;
+}
+
+#[tokio::test]
+async fn data_constraint_upgrade_failure_in_live_wal_preserves_source_and_sidecars() {
+    let dir = Directory::new();
+    let mut conn = populated_dispatch_prefix(&dir).await;
+    sqlx::raw_sql("PRAGMA wal_autocheckpoint=0;
+    INSERT INTO fixture_runs SELECT 'run-two',context_id,incarnation_id,owner_id,conversation_id,session_id,native_session_id,binding_generation,message_id,event_id,scope_sequence+1,claim_generation,'run-key-two',input_digest,lease_generation,dispatch_fence,lease_deadline_ms,attempt,'blocked','quarantined',NULL,NULL,NULL FROM fixture_runs;").execute(&mut conn).await.unwrap();
+    // Valid prefix 4 permits historical reuse; selected no-reuse migration cannot
+    // silently discard this conflicting history. Its copy rehearsal must refuse.
+    assert!(sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&mut conn)
+        .await
+        .unwrap()
+        .is_empty());
+    refused_unchanged(&dir).await;
+    conn.close().await.unwrap();
+}

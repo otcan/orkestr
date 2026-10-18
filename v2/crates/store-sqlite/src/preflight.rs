@@ -73,12 +73,29 @@ pub(super) async fn prepare(path: &Path) -> Result<bool> {
     let mut probe = SqliteConnection::connect_with(
         &SqliteConnectOptions::new()
             .filename(&copied)
-            .read_only(true)
+            .foreign_keys(true)
             .create_if_missing(false),
     )
     .await
     .map_err(db)?;
-    let result = identify(&mut probe).await;
+    let result = async {
+        identify(&mut probe).await?;
+        // Rehearse all pending upgrades on the disposable copy, including data
+        // constraints and inbound foreign keys, before writable source open.
+        sqlx::migrate!("./migrations")
+            .run(&mut probe)
+            .await
+            .map_err(db)?;
+        let violations = sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(&mut probe)
+            .await
+            .map_err(db)?;
+        if !violations.is_empty() {
+            return Err(StoreError::Invalid);
+        }
+        Ok(())
+    }
+    .await;
     let closed = probe.close().await.map_err(db);
     result?;
     closed?;

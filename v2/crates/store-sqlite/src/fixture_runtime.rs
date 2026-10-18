@@ -9,6 +9,7 @@ use uuid::Uuid;
 mod admission;
 mod dispatch;
 mod inspection;
+mod observations;
 mod port;
 #[cfg(feature = "fixture-test-controls")]
 pub mod test_controls;
@@ -113,7 +114,7 @@ pub async fn bootstrap_fixture_supervisor(
             let context: String = row.get("context_id");
             sqlx::query("UPDATE session_bindings SET state='lost' WHERE id IN (SELECT session_id FROM fixture_readiness WHERE context_id=? AND incarnation_id=?)")
                 .bind(&context).bind(predecessor.to_string()).execute(&mut *tx).await.map_err(db)?;
-            sqlx::query("UPDATE fixture_runs SET state='blocked',dispatch_state=CASE WHEN dispatch_state='delivery_unknown' THEN 'delivery_unknown' ELSE 'quarantined' END,candidate_hash=NULL,reservation_hash=NULL WHERE context_id=? AND incarnation_id=?")
+            sqlx::query("UPDATE fixture_runs SET state=CASE WHEN state IN ('starting','running') THEN 'blocked' ELSE state END,dispatch_state=CASE WHEN dispatch_state='delivery_unknown' THEN 'delivery_unknown' ELSE 'quarantined' END,candidate_hash=NULL,reservation_hash=NULL WHERE context_id=? AND incarnation_id=?")
                 .bind(&context).bind(predecessor.to_string()).execute(&mut *tx).await.map_err(db)?;
             (
                 Uuid::parse_str(&row.get::<String, _>("context_id")).map_err(db)?,

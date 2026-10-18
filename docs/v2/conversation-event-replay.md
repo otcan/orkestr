@@ -16,5 +16,5 @@ locators and raw progress are absent. See fixture-provider-observed.json.
 Deserialize replay through ConversationEvent: unknown fields, mismatched variant
 schema/kind, missing synthetic and invalid typed IDs are rejected. IntakeStore::events
 returns this union; SSE uses each variant's name and the canonical sequence cursor.
-No journal rows are filtered. The current store still only writes legacy intake
-rows; fixture persistence follows separately after the additive migration.
+No journal rows are filtered. Migration 0005 permits the fixture-only adapter to append schema 2 metadata in
+the same journal/outbox transaction. Ordinary Store append remains Unavailable.

@@ -200,31 +200,6 @@ impl IntakeStore for Store {
         if after < 0 || after > last {
             return Err(StoreError::Invalid);
         }
-        let rows = sqlx::query("SELECT id,message_id,sequence,occurred_at FROM events WHERE conversation_id=? AND owner_id=? AND sequence>? ORDER BY sequence LIMIT ?")
-            .bind(conversation.to_string()).bind(owner.to_string()).bind(after).bind(limit.clamp(1,100)).fetch_all(&self.pool).await.map_err(db)?;
-        rows.iter()
-            .map(|r| {
-                let message_id = MessageId(parse(r.get("message_id"))?);
-                let sequence = r.get("sequence");
-                Ok(ConversationEvent::MessageAccepted(EventEnvelope {
-                    event_id: EventId(parse(r.get("id"))?),
-                    schema_version: 1,
-                    owner_id: owner.clone(),
-                    scope: scope.clone(),
-                    aggregate_id: conversation.clone(),
-                    aggregate_version: sequence,
-                    sequence,
-                    correlation_id: message_id.clone(),
-                    causation_id: message_id.clone(),
-                    actor_kind: "owner".into(),
-                    source: "http".into(),
-                    occurred_at: r.get("occurred_at"),
-                    payload_ref_or_safe_payload: MessageAccepted {
-                        kind: "message_accepted".into(),
-                        message_id,
-                    },
-                }))
-            })
-            .collect()
+        crate::replay::events(&self.pool, owner, conversation, scope, after, limit).await
     }
 }

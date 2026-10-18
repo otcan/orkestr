@@ -51,10 +51,12 @@ pub(super) fn envelope(row: &SqliteRow) -> Result<ProviderAdmission> {
     })
 }
 pub(super) fn run_state(row: &SqliteRow) -> RunState {
-    if row.get::<&str, _>("state") == "starting" {
-        RunState::Starting
-    } else {
-        RunState::Blocked
+    match row.get::<&str, _>("state") {
+        "starting" => RunState::Starting,
+        "running" => RunState::Running,
+        "awaiting_acceptance" => RunState::AwaitingAcceptance,
+        "failed" => RunState::Failed,
+        _ => RunState::Blocked,
     }
 }
 fn input_digest(claim: &InboxClaim, binding: &SessionId, generation: u64, key: &str) -> String {
@@ -140,6 +142,15 @@ impl FixtureSupervisorStore {
             };
             tx.commit().await.map_err(db)?;
             return Ok(result);
+        }
+        let occupied: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM fixture_runs WHERE session_id=?")
+                .bind(binding_id.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db)?;
+        if occupied != 0 {
+            return Err(RuntimeStoreError::Busy);
         }
         let clock = now(&mut tx).await?;
         let inbox =
