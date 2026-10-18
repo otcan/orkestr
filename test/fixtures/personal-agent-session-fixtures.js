@@ -34,7 +34,6 @@ export function sessionStore({ now = Date.now } = {}) {
     return clone(row);
   }
   return {
-    conversation: id => resolveSessionConversation(id, { ownerUserId: "owner" }),
     create(input) {
       if (rows.has(input.id)) throw new Error("duplicate session");
       const { ownerUserId: _transientOwner, ...record } = input;

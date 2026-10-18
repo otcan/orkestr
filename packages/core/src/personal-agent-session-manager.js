@@ -26,6 +26,8 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
       if (lost) throw sessionError("agent_session_lease_lost");
       return result;
     } catch (error) {
+      // Stop the provider immediately on failed persistence; never replay it.
+      controller.abort("session_operation_failed");
       // A lost fence is intentionally retained for operator reconciliation.
       if (!lost && error?.code !== "agent_session_lease_lost") {
         fenced(row, { lifecycle: "blocked", blockedReason: sessionBlockedReason(error) }, true);
@@ -116,7 +118,8 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
       const check = () => {
         if (persistenceError) throw persistenceError;
         signal.throwIfAborted();
-        currentLease(row);
+        try { currentLease(row); }
+        catch (error) { persistenceError = error; failed.abort("lease_lost"); throw error; }
       };
       const guard = callback => async (...args) => {
         check();

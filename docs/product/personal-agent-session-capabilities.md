@@ -167,11 +167,15 @@ changes and their compatibility tests remain with that owner.
 The manager consumes Lane A's prepared synchronous store surface:
 `create(input)`, `get(id)`, `list({conversationId, scopeKind, scopeId?, roles?, lifecycles?})`,
 `acquireLease(id, {expectedVersion, ttlMs})`,
-`update(id, {expectedVersion, leaseToken, patch})`, and
-`conversation(id) -> {id, scopeKind, scopeId} | null`. The conversation lookup
-projects #68's `scope_kind` and `project_id`: global/null or project/project ID.
-`findRole`/`findNative` lookups may be supplied by #70; this manager uses the
-existing list and SQLite uniqueness constraints instead.
+`update(id, {expectedVersion, leaseToken, patch})`. The list filter is
+`lifecycles: string[]`, using only `starting|ready|busy|blocked|stopped`.
+Only `openPersonalAgentSessionStore()` may be asynchronous; the prepared methods
+remain synchronous, including persistence before native event forwarding.
+Canonical conversation lookup is injected separately as the trusted synchronous
+`resolveConversation(id, {ownerUserId}) -> {id, scopeKind, scopeId} | null`.
+It projects #68's `scope_kind` and `project_id`: global/null or project/project ID.
+No extra lookup method is required on the session store. The manager uses the
+existing list and SQLite uniqueness constraints instead of new role/native lookups.
 
 There is **no runtime-owned transaction adapter** or `transaction(fn)` requirement.
 Each canonical SQLite mutation owns its short `BEGIN IMMEDIATE`, validates the
@@ -179,6 +183,8 @@ canonical conversation/scope inside that transaction, and fences changes with
 version/token predicates. Provider awaits never hold a database transaction.
 The env-based wrappers prepare the store asynchronously; native event callbacks
 persist synchronously before forwarding an event. A null CAS result fails closed.
+Renewal or write/fence conflicts abort the active provider signal without replay;
+the uncertain fence is retained for explicit reconciliation.
 Every successful mutation increments version. Missing mutation IDs throw 404;
 `get` returns null for a missing row. New rows default to `starting`, version 0
 and nullable native/lease fields. Lease tokens fence writers, with no separate
@@ -195,9 +201,13 @@ access. Native account/profile resolution receives that owner transiently, witho
 writing it to SQLite. This is an application trust boundary, not durable ownership
 or isolation against root-capable runtimes.
 
-`store.conversation(id)` is authoritative for scope before creation and every
-mutation. An optional synchronous `resolveConversation(id, {ownerUserId})` may
-further restrict access, but cannot supply or override canonical scope. IDs/scope,
+The injected resolver supplies authoritative canonical scope before creation
+and every mutation. It must read canonical scoped conversation storage under
+the authenticated app-owner context, never message fields or machine/HTTP
+impersonation. A missing resolver, missing canonical storage or asynchronous
+resolver is explicit unavailable (503); an unknown/inaccessible conversation is
+404. There is no sentinel conversation, schema creation or fallback to an
+untrusted projection. IDs/scope,
 role, provider/account and fork lineage cannot change under an in-flight lease.
 Model/effort updates preserve conversation/session/native IDs; changing provider
 or account requires explicit rebind. No production owner authorizer or supervisor

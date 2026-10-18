@@ -3,7 +3,7 @@ import test from "node:test";
 import { sessionHarness, sessionInput, sessionProfile, sessionStore, supervisor } from "./fixtures/personal-agent-session-fixtures.js";
 
 test("canonical CAS store needs no outer transaction or persisted owner column", async () => {
-  const h = sessionHarness({ resolveConversation: undefined });
+  const h = sessionHarness();
   delete h.store.transaction;
   const create = h.store.create;
   h.store.create = input => { assert.equal(Object.hasOwn(input, "ownerUserId"), false); return create(input); };
@@ -42,10 +42,11 @@ test("missing or asynchronous app-owner authorizer fails closed", () => {
   }
 });
 
-test("canonical conversation scope wins over a permissive access projection", async () => {
-  const h = sessionHarness({ resolveConversation: id => ({ id, scopeKind: "global", scopeId: null }) });
+test("trusted canonical resolver is rechecked on reads and mutations", async () => {
+  let scopeKind = "global";
+  const h = sessionHarness({ resolveConversation: id => ({ id, scopeKind, scopeId: scopeKind === "global" ? null : "project-example" }) });
   const row = h.manager.ensure(sessionInput);
-  h.store.conversation = id => ({ id, scopeKind: "project", scopeId: "project-example" });
+  scopeKind = "project";
   assert.throws(() => h.manager.get(row.id), /scope_unavailable/);
   assert.throws(() => h.manager.ensure(sessionInput), /conversation_not_found/);
   assert.throws(() => h.manager.changeProfile(row.id, sessionProfile), /scope_unavailable/);
@@ -54,18 +55,18 @@ test("canonical conversation scope wins over a permissive access projection", as
   assert.deepEqual(h.calls, []);
 });
 
-test("canonical conversation lookup is required, with no projection-only fallback", () => {
-  const h = sessionHarness();
-  delete h.store.conversation;
+test("injected canonical conversation lookup is required without a store fallback", () => {
+  const h = sessionHarness({ resolveConversation: undefined });
   assert.throws(() => h.manager.ensure(sessionInput), /store_unavailable/);
   assert.deepEqual(h.calls, []);
 });
 
 test("scope is revalidated before a provider result can update the durable row", async () => {
-  const h = sessionHarness();
+  let scopeKind = "global";
+  const h = sessionHarness({ resolveConversation: id => ({ id, scopeKind, scopeId: scopeKind === "global" ? null : "project-example" }) });
   const row = h.manager.ensure(sessionInput);
   h.adapter.open = async () => {
-    h.store.conversation = id => ({ id, scopeKind: "project", scopeId: "project-example" });
+    scopeKind = "project";
     return { nativeSessionId: "must-not-persist", lifecycle: "ready" };
   };
   await assert.rejects(h.manager.startOrResume(row.id), /scope_unavailable/);

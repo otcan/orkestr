@@ -13,12 +13,9 @@ export function sessionAccess({ store, ownerUserId, authorizeOwner, resolveConve
   }
   function conversation(id) {
     authorized();
-    if (typeof store?.conversation !== "function") throw sessionError("agent_session_store_unavailable", 503);
-    const canonical = store.conversation(sessionId(id));
-    if (resolveConversation) {
-      const access = resolveConversation(id, { ownerUserId });
-      if (!access || typeof access.then === "function") return null;
-    }
+    if (typeof resolveConversation !== "function") throw sessionError("agent_session_store_unavailable", 503);
+    const canonical = resolveConversation(sessionId(id), { ownerUserId });
+    if (canonical && typeof canonical.then === "function") throw sessionError("agent_session_store_unavailable", 503);
     if (canonical && (canonical.id !== id || !(canonical.scopeKind === "global" && canonical.scopeId === null || canonical.scopeKind === "project" && typeof canonical.scopeId === "string" && canonical.scopeId.length > 0))) throw sessionError("agent_session_scope_unavailable", 404);
     return canonical;
   }
