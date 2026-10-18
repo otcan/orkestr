@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createGunzip } from "node:zlib";
 import { createInterface } from "node:readline";
-import { appendEvent, listEventArchives } from "../../storage/src/store.js";
+import { appendEvent, listEventArchives, terminateEventJournalTail } from "../../storage/src/store.js";
 import { dataPaths } from "../../storage/src/paths.js";
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { requirePersonalAgentOwner } from "./personal-agent-capability.js";
@@ -130,17 +130,23 @@ export async function dispatchPersonalAgentEvents(env = process.env, { limit = 1
     if (!pending.length) {
       return { dispatched: 0, remaining: 0 };
     }
-    const journaledIds = new Set();
-    for await (const existing of retainedEvents(env)) {
-      if (typeof existing?.eventId === "string") journaledIds.add(existing.eventId);
-    }
-    let dispatched = 0;
+    // An interrupted earlier append may have left a partial record; fence it
+    // off so the redispatched record is not glued onto the fragment.
+    await terminateEventJournalTail(env);
+    const journaledIds = await readableEventIds(env);
+    let appended = false;
     for (const row of pending) {
       const event = JSON.parse(row.payload_json);
       if (!journaledIds.has(event.eventId)) {
         await appendEvent(event, env);
-        journaledIds.add(event.eventId);
+        appended = true;
       }
+    }
+    // Acknowledge (and drop the payload of) only events the journal returns.
+    const readable = appended ? await readableEventIds(env) : journaledIds;
+    let dispatched = 0;
+    for (const row of pending) {
+      if (!readable.has(JSON.parse(row.payload_json).eventId)) continue;
       tx(db, () => {
         db.prepare(`update personal_agent_event_outbox
           set dispatched_at = ?, payload_json = null where seq = ? and dispatched_at is null`)
@@ -150,6 +156,14 @@ export async function dispatchPersonalAgentEvents(env = process.env, { limit = 1
     }
     return { dispatched, remaining: Number(db.prepare("select count(*) as count from personal_agent_event_outbox where dispatched_at is null").get().count) };
   });
+}
+
+async function readableEventIds(env) {
+  const ids = new Set();
+  for await (const existing of retainedEvents(env)) {
+    if (typeof existing?.eventId === "string") ids.add(existing.eventId);
+  }
+  return ids;
 }
 
 async function* readJsonLines(filePath, compressed = false) {
@@ -188,13 +202,17 @@ export async function listPersonalAgentEvents({ afterCursor = null, limit = 100 
   const db = await openAgentJobDb(env);
   const highWater = Number(db.prepare("select coalesce(max(seq), 0) as seq from personal_agent_event_outbox").get().seq);
   if (after > highWater) fail("personal_agent_event_cursor_ahead", 409);
+  // Page only the contiguous dispatched prefix; rows still in the outbox
+  // (beyond one dispatch batch, or awaiting a readable append) keep hasMore.
+  const firstPending = db.prepare("select min(seq) as seq from personal_agent_event_outbox where dispatched_at is null").get().seq;
+  const visible = firstPending == null ? highWater : Number(firstPending) - 1;
 
   const bySequence = new Map();
   for await (const event of retainedEvents(env)) {
     if (event?.schemaVersion !== 1 || typeof event.cursor !== "string") continue;
     let seq;
     try { seq = parseCursor(event.cursor); } catch { continue; }
-    if (seq > after && seq <= highWater && typeof event.eventId === "string" && !bySequence.has(seq)) {
+    if (seq > after && seq <= visible && typeof event.eventId === "string" && !bySequence.has(seq)) {
       bySequence.set(seq, event);
     }
   }
@@ -204,7 +222,7 @@ export async function listPersonalAgentEvents({ afterCursor = null, limit = 100 
   if (oldest !== null && oldest > firstExpected) {
     return { events: [], cursor: afterCursor, currentCursor: cursorFor(highWater), resetRequired: true, hasMore: false };
   }
-  if (oldest === null && after < highWater) {
+  if (oldest === null && after < visible) {
     return { events: [], cursor: afterCursor, currentCursor: cursorFor(highWater), resetRequired: true, hasMore: false };
   }
   for (let index = 1; index < ordered.length; index += 1) {
@@ -213,8 +231,8 @@ export async function listPersonalAgentEvents({ afterCursor = null, limit = 100 
     }
   }
   const events = ordered.slice(0, pageSize).map(([, event]) => event);
-  const hasMore = ordered.length > events.length;
-  const cursor = events.at(-1)?.cursor || cursorFor(highWater);
+  const hasMore = ordered.length > events.length || visible < highWater;
+  const cursor = events.at(-1)?.cursor || cursorFor(Math.max(after, visible));
   return { events, cursor, currentCursor: cursorFor(highWater), resetRequired: false, hasMore };
 }
 
