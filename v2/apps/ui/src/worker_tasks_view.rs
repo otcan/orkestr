@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use orkestr_v2_contracts::{ConversationId, RunId, WorkerTaskPhase, WorkerTaskReceipt};
 use orkestr_v2_ui::{
     session_scope::SessionScope,
-    worker_tasks::{phase_label, TaskDraft, TaskHistory},
+    worker_tasks::{phase_label, TaskHistory},
 };
 use serde_json::{json, Value};
 use std::{cell::Cell, rc::Rc};
@@ -20,7 +20,14 @@ pub fn WorkerTasksView(
     onrefresh: EventHandler<()>,
     onexpired: EventHandler<()>,
 ) -> Element {
-    let mut draft = use_signal(TaskDraft::default);
+    let retained = orkestr_v2_ui::task_draft_lifetime::use_task_draft(
+        conversation.clone(),
+        parent.clone(),
+        session_scope,
+    );
+    let Some(mut draft) = retained else {
+        return rsx! {p {role:"status", "Task draft unavailable for this session or this page’s saved-draft limit. Existing task history remains available after returning to a saved parent."}};
+    };
     let mut selected_run = use_signal(String::new);
     let worker_execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut busy = use_signal(|| false);
