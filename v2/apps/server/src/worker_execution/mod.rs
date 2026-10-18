@@ -34,7 +34,7 @@ enum Phase {
     Pending,
     Preparing(Box<Preparing>),
     Running(Box<Running>),
-    Stopping(Box<crate::control_dispatch::ActiveControl>),
+    Stopping(Box<Stopping>),
     Closed(WorkerProgress),
 }
 struct Preparing {
@@ -45,8 +45,13 @@ struct Running {
     authority: Authority,
     pump: CodexPump,
     run: RunId,
-    sender: crate::control_dispatch::ControlSender,
+    control: crate::control_registry::RunControl,
     controls: crate::control_dispatch::ControlReceiver,
+}
+struct Stopping {
+    active: crate::control_dispatch::ActiveControl,
+    // Retain registration through Stop drive and any pending reconciliation.
+    _control: crate::control_registry::RunControl,
 }
 
 /// Held by the parent's ordinary session loop, never a detached task. The same

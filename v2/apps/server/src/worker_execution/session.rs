@@ -105,7 +105,7 @@ impl WorkerSchedule {
             &self.configuration.launcher,
             &self.configuration.workspace,
             directories,
-            Box::new((directory, slot)),
+            Box::new((directory, slot, self.configuration.children.retain())),
         )
         .map_err(|_| "Worker native launch refused")?;
         self.deadline = Instant::now() + Duration::from_secs(15);
@@ -183,16 +183,14 @@ impl WorkerSchedule {
             return Err("Worker consumed identity mismatch");
         }
         let run = capability.provider().run.run_id.clone();
-        let (sender, controls) = crate::control_dispatch::mailbox(
-            self.store.clone(),
-            self.parent.owner_id.clone(),
-            self.parent.conversation_id.clone(),
-            run.clone(),
-        )
-        .map_err(|_| "Worker control registration refused")?;
         let (authority, pump) = ready
             .attach(self.store.clone(), capability)
             .map_err(|_| "Worker attachment is uncertain; automatic replay refused")?;
+        let (control, controls) = self
+            .configuration
+            .controls
+            .register(self.store.clone(), &run)
+            .map_err(|_| "Worker control registration refused")?;
         // Attempt native interruption before the hard lease expires. Core's
         // clipped authoritative deadline may be earlier; refusal stays unknown.
         self.deadline = Instant::now()
@@ -203,7 +201,7 @@ impl WorkerSchedule {
                 authority,
                 pump,
                 run,
-                sender,
+                control,
                 controls,
             })),
             WorkerProgress::Running,

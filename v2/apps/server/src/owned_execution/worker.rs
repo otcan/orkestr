@@ -21,6 +21,8 @@ impl ConfiguredExecution {
                         launcher_sha256: self.config.launcher_sha256.clone(),
                         workspace: self.config.workspace.clone(),
                         directory: self.directory.clone(),
+                        controls: self.control.clone(),
+                        children: self.children.clone(),
                     },
                     parent,
                 )
