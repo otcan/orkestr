@@ -3,9 +3,9 @@ use super::*;
 /// Delegation lineage retained before inference consumption. No inference,
 /// tool launch or result-delivery authority is exposed by this handle.
 pub struct OfflinePythonParent {
-    parent: Box<ProviderAdmission>,
-    namespace: String,
-    incarnation: String,
+    pub(super) parent: Box<ProviderAdmission>,
+    pub(super) namespace: String,
+    pub(super) incarnation: String,
 }
 
 impl Store {
