@@ -41,6 +41,10 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 -m unittest discover -s tools/tests -v
+      - name: Release evidence policy regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s acceptance -p 'test_release_readiness.py' -v
       - name: Rust format
         run: cargo +1.99.1 fmt --all -- --check
       - name: Rust lint
