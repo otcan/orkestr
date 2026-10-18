@@ -72,3 +72,9 @@ logout/refusal, revoke/held inputs, fresh enable, terminal Stop, two-pool revoke
 race, and failure rollback. These Rust tests and strict lint are **unexecuted**
 pending exact Core issuer source and bounded build admission. No live reads,
 timers, credentials, provider or dispatch effects were used.
+
+Executed lightweight check:
+`PYTHONDONTWRITEBYTECODE=1 python3 v2/migration/test_durable_timer_schema.py`:
+4/4 PASS (SQL immutability, reopen, FK refusal and exact credential-free columns).
+These minimal synthetic SQL parents do not qualify schema upgrades, Store
+behavior or issuer authorization. Owned Rust format and diff checks PASS.
