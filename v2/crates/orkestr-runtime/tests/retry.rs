@@ -11,9 +11,9 @@ use support::*;
 #[test]
 fn fail_once_record_retries_same_terminal_after_provider_has_removed_turn() {
     for terminal in [
-        ProviderEvent::Completed { synthetic: true },
-        ProviderEvent::Failed,
-        ProviderEvent::Lost,
+        ObservationKind::CompletedProposal { synthetic: true },
+        ObservationKind::Failed,
+        ObservationKind::Lost,
     ] {
         let a = admission(SessionRole::Worker, 10);
         let store = Spy::new(a.clone());
@@ -21,41 +21,41 @@ fn fail_once_record_retries_same_terminal_after_provider_has_removed_turn() {
         let mut pending = PendingObservation::default();
         p.start(&a).unwrap();
         assert_eq!(
-            ready(supervisor::step(&store, &mut p, &owner(), &a, &mut pending)),
+            ready(supervisor::step(&store, &mut p, &a, &mut pending)),
             Ok(true)
         );
         p.emit(&a, terminal.clone()).unwrap();
         store.state.lock().unwrap().fail_once = true;
         assert_eq!(
-            ready(supervisor::step(&store, &mut p, &owner(), &a, &mut pending)),
+            ready(supervisor::step(&store, &mut p, &a, &mut pending)),
             Err(Error::Store(RuntimeStoreError::Unavailable))
         );
         assert_eq!(p.poll(&a), Err(Blocker::UnknownSession));
         assert_eq!(
-            ready(supervisor::step(&store, &mut p, &owner(), &a, &mut pending)),
+            ready(supervisor::step(&store, &mut p, &a, &mut pending)),
             Ok(true)
         );
         let s = store.state.lock().unwrap();
         assert_eq!(
             s.accepted
                 .iter()
-                .map(|i| i.event.clone())
+                .map(|i| i.kind.clone())
                 .collect::<Vec<_>>(),
-            vec![ProviderEvent::Started, terminal]
+            vec![ObservationKind::Started, terminal]
         );
         assert_eq!(s.attempts[1], s.attempts[2]);
-        assert_eq!(s.attempts[0].provider_sequence, 1);
-        assert_eq!(s.attempts[1].provider_sequence, 2);
+        assert!(s.attempts[0].source_event_key.ends_with(":1"));
+        assert!(s.attempts[1].source_event_key.ends_with(":2"));
         drop(s);
         assert_eq!(
-            ready(supervisor::step(&store, &mut p, &owner(), &a, &mut pending)),
+            ready(supervisor::step(&store, &mut p, &a, &mut pending)),
             Err(Error::Provider(Blocker::UnknownSession))
         );
     }
 }
 #[test]
-fn stale_or_fenced_refusal_retains_original_for_reconciliation() {
-    for error in [RuntimeStoreError::StaleLease, RuntimeStoreError::Fenced] {
+fn stale_or_expired_refusal_retains_original_for_reconciliation() {
+    for error in [RuntimeStoreError::StaleLease, RuntimeStoreError::Expired] {
         let a = admission(SessionRole::Worker, 10);
         let store = Spy::new(a.clone());
         store.state.lock().unwrap().refusal = Some(error);
@@ -63,14 +63,14 @@ fn stale_or_fenced_refusal_retains_original_for_reconciliation() {
         let mut pending = PendingObservation::default();
         p.start(&a).unwrap();
         p.poll(&a).unwrap();
-        p.emit(&a, ProviderEvent::Lost).unwrap();
+        p.emit(&a, ObservationKind::Lost).unwrap();
         for _ in 0..2 {
             assert_eq!(
-                ready(supervisor::step(&store, &mut p, &owner(), &a, &mut pending)),
+                ready(supervisor::step(&store, &mut p, &a, &mut pending)),
                 Err(Error::Store(error))
             );
         }
-        assert_eq!(pending.pending().unwrap().event, ProviderEvent::Lost);
+        assert_eq!(pending.pending().unwrap().kind, ObservationKind::Lost);
         let s = store.state.lock().unwrap();
         assert!(s.accepted.is_empty());
         assert_eq!(s.attempts.len(), 1);
@@ -85,23 +85,17 @@ fn retry_does_not_relabel_old_observation_with_new_admission() {
     let mut pending = PendingObservation::default();
     p.start(&a).unwrap();
     assert_eq!(
-        ready(supervisor::step(&store, &mut p, &owner(), &a, &mut pending)),
+        ready(supervisor::step(&store, &mut p, &a, &mut pending)),
         Err(Error::Store(RuntimeStoreError::Unavailable))
     );
     let mut newer = a.clone();
     newer.lease_generation += 1;
     assert_eq!(
-        ready(supervisor::step(
-            &store,
-            &mut p,
-            &owner(),
-            &newer,
-            &mut pending
-        )),
+        ready(supervisor::step(&store, &mut p, &newer, &mut pending)),
         Err(Error::Store(RuntimeStoreError::StaleLease))
     );
     assert_eq!(
-        ready(supervisor::step(&store, &mut p, &owner(), &a, &mut pending)),
+        ready(supervisor::step(&store, &mut p, &a, &mut pending)),
         Ok(true)
     );
     assert_eq!(store.state.lock().unwrap().accepted.len(), 1);
