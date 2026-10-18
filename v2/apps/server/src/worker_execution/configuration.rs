@@ -10,6 +10,8 @@ pub struct WorkerConfiguration {
     pub launcher_sha256: String,
     pub workspace: PathBuf,
     pub directory: PathBuf,
+    pub controls: crate::control_registry::ControlRegistry,
+    pub children: crate::owned_children::ChildSet,
 }
 
 impl WorkerConfiguration {

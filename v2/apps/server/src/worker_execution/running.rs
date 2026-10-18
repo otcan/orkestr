@@ -8,15 +8,22 @@ impl WorkerSchedule {
         &mut self,
         mut running: Box<Running>,
     ) -> Result<(Phase, WorkerProgress), &'static str> {
+        let _schedule = running.control.serialize().await;
         if let Some(control) = running
             .controls
             .take()
             .map_err(|_| "Worker control handoff unavailable")?
         {
-            let control = control
+            let active = control
                 .dispatch(running.authority, running.pump)
                 .map_err(|_| "Worker native interruption requires reconciliation")?;
-            return Ok((Phase::Stopping(Box::new(control)), WorkerProgress::Running));
+            return Ok((
+                Phase::Stopping(Box::new(Stopping {
+                    active,
+                    _control: running.control,
+                })),
+                WorkerProgress::Running,
+            ));
         }
         let status = self
             .store
@@ -32,6 +39,9 @@ impl WorkerSchedule {
         if status.run_id.as_ref() != Some(&running.run) {
             return Err("Worker execution scope changed");
         }
+        running.control.set_available(
+            status.phase == ExecutionPhase::Running && running.pump.pending().is_none(),
+        );
         if status.phase == ExecutionPhase::Completed {
             let _ = running.authority.revoke();
             return Ok((
@@ -77,7 +87,7 @@ impl WorkerSchedule {
                 .await
                 .map_err(|_| "Worker deadline requires reconciliation")?;
             running
-                .sender
+                .control
                 .publish(receipt)
                 .map_err(|_| "Worker deadline handoff requires reconciliation")?;
             // This same parent-owned loop serializes Worker observations and
@@ -97,14 +107,17 @@ impl WorkerSchedule {
             )) => {}
             Err(_) => return Err("Worker observation requires reconciliation"),
         }
+        // A Busy persistence step can retain a new observation. Refresh before
+        // releasing the shared guard so HTTP cannot cancel through that gap.
+        running.control.set_available(
+            status.phase == ExecutionPhase::Running && running.pump.pending().is_none(),
+        );
         Ok((Phase::Running(running), WorkerProgress::Running))
     }
 
-    pub(super) async fn stopping(
-        mut control: Box<crate::control_dispatch::ActiveControl>,
-    ) -> (Phase, WorkerProgress) {
+    pub(super) async fn stopping(mut control: Box<Stopping>) -> (Phase, WorkerProgress) {
         use crate::control_dispatch::StopProgress;
-        match control.tick().await {
+        match control.active.tick().await {
             StopProgress::Pending | StopProgress::InterruptAcknowledged => {
                 (Phase::Stopping(control), WorkerProgress::Running)
             }
