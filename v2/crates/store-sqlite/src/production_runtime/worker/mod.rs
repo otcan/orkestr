@@ -13,3 +13,6 @@ mod tests;
 
 #[cfg(test)]
 mod dispatch_tests;
+
+#[cfg(test)]
+mod metadata_tests;

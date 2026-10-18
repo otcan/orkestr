@@ -114,6 +114,8 @@ pub(super) async fn running(
     else {
         panic!()
     };
+    assert_eq!(cap.message_id(), &c.message_id);
+    assert_eq!(cap.source_event_id(), &c.event_id);
     let p = cap.provider().clone();
     drop(cap);
     f.handle
@@ -134,17 +136,26 @@ pub(super) async fn running(
         )
         .await
         .unwrap();
-    let worker = f
+    let metadata = f
         .handle
-        .confirm_native_session(NativeSessionConfirmation {
-            session_id: worker.session_id,
-            expected_generation: worker.generation,
-            native_session_id: "synthetic-native-worker".into(),
-            protocol_version: "codex-rpc-1".into(),
-            source_event_key: "worker-ready".into(),
-        })
+        .authorize_worker_metadata(&f.token, &p.run.run_id, &worker)
         .await
         .unwrap();
+    let worker = f
+        .handle
+        .confirm_metadata_session(
+            metadata,
+            NativeSessionConfirmation {
+                session_id: worker.session_id,
+                expected_generation: worker.generation,
+                native_session_id: "synthetic-native-worker".into(),
+                protocol_version: "codex-rpc-1".into(),
+                source_event_key: "worker-ready".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let worker = worker.binding().clone();
     assert_ne!(worker.session_id, b.session_id);
     assert_ne!(worker.native_session_id, b.native_session_id);
     (

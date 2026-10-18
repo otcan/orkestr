@@ -1,7 +1,7 @@
 use super::*;
 use sqlx::sqlite::SqliteRow;
 impl Store {
-    pub(super) fn worker_credential(&self, credential: &str) -> Result<()> {
+    pub(crate) fn worker_credential(&self, credential: &str) -> Result<()> {
         if credential.len() != 64
             || !credential.bytes().all(|b| b.is_ascii_hexdigit())
             || crate::digest(credential) != self.context()?.token_hash
@@ -19,6 +19,13 @@ impl Store {
         parent_run_id: &RunId,
     ) -> Result<SqliteRow> {
         self.worker_credential(credential)?;
+        self.worker_parent_current_in(tx, parent_run_id).await
+    }
+    pub(crate) async fn worker_parent_current_in(
+        &self,
+        tx: &mut SqliteConnection,
+        parent_run_id: &RunId,
+    ) -> Result<SqliteRow> {
         let c = self.context()?;
         c.validate(tx).await?;
         let row = sqlx::query("SELECT * FROM production_runs WHERE id=? AND owner_id=? AND context_id=? AND incarnation_id=?")

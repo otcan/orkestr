@@ -186,6 +186,9 @@ impl Store {
         let capability = ConsumedProviderDispatch {
             provider: claim.provider.clone(),
             message_id: orkestr_v2_contracts::MessageId(Uuid::parse_str(&message_id).map_err(db)?),
+            source_event_id: orkestr_v2_contracts::EventId(
+                row.get::<String, _>("event_id").parse().map_err(db)?,
+            ),
             text,
             namespace: context.namespace.clone(),
             incarnation: context.incarnation.clone(),

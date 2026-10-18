@@ -159,3 +159,32 @@ admission. Standard reserve/consume checkpoints remain available. Actual Worker
 SIGKILL/new-process acceptance is pending independent execution; separate-pool
 races/reopen are not process-crash evidence. No paid inference or native process
 was used for the authored Store tests.
+
+### Parent-bound metadata and exact run reads
+
+Worker setup uses `authorize_worker_metadata(credential, parent_run_id, &starting_binding)`.
+The returned existing opaque `BoundSessionMetadata` privately retains the parent
+locator. Each setup fence and the readiness write transaction resolve the exact
+current consumed Running Deep parent and validate the Worker parent session,
+conversation, supervisor context and immutable Starting binding. Generic
+`authorize_session_metadata` and direct `confirm_native_session` refuse Worker
+bindings. `confirm_metadata_session` performs validation and readiness writes in
+one transaction. No Runtime-created parent authority or generation arithmetic is
+accepted.
+
+Before by-value native attachment, a scheduler may retain the public immutable
+source identifiers from `ConsumedProviderDispatch::message_id()` and
+`source_event_id()`. These are evidence, not execution or delegation grants.
+Delegation still resolves the canonical parent RunId inside the bound Store.
+
+`execution_run_status(credential, owner, conversation, run)` is a bound-supervisor
+read of exactly that context/incarnation's run. It authenticates the original
+credential and owner scope, returns the existing status DTO without Deep queue
+age, and never reconstructs admissions or control tokens. Conversation-wide
+`execution_status` remains Deep-only. The initial server scheduling policy may
+choose one deterministic `parent-input-once-v1` request key per parent; no browser
+delegation endpoint or Worker role activation is supplied by these Store APIs.
+
+Parent genuine terminal/proposal evidence is persisted and fences descendants;
+it is not refused as Busy. Explicit owner acceptance may remain Busy while an
+unresolved descendant exists. These are distinct lifecycle decisions.
