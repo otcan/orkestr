@@ -75,3 +75,23 @@ acceptance, transport crash recovery or verified completion. Production starts
 remain blocked; unsupported raw Progress/Stopped and ordinary Store append remain
 unavailable. Independent full-table rollback/outbox checks remain Core/Verification
 evidence rather than assertions made by this public-projection harness.
+
+## Actual-store retry and refusal matrix
+
+`observation_matrix.rs` closes the actual writer pool after FAKE terminal polling,
+observes append Unavailable, then reattaches the original live handle to a reopened
+pool. The same pending terminal/sequence commits with no additional provider poll;
+an identical append gets the original duplicate receipt. This covers proposal,
+Failed and Lost and uses no substitute RuntimeStore or SQL failpoint. Independent
+read-pool event bytes remain unchanged during failure. It is a pre-commit pool
+failure, not committed reply loss or process recovery.
+
+The actual-adapter matrix refuses owner/run/session/attempt/lease/fence/purpose/role
+envelope changes for both committed and unseen sequences, plus changed input
+lease/fence snapshots. Refusals preserve canonical replay bytes and public
+attempt/scope projections; a legitimate next sequence still commits. These are
+public projections, not claims of comparing every private durable column.
+Premature completion/approval before Started conflict; after proposal/Failed/Lost,
+new completion/Started/terminal evidence conflicts and Stopped remains Unavailable.
+Original terminal receipts survive all such refusals. No production start path,
+shared port, store schema, root manifest or lock changes are introduced.
