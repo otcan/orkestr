@@ -93,7 +93,7 @@ pub fn TimerDetail(
                 label {r#for:"timer-owner-text","Fresh instructions for the selected conversation"}
                 textarea {id:"timer-owner-text",value:"{editor.read().text}",oninput:move |event|editor.write().edit(event.value())}
                 p {"Imported instructions are not copied. Changing this text does not change an uncertain request."}
-                button {disabled:disabled||current.dormant_reason.is_some()||matches!(current.state,State::Stopped|State::RolledBack),onclick:move |_|submit.call(None),"Enable or rearm timer"}
+                button {disabled:disabled||current.dormant_reason.is_some()||matches!(current.state,State::Enabled|State::Stopped|State::RolledBack),onclick:move |_|submit.call(None),"Enable timer"}
                 for (action,label) in [(Action::Disable,"Disable timer"),(Action::Stop,"Stop timer schedule"),(Action::Rollback,"Roll back timer schedule")] {
                     button {disabled,onclick:move |_|submit.call(Some(action)),"{label}"}
                 }

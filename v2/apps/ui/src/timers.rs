@@ -148,7 +148,10 @@ impl Editor {
                 return Err("Enter fresh instructions up to 32768 UTF-8 bytes.");
             }
             if detail.dormant_reason.is_some()
-                || matches!(detail.state, State::Stopped | State::RolledBack)
+                || matches!(
+                    detail.state,
+                    State::Enabled | State::Stopped | State::RolledBack
+                )
             {
                 return Err("This timer cannot be enabled in its current state.");
             }

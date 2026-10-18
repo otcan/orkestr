@@ -89,3 +89,33 @@ fn old_or_foreign_success_does_not_clear_draft() {
     assert!(e.result(&p, 200, Some(&d)).is_err());
     assert_eq!(e.text, "keep");
 }
+
+#[test]
+fn enabled_unarmed_requires_disable_then_fresh_enable_but_uncertain_retry_stays_exact() {
+    use orkestr_v2_ui::timers::State;
+    let mut enabled = detail();
+    enabled.state = State::Enabled;
+    enabled.controller_hold = Some("explicit_owner_rearm_required".into());
+    let mut editor = Editor::default();
+    editor.edit("fresh owner instructions".into());
+    assert!(editor
+        .prepare(&enabled, &target(), None, "new-enable".into())
+        .is_err());
+    let disable = editor
+        .prepare(&enabled, &target(), Some(Action::Disable), "disable".into())
+        .unwrap();
+    let mut disabled = detail();
+    disabled.revision = 2;
+    editor.result(&disable, 200, Some(&disabled)).unwrap();
+    editor.review();
+    let enable = editor
+        .prepare(&disabled, &target(), None, "fresh-enable".into())
+        .unwrap();
+    assert_eq!(enable.body["expected_revision"], 2);
+    assert!(editor.result(&enable, 503, None).is_err());
+    let retry = editor
+        .prepare(&enabled, &target(), None, "must-not-replace".into())
+        .unwrap();
+    assert_eq!(retry.body, enable.body);
+    assert_eq!(retry.body["request_key"], "fresh-enable");
+}

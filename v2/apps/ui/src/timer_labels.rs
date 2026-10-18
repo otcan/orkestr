@@ -29,7 +29,7 @@ pub fn controller_notice(state: &str, armed: bool) -> &'static str {
     if state != "enabled" {
         "This timer is not enabled to schedule new work. Already admitted work has its own status."
     } else if !armed {
-        "This timer is enabled but not armed. Explicitly enable it again to allow scheduling after a restart."
+        "This timer is enabled but not armed. Disable it first, then enable with fresh instructions to allow scheduling after a restart or permission expiry. Retrying an earlier request cannot rearm it."
     } else {
         "Scheduling is armed. This does not confirm that work has started or completed."
     }
