@@ -114,6 +114,8 @@ pub struct CodexPump {
     source: CodexOutput,
     cursor: PendingObservation,
     admission: ProviderAdmission,
+    #[cfg(all(test, feature = "fixture-test-controls"))]
+    test_fence: Option<std::sync::Arc<super::fence::StoreFence>>,
 }
 #[allow(
     dead_code,
@@ -137,6 +139,8 @@ impl CodexPump {
                 broker: None,
                 writing: None,
             },
+            #[cfg(all(test, feature = "fixture-test-controls"))]
+            test_fence: None,
             cursor: PendingObservation::default(),
             admission,
         }
@@ -174,6 +178,23 @@ impl CodexPump {
     #[cfg(test)]
     pub(super) fn provider_offset(&self) -> usize {
         self.source.writing.as_ref().map_or(0, |w| w.offset())
+    }
+    #[cfg(all(test, feature = "fixture-test-controls"))]
+    pub(super) fn with_test_fence(
+        mut self,
+        fence: std::sync::Arc<super::fence::StoreFence>,
+    ) -> Self {
+        self.test_fence = Some(fence);
+        self
+    }
+    #[cfg(all(test, feature = "fixture-test-controls"))]
+    pub(super) async fn arm_post_action_rollback(&self, marker: std::path::PathBuf) {
+        assert!(self.prepared_for_provider_write());
+        self.test_fence
+            .as_ref()
+            .unwrap()
+            .arm_post_action_rollback(marker)
+            .await;
     }
     pub fn pending(&self) -> Option<&orkestr_v2_application::runtime::ProviderEventInput> {
         self.cursor.pending()

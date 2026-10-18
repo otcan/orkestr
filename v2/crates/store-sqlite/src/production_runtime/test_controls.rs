@@ -3,6 +3,7 @@ use super::*;
 /// Exact transaction boundaries; no caller-supplied SQL or arbitrary callback.
 #[derive(Clone, Copy)]
 pub enum ProductionCheckpoint {
+    ExecutionFenceAfterActionRollback,
     AdmitBeforeAck,
     AdmitBeforeCommit,
     AdmitAfterCommit,
@@ -23,6 +24,7 @@ pub enum ProductionCheckpoint {
 impl ProductionCheckpoint {
     fn name(self) -> &'static str {
         match self {
+            Self::ExecutionFenceAfterActionRollback => "execution-fence-after-action-rollback",
             Self::AdmitBeforeAck => "admit-before-ack",
             Self::AdmitBeforeCommit => "admit-before-commit",
             Self::AdmitAfterCommit => "admit-after-commit",
@@ -117,6 +119,13 @@ impl Store {
         let mut marker = options.open(&armed.marker).map_err(db)?;
         marker.write_all(name.as_bytes()).map_err(db)?;
         marker.sync_all().map_err(db)?;
+        drop(marker);
+        if matches!(
+            armed.stage,
+            ProductionCheckpoint::ExecutionFenceAfterActionRollback
+        ) {
+            return Err(RuntimeStoreError::Unavailable);
+        }
         if matches!(armed.stage, ProductionCheckpoint::StopAfterAuthentication) {
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
             while tokio::time::Instant::now() < deadline {
