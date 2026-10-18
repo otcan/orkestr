@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import secrets
-import socket
 import subprocess
 import tempfile
 import time
@@ -61,15 +60,22 @@ def fixture(root, case):
     return home, legacy
 
 
-def exercise(binary, case, timeout=4):
+def exercise(binary, case, port, timeout=4):
+    if not 1024 <= port <= 65535:
+        raise ValueError("assigned lane port must be between 1024 and 65535")
     # No caller-supplied homes: even a faulty binary only receives disposable paths.
     with tempfile.TemporaryDirectory(prefix='orkestr-isolation-') as temporary:
         root = Path(temporary)
         home, legacy = fixture(root, case)
         before = snapshot(root)
-        with socket.socket() as reservation:
-            reservation.bind(('127.0.0.1', 0))
-            port = reservation.getsockname()[1]
+        observations = {}
+
+        def observe(stage):
+            state = snapshot(root)
+            observations[stage] = sorted(
+                key for key in before.keys() | state.keys()
+                if before.get(key) != state.get(key))
+
         env = {key: os.environ[key] for key in ('PATH', 'LANG') if key in os.environ}
         env.update(HOME=str(root), TMPDIR=str(root), ORKESTR_HOME=str(legacy),
                    ORKESTR_V2_HOME=str(home), ORKESTR_V2_BIND=f'127.0.0.1:{port}',
@@ -79,6 +85,7 @@ def exercise(binary, case, timeout=4):
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         ready = False
         try:
+            observe('after-launch')
             if case == 'separated-homes':
                 deadline = time.monotonic() + timeout
                 while process.poll() is None and time.monotonic() < deadline:
@@ -90,17 +97,22 @@ def exercise(binary, case, timeout=4):
                     except (OSError, TimeoutError):
                         time.sleep(.02)
                 if process.poll() is None:
+                    observe('before-terminate')
                     process.terminate()
             stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
+            observe('before-timeout-kill')
             process.kill()
             stdout, stderr = process.communicate()
         finally:
             if process.poll() is None:
-                process.kill()
-                process.communicate()
-        after = snapshot(root)
-        changed = sorted(key for key in before.keys() | after.keys() if before.get(key) != after.get(key))
+                try:
+                    observe('before-finally-kill')
+                finally:
+                    process.kill()
+                    process.communicate()
+        observe('after-exit')
+        changed = sorted({key for paths in observations.values() for key in paths})
         if case == 'separated-homes':
             legacy_changed = [key for key in changed if key == 'legacy' or key.startswith('legacy/')]
             passed = ready and not legacy_changed and (home / 'core.sqlite3').is_file()
@@ -110,17 +122,22 @@ def exercise(binary, case, timeout=4):
                 word in diagnostic for word in ('isolation', 'overlap', 'symlink', 'hardlink', 'alias'))
             passed = refused and not changed
         return {'case': case, 'passed': passed, 'ready': ready,
-                'returncode': process.returncode, 'changed_paths': changed}
+                'returncode': process.returncode, 'changed_paths': changed,
+                'snapshot_changes': observations}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, required=True)
+    parser.add_argument('--port', type=int, required=True,
+                        help='explicit coordinator-assigned reserved lane port; no automatic selection')
     parser.add_argument('--case', choices=CASES, action='append')
     args = parser.parse_args()
     if not args.binary.is_absolute() or not args.binary.is_file():
         parser.error('--binary must identify an absolute existing executable')
-    results = [exercise(args.binary, case) for case in args.case or CASES]
+    if not 1024 <= args.port <= 65535:
+        parser.error('--port must be between 1024 and 65535')
+    results = [exercise(args.binary, case, args.port) for case in args.case or CASES]
     print(json.dumps(results, indent=2))
     return 0 if all(result['passed'] for result in results) else 1
 

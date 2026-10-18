@@ -87,18 +87,30 @@ cooperative synthetic filesystem cases, not a process sandbox for untrusted code
 Ten negative cases cover empty/populated/dangling DB symlinks, an ancestor home
 symlink, a home symlink, DB hardlinks, WAL/SHM symlinks and WAL/SHM hardlinks.
 Refusal requires a nonzero nonsignal exit, a recognizable isolation diagnostic,
-and an unchanged snapshot of both homes and aliases (names, bytes, link targets,
+and unchanged snapshots of both homes and aliases (names, bytes, link targets,
 file device/inode/link count). File timestamps are intentionally excluded since
 reading can change access time. Directory inode identity is not asserted.
 An eleventh positive case requires HTTP health, a created DB, and unchanged
 legacy entries with separate homes. It catches blanket-refusal implementations.
-A free loopback port is selected; the bind reservation is released before launch,
-so an unrelated port race fails the control rather than providing pass evidence.
+An explicit `--port` is required and must be the coordinator-assigned reserved
+lane port. No bind-to-zero or automatic fallback is used. Assignment is an
+operator admission requirement; the script cannot independently validate the
+coordinator's reservation. Mock tests use a synthetic port value without binding
+or launching a process.
+
+Snapshots are captured after launch, immediately before each terminate/kill,
+and after exit. JSON reports per-stage changes and their union; both negative
+cases and the separated-home control fail on protected changes in any captured
+stage, even if shutdown removes/restores them. A child that exits by itself may
+already have cleaned up before the next snapshot; these observations cannot
+prove the absence of arbitrary transient writes between snapshots. Deterministic
+in-process handshakes or syscall tracing would be needed for that stronger claim.
 
 After explicit build/binary execution admission, run against each exact binary:
 
 ```sh
-python3 -B v2/acceptance/isolation/probe.py --binary /absolute/synthetic-build/orkestr-v2-server
+python3 -B v2/acceptance/isolation/probe.py \
+  --binary /absolute/synthetic-build/orkestr-v2-server --port "$ASSIGNED_LANE_PORT"
 ```
 
 Expected baseline: negative cases expose acceptance/mutation or an unrelated
@@ -116,6 +128,9 @@ Executed lightweight check:
 python3 -B -m unittest discover -s v2/acceptance/isolation -p 'test_*.py' -v
 ```
 
-Result: five fixture/mocked tests passed. They check all negative fixture shapes,
+Result: eight fixture/mocked tests passed. They check all negative fixture shapes,
 mutation detection, unrelated-error rejection, no symlink traversal in snapshots,
-and actual synthetic hardlink identity. They do not establish a server pass.
+actual synthetic hardlink identity, exact assigned-port forwarding, and live
+mutation evidence retained when mocked terminate/kill removes a sidecar. They
+do not establish a server pass. All eleven candidate cases remain **pending /
+unexecuted**. CI is **unexecuted** for this helper revision.
