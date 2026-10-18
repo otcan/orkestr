@@ -2,8 +2,8 @@
 mod cancellation;
 mod execution;
 mod worker_discovery;
-pub use worker_discovery::*;
 pub use execution::*;
+pub use worker_discovery::*;
 mod events;
 mod production_events;
 pub use production_events::*;
