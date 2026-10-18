@@ -1,69 +1,97 @@
 //! Supervisor-owned session lifecycle; no browser-selected authority or transport.
 use super::*;
-use orkestr_runtime::{containment::ChildDirectories, execution::PreparingCodex};
+use orkestr_runtime::{containment::ReapedBroker, execution::ReadyCodex};
 use orkestr_v2_application::runtime::{RuntimeStore, RuntimeStoreError};
 use orkestr_v2_contracts::ExecutionPhase;
 use std::time::Instant;
 
+enum SessionExit {
+    Shutdown,
+    Stopped {
+        run: orkestr_v2_contracts::RunId,
+        proof: ReapedBroker,
+    },
+}
+
 impl ConfiguredExecution {
-    pub(super) async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<(), &'static str> {
+    pub(super) async fn run(
+        mut self,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<(), &'static str> {
         self.current().await?;
         self.config.verify_launcher()?;
-        let conversation = &self.config.conversation_id;
+        let mut heartbeat = Instant::now();
+        let mut grant = if let Some(grant) = self.initial_grant.take() {
+            // A restarted server accepts HTTP first; it does not immediately
+            // launch a native process merely because accepted history exists.
+            if !self.wait_eligible(&mut shutdown, &mut heartbeat).await? {
+                return Ok(());
+            }
+            grant
+        } else {
+            let binding = self
+                .store
+                .ensure_role_bindings(&self.owner, &self.config.conversation_id)
+                .await
+                .map_err(|_| "execution bindings unavailable")?
+                .deep;
+            self.store
+                .authorize_session_metadata(&binding)
+                .await
+                .map_err(|_| "execution setup authority refused")?
+        };
+        loop {
+            let Some(ready) = self
+                .prepare_session(grant, &mut shutdown, &mut heartbeat)
+                .await?
+            else {
+                return Ok(());
+            };
+            match self
+                .drive_session(ready, &mut shutdown, &mut heartbeat)
+                .await?
+            {
+                SessionExit::Shutdown => return Ok(()),
+                SessionExit::Stopped { run, proof } => {
+                    if self.config.worker.is_some() {
+                        return Err("execution Worker retirement requires reconciliation");
+                    }
+                    if !self.wait_eligible(&mut shutdown, &mut heartbeat).await? {
+                        return Ok(());
+                    }
+                    grant = self.stopped_grant(&run, proof).await?;
+                }
+            }
+        }
+    }
+
+    async fn stopped_grant(
+        &self,
+        run: &orkestr_v2_contracts::RunId,
+        _proof: ReapedBroker,
+    ) -> Result<BoundSessionMetadata, &'static str> {
+        self.current().await?;
         let binding = self
             .store
-            .ensure_role_bindings(&self.owner, conversation)
+            .ensure_role_bindings(&self.owner, &self.config.conversation_id)
             .await
             .map_err(|_| "execution bindings unavailable")?
             .deep;
-        let grant = self
-            .store
-            .authorize_session_metadata(&binding)
+        self.store
+            .authorize_stopped_session_metadata(&self.token, run, &binding)
             .await
-            .map_err(|_| "execution setup authority refused")?;
-        let directories = ChildDirectories::new(
-            &self.config.workspace,
-            &self.directory.join("home"),
-            &self.directory.join("tmp"),
-        )
-        .map_err(|_| "execution child directories unavailable")?;
-        // The metadata fence rechecks current authority at the actual child spawn.
-        let mut setup = PreparingCodex::open_retained(
-            self.store.clone(),
-            grant,
-            &self.config.launcher,
-            &self.config.workspace,
-            directories,
-            self.children.retain(),
-        )
-        .map_err(|_| "execution broker setup refused")?;
-        let deadline = Instant::now() + Duration::from_secs(15);
-        loop {
-            if *shutdown.borrow() {
-                return Ok(());
-            }
-            self.current().await?;
-            if setup
-                .poll()
-                .map_err(|_| "execution broker readiness refused")?
-            {
-                break;
-            }
-            if Instant::now() >= deadline {
-                return Err("execution broker readiness timed out");
-            }
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_millis(10)) => {},
-                _ = shutdown.changed() => return Ok(()),
-            }
-        }
-        let ready = setup
-            .confirm()
-            .await
-            .map_err(|_| "execution readiness commit refused")?;
-        let mut heartbeat = Instant::now();
-        let Some(capability) = self.next(&mut shutdown, &mut heartbeat).await? else {
-            return Ok(());
+            .map_err(|_| "execution stopped-session continuation refused")
+    }
+
+    async fn drive_session(
+        &self,
+        ready: ReadyCodex,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+    ) -> Result<SessionExit, &'static str> {
+        let conversation = &self.config.conversation_id;
+        let Some(capability) = self.next(shutdown, heartbeat).await? else {
+            return Ok(SessionExit::Shutdown);
         };
         let mut run = capability.provider().run.run_id.clone();
         let mut worker = self.prepare_worker(&capability)?;
@@ -76,7 +104,7 @@ impl ConfiguredExecution {
             .map_err(|_| "execution control registration refused")?;
         let mut deadline = Instant::now() + Duration::from_secs(45);
         loop {
-            self.maintain(&mut heartbeat).await?;
+            self.maintain(heartbeat).await?;
             // Parent Stop serializes against both its own pump and a bounded
             // Worker step. Lock order is always Deep then Worker.
             let schedule = run_control.serialize().await;
@@ -96,9 +124,10 @@ impl ConfiguredExecution {
                 run_control.disable();
                 drop(schedule);
                 drop(worker.take());
-                return self
-                    .stop_owned(&mut controls, authority, pump, &mut heartbeat)
-                    .await;
+                let proof = self
+                    .stop_owned(&mut controls, authority, pump, &run, heartbeat)
+                    .await?;
+                return Ok(SessionExit::Stopped { run, proof });
             }
             if status.phase == ExecutionPhase::Completed {
                 drop(schedule);
@@ -108,8 +137,16 @@ impl ConfiguredExecution {
                 // Only explicit committed owner acceptance releases the binding.
                 // Inputs received during an active turn remain ordered in Core;
                 // neither queued text nor browser JSON can mint a new capability.
-                let Some(capability) = self.next(&mut shutdown, &mut heartbeat).await? else {
-                    break;
+                let Some(capability) = self.next(shutdown, heartbeat).await? else {
+                    // Owner acceptance is durable, but replacement still needs
+                    // this exact native tree's cleanup witness before retirement.
+                    let retiring = pump
+                        .retire_broker()
+                        .map_err(|_| "execution accepted-session retirement refused")?;
+                    drop(authority);
+                    let proof = self.reaped(retiring, &run, heartbeat).await?;
+                    self.retire_accepted(&run, proof).await?;
+                    return Ok(SessionExit::Shutdown);
                 };
                 run = capability.provider().run.run_id.clone();
                 worker = self.prepare_worker(&capability)?;
@@ -162,24 +199,41 @@ impl ConfiguredExecution {
                     .map_err(|_| "execution shutdown handoff requires reconciliation")?;
                 drop(schedule);
                 drop(worker.take());
-                return self
-                    .stop_owned(&mut controls, authority, pump, &mut heartbeat)
-                    .await;
+                let proof = self
+                    .stop_owned(&mut controls, authority, pump, &run, heartbeat)
+                    .await?;
+                return Ok(SessionExit::Stopped { run, proof });
             }
             if pump.pending().is_none() {
                 pump.flush().map_err(|_| "execution write fence refused")?;
             }
-            match pump.step(&self.store).await {
-                Ok(_) => {}
+            let committed = match pump.step(&self.store).await {
+                Ok(committed) => committed,
                 Err(orkestr_runtime::supervisor::Error::Store(
                     RuntimeStoreError::Busy | RuntimeStoreError::Unavailable,
-                )) => {}
+                )) => false,
                 Err(_) => return Err("execution observation refused; reconciliation required"),
-            }
+            };
+            let phase = if committed {
+                // A committed proposal/terminal event may change phase during
+                // this step. Publish availability from that result before HTTP
+                // acquires the same lock, not from the pre-step Running sample.
+                let current = self
+                    .store
+                    .execution_status(&self.owner, conversation)
+                    .await
+                    .map_err(|_| "execution status unavailable")?
+                    .ok_or("execution status missing")?;
+                if current.run_id.as_ref() != Some(&run) {
+                    return Err("execution scope changed; reconciliation required");
+                }
+                current.phase
+            } else {
+                status.phase
+            };
             // A persistence retry may retain an observation during this step.
             // Refuse new control handoff until that exact evidence is committed.
-            run_control
-                .set_available(status.phase == ExecutionPhase::Running && pump.pending().is_none());
+            run_control.set_available(phase == ExecutionPhase::Running && pump.pending().is_none());
             drop(schedule);
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(10)) => {},
@@ -188,6 +242,6 @@ impl ConfiguredExecution {
         }
         let _ = authority.revoke();
         drop(pump);
-        Ok(())
+        Ok(SessionExit::Shutdown)
     }
 }

@@ -7,6 +7,36 @@ use orkestr_v2_store_sqlite::{ConsumedProviderDispatch, ExecutionConsumption};
 use std::time::Instant;
 
 impl ConfiguredExecution {
+    /// Read-only wakeup after native retirement. A held pre-Stop input must not
+    /// spend a one-use setup grant or start an idle replacement process.
+    pub(super) async fn wait_eligible(
+        &self,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+    ) -> Result<bool, &'static str> {
+        loop {
+            if *shutdown.borrow() {
+                return Ok(false);
+            }
+            self.maintain(heartbeat).await?;
+            let page = self
+                .store
+                .held_owner_inputs_authenticated(&self.token, &self.config.conversation_id, 0, 1)
+                .await
+                .map_err(|_| "execution input eligibility unavailable")?;
+            if !page.is_valid() || page.conversation_id != self.config.conversation_id {
+                return Err("execution input eligibility invalid");
+            }
+            if page.eligible_input_available {
+                return Ok(true);
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {},
+                _ = shutdown.changed() => return Ok(false),
+            }
+        }
+    }
+
     pub(super) async fn maintain(&self, heartbeat: &mut Instant) -> Result<(), &'static str> {
         self.current().await?;
         if heartbeat.elapsed() >= Duration::from_secs(10) {

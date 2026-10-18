@@ -27,6 +27,7 @@ pub struct StopExecution {
     authority: Authority,
     stopping: StoppingCodex,
     progress: StopProgress,
+    retain_terminal: bool,
 }
 impl StopExecution {
     /// Trusted factory only. `owner` and `run` identify the factory's registered
@@ -57,6 +58,7 @@ impl StopExecution {
                 authority,
                 stopping,
                 progress: StopProgress::Pending,
+                retain_terminal: false,
             }),
             Err(error) => {
                 let _ = authority.revoke();
@@ -72,6 +74,27 @@ impl StopExecution {
     }
     pub fn retained(&self) -> &[ProviderEvent] {
         self.stopping.retained()
+    }
+
+    /// Trusted factory opt-in before driving Stop. The default adapter still
+    /// initiates cleanup immediately. This move retains the exact owned child
+    /// only so a confirmed Stop can obtain a separate descendant-reap witness.
+    pub fn retaining_terminal(mut self) -> Self {
+        self.retain_terminal = true;
+        self.stopping = self.stopping.retaining_terminal();
+        self
+    }
+
+    pub fn retire_broker(
+        self,
+    ) -> Result<orkestr_runtime::containment::RetiringBroker, orkestr_runtime::containment::Error>
+    {
+        if !self.retain_terminal || self.progress != StopProgress::Stopped {
+            return Err(orkestr_runtime::containment::Error::AuthorityProtocol);
+        }
+        // The consuming Runtime port detaches the child from this exact old
+        // Authority before that Authority drops. No status/PID reconstruction.
+        self.stopping.retire_broker()
     }
 
     /// A bounded transport step. Transient persistence failures retain the exact
@@ -91,7 +114,9 @@ impl StopExecution {
         match self.stopping.step(&self.store).await {
             Ok(_) if self.stopping.stopped() => {
                 self.progress = StopProgress::Stopped;
-                let _ = self.authority.revoke();
+                if !self.retain_terminal {
+                    let _ = self.authority.revoke();
+                }
             }
             Ok(_) => {
                 self.progress = if self.stopping.acknowledged() {
