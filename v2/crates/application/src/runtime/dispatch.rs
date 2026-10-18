@@ -30,7 +30,7 @@ pub struct DispatchClaim {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchClaimResult {
-    Reserved(DispatchClaim),
+    Reserved(Box<DispatchClaim>),
     Replay,
     ReconciliationRequired,
 }
