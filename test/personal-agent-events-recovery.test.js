@@ -127,3 +127,51 @@ test("the feed reads its high-water mark and first pending row from one snapshot
   assert.ok(seq(feed.cursor) <= seq(feed.currentCursor), "the cursor never runs ahead of the snapshot");
   assert.ok(feed.events.every((event) => seq(event.cursor) <= seq(feed.currentCursor)));
 });
+
+test("a committed task is returned even when journal dispatch fails afterwards", async (t) => {
+  const env = await fixture(t);
+  const { createPersonalAgentTask, transitionPersonalAgentTask } = await import("../packages/core/src/personal-agent-tasks.js");
+  const db = await openAgentJobDb(env);
+  db.prepare("insert into personal_agent_projects (id, title, created_at, updated_at) values ('prj_fixture', 'fixture', 'now', 'now')").run();
+  const journal = dataPaths(env).events;
+  await fs.mkdir(journal, { recursive: true }); // the journal cannot be read or appended
+  const created = await createPersonalAgentTask({
+    projectId: "prj_fixture", title: "fixture task", outcome: "fixture outcome", nextAction: "fixture next action", acceptanceCriteria: ["verified"],
+    scope: { permissions: [], resources: [] }, dependencies: [], budget: { maxAttempts: 1, maxRuntimeMs: 1000 },
+  }, env);
+  assert.equal(created.created, true);
+  const moved = await transitionPersonalAgentTask({ taskId: created.task.id, to: "running",
+    actor: { kind: "system", id: "controller-fixture", origin: "agent_job" }, evidence: { admission: { runId: "run-fixture" } } }, env);
+  assert.equal(moved.task.state, "running");
+  assert.equal(db.prepare("select count(*) as count from personal_agent_event_outbox where dispatched_at is null").get().count, 2, "events stay queued for recovery");
+  await fs.rm(journal, { recursive: true });
+  await dispatchPersonalAgentEvents(env);
+  assert.deepEqual((await listPersonalAgentEvents({}, env)).events.map((event) => event.type), ["task.created", "task.state_changed"]);
+});
+
+test("a lost newest journal file is reported as a reset, not a complete page", async (t) => {
+  const env = await fixture(t);
+  const { rotateEvents } = await import("../packages/storage/src/store.js");
+  await queueOnly(env, 2);
+  await dispatchPersonalAgentEvents(env);
+  await rotateEvents(env, { force: true, compress: false });
+  const db = await openAgentJobDb(env);
+  tx(db, () => queuePersonalAgentEvent(db, eventInput(3), { env }));
+  await dispatchPersonalAgentEvents(env);
+  await fs.rm(dataPaths(env).events); // archive keeps 1-2; dispatched 3 is gone
+  const feed = await listPersonalAgentEvents({ limit: 200 }, env);
+  assert.equal(feed.resetRequired, true);
+  assert.equal(feed.hasMore, false);
+});
+
+test("an event larger than the configured journal limit is refused before it is queued", async (t) => {
+  const env = await fixture(t);
+  env.ORKESTR_EVENTS_MAX_EVENT_BYTES = "2048";
+  const db = await openAgentJobDb(env);
+  const big = { ...eventInput("big"), data: { note: "x".repeat(3000) } };
+  assert.throws(() => tx(db, () => queuePersonalAgentEvent(db, big, { env })), { code: "personal_agent_event_too_large" });
+  assert.equal(db.prepare("select count(*) as count from personal_agent_event_outbox").get().count, 0);
+  tx(db, () => queuePersonalAgentEvent(db, eventInput("small"), { env }));
+  await dispatchPersonalAgentEvents(env);
+  assert.equal((await listPersonalAgentEvents({}, env)).events.length, 1);
+});

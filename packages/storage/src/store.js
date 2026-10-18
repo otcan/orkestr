@@ -168,6 +168,11 @@ function eventMaxBytes(env = process.env) {
   return positiveBytes(env.ORKESTR_EVENTS_MAX_BYTES, 128 * 1024 * 1024);
 }
 
+// Largest record appendEvent keeps intact; larger ones become a truncation record.
+export function eventJournalMaxEventBytes(env = process.env) {
+  return eventMaxEventBytes(env);
+}
+
 function eventMaxEventBytes(env = process.env) {
   return positiveBytes(env.ORKESTR_EVENTS_MAX_EVENT_BYTES, 64 * 1024);
 }

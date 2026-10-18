@@ -173,7 +173,9 @@ export async function createPersonalAgentTask(input, env = process.env) {
     }, { source: "personal_agent.task", env });
     return { task: taskFromRow(taskRow(db, id)), created: true };
   });
-  await dispatchPersonalAgentEvents(env);
+  // Committed; the outbox is the recovery path, so journal trouble must not
+  // turn a durable mutation into a reported failure (and an unsafe retry).
+  await dispatchPersonalAgentEvents(env).catch(() => {});
   return result;
 }
 
@@ -290,7 +292,9 @@ export async function transitionPersonalAgentTask(input, env = process.env) {
     }, { source: "personal_agent.task", env });
     return { task: taskFromRow(taskRow(db, taskId)), replayed: false };
   });
-  await dispatchPersonalAgentEvents(env);
+  // Committed; the outbox is the recovery path, so journal trouble must not
+  // turn a durable mutation into a reported failure (and an unsafe retry).
+  await dispatchPersonalAgentEvents(env).catch(() => {});
   return result;
 }
 
