@@ -212,6 +212,26 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(run.call_count,2)
         self.assertEqual(seal.call_args.kwargs,{'execution_controls':True})
 
+    def test_explicit_bindgen_directory_precedes_inherited_path(self):
+        import build_pair
+        checkout=self.root/'checkout';checkout.mkdir()
+        cargo=self.root/'cargo';cargo.mkdir()
+        rustup=self.root/'rustup';rustup.mkdir()
+        wrapper=self.root/'wrapper';wrapper.write_text('not executed')
+        bindgen=self.root/'tools';bindgen.mkdir()
+        tool=bindgen/'wasm-bindgen';tool.write_text('not executed');tool.chmod(0o755)
+        out=self.root/'output'
+        def fake_run(command,**kwargs):
+            self.assertEqual(kwargs['env']['PATH'].split(build_pair.os.pathsep)[:2],
+                             [str(bindgen),str(cargo/'bin')])
+            if command[0]==str(wrapper):
+                target=out/'target/release';target.mkdir(parents=True)
+                (target/'orkestr-v2-server').write_bytes(self.binary.read_bytes())
+        with patch.object(receipt,'git',side_effect=['a'*40,'']), \
+             patch.object(receipt,'seal',return_value=self.value), \
+             patch.object(build_pair.subprocess,'run',side_effect=fake_run):
+            build_pair.build(checkout,out,'a'*40,'2.0.0-rc.1',wrapper,cargo,rustup,'2.34',bindgen_bin=bindgen)
+
     def test_archive_is_deterministic_for_verified_candidate(self):
         import archive
         self.assemble()
