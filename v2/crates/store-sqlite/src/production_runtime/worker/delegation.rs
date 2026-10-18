@@ -33,6 +33,23 @@ impl Store {
         parent_run_id: &RunId,
         input: &WorkerAdmissionInput,
     ) -> Result<WorkerDelegationResult> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let result = self
+            .delegate_worker_in(&mut tx, credential, parent_run_id, input)
+            .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(result)
+    }
+
+    /// Shared atomic operation for task claim consumption. The caller owns the
+    /// immediate transaction and must commit before exposing a fresh locator.
+    pub(in crate::production_runtime) async fn delegate_worker_in(
+        &self,
+        tx: &mut sqlx::SqliteConnection,
+        credential: &str,
+        parent_run_id: &RunId,
+        input: &WorkerAdmissionInput,
+    ) -> Result<WorkerDelegationResult> {
         self.worker_credential(credential)?;
         if !valid(&input.request_key)
             || !(1..=30_000).contains(&input.lifetime_ms)
@@ -54,19 +71,17 @@ impl Store {
                 &input.lifetime_ms.to_string(),
             ],
         );
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        c.authenticate(&mut tx).await?;
+        c.authenticate(&mut *tx).await?;
         if let Some(row) = sqlx::query("SELECT * FROM worker_provider_delegations WHERE owner_id=? AND parent_run_id=? AND request_key=?")
             .bind(c.owner.to_string()).bind(parent_run_id.to_string()).bind(&input.request_key)
             .fetch_optional(&mut *tx).await.map_err(db)? {
             if row.get::<&str,_>("context_id") != c.id { return Err(RuntimeStoreError::Unauthorized); }
             if row.get::<&str,_>("input_digest") != digest { return Err(RuntimeStoreError::Conflict); }
             let result = receipt(&row)?;
-            tx.commit().await.map_err(db)?;
             return Ok(WorkerDelegationResult::Existing(result));
         }
         let parent = self
-            .worker_parent_in(&mut tx, credential, parent_run_id)
+            .worker_parent_in(&mut *tx, credential, parent_run_id)
             .await?;
         if parent.get::<String, _>("message_id") != input.source_message_id.to_string()
             || parent.get::<String, _>("event_id") != input.source_event_id.to_string()
@@ -97,7 +112,7 @@ impl Store {
         if native.as_deref().is_none_or(str::is_empty) {
             return Err(RuntimeStoreError::Unavailable);
         }
-        let clock = now(&mut tx).await?;
+        let clock = now(&mut *tx).await?;
         let supervisor_deadline: i64 = sqlx::query_scalar(
             "SELECT lease_deadline_ms FROM production_supervisors WHERE context_id=?",
         )
@@ -123,7 +138,6 @@ impl Store {
             .bind(input.source_message_id.to_string()).bind(input.source_event_id.to_string())
             .bind(&input.request_key).bind(digest).bind(i64::from(input.lifetime_ms)).bind(deadline)
             .bind(hash("worker-provider-grant-v1", &[&locator])).execute(&mut *tx).await.map_err(db)?;
-        tx.commit().await.map_err(db)?;
         Ok(WorkerDelegationResult::Fresh(WorkerDelegation {
             _id: id,
             _locator: locator,
