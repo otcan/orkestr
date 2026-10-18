@@ -23,7 +23,8 @@ mod production_runtime;
 mod replay;
 mod runtime;
 pub use production_runtime::{
-    BoundSessionMetadata, ClaudeProcessInitialization, ConsumedOfflinePython,
+    BoundSessionMetadata, ClaudeProcessInitialization, CompletedToolDelivery, ConsumedOfflinePython,
+    OfflinePythonNativeCall, OfflinePythonNativeRequestId, OfflinePythonOutput, OfflinePythonParent, OfflinePythonResultConsumption, OfflinePythonResultPreparation, OfflinePythonResultReservation, TimerSchedulerIssuer,
     ConsumedProviderDispatch, ExecutionConsumption, FastAdmissionInput, OfflinePythonAdmission,
     OfflinePythonConsumption, OfflinePythonDelegation, OfflinePythonOutcome, OfflinePythonReceipt,
     OfflinePythonState, ProductionSupervisorStore, ReadySessionTransition, RunLeaseTransition,
