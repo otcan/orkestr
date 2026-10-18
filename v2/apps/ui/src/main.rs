@@ -34,6 +34,10 @@ fn App() -> Element {
     let mut drafts = use_signal(BTreeMap::<String, Draft>::new);
     let mut pending_project = use_signal(|| None::<ProjectInput>);
     let mut session_scope = use_signal(SessionScope::default);
+    let mut task_drafts = use_signal(|| {
+        orkestr_v2_ui::task_draft_lifetime::TaskDrafts::new(dioxus::dioxus_core::current_scope_id())
+    });
+    use_context_provider(move || task_drafts);
     // Owner-scoped high-water marks outlive keyed conversation and tab remounts.
     let mut execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut host_resources = use_signal(orkestr_v2_ui::host_resources::HostResources::default);
@@ -61,9 +65,13 @@ fn App() -> Element {
                 workers.write().clear_owner();
                 held_inputs.write().clear_owner();
                 worker_execution.write().authorization_lost();
+                task_drafts.write().clear_owner();
                 session_scope
                     .write()
                     .activate(&session.global_conversation_id, &mut drafts.write());
+                task_drafts
+                    .write()
+                    .activate(session_scope.read().generation());
                 projects.set(Vec::new());
                 pending_project.set(None);
                 global.set(session.global_conversation_id.clone());
@@ -85,6 +93,7 @@ fn App() -> Element {
         workers.write().clear_owner();
         held_inputs.write().clear_owner();
         worker_execution.write().authorization_lost();
+        task_drafts.write().clear_owner();
         session_scope.write().invalidate();
         projects.set(Vec::new());
         pending_project.set(None);
@@ -112,7 +121,9 @@ fn App() -> Element {
                     workers.write().clear_owner();
                     held_inputs.write().clear_owner();
                     worker_execution.write().authorization_lost();
+                    task_drafts.write().clear_owner();
                     session_scope.write().activate(&session.global_conversation_id, &mut drafts.write());
+                    task_drafts.write().activate(session_scope.read().generation());
                     projects.set(Vec::new()); pending_project.set(None); refresh += 1;
                     tab.set("Assistant".into());
                     global.set(session.global_conversation_id.to_string());
@@ -143,6 +154,7 @@ fn App() -> Element {
                                     workers.write().clear_owner();
                                     held_inputs.write().clear_owner();
                                     worker_execution.write().authorization_lost();
+                                    task_drafts.write().clear_owner();
                                     session_scope.write().invalidate();
                                     projects.set(Vec::new()); pending_project.set(None);
                                     global.set(String::new()); current.set(String::new()); refresh += 1;
