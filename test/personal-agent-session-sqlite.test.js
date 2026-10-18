@@ -28,7 +28,7 @@ function conversationFixture(db) {
 
 function session(id, overrides = {}) {
   return {
-    id, ownerUserId: "owner-fixture", conversationId: "conv_global", scopeKind: "global", scopeId: null,
+    id, conversationId: "conv_global", scopeKind: "global", scopeId: null,
     role: "fast", provider: "codex", accountProfileId: "codex-fixture",
     modelProfile: { model: "fixture-model" }, lifecycle: "ready",
     createdAt: "2026-10-18T10:00:00.000Z", updatedAt: "2026-10-18T10:00:00.000Z",
@@ -46,7 +46,7 @@ test("session migration is additive, dry-runnable, idempotent, and fail-closed o
     const dry = planPersonalAgentSessionMigration(db);
     assert.equal(dry.dryRun, true);
     assert.deepEqual(dry.missingColumns, [
-      "id", "owner_user_id", "conversation_id", "scope_kind", "scope_id", "role", "provider", "account_profile_id",
+      "id", "conversation_id", "scope_kind", "scope_id", "role", "provider", "account_profile_id",
       "model_profile_json", "native_session_id", "fork_from_session_id", "lifecycle", "blocked_reason",
       "version", "lease_token", "lease_expires_at", "heartbeat_at", "created_at", "updated_at",
     ]);
@@ -64,18 +64,17 @@ test("session table enforces active role uniqueness, native identity non-aliasin
     conversationFixture(db);
     migratePersonalAgentSessions(db, { dryRun: false });
     const insert = db.prepare(`insert into personal_agent_sessions
-      (id,owner_user_id,conversation_id,scope_kind,scope_id,role,provider,account_profile_id,model_profile_json,native_session_id,lifecycle,version,created_at,updated_at)
-      values (?,?,?,?,?,?,?,?,?,?,?,0,'now','now')`);
-    insert.run("ses_fast", "owner-fixture", "conv_global", "global", null, "fast", "codex", "acct", "{}", "native-1", "ready");
-    assert.throws(() => insert.run("ses_fast_dup", "owner-fixture", "conv_global", "global", null, "fast", "claude-code", "acct-b", "{}", "native-2", "starting"), /UNIQUE constraint failed/);
-    insert.run("ses_worker", "owner-fixture", "conv_global", "global", null, "worker", "codex", "acct", "{}", null, "starting");
-    assert.throws(() => insert.run("ses_alias", "owner-fixture", "conv_global", "global", null, "worker", "codex", "acct", "{}", "native-1", "ready"), /UNIQUE constraint failed/);
-    assert.throws(() => insert.run("ses_wrong_scope", "owner-fixture", "conv_project", "global", null, "deep", "codex", "acct", "{}", null, "ready"), /personal_agent_session_scope_mismatch/);
-    assert.throws(() => db.prepare("update personal_agent_sessions set owner_user_id = 'other' where id = 'ses_fast'").run(), /personal_agent_session_owner_immutable/);
+      (id,conversation_id,scope_kind,scope_id,role,provider,account_profile_id,model_profile_json,native_session_id,lifecycle,version,created_at,updated_at)
+      values (?,?,?,?,?,?,?,?,?,?,0,'now','now')`);
+    insert.run("ses_fast", "conv_global", "global", null, "fast", "codex", "acct", "{}", "native-1", "ready");
+    assert.throws(() => insert.run("ses_fast_dup", "conv_global", "global", null, "fast", "claude-code", "acct-b", "{}", "native-2", "starting"), /UNIQUE constraint failed/);
+    insert.run("ses_worker", "conv_global", "global", null, "worker", "codex", "acct", "{}", null, "starting");
+    assert.throws(() => insert.run("ses_alias", "conv_global", "global", null, "worker", "codex", "acct", "{}", "native-1", "ready"), /UNIQUE constraint failed/);
+    assert.throws(() => insert.run("ses_wrong_scope", "conv_project", "global", null, "deep", "codex", "acct", "{}", null, "ready"), /personal_agent_session_scope_mismatch/);
   } finally { db.close(); }
 });
 
-test("session migration adds the owner column to an existing table and preserves legacy admin ownership", () => {
+test("session migration accepts an existing owner-free schema without inventing ownership", () => {
   const db = new DatabaseSync(":memory:");
   try {
     conversationFixture(db);
@@ -97,10 +96,9 @@ test("session migration adds the owner column to an existing table and preserves
     db.exec(`create trigger personal_agent_sessions_scope_insert before insert on personal_agent_sessions begin select 1; end;
       create trigger personal_agent_sessions_scope_update before update of conversation_id, scope_kind, scope_id on personal_agent_sessions begin select 1; end`);
     const plan = planPersonalAgentSessionMigration(db);
-    assert.equal(plan.legacyOwnerColumnMissing, true);
+    assert.equal(plan.missingColumns.length, 0);
     migratePersonalAgentSessions(db, { dryRun: false });
-    assert.equal(db.prepare("select owner_user_id from personal_agent_sessions where id='legacy'").get().owner_user_id, "admin");
-    assert.throws(() => db.prepare("update personal_agent_sessions set owner_user_id='other' where id='legacy'").run(), /personal_agent_session_owner_immutable/);
+    assert.equal(db.prepare("select count(*) as n from pragma_table_info('personal_agent_sessions') where name='owner_user_id'").get().n, 0);
     migratePersonalAgentSessions(db, { dryRun: false });
   } finally { db.close(); }
 });
@@ -115,6 +113,10 @@ test("session lease acquisition and updates use version/token CAS across store h
     migratePersonalAgentSessions(db, { dryRun: false });
     const first = await openPersonalAgentSessionStore({ env, now: () => clock });
     const second = await openPersonalAgentSessionStore({ env, now: () => clock });
+    assert.deepEqual(first.conversation("conv_global"), { id: "conv_global", scopeKind: "global", scopeId: null });
+    assert.deepEqual(first.conversation("conv_project"), { id: "conv_project", scopeKind: "project", scopeId: "prj_fixture" });
+    assert.equal(first.conversation("missing"), null);
+    assert.equal(Object.hasOwn(first.create(session("ses_owner_free", { role: "worker" })), "ownerUserId"), false);
     first.create(session("ses_a"));
     const lease = first.acquireLease("ses_a", { expectedVersion: 0, ttlMs: 1000 });
     assert.equal(lease.session.version, 1);
@@ -124,21 +126,27 @@ test("session lease acquisition and updates use version/token CAS across store h
     }), null);
     const updated = second.update("ses_a", {
       expectedVersion: 1, leaseToken: lease.leaseToken,
-      patch: { lifecycle: "busy", nativeSessionId: "native-a", heartbeatAt: new Date(clock).toISOString(), releaseLease: true },
+      patch: { lifecycle: "ready", nativeSessionId: "native-a", heartbeatAt: new Date(clock).toISOString(), releaseLease: true },
     });
     assert.equal(updated.version, 2);
-    assert.equal(updated.lifecycle, "busy");
+    assert.equal(updated.lifecycle, "ready");
     assert.equal(updated.leaseToken, null);
     assert.equal(first.update("ses_a", {
       expectedVersion: 1, leaseToken: lease.leaseToken, patch: { lifecycle: "ready" },
     }), null);
     const nextLease = second.acquireLease("ses_a", { expectedVersion: 2, ttlMs: 1000 });
     assert.ok(nextLease);
+    const busy = first.update("ses_a", {
+      expectedVersion: 3, leaseToken: nextLease.leaseToken, patch: { lifecycle: "busy", releaseLease: true },
+    });
+    assert.equal(second.acquireLease("ses_a", { expectedVersion: 4, ttlMs: 1000 }), null);
+    assert.equal(first.get("ses_a").lifecycle, "busy");
+    first.create(session("ses_expiring", { role: "worker" }));
+    const expiring = second.acquireLease("ses_expiring", { expectedVersion: 0, ttlMs: 1000 });
     clock += 1001;
-    const expiredTakeover = first.acquireLease("ses_a", { expectedVersion: 3, ttlMs: 1000 });
-    assert.equal(expiredTakeover, null);
-    assert.equal(first.get("ses_a").leaseToken, nextLease.leaseToken);
-    assert.equal(first.get("ses_a").version, 3);
+    assert.equal(first.acquireLease("ses_expiring", { expectedVersion: expiring.session.version, ttlMs: 1000 }), null);
+    assert.equal(first.get("ses_expiring").leaseToken, expiring.leaseToken);
+    assert.equal(busy.version, 4);
   } finally {
     await closeAgentJobDbs();
     await fs.rm(home, { recursive: true, force: true });
@@ -155,7 +163,7 @@ test("store transaction groups synchronous operations, rolls back failures, and 
     const store = await openPersonalAgentSessionStore({ env });
     const created = store.transaction(tx => {
       const row = tx.create(session("tx-one"));
-      assert.equal(row.ownerUserId, "owner-fixture");
+      assert.equal(Object.hasOwn(row, "ownerUserId"), false);
       return tx.acquireLease("tx-one", { expectedVersion: 0, ttlMs: 1000 });
     });
     assert.equal(created.session.version, 1);

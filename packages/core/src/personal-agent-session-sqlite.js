@@ -4,7 +4,7 @@ import { personalAgentFeature } from "./personal-agent-feature.js";
 import { migratePersonalAgentSessions } from "./personal-agent-session-migration.js";
 
 const columns = [
-  "id", "owner_user_id", "conversation_id", "scope_kind", "scope_id", "role", "provider", "account_profile_id",
+  "id", "conversation_id", "scope_kind", "scope_id", "role", "provider", "account_profile_id",
   "model_profile_json", "native_session_id", "fork_from_session_id", "lifecycle", "blocked_reason",
   "version", "lease_token", "lease_expires_at", "heartbeat_at", "created_at", "updated_at",
 ];
@@ -16,7 +16,7 @@ function sessionError(code, statusCode = 409) {
 function toSession(row) {
   if (!row) return null;
   return {
-    id: row.id, ownerUserId: row.owner_user_id, conversationId: row.conversation_id, scopeKind: row.scope_kind, scopeId: row.scope_id,
+    id: row.id, conversationId: row.conversation_id, scopeKind: row.scope_kind, scopeId: row.scope_id,
     role: row.role, provider: row.provider, accountProfileId: row.account_profile_id,
     modelProfile: JSON.parse(row.model_profile_json), nativeSessionId: row.native_session_id,
     forkFromSessionId: row.fork_from_session_id, lifecycle: row.lifecycle, blockedReason: row.blocked_reason,
@@ -33,8 +33,9 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
   migratePersonalAgentSessions(db, { dryRun: false });
   const getStatement = db.prepare("select * from personal_agent_sessions where id = ?");
   const insertStatement = db.prepare(`insert into personal_agent_sessions (${columns.join(",")}) values (${columns.map(() => "?").join(",")})`);
+  const conversationStatement = db.prepare("select id, scope_kind, project_id from personal_agent_conversations where id = ?");
   const insertLeaseStatement = db.prepare(`update personal_agent_sessions set lease_token = ?, lease_expires_at = ?, version = version + 1, updated_at = ?
-    where id = ? and version = ? and lease_token is null`);
+    where id = ? and version = ? and lease_token is null and lifecycle <> 'busy'`);
   const updateStatement = db.prepare(`update personal_agent_sessions set
     lifecycle = ?, blocked_reason = ?, native_session_id = ?, heartbeat_at = ?, model_profile_json = ?,
     lease_token = ?, lease_expires_at = ?, version = version + 1, updated_at = ?
@@ -43,10 +44,13 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
     where conversation_id = ? and scope_kind = ? and scope_id is ? order by created_at, id`);
 
   const store = {
+    conversation(conversationId) {
+      const row = conversationStatement.get(conversationId);
+      return row ? { id: row.id, scopeKind: row.scope_kind, scopeId: row.scope_kind === "project" ? row.project_id : null } : null;
+    },
     create(input) {
       const row = {
         id: input.id,
-        owner_user_id: String(input.ownerUserId || "").trim(),
         conversation_id: input.conversationId,
         scope_kind: input.scopeKind,
         scope_id: input.scopeId ?? null,
@@ -65,7 +69,6 @@ export async function openPersonalAgentSessionStore({ env = process.env, now = D
         created_at: input.createdAt,
         updated_at: input.updatedAt,
       };
-      if (!row.owner_user_id) throw sessionError("personal_agent_session_owner_required", 400);
       return tx(db, () => {
         insertStatement.run(...columns.map(key => row[key]));
         return toSession(getStatement.get(row.id));
