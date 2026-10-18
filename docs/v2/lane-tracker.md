@@ -9,18 +9,45 @@ or acceptance evidence.
 
 ## Admission and evidence
 
-| Lane | Branch | Admitted work | Reported PR / exact tested head | Tests / CI |
+| Lane | Branch | Admitted work | Reported PR / historical evidence head | Tests / CI |
 |---|---|---|---|---|
 | Coordinator | `v2/s0-contract-integration` | Additive integration candidate; held for isolation fix and review | [PR #80](https://github.com/otcan/orkestr/pull/80), `76f9c6cd91e094329ae5c29c7e95f301366ed02a` | Local locked workspace: 27 Rust tests, including a runner with 7 nested Python scenarios; 4 separate mocked Python tests; fmt/clippy/boundaries passed. CI at earlier `aec7475b` passed; latest-head CI requires query |
 | Core | `v2/s0-core` | LIGHT contract/review support and bounded isolation fix | [PR #78](https://github.com/otcan/orkestr/pull/78), `f8e1af18b5c88df753623e3a69f7240f56080a0e` | Reported 4 Rust tests including a runner with 7 nested Python scenarios; [exact-head CI](https://github.com/otcan/orkestr/actions/runs/39132972264) passed. Database-alias failure blocks integration |
-| Runtime | `v2/s0-runtime` | Admitted heavy: offline adapter; shared typed-port migration pending; no own store | [PR #76](https://github.com/otcan/orkestr/pull/76), `5481e6b0b7c9cc932d23fccb95bd6eea43221551` | Candidate P2 fixes included in PR #80; combined locked runtime tests: 16 passed. Independent fix review pending; volatile retry is not crash durability |
+| Runtime | `v2/s0-runtime` | Admitted heavy: offline adapter; shared typed-port migration pending; no own store | [PR #76](https://github.com/otcan/orkestr/pull/76), `5481e6b0b7c9cc932d23fccb95bd6eea43221551` | Candidate P2 fixes included in PR #80; combined locked runtime tests: 16 passed. Independent source fix review completed at this checkpoint; volatile retry is not crash durability |
 | UI | `v2/s0-ui` | Explicitly admitted heavy after core cycle completed; implementation pending | [PR #73](https://github.com/otcan/orkestr/pull/73), `be36a064443f562329da80468713663d5f805801` | Independent docs review found no blocker. Fixture JSON syntax only; no UI build/native acceptance. macOS simulator path pending |
 | Verification | `v2/s0-verification` | Light independent implementation review and executable probes | [PR #75](https://github.com/otcan/orkestr/pull/75), `c42b88eed8894430d9cfb6f2be8bda29ec0e800f` | Independently built core `28c47793`; 4 black-box probes: 3 passed, 1 failed (database symlink isolation). Coordinator source-reviewed probes and evidence. Broader inventory: 0 passed/17 pending |
 
 Current admission: runtime and UI are the two heavy implementation lanes; core
 provides light contract/review support and the bounded isolation correction.
 Verification reviews implementation; coordinator reviews verification artifacts.
-No additional workers were created.
+Three owner-authorized light helpers now cover isolation probes, local-install
+scripts and copy-only migration audit. They have no shared source, schema,
+manifest or lockfile ownership and no heavy admission.
+
+Historical tested heads in the table are checkpoints, not current PR heads.
+The provisional runtime fixes were independently source-reviewed at `5481e6b0`
+and combined `aec7475b`; that review is complete. The later `379d0b5e` typed
+migration exposed caller-role and replay-dispatch gaps. Canonical v1 migration
+`05d7e369ee69a2a881fefc9260399f7d79ba2235` checks authoritative role and refuses
+provider dispatch pending a fresh/replay distinction. Its 19 Rust tests remain
+uncompiled; exact-head independent review precedes coordinator lock resolution.
+Core v1 input is `d4cf693435378ed232d97df60727ea6e54d9b90b`; its new
+`async-trait =0.1.89` dependency remains lock-blocked. Core oracle increment
+`7960f9b9460a9ccfa0f4a5f1cdec7c6dcb8f3ec2` defines eight Python scenarios,
+not newly executed; source review requested explicit SQLite handle closure.
+
+UI implementation at `8d4049dcf67922d583eb0c21231105922ce52b26` supersedes
+the feasibility-only scope of PR #73. Coordinator independently ran 11 Node
+bridge tests successfully; Rust/WASM, browser and native acceptance remain
+pending. The current dependency proposal uses Dioxus `=0.7.3`, without
+`gloo-timers`. Experimental Bearer transport does not satisfy the original
+browser-session/CSRF acceptance. Same-origin asset serving remains required.
+
+Helper source checkpoints independently reviewed by coordinator:
+`0cc2384b` isolation (5 mocked tests passed; real probes unexecuted),
+`593f62e4` local-install (15 mocked tests passed; real launch unexecuted),
+`fad49979` migration audit (validator and 13 negative cases passed; no importer).
+These checks confer no product acceptance or integration authority.
 
 Host observation at admission: load averages 10.51 / 6.94 / 5.05, approximately
 41 GB available memory. Retain at most two heavy implementation lanes and one
@@ -36,6 +63,8 @@ private host paths and runtime identities stay outside this repository.
    Core has confirmed it will commit the initial toolchain and lockfile;
    coordinator has acknowledged this as the serialized integration input.
 2. Coordinator reviews and integrates workspace membership and `v2/Cargo.lock`.
+   Subsequent lock resolution waits for canonical runtime source migration and
+   independent review; pending compilation is not passing evidence.
    Core's initial lockfile is the input; later dependency changes are serialized
    through coordinator. Runtime/UI must consume shared contracts rather than
    create competing DTOs, schemas, databases, or lockfile resolutions.
