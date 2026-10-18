@@ -27,7 +27,7 @@ The design is **subscription-backed first, provider-independent by contract**. W
 | D05 | Reasoning sessions may persist, fork, or start fresh; workers can likewise be reused, forked, or newly created. | Orkestr stores the lineage, decisions, provenance, and outcomes, independent of provider session lifetime. |
 | D06 | The reasoning layer selects the appropriate worker/strategy for each request and combines verified results. | Delegation is a reasoned decision, not a rule that every user message becomes a worker or Jira task. |
 | D07 | **Resources belong to the project, not the chat/session.** | All project sessions and authorized workers resolve the same canonical resource bindings. |
-| D08 | **Every new project automatically provisions** its standard GitHub repository, Jira project/task linkage, OXRM structured workspace, and WhatsApp project conversation, including a shopping-list project. | Project creation is a durable provisioning workflow, not four optional shortcuts. If provider access prevents a step, expose its pending/blocked state and exact remedy, without pretending it succeeded. |
+| D08 | **Every project is immediately useful using the self-hosted local baseline.** New projects get local Git/workspace and a local OXRM workspace when those bundled services are healthy; shared managed desktops are leased only when needed. | Local project setup is durable and idempotent. GitHub, Jira, external OXRM, and WhatsApp are optional integrations, never prerequisites for project creation or the first task. Do not claim local OXRM readiness until its implementation and deployment are verified. |
 | D09 | Shared desktops and other suitable resources may be reused across projects with explicit scoped leases. | A physical desktop or worker runtime is not automatically duplicated for every project. |
 | D10 | Global reasoning can coordinate project reasoning sessions without consuming their user-visible chat capacity. | Cross-project questions are asynchronous fan-out/fan-in with partial results and explicit blockers. |
 | D11 | **Orkestr owns routing, durable state, admission, lifecycle, approvals, and control signals**; models own language and reasoning. | A fast model cannot by itself authorize deployment, bypass an approval, or mark a task completed. |
@@ -37,7 +37,17 @@ The design is **subscription-backed first, provider-independent by contract**. W
 | D15 | **Module/plugin ≠ connection/identity ≠ capability ≠ project binding.** | One WhatsApp plugin may host several authorized phone identities; each project selects an allowed connection and the capabilities it can use. |
 | D16 | A plugin can be **global (enabled for all eligible projects)**, **enabled for selected projects**, or **shared by a chosen set of projects**. | Instance-level install and security policy form the ceiling. Project selection can narrow permissions or choose an allowed connection, not elevate privileges. |
 | D17 | Orkestr onboarding is **lightweight, progressive and connection-aware**, with an Integration Hub. | No need to connect every service before entering the assistant. The system presents a short standardized authentication/setup/health flow when a capability is needed. |
-| D18 | Plugin setup and project resource provisioning are distinct. Plugins are installed/configured once; resources are provisioned per project by default. | Background workers reuse the project resources instead of independently provisioning duplicates; desktops are leased only when needed. |
+| D18 | Plugin setup and project resource provisioning are distinct. Plugins are installed/configured once; bundled local resources and explicitly enabled plugin resources are bound/provisioned per project. | Background workers reuse project resources instead of creating duplicates; external resources are optional and provisioned only through an enabled plugin/connection. Desktops are leased only when needed. |
+
+### 2.1 Owner correction: self-hosted baseline and optional external integrations
+
+The owner decision recorded on 2026-10-18 supersedes the earlier interpretation of D08 and the original §6 examples that required external GitHub, Jira, OXRM, and WhatsApp resources for every project. Orkestr is self-hosted first, initially distributed as a Docker-based stack on a user's computer or self-owned VPS. The existing first-run administrator username/password setup remains; iOS is a client, never the host.
+
+Initial onboarding is intentionally minimal: reach a working installation, create the administrator, connect and verify one user-owned Codex/Claude Code subscription or model/API credential, then start the global conversation. No outside account signup or GitHub, Jira, OXRM, or WhatsApp account creation is mandatory before the first task. External integrations are offered progressively through the Integration Hub.
+
+The intended Docker baseline includes the Orkestr control plane, local Git capability, a local OXRM service/workspace, the managed desktop infrastructure Orkestr already provisions, and Codex/Claude Code execution. These are product targets, not claims that each is currently included or ready. The open verification questions in §11 must be answered before promising the complete stack. Reuse the desktop pool and leases; do not allocate a desktop per project.
+
+OXRM is proposed as the single user-facing project/task-management surface to avoid competing Jira, OXRM, and Orkestr boards. Existing Orkestr Agent Job and Personal Agent task, run/effect/approval/event records remain authoritative for execution and evidence until OXRM's actual task model and synchronization contract are verified. Do not remove existing task tables, migrate task truth, or assume OXRM capabilities without evidence.
 
 ### Interpretation: what "one thread" means
 
@@ -151,24 +161,21 @@ Preserve native session references, the canonical transcript, reasoning decision
 
 ## 6. Project resource contract
 
-**A project is a complete working environment, not a folder of chats.** Every new project, even a shopping list or simple checklist, should obtain the same standard resource set, while all project sessions and workers share its canonical resource bindings. These are **actual resources**, not merely empty placeholders. The user's explicit correction supersedes the earlier lazy-provisioning principle for repositories, tasks, OXRM and WhatsApp.
+**A project is a locally functional working environment, not a folder of chats or a prerequisite to sign up for third-party services.** Project creation, including a shopping list, creates the Orkestr project and idempotently binds/provisions the local capabilities available in the self-hosted installation. Local readiness failures remain explicit blockers; no empty placeholder may be reported as ready.
 
-| Default project resource | Automatically created or bound on project creation | Sharing and truth |
+| Resource | Default project behavior | Sharing and source-of-truth boundary |
 |---|---|---|
-| **GitHub** | Project repository and initial workspace, or an explicitly selected existing repository | One project binding, with worker branches/worktrees as needed; do not duplicate a repository for each agent |
-| **Jira** | Project/task-tracking container with configured project key, or a selected existing Jira project when the owner chooses it | Orkestr's task/run IDs correlate to Jira issue IDs, without competing claims of completion |
-| **OXRM** | A project-scoped structured data workspace/schema through the existing OXRM service | Useful even for shopping lists; project records, collection schemas, access controls and audit are available immediately |
-| **WhatsApp** | A dedicated project conversation using an eligible configured connection, with routing to the canonical project assistant | Multiple WhatsApp connections may exist; preserve channel/sender identity and consent. If actual group/thread creation is not supported by that account/API, report provisioning blocked and expose the supported connection path, rather than inventing a group |
-| **Desktop and execution** | A resource capability/binding to the managed desktop pool | **Do not** launch or allocate a dedicated desktop on project creation. Lease only when a run needs one, with isolation and release rules |
-| **Files, memory and integrations** | Project file/artifact namespace and eligible plugin bindings | Existing consent, provenance, authentication, and scoped permissions remain authoritative |
+| **Local Git/workspace** | Bind an on-disk repository/worktree capability, or create one locally if that is the verified implementation. GitHub is optional remote hosting/sync through its plugin. | One canonical project binding; workers use branches/worktrees as appropriate. Do not duplicate a repository per agent. Whether the bundled implementation should use ordinary on-disk repositories or a local bare Git service remains open. |
+| **Project/task management** | Local OXRM workspace is the proposed user-facing surface when the bundled OXRM service is verified and ready. | Existing Orkestr task/run/effect/approval/event records remain execution and evidence authority until the OXRM mapping and sync contract are proven. Jira is optional via its plugin. Avoid two user-facing task boards. |
+| **WhatsApp** | No external WhatsApp conversation is required at project creation. Pair an eligible user-controlled number/account only when requested. | Plugin connection, identity, project binding, consent, sender policy, and routing remain explicit. No sender or route changes are implied by this ADR. |
+| **Desktop and execution** | Reuse the managed desktop pool and execution infrastructure already provided by the installation. | Lease on demand for a run; never allocate a dedicated desktop per project by default. Apply scoped access, isolation, cleanup, and release rules. |
+| **Files, memory and integrations** | Bind local project file/artifact storage and eligible capabilities. | Existing memory consent, provenance, authentication, scoped permissions, and retention contracts remain authoritative. External plugins are optional and progressively configured. |
 
-The owner's term is **OXRM**, a structured project-data resource. Its actual current service, provisioning API and tenancy boundary must be verified. This ADR does not authorize construction of a competing database product.
+**Provisioning workflow:** Project creation durably creates the project and an idempotent job for required local bindings and resources. Each resource has its own state (`pending`, `provisioning`, `ready`, `needs_connection`, `needs_approval`, or `failed`); one unavailable optional plugin must not make the local project unusable. Required local stack failures are visible blockers with a precise remedy. Retries reconcile partial progress without duplicate local resources. Desktops are excluded from eager provisioning and leased only when a run needs one.
 
-**Provisioning workflow:** Project creation durably creates a project and an idempotent provisioning job for its four default integrations; it checks enabled plugin instances, selected or inherited connections, and resource creation permissions. It then provisions resources in a safe dependency order, records the external resource IDs, verifies they exist and are usable, and exposes independent states such as `provisioning`, `ready`, `needs_connection`, `needs_approval`, or `failed`. Retries reuse idempotency keys and reconcile partially created resources, without making duplicate GitHub/Jira/OXRM/WhatsApp resources. Users must see which components succeeded or are blocked.
+**External provisioning is opt-in.** GitHub, Jira, WhatsApp, email/Pingen, CAPTCHA, and other services are installable plugins, configured progressively through the Integration Hub. Automatic creation is permitted only for an explicitly enabled plugin with an eligible connection and policy grant. Use idempotency, explicit blockers, least privilege, audit metadata, approval/effect controls, and honest failure states. Development and tests use fake provisioners only; they must not create live external resources or alter production connections/routes.
 
-**The target default is automatic real provisioning**, not a checkbox list. However, a platform cannot promise to create a repository, Jira project or WhatsApp group without credentials and permission or when a provider API lacks the operation. Do not fake success. Offer the shortest relevant connection/approval flow; where Orkestr has an authorized managed default, use it. Safe default provisioning under an already-granted scope should not require fresh approval for every project, but new external access, sending a first message, paid services, account changes, or high-impact actions still follow policy and approval rules.
-
-**Isolation:** Project resource IDs belong to the project; runtime agents get only scoped capability grants or leases. A global assistant can request project status through an authorized interface, not unrestricted access to every project's secrets. Shared desktops must clear or isolate files, credentials and session state on reassignment.
+**Isolation:** Project resource IDs belong to the project; runtime agents get only scoped capability grants or leases. Global defaults may be inherited but only narrowed per project, never escalated. A global assistant may request project status through an authorized interface, not unrestricted access to project secrets. Shared desktops must clear or isolate files, credentials and session state on reassignment.
 
 ## 6A. Installable plugin, connection and onboarding architecture
 
@@ -196,14 +203,14 @@ Plugins include but are not limited to **GitHub, Jira, OXRM, WhatsApp, email mes
 
 Each installable plugin advertises its name/version, capabilities, account multiplicity, authentication modes (OAuth, pairing, API key, managed), required scopes, health/test probes, project provisioners and teardown semantics. A uniform Integration Hub supports **Discover → Install → Configure connection → Test → Enable globally or for projects → Bind/provision**. A provider-specific form is rendered only when the manifest requires it; credentials are not printed in messages or logs.
 
-**Progressive initial onboarding** is deliberately shorter: create/sign in to Orkestr, reach the global assistant immediately, optionally choose a project template, and let the standard project-creation flow perform automatic provisioning. If essential third-party authentication is absent, offer a single contextual connect action with a precise pending state. Do not force new users to configure CAPTCHA, all phone numbers, every email sender, and every optional module before they can have a conversation.
+**Progressive initial onboarding** is deliberately shorter: complete a working self-hosted install, create the administrator, connect and verify one user-owned Codex/Claude Code subscription or model/API credential, then reach the global assistant. No third-party integration is essential to the first conversation or task. Offer GitHub, Jira, WhatsApp and other plugin setup only when useful, with a precise connect/test flow. Do not force optional modules or external accounts before the user can begin.
 
 **Reliability and lifecycle:** Installation, connection setup, scope changes and provisioning have independent states and audit trails. Verify connection health; show exactly which project bindings break on disable/uninstall; use safe updates and rollback; revoke grants without deleting historical task/event records. A plugin may fail while Orkestr's core remains available. Treat external side effects as idempotent and governed by the current approval/effect ledger.
 
 ### Examples
 
-- A **shopping list** project automatically gets its standard GitHub/Jira/OXRM/WhatsApp project resources when the required provider connections permit it. Its OXRM workspace stores list items and history. It does not require a running desktop.
-- A **Moteks** project has GitHub/Jira/OXRM resources and a WhatsApp conversation, plus an enabled Moteks-specific CRM plugin. Its data remains inaccessible to unrelated projects.
+- A **shopping list** project works using local project storage and local Git. If the bundled OXRM service is verified and healthy, its local workspace is the proposed user-facing place for list items; Orkestr's task/run/effect/approval/event records remain execution evidence. No GitHub, Jira, WhatsApp, or desktop account is required.
+- A **Moteks** project works locally first. GitHub, Jira, WhatsApp, or a Moteks-specific CRM plugin can be enabled and bound as needed; its data remains inaccessible to unrelated projects.
 - **WhatsApp** is installed only once, but may expose multiple numbers as distinct connections; a project binds to its authorized number while project workers share that binding.
 - A **CAPTCHA** or **Pingen** plugin can be installed but enabled globally, for selected projects only, or using different provider accounts with constrained capabilities, without installing multiple copies.
 
@@ -240,7 +247,7 @@ The owner asks a difficult design question while several runs compile or browse.
 
 ### E. Hobby checklist
 
-The owner creates a shopping-list or dance-event checklist project. It automatically receives a GitHub repo, Jira project/task container, OXRM workspace for list items and associated data, and a project WhatsApp conversation using existing permitted connections. Workers share those resources. A desktop is not allocated until an execution task needs one. If a required provider connection or permission is missing, the project shows a specific provisioning blocker and offers the minimal setup flow rather than silently omitting the resource.
+The owner creates a shopping-list or dance-event checklist project. It is usable immediately with the verified local baseline and shares the existing managed desktop pool only if an execution task later needs a lease. A local OXRM workspace is the intended user-facing project-data surface, pending verification of its implementation and lifecycle. GitHub, Jira, and WhatsApp are optional plugin resources. Missing optional connections do not block the project; missing required local services produce a specific readiness blocker rather than fabricated success.
 
 ## 9. Trust, security, and persistence requirements
 
@@ -258,6 +265,8 @@ The owner creates a shopping-list or dance-event checklist project. It automatic
 
 The first acceptance milestone is an end-to-end proof, **not** only a beautiful mobile chat view.
 
+Onboarding acceptance must additionally prove that a fresh self-hosted Docker installation can create its administrator, connect and verify one supported user-owned reasoning provider, and start a useful main conversation and local project without GitHub, Jira, OXRM external accounts, or WhatsApp setup. Test local stack health/readiness and idempotent project provisioning with fake provisioners; no live external resource creation is permitted in development tests.
+
 - **AT-01 Receipt while busy:** A long-running reasoning/execution turn does not prevent a new message being durably accepted, visibly acknowledged, and shown in the same main conversation. Measure p50/p95 receipt, fast response, and reasoning latency separately.
 - **AT-02 Strong reasoning:** A difficult prompt reaches the capable persistent reasoning session, not solely a lightweight router; it either answers with evidence or records a work item and an explicit pending state.
 - **AT-03 Real session architecture:** Verify separate native provider session IDs for fast and reasoning roles, and separately supervised execution runs. Model/profile changes retain the Orkestr conversation identity.
@@ -265,7 +274,7 @@ The first acceptance milestone is an end-to-end proof, **not** only a beautiful 
 - **AT-05 Mid-run modification:** A user follow-up updates or supersedes the authorized task without duplicate external effects or lost messages.
 - **AT-06 Hard stop:** A stop/deployment hold is enforced through the control plane while the reasoning model is busy. The UI states whether the target effect was still stoppable.
 - **AT-07 Resource reuse and isolation:** Two project sessions see the same project resource bindings; a leased desktop can be reused safely, and another project's private resources stay inaccessible.
-- **AT-07a Project provisioning:** A new shopping-list project and a new software project each automatically create or bind a repository, Jira project, OXRM workspace and WhatsApp conversation when authorized, with no duplicate resources on retry. Missing access shows an exact blocker; desktops are not needlessly instantiated.
+- **AT-07a Project provisioning:** A new shopping-list project and a new software project are useful without external accounts, use the bundled local Git/project baseline, and create/bind any verified local OXRM workspace idempotently. Fake optional-plugin provisioners exercise GitHub/Jira/WhatsApp workflows, retries, partial failure and exact blockers without contacting live services. Desktops are leased on demand, not instantiated per project.
 - **AT-07b Plugin inheritance:** Install a plugin once, configure multiple connections, enable globally or for selected projects, restrict capabilities per project, and verify a disabled project cannot invoke it. Admin restrictions cannot be broadened by projects.
 - **AT-07c Progressive onboarding:** A fresh user can reach the assistant without connecting every optional plugin, and can complete any missing resource authentication contextually. Provider setup/health and partial provisioning states are truthful.
 - **AT-08 Worker choice and lineage:** Reasoning selects reuse, fork, or fresh worker with traceable rationale; history and outcome can be inspected after provider sessions expire.
@@ -283,11 +292,11 @@ The original 24-task backlog remains a useful implementation skeleton, but **it 
 | Area | Change required |
 |---|---|
 | Product charter/architecture (ORK-535/536) | Add global + per-project single canonical conversation, two actual Codex/Claude sessions per scope, native-first direction, resource registry, execution lineage and durable routing contract. |
-| Project/task foundation (ORK-537 through 540) | Add automatic project GitHub/Jira/OXRM/WhatsApp provisioning, idempotent resource binding/reconciliation, correlated message/run events, strong acceptance evidence, and durable asynchronous inbox/replay semantics. |
+| Project/task foundation (ORK-537 through 540) | Add a usable local project baseline, verify local Git/OXRM resource contracts, idempotent resource binding/reconciliation, correlated message/run events, strong acceptance evidence, and durable asynchronous inbox/replay semantics. Keep GitHub/Jira/WhatsApp provisioning optional behind plugins and fake provisioners in development. |
 | Assistant/memory/inference (ORK-541 through 545) | Keep opt-in memory and replace any assumption that a lightweight local model is the mandatory or authoritative conversational/reasoning brain. Define fast-vs-deep subscription session profiles with optional explicit fallback. Existing local adapter work may remain a supported capability. |
 | Delegation (ORK-546 through 551) | Make worker sessions background-only by default, expose lineage and reasoning-driven worker selection (persistent/fork/new), reliable cancellation, priority, and per-project resource leases. |
 | Interface (ORK-552 through 555) | Extend the web UI without regressions, but **add foundational iOS work** for navigation/global-project conversations/resources/approvals and an Android follow-up. Include an Integration Hub showing plugin installation, multiple accounts, global/project scoping, health and provisioning status. Do not treat mobile as indefinitely deferred. |
-| Acceptance/release (ORK-556 through 558) | Add the acceptance cases above, particularly fast receipt while reasoning is busy, cross-project routing, stop/deploy safety, automatic project provisioning, plugin scoping/isolation, progressive onboarding, recovery, and iOS navigation. Continue feature flags and separate release approvals. |
+| Acceptance/release (ORK-556 through 558) | Add the acceptance cases above, particularly fast receipt while reasoning is busy, cross-project routing, stop/deploy safety, default local project readiness, optional plugin provisioning, plugin scoping/isolation, progressive onboarding, recovery, and iOS navigation. Continue feature flags and separate release approvals. |
 | Additional plugin platform scope (gap assessment required) | Specify installable plugin package/manifest, isolation, install/update/uninstall contract, connection/identity management, health, capability registration, global/project inheritance, resource provisioners, and developer/UI extension APIs. Add scoped Jira issues only where the current backlog does not cover them. |
 
 **Implementation sequencing proposal:** (1) approve the conversation/session/resource contract; (2) wire durable ingress + fast/deep runtime sessions against existing thread and Agent Job primitives; (3) prove nonblocking end-to-end with one project and one worker; (4) add global-to-project fan-out/fan-in, resource bindings, reuse/fork/new, controls and audit; (5) build iOS navigation against the same APIs, retain web compatibility; (6) run independent acceptance, rollout planning and Android design. Keep already-merged OP work intact and add changes incrementally.
@@ -296,17 +305,18 @@ Do **not** rewrite every Jira child or launch new workers automatically just bec
 
 ## 12. Open engineering choices, not reversals of the product decisions
 
-1. Which exact existing service the owner calls **OX**, its schema/provisioning API, and whether project data should be single-tenant partitions or separate resources.
-2. Which iOS implementation framework best reuses the current web UI and runtime securely; how push notifications and offline state are handled; Android sequencing.
-3. How the installed Codex/Claude Code runtimes expose session resume, fork, steering, model selection, concurrency, cancellation, and provider-supported subscription authentication. Validate each capability in tests.
-4. Fast and deep model profiles per provider, explicit fallbacks, practical latency and budget ceilings; never assume a specific branding/model will remain available.
-5. The boundary between internal provider subagents and durable independently supervised Orkestr workers; preserve lifecycle evidence at whichever boundary is supported.
-6. Exact project provisioning policies for permitted managed defaults, provider quotas, connection eligibility and external-effect approvals; automatic provision of standard resources is agreed, not optional.
-7. Storage/retention details for full conversation history versus summarized reasoning, mutable project state, and consented long-term memory.
-8. Concurrency/scheduling semantics when a project receives several follow-ups while a reasoning session is busy; enforce causal order and duplicate-effect prevention.
-9. Exact plugin distribution/signature/sandbox/versioning and UI extension enforcement, especially where existing runtimes may have host-level privileges.
-10. Which WhatsApp connection/provider supports project conversation provisioning or binding and how unsupported API operations are surfaced accurately.
-11. How OXRM is concretely provisioned and isolated across projects using the existing service.
+1. What the existing OXRM implementation is, how it is deployed today, which container image/storage/APIs it uses, what its project/task lifecycle, dependencies and approvals actually support, and how backup/readiness are guaranteed. Verify rather than infer whether it is already part of Docker installation and whether its task model can represent Orkestr work without duplicate sources of truth. Until that evidence exists, keep Orkestr task/run/effect/approval/event records authoritative for execution and do not promise OXRM features.
+2. Whether bundled Git means ordinary on-disk repositories/worktrees or a local bare Git service, and how repositories are backed up and isolated.
+3. Which components are included in the minimal Docker stack versus requiring the full managed desktop runtime; establish minimum resource requirements and readiness checks for a new installation.
+4. Which iOS implementation framework best reuses the current web UI and runtime securely; how push notifications and offline state are handled; Android sequencing.
+5. How the installed Codex/Claude Code runtimes expose session resume, fork, steering, model selection, concurrency, cancellation, and provider-supported subscription authentication. Validate each capability in tests.
+6. Fast and deep model profiles per provider, explicit fallbacks, practical latency and budget ceilings; never assume a specific branding/model will remain available.
+7. The boundary between internal provider subagents and durable independently supervised Orkestr workers; preserve lifecycle evidence at whichever boundary is supported.
+8. Exact local project provisioning dependencies, health/readiness, backup/recovery and resource limits; external provisioning policies, provider quotas, connection eligibility and approvals apply only to explicitly enabled plugins.
+9. Storage/retention details for full conversation history versus summarized reasoning, mutable project state, and consented long-term memory.
+10. Concurrency/scheduling semantics when a project receives several follow-ups while a reasoning session is busy; enforce causal order and duplicate-effect prevention.
+11. Exact plugin distribution/signature/sandbox/versioning and UI extension enforcement, especially where existing runtimes may have host-level privileges.
+12. Which WhatsApp connection/provider supports optional project conversation provisioning or binding and how unsupported API operations are surfaced accurately.
 
 ## 13. Definition of done for this decision record
 
