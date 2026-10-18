@@ -33,6 +33,12 @@ jobs:
         run: |
           echo "ORKESTR_V2_HOME=$RUNNER_TEMP/orkestr-v2-intake" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_DIR=$RUNNER_TEMP/orkestr-v2-target" >> "$GITHUB_ENV"
+      - name: Install namespace test prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y bubblewrap
+      - name: Probe unprivileged provider lifetime namespaces
+        run: python3 tests/probe_lifetime_namespaces.py
       - name: Install pinned Rust
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
       - name: Architecture boundaries
