@@ -21,6 +21,8 @@ mod fence;
 pub use fast::FastAdmissionInput;
 pub(crate) mod inspection;
 mod leases;
+mod running_renewal;
+pub use running_renewal::{RunLeaseTransition, RunRenewalAuthority};
 mod metadata;
 #[cfg(test)]
 mod observation_tests;
