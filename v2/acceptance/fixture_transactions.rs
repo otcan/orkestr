@@ -101,6 +101,18 @@ async fn independent_race_and_observer_before_io() {
     let other = c.h.reattach(&c.b).await.unwrap();
     let (a, b) = tokio::join!(c.admit(&c.h), c.admit(&other));
     assert_eq!(a.provider, b.provider);
+    assert_eq!(
+        c.h.inspect_fixture_scope(&c.claim.conversation_id)
+            .await
+            .unwrap(),
+        FixtureScopeInspection {
+            attempts: 1,
+            acknowledged: 1,
+            reservations: 0,
+            delivery_unknown: 0,
+            quarantined: 0
+        }
+    );
     let fresh = match (a.disposition, b.disposition) {
         (AdmissionDisposition::FreshCandidate, AdmissionDisposition::Replay) => {
             assert!(b.candidate_key.is_none());
@@ -155,6 +167,10 @@ async fn independent_race_and_observer_before_io() {
 async fn semantic_conflict_and_forged_locators_do_not_consume_authority() {
     let c = Case::new().await;
     let fresh = c.admit(&c.h).await;
+    let before =
+        c.h.inspect_fixture_scope(&c.claim.conversation_id)
+            .await
+            .unwrap();
     let mut changed = c.claim.clone();
     changed.scope_sequence += 1;
     assert_eq!(
@@ -174,6 +190,12 @@ async fn semantic_conflict_and_forged_locators_do_not_consume_authority() {
         c.h.claim_provider_dispatch(&forged, "reserve").await,
         Err(RuntimeStoreError::Conflict)
     ));
+    assert_eq!(
+        c.h.inspect_fixture_scope(&c.claim.conversation_id)
+            .await
+            .unwrap(),
+        before
+    );
     let claim = match c
         .h
         .claim_provider_dispatch(&fresh, "reserve")
@@ -257,4 +279,129 @@ async fn discarded_reply_pool_reopen_and_ordinary_store_fail_closed() {
         DispatchConsumption::ReconciliationRequired
     );
     reopened.close().await;
+}
+
+#[cfg(feature = "fixture-test-controls")]
+#[tokio::test]
+async fn expiry_takeover_quarantines_reserved_predecessor_without_touching_other_context() {
+    let c = Case::new().await;
+    let other = bootstrap_fixture_supervisor(
+        &c.b,
+        &c.claim.owner_id,
+        ExplicitFixtureSupervisorConfig {
+            namespace: "unrelated".into(),
+            supervisor_key: "unrelated".into(),
+            takeover: FixtureTakeover::First,
+        },
+    )
+    .await
+    .unwrap();
+    let fresh = c.admit(&c.h).await;
+    let reserved = match c
+        .h
+        .claim_provider_dispatch(&fresh, "reserve")
+        .await
+        .unwrap()
+    {
+        DispatchClaimResult::Reserved(r) => r,
+        _ => panic!("reserved"),
+    };
+    c.h.fixture_expire_context().await.unwrap();
+    assert_eq!(
+        c.h.consume_provider_dispatch(&reserved).await.unwrap_err(),
+        RuntimeStoreError::Expired
+    );
+    let config = || ExplicitFixtureSupervisorConfig {
+        namespace: "independent".into(),
+        supervisor_key: "transaction-check".into(),
+        takeover: FixtureTakeover::ExpiredPredecessor {
+            incarnation_id: c.h.incarnation_id(),
+        },
+    };
+    let (a, b) = tokio::join!(
+        bootstrap_fixture_supervisor(&c.a, &c.claim.owner_id, config()),
+        bootstrap_fixture_supervisor(&c.b, &c.claim.owner_id, config())
+    );
+    let winner = match (a, b) {
+        (Ok(h), Err(RuntimeStoreError::Conflict)) | (Err(RuntimeStoreError::Conflict), Ok(h)) => h,
+        _ => panic!("one successor"),
+    };
+    assert_eq!(
+        c.h.validate_context().await.unwrap_err(),
+        RuntimeStoreError::Fenced
+    );
+    let row = winner
+        .inspect_fixture_attempt(&c.claim.conversation_id, "admit")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(row.blocked && row.inbox_acknowledged);
+    assert_eq!(row.dispatch, FixtureDispatchState::Quarantined);
+    assert!(!row.candidate_verifier_present && !row.reservation_verifier_present);
+    assert_eq!(
+        winner
+            .inspect_fixture_scope(&c.claim.conversation_id)
+            .await
+            .unwrap(),
+        FixtureScopeInspection {
+            attempts: 1,
+            acknowledged: 1,
+            reservations: 0,
+            delivery_unknown: 0,
+            quarantined: 1
+        }
+    );
+    assert!(matches!(
+        winner.consume_provider_dispatch(&reserved).await,
+        Err(RuntimeStoreError::Fenced)
+    ));
+    other.validate_context().await.unwrap();
+    assert_eq!(
+        other
+            .inspect_fixture_scope(&c.claim.conversation_id)
+            .await
+            .unwrap(),
+        FixtureScopeInspection {
+            attempts: 0,
+            acknowledged: 0,
+            reservations: 0,
+            delivery_unknown: 0,
+            quarantined: 0
+        }
+    );
+    c.close().await;
+}
+#[cfg(feature = "fixture-test-controls")]
+#[tokio::test]
+async fn unavailable_reply_control_persists_unknown_without_locator_verifiers() {
+    let c = Case::new().await;
+    let fresh = c.admit(&c.h).await;
+    let reserved = match c
+        .h
+        .claim_provider_dispatch(&fresh, "reserve")
+        .await
+        .unwrap()
+    {
+        DispatchClaimResult::Reserved(r) => r,
+        _ => panic!("reserved"),
+    };
+    assert_eq!(
+        c.h.fixture_consume_without_reply(&reserved)
+            .await
+            .unwrap_err(),
+        RuntimeStoreError::Unavailable
+    );
+    let observer = c.h.reattach(&c.b).await.unwrap();
+    let row = observer
+        .inspect_fixture_attempt(&c.claim.conversation_id, "admit")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.dispatch, FixtureDispatchState::DeliveryUnknown);
+    assert!(!row.candidate_verifier_present && !row.reservation_verifier_present);
+    assert_eq!(
+        observer.consume_provider_dispatch(&reserved).await.unwrap(),
+        DispatchConsumption::ReconciliationRequired
+    );
+    c.close().await;
 }
