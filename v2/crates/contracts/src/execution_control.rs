@@ -27,7 +27,10 @@ fn valid_key(key: &str) -> bool {
 }
 impl ExecutionControlRequest {
     pub fn is_valid(&self) -> bool {
-        !self.run_id.0.is_nil() && self.expected_revision >= 0 && self.expected_control_revision.is_none_or(|r| r > 0) && valid_key(&self.request_key)
+        !self.run_id.0.is_nil()
+            && self.expected_revision >= 0
+            && self.expected_control_revision.is_none_or(|r| r > 0)
+            && valid_key(&self.request_key)
     }
 }
 impl ExecutionSteerRequest {

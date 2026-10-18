@@ -87,7 +87,9 @@ impl ExecutionStatus {
     pub fn is_valid(&self) -> bool {
         self.schema_version == 1
             && self.revision >= 0
-            && self.control_revision.is_none_or(|r| r > 0 && self.run_id.is_some())
+            && self
+                .control_revision
+                .is_none_or(|r| r > 0 && self.run_id.is_some())
             && self.observed_at_ms > 0
             && (self.phase == ExecutionPhase::Queued || self.run_id.is_some())
             && self.acceptance_candidate.as_ref().is_none_or(|c| {
