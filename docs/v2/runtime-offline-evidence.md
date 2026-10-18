@@ -89,3 +89,44 @@ regression test command via v2-cargo with --locked stopped before compile becaus
 this lane awaits the coordinator-owned lockfile. These new Rust tests are pending,
 not passing acceptance. Formal review still needs a distinct reviewer identity;
 the shared PR-owning account cannot formally approve its own PR.
+
+
+Shared-port migration checkpoint:
+
+- Consumed the coordinator combined candidate `aec7475b` by non-force merge.
+  At that exact head, the offline locked runtime command passed 16 tests
+  (10 protocol/fake, 3 ordering, 3 retry). These are not store durability tests.
+- Imported core provider-event additions from `e2de7312` and replaced the
+  provisional synchronous store with native asynchronous `RuntimeStore` calls.
+  Runtime uses shared UUID IDs and separate lease/fence generations. Provider
+  traits, parser and fake remain runtime-owned; no persistence adapter was added.
+- Cancellation carries a distinct interrupt-control envelope and returns the
+  persisted cancellation receipt even when interruption fails. Its new fence
+  cannot become execution admission. Refused stale/fenced observations are held
+  for explicit reconciliation rather than retried as newly authorized events.
+- The migrated tests use ready-future spies, stable sequence/payload retries and
+  typed `Unavailable`/`Fenced`/`StaleLease` errors. They remain unexecuted pending
+  the coordinator-owned dependency lock update. No live inference was run.
+
+Canonical port v1 supersedes the v0 migration above:
+
+- Consumed core `d4cf693435378ed232d97df60727ea6e54d9b90b` and switched the
+  runtime to contracts-owned `RunAdmission`, `ObservationKind` and
+  `ProviderObservation`, u64 lease/dispatch authority and admission purpose.
+- The start helper validates the store-returned role against the requested role
+  and does not dispatch ANY provider turn until core specifies a fresh/replay
+  dispatch disposition. It returns `DispatchUnconfirmed` for otherwise valid
+  admission. Identical replay is not permission to start another turn.
+- Cancellation uses only the core cancellation-acknowledgement token. The fake
+  rejects this token on start, preserves already queued terminal evidence, and
+  acknowledges Stopped only under the cancellation identity after interruption.
+- Pending observations preserve their exact key and body across Unavailable.
+  Keys include run, attempt, generation and local sequence. Stale/expired/owner
+  refusals latch reconciliation without repolling; this remains volatile state.
+- The 19 migrated tests (11 fake/parser, 5 ordering/dispatch, 3 retry) are defined
+  but uncompiled pending the coordinator lock. The test-only ready-future store
+  spy returns Unavailable for every unimplemented operation. Its async-trait
+  dev dependency uses core's exact 0.1.89; no Tokio/executor dependency is added.
+- No SQL adapter, production fallback store, real provider command or inferred
+  cancellation/recovery acceptance is introduced. Earlier aec7475b tests do not
+  establish correctness of this v1 migration.

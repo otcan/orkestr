@@ -1,6 +1,8 @@
 //! Controllable FAKE provider. Explicit fixture mode, bounded queues, no timers,
 //! threads, inference, persistence or implicit fallback to synthetic results.
-use crate::ports::{Admission, Blocker, Provider, ProviderEvent};
+use crate::ports::{Blocker, InterruptControl, ObservationKind, Provider, RunAdmission};
+use orkestr_v2_contracts::runtime::{AdmissionPurpose, MAX_PROVIDER_PROGRESS_BYTES};
+use orkestr_v2_contracts::SessionId;
 use std::collections::{HashMap, VecDeque};
 
 pub const LABEL: &str = "FAKE — synthetic test provider; no model inference";
@@ -9,13 +11,13 @@ const MAX_SESSIONS: usize = 64;
 
 #[derive(Debug)]
 struct Turn {
-    admission: Admission,
-    events: VecDeque<ProviderEvent>,
+    admission: RunAdmission,
+    events: VecDeque<ObservationKind>,
     terminal: bool,
 }
 
 pub struct FakeProvider {
-    turns: HashMap<String, Turn>,
+    turns: HashMap<SessionId, Turn>,
 }
 impl FakeProvider {
     pub fn fixture_only(explicit_fixture_mode: bool) -> Result<Self, Blocker> {
@@ -27,11 +29,19 @@ impl FakeProvider {
         })
     }
     /// Empty queue means busy indefinitely: deterministic tests control progress.
-    pub fn emit(&mut self, admission: &Admission, event: ProviderEvent) -> Result<(), Blocker> {
-        if matches!(event, ProviderEvent::Completed { synthetic: false }) {
+    pub fn emit(
+        &mut self,
+        admission: &RunAdmission,
+        event: ObservationKind,
+    ) -> Result<(), Blocker> {
+        if matches!(
+            event,
+            ObservationKind::CompletedProposal { synthetic: false }
+        ) {
             return Err(Blocker::FixtureOnly);
         }
-        if matches!(&event, ProviderEvent::Progress(text) if text.len() > 8192) {
+        if matches!(&event, ObservationKind::Progress { text } if text.len() > MAX_PROVIDER_PROGRESS_BYTES)
+        {
             return Err(Blocker::QueueFull);
         }
         let turn = self.checked(admission)?;
@@ -43,15 +53,15 @@ impl FakeProvider {
         }
         turn.terminal = matches!(
             event,
-            ProviderEvent::Completed { .. }
-                | ProviderEvent::Failed
-                | ProviderEvent::Stopped
-                | ProviderEvent::Lost
+            ObservationKind::CompletedProposal { .. }
+                | ObservationKind::Failed
+                | ObservationKind::Stopped
+                | ObservationKind::Lost
         );
         turn.events.push_back(event);
         Ok(())
     }
-    fn checked(&mut self, admission: &Admission) -> Result<&mut Turn, Blocker> {
+    fn checked(&mut self, admission: &RunAdmission) -> Result<&mut Turn, Blocker> {
         let turn = self
             .turns
             .get_mut(&admission.session_id)
@@ -63,7 +73,17 @@ impl FakeProvider {
     }
 }
 impl Provider for FakeProvider {
-    fn start(&mut self, admission: &Admission) -> Result<(), Blocker> {
+    fn start(&mut self, admission: &RunAdmission) -> Result<(), Blocker> {
+        if admission.purpose != AdmissionPurpose::Execution {
+            return Err(Blocker::StaleLease);
+        }
+        if admission
+            .native_session_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            return Err(Blocker::UnknownSession);
+        }
         if self.turns.contains_key(&admission.session_id) {
             return Err(Blocker::Busy);
         }
@@ -81,13 +101,13 @@ impl Provider for FakeProvider {
             admission.session_id.clone(),
             Turn {
                 admission: admission.clone(),
-                events: VecDeque::from([ProviderEvent::Started]),
+                events: VecDeque::from([ObservationKind::Started]),
                 terminal: false,
             },
         );
         Ok(())
     }
-    fn poll(&mut self, admission: &Admission) -> Result<Option<ProviderEvent>, Blocker> {
+    fn poll(&mut self, admission: &RunAdmission) -> Result<Option<ObservationKind>, Blocker> {
         let turn = self.checked(admission)?;
         let event = turn.events.pop_front();
         if turn.terminal && turn.events.is_empty() {
@@ -95,27 +115,30 @@ impl Provider for FakeProvider {
         }
         Ok(event)
     }
-    fn interrupt(&mut self, admission: &Admission) -> Result<(), Blocker> {
-        // The cancellation fence may be newer, but may never target another run.
-        let turn = self
-            .turns
-            .get_mut(&admission.session_id)
-            .ok_or(Blocker::UnknownSession)?;
-        if admission.run_id != turn.admission.run_id
-            || admission.native_session_id != turn.admission.native_session_id
-            || admission.role != turn.admission.role
-            || admission.generation < turn.admission.generation
+    fn interrupt(&mut self, control: &InterruptControl) -> Result<(), Blocker> {
+        let original = &control.original;
+        let cancelled = &control.cancellation;
+        if cancelled.purpose != AdmissionPurpose::CancellationAcknowledgement
+            || cancelled.owner_id != original.owner_id
+            || cancelled.conversation_id != original.conversation_id
+            || cancelled.run_id != original.run_id
+            || cancelled.session_id != original.session_id
+            || cancelled.native_session_id != original.native_session_id
+            || cancelled.role != original.role
+            || cancelled.attempt != original.attempt
+            || cancelled.lease_generation <= original.lease_generation
+            || cancelled.dispatch_fence <= original.dispatch_fence
         {
             return Err(Blocker::StaleLease);
         }
-        // Completion may already be waiting for persistence. Never replace that
-        // evidence with a fabricated stop confirmation or rebind its generation.
+        let turn = self.checked(original)?;
         if turn.terminal {
             return Err(Blocker::Busy);
         }
-        turn.admission = admission.clone();
+        // Only a confirmed control dispatch can bind cancellation acknowledgement.
+        turn.admission = cancelled.clone();
         turn.events.clear();
-        turn.events.push_back(ProviderEvent::Stopped);
+        turn.events.push_back(ObservationKind::Stopped);
         turn.terminal = true;
         Ok(())
     }

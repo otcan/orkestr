@@ -5,4 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-serde_json = "=1.0.145"
+serde_json.workspace = true
+orkestr-v2-application = { path = "../application" }
+orkestr-v2-contracts = { path = "../contracts" }
+
+[dev-dependencies]
+async-trait = "=0.1.89"

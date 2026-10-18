@@ -1,30 +1,11 @@
-//! Proposed application ports; durable implementation belongs to the core store.
-//! Every method must finish its transaction before calling a provider.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Role {
-    Fast,
-    Deep,
-    Worker,
-}
+//! Runtime-owned process capabilities; all durable authority belongs to core.
+pub use orkestr_v2_contracts::runtime::{ObservationKind, RunAdmission};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Admission {
-    pub run_id: String,
-    pub session_id: String,
-    pub native_session_id: String,
-    pub generation: u64,
-    pub role: Role,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ProviderEvent {
-    Started,
-    Progress(String),
-    ApprovalRequested,
-    Completed { synthetic: bool },
-    Failed,
-    Stopped,
-    Lost,
+/// A cancellation token can control an existing turn, never admit a new one.
+#[derive(Clone, Debug)]
+pub struct InterruptControl {
+    pub original: RunAdmission,
+    pub cancellation: RunAdmission,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,43 +17,22 @@ pub enum Blocker {
     QueueFull,
     FixtureOnly,
     Protocol,
+    /// Core admission replay cannot yet distinguish a fresh provider dispatch.
+    DispatchUnconfirmed,
 }
 
-/// Provider methods return promptly. Pending work is polled by a supervisor,
-/// outside ingress transactions. Completion remains a proposal, never success.
+/// Commands return promptly; ingress never waits here. Core owns durable checks.
 pub trait Provider {
-    fn start(&mut self, admission: &Admission) -> Result<(), Blocker>;
-    fn poll(&mut self, admission: &Admission) -> Result<Option<ProviderEvent>, Blocker>;
-    fn interrupt(&mut self, admission: &Admission) -> Result<(), Blocker>;
-    fn resume(&mut self, _admission: &Admission) -> Result<(), Blocker> {
+    fn start(&mut self, admission: &RunAdmission) -> Result<(), Blocker>;
+    fn poll(&mut self, admission: &RunAdmission) -> Result<Option<ObservationKind>, Blocker>;
+    fn interrupt(&mut self, control: &InterruptControl) -> Result<(), Blocker>;
+    fn resume(&mut self, _admission: &RunAdmission) -> Result<(), Blocker> {
         Err(Blocker::Unsupported)
     }
-    fn fork(&mut self, _admission: &Admission) -> Result<(), Blocker> {
+    fn fork(&mut self, _admission: &RunAdmission) -> Result<(), Blocker> {
         Err(Blocker::Unsupported)
     }
-    fn steer(&mut self, _admission: &Admission, _text: &str) -> Result<(), Blocker> {
+    fn steer(&mut self, _admission: &RunAdmission, _text: &str) -> Result<(), Blocker> {
         Err(Blocker::Unsupported)
     }
-}
-
-/// Core implements atomic generation checks, run/session evidence and recovery.
-/// No blanket implementation or in-memory production fallback is supplied.
-pub trait SessionStore {
-    fn admit(&self, scope: &str, role: Role, run_id: &str) -> Result<Admission, Blocker>;
-    fn record(&self, admission: &Admission, event: ProviderEvent) -> Result<(), Blocker>;
-    /// Persist cancel_requested and increment the dispatch fence BEFORE interrupt.
-    fn request_cancel(&self, run_id: &str) -> Result<Admission, Blocker>;
-    /// Mark unconfirmed active attempts lost/blocked; never silently restart.
-    fn recover(&self) -> Result<Vec<Admission>, Blocker>;
-}
-
-/// Store fencing is deliberately ordered before fallible provider interruption.
-/// An error means cancellation is requested, not confirmed.
-pub fn cancel<S: SessionStore, P: Provider>(
-    store: &S,
-    provider: &mut P,
-    run_id: &str,
-) -> Result<(), Blocker> {
-    let fenced = store.request_cancel(run_id)?;
-    provider.interrupt(&fenced)
 }
