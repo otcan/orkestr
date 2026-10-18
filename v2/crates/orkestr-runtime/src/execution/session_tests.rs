@@ -205,6 +205,7 @@ for line in frames():"#,
         panic!("unique dispatch")
     };
     let (authority, mut pump) = ready.attach(bound.clone(), cap).unwrap();
+    let original_scope = pump.source.scope.clone();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         #[cfg(feature = "fixture-test-controls")]
@@ -429,16 +430,22 @@ for line in frames():"#,
                 1
             );
             if stop_mode == 9 {
-                // The ordinary test broker is not an exit-73 proof issuer.
-                // Taking retirement must nevertheless retain the original Child
-                // until wait; canonical Cancelled must not have quarantined it.
+                // The reviewed broker issues proof only after EOF cleanup and
+                // owned wait. Canonical Cancelled must retain that exact child.
                 let mut retiring = stopping.retire_broker().unwrap();
                 drop(authority);
                 loop {
                     match retiring.poll_reaped() {
                         Ok(None) => tokio::time::sleep(Duration::from_millis(2)).await,
-                        Err(crate::containment::Error::AuthorityProtocol) => break,
-                        _ => panic!("ordinary broker must not issue replacement evidence"),
+                        Ok(Some(proof)) => {
+                            assert_eq!(proof.scope(), &original_scope);
+                            assert!(matches!(
+                                retiring.poll_reaped(),
+                                Err(crate::containment::Error::Revoked)
+                            ));
+                            break;
+                        }
+                        Err(error) => panic!("reviewed broker retirement refused: {error:?}"),
                     }
                     assert!(Instant::now() < deadline);
                 }
@@ -537,6 +544,6 @@ async fn buffered_progress_preserves_racing_completion_truth() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn retained_durable_stopped_hands_owned_child_to_retirement_without_fake_proof() {
+async fn retained_durable_stopped_yields_single_use_original_scope_reap_proof() {
     exercise(true, 9).await;
 }
