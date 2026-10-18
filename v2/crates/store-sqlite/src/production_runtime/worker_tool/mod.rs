@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 mod authority;
 mod finish;
 mod issuance;
+mod native_delivery;
+pub use native_delivery::*;
 mod native_request;
 pub use native_request::OfflinePythonNativeRequestId;
 mod retained_parent;
