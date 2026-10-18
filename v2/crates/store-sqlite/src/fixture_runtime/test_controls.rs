@@ -42,6 +42,10 @@ pub enum FixtureCheckpoint {
     ConsumeAfterCommit,
     ObservationBeforeCommit,
     ObservationAfterCommit,
+    CancelBeforeCommit,
+    CancelAfterCommit,
+    StoppedBeforeCommit,
+    StoppedAfterCommit,
 }
 impl FixtureCheckpoint {
     fn name(self) -> &'static str {
@@ -55,6 +59,10 @@ impl FixtureCheckpoint {
             Self::ConsumeAfterCommit => "consume-after-commit",
             Self::ObservationBeforeCommit => "observation-before-commit",
             Self::ObservationAfterCommit => "observation-after-commit",
+            Self::CancelBeforeCommit => "cancel-before-commit",
+            Self::CancelAfterCommit => "cancel-after-commit",
+            Self::StoppedBeforeCommit => "stopped-before-commit",
+            Self::StoppedAfterCommit => "stopped-after-commit",
         }
     }
 }

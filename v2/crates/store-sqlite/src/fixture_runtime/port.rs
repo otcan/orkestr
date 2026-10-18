@@ -73,8 +73,13 @@ impl RuntimeStore for FixtureSupervisorStore {
     ) -> Result<ProviderEventReceipt> {
         self.append_observation(owner, admission, input).await
     }
-    async fn request_cancel(&self, _: &OwnerId, _: &RunId, _: &str) -> Result<CancelReceipt> {
-        Err(RuntimeStoreError::Unavailable)
+    async fn request_cancel(
+        &self,
+        owner: &OwnerId,
+        run: &RunId,
+        key: &str,
+    ) -> Result<CancelReceipt> {
+        self.cancel(owner, run, key).await
     }
     async fn acknowledge_inbox(&self, _: &InboxClaim, _: &RunAdmission) -> Result<()> {
         // No standalone ack: successful admit already consumed exactly its row.
