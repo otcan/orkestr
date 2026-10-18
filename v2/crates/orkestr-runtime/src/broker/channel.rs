@@ -342,6 +342,9 @@ pub(crate) struct BrokerMetadataRequest {
     bytes: Vec<u8>,
 }
 impl BrokerMetadataRequest {
+    pub(super) fn sealed(lineage: std::sync::Arc<()>, bytes: Vec<u8>) -> Self {
+        Self { lineage, bytes }
+    }
     pub(crate) fn into_submission(self) -> (std::sync::Arc<()>, Vec<u8>) {
         (self.lineage, self.bytes)
     }

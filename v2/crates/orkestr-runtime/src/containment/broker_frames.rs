@@ -46,6 +46,12 @@ fn outer<'a>(value: &'a Value, method: &str) -> Result<&'a Value, Error> {
 pub(super) fn metadata(frame: &[u8], workspace: &Path) -> Result<Vec<u8>, Error> {
     let value: Value = serde_json::from_slice(frame).map_err(|_| Error::InvalidFrame)?;
     let inner = outer(&value, "BrokerMetadata")?;
+    if inner.get("type").and_then(Value::as_str) == Some("control_request") {
+        if inner != &crate::broker::claude_initialize::frame() {
+            return Err(Error::InvalidFrame);
+        }
+        return serde_json::to_vec(&value).map_err(|_| Error::InvalidFrame);
+    }
     let mut validation = inner.clone();
     if validation.get("method").and_then(Value::as_str) == Some("thread/resume") {
         let params = validation
@@ -209,6 +215,27 @@ mod tests {
         serde_json::to_vec(&json!({"id":2,"method":method,"params":{
             "owned_handle":"synthetic_owned","frame":frame}}))
         .unwrap()
+    }
+    #[test]
+    fn claude_initialize_is_closed_and_broker_only() {
+        let frame = crate::broker::claude_initialize::frame();
+        let workspace = Path::new("/synthetic/workspace");
+        assert!(metadata(&envelope("BrokerMetadata", frame.clone()), workspace).is_ok());
+        assert!(validate_metadata(&serde_json::to_vec(&frame).unwrap(), workspace).is_err());
+        for (pointer, value) in [
+            ("/request/hooks", json!({})),
+            ("/request/subtype", json!("interrupt")),
+            ("/request_id", json!("foreign")),
+            ("/request/input", json!("forbidden")),
+        ] {
+            let mut denied = frame.clone();
+            if pointer == "/request/input" {
+                denied["request"]["input"] = value;
+            } else {
+                *denied.pointer_mut(pointer).unwrap() = value;
+            }
+            assert!(metadata(&envelope("BrokerMetadata", denied), workspace).is_err());
+        }
     }
     #[test]
     fn resume_is_broker_only_and_closed() {

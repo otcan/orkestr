@@ -60,6 +60,10 @@ impl ClaudeChannel {
             poisoned: false,
         })
     }
+    #[allow(dead_code, reason = "Core requested-native readiness issuer pending")]
+    pub(crate) fn initialize_protocol(&self) -> super::claude_initialize::ClaudeInitialize {
+        super::claude_initialize::ClaudeInitialize::new(self.handle.clone(), self.lineage.clone())
+    }
     pub(crate) fn native(&self) -> &str {
         &self.native
     }
