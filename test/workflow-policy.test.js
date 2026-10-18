@@ -232,6 +232,7 @@ for (const [name, before, after] of [
   ["main branch", "v2/**", "main"],
   ["unbounded branch", "v2/**", "**"],
   ["negated branch", "v2/**", "!v2/private"],
+  ["tag trigger", "push: {branches: ['v2/**']}", "push: {branches: ['v2/**'], tags: ['v*']}"],
   ["missing branch filter", "{branches: ['v2/**']}", "{}"],
   ["manual trigger", "pull_request:", "workflow_dispatch:"],
   ["job write token", "runs-on: macos-15", "runs-on: macos-15\n    permissions: {contents: write}"],

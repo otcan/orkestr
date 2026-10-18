@@ -38,7 +38,7 @@ fn main() {
             event: Event::TaskCompleted {
                 task_id: "prototype-domain".into(),
                 worker_id: "demo-worker".into(),
-                summary: "Demonstrated in-memory event reducer".into(),
+                result_ref: "synthetic-result-001".into(),
             },
         },
     ];
