@@ -1,6 +1,5 @@
 use crate::transport::{self, Failure};
 use dioxus::prelude::*;
-use gloo_timers::future::TimeoutFuture;
 use orkestr_v2_contracts::{Credentials, Project, ProjectInput, Receipt, SessionResponse};
 use orkestr_v2_ui::{Draft, Projection};
 use serde_json::{json, Value};
@@ -134,7 +133,7 @@ pub fn Conversation(id: String, token: String, mut drafts: Signal<BTreeMap<Strin
                         Err(error) => {
                             if error.status == 401 { onexpired.call(()); return; }
                             status.set(error.message);
-                            TimeoutFuture::new(2000).await; continue;
+                            transport::delay().await; continue;
                         }
                     }
                 }
@@ -152,7 +151,7 @@ pub fn Conversation(id: String, token: String, mut drafts: Signal<BTreeMap<Strin
                     Ok(_) => status.set("Stream disconnected; reconnecting. Runtime status unavailable.".into()),
                     Err(error) => status.set(error.message),
                 }
-                TimeoutFuture::new(1000).await;
+                transport::delay().await;
             }
         }
     });

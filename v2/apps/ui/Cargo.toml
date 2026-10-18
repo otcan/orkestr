@@ -15,9 +15,7 @@ orkestr-v2-contracts = { path = "../../crates/contracts" }
 serde.workspace = true
 serde_json.workspace = true
 dioxus = { version = "=0.7.3", default-features = false, features = ["macro", "html", "signals", "hooks", "launch", "document"] }
-gloo-timers = { version = "=0.3.0", features = ["futures"] }
 
 [[bin]]
 name = "orkestr-v2-ui"
 path = "src/main.rs"
-required-features = ["web"]

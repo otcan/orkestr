@@ -28,6 +28,10 @@ pub async fn key() -> Result<String, Failure> {
     document::eval("return crypto.randomUUID();").join().await.map_err(|_| Failure::from("Secure request ID generation unavailable".into()))
 }
 
+pub async fn delay() {
+    let _ = document::eval("await new Promise(resolve => setTimeout(resolve, 1500)); return null;").await;
+}
+
 pub async fn projects(token: &str) -> Result<Vec<Project>, Failure> {
     let mut result = Vec::new();
     let mut after = 0;
