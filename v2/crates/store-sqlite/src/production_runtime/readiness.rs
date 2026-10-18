@@ -6,6 +6,19 @@ impl Store {
         &self,
         input: NativeSessionConfirmation,
     ) -> Result<Binding> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let binding = self
+            .confirm_native_session_in(&mut tx, input, false)
+            .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(binding)
+    }
+    pub(super) async fn confirm_native_session_in(
+        &self,
+        tx: &mut SqliteConnection,
+        input: NativeSessionConfirmation,
+        worker_authorized: bool,
+    ) -> Result<Binding> {
         let c = self.context()?;
         if input.native_session_id.is_empty()
             || input.native_session_id.len() > 512
@@ -25,8 +38,7 @@ impl Store {
                 &input.source_event_key,
             ],
         );
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        c.validate(&mut tx).await?;
+        c.validate(tx).await?;
         let row = sqlx::query("SELECT * FROM session_bindings WHERE id=? AND owner_id=?")
             .bind(input.session_id.to_string())
             .bind(c.owner.to_string())
@@ -35,6 +47,9 @@ impl Store {
             .map_err(db)?
             .ok_or(RuntimeStoreError::NotFound)?;
         let binding = crate::runtime::binding(&row)?;
+        if binding.role == Role::Worker && !worker_authorized {
+            return Err(RuntimeStoreError::Fenced);
+        }
         if let Some(ready) = sqlx::query("SELECT * FROM production_readiness WHERE session_id=?")
             .bind(input.session_id.to_string())
             .fetch_optional(&mut *tx)
@@ -49,7 +64,6 @@ impl Store {
             if ready.get::<String, _>("evidence_digest") != digest {
                 return Err(RuntimeStoreError::Conflict);
             }
-            tx.commit().await.map_err(db)?;
             return Ok(binding);
         }
         if binding.generation != input.expected_generation {
@@ -71,7 +85,6 @@ impl Store {
         sqlx::query("INSERT INTO production_readiness(session_id,context_id,incarnation_id,protocol_version,source_event_key,evidence_digest) VALUES(?,?,?,?,?,?)")
             .bind(input.session_id.to_string()).bind(&c.id).bind(&c.incarnation).bind(input.protocol_version).bind(input.source_event_key).bind(digest).execute(&mut *tx).await.map_err(db)?;
         let result = crate::runtime::binding(&updated)?;
-        tx.commit().await.map_err(db)?;
         Ok(result)
     }
 }

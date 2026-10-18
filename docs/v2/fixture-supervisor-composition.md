@@ -75,12 +75,3 @@ ordinary Store refusal, preserved racing terminal evidence, and retained polled
 stop across persistence outage. The lost-reply case uses Core's opt-in reply-drop
 facility, not SIGKILL or lost transport ACK. Independent cancellation process
 acceptance is a separate artifact and is not transferred to this composition.
-
-## Runtime registration checkpoint
-
-Runtime consumed the exact three-file Core source commit 454b40d7 and registered
-`tests/fixture_composition.rs`, without changing the library, dependency manifests
-or lockfile. Its own wrapper locked/offline runs passed six default and seven
-feature composition cases, zero ignored. Selected feature clippy with warnings
-denied, formatting and diff checks passed. These are test-only composition results,
-not production supervisor enablement or process-crash acceptance.

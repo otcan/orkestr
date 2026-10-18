@@ -1,6 +1,6 @@
 # Orkestr 2.0: full Rust application rewrite
 
-Status: implementation plan authorized for an isolated development track, 2026-10-18. Integration branch: `v2/rust-rewrite`. This is not a production release or a declaration that the application already exists.
+Status: full web release implementation authorized, 2026-10-18. Active integration branch: `v2/s0-contract-integration`. The [full release program](full-release.md) records current scope, ownership and gates. Implementation exists; production execution remains incomplete at its recorded baseline.
 
 ## 1. Decision and precedence
 
@@ -11,7 +11,7 @@ Product requirements follow [ADR 0003 at commit 2d48f841](https://github.com/otc
 This revision replaces the initial v2 draft's incompatible assumptions:
 
 - A small local model is NOT the mandatory router or the authoritative assistant. Fast and deep roles use distinct persistent supported Codex/Claude Code sessions; explicitly selected model/API/local alternatives remain possible.
-- iOS is a first-class client, with feasibility and build work starting in the first implementation wave. It is not deferred behind an indefinite PWA-only phase.
+- Web production replacement comes first. Native iOS remains a planned client and follows the web release; iOS feasibility, simulator and device checks do not block web qualification.
 - The ordinary UI is one global main conversation plus one main conversation per project, not a mandatory tree of worker chats.
 - Local Git/workspaces form the project baseline. Local OXRM integration must be verified. External GitHub, Jira and WhatsApp are optional plugins, not prerequisites for creating a shopping list.
 - There is no verified Rust demo at the plan baseline. A README containing cargo commands is not implementation evidence.
@@ -32,7 +32,7 @@ Existing ADR 0001/0002 and runtime specifications remain behavioral/security ref
 | Packaging | Separate Docker Compose project and local CLI | Runs on the owner's computer or self-owned VPS. iOS is a client, not a CLI/agent host |
 | Integrations | Versioned capability/plugin protocol | Rust first-party adapters. Existing specialist services may remain isolated external processes; no rewrite of Chromium, Git, Codex, Claude or OXRM for language purity |
 
-Dioxus is the selected implementation path, not an invitation for parallel frontend-framework experiments. Its first milestone must prove input, streaming, accessibility and iOS build behavior. A failed gate requires a documented architectural correction, not silently replacing Rust with a TypeScript UI or claiming mobile readiness from a web screenshot. Small platform bindings and browser interop are permitted and inventoried.
+Dioxus is the selected implementation path, not an invitation for parallel frontend-framework experiments. Its web milestone must prove input, streaming and accessibility. Native iOS has separate build and device gates. A failed gate requires a documented architectural correction, not silently replacing Rust with a TypeScript UI or claiming mobile readiness from a web screenshot. Small platform bindings and browser interop are permitted and inventoried.
 
 Rust's compiler prevents important memory/data-race errors; it does not prevent duplicated effects, faulty authorization, deadlocks or incorrect workflow design. Tests and deterministic control are the basis of trust. Abundant inference capacity is a development resource, not a correctness argument.
 
@@ -94,9 +94,9 @@ A legacy bridge is temporary, separately deployable and versioned. It can expose
 
 The first deliverable is a locally runnable Rust server and Rust UI, with durable messages, a fake busy reasoning session, a separate worker, reliable Stop, evidence-backed results and restart recovery. Fake adapters prove software behavior, not real provider support. A second acceptance step uses a separately configured real local subscription session.
 
-The first-wave contracts and tests are in [first-implementation.md](first-implementation.md); complete migration gates are in [migration.md](migration.md). NEW development threads implement this track. The owner tests the candidate locally before deciding to replace the old installation. Mainline merge, production deployment, channel takeover, credential reuse and destructive migration remain separate approval gates.
+The first-wave contracts and tests are in [first-implementation.md](first-implementation.md); complete migration gates are in [migration.md](migration.md). Reuse the existing development lanes for the approved [full release program](full-release.md). The owner authorized implementation through the gated release sequence; candidate qualification, supervised daily use, migration reconciliation and the release train still precede cutover. Destructive migration and automatic credential copying are outside that authorization.
 
-At plan revision, the branch contains planning files only. Implementation reports must cite actual commits, tests and artifacts; do not claim a working demo from documentation alone.
+The recorded full-release baseline has executable Rust intake and explicit fixture runtime composition. Ordinary production dispatch and real provider acceptance are not yet complete. Implementation reports must cite actual commits, tests and artifacts; do not claim a working product from documentation or fixture tests alone.
 
 ## Primary technical references
 

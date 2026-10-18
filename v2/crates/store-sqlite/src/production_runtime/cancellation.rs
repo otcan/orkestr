@@ -4,7 +4,7 @@ use super::*;
 use orkestr_v2_contracts::RunId;
 use sqlx::sqlite::SqliteRow;
 
-fn receipt(run: &SqliteRow, cancel: &SqliteRow) -> Result<CancelReceipt> {
+pub(super) fn receipt(run: &SqliteRow, cancel: &SqliteRow) -> Result<CancelReceipt> {
     let mut admission = envelope(run)?.run;
     admission.lease_generation =
         u64::try_from(cancel.get::<i64, _>("lease_generation")).map_err(db)?;
@@ -40,7 +40,7 @@ impl Store {
         owner: &OwnerId,
         run: &RunId,
         key: &str,
-        guard: Option<(&orkestr_v2_contracts::ConversationId, i64)>,
+        guard: Option<(&orkestr_v2_contracts::ConversationId, i64, Option<i64>)>,
         credential: Option<&str>,
     ) -> Result<(CancelReceipt, i64)> {
         let context = self.context()?;
@@ -70,7 +70,7 @@ impl Store {
                 .await
                 .map_err(db)?
                 .ok_or(RuntimeStoreError::NotFound)?;
-        if let Some((conversation, _)) = guard {
+        if let Some((conversation, _, _)) = guard {
             if row.get::<String, _>("conversation_id") != conversation.to_string() {
                 return Err(RuntimeStoreError::NotFound);
             }
@@ -84,8 +84,10 @@ impl Store {
             if cancel.get::<&str, _>("request_key") != key {
                 return Err(RuntimeStoreError::Fenced);
             }
-            if let Some((_, expected)) = guard {
-                if cancel.get::<Option<i64>, _>("request_revision") != Some(expected) {
+            if let Some((_, expected, control)) = guard {
+                if cancel.get::<Option<i64>, _>("request_revision") != Some(expected)
+                    || cancel.get::<Option<i64>, _>("request_control_revision") != control
+                {
                     return Err(RuntimeStoreError::Conflict);
                 }
             }
@@ -96,18 +98,36 @@ impl Store {
                     .unwrap_or(0),
             ));
         }
-        if let Some((conversation, expected)) = guard {
-            let actual: i64 = sqlx::query_scalar(
+        if let Some((conversation, expected, control)) = guard {
+            let projection: i64 = sqlx::query_scalar(
                 "SELECT revision FROM execution_revisions WHERE conversation_id=?",
             )
             .bind(conversation.to_string())
             .fetch_one(&mut *tx)
             .await
             .map_err(db)?;
-            if expected < 0 || actual != expected {
+            // A sampled projection may lag streaming progress, but cannot claim
+            // a future cut. Otherwise the resulting receipt would precede its
+            // own requested revision even with a valid exact-run control CAS.
+            if expected < 0 || expected > projection {
+                return Err(RuntimeStoreError::Conflict);
+            }
+            if let Some(control) = control {
+                let current: i64 = sqlx::query_scalar(
+                    "SELECT revision FROM production_control_revisions WHERE run_id=?",
+                )
+                .bind(run.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db)?;
+                if control <= 0 || current != control {
+                    return Err(RuntimeStoreError::Conflict);
+                }
+            } else if projection != expected {
                 return Err(RuntimeStoreError::Conflict);
             }
         }
+
         context.validate(&mut tx).await?;
         if row.get::<String, _>("incarnation_id") != context.incarnation.clone()
             || !matches!(row.get::<&str, _>("state"), "starting" | "running")
@@ -146,10 +166,13 @@ impl Store {
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
-        let deadline = clock
+        let mut deadline = clock
             .checked_add(60_000)
             .ok_or(RuntimeStoreError::Unavailable)?
             .min(supervisor_deadline);
+        if provider.run.role == Role::Worker {
+            deadline = deadline.min(provider.run.lease_deadline_ms);
+        }
         let (state, inflight, control) = if dispatch == "delivery_unknown" {
             ("cancel_requested", "unknown", "pending")
         } else {
@@ -191,8 +214,8 @@ impl Store {
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(db)?;
-        sqlx::query("UPDATE production_cancellations SET request_revision=?,receipt_revision=? WHERE run_id=?")
-            .bind(guard.map(|(_, revision)| revision)).bind(revision).bind(run.to_string()).execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("UPDATE production_cancellations SET request_revision=?,receipt_revision=?,request_control_revision=? WHERE run_id=?")
+            .bind(guard.map(|(_, revision, _)| revision)).bind(revision).bind(guard.and_then(|(_, _, control)| control)).bind(run.to_string()).execute(&mut *tx).await.map_err(db)?;
         let result = receipt(&row, &cancel)?;
         #[cfg(feature = "fixture-test-controls")]
         self.production_checkpoint("cancel-before-commit").await?;

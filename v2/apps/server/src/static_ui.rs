@@ -1,7 +1,10 @@
 //! Optional immutable static snapshot; never reads request-selected filesystem paths.
+mod cache;
+#[cfg(test)]
+mod cache_http_tests;
 use axum::{
     body::{Body, Bytes},
-    http::{header, Method, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
     Router,
 };
@@ -15,7 +18,22 @@ use std::{
 
 const MAX_FILE: usize = 8 * 1024 * 1024;
 const MAX_TOTAL: usize = 64 * 1024 * 1024;
-type Assets = BTreeMap<String, (&'static str, Bytes)>;
+struct Asset {
+    content_type: &'static str,
+    data: Bytes,
+    etag: HeaderValue,
+}
+impl Asset {
+    fn new(content_type: &'static str, data: Bytes) -> Self {
+        let etag = cache::etag(&data);
+        Self {
+            content_type,
+            data,
+            etag,
+        }
+    }
+}
+type Assets = BTreeMap<String, Asset>;
 
 fn invalid() -> io::Error {
     io::Error::new(
@@ -84,14 +102,14 @@ fn load(
             if key == "/api" || key.starts_with("/api/") {
                 return Err(invalid());
             }
-            assets.insert(key, (content_type, Bytes::from(data)));
+            assets.insert(key, Asset::new(content_type, Bytes::from(data)));
         } else {
             return Err(invalid());
         }
     }
     Ok(())
 }
-fn respond(method: Method, uri: Uri, assets: &Assets) -> Response {
+fn respond(method: Method, uri: Uri, request_headers: &HeaderMap, assets: &Assets) -> Response {
     let path = uri.path();
     if path == "/api" || path.starts_with("/api/") {
         return super::Error(StatusCode::NOT_FOUND, "not_found", "Endpoint not found")
@@ -108,21 +126,28 @@ fn respond(method: Method, uri: Uri, assets: &Assets) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     }
     let key = if path == "/" { "/index.html" } else { path };
-    let Some((content_type, data)) = assets.get(key) else {
+    let Some(asset) = assets.get(key) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let mut response = Response::new(if method == Method::HEAD {
+    let unchanged = cache::unchanged(request_headers, &asset.etag);
+    let mut response = Response::new(if method == Method::HEAD || unchanged {
         Body::empty()
     } else {
-        Body::from(data.clone())
+        Body::from(asset.data.clone())
     });
+    if unchanged {
+        *response.status_mut() = StatusCode::NOT_MODIFIED;
+    }
     let headers = response.headers_mut();
-    headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
+    headers.insert(header::CONTENT_TYPE, asset.content_type.parse().unwrap());
+    // For HEAD/304 this is the selected representation length, never a payload
+    // length of zero. Setting it also prevents middleware synthesizing zero.
     headers.insert(
         header::CONTENT_LENGTH,
-        data.len().to_string().parse().unwrap(),
+        asset.data.len().to_string().parse().unwrap(),
     );
-    headers.insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    headers.insert(header::ETAG, asset.etag.clone());
+    headers.insert(header::CACHE_CONTROL, cache::POLICY.parse().unwrap());
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
     response
 }
@@ -142,10 +167,12 @@ pub fn with_static_ui(router: Router, dist: &Path) -> io::Result<Router> {
         return Err(invalid());
     }
     let assets = Arc::new(assets);
-    Ok(router.fallback(move |method: Method, uri: Uri| {
-        let assets = assets.clone();
-        async move { respond(method, uri, &assets) }
-    }))
+    Ok(
+        router.fallback(move |method: Method, uri: Uri, headers: HeaderMap| {
+            let assets = assets.clone();
+            async move { respond(method, uri, &headers, &assets) }
+        }),
+    )
 }
 
 #[cfg(test)]
@@ -154,7 +181,7 @@ mod tests {
     fn assets() -> Assets {
         BTreeMap::from([(
             "/index.html".into(),
-            ("text/html; charset=utf-8", Bytes::from_static(b"UI")),
+            Asset::new("text/html; charset=utf-8", Bytes::from_static(b"UI")),
         )])
     }
     #[test]
@@ -175,9 +202,14 @@ mod tests {
         let mut total = 0;
         load(&directory.0, &directory.0, 0, &mut assets, &mut total).unwrap();
         assert_eq!(total, wasm.len());
-        assert_eq!(assets["/app.wasm"].1.as_ref(), wasm);
+        assert_eq!(assets["/app.wasm"].data.as_ref(), wasm);
         for method in [Method::GET, Method::HEAD] {
-            let response = respond(method, "/app.wasm".parse().unwrap(), &assets);
+            let response = respond(
+                method,
+                "/app.wasm".parse().unwrap(),
+                &HeaderMap::new(),
+                &assets,
+            );
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(response.headers()[header::CONTENT_TYPE], "application/wasm");
             assert_eq!(response.headers()[header::CONTENT_LENGTH], "8");
@@ -191,7 +223,12 @@ mod tests {
     #[test]
     fn api_unknown_is_json_and_never_spa() {
         for path in ["/api", "/api/v2/missing"] {
-            let response = respond(Method::GET, path.parse().unwrap(), &assets());
+            let response = respond(
+                Method::GET,
+                path.parse().unwrap(),
+                &HeaderMap::new(),
+                &assets(),
+            );
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
             assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
         }
@@ -205,14 +242,25 @@ mod tests {
             "/index.html/extra",
         ] {
             assert_eq!(
-                respond(Method::GET, path.parse().unwrap(), &assets()).status(),
+                respond(
+                    Method::GET,
+                    path.parse().unwrap(),
+                    &HeaderMap::new(),
+                    &assets()
+                )
+                .status(),
                 StatusCode::NOT_FOUND
             );
         }
     }
     #[test]
     fn explicit_index_and_head_have_correct_headers() {
-        let response = respond(Method::HEAD, "/".parse().unwrap(), &assets());
+        let response = respond(
+            Method::HEAD,
+            "/".parse().unwrap(),
+            &HeaderMap::new(),
+            &assets(),
+        );
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers()[header::CONTENT_TYPE],
@@ -224,7 +272,13 @@ mod tests {
             "nosniff"
         );
         assert_eq!(
-            respond(Method::POST, "/".parse().unwrap(), &assets()).status(),
+            respond(
+                Method::POST,
+                "/".parse().unwrap(),
+                &HeaderMap::new(),
+                &assets()
+            )
+            .status(),
             StatusCode::METHOD_NOT_ALLOWED
         );
     }

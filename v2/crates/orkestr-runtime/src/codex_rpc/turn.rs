@@ -45,6 +45,24 @@ impl TurnStream {
     pub fn terminal(&self) -> Option<&ProviderEvent> {
         self.terminal.as_ref()
     }
+    /// Correlation only. The reuse adapter separately requires durable acceptance
+    /// and a fresh consumed Core capability before transferring the owned child.
+    pub(crate) fn completed_continuation(&self) -> Result<(String, u64), Blocker> {
+        if self.poisoned
+            || !self.acknowledged
+            || self.interrupt_claimed
+            || !self.events.is_empty()
+            || !matches!(self.terminal, Some(ProviderEvent::CompletedProposal { .. }))
+        {
+            return Err(Blocker::Protocol);
+        }
+        let next = self
+            .request
+            .checked_add(1)
+            .filter(|next| *next < (1_u64 << 53))
+            .ok_or(Blocker::Protocol)?;
+        Ok((self.thread.clone(), next))
+    }
     /// Protocol correlation only: the caller still needs issued cancellation
     /// authority around every actual write. Failure never permits retry.
     #[allow(

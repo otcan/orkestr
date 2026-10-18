@@ -35,8 +35,17 @@ mod readiness;
 mod recovery;
 #[cfg(test)]
 mod recovery_tests;
+mod resume_metadata;
+mod retirement;
+#[cfg(test)]
+mod retirement_tests;
 mod status;
 mod stop;
+mod stopped_metadata;
+mod worker;
+pub use worker::*;
+mod worker_tool;
+pub use worker_tool::*;
 #[cfg(test)]
 mod stop_tests;
 #[cfg(feature = "fixture-test-controls")]
@@ -194,3 +203,6 @@ impl Context {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod stop_progress_tests;

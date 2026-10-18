@@ -14,6 +14,8 @@ pub use conversation_export::{
     ConversationExport, ConversationExportError, ConversationExportLimits,
     ConversationExportReceipt,
 };
+pub mod history_import;
+pub use history_import::{history_source_digest, HistoryError};
 mod intake;
 mod paths;
 mod preflight;
@@ -21,8 +23,11 @@ mod production_runtime;
 mod replay;
 mod runtime;
 pub use production_runtime::{
-    BoundSessionMetadata, ConsumedProviderDispatch, ExecutionConsumption, FastAdmissionInput,
-    ProductionSupervisorStore, ReadySessionTransition,
+    BoundSessionMetadata, ConsumedOfflinePython, ConsumedProviderDispatch, ExecutionConsumption,
+    FastAdmissionInput, OfflinePythonAdmission, OfflinePythonConsumption, OfflinePythonDelegation,
+    OfflinePythonOutcome, OfflinePythonReceipt, OfflinePythonState, ProductionSupervisorStore,
+    ReadySessionTransition, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
+    WorkerDelegationResult, WorkerDelegationState,
 };
 
 pub use production_runtime::inspection::{

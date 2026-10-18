@@ -125,50 +125,23 @@ pub async fn snapshot(
     id: &str,
     csrf: &str,
     after: i64,
-    mut projection: Projection,
+    projection: Projection,
+    required_watermark: i64,
 ) -> Result<Projection, Failure> {
-    let mut after = after;
-    let mut initial_watermark = None;
-    let mut pages = 0;
-    loop {
-        pages += 1;
-        if pages > 1000 {
-            return Err(
-                "History changed too quickly or exceeds the current scan limit; retry snapshot"
-                    .to_string()
-                    .into(),
-            );
-        }
-        let page = history_page(id, csrf, after).await?;
-        let watermark = *initial_watermark.get_or_insert(page.last_sequence);
-        let next = page.next_cursor;
-        projection
-            .page(page)
-            .map_err(|message| Failure::from(message.to_string()))?;
-        match next {
-            Some(next) if next > after => after = next,
-            None => {
-                projection.watermark = watermark;
-                return Ok(projection);
-            }
-            _ => return Err("Invalid snapshot cursor".to_string().into()),
-        }
-    }
+    orkestr_v2_ui::reconcile(id, after, &projection, required_watermark, |cursor| {
+        history_page(id, csrf, cursor)
+    })
+    .await
 }
 
-#[derive(Deserialize)]
-pub struct StreamItem {
-    pub status: u16,
-    pub event: String,
-    pub id: Option<String>,
-    pub body: Option<orkestr_v2_contracts::EventEnvelope>,
-}
+use orkestr_v2_ui::StreamItem;
 
 pub async fn event(id: &str, cursor: i64) -> Result<StreamItem, Failure> {
     let eval = document::eval(include_str!("stream.js"));
     eval.send(json!({"path":format!("/api/v2/conversations/{id}/events"),"cursor":cursor}))
         .map_err(|_| Failure::from("Stream bridge unavailable".to_string()))?;
-    eval.join().await.map_err(|_| {
+    let raw: Value = eval.join().await.map_err(|_| {
         Failure::from("Disconnected; reconnecting from last applied cursor".to_string())
-    })
+    })?;
+    Ok(orkestr_v2_ui::decode_stream(raw))
 }

@@ -59,6 +59,9 @@ class Channel:
         self.stage = "new"
         self.pending = None
         self.seen = set()
+        self.last_outer = 0
+        self.retired_turns = set()
+        self.last_turn_inner = 0
         self.native = None
         self.committed = False
         self.turn = None
@@ -71,6 +74,8 @@ class Channel:
         outer = request["id"]
         require(type(outer) is int and 0 < outer < 2**53 and outer not in self.seen)
         require(len(self.seen) < 256)
+        require(outer > self.last_outer)
+        self.last_outer = outer
         self.seen.add(outer)
         method, params = request["method"], request["params"]
         if self.handle is None:
@@ -114,9 +119,13 @@ class Channel:
             # This server cannot authenticate Core authority from JSON.
             require(self.stage == "ready" and (not self.committed or self.terminal))
             self.validate_turn(frame)
+            require(frame["id"] > self.last_turn_inner)
+            self.last_turn_inner = frame["id"]
             message = frame["params"]["clientUserMessageId"]
             require(message not in self.messages and len(self.messages) < 256)
             self.messages.add(message)
+            if self.turn is not None:
+                self.retired_turns.add(self.turn)
             self.turn, self.terminal, self.cancelled = None, False, False
             self.committed = True  # latch BEFORE a possible partial provider write
             kind = "turn/start"
@@ -176,7 +185,7 @@ class Channel:
             require(isinstance(frame.get("method"), str) and "params" in frame)
             if frame["method"] not in ("turn/started", "turn/completed", "item/agentMessage/delta"):
                 return None
-            require(self.committed)
+            require(self.committed and not self.terminal)
             params = frame["params"]
             require(isinstance(params, dict) and params.get("threadId") == self.native)
             if "threadId" in params:
@@ -193,6 +202,7 @@ class Channel:
                 require(identifier(turn_id) and turn.get("status") in
                         ("inProgress", "completed", "failed", "interrupted"))
                 clean = {"threadId": self.native, "turn": {"id": turn_id, "status": turn["status"]}}
+            require(turn_id not in self.retired_turns)
             if self.turn is not None:
                 require(turn_id == self.turn)
             else:

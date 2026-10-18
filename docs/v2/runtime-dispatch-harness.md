@@ -44,8 +44,11 @@ without SQL access or a process-recovery claim.
 
 ## Earlier volatile protocol harness
 
+On Runtime branch checkpoint `8e8a83c5`,
 `orkestr-runtime/tests/dispatch.rs` exercises the existing application dispatch
 port using an explicitly enabled, mutex-backed test oracle and the FAKE provider.
+That earlier volatile test/support patch is not included in this integration
+checkpoint; its reported results remain separate historical evidence.
 It introduces no runtime dispatch path, schema, persistent store or authority.
 Production `supervisor::start` remains `DispatchUnconfirmed` for every disposition.
 

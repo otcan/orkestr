@@ -20,23 +20,32 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 mod auth;
 mod browser;
+pub mod control_dispatch;
+pub mod control_registry;
 mod execution;
 mod execution_accept;
+pub mod fast_execution;
+pub mod owned_children;
+pub mod owned_execution;
 mod provider_payload;
+mod resource_health;
 mod routes;
+pub mod stop_execution;
+pub mod worker_execution;
 
 #[derive(Clone)]
 pub struct AppState {
     pub store: Store,
     execution_store: Option<Store>,
+    execution_control: Option<control_registry::ControlRegistry>,
     bootstrap_token: Arc<String>,
     origin: Arc<String>,
     authority: Arc<String>,
     auth_window: Arc<Mutex<(Instant, u32)>>,
+    resources: resource_health::ResourceSampler,
 }
 impl AppState {
-    /// Trusted bootstrap only: browser input cannot construct a bound Store.
-    /// Core still checks owner, supervisor context and every supplied identifier.
+    /// Trusted bootstrap only; browser input never selects supervisor authority.
     pub fn with_execution_store(mut self, store: Store) -> Self {
         self.execution_store = Some(store);
         self
@@ -67,10 +76,12 @@ impl AppState {
         Ok(Self {
             store,
             execution_store: None,
+            execution_control: None,
             bootstrap_token: Arc::new(bootstrap_token),
             origin: Arc::new(origin),
             authority: Arc::new(authority),
             auth_window: Arc::new(Mutex::new((Instant::now(), 0))),
+            resources: resource_health::ResourceSampler::new(),
         })
     }
 }
@@ -205,6 +216,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/machine/session",post(auth::session))
         .route("/api/v2/browser/session",post(browser::login).get(browser::session).delete(browser::logout))
         .route("/api/v2/projects",get(routes::projects).post(routes::create_project))
+        .route("/api/v2/resources",get(resource_health::resources))
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
         .route("/api/v2/conversations/{id}/execution",get(execution::status))
         .route("/api/v2/conversations/{id}/stop",post(execution::stop))

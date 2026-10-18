@@ -9,6 +9,10 @@ pub(crate) struct BrokerChannel {
     pending: Option<(u64, Option<u64>)>,
     poisoned: bool,
     execution_claimed: bool,
+    terminal_observed: bool,
+    active_turn: Option<String>,
+    retired_turns: std::collections::HashSet<String>,
+    last_execution_inner: u64,
     preparation: Option<Preparation>,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -35,6 +39,10 @@ impl OwnedMetadataHandle {
             pending: None,
             poisoned: false,
             execution_claimed: false,
+            terminal_observed: false,
+            active_turn: None,
+            retired_turns: std::collections::HashSet::new(),
+            last_execution_inner: 0,
             preparation: None,
         }
     }
@@ -124,6 +132,11 @@ impl BrokerChannel {
         {
             return Err(Blocker::Protocol);
         }
+        if inner_id == 0 || inner_id <= self.last_execution_inner {
+            self.poisoned = true;
+            return Err(Blocker::Protocol);
+        }
+        self.last_execution_inner = inner_id;
         self.execution_claimed = true;
         let lineage = self.lineage.clone().ok_or(Blocker::Protocol)?;
         let outer = self.next;
@@ -138,6 +151,63 @@ impl BrokerChannel {
             outer,
         })
     }
+    /// Correlation only: caller must have durably accepted the old proposal,
+    /// retired old authority, and own a NEW exact consumed Core dispatch.
+    pub(crate) fn reserve_continuation(
+        &mut self,
+        inner_id: u64,
+    ) -> Result<BrokerExecutionEnvelope, Blocker> {
+        if self.poisoned
+            || !self.execution_claimed
+            || !self.terminal_observed
+            || self.pending.is_some()
+            || self.active_turn.is_none()
+            || self.preparation.is_some_and(|p| p != Preparation::Written)
+            || inner_id <= self.last_execution_inner
+            || self.retired_turns.len() >= 256
+        {
+            self.poisoned = true;
+            return Err(Blocker::Protocol);
+        }
+        self.retired_turns
+            .insert(self.active_turn.take().ok_or(Blocker::Protocol)?);
+        self.terminal_observed = false;
+        self.execution_claimed = false;
+        self.reserve_execution(inner_id)
+    }
+
+    fn observe_turn(&mut self, frame: &Value) -> Result<(), Blocker> {
+        let method = frame.get("method").and_then(Value::as_str);
+        let turn = match method {
+            Some("item/agentMessage/delta") => frame.pointer("/params/turnId"),
+            Some("turn/started" | "turn/completed") => frame.pointer("/params/turn/id"),
+            _ => return Err(Blocker::Protocol),
+        }
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or(Blocker::Protocol)?;
+        if self.terminal_observed
+            || self.retired_turns.contains(turn)
+            || self
+                .active_turn
+                .as_deref()
+                .is_some_and(|active| active != turn)
+        {
+            return Err(Blocker::Protocol);
+        }
+        self.active_turn = Some(turn.to_owned());
+        if method == Some("turn/completed") {
+            if !matches!(
+                frame.pointer("/params/turn/status").and_then(Value::as_str),
+                Some("completed" | "failed" | "interrupted")
+            ) {
+                return Err(Blocker::Protocol);
+            }
+            self.terminal_observed = true;
+        }
+        Ok(())
+    }
+
     fn wrap(&mut self, method: &str, frame: Value) -> Result<Vec<u8>, Blocker> {
         if self.poisoned || self.pending.is_some() || self.next >= (1_u64 << 53) {
             return Err(Blocker::Protocol);
@@ -219,6 +289,7 @@ impl BrokerChannel {
             if frame.get("id").is_some() {
                 return Err(Blocker::Protocol);
             }
+            self.observe_turn(frame)?;
             return Ok(Some(frame.clone()));
         }
         let (outer, inner) = self.pending.ok_or(Blocker::Protocol)?;
@@ -237,6 +308,16 @@ impl BrokerChannel {
             Some(id)
                 if frame.is_object() && frame.get("id").and_then(Value::as_u64) == Some(id) => {}
             _ => return Err(Blocker::Protocol),
+        }
+        if self.execution_claimed {
+            if let Some(turn) = frame.pointer("/result/turn/id").and_then(Value::as_str) {
+                if self.retired_turns.contains(turn)
+                    || self.active_turn.as_deref().is_some_and(|id| id != turn)
+                {
+                    return Err(Blocker::Protocol);
+                }
+                self.active_turn = Some(turn.to_owned());
+            }
         }
         self.pending = None;
         Ok((!frame.is_null()).then(|| frame.clone()))
@@ -267,136 +348,4 @@ impl BrokerMetadataRequest {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    fn channel() -> BrokerChannel {
-        OwnedMetadataHandle {
-            _handle: "synthetic_owned".into(),
-            lineage: Some(std::sync::Arc::new(())),
-        }
-        .into_channel()
-    }
-    #[test]
-    fn execution_correlation_is_once_only_without_becoming_authority() {
-        let mut c = channel();
-        let envelope = c.reserve_execution(7).unwrap();
-        assert!(c.reserve_execution(8).is_err());
-        assert!(c.metadata(json!({"method":"initialized"})).is_err());
-        let frame: Value = serde_json::from_slice(
-            &envelope.wrap(json!({"id":7,"method":"turn/start","params":{}})),
-        )
-        .unwrap();
-        assert_eq!(frame["method"], "CommitExecution");
-        assert_eq!(frame["params"]["owned_handle"], "synthetic_owned");
-        assert_eq!(c.receive(json!({"id":2,"result":{"owned_handle":"synthetic_owned","frame":{"id":7,"result":{"turn":{"id":"synthetic-turn","status":"inProgress"}}}}}).to_string().as_bytes()).unwrap().unwrap()["id"],7);
-        assert!(c.reserve_execution(9).is_err());
-        assert!(c.receive(json!({"method":"BrokerOutput","params":{"owned_handle":"synthetic_owned","frame":{"method":"turn/completed","params":{}}}}).to_string().as_bytes()).unwrap().is_some());
-    }
-    #[test]
-    fn correlated_setup_and_initialized_null_reply() {
-        let mut c = channel();
-        let request: Value = serde_json::from_slice(
-            &c.metadata(json!({"id":7,"method":"initialize","params":{}}))
-                .unwrap()
-                .into_submission()
-                .1,
-        )
-        .unwrap();
-        assert_eq!(request["id"], 2);
-        let response = json!({"id":2,"result":{"owned_handle":"synthetic_owned","frame":{"id":7,"result":{}}}});
-        assert_eq!(
-            c.receive(response.to_string().as_bytes()).unwrap().unwrap()["id"],
-            7
-        );
-        c.metadata(json!({"method":"initialized"})).unwrap();
-        assert_eq!(
-            c.receive(
-                json!({"id":3,"result":{"owned_handle":"synthetic_owned","frame":null}})
-                    .to_string()
-                    .as_bytes()
-            )
-            .unwrap(),
-            None
-        );
-    }
-    #[test]
-    fn foreign_handle_and_wrong_inner_correlation_poison() {
-        for (handle, id) in [("foreign", 7), ("synthetic_owned", 8)] {
-            let mut c = channel();
-            c.metadata(json!({"id":7,"method":"initialize"})).unwrap();
-            assert!(c
-                .receive(
-                    json!({"id":2,"result":{"owned_handle":handle,"frame":{"id":id,"result":{}}}})
-                        .to_string()
-                        .as_bytes()
-                )
-                .is_err());
-            assert!(c.metadata(json!({"method":"initialized"})).is_err());
-        }
-    }
-    #[test]
-    fn metadata_never_serializes_turn_and_unrelated_output_refused() {
-        let mut c = channel();
-        assert!(c.metadata(json!({"id":4,"method":"turn/start"})).is_err());
-        let mut c = channel();
-        assert!(c.receive(json!({"method":"BrokerOutput","params":{"owned_handle":"foreign","frame":{"method":"turn/started"}}}).to_string().as_bytes()).is_err());
-    }
-    #[test]
-    fn actual_fd_preparation_is_correlated_once_and_write_precedes_reply() {
-        let mut c = channel();
-        c.require_prepared().unwrap();
-        c.metadata(json!({"method":"initialized"})).unwrap();
-        assert!(c.take_prepared().is_err());
-        let prepared = json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":2}});
-        assert_eq!(c.receive(prepared.to_string().as_bytes()).unwrap(), None);
-        let proof = c.take_prepared().unwrap();
-        assert!(c.take_prepared().is_err());
-        c.finish_provider_write(proof).unwrap();
-        assert_eq!(
-            c.receive(
-                json!({"id":2,"result":{"owned_handle":"synthetic_owned","frame":null}})
-                    .to_string()
-                    .as_bytes()
-            )
-            .unwrap(),
-            None
-        );
-        c.metadata(json!({"id":3,"method":"account/read","params":{"refreshToken":false}}))
-            .unwrap();
-        assert!(c.take_prepared().is_err());
-    }
-    #[test]
-    fn actual_fd_foreign_duplicate_or_early_completion_poisons() {
-        for bad in [
-            json!({"method":"BrokerPrepared","params":{"owned_handle":"foreign","request_id":2}}),
-            json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":3}}),
-            json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":2,"extra":true}}),
-            json!({"id":2,"result":{"owned_handle":"synthetic_owned","frame":null}}),
-        ] {
-            let mut c = channel();
-            c.require_prepared().unwrap();
-            c.metadata(json!({"method":"initialized"})).unwrap();
-            assert!(c.receive(bad.to_string().as_bytes()).is_err());
-            assert!(c.take_prepared().is_err());
-        }
-        let mut c = channel();
-        c.require_prepared().unwrap();
-        c.metadata(json!({"method":"initialized"})).unwrap();
-        let prepared = json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":2}}).to_string();
-        c.receive(prepared.as_bytes()).unwrap();
-        assert!(c.receive(prepared.as_bytes()).is_err());
-    }
-    #[test]
-    fn actual_fd_write_proof_cannot_cross_child_lineage() {
-        let mut a = channel();
-        let mut b = channel();
-        for c in [&mut a, &mut b] {
-            c.require_prepared().unwrap();
-            c.metadata(json!({"method":"initialized"})).unwrap();
-            c.receive(json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":2}}).to_string().as_bytes()).unwrap();
-        }
-        let foreign = a.take_prepared().unwrap();
-        let _own = b.take_prepared().unwrap();
-        assert!(b.finish_provider_write(foreign).is_err());
-    }
-}
+mod tests;

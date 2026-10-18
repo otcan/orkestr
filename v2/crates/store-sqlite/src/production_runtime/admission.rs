@@ -10,13 +10,29 @@ pub(super) fn envelope(row: &SqliteRow) -> Result<ProviderAdmission> {
         "claude" => ProviderKind::Claude,
         _ => return Err(RuntimeStoreError::Unavailable),
     };
-    crate::runtime::envelope::envelope(row, kind)
+    let mut result = crate::runtime::envelope::envelope(row, kind)?;
+    match row.get::<&str, _>("role") {
+        "deep" => {}
+        "fast" => {
+            result.run.role = Role::Fast;
+            result.binding.role = Role::Fast;
+        }
+        "worker" => {
+            result.run.role = Role::Worker;
+            result.binding.role = Role::Worker;
+            result.binding.parent_session_id = Some(SessionId(
+                Uuid::parse_str(row.get("parent_session_id")).map_err(db)?,
+            ));
+        }
+        _ => return Err(RuntimeStoreError::Unavailable),
+    }
+    Ok(result)
 }
 
 // Admission replay is execution evidence, never an issued cancellation control.
 // Return an actually issued execution token even when cancellation advanced the
 // canonical row. A replay carries no locator and cannot authorize redispatch.
-async fn replay_envelope(
+pub(super) async fn replay_envelope(
     conn: &mut SqliteConnection,
     row: &SqliteRow,
 ) -> Result<ProviderAdmission> {
