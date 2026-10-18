@@ -196,6 +196,9 @@ calls and retries, and rejects an in-flight preparation's late result before a
 provider can start. This does not undo filesystem work already dispatched inside
 a preparation callback; cancellation inside such work requires cooperative checks
 by that callback. The manager does not claim to roll back arbitrary side effects.
+The synchronous `toolDecision` callback also checks cancellation and the fence
+before and after evaluation, preserving its immediate allow/approval/deny return.
+Only test fault reporting remains unguarded; it cannot authorize or execute tools.
 Every successful mutation increments version. Missing mutation IDs throw 404;
 `get` returns null for a missing row. New rows default to `starting`, version 0
 and nullable native/lease fields. Lease tokens fence writers, with no separate

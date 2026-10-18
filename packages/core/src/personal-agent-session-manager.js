@@ -129,8 +129,16 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
         check();
         return value;
       };
+      // Native executors select tools synchronously; retain that contract.
+      const guardedDecision = (...args) => {
+        check();
+        const value = ctx.toolDecision(...args);
+        check();
+        return value;
+      };
       const result = await adapter.run(runtimeRow(row), { ...ctx, signal,
         prepareWorkspace: guard(ctx.prepareWorkspace),
+        toolDecision: guardedDecision,
         authorizeTool: guard(ctx.authorizeTool), executeTool: guard(ctx.executeTool),
         emit(event) {
           if (persistenceError || signal.aborted) return;
