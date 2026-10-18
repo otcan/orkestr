@@ -36,6 +36,7 @@ impl Workers {
             conversation,
             after,
         };
+        self.selected = None;
         self.read = Some(read.clone());
         self.loading = true;
         self.unavailable = false;
@@ -102,10 +103,16 @@ impl Workers {
     pub fn page(&self) -> Option<&WorkerExecutionPage> {
         self.page.as_ref()
     }
+    pub fn displayed_page(&self) -> Option<&WorkerExecutionPage> {
+        if self.loading {
+            None
+        } else {
+            self.page.as_ref()
+        }
+    }
     pub fn select(&mut self, run: &RunId) -> bool {
         if self
-            .page
-            .as_ref()
+            .displayed_page()
             .is_some_and(|p| p.workers.iter().any(|w| &w.run_id == run))
         {
             self.selected = Some(run.clone());

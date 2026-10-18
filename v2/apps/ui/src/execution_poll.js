@@ -1,6 +1,10 @@
 // Read-only, same-origin execution/host status channel. The owning component sends cancellation on drop.
 const {path} = await dioxus.recv();
-if (path !== "/api/v2/resources" && !/^\/api\/v2\/conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/execution(?:\?run_id=[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$/.test(path)) throw new Error("Invalid status path");
+const uuid = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+const base = `/api/v2/conversations/${uuid}`;
+const executionPath = new RegExp(`^${base}/execution(?:\\?run_id=${uuid})?$`);
+const workersPath = new RegExp(`^${base}/workers\\?${"(?:after=" + uuid + "&)?"}limit=25$`);
+if (path !== "/api/v2/resources" && !executionPath.test(path) && !workersPath.test(path)) throw new Error("Invalid status path");
 let stopped = false, controller, wake, retryTimer;
 const now = () => Math.floor(performance.now());
 dioxus.recv().then(() => {

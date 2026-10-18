@@ -80,3 +80,20 @@ test('exact-run status permits only the registered single UUID query and owner c
         await assert.rejects(execute({recv:async()=>({path:path+query})},()=>assert.fail('no fetch')),/Invalid status path/);
     }
 });
+
+test('Worker discovery uses bounded canonical keyset read without authority headers',async()=>{
+    const base=path.replace('/execution','/workers');
+    for(const query of ['?limit=25','?after=00000000-0000-4000-8000-000000000010&limit=25']) {
+        const target=base+query;let first=true,cancel;const messages=[];
+        const run=execute({recv:()=>first?(first=false,Promise.resolve({path:target})):new Promise(resolve=>{cancel=resolve;}),send:m=>messages.push(m)},async(url,options)=>{
+            assert.equal(url,target);assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers,undefined);assert.equal(options.method,'GET');
+            return new Response('{"workers":[],"next_after":null}');
+        });
+        while(!messages.length) await new Promise(resolve=>setImmediate(resolve));
+        cancel();await run;assert.deepEqual(messages[0].body.workers,[]);
+    }
+    for(const query of ['', '?limit=101','?after=invalid&limit=25','?limit=25&owner=other','?after=00000000-0000-4000-8000-000000000010&limit=25&limit=25']) {
+        await assert.rejects(execute({recv:async()=>({path:base+query})},()=>assert.fail('no fetch')),/Invalid status path/);
+    }
+});

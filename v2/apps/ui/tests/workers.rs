@@ -76,6 +76,12 @@ fn next_page_replaces_bounded_selection_and_conversation_change_fences_reads() {
         first.conversation_id.clone(),
         Some(first.workers[0].run_id.clone()),
     );
+    assert!(
+        workers.selected().is_none(),
+        "page navigation clears the displayed run before its response"
+    );
+    assert!(workers.displayed_page().is_none());
+    assert!(!workers.select(&first.workers[0].run_id));
     let mut second = first.clone();
     second.workers[0].run_id =
         serde_json::from_value(serde_json::json!("00000000-0000-4000-8000-000000000011")).unwrap();
