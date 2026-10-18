@@ -136,3 +136,26 @@ pub fn fresh_input_notice(page: &HeldOwnerInputPage) -> &'static str {
         "A new message does not release older held input. Starting new work still requires cleanup and readiness checks."
     }
 }
+
+/// Preview only the already loaded, bounded conversation window; never fetch
+/// additional history or substitute a sequence/source event for message identity.
+pub fn saved_preview(
+    projection: &crate::Projection,
+    conversation: &ConversationId,
+    message: &orkestr_v2_contracts::MessageId,
+) -> Option<String> {
+    if projection.conversation_id.as_deref() != Some(conversation.to_string().as_str()) {
+        return None;
+    }
+    let text = &projection
+        .messages
+        .values()
+        .find(|row| &row.message_id == message)?
+        .text;
+    let mut chars = text.chars();
+    let mut preview: String = chars.by_ref().take(180).collect();
+    if chars.next().is_some() {
+        preview.push('…');
+    }
+    Some(preview)
+}

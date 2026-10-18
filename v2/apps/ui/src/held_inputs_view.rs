@@ -5,7 +5,11 @@ use orkestr_v2_ui::held_inputs::{
 
 /// Read evidence never authorizes release or cancellation.
 #[component]
-pub fn HeldInputsView(model: Signal<HeldInputs>, now_ms: u64) -> Element {
+pub fn HeldInputsView(
+    model: Signal<HeldInputs>,
+    projection: Signal<orkestr_v2_ui::Projection>,
+    now_ms: u64,
+) -> Element {
     let model = model.read();
     rsx! {
         section { "aria-label": "Held input",
@@ -19,7 +23,12 @@ pub fn HeldInputsView(model: Signal<HeldInputs>, now_ms: u64) -> Element {
                         li { key: "{input.message_id}",
                             h4 { "Saved message held after Stop" }
                             p { "{reason(input)}" }
-                            p { "Message preview and saved time are unavailable in this list. Your message remains saved." }
+                            if let Some(preview) = orkestr_v2_ui::held_inputs::saved_preview(&projection.read(), &page.conversation_id, &input.message_id) {
+                                p { "{preview}" }
+                                p { "Preview from loaded conversation messages. Saved time unavailable." }
+                            } else {
+                                p { "Preview unavailable in the loaded messages. Your message remains saved; saved time unavailable." }
+                            }
                             details {
                               summary { "Message provenance" }
                               dl {

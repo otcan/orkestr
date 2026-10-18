@@ -27,3 +27,8 @@ and identical replay staleness. Bridge tests cover the selected read path and
 reject negative, repeated or authority-bearing query variants. These are not
 mounted browser or native lifecycle acceptance. The coordinator must pair this
 source with reviewed read-route registration before browser qualification.
+
+Held-message previews use only the already-loaded bounded conversation window,
+matched by conversation and exact message identity, truncated to 180 Unicode
+characters. Missing text and missing saved time are disclosed; viewing a held
+page never expands the history fetch. Provenance remains under optional details.
