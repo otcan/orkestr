@@ -83,6 +83,8 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
       const open = parent
         ? () => leased(parent.id, async (source, parentSignal) => {
           if (source.lifecycle !== "ready") throw sessionError("agent_session_reconciliation_required");
+          currentLease(row);
+          signal.throwIfAborted();
           const result = await adapter.open(runtimeRow(row), { parent: runtimeRow(source), signal: AbortSignal.any([signal, parentSignal]) });
           fenced(source, {}, true);
           return result;
