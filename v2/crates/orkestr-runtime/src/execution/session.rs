@@ -315,11 +315,17 @@ impl ReadyCodex {
             .channel
             .reserve_execution(request_id)
             .map_err(SubmissionFailure::Protocol)?;
+        #[cfg(all(test, feature = "fixture-test-controls"))]
+        let mut test_fence = None;
         let (authority, child) = self
             .child
             .attach_and_enqueue(capability, |cap| {
                 let fence =
                     std::sync::Arc::new(super::fence::StoreFence::from_consumed(store, &cap)?);
+                #[cfg(all(test, feature = "fixture-test-controls"))]
+                {
+                    test_fence = Some(fence.clone());
+                }
                 let scope = execution_scope(&cap)?;
                 Ok((
                     CodexTurn {
@@ -332,12 +338,12 @@ impl ReadyCodex {
                 ))
             })
             .map_err(|failure| SubmissionFailure::Transport(failure.cause))?;
-        Ok((
-            authority,
-            super::pump::CodexPump::new(child, scope, provider, stream)
-                .with_broker(self.channel)
-                .with_provider_write(writing),
-        ))
+        let pump = super::pump::CodexPump::new(child, scope, provider, stream)
+            .with_broker(self.channel)
+            .with_provider_write(writing);
+        #[cfg(all(test, feature = "fixture-test-controls"))]
+        let pump = pump.with_test_fence(test_fence.unwrap());
+        Ok((authority, pump))
     }
 }
 

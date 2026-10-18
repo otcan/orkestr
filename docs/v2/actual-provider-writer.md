@@ -28,3 +28,21 @@ The provider interrupt/control write composition is still pending. A durable
 Stop intent and refused execution write do not establish a provider Stopped
 observation. Real-provider activation remains held until that composition and
 its independent review pass.
+
+## Post-action rollback regression
+
+The opt-in runtime unit test
+`post_native_suffix_rollback_quarantines_without_offset_retry_or_reissue`
+uses Core's `ExecutionFenceAfterActionRollback` facility from
+`603efd12703e8fd1a3c02a9a8406b116defe93db`. A test-only retained reference arms
+exactly the attached child's StoreFence after `BrokerPrepared`, avoiding setup
+and attachment callbacks. This reference and arming method are absent from
+non-test builds, including feature-enabled library builds.
+
+The synthetic native reader records a nonempty incomplete prefix. The fence
+then rolls back and returns `Unavailable`; no offset is acknowledged, further
+pump/flush calls refuse, and the child is quarantined. Reopening the ordinary
+store reports reconciliation rather than issuing another reservation or
+capability; no completion or acceptance candidate is invented. This is a
+deterministic injected pre-COMMIT rollback after a real bounded write, not an
+OS/disk COMMIT-failure simulation. Sealed interruption remains a separate gate.

@@ -153,7 +153,7 @@ for line in frames():"#,
             &conversation,
             &MessageInput {
                 client_message_id: "input:1".into(),
-                text: if stop_mode == 2 {
+                text: if stop_mode >= 2 {
                     "x".repeat(30000)
                 } else {
                     "durable synthetic broker input".into()
@@ -190,6 +190,61 @@ for line in frames():"#,
     let (authority, mut pump) = ready.attach(bound.clone(), cap).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
+        #[cfg(feature = "fixture-test-controls")]
+        if stop_mode == 3 && pump.prepared_for_provider_write() {
+            let marker = root.join("after-native-write-rollback");
+            pump.arm_post_action_rollback(marker.clone()).await;
+            assert!(pump.step(&bound).await.is_err());
+            assert_eq!(
+                std::fs::read(marker).unwrap(),
+                b"execution-fence-after-action-rollback"
+            );
+            // The callback wrote, but its offset/result never escaped rollback.
+            assert_eq!(pump.provider_offset(), 0);
+            assert!(pump.flush().is_err());
+            assert!(pump.step(&bound).await.is_err());
+            authority.revoke().unwrap();
+            drop(pump);
+            let bytes = std::fs::read(root.join("workspace/native-bytes.log")).unwrap();
+            assert!(!bytes.is_empty());
+            assert!(bytes.len() <= 16384);
+            assert!(!bytes.contains(&b'\n'));
+            let observed = bytes.len();
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            assert_eq!(
+                std::fs::metadata(root.join("workspace/native-bytes.log"))
+                    .unwrap()
+                    .len(),
+                observed as u64
+            );
+            let reopened = Store::open(&root.join("state.sqlite3")).await.unwrap();
+            let attached = bound.reattach_supervisor(&reopened).await.unwrap();
+            assert!(matches!(
+                attached.consume_execution(&reservation).await.unwrap(),
+                ExecutionConsumption::ReconciliationRequired
+            ));
+            assert!(matches!(
+                attached
+                    .claim_provider_dispatch(&result, "no-replacement")
+                    .await
+                    .unwrap(),
+                DispatchClaimResult::ReconciliationRequired
+            ));
+            let status = reopened
+                .execution_status(&owner, &conversation)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(status.phase, orkestr_v2_contracts::ExecutionPhase::Starting);
+            assert!(status.acceptance_candidate.is_none());
+            drop(attached);
+            drop(reopened);
+            drop(authority);
+            drop(bound);
+            drop(store);
+            std::fs::remove_dir_all(root).unwrap();
+            return;
+        }
         if (stop_mode == 1 && pump.prepared_for_provider_write())
             || (stop_mode == 2 && pump.provider_offset() > 0)
         {
@@ -294,4 +349,10 @@ async fn committed_stop_after_broker_prepared_before_native_write_delivers_zero_
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn committed_stop_after_actual_partial_prefix_quarantines_without_suffix_or_redispatch() {
     exercise(true, 2).await;
+}
+
+#[cfg(feature = "fixture-test-controls")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_native_suffix_rollback_quarantines_without_offset_retry_or_reissue() {
+    exercise(true, 3).await;
 }
