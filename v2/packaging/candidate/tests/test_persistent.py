@@ -96,3 +96,14 @@ class PersistentTests(unittest.TestCase):
             self.assertEqual(plan.stat().st_mode&0o777,0o600)
             seal=value.pop('configuration_sha256')
             self.assertEqual(seal,persistent.receipt.digest(value))
+
+
+    def test_fifo_and_directory_plan_refused_before_read(self):
+        import os
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw);fifo=root/'plan.fifo'
+            os.mkfifo(fifo,0o600)
+            for path in (fifo,root):
+                with patch.object(Path,'read_text',side_effect=AssertionError('must not read special file')):
+                    with self.assertRaisesRegex(RuntimeError,'regular private plan required'):
+                        persistent.load(path)

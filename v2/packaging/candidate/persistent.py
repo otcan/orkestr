@@ -6,6 +6,8 @@ exact child launched here. Neither command activates providers or live routing.
 """
 import argparse
 import json
+import os
+import stat
 from pathlib import Path
 import signal
 import subprocess
@@ -47,7 +49,9 @@ def prepare(candidate, home, plan_path, port):
 
 def load(path):
     receipt.require(path.is_absolute() and not path.is_symlink(), 'absolute regular private plan required')
-    receipt.require(path.stat().st_uid==__import__('os').getuid() and path.stat().st_mode&0o077==0,'private owned plan required')
+    metadata=path.lstat()
+    receipt.require(stat.S_ISREG(metadata.st_mode),'regular private plan required')
+    receipt.require(metadata.st_uid==os.getuid() and metadata.st_mode&0o077==0,'private owned plan required')
     plan=json.loads(path.read_text())
     receipt.require(plan['format']=='orkestr-v2-persistent-plan-v1','unsupported plan')
     expected=plan.pop('configuration_sha256')
