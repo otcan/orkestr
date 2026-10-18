@@ -36,17 +36,53 @@ that omit the join key; first real resume acceptance must verify compatibility,
 and may require a reviewed completion-only output mode rather than weakening
 correlation.
 
-## Integration prerequisites (unexecuted)
+## Current executable handoff and remaining lifecycle gates
 
-The ordinary current Core metadata grant describes a Starting session without
-native readiness. It cannot authorize setup of an already Ready resumed binding.
-Core must issue an additive, private resume setup/attachment capability linking
-accepted completion, current exact binding and native UUID. Runtime must consume
-it while constructing a new broker and must consume a new dispatch capability
-for the next actual stdin write. No fabricated Starting state or generation
-increment is permitted. There is intentionally no executable resume entrypoint
-in `claude_server.main` yet: crossing a new broker process needs Runtime/Core's
-opaque private bootstrap, not serialized Python capability or caller JSON.
+The fixed broker entry now supports
+`claude_server.py resume-owned-session --protocol orkestr-v2-provider-broker-v1`.
+It requires a new fd3 sole-writer handoff and a separate inherited fd4 bootstrap.
+`claude_bootstrap.receive(config, descriptor=4)` accepts only a connected AF_UNIX
+stream whose peer is the direct same-UID parent. Within one second it consumes
+exactly `claude-resume-v1\0` followed by a canonical 36-byte ASCII UUID and EOF.
+That record selects an identity; it is not Core authority. The private parent
+must derive it from the exact issued accepted-session grant and owned reaped
+session ticket, never browser JSON. The returned one-use ResumeSpec binds the
+exact configuration object and is consumed by `resumed_session` before launch.
+The hashed `claude-package.json` includes bootstrap/resume dependencies.
+
+Runtime must establish prior durable completion plus owner acceptance, close the
+old reader/writer and fully reap the old owned process tree before using a fresh
+Core-issued metadata/attachment grant. New child, socketpairs, FD writer and Arc
+lineage are mandatory. No old transport reset, generation arithmetic, EOF-only
+proof or automatic retry is permitted. Core grant eligibility and Runtime
+retirement must be checked against their current exact source independently.
+
+The older in-process `claude_resume.retire` helper checks a directly owned native
+child's zero exit; it is not the current external broker tree-reap proof. Runtime
+must use its consuming owned-child retirement proof and the reviewed broker clean
+EOF/ECHILD exit73 contract. A broker ACK, normal exit0, forced kill or timeout
+cannot substitute. Compatibility probes with private operator ResumeSpec do not
+qualify ordinary Core-issued continuation.
+
+Metadata control initialize ACK proves process initialization only. It contains
+no observed native UUID. The current Core/Runtime initialization-versus-observation
+split must remain: consume the actual turn capability, then validate emitted
+system/init and durably observe that exact binding before Started/output. A new
+resumed process still follows the reviewed readiness path; this document grants
+no authority to skip it.
+
+## Native Stop remains a separate missing hook
+
+Current ClaudeChannel admits initialize metadata and one CommitExecution only.
+It rejects CancelExecution and arbitrary control_request, including interrupt.
+No genuine pinned-native interrupt ACK/terminal trace has been authored or run by
+this lane. Adding Stop requires a separate closed control operation derived from
+Core's exact issued cancellation receipt, the current same-child/input identity,
+and every actual suffix under the cancellation fence. Native control ACK is not
+terminal or cleanup proof. Local exit must not synthesize an interrupted result.
+Root's bounded native protocol probe and Runtime's typed cancellation composition
+must define which actual terminal proves interruption; otherwise Stop remains
+unknown until owned cleanup is established, without claiming native completion.
 
 Synthetic tests launch two distinct fake native PIDs with an unchanged UUID,
 transfer the sole writer, complete the first child wait, exercise single-use
