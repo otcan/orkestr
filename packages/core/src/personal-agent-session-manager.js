@@ -131,6 +131,10 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, runtimes
     if (!ctx.signal || ctx.signal.aborted) throw sessionError("agent_session_cancelled");
     return leased(id, async (row, leaseSignal, update) => {
       const adapter = await runtime(row);
+      if (ctx.signal.aborted) {
+        fenced(row, {}, true);
+        return { type: "cancelled" };
+      }
       if (row.lifecycle === "blocked") throw sessionError("agent_session_reconnect_required");
       if (row.forkFromSessionId && !row.nativeSessionId) throw sessionError("agent_session_fork_not_started");
       update({ lifecycle: "busy" });
@@ -166,13 +170,13 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, runtimes
       if (leaseSignal.aborted) throw sessionError("agent_session_lease_lost");
       // A late provider success cannot turn an owner cancellation into a reply.
       if (ctx.signal.aborted) {
-        fenced(row, { lifecycle: "ready", blockedReason: null }, true);
+        fenced(row, { lifecycle: row.lifecycle === "starting" ? "starting" : "ready", blockedReason: null }, true);
         return { type: "cancelled" };
       }
       if (!["final", "cancelled", "park", "expired"].includes(result?.type)) throw sessionError("agent_session_outcome_invalid");
       const current = transaction(tx => owned(tx, id));
       if (result.type === "final" && !current.nativeSessionId) throw sessionError("agent_session_native_session_missing");
-      fenced(row, { lifecycle: "ready", blockedReason: null }, true);
+      fenced(row, { lifecycle: result.type === "cancelled" && row.lifecycle === "starting" ? "starting" : "ready", blockedReason: null }, true);
       return result;
     });
   }

@@ -54,6 +54,12 @@ report counts the permitted control requests.
 canonical `personalAgentFeature(env)` helper. Flag-off calls do not touch the
 store or runtimes. There is no new HTTP endpoint, channel route or UI here.
 
+The composition factory in
+`packages/connectors/src/personal-agent-session-runtimes.js` injects the
+existing supported Codex authentication discovery into the core bridge.
+Without that dependency, the core bridge reports unavailable. Core imports no
+new connector module and never infers authentication from a selected profile.
+
 - Orkestr session ID, canonical conversation ID and native provider session ID
   are separate. FAST and DEEP are unique roles in an owner/global or exact
   project conversation; worker sessions may be numerous. Fork lineage stays
@@ -94,7 +100,9 @@ supervised turn. A lost app-server cannot resume that empty history: it blocks
 instead of creating a replacement ID or spending quota to seed a transcript.
 After a turn starts, normal durable resume is used. A crash before the native
 ID can be persisted may leave an unreferenced native session; recovery must not
-guess a binding or replay an effect. Claude print mode cannot allocate a
+guess a binding or replay an effect. The empty-session cache is invalidated
+**before** `turn/start` dispatch: a lost acknowledgement must reconcile actual
+native state rather than bypassing the busy-turn check. Claude print mode cannot allocate a
 metadata-only session: its native ID is null/`starting` until the first real
 supervised turn reports it. No UUID is presented as a fabricated Claude ID.
 

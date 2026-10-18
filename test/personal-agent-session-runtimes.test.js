@@ -19,6 +19,7 @@ test.afterEach(() => stopCodexJobClients());
 
 test("discovery requires enabled subscription profile, native executor, CLI and ChatGPT auth", async () => {
   assert.deepEqual(await createPersonalAgentSessionRuntimes(options).codex.probe(row), { available: true });
+  assert.deepEqual(await createPersonalAgentSessionRuntimes({ ...options, codexLogin: undefined }).codex.probe(row), { available: false, reason: "runtime_unavailable" });
   for (const [override, reason] of [
     [{ env: {} }, "runtime_unavailable"],
     [{ resolveProfile: async () => ({ ...profile, state: "rate_limited" }) }, "rate_limited"],
@@ -127,6 +128,41 @@ test("strict Codex resume failure does not silently start another thread; ordina
   assert.equal((await readFakeCodex(env)).threads.length, 1);
 });
 
+test("a lost first turn/start reply invalidates the empty-session shortcut and requires reconciliation", async t => {
+  const env = { ...await codexJobEnv({ script: [{ wait: true }] }), ORKESTR_PERSONAL_AGENT_ENABLED: "1" };
+  t.after(() => fs.rm(env.ORKESTR_HOME, { recursive: true, force: true }));
+  const cwd = path.join(env.ORKESTR_HOME, "project");
+  await fs.mkdir(cwd);
+  const account = { ...profile, credentialRoot: path.join(env.ORKESTR_HOME, "profile") };
+  let client;
+  const runtime = createPersonalAgentSessionRuntimes({ ...options, env, cwd, resolveProfile: async () => account,
+    codexClient: async args => { client = await getCodexJobClient(args); return client; } }).codex;
+  const opened = await runtime.open(row);
+  const request = client.request.bind(client);
+  client.request = async (method, params) => {
+    const value = await request(method, params);
+    if (method === "turn/start") throw new Error("synthetic lost acknowledgement");
+    return value;
+  };
+  const ctx = { ...supervisor(), prepareWorkspace: async () => ({ path: cwd, kind: "project" }) };
+  await assert.rejects(runtime.run({ ...row, nativeSessionId: opened.nativeSessionId }, ctx, { prompt: "synthetic" }));
+  await assert.rejects(runtime.open({ ...row, nativeSessionId: opened.nativeSessionId }), /reconciliation_required/);
+  assert.equal((await readFakeCodex(env)).turnStarts, 1);
+});
+
+test("strict native Codex turn cancelled before dispatch never starts inference", async t => {
+  const env = await codexJobEnv();
+  t.after(() => fs.rm(env.ORKESTR_HOME, { recursive: true, force: true }));
+  const session = new CodexJobSession({ env });
+  await session.open({ strictResume: true });
+  const cancelled = new AbortController();
+  cancelled.abort();
+  const result = await session.runTurn({ text: "synthetic" }, { signal: cancelled.signal });
+  session.close();
+  assert.equal(result.status, "cancelled");
+  assert.equal((await readFakeCodex(env)).turnStarts || 0, 0);
+});
+
 test("real Claude bridge with fake CLI persists native ID, sends new prompts and preserves approval hook denial", async t => {
   const fake = await fakeClaude([{ final: "first answer" }, { tools: [{ name: "Bash", input: { command: "synthetic action" } }], final: "second answer" }], { ORKESTR_PERSONAL_AGENT_ENABLED: "1" });
   const env = fake.env;
@@ -157,4 +193,18 @@ test("real Claude bridge with fake CLI persists native ID, sends new prompts and
   assert.deepEqual(await fake.ran(), [], "Bash was denied by the existing permission broker");
   assert.ok(claudeJobArgs({ personalAgentSession: true, effort: "high" }).includes("--effort"));
   assert.ok(!claudeJobArgs({ effort: "high" }).includes("--effort"));
+});
+
+test("managed Claude cancellation during workspace preparation never invokes the CLI", async t => {
+  const fake = await fakeClaude([{ final: "should not run" }], { ORKESTR_PERSONAL_AGENT_ENABLED: "1" });
+  t.after(() => fs.rm(fake.env.ORKESTR_HOME, { recursive: true, force: true }));
+  const cwd = path.join(fake.env.ORKESTR_HOME, "project");
+  await fs.mkdir(cwd);
+  const account = { ...profile, provider: "claude-code", credentialRoot: path.join(fake.env.ORKESTR_HOME, "profile") };
+  const runtime = createPersonalAgentSessionRuntimes({ ...options, env: fake.env, cwd, resolveProfile: async () => account,
+    claudeEnv: async () => ({ HOME: fake.env.HOME }) })["claude-code"];
+  const cancelled = new AbortController();
+  const ctx = { ...supervisor(cancelled.signal), prepareWorkspace: async () => { cancelled.abort(); return { path: cwd, kind: "project" }; } };
+  assert.equal((await runtime.run({ ...row, provider: "claude-code" }, ctx, { prompt: "synthetic" })).type, "cancelled");
+  assert.deepEqual(await fake.calls(), []);
 });

@@ -1,7 +1,6 @@
 import path from "node:path";
 import { resolveLlmAccountProfile } from "./llm-account-profiles.js";
 import { personalAgentFeature } from "./personal-agent-feature.js";
-import { codexLoginStatus } from "../../connectors/src/codex.js";
 import { codexAppServerStatus } from "./codex-app-server-client.js";
 import { getCodexJobClient } from "./codex-job-client.js";
 import { codexJobAdapter, personalAgentCodexDynamicTools, personalAgentCodexInstructions } from "./agent-job-codex.js";
@@ -13,7 +12,7 @@ import { sessionBlockedReason, sessionError } from "./personal-agent-session-rec
 // Subscription executors only. The optional openai-compatible profile remains
 // in Agent Jobs and is never selected as an implicit replacement here.
 export function createPersonalAgentSessionRuntimes({ env = process.env, cwd, resolveProfile = resolveLlmAccountProfile,
-  codexLogin = codexLoginStatus, codexStatus = codexAppServerStatus, codexClient = getCodexJobClient,
+  codexLogin = async () => ({ available: false }), codexStatus = codexAppServerStatus, codexClient = getCodexJobClient,
   claudeDiagnostics = claudeCodeAccountDiagnostics, claudeEnv = claudeCodeExecutionEnv,
   executors = { codex: codexJobAdapter, "claude-code": claudeCodeJobAdapter } } = {}) {
   if (!cwd || !path.isAbsolute(cwd)) throw sessionError("agent_session_workspace_required", 400);

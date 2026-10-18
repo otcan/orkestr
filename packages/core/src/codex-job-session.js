@@ -42,6 +42,7 @@ export class CodexJobSession {
     this.approvalPolicy = approvalPolicy;
     this.model = strictResume ? model : "";
     this.effort = strictResume ? effort : "";
+    this.strictResume = strictResume;
     let thread = null;
     let resumed = false;
     if (clean(sessionRef)) {
@@ -92,6 +93,7 @@ export class CodexJobSession {
   }
 
   async runTurnOnce(text, { onEvent = () => {}, onServerRequest = null, signal = null } = {}) {
+    if (this.strictResume && signal?.aborted) return { turnId: "", status: "cancelled", finalText: "", error: null, duplicate: false };
     if (this.turn) throw Object.assign(new Error("codex_job_turn_already_active"), { kind: "task", retryable: false });
     const turn = { id: "", items: new Map(), finalText: "", lastText: "", onEvent, onServerRequest, done: null };
     turn.settled = new Promise((resolve, reject) => { turn.done = { resolve, reject }; });
@@ -103,6 +105,10 @@ export class CodexJobSession {
     }, 200);
     watchdog.unref?.();
     try {
+      // Dispatch may succeed even when its acknowledgement is lost. From this
+      // point forward an uncertain turn must use durable/native reconciliation,
+      // never the loaded-empty shortcut on a retry.
+      this.client.personalAgentPendingSessions?.delete(this.codexThreadId);
       const started = await this.client.request("turn/start", {
         threadId: this.codexThreadId,
         input: [{ type: "text", text, text_elements: [] }],
@@ -112,7 +118,6 @@ export class CodexJobSession {
         ...(this.effort ? { effort: this.effort } : {}),
       });
       turn.id = clean(started?.turn?.id) || turn.id;
-      this.client.personalAgentPendingSessions?.delete(this.codexThreadId);
       if (signal?.aborted) void this.interrupt();
       const completed = await turn.settled;
       const status = ["interrupted", "cancelled", "canceled", "aborted"].includes(clean(completed.status)) ? "cancelled"

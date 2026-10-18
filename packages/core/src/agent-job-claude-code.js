@@ -218,6 +218,7 @@ async function runClaudeJobAttempt(ctx, jobInput) {
 
   const onAbort = () => terminate({ kind: ctx.signal.reason === "cancelled" ? "cancelled" : "aborted", reason: String(ctx.signal.reason || "aborted") });
   try {
+    if (managed && ctx.signal?.aborted) return { type: "cancelled", sessionRef: clean(input.resumeSessionRef) };
     proc = spawn(claudeCodeCommand(ctx.env), claudeJobArgs(input), {
       cwd: workspace.path,
       env: childEnv(ctx.env, broker, managed),

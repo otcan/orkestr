@@ -174,6 +174,16 @@ test("a late authorization cannot return allow after owner cancellation", async 
   assert.equal((await h.manager.runTurn(row.id, ctx, {})).type, "cancelled");
 });
 
+test("cancellation during discovery does not invoke a native turn or claim initial readiness", async () => {
+  const h = sessionHarness(), cancelled = new AbortController();
+  const row = h.manager.ensure(sessionInput);
+  h.adapter.probe = async () => { cancelled.abort(); return { available: true }; };
+  assert.equal((await h.manager.runTurn(row.id, supervisor(cancelled.signal), {})).type, "cancelled");
+  assert.deepEqual(h.calls, []);
+  assert.equal(h.manager.get(row.id).lifecycle, "starting");
+  assert.equal(h.manager.get(row.id).leaseToken, null);
+});
+
 test("fork lineage is same conversation/account and serialized against the parent", async () => {
   const h = sessionHarness();
   const parent = await h.manager.startOrResume(h.manager.ensure(sessionInput).id);
