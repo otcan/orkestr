@@ -7,18 +7,21 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 pub enum ConversationEvent {
     MessageAccepted(EventEnvelope),
     FixtureProviderObserved(FixtureProviderObservedEnvelope),
+    FixtureCancellationRequested(FixtureCancellationRequestedEnvelope),
 }
 impl ConversationEvent {
     pub fn sequence(&self) -> i64 {
         match self {
             Self::MessageAccepted(e) => e.sequence,
             Self::FixtureProviderObserved(e) => e.sequence,
+            Self::FixtureCancellationRequested(e) => e.sequence,
         }
     }
     pub fn sse_name(&self) -> &'static str {
         match self {
             Self::MessageAccepted(_) => "message_accepted",
             Self::FixtureProviderObserved(_) => "fixture_provider_observed",
+            Self::FixtureCancellationRequested(_) => "fixture_cancellation_requested",
         }
     }
 }
@@ -67,6 +70,7 @@ impl<'de> Deserialize<'de> for ConversationEvent {
         enum Wire {
             Message(EventEnvelope),
             Fixture(FixtureProviderObservedEnvelope),
+            Cancellation(FixtureCancellationRequestedEnvelope),
         }
         match Wire::deserialize(d)? {
             Wire::Message(e)
@@ -79,6 +83,9 @@ impl<'de> Deserialize<'de> for ConversationEvent {
                 if e.schema_version == 2 && e.payload_ref_or_safe_payload.run_sequence > 0 =>
             {
                 Ok(Self::FixtureProviderObserved(e))
+            }
+            Wire::Cancellation(e) if e.schema_version == 3 => {
+                Ok(Self::FixtureCancellationRequested(e))
             }
             _ => Err(de::Error::custom("event variant/schema mismatch")),
         }
