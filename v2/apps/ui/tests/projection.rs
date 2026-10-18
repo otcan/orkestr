@@ -1,9 +1,10 @@
-use orkestr_v2_ui::{Draft, Projection, WINDOW};
 use orkestr_v2_contracts::ConversationSnapshot;
+use orkestr_v2_ui::{Draft, Projection, WINDOW};
 
 #[test]
 fn intake_fixture_is_not_a_model_response() {
-    let snapshot: ConversationSnapshot = serde_json::from_str(include_str!("../../../fixtures/conversation-snapshot.json")).unwrap();
+    let snapshot: ConversationSnapshot =
+        serde_json::from_str(include_str!("../../../fixtures/conversation-snapshot.json")).unwrap();
     let mut projection = Projection::default();
     projection.page(snapshot.clone()).unwrap();
     projection.page(snapshot).unwrap();
@@ -38,7 +39,8 @@ fn unchanged_accepted_draft_clears_and_utf8_limit_is_bytes() {
 
 #[test]
 fn bounded_paginated_projection_and_conflicting_replay() {
-    let base: ConversationSnapshot = serde_json::from_str(include_str!("../../../fixtures/conversation-snapshot.json")).unwrap();
+    let base: ConversationSnapshot =
+        serde_json::from_str(include_str!("../../../fixtures/conversation-snapshot.json")).unwrap();
     let mut view = Projection::default();
     for sequence in 1..=10000 {
         let mut page = base.clone();
@@ -57,7 +59,8 @@ fn bounded_paginated_projection_and_conflicting_replay() {
 
 #[test]
 fn sparse_sequences_and_empty_delta_advance_authoritative_watermark() {
-    let mut page: ConversationSnapshot = serde_json::from_str(include_str!("../../../fixtures/conversation-snapshot.json")).unwrap();
+    let mut page: ConversationSnapshot =
+        serde_json::from_str(include_str!("../../../fixtures/conversation-snapshot.json")).unwrap();
     page.messages[0].sequence = 7;
     page.last_sequence = 12;
     let mut view = Projection::default();
@@ -73,7 +76,8 @@ fn sparse_sequences_and_empty_delta_advance_authoritative_watermark() {
 
 #[test]
 fn invalid_late_message_rejects_whole_page_without_advancing_cursor() {
-    let mut page: ConversationSnapshot = serde_json::from_str(include_str!("../../../fixtures/conversation-snapshot.json")).unwrap();
+    let mut page: ConversationSnapshot =
+        serde_json::from_str(include_str!("../../../fixtures/conversation-snapshot.json")).unwrap();
     let mut view = Projection::default();
     view.page(page.clone()).unwrap();
     page.last_sequence = 3;
@@ -89,7 +93,8 @@ fn invalid_late_message_rejects_whole_page_without_advancing_cursor() {
 
 #[test]
 fn conflicting_duplicates_inside_one_page_are_not_last_write_wins() {
-    let mut page: ConversationSnapshot = serde_json::from_str(include_str!("../../../fixtures/conversation-snapshot.json")).unwrap();
+    let mut page: ConversationSnapshot =
+        serde_json::from_str(include_str!("../../../fixtures/conversation-snapshot.json")).unwrap();
     let mut conflicting = page.messages[0].clone();
     conflicting.actor_kind = "assistant".into();
     page.messages.push(conflicting);

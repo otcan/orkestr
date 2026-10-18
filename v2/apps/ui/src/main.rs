@@ -1,12 +1,14 @@
+mod history;
 mod transport;
 mod views;
-mod history;
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{Project, ProjectInput};
 use orkestr_v2_ui::Draft;
 use std::collections::BTreeMap;
 
-fn main() { dioxus::launch(App); }
+fn main() {
+    dioxus::launch(App);
+}
 
 #[component]
 fn App() -> Element {
