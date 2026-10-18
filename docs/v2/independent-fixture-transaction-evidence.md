@@ -107,3 +107,45 @@ process recovery are not covered by these five tests. The new controls remove
 several facility blockers; they do not make unexecuted cases pass. Production
 starts, provider observations, cancellation/recovery and effects remain outside
 this fixture evidence. Coordinator review of the authored test delta is required.
+
+### Independently authored process-kill checkpoint
+
+`v2/acceptance/fixture_crash.rs` was separately authored and installed as
+`crates/store-sqlite/tests/independent_crash.rs` against the same exact 44ecdb30
+archive. The child bootstraps its own synthetic fixture with public APIs and arms
+a typed checkpoint. The parent retains its Child handle, bounds marker wait to
+10 seconds, verifies exact marker bytes, then kills and reaps that child. RAII
+also kills/reaps on failure. No private handle reconstruction or locator transfer
+is used. All synthetic directories are nested in the assigned isolated home.
+
+After kill, a read-only SQLite connection with query_only enabled opens one read
+transaction over fixture run and inbox acknowledgement rows. It does not open
+Store, run migrations or write SQL state. This is a narrowly scoped inspection
+of the owned synthetic database, not a new authority or recovery API.
+
+Required wrapper command:
+
+```sh
+v2-cargo test --locked --offline -p orkestr-v2-store-sqlite --features fixture-test-controls --test independent_crash
+```
+
+Result: **1 parent passed, 0 failed, 1 standalone child entry ignored**; the parent
+invoked that entry three times. Final execution took 0.11s. Three actual owned
+process SIGKILL observations are independently authored:
+
+| Window | Exact read-only observation after kill |
+| --- | --- |
+| AdmitBeforeAck, after run insertion | Zero runs and zero acknowledged inbox rows |
+| AdmitAfterCommit, before reply | One run and one acknowledgement; Candidate, candidate verifier present, reservation verifier absent |
+| ConsumeAfterCommit, before reply | One run and one acknowledgement; DeliveryUnknown, both locator verifiers absent |
+
+This adds independent process-kill evidence for the R03 rollback and R06
+commit-before-reply windows, separate from earlier deliberate reply discard and
+pool reopen. It does not establish post-process-restart authority, provider
+execution/no-redispatch integration, retry after rollback, all reserve windows,
+or full R01–R08 acceptance. No provider is invoked by this test.
+
+Source SHA256: `2a247a55f4be1fd7c102b01caeb54e9ebebf01322d203885033e9f3571004004`.
+Executed binary SHA256: `f3081b4617336073430edbd6abfd6a2b184a6c2c846cbdf77d941daf5b4e6b10`.
+Independent coordinator review remains required; these are author-executed results
+for independently authored verification tests, not self-approved test correctness.
