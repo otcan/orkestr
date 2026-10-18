@@ -41,7 +41,25 @@ pub(super) fn metadata(frame: &[u8], workspace: &Path) -> Result<Vec<u8>, Error>
     let value: Value = serde_json::from_slice(frame).map_err(|_| Error::InvalidFrame)?;
     let inner = outer(&value, "BrokerMetadata")?;
     let mut validation = inner.clone();
-    if inner.get("method").and_then(Value::as_str) == Some("thread/start") {
+    if validation.get("method").and_then(Value::as_str) == Some("thread/resume") {
+        let params = validation
+            .get_mut("params")
+            .and_then(Value::as_object_mut)
+            .ok_or(Error::InvalidFrame)?;
+        if params.len() != 5
+            || !params
+                .remove("threadId")
+                .and_then(|id| id.as_str().map(str::to_owned))
+                .is_some_and(|id| {
+                    !id.is_empty() && id.len() <= 512 && !id.chars().any(char::is_control)
+                })
+        {
+            return Err(Error::InvalidFrame);
+        }
+        params.insert("ephemeral".into(), Value::Bool(false));
+        validation["method"] = Value::String("thread/start".into());
+    }
+    if validation.get("method").and_then(Value::as_str) == Some("thread/start") {
         let params = validation
             .get_mut("params")
             .and_then(Value::as_object_mut)
@@ -135,6 +153,44 @@ pub(super) fn turn(
     serde_json::to_vec(&value).map_err(|_| Error::InvalidFrame)
 }
 
+pub(super) fn cancellation(
+    bytes: &[u8],
+    lineage: &Arc<()>,
+    process: &Arc<Process>,
+) -> Result<Vec<u8>, Error> {
+    if !process
+        .broker_launcher
+        .load(std::sync::atomic::Ordering::Acquire)
+        || !Arc::ptr_eq(lineage, &process.broker_lineage)
+    {
+        return Err(Error::WrongScope);
+    }
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| Error::InvalidFrame)?;
+    let frame = outer(&value, "CancelExecution")?;
+    let object = frame.as_object().ok_or(Error::InvalidFrame)?;
+    let params = frame
+        .get("params")
+        .and_then(Value::as_object)
+        .ok_or(Error::InvalidFrame)?;
+    if object.len() != 3
+        || frame.get("method").and_then(Value::as_str) != Some("turn/interrupt")
+        || !frame
+            .get("id")
+            .and_then(Value::as_u64)
+            .is_some_and(|id| id > 0 && id < (1 << 53))
+        || params.len() != 2
+        || !["threadId", "turnId"].iter().all(|key| {
+            params
+                .get(*key)
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.is_empty() && text.len() <= 512)
+        })
+    {
+        return Err(Error::InvalidFrame);
+    }
+    serde_json::to_vec(&value).map_err(|_| Error::InvalidFrame)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,6 +199,34 @@ mod tests {
         serde_json::to_vec(&json!({"id":2,"method":method,"params":{
             "owned_handle":"synthetic_owned","frame":frame}}))
         .unwrap()
+    }
+    #[test]
+    fn resume_is_broker_only_and_closed() {
+        let frame = json!({"id":3,"method":"thread/resume","params":{"threadId":"synthetic-native","cwd":"/synthetic/workspace","approvalPolicy":"never","sandbox":"read-only","modelProvider":"openai"}});
+        assert!(metadata(
+            &envelope("BrokerMetadata", frame.clone()),
+            Path::new("/synthetic/workspace")
+        )
+        .is_ok());
+        assert!(validate_metadata(
+            &serde_json::to_vec(&frame).unwrap(),
+            Path::new("/synthetic/workspace")
+        )
+        .is_err());
+        for (key, value) in [
+            ("threadId", json!("")),
+            ("modelProvider", json!("external")),
+            ("ephemeral", json!(false)),
+            ("input", json!([])),
+        ] {
+            let mut denied = frame.clone();
+            denied["params"][key] = value;
+            assert!(metadata(
+                &envelope("BrokerMetadata", denied),
+                Path::new("/synthetic/workspace")
+            )
+            .is_err());
+        }
     }
     #[test]
     fn setup_wrapper_reuses_closed_whitelist() {

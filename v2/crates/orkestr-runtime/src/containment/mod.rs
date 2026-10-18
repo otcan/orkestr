@@ -2,11 +2,13 @@
 //! Runtime owns provider protocols and the private consumed-turn adapter.
 pub(crate) mod broker;
 mod broker_frames;
+mod cancellation;
 mod environment;
 mod framing;
 pub mod metadata;
 mod process;
 mod provider_fd;
+mod reuse;
 mod scope;
 mod sys;
 
@@ -60,3 +62,6 @@ pub(crate) struct TurnFailure {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod retained_tests;

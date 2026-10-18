@@ -29,13 +29,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|_| "store startup failed")?;
     let origin = config.origin;
-    let state = AppState::new(store.clone(), token, origin)?;
+    let mut state = AppState::new(store.clone(), token, origin)?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let execution = match std::env::var_os("ORKESTR_V2_EXECUTION_CONFIG") {
         None => None,
         Some(file) => {
             let execution =
                 ConfiguredExecution::load(&store, &home, bind, &PathBuf::from(file)).await?;
+            state = execution.install_control(state);
             Some(execution)
         }
     };
@@ -54,14 +55,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
     }
     let execution = execution.map(ConfiguredExecution::start);
-    let served = axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await;
-    if let Some(execution) = execution {
-        execution.shutdown().await;
+    let (shutdown, mut requested) = tokio::sync::watch::channel(false);
+    let mut serving = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = requested.changed().await;
+            })
+            .await
+    });
+    let completed = tokio::select! {
+        result = &mut serving => Some(result),
+        _ = tokio::signal::ctrl_c() => None,
+    };
+    // An open SSE connection must not delay the owned execution fence/cleanup.
+    // Stop accepting HTTP and stop the supervisor before waiting for HTTP drain.
+    let _ = shutdown.send(true);
+    let cleanup = match execution {
+        Some(execution) => execution.shutdown().await,
+        None => Ok(()),
+    };
+    if let Some(result) = completed {
+        result??;
+    } else {
+        match tokio::time::timeout(std::time::Duration::from_secs(2), &mut serving).await {
+            Ok(result) => result??,
+            Err(_) => {
+                serving.abort();
+                let _ = serving.await;
+            }
+        }
     }
-    served?;
+    cleanup?;
     Ok(())
 }

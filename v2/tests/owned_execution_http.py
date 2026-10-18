@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import select
 import shutil
 import signal
 import socket
@@ -17,7 +18,12 @@ import urllib.request
 binary = Path(sys.argv[1]).resolve(strict=True)
 peer = Path(__file__).with_name("owned_execution_peer.py").resolve(strict=True)
 broker = Path(__file__).resolve().parent.parent / "provider-broker"
-opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
 
 def wait_for(operation, description, seconds=8):
@@ -80,6 +86,23 @@ class Case:
             assert not (self.workspace / "synthetic-peer.jsonl").exists()
             assert not (self.home / "owned-execution").exists()
             return
+        # Prove this exact child owns the requested listener before any HTTP
+        # request. An ephemeral-port race must never contact another service.
+        expected = (f"orkestr-v2-server schema=1 home={self.home} "
+                    f"bind=127.0.0.1:{self.port} execution=").encode()
+        pending = bytearray()
+        def owned_listener():
+            if self.process.poll() is not None:
+                raise AssertionError("ordinary server exited before owned-listener readiness")
+            if not select.select([self.process.stderr], [], [], 0.05)[0]:
+                return False
+            chunk = os.read(self.process.stderr.fileno(), 8192)
+            assert chunk, "ordinary server stderr closed before readiness"
+            pending.extend(chunk)
+            assert len(pending) <= 16384, "ordinary server readiness output exceeded bound"
+            return any(line.startswith(expected) and line.endswith(b" connections=none")
+                       for line in pending.split(b"\n")[:-1])
+        wait_for(owned_listener, "child-owned listener readiness deadline")
         def healthy():
             if self.process.poll() is not None:
                 raise AssertionError("ordinary server startup failed: " + self.process.stderr.read())
@@ -160,12 +183,27 @@ class Case:
             db.execute("DELETE FROM auth_sessions WHERE token_hash=?",
                        (hashlib.sha256(self.machine.encode()).hexdigest(),))
 
-    def message(self):
+    def message(self, number=1):
         return self.request(self.path + "/messages", "POST", {
-            "client_message_id": "synthetic:1", "text": "synthetic ordinary HTTP input"})
+            "client_message_id": f"synthetic:{number}",
+            "text": "synthetic ordinary HTTP input" + (f" {number}" if number > 1 else "")})
+
+    def phase(self, expected):
+        code, body, _ = self.request(self.path + "/execution")
+        return body if code == 200 and body["phase"] == expected else None
+
+    def peer_gone(self):
+        pid = self.trace()[0]["pid"]
+        try:
+            os.kill(pid, 0)
+            return False
+        except ProcessLookupError:
+            return True
 
     def cleanup(self):
         self.stop()
+        if self.trace():
+            wait_for(self.peer_gone, "normal shutdown must reap the owned synthetic native peer")
         self.temp.cleanup()
 
 
@@ -178,6 +216,7 @@ def success(case):
         code, body, _ = case.request(case.path + "/execution")
         return body if code == 200 and body["phase"] == "awaiting_acceptance" else None
     status = wait_for(proposed, "durable provider proposal deadline")
+    assert not case.peer_gone(), "proposal must retain the owned native child"
     assert status["capabilities"] == {"stop": False, "steer": False}
     payload_path = case.path + "/payloads/" + status["progress"]["payload_id"]
     code, payload, headers = case.request(payload_path)
@@ -204,6 +243,7 @@ def success(case):
     assert code == 200 and receipt["outcome"] == "succeeded"
     assert case.request(case.path + "/accept", "POST", accept)[:2] == (200, receipt)
     assert case.request(case.path + "/execution")[1]["phase"] == "completed"
+    assert not case.peer_gone(), "owner acceptance must retain the same native child"
     assert case.request(payload_path, "DELETE")[0] == 204
     assert case.request(payload_path)[1]["text"] is None
 
@@ -215,35 +255,91 @@ def revoked_after_start(case):
     wait_for(lambda: any(r["kind"] == "ready" for r in case.trace()), "synthetic readiness deadline")
     case.revoke_machine()
     assert case.message()[0] == 202
-    def peer_gone():
-        pid = case.trace()[0]["pid"]
-        try:
-            os.kill(pid, 0)
-            return False
-        except ProcessLookupError:
-            return True
-    wait_for(peer_gone, "revocation must reap the owned synthetic peer")
+    wait_for(case.peer_gone, "revocation must reap the owned synthetic peer")
     status = case.request(case.path + "/execution")[1]
     assert status["phase"] == "queued" and status["run_id"] is None
     assert not any(r["kind"] == "turn" for r in case.trace())
 
 
-for scenario in ["success", "revoked_after_start", "revoked_at_start", "queued_at_start"]:
-    case = Case()
-    try:
-        case.setup()
-        if scenario == "success":
-            success(case)
-        elif scenario == "revoked_after_start":
-            revoked_after_start(case)
-        else:
-            if scenario == "queued_at_start":
-                assert case.message()[0] == 202
-            case.stop()
-            case.configure()
-            if scenario == "revoked_at_start":
-                case.revoke_machine()
-            case.start(configured=True, refused=True)
-        print("ordinary synthetic HTTP case passed:", scenario)
-    finally:
-        case.cleanup()
+def revoked_in_flight(case):
+    case.stop()
+    case.configure()
+    (case.workspace / "hold-first").touch()
+    case.start(configured=True)
+    assert case.message()[0] == 202
+    wait_for(lambda: case.phase("running"), "first synthetic turn must be active")
+    assert case.message(2)[0] == 202
+    case.revoke_machine()
+    wait_for(case.peer_gone, "in-flight revocation must reap the owned synthetic peer")
+    assert len([r for r in case.trace() if r["kind"] == "turn"]) == 1
+    # Revocation is itself an auth fence. A local kill cannot forge a provider
+    # stopped/completed receipt using the now-revoked machine credential.
+    with sqlite3.connect(case.home / "core.sqlite3") as db:
+        assert db.execute("SELECT count(*) FROM production_runs").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM reasoning_inbox WHERE state!='consumed'").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM production_observations WHERE kind IN ('completed_proposal','stopped')").fetchone()[0] == 0
+    assert case.request(case.path + "/execution")[1]["phase"] not in ("completed", "cancelled")
+
+
+def shutdown_with_open_events(case):
+    case.stop()
+    case.configure()
+    (case.workspace / "hold-first").touch()
+    case.start(configured=True)
+    assert case.message()[0] == 202
+    wait_for(lambda: case.phase("running"), "synthetic turn must be active before shutdown")
+    request = urllib.request.Request(case.origin + case.path + "/events", headers={
+        "Origin": case.origin, "Cookie": case.cookie})
+    with opener.open(request, timeout=3) as stream:
+        assert stream.status == 200
+        # Keep this valid SSE connection open while requesting ordinary shutdown.
+        case.process.send_signal(signal.SIGINT)
+        assert case.process.wait(timeout=5) == 0
+        wait_for(case.peer_gone, "open SSE must not retain the owned native child")
+    with sqlite3.connect(case.home / "core.sqlite3") as db:
+        assert db.execute("SELECT state FROM production_runs").fetchone()[0] == "cancel_requested"
+        assert db.execute("SELECT count(*) FROM production_cancellations").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM production_observations WHERE kind='stopped'").fetchone()[0] == 0
+
+
+def main():
+    from owned_execution_followup import two_turn, in_flight_followup
+    from owned_execution_stop import stop
+    from owned_execution_streaming_stop import streaming_stop
+    for scenario in ["success", "revoked_after_start", "revoked_in_flight", "shutdown_with_open_events",
+                     "revoked_at_start", "queued_at_start", "two_turn", "in_flight_followup",
+                     "stop_terminal", "stop_ack_only", "streaming_stop", "streaming_stop_burst"]:
+        case = Case()
+        try:
+            case.setup()
+            if scenario == "success":
+                success(case)
+            elif scenario == "revoked_after_start":
+                revoked_after_start(case)
+            elif scenario == "revoked_in_flight":
+                revoked_in_flight(case)
+            elif scenario == "shutdown_with_open_events":
+                shutdown_with_open_events(case)
+            elif scenario == "two_turn":
+                two_turn(case, wait_for)
+            elif scenario == "in_flight_followup":
+                in_flight_followup(case, wait_for)
+            elif scenario in ("stop_terminal", "stop_ack_only"):
+                stop(case, wait_for, scenario == "stop_terminal")
+            elif scenario in ("streaming_stop", "streaming_stop_burst"):
+                streaming_stop(case, wait_for, scenario == "streaming_stop_burst")
+            else:
+                if scenario == "queued_at_start":
+                    assert case.message()[0] == 202
+                case.stop()
+                case.configure()
+                if scenario == "revoked_at_start":
+                    case.revoke_machine()
+                case.start(configured=True, refused=True)
+            print("ordinary synthetic HTTP case passed:", scenario)
+        finally:
+            case.cleanup()
+
+
+if __name__ == "__main__":
+    main()

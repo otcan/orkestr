@@ -51,12 +51,17 @@ def encode(value):
 
 
 class Channel:
-    def __init__(self, workspace):
+    def __init__(self, workspace, *, expected_native=None):
+        require(expected_native is None or identifier(expected_native))
+        self.expected_native = expected_native
         self.workspace = str(workspace)
         self.handle = None
         self.stage = "new"
         self.pending = None
         self.seen = set()
+        self.last_outer = 0
+        self.retired_turns = set()
+        self.last_turn_inner = 0
         self.native = None
         self.committed = False
         self.turn = None
@@ -69,6 +74,8 @@ class Channel:
         outer = request["id"]
         require(type(outer) is int and 0 < outer < 2**53 and outer not in self.seen)
         require(len(self.seen) < 256)
+        require(outer > self.last_outer)
+        self.last_outer = outer
         self.seen.add(outer)
         method, params = request["method"], request["params"]
         if self.handle is None:
@@ -79,7 +86,9 @@ class Channel:
             exact(identity, ("provider", "role", "owner_id", "session_id", "namespace", "incarnation"))
             require(identity["provider"] == "codex")  # ClaudeUnsupported; no fallback.
             require(all(identifier(value) for value in identity.values()))
-            require(identity["role"] in ("fast", "deep"))
+            # Closed transport metadata only. Core must separately issue Worker
+            # parent/task admission; role JSON cannot create that authority.
+            require(identity["role"] in ("fast", "deep", "worker"))
             self.handle = secrets.token_hex(24)
             return None, {"id": outer, "result": {"protocol": PROTOCOL,
                     "identity": identity, "metadata_only": True, "owned_handle": self.handle}}
@@ -110,9 +119,13 @@ class Channel:
             # This server cannot authenticate Core authority from JSON.
             require(self.stage == "ready" and (not self.committed or self.terminal))
             self.validate_turn(frame)
+            require(frame["id"] > self.last_turn_inner)
+            self.last_turn_inner = frame["id"]
             message = frame["params"]["clientUserMessageId"]
             require(message not in self.messages and len(self.messages) < 256)
             self.messages.add(message)
+            if self.turn is not None:
+                self.retired_turns.add(self.turn)
             self.turn, self.terminal, self.cancelled = None, False, False
             self.committed = True  # latch BEFORE a possible partial provider write
             kind = "turn/start"
@@ -138,8 +151,15 @@ class Channel:
         elif kind == "account/read":
             require(self.stage == "initialized" and params == {"refreshToken": False}
                     and params["refreshToken"] is False)
-        elif kind == "thread/start":
+        elif kind in ("thread/start", "thread/resume"):
             require(self.stage == "subscription")
+            require((kind == "thread/resume") == (self.expected_native is not None))
+            if kind == "thread/resume":
+                require(isinstance(params, dict) and params.get("threadId") == self.expected_native)
+                params = dict(params)
+                del params["threadId"]
+                require("ephemeral" not in params)
+                params["ephemeral"] = False
             require(params == {"cwd": self.workspace, "approvalPolicy": "never",
                                "sandbox": "read-only", "ephemeral": False, "modelProvider": "openai"}
                     and params["ephemeral"] is False)
@@ -165,7 +185,7 @@ class Channel:
             require(isinstance(frame.get("method"), str) and "params" in frame)
             if frame["method"] not in ("turn/started", "turn/completed", "item/agentMessage/delta"):
                 return None
-            require(self.committed)
+            require(self.committed and not self.terminal)
             params = frame["params"]
             require(isinstance(params, dict) and params.get("threadId") == self.native)
             if "threadId" in params:
@@ -182,6 +202,7 @@ class Channel:
                 require(identifier(turn_id) and turn.get("status") in
                         ("inProgress", "completed", "failed", "interrupted"))
                 clean = {"threadId": self.native, "turn": {"id": turn_id, "status": turn["status"]}}
+            require(turn_id not in self.retired_turns)
             if self.turn is not None:
                 require(turn_id == self.turn)
             else:
@@ -210,11 +231,12 @@ class Channel:
             frame = {"id": inner, "result": {"requiresOpenaiAuth": result["requiresOpenaiAuth"],
                                              "account": {"type": "chatgpt"}}}
             self.stage = "subscription"
-        elif kind == "thread/start":
+        elif kind in ("thread/start", "thread/resume"):
             thread = result.get("thread")
             require(isinstance(thread, dict))
             require(result.get("modelProvider") == thread.get("modelProvider") == "openai")
             require(identifier(thread.get("id")) and thread.get("ephemeral") is False)
+            require(self.expected_native is None or thread["id"] == self.expected_native)
             require(thread.get("cwd") == self.workspace and result.get("cwd") == self.workspace)
             require(result.get("approvalPolicy") == "never")
             sandbox = result.get("sandbox")

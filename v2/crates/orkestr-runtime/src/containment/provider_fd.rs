@@ -165,7 +165,7 @@ sys.stdout.buffer.write(os.read(r,64))
             .args(["-c", script, marker, &count.to_string()])
             .stdout(Stdio::piped());
         super::super::sys::configure_command(&mut command);
-        super::super::sys::inherit_handoff(&mut command, child_socket.as_raw_fd());
+        super::super::sys::inherit_handoff(&mut command, child_socket.as_raw_fd(), None).unwrap();
         let child = command.spawn().map_err(|_| Error::Io)?;
         drop(child_socket);
         let deadline = Instant::now() + Duration::from_secs(5);

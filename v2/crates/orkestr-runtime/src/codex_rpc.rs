@@ -26,7 +26,10 @@ pub struct CodexRpc {
 enum Request {
     Initialize,
     Account,
-    Thread { cwd: String },
+    Thread {
+        cwd: String,
+        expected_native: Option<String>,
+    },
 }
 impl Default for CodexRpc {
     fn default() -> Self {
@@ -109,6 +112,7 @@ impl CodexRpc {
         self.request(
             Request::Thread {
                 cwd: cwd.to_owned(),
+                expected_native: None,
             },
             "thread/start",
             json!({
@@ -116,6 +120,35 @@ impl CodexRpc {
                 "ephemeral":false,"modelProvider":"openai"
             }),
         )
+    }
+
+    /// Resume only the durable identity selected by trusted setup. A refusal
+    /// leaves the request pending for quarantine; never fall back to creation.
+    pub(crate) fn resume_session(
+        &mut self,
+        cwd: &std::path::Path,
+        native: &str,
+    ) -> Result<Value, Blocker> {
+        if native.is_empty() || native.len() > 512 || native.chars().any(char::is_control) {
+            return Err(Blocker::Protocol);
+        }
+        // Reuse the exact trusted workspace/readiness checks without issuing a
+        // start request: this temporary value cannot reach the transport.
+        let mut frame = self.create_session(cwd)?;
+        let (_, request) = self.pending.as_mut().ok_or(Blocker::Protocol)?;
+        if let Request::Thread {
+            expected_native, ..
+        } = request
+        {
+            *expected_native = Some(native.to_owned());
+        }
+        frame["method"] = json!("thread/resume");
+        frame["params"]
+            .as_object_mut()
+            .ok_or(Blocker::Protocol)?
+            .remove("ephemeral");
+        frame["params"]["threadId"] = json!(native);
+        Ok(frame)
     }
 
     /// Server-only locator for Core native readiness confirmation. Not dispatch
@@ -168,13 +201,19 @@ impl CodexRpc {
                 self.readiness = Readiness::Initialized;
                 Some(json!({"method":"initialized"}))
             }
-            Request::Thread { cwd } => {
+            Request::Thread {
+                cwd,
+                expected_native,
+            } => {
                 let native = result
                     .pointer("/thread/id")
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty() && s.len() <= 512)
                     .ok_or(Blocker::Protocol)?;
-                if result.get("modelProvider").and_then(Value::as_str) != Some("openai")
+                if expected_native
+                    .as_deref()
+                    .is_some_and(|expected| native != expected)
+                    || result.get("modelProvider").and_then(Value::as_str) != Some("openai")
                     || result
                         .pointer("/thread/modelProvider")
                         .and_then(Value::as_str)
@@ -207,5 +246,64 @@ impl CodexRpc {
         };
         self.pending = None;
         Ok(notification)
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    fn ready() -> CodexRpc {
+        let mut rpc = CodexRpc::default();
+        rpc.initialize().unwrap();
+        rpc.receive(&json!({"id":1,"result":{"userAgent":"synthetic","platformFamily":"unix","platformOs":"linux","codexHome":"/synthetic"}}).to_string()).unwrap();
+        rpc.account_read().unwrap();
+        rpc.receive(
+            &json!({"id":2,"result":{"requiresOpenaiAuth":true,"account":{"type":"chatgpt"}}})
+                .to_string(),
+        )
+        .unwrap();
+        rpc
+    }
+    fn response() -> Value {
+        json!({"id":3,"result":{"thread":{"id":"synthetic-native","cwd":"/synthetic","ephemeral":false,"modelProvider":"openai"},"cwd":"/synthetic","modelProvider":"openai","approvalPolicy":"never","sandbox":{"type":"readOnly","networkAccess":false}}})
+    }
+    #[test]
+    fn exact_resume_and_no_creation_fallback() {
+        let mut rpc = ready();
+        let frame = rpc
+            .resume_session(std::path::Path::new("/synthetic"), "synthetic-native")
+            .unwrap();
+        assert_eq!(frame["method"], "thread/resume");
+        assert_eq!(frame["params"]["threadId"], "synthetic-native");
+        assert_eq!(frame["params"].as_object().unwrap().len(), 5);
+        assert!(frame["params"].get("ephemeral").is_none());
+        rpc.receive(&response().to_string()).unwrap();
+        assert_eq!(rpc.native_session(), Some("synthetic-native"));
+    }
+    #[test]
+    fn changed_or_missing_resume_evidence_stays_quarantined() {
+        for pointer in [
+            "/result/thread/id",
+            "/result/thread/cwd",
+            "/result/cwd",
+            "/result/thread/modelProvider",
+            "/result/modelProvider",
+            "/result/thread/ephemeral",
+            "/result/approvalPolicy",
+            "/result/sandbox/type",
+            "/result/sandbox/networkAccess",
+        ] {
+            let mut rpc = ready();
+            rpc.resume_session(std::path::Path::new("/synthetic"), "synthetic-native")
+                .unwrap();
+            let mut reply = response();
+            *reply.pointer_mut(pointer).unwrap() = Value::Null;
+            assert_eq!(rpc.receive(&reply.to_string()), Err(Blocker::Protocol));
+            assert_eq!(rpc.native_session(), None);
+            assert_eq!(
+                rpc.create_session(std::path::Path::new("/synthetic")),
+                Err(Blocker::Busy)
+            );
+        }
     }
 }

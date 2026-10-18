@@ -14,6 +14,7 @@ pub struct TurnStream {
     terminal: Option<ProviderEvent>,
     events: VecDeque<ProviderEvent>,
     poisoned: bool,
+    interrupt_claimed: bool,
 }
 impl TurnStream {
     /// Protocol correlation only. The process layer separately consumes Core's
@@ -31,6 +32,7 @@ impl TurnStream {
             terminal: None,
             events: VecDeque::new(),
             poisoned: false,
+            interrupt_claimed: false,
         })
     }
     pub fn next_event(&mut self) -> Option<ProviderEvent> {
@@ -42,6 +44,47 @@ impl TurnStream {
     }
     pub fn terminal(&self) -> Option<&ProviderEvent> {
         self.terminal.as_ref()
+    }
+    /// Correlation only. The reuse adapter separately requires durable acceptance
+    /// and a fresh consumed Core capability before transferring the owned child.
+    pub(crate) fn completed_continuation(&self) -> Result<(String, u64), Blocker> {
+        if self.poisoned
+            || !self.acknowledged
+            || self.interrupt_claimed
+            || !self.events.is_empty()
+            || !matches!(self.terminal, Some(ProviderEvent::CompletedProposal { .. }))
+        {
+            return Err(Blocker::Protocol);
+        }
+        let next = self
+            .request
+            .checked_add(1)
+            .filter(|next| *next < (1_u64 << 53))
+            .ok_or(Blocker::Protocol)?;
+        Ok((self.thread.clone(), next))
+    }
+    /// Protocol correlation only: the caller still needs issued cancellation
+    /// authority around every actual write. Failure never permits retry.
+    #[allow(
+        dead_code,
+        reason = "sealed cancellation transport is being integrated"
+    )]
+    pub(crate) fn claim_interrupt(&mut self, request: u64) -> Result<Value, Blocker> {
+        if self.poisoned
+            || !self.acknowledged
+            || !self.started
+            || self.terminal.is_some()
+            || self.interrupt_claimed
+            || request == 0
+            || request == self.request
+            || request >= (1_u64 << 53)
+        {
+            return Err(Blocker::Protocol);
+        }
+        let turn = self.turn.as_ref().ok_or(Blocker::Protocol)?;
+        self.interrupt_claimed = true;
+        Ok(serde_json::json!({"id":request,"method":"turn/interrupt",
+            "params":{"threadId":self.thread,"turnId":turn}}))
     }
     pub fn finish(&mut self) -> Result<(), Blocker> {
         if self.poisoned || !self.acknowledged || self.terminal.is_none() {
@@ -173,4 +216,54 @@ fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, Blocker> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .ok_or(Blocker::Protocol)
+}
+
+#[cfg(test)]
+mod interrupt_tests {
+    use super::*;
+
+    fn active() -> TurnStream {
+        let mut stream = TurnStream::new("thread-owned", 1).unwrap();
+        stream.acknowledged = true;
+        stream.started = true;
+        stream.turn = Some("turn-owned".into());
+        stream
+    }
+
+    #[test]
+    fn interrupt_is_once_and_does_not_invent_terminal_evidence() {
+        let mut stream = active();
+        let frame = stream.claim_interrupt(2).unwrap();
+        assert_eq!(
+            frame,
+            serde_json::json!({"id":2,"method":"turn/interrupt",
+            "params":{"threadId":"thread-owned","turnId":"turn-owned"}})
+        );
+        assert_eq!(stream.claim_interrupt(3), Err(Blocker::Protocol));
+        assert!(stream.terminal().is_none());
+        assert!(stream.next_event().is_none());
+    }
+
+    #[test]
+    fn incomplete_poisoned_or_terminal_turn_never_issues_interrupt() {
+        for mutation in 0..8 {
+            let mut stream = active();
+            match mutation {
+                0 => stream.acknowledged = false,
+                1 => stream.started = false,
+                2 => stream.turn = None,
+                3 => stream.poisoned = true,
+                4 => stream.terminal = Some(ProviderEvent::CompletedProposal { synthetic: false }),
+                5 => stream.terminal = Some(ProviderEvent::Failed),
+                6 => stream.terminal = Some(ProviderEvent::Lost),
+                _ => stream.terminal = Some(ProviderEvent::Stopped),
+            }
+            let original = stream.terminal.clone();
+            assert_eq!(stream.claim_interrupt(2), Err(Blocker::Protocol));
+            assert_eq!(stream.terminal, original);
+        }
+        for request in [0, 1, 1_u64 << 53] {
+            assert_eq!(active().claim_interrupt(request), Err(Blocker::Protocol));
+        }
+    }
 }

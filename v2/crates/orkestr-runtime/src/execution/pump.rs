@@ -8,16 +8,19 @@ use crate::{
 };
 use orkestr_v2_application::runtime::ProviderAdmission;
 use orkestr_v2_store_sqlite::Store;
+#[path = "control.rs"]
+mod control;
+pub use control::{StopFailure, StoppingCodex};
 
-struct CodexOutput {
-    child: OwnedChild,
-    scope: ExecutionScope,
+pub(super) struct CodexOutput {
+    pub(super) child: OwnedChild,
+    pub(super) scope: ExecutionScope,
     admission: RunAdmission,
-    stream: TurnStream,
-    failed: Option<Blocker>,
-    eof: bool,
-    broker: Option<crate::broker::channel::BrokerChannel>,
-    writing: Option<super::provider_write::PendingWrite>,
+    pub(super) stream: TurnStream,
+    pub(super) failed: Option<Blocker>,
+    pub(super) eof: bool,
+    pub(super) broker: Option<crate::broker::channel::BrokerChannel>,
+    pub(super) writing: Option<super::provider_write::PendingWrite>,
 }
 impl Provider for CodexOutput {
     fn start(&mut self, _: &RunAdmission) -> Result<(), Blocker> {
@@ -111,9 +114,9 @@ impl Provider for CodexOutput {
     reason = "metadata attachment composition is independently gated"
 )]
 pub struct CodexPump {
-    source: CodexOutput,
-    cursor: PendingObservation,
-    admission: ProviderAdmission,
+    pub(super) source: CodexOutput,
+    pub(super) cursor: PendingObservation,
+    pub(super) admission: ProviderAdmission,
     #[cfg(all(test, feature = "fixture-test-controls"))]
     test_fence: Option<std::sync::Arc<super::fence::StoreFence>>,
 }

@@ -72,6 +72,23 @@ for line in sys.stdin:
    yield line.decode()
 for line in frames():"#,
         );
+        let source = if stop_mode >= 4 {
+            source.replace(" elif m!='initialized':", " elif m=='turn/interrupt':\n  reply={'id':f['id'],'result':{}}\n elif m!='initialized':")
+                .replace("   {'method':'turn/completed','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'completed'}}}", "")
+                + "\n if m=='turn/interrupt':\n  import time\n  while not os.path.exists('release-stop'): time.sleep(0.002)\n  emit({'method':'turn/completed','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'interrupted'}}})\n"
+        } else {
+            source
+        };
+        let source = if stop_mode >= 7 {
+            source.replace("  emit({'method':'turn/completed'", "  for i in range(32): emit({'method':'item/agentMessage/delta','params':{'threadId':'synthetic-native','turnId':'t1','itemId':'buffered','delta':'buffered progress'}})\n  emit({'method':'turn/completed'")
+        } else {
+            source
+        };
+        let source = if stop_mode == 6 || stop_mode == 8 {
+            source.replace("'status':'interrupted'", "'status':'completed'")
+        } else {
+            source
+        };
         std::fs::write(&provider, source).unwrap();
         std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
         let config = root.join("synthetic-private.json");
@@ -153,7 +170,7 @@ for line in frames():"#,
             &conversation,
             &MessageInput {
                 client_message_id: "input:1".into(),
-                text: if stop_mode >= 2 {
+                text: if (2..=3).contains(&stop_mode) {
                     "x".repeat(30000)
                 } else {
                     "durable synthetic broker input".into()
@@ -299,6 +316,123 @@ for line in frames():"#,
             .await
             .unwrap()
             .unwrap();
+        if stop_mode >= 4
+            && status.phase == orkestr_v2_contracts::ExecutionPhase::Running
+            && status.progress.is_some()
+        {
+            let receipt = bound
+                .request_cancel(&owner, &result.provider.run.run_id, "native-stop")
+                .await
+                .unwrap();
+            let mut stopping = pump.into_stopping(bound.clone(), &receipt).unwrap();
+            while !stopping.acknowledged() {
+                stopping.flush().unwrap();
+                stopping.step(&bound).await.unwrap();
+                assert!(Instant::now() < deadline);
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+            assert!(!stopping.stopped());
+            assert_eq!(
+                store
+                    .execution_status(&owner, &conversation)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .phase,
+                orkestr_v2_contracts::ExecutionPhase::CancelRequested
+            );
+            if stop_mode == 5 {
+                for _ in 0..10 {
+                    assert!(!stopping.step(&bound).await.unwrap());
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+                assert!(!stopping.stopped());
+                assert_eq!(
+                    store
+                        .execution_status(&owner, &conversation)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .phase,
+                    orkestr_v2_contracts::ExecutionPhase::CancelRequested
+                );
+                authority.revoke().unwrap();
+                drop(stopping);
+                drop(authority);
+                drop(bound);
+                drop(store);
+                std::fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            std::fs::write(root.join("workspace/release-stop"), b"ok").unwrap();
+            if stop_mode == 6 || stop_mode == 8 {
+                loop {
+                    if stopping.step(&bound).await.is_err() {
+                        break;
+                    }
+                    assert!(Instant::now() < deadline);
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+                assert_eq!(
+                    stopping.retained().last(),
+                    Some(&ProviderEvent::CompletedProposal { synthetic: false })
+                );
+                if stop_mode == 8 {
+                    assert_eq!(stopping.retained().len(), 16);
+                    assert_eq!(stopping.omitted_nonterminal(), 17);
+                }
+                assert!(!stopping.stopped());
+                assert_eq!(
+                    store
+                        .execution_status(&owner, &conversation)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .phase,
+                    orkestr_v2_contracts::ExecutionPhase::CancelRequested
+                );
+                authority.revoke().unwrap();
+                drop(stopping);
+                drop(authority);
+                drop(bound);
+                drop(store);
+                std::fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            while !stopping.stopped() {
+                stopping.step(&bound).await.unwrap();
+                assert!(Instant::now() < deadline);
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+            if stop_mode == 7 {
+                assert_eq!(stopping.retained().len(), 15);
+                assert_eq!(stopping.omitted_nonterminal(), 17);
+            }
+            assert_eq!(
+                store
+                    .execution_status(&owner, &conversation)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .phase,
+                orkestr_v2_contracts::ExecutionPhase::Cancelled
+            );
+            assert_eq!(
+                std::fs::read_to_string(root.join("workspace/native-methods.log"))
+                    .unwrap()
+                    .lines()
+                    .filter(|m| *m == "turn/interrupt")
+                    .count(),
+                1
+            );
+            authority.revoke().unwrap();
+            drop(stopping);
+            drop(authority);
+            drop(bound);
+            drop(store);
+            std::fs::remove_dir_all(root).unwrap();
+            return;
+        }
         if status.phase == orkestr_v2_contracts::ExecutionPhase::AwaitingAcceptance {
             break;
         }
@@ -355,4 +489,27 @@ async fn committed_stop_after_actual_partial_prefix_quarantines_without_suffix_o
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn post_native_suffix_rollback_quarantines_without_offset_retry_or_reissue() {
     exercise(true, 3).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_interrupt_ack_is_not_terminal_and_only_interrupted_evidence_confirms_stop() {
+    exercise(true, 4).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_interrupt_ack_alone_never_confirms_stop() {
+    exercise(true, 5).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_completion_racing_stop_is_retained_without_relabel() {
+    exercise(true, 6).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn buffered_progress_does_not_hide_interrupted_terminal() {
+    exercise(true, 7).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn buffered_progress_preserves_racing_completion_truth() {
+    exercise(true, 8).await;
 }

@@ -60,6 +60,7 @@ fn private_explicit_config_is_validated_without_launching_anything() {
     fixture.write();
     let config = fixture.load().unwrap();
     assert_eq!(config.token(&fixture.home).unwrap(), "ab".repeat(32));
+    assert!(config.worker.is_none());
     assert!(Config::load(
         &fixture.path,
         &fixture.home,
@@ -113,4 +114,25 @@ fn modified_launcher_is_rechecked_and_errors_never_include_token_values() {
     fs::write(&config.machine_token_file, "synthetic-sensitive-value").unwrap();
     let error = config.token(&fixture.home).unwrap_err();
     assert!(!error.contains("synthetic-sensitive-value"));
+}
+
+#[test]
+fn optional_worker_policy_is_validated_before_any_runtime_is_created() {
+    let mut fixture = Fixture::new();
+    fixture.value["worker"] = json!({"mode":"parent-input-once-v1", "lifetime_ms":1000});
+    fixture.write();
+    assert!(fixture.load().unwrap().worker.is_some());
+    for policy in [
+        json!({"mode":"unbounded", "lifetime_ms":1000}),
+        json!({"mode":"parent-input-once-v1", "lifetime_ms":0}),
+        json!({"mode":"parent-input-once-v1", "lifetime_ms":30001}),
+        json!({"mode":"parent-input-once-v1", "lifetime_ms":1000,
+               "provider_auth":"synthetic-forbidden-authority"}),
+        json!({"mode":"parent-input-once-v1", "lifetime_ms":1000,
+               "parent_run_id":uuid::Uuid::new_v4()}),
+    ] {
+        fixture.value["worker"] = policy;
+        fixture.write();
+        assert!(fixture.load().is_err());
+    }
 }

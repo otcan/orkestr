@@ -24,12 +24,21 @@ pub struct Exit {
 }
 
 pub(super) fn start_reaper(active: Arc<AtomicUsize>) -> Result<Sender<Child>, Error> {
+    start_reaper_retained(active, Box::new(()))
+}
+
+pub(super) fn start_reaper_retained(
+    active: Arc<AtomicUsize>,
+    resources: Box<dyn Send + 'static>,
+) -> Result<Sender<Child>, Error> {
     // At most maximum_children outstanding Child values, including reaper work:
     // the capacity slot is released only after wait, never on handle drop.
     let (sender, receiver) = mpsc::channel::<Child>();
     std::thread::Builder::new()
         .name("contained-reaper".into())
         .spawn(move || {
+            // Keep caller capacity/scratch alive until all owned children are waited.
+            let _resources = resources;
             let mut pending = Vec::new();
             let mut disconnected = false;
             loop {
@@ -100,7 +109,16 @@ impl Process {
         active: &Arc<AtomicUsize>,
         reaper: &Sender<Child>,
     ) -> Result<Arc<Self>, Error> {
-        Self::spawn_config_mode(program, args, directories, bounds, active, reaper, false)
+        Self::spawn_config_mode(
+            program,
+            args,
+            directories,
+            bounds,
+            active,
+            reaper,
+            false,
+            None,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -112,6 +130,7 @@ impl Process {
         active: &Arc<AtomicUsize>,
         reaper: &Sender<Child>,
         provider_fd: bool,
+        resume_native: Option<&str>,
     ) -> Result<Arc<Self>, Error> {
         use std::os::fd::AsRawFd;
         let pair = if provider_fd {
@@ -119,6 +138,29 @@ impl Process {
         } else {
             None
         };
+        let bootstrap = resume_native
+            .map(|native| {
+                use std::io::Write;
+                use std::net::Shutdown;
+                use std::os::unix::net::UnixStream;
+                if !provider_fd
+                    || native.is_empty()
+                    || native.len() > 512
+                    || native.chars().any(char::is_control)
+                {
+                    return Err(Error::InvalidFrame);
+                }
+                let (mut parent, child) = UnixStream::pair().map_err(|_| Error::Io)?;
+                parent.set_nonblocking(true).map_err(|_| Error::Io)?;
+                // Small, bounded local socket write; never wait for a broker reply.
+                let payload = [b"codex-resume-v1\0".as_slice(), native.as_bytes()].concat();
+                if parent.write(&payload).map_err(|_| Error::Io)? != payload.len() {
+                    return Err(Error::Io);
+                }
+                parent.shutdown(Shutdown::Write).map_err(|_| Error::Io)?;
+                Ok(child)
+            })
+            .transpose()?;
         let mut command = Command::new(program);
         command
             .args(args)
@@ -128,7 +170,11 @@ impl Process {
         directories.configure(&mut command);
         sys::configure_command(&mut command);
         if let Some((_, socket)) = &pair {
-            sys::inherit_handoff(&mut command, socket.as_raw_fd());
+            sys::inherit_handoff(
+                &mut command,
+                socket.as_raw_fd(),
+                bootstrap.as_ref().map(AsRawFd::as_raw_fd),
+            )?;
         }
         #[cfg(unix)]
         {
@@ -180,10 +226,9 @@ impl Process {
         live.framing.close();
         live.handoff = None;
         live.provider_writer = None;
-        if result.is_ok() {
-            if let Some(child) = live.child.take() {
-                self.reaper.send(child).map_err(|_| Error::Io)?;
-            }
+        // Even if signalling fails, preserve wait ownership and retained resources.
+        if let Some(child) = live.child.take() {
+            self.reaper.send(child).map_err(|_| Error::Io)?;
         }
         result
     }

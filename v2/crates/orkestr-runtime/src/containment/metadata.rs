@@ -17,7 +17,7 @@
 //! overrides, live-session adoption, or canonical credential access is provided.
 //! Runtime must supply a separately authorized canonical subscription route;
 //! an executable or disposable HOME is not subscription authorization.
-use super::process::{start_reaper, validate_metadata, Process};
+use super::process::{start_reaper_retained, validate_metadata, Process};
 use super::scope::{Shared, State};
 use super::{
     sys, Authority, ChildDirectories, ConsumedTurn, DispatchFence, Error, ExecutionScope, Exit,
@@ -100,13 +100,21 @@ pub struct MetadataAuthority {
 }
 impl MetadataAuthority {
     pub fn new(store: Store, grant: BoundSessionMetadata) -> Result<Self, Error> {
+        Self::new_retained(store, grant, Box::new(()))
+    }
+    /// Retains opaque capacity/scratch until the owned reaper has waited every child.
+    pub fn new_retained(
+        store: Store,
+        grant: BoundSessionMetadata,
+        resources: Box<dyn Send + 'static>,
+    ) -> Result<Self, Error> {
         sys::supported()?;
         // Validate ordinary issuer authority before creating local resources.
         store
             .with_metadata_fence(&grant, || Ok::<_, Error>(()))
             .map_err(|_| Error::Revoked)??;
         let active = Arc::new(AtomicUsize::new(0));
-        let reaper = start_reaper(active.clone())?;
+        let reaper = start_reaper_retained(active.clone(), resources)?;
         Ok(Self {
             shared: Arc::new(MetadataShared {
                 store,
@@ -194,6 +202,13 @@ impl MetadataExecutor {
                 &self.shared.active,
                 &self.shared.reaper,
                 provider_fd,
+                if provider_fd
+                    && grant.provider() == orkestr_v2_application::runtime::ProviderKind::Codex
+                {
+                    grant.binding().native_session_id.as_deref()
+                } else {
+                    None
+                },
             )?);
             Ok::<_, Error>(())
         });
