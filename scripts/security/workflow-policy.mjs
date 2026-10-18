@@ -113,6 +113,7 @@ export function validateWorkflow(source, filename = "") {
   if (iosSimulator) {
     requirePolicy(record(workflow.on) && events.every(event => ["pull_request", "push"].includes(event)), "workflow_ios_trigger");
     for (const event of events) {
+      requirePolicy(!["tags", "tags-ignore", "branches-ignore"].some(key => key in (workflow.on[event] || {})), "workflow_ios_branch");
       const branches = workflow.on[event]?.branches;
       requirePolicy(Array.isArray(branches) && branches.length > 0 && branches.every(branch => typeof branch === "string" && /^v2\/[A-Za-z0-9_/*-]+$/.test(branch)), "workflow_ios_branch");
     }
