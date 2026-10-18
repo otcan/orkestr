@@ -99,7 +99,10 @@ cargo test --locked -p orkestr-v2-server --test owned_execution
 The executable test uses the real default-feature server binary and HTTP setup,
 cookie login, message intake, progress read, explicit acceptance and payload
 removal. It separately verifies default-disabled startup, queued-input refusal,
-revoked startup authentication and ongoing revocation before dispatch. It uses
+revoked startup authentication and ongoing revocation before dispatch. A fifth
+case revokes the machine session during an active synthetic turn with a queued
+follow-up: the owned native process exits, the follow-up is retained, and no
+provider completion or Stopped receipt is fabricated. It uses
 an environment allowlist, the product broker and an explicitly synthetic native
 peer. The broker transfers its sole native stdin writer to Runtime before any
 native request; the executable test exercises the normal fenced writes. It never

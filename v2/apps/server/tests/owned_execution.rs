@@ -21,6 +21,6 @@ fn ordinary_http_dispatch_progress_acceptance_and_revocation() {
         String::from_utf8_lossy(&output.stdout)
             .matches("case passed:")
             .count(),
-        4
+        5
     );
 }

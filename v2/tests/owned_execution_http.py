@@ -160,9 +160,22 @@ class Case:
             db.execute("DELETE FROM auth_sessions WHERE token_hash=?",
                        (hashlib.sha256(self.machine.encode()).hexdigest(),))
 
-    def message(self):
+    def message(self, number=1):
         return self.request(self.path + "/messages", "POST", {
-            "client_message_id": "synthetic:1", "text": "synthetic ordinary HTTP input"})
+            "client_message_id": f"synthetic:{number}",
+            "text": "synthetic ordinary HTTP input" + (f" {number}" if number > 1 else "")})
+
+    def phase(self, expected):
+        code, body, _ = self.request(self.path + "/execution")
+        return body if code == 200 and body["phase"] == expected else None
+
+    def peer_gone(self):
+        pid = self.trace()[0]["pid"]
+        try:
+            os.kill(pid, 0)
+            return False
+        except ProcessLookupError:
+            return True
 
     def cleanup(self):
         self.stop()
@@ -215,20 +228,33 @@ def revoked_after_start(case):
     wait_for(lambda: any(r["kind"] == "ready" for r in case.trace()), "synthetic readiness deadline")
     case.revoke_machine()
     assert case.message()[0] == 202
-    def peer_gone():
-        pid = case.trace()[0]["pid"]
-        try:
-            os.kill(pid, 0)
-            return False
-        except ProcessLookupError:
-            return True
-    wait_for(peer_gone, "revocation must reap the owned synthetic peer")
+    wait_for(case.peer_gone, "revocation must reap the owned synthetic peer")
     status = case.request(case.path + "/execution")[1]
     assert status["phase"] == "queued" and status["run_id"] is None
     assert not any(r["kind"] == "turn" for r in case.trace())
 
 
-for scenario in ["success", "revoked_after_start", "revoked_at_start", "queued_at_start"]:
+def revoked_in_flight(case):
+    case.stop()
+    case.configure()
+    (case.workspace / "hold-first").touch()
+    case.start(configured=True)
+    assert case.message()[0] == 202
+    wait_for(lambda: case.phase("running"), "first synthetic turn must be active")
+    assert case.message(2)[0] == 202
+    case.revoke_machine()
+    wait_for(case.peer_gone, "in-flight revocation must reap the owned synthetic peer")
+    assert len([r for r in case.trace() if r["kind"] == "turn"]) == 1
+    # Revocation is itself an auth fence. A local kill cannot forge a provider
+    # stopped/completed receipt using the now-revoked machine credential.
+    with sqlite3.connect(case.home / "core.sqlite3") as db:
+        assert db.execute("SELECT count(*) FROM production_runs").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM reasoning_inbox WHERE state!='consumed'").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM production_observations WHERE kind IN ('completed_proposal','stopped')").fetchone()[0] == 0
+    assert case.request(case.path + "/execution")[1]["phase"] not in ("completed", "cancelled")
+
+
+for scenario in ["success", "revoked_after_start", "revoked_in_flight", "revoked_at_start", "queued_at_start"]:
     case = Case()
     try:
         case.setup()
@@ -236,6 +262,8 @@ for scenario in ["success", "revoked_after_start", "revoked_at_start", "queued_a
             success(case)
         elif scenario == "revoked_after_start":
             revoked_after_start(case)
+        elif scenario == "revoked_in_flight":
+            revoked_in_flight(case)
         else:
             if scenario == "queued_at_start":
                 assert case.message()[0] == 202
