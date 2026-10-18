@@ -96,9 +96,9 @@ impl TimerController {
         if !grants.contains_key(&key) && grants.len() >= MAX_GRANTS {
             return Err(HistoryError::Unavailable);
         }
-        let receipt = self
+        let outcome = self
             .store
-            .enable_timer_input(
+            .enable_timer_input_outcome(
                 &credential,
                 &owner,
                 &TimerEnableRequest {
@@ -110,6 +110,12 @@ impl TimerController {
                 self.clock.now_ms()?,
             )
             .await?;
+        // Replayed receipts are reads only: retain an existing grant unchanged,
+        // or remain unarmed after expiry/restart. A fresh transition is required.
+        if outcome.duplicate {
+            return Ok(outcome.receipt);
+        }
+        let receipt = outcome.receipt;
         grants.insert(
             key,
             Grant {

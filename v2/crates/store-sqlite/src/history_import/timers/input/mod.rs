@@ -14,6 +14,12 @@ pub struct TimerInputReceipt {
     pub input: Receipt,
     pub duplicate: bool,
 }
+/// Transaction-reported transition status; consumers must not renew grants on replay.
+#[derive(Clone, Debug)]
+pub struct TimerEnableOutcome {
+    pub receipt: TimerReceipt,
+    pub duplicate: bool,
+}
 async fn watermark(
     tx: &mut Transaction<'_, Sqlite>,
     owner: &OwnerId,
@@ -38,13 +44,13 @@ async fn guard(
 }
 impl Store {
     /// Explicit owner enable captures the current Deep Stop boundary atomically.
-    pub async fn enable_timer_input(
+    pub async fn enable_timer_input_outcome(
         &self,
         credential: &str,
         owner: &OwnerId,
         request: &TimerEnableRequest,
         now_ms: i64,
-    ) -> Result<TimerReceipt> {
+    ) -> Result<TimerEnableOutcome> {
         let mut tx = self.history_transaction(credential, owner, true).await?;
         let replay: i64 = sqlx::query_scalar("SELECT count(*) FROM dormant_timer_controls WHERE owner_id=? AND namespace=? AND request_key=?").bind(owner.to_string()).bind(request.namespace.to_string()).bind(&request.request_key).fetch_one(&mut *tx).await.map_err(unavailable)?;
         let result = control::enable_in_transaction(&mut tx, owner, request, now_ms).await?;
@@ -79,7 +85,23 @@ impl Store {
                 .bind(owner.to_string()).bind(request.namespace.to_string()).bind(result.generation).bind(request.conversation_id.to_string()).bind(boundary).bind(&request.request_key).execute(&mut *tx).await.map_err(unavailable)?;
         }
         tx.commit().await.map_err(unavailable)?;
-        Ok(result)
+        Ok(TimerEnableOutcome {
+            receipt: result,
+            duplicate: replay != 0,
+        })
+    }
+    /// Compatibility receipt API. Execution controllers need transition status above.
+    pub async fn enable_timer_input(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        request: &TimerEnableRequest,
+        now_ms: i64,
+    ) -> Result<TimerReceipt> {
+        Ok(self
+            .enable_timer_input_outcome(credential, owner, request, now_ms)
+            .await?
+            .receipt)
     }
     /// Sole ordinary writer remains Core intake; cadence/provenance/input commit together.
     pub async fn admit_timer_input(
