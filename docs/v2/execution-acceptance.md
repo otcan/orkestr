@@ -74,3 +74,18 @@ parent SIGKILLs two owned writers at the two acceptance boundaries and starts tw
 fresh replay processes. This is Store acceptance evidence, not HTTP/browser or
 provider-execution acceptance. Populated historical-prefix upgrade and independent
 acceptance review remain separate gates.
+
+## Credential-bearing HTTP boundary
+
+HTTP composition must use `Store::accept_execution_authenticated(credential,
+conversation, request)`. It derives owner from the exact stored credential and
+rechecks its owner, expiry and revocation under the same immediate transaction
+as the decision or historical receipt lookup. Revocation committed before that
+transaction therefore refuses both fresh writes and receipt delivery. A
+concurrent revocation serializes with the decision; it cannot retroactively undo
+an already committed acceptance. Browser composition still enforces CSRF/Origin
+and passes the exact namespaced credential used by session authentication.
+
+The earlier `accept_execution(owner, ...)` remains a trusted internal Store
+operation: a cached OwnerId is not proof of current authentication. It must not
+be exposed directly by an HTTP handler. No acceptance endpoint is activated here.

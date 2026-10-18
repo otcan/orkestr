@@ -242,3 +242,54 @@ async fn acceptance_write_failure_rolls_back_binding_event_outbox_and_revision()
         .unwrap()
         .is_valid());
 }
+
+#[tokio::test]
+async fn authenticated_acceptance_fences_revocation_before_commit_and_receipt_replay() {
+    let f = setup().await;
+    let (_, request) = proposal(&f).await;
+    assert_eq!(
+        f.store.authenticate(&f.token).await.unwrap(),
+        Some(f.owner.clone())
+    );
+    f.store.revoke_session(&f.token).await.unwrap();
+    let before = snapshot(&f.store).await;
+    // Model a route that cached owner before revocation: the in-transaction
+    // guard must refuse even when its preliminary lookup had succeeded.
+    assert!(matches!(
+        f.store
+            .accept_execution_guarded(&f.owner, &f.conversation, &request, Some(&f.token))
+            .await,
+        Err(RuntimeStoreError::Unauthorized)
+    ));
+    assert!(matches!(
+        f.store
+            .accept_execution_authenticated(&f.token, &f.conversation, &request)
+            .await,
+        Err(RuntimeStoreError::Unauthorized)
+    ));
+    assert_eq!(snapshot(&f.store).await, before);
+    f.store.save_session(&f.token, &f.owner).await.unwrap();
+    let receipt = f
+        .store
+        .accept_execution_authenticated(&f.token, &f.conversation, &request)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.store
+            .accept_execution_authenticated(&f.token, &f.conversation, &request)
+            .await
+            .unwrap(),
+        receipt
+    );
+    f.store.revoke_session(&f.token).await.unwrap();
+    let other = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
+    let before = snapshot(&other).await;
+    assert!(matches!(
+        other
+            .accept_execution_authenticated(&f.token, &f.conversation, &request)
+            .await,
+        Err(RuntimeStoreError::Unauthorized)
+    ));
+    assert_eq!(snapshot(&other).await, before);
+    other.close().await;
+}

@@ -6,6 +6,27 @@ use orkestr_v2_contracts::{
 };
 
 impl Store {
+    /// HTTP-facing owner decision. Credential validity is checked again under
+    /// the same immediate transaction as both fresh acceptance and receipt replay.
+    /// The caller must additionally enforce its browser CSRF/Origin policy.
+    pub async fn accept_execution_authenticated(
+        &self,
+        credential: &str,
+        conversation: &ConversationId,
+        input: &ExecutionAcceptanceRequest,
+    ) -> Result<ExecutionAcceptanceReceipt> {
+        if credential.is_empty() || credential.len() > 1024 {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        let owner = self
+            .authenticate(credential)
+            .await
+            .map_err(|_| RuntimeStoreError::Unavailable)?
+            .ok_or(RuntimeStoreError::Unauthorized)?;
+        self.accept_execution_guarded(&owner, conversation, input, Some(credential))
+            .await
+    }
+
     /// Trusted HTTP composition supplies authenticated owner and enforces browser
     /// CSRF/Origin. A supervisor-bound provider handle cannot accept its output.
     pub async fn accept_execution(
@@ -14,6 +35,17 @@ impl Store {
         conversation: &ConversationId,
         input: &ExecutionAcceptanceRequest,
     ) -> Result<ExecutionAcceptanceReceipt> {
+        self.accept_execution_guarded(owner, conversation, input, None)
+            .await
+    }
+
+    pub(super) async fn accept_execution_guarded(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        input: &ExecutionAcceptanceRequest,
+        credential: Option<&str>,
+    ) -> Result<ExecutionAcceptanceReceipt> {
         if self.authority.is_some() {
             return Err(RuntimeStoreError::Unauthorized);
         }
@@ -21,6 +53,14 @@ impl Store {
             return Err(RuntimeStoreError::InvalidInput);
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        if let Some(credential) = credential {
+            let authorized: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
+                .bind(crate::digest(credential)).bind(owner.to_string())
+                .fetch_one(&mut *tx).await.map_err(db)?;
+            if authorized != 1 {
+                return Err(RuntimeStoreError::Unauthorized);
+            }
+        }
         crate::runtime::scope(&mut tx, owner, conversation).await?;
         if let Some(row)=sqlx::query("SELECT * FROM production_acceptances WHERE owner_id=? AND conversation_id=? AND request_key=?")
             .bind(owner.to_string()).bind(conversation.to_string()).bind(&input.request_key).fetch_optional(&mut *tx).await.map_err(db)? {
