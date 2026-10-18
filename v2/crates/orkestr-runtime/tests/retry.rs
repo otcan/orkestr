@@ -55,7 +55,11 @@ fn fail_once_record_retries_same_terminal_after_provider_has_removed_turn() {
 }
 #[test]
 fn stale_or_expired_discards_delivery_without_repoll_or_readmission() {
-    for error in [RuntimeStoreError::StaleLease, RuntimeStoreError::Expired] {
+    for error in [
+        RuntimeStoreError::StaleLease,
+        RuntimeStoreError::Fenced,
+        RuntimeStoreError::Expired,
+    ] {
         let a = admission(SessionRole::Worker, 10);
         let store = Spy::new(a.clone());
         store.state.lock().unwrap().refusal = Some(error);
@@ -152,4 +156,38 @@ fn committed_terminal_lost_ack_retries_original_key_without_duplicate() {
     assert_eq!(state.attempts[0], state.attempts[1]);
     assert_eq!(state.accepted.len(), 1);
     assert!(pending.pending().is_none());
+}
+
+#[test]
+fn committed_lost_ack_then_revoked_authority_refuses_without_ack_or_transition() {
+    for error in [RuntimeStoreError::Fenced, RuntimeStoreError::Expired] {
+        let a = admission(SessionRole::Worker, 10);
+        let store = Spy::new(a.clone());
+        let mut p = FakeProvider::fixture_only(true).unwrap();
+        let mut pending = PendingObservation::default();
+        p.start(&a).unwrap();
+        p.poll(&a).unwrap();
+        p.emit(&a, ObservationKind::CompletedProposal { synthetic: true })
+            .unwrap();
+        store.state.lock().unwrap().lose_ack_once = true;
+        assert_eq!(
+            ready(supervisor::step(&store, &mut p, &a, &mut pending)),
+            Err(Error::Store(RuntimeStoreError::Unavailable))
+        );
+        store.state.lock().unwrap().refusal = Some(error);
+        assert_eq!(
+            ready(supervisor::step(&store, &mut p, &a, &mut pending)),
+            Err(Error::Store(error))
+        );
+        assert!(pending.pending().is_none());
+        assert_eq!(
+            ready(supervisor::step(&store, &mut p, &a, &mut pending)),
+            Err(Error::Store(error))
+        );
+        let state = store.state.lock().unwrap();
+        assert_eq!(state.accepted.len(), 1);
+        assert_eq!(state.attempts.len(), 2);
+        assert_eq!(state.attempts[0], state.attempts[1]);
+        assert_eq!(state.attempts[0].dispatch_fence, a.dispatch_fence);
+    }
 }

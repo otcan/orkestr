@@ -1,7 +1,6 @@
 //! Bounded, offline protocol decoding. These are candidate adapter boundaries,
 //! not proof of authentication, subscription entitlement or live execution.
 use crate::ports::{Blocker, ObservationKind};
-use orkestr_v2_contracts::runtime::MAX_PROVIDER_PROGRESS_BYTES;
 use serde_json::Value;
 const MAX_FRAME: usize = 64 * 1024;
 
@@ -42,13 +41,10 @@ pub fn codex_event(
         if text(p, "turnId")? != turn {
             return Err(Blocker::StaleLease);
         }
-        let delta = text(p, "delta")?;
-        if delta.len() > MAX_PROVIDER_PROGRESS_BYTES {
-            return Err(Blocker::Protocol);
-        }
-        return Ok(Some(ObservationKind::Progress {
-            text: delta.to_owned(),
-        }));
+        text(p, "delta")?;
+        // No payload store exists yet. Never fabricate a PayloadId or journal
+        // raw provider text as metadata; the caller must surface this blocker.
+        return Err(Blocker::PayloadUnavailable);
     }
     let t = p.get("turn").ok_or(Blocker::Protocol)?;
     if text(t, "id")? != turn {

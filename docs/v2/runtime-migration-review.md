@@ -1,84 +1,64 @@
-# Runtime migration review proposal
+# Runtime v3 source migration review
 
-Status: source proposal against owner-selected port version 1, core commit
-`d4cf693435378ed232d97df60727ea6e54d9b90b`. No runtime SQLite implementation or
-migration exists. This document supersedes historical runtime store sketches;
-core owns all shared contracts, application ports, schema and durable authority.
+Canonical origin: core 1ecfd1e84af05af580186f171f954f28ef3a9e27, frozen port
+version 3, PR #82. Migration parent: 330375d8a3ed32281dd6fed571a16f49c5a47d9b.
+Contracts/application crate paths are imported exactly from that origin, including
+crate-local manifests. This supersedes the owner-selected d4cf6934 async-trait
+migration; the canonical trait again uses native Future + Send. Runtime removes
+its test-only async-trait dependency and spy annotation. No competing port/store
+or new dependency is introduced. Root manifest/lock, toolchain, schema/store,
+domain/demo and CI remain untouched by this migration.
 
-Runtime imports the canonical `async_trait` Send + Sync `RuntimeStore` methods and
-contracts-owned UUID IDs, admission, observation and lifecycle records. Both
-application port names denote the same trait. Application requires async-trait =0.1.89; runtime adds the same pinned test-only
-dependency for its spy implementation. Coordinator alone integrates the lock.
-No Tokio or executor dependency is needed by the ready-future test spies.
+Runtime imports core UUID IDs, admissions and observation types. There is only
+RuntimeStore::record_observation(admission, event_key, observation); runtime owns
+Provider/Blocker, fake source, protocol parsing and supervision. Core owns all
+schema, payload storage, durable operations and acceptance tests.
 
-The adapter proposal retains these invariants:
+## Authority and dispatch
 
-- Core-returned role is checked; caller expectations cannot assign authority.
-  `start` returns `DispatchUnconfirmed` even for a valid admission until core
-  specifies how a fresh dispatch differs from an idempotent replay. A replay
-  never blindly starts an active or completed run. Store admission must atomically
-  acknowledge the inbox handoff; runtime never creates a second claim/store.
-- Observation keys bind run, attempt, generation and local sequence. Transient
-  Unavailable retains identical key/body. Stale, expired or unauthorized refusals
-  latch reconciliation without polling again. This cursor is volatile, not a
-  durable recovery mechanism. CompletedProposal is evidence, never task success.
-- Durable cancellation precedes interruption. Original execution identity and
-  cancellation-acknowledgement purpose remain distinct. The fake rejects stop
-  tokens on start, preserves queued terminal evidence on a stop race and only
-  binds the cancellation token after the explicit interrupt command. Unknown
-  in-flight outcomes remain unknown when interruption fails.
-- Recovery, native binding confirmation, admission/ack transactions, lease
-  expiry and event dedup are core store responsibilities. No provider wait,
-  live inference, effect retry or automatic provider restart is introduced.
-  Unimplemented test-spy methods return Unavailable, not fabricated success.
+High-level start validates store-returned owner/scope/session/role and Execution
+purpose, then returns DispatchUnconfirmed for every admission. An identical
+admission replay is not fresh dispatch permission. Caller role cannot manufacture
+provider authority. Cancellation-only tokens cannot start a provider; cancellation
+receipt identity/generations are validated before sending interrupt control.
+Terminal evidence remains preserved if interruption races a queued terminal.
+Native namespace/supervisor authority and fresh dispatch disposition remain
+unresolved core contracts. Relevant durable methods remain Unavailable.
 
-Required durable acceptance remains separate: concurrent role/native uniqueness,
-ordered competing claims and expiry/reclaim, admission rollback and idempotent
-handoff, changed-body dedup conflict, owner/scope isolation, atomic cancellation
-fence/control outbox, stale observation/effect rejection, and restart recovery
-preserving unknown dispatches for explicit reconciliation. Core must extend the
-shared journal/event DTO compatibly; runtime owns no alternate journal.
+Each observation includes the original admission's u64 lease generation and
+explicit dispatch fence. No conversion/truncation to a database integer occurs
+in runtime. Key/body/admission remain unchanged across Unavailable/Busy, including
+lost commit ACKs. StaleLease/Fenced/Expired deliberately discard delivery and
+latch refusal without repoll, readmission or restart. Conflict, unauthorized or
+invalid input remain visible latched blockers, not acknowledgements. Refusal
+never changes Stopped into successful cancellation. Only core's committed receipt
+can acknowledge; CompletedProposal remains AwaitingAcceptance evidence.
 
-Verification status: 21 migrated Rust tests are defined, not compiled at this
-proposal head. Prior combined-base 16-test results do not transfer. Cargo and
-download work remain held until coordinator readmission. No formal approval,
-build pass, dispatch implementation or durable acceptance is claimed.
+Core's frozen v3 rule checks authority before duplicate acknowledgement too.
+Thus a committed event whose ACK was lost may subsequently receive explicit
+Fenced/Expired refusal. That neither undoes the earlier commit nor acknowledges
+the retry. The authored spy regression models this ordering; it establishes no
+database durability. Runtime never provides a trusted digest: core must compute
+it, check event-key equality and enforce scope/lease/fence/expiry atomically.
 
-## Canonical observation clarification
+## Progress payload boundary
 
-This source revision restores only contracts/application paths from core
-93460326d0e73e021e6dbc54a262a8c9a6eb8f0a, superseding the intervening explicit
-v0 handoff. Runtime uses record_observation and shared ProviderObservation,
-ObservationKind and ObservationReceipt; no second port is introduced.
-Unavailable/Busy retain the identical event and key, including lost commit ACKs.
-StaleLease/Expired deliberately discard the queued delivery and latch refusal;
-this is not acknowledgement, restart or readmission. Conflict retains evidence
-and latches a visible blocker with no acknowledgement. Core must atomically
-validate lease/fence/expiry, derive payload digest, require matching event key,
-and return the original receipt on identical retry after durable commit.
-SQLite observation support remains Unavailable. The spy models receipt dedup,
-not durability. 21 tests are authored, unexecuted at this revision. No cargo,
-formatting, root/lock mutation or CI pass is claimed. Source was published in
-draft PR #76 at 2c9fd0fa72ea849d8beb39e73f2e0c485fef029d and independently
-reviewed with no blocking source finding for the bounded migration. This is
-source review only; root/lock and integration gates remain coordinator-owned.
+Raw Progress text is absent from shared observations. ProgressRef contains only
+a PayloadId. Codex raw delta parsing returns PayloadUnavailable after checking
+frame and provider identity, because no removable payload store exists. Runtime
+never invents a durable payload ID or relabels provider output as owner input.
+The explicit fake may queue synthetic ProgressRef IDs for bounded queue tests;
+those references assert no existing stored payload. Core must validate existence,
+ownership and policy before any durable acknowledgement. No pretend payload
+endpoint, payload store or production fallback is introduced.
 
-## Owner-selected async-trait handoff
+## Review and validation
 
-Migration parent: 4c5c81ff946d15f7ab083dbe78867852b2a3a350. The agreed
-contracts/application paths are imported exactly from core
-d4cf693435378ed232d97df60727ea6e54d9b90b, superseding the native-Future
-selection above. Exact agreement and both provider-observation fixtures were
-inspected read-only; fixture files match the current source. Types/signature
-arguments are unchanged from 93460326 except RUNTIME_PORT_VERSION =1 and the
-async_trait Send+Sync method convention. There is no duplicate port/store.
-Runtime's test spy uses the shared trait macro and explicit Unavailable methods.
-
-The 379d0b5e role/replay finding remains addressed: start compares store-returned
-scope, session, role and execution purpose before any provider command, then
-returns DispatchUnconfirmed for every admission. Neither matching role nor
-idempotent replay authorizes dispatch. Existing mismatch/replay no-start tests
-remain; transient/lost-ACK/stale-discard/Conflict cases remain unchanged.
-All 21 tests remain unexecuted here. No root/lock, schema, store, domain/demo,
-toolchain or CI edits; no cargo/downloads, formatting or build pass claimed.
-Independent source review must precede coordinator dependency-lock integration.
+23 runtime tests authored: 12 offline, 5 ordering, 6 retry. Added raw-progress
+unavailable and committed-lost-ACK-then-revoked-authority cases; stale delivery
+coverage includes Fenced. All are unexecuted/uncompiled at this migration head.
+Spies are ready-future protocol evidence only, never durability or restart credit.
+Prior canonical/migration source reviews and historical exact aec7475b 16/16
+results do not transfer to this revision. No heavy compilation, tests or CI pass
+is claimed. Coordinator alone resolves root/lock and final source union after
+independent review. Exact-head build/tests remain pending that handoff.

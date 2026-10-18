@@ -17,6 +17,7 @@ pub enum Blocker {
     QueueFull,
     FixtureOnly,
     Protocol,
+    PayloadUnavailable,
     /// Core admission replay cannot yet distinguish a fresh provider dispatch.
     DispatchUnconfirmed,
 }

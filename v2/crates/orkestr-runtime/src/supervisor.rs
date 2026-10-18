@@ -95,6 +95,7 @@ pub async fn step<S: RuntimeStore, P: Provider>(
             run_id: admission.run_id.clone(),
             session_id: admission.session_id.clone(),
             lease_generation: admission.lease_generation,
+            dispatch_fence: admission.dispatch_fence,
             kind,
         });
     }
@@ -122,16 +123,21 @@ pub async fn step<S: RuntimeStore, P: Provider>(
             // or permission to repoll, readmit or start another provider turn.
             if matches!(
                 error,
-                RuntimeStoreError::StaleLease | RuntimeStoreError::Expired
+                RuntimeStoreError::StaleLease
+                    | RuntimeStoreError::Fenced
+                    | RuntimeStoreError::Expired
             ) {
                 cursor.pending = None;
             }
             if matches!(
                 error,
                 RuntimeStoreError::StaleLease
+                    | RuntimeStoreError::Fenced
                     | RuntimeStoreError::Expired
                     | RuntimeStoreError::Unauthorized
                     | RuntimeStoreError::Conflict
+                    | RuntimeStoreError::InvalidInput
+                    | RuntimeStoreError::NotFound
             ) {
                 cursor.refused = Some(error);
             }

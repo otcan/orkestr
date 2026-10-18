@@ -74,7 +74,6 @@ impl Spy {
         }
     }
 }
-#[async_trait::async_trait]
 impl RuntimeStore for Spy {
     async fn claim_next(
         &self,
@@ -126,6 +125,8 @@ impl RuntimeStore for Spy {
     ) -> Result<ObservationReceipt> {
         assert_eq!(key, input.source_event_key);
         assert_eq!(a.run_id, input.run_id);
+        assert_eq!(a.dispatch_fence, input.dispatch_fence);
+        assert_eq!(a.lease_generation, input.lease_generation);
         let mut s = self.state.lock().unwrap();
         s.calls.push("record");
         s.attempts.push(input.clone());

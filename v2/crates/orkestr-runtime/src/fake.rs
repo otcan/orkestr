@@ -1,7 +1,7 @@
 //! Controllable FAKE provider. Explicit fixture mode, bounded queues, no timers,
 //! threads, inference, persistence or implicit fallback to synthetic results.
 use crate::ports::{Blocker, InterruptControl, ObservationKind, Provider, RunAdmission};
-use orkestr_v2_contracts::runtime::{AdmissionPurpose, MAX_PROVIDER_PROGRESS_BYTES};
+use orkestr_v2_contracts::runtime::AdmissionPurpose;
 use orkestr_v2_contracts::SessionId;
 use std::collections::{HashMap, VecDeque};
 
@@ -39,10 +39,6 @@ impl FakeProvider {
             ObservationKind::CompletedProposal { synthetic: false }
         ) {
             return Err(Blocker::FixtureOnly);
-        }
-        if matches!(&event, ObservationKind::Progress { text } if text.len() > MAX_PROVIDER_PROGRESS_BYTES)
-        {
-            return Err(Blocker::QueueFull);
         }
         let turn = self.checked(admission)?;
         if turn.terminal {

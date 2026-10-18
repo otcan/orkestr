@@ -91,8 +91,9 @@ fn queues_are_bounded_and_fake_never_claims_real_output() {
     for _ in 0..31 {
         p.emit(
             &a,
-            ObservationKind::Progress {
-                text: "pending".into(),
+            ObservationKind::ProgressRef {
+                payload_id: serde_json::from_str("\"00000000-0000-4000-8000-000000000099\"")
+                    .unwrap(),
             },
         )
         .unwrap();
@@ -117,6 +118,7 @@ fn unsupported_resume_fork_and_steer_are_explicit() {
 fn codex_offline_fixture_checks_identity_and_terminal_status() {
     let events: Vec<_> = include_str!("fixtures/codex.jsonl")
         .lines()
+        .filter(|line| !line.contains("item/agentMessage/delta"))
         .map(|line| {
             codex_event(line, "fixture-thread", "fixture-turn")
                 .unwrap()
@@ -127,9 +129,6 @@ fn codex_offline_fixture_checks_identity_and_terminal_status() {
         events,
         vec![
             ObservationKind::Started,
-            ObservationKind::Progress {
-                text: "Synthetic fixture output".into()
-            },
             ObservationKind::CompletedProposal { synthetic: false },
             ObservationKind::Stopped,
             ObservationKind::Failed
@@ -216,4 +215,20 @@ fn cancellation_ack_token_cannot_start_execution() {
     let a = admission(SessionRole::Worker, "cancel-purpose");
     assert_eq!(p.start(&control(&a).cancellation), Err(Blocker::StaleLease));
     p.start(&a).unwrap();
+}
+
+#[test]
+fn raw_progress_requires_unavailable_payload_store_not_fabricated_reference() {
+    let line = include_str!("fixtures/codex.jsonl")
+        .lines()
+        .find(|line| line.contains("item/agentMessage/delta"))
+        .unwrap();
+    assert_eq!(
+        codex_event(line, "fixture-thread", "fixture-turn"),
+        Err(Blocker::PayloadUnavailable)
+    );
+    assert_eq!(
+        codex_event(line, "wrong-thread", "fixture-turn"),
+        Err(Blocker::StaleLease)
+    );
 }
