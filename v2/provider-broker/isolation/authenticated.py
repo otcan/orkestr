@@ -33,16 +33,25 @@ def private_path(path, directory=False):
 def private_state(path):
     """Dedicated role state, never canonical home or copied account/config."""
     root=Path(private_path(path,True))
-    allowed={"sessions","archived_sessions","session_index.jsonl","auth.json"}
-    for name in ("state_5.sqlite","logs_2.sqlite"):
+    disposable={"tmp","cache","skills","thread-writer-locks"}
+    allowed={"sessions","archived_sessions","session_index.jsonl","auth.json",
+             "models_cache.json","installation_id",".sandbox_migration"}|disposable
+    for name in ("state_5.sqlite","logs_2.sqlite","goals_1.sqlite","memories_1.sqlite",
+                 "queue_1.sqlite","thread_history_1.sqlite"):
         allowed.update((name,name+"-wal",name+"-shm",name+"-journal"))
     for item in root.iterdir():
         if item.name not in allowed or item.is_symlink():
             raise ValueError("unexpected private native state")
         info=item.lstat()
-        expected_directory=item.name in ("sessions","archived_sessions")
+        expected_directory=item.name in ({"sessions","archived_sessions"}|disposable)
         if not (stat.S_ISDIR(info.st_mode) if expected_directory else stat.S_ISREG(info.st_mode)):
             raise ValueError("private native state type refused")
+        if item.name in disposable and any(item.iterdir()):
+            raise ValueError("disposable native state requires empty mountpoint")
+        if item.name=="models_cache.json" and info.st_size>8*1024**2:
+            raise ValueError("native model cache bound")
+        if item.name in ("installation_id",".sandbox_migration") and info.st_size>4096:
+            raise ValueError("native metadata bound")
         if item.name=="auth.json" and (not item.is_file() or item.stat().st_size!=0):
             raise ValueError("account copies forbidden in private state")
     count=0
@@ -169,6 +178,11 @@ class SelectedCodexProfile:
             mounts += ["--bind",self.state_root,"/account"]
         else:
             mounts += ["--bind",self.sessions,"/account/sessions"]
+        if self._provider=="codex":
+            # Native helper symlinks and downloaded skills/cache never persist
+            # into the next launch. Empty host mountpoints only, never traversal.
+            for name in ("tmp","cache","skills","thread-writer-locks"):
+                mounts += ["--size","33554432","--tmpfs","/account/"+name]
         if self.auth is not None:
             mounts += ["--ro-bind",self.auth,"/account/auth.json"]
         mount_index=argv.index("--chdir")
