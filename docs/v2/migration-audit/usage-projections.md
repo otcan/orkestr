@@ -8,8 +8,9 @@ cross-store coherence, activity, installed connector use or release coverage.
 Empty or absent job records cannot establish unused workflows elsewhere.
 
 `v2/migration/usage_projection.py` proposes the next bounded edge. It is tested
-only on synthetic stores; production invocation requires review of the exact
-projection. It reuses the reviewed mode=ro pinned transaction and ordinary-table
+only on synthetic stores; root independently reviewed the exact committed projection and executed it
+under a bounded process. Migration subsequently reviewed the private receipt.
+The statements below describe the original projection contract. It reuses the reviewed mode=ro pinned transaction and ordinary-table
 checks, then narrows its authorizer to `runs.state`, empty-column count reads
 and count/sum/coalesce. No identifiers, timestamps, JSON payloads, provider names,
 route data, credentials or result bodies are selected. No schema initializer,
@@ -48,9 +49,9 @@ accepts only a path and exposes no SQL/connection parameter.
 
 | Class | Smallest next reviewed evidence | Current gap |
 |---|---|---|
-| Job lifecycle | Fixed state buckets above | Candidate not executed live; no real-time activity proof |
+| Job lifecycle | Fixed state buckets above | Executed by root; no real-time activity proof |
 | Thread role / workers | Source-validated fixed enum aggregate in storage-side projection | Role/lineage embedded in thread JSON; JSON body reads remain excluded |
-| Provider class | Fixed provider enum normalization inside a reviewed source projection | Provider column is free text; raw names/grouping are excluded pending enum authority |
+| Provider class | Fixed provider enum normalization inside a reviewed source projection | Fixed enum candidate now in `workflow-class-projection.md`; live execution pending review |
 | Timers / automation / setups | Safe status projection returning only known class/enabled buckets | Registry JSON and prompt-bearing definitions remain excluded |
 | Connectors / browser / desktop | Reviewed status API with fixed capability classes and no identities | Session/profile/route and lease contents remain excluded |
 | Tasks / resources / results / memory | Feature-aware schema/status projections with missing-store coverage | Job tables do not cover every authority/store |
@@ -62,5 +63,6 @@ requires each authority to explicitly report coverage and exclusions.
 
 Validation: 52 synthetic tests pass using the migration test discovery command,
 including four new projection tests for fixed/unknown buckets, empty-store
-semantics, forbidden columns/functions and view refusal. No live semantic
-projection, provider/role/registry query, push or CI run was executed.
+semantics, forbidden columns/functions and view refusal. Root subsequently executed the reviewed run-state projection and Migration
+reviewed its private receipt. Provider/role/registry queries and CI for this
+follow-up remain unexecuted.
