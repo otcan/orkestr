@@ -221,3 +221,6 @@ mod stop_progress_tests;
 
 #[cfg(test)]
 mod claude_identity_tests;
+
+mod steering;
+pub use steering::*;
