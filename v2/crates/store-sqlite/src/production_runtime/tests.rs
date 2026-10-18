@@ -111,6 +111,7 @@ pub(super) async fn snapshot(store: &Store) -> Vec<String> {
         ("execution_revisions","conversation_id,revision"),
         ("production_run_leases","run_id,generation,lease_deadline_ms,dispatch_fence,purpose"),
         ("production_supervisors","context_id,owner_id,provider_kind,namespace,supervisor_key,incarnation_id,generation,lease_deadline_ms"),
+        ("production_requested_native","session_id,binding_generation,context_id,incarnation_id,requested_native_id,initialization_key,observed_run_id,observed_event_key"),
         ("production_readiness","session_id,context_id,incarnation_id,protocol_version,source_event_key,evidence_digest"),
         ("production_runs","id,context_id,incarnation_id,owner_id,conversation_id,session_id,native_session_id,provider_kind,binding_generation,message_id,event_id,scope_sequence,claim_generation,request_key,input_digest,lease_generation,dispatch_fence,lease_deadline_ms,attempt,state,dispatch_state,candidate_hash,reservation_hash,reserve_key,role,parent_session_id,worker_delegation_id"),
         ("reasoning_inbox","conversation_id,sequence,message_id,event_id,state,claimant_session_id,claim_generation,claim_deadline_ms,admitted_fixture_run_id,admitted_run_id"),

@@ -165,3 +165,29 @@ impl Store {
 }
 #[cfg(test)]
 mod tests;
+
+impl Store {
+    pub(super) async fn consume_claude_resume_in(
+        &self,
+        tx: &mut SqliteConnection,
+        grant: &BoundSessionMetadata,
+        input: &super::claude_identity::ClaudeProcessInitialization,
+    ) -> Result<()> {
+        self.validate_resume_metadata(tx, grant).await?;
+        let link = grant.resume.as_ref().ok_or(RuntimeStoreError::Fenced)?;
+        let digest = crate::runtime::ledger::hash(
+            "claude-process-initialized-v1",
+            &[
+                &input.requested_native_session_id,
+                &input.protocol_version,
+                &input.source_event_key,
+            ],
+        );
+        let changed = sqlx::query("UPDATE production_resume_metadata SET state='confirmed',confirmation_digest=? WHERE id=? AND state='issued'")
+            .bind(digest).bind(&link.id).execute(tx).await.map_err(db)?.rows_affected();
+        if changed != 1 {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        Ok(())
+    }
+}

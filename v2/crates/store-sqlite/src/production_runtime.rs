@@ -13,6 +13,8 @@ mod admission;
 mod cancellation;
 #[cfg(test)]
 mod cancellation_tests;
+mod claude_identity;
+pub use claude_identity::ClaudeProcessInitialization;
 mod capability;
 pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};
 mod dispatch;
@@ -214,3 +216,6 @@ impl Context {
 
 #[cfg(test)]
 mod stop_progress_tests;
+
+#[cfg(test)]
+mod claude_identity_tests;
