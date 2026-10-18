@@ -1,6 +1,9 @@
 //! Opt-in Claude factory for trusted server composition; no router/main mutation.
 //! The configured launcher owns canonical account selection. Browser JSON cannot
 //! provide a launcher, account, native identity, setup grant or inference grant.
+mod schedule;
+pub use schedule::ClaudeSchedule;
+
 use orkestr_runtime::{
     containment::{Authority, ChildDirectories},
     execution::{ClaudePump, PreparingClaude, ReadyClaude, SetupFailure, SubmissionFailure},

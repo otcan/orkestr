@@ -1,5 +1,8 @@
 //! Trusted fixed-purpose presentation scheduling. No inbox claim, source text,
 //! role substitution, worker delegation or provider I/O is accepted here.
+mod session;
+pub use session::{FastFailure, FastStart, LiveFast, PreparingFast, ReadyFast};
+
 use orkestr_v2_application::runtime::{
     AdmissionDisposition, AdmissionPurpose, DispatchClaimResult, Role, RunAdmissionResult,
     RunState, RuntimeStore, RuntimeStoreError,
@@ -39,8 +42,8 @@ fn validate(
 }
 
 /// Caller must obtain a distinct Ready Fast binding via Core metadata setup.
-/// This function consumes only the canonical non-inbox issuer. Its present
-/// Unavailable result propagates unchanged; Deep admission is never attempted.
+/// This function consumes only the canonical non-inbox issuer. An
+/// Unavailable result propagates unchanged on older adapters; Deep admission is never attempted.
 /// The returned capability still requires same-child attachment and actual fences.
 pub async fn consume_fast(
     store: &Store,

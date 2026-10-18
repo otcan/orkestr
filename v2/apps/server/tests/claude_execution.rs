@@ -14,9 +14,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-async fn exercise(failure: bool) {
+async fn exercise(failure: bool, scheduled: bool) {
     let root = std::path::PathBuf::from(std::env::var("ORKESTR_V2_HOME").unwrap()).join(format!(
-        "claude-server-owned-{}-{failure}",
+        "claude-server-owned-{}-{failure}-{scheduled}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).unwrap();
@@ -86,27 +86,59 @@ for line in sys.stdin:
         .await
         .unwrap()
         .deep;
-    let grant = bound.authorize_session_metadata(&binding).await.unwrap();
-    let dirs = orkestr_runtime::containment::ChildDirectories::new(
-        &root.join("workspace"),
-        &root.join("home"),
-        &root.join("tmp"),
-    )
-    .unwrap();
-    let mut preparing = PreparingClaudeExecution::open_retained(
-        bound.clone(),
-        grant,
-        &launcher,
-        dirs,
-        Box::new(()),
-    )
-    .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !preparing.poll_ready().unwrap() {
-        assert!(Instant::now() < deadline);
-        tokio::time::sleep(Duration::from_millis(2)).await;
-    }
-    let ready = preparing.confirm().await.unwrap();
+    let dirs = || {
+        orkestr_runtime::containment::ChildDirectories::new(
+            &root.join("workspace"),
+            &root.join("home"),
+            &root.join("tmp"),
+        )
+        .unwrap()
+    };
+    let mut scheduler = if scheduled {
+        Some(
+            ClaudeSchedule::open_retained(
+                bound.clone(),
+                owner.clone(),
+                conversation.clone(),
+                &launcher,
+                dirs(),
+                Box::new(()),
+            )
+            .await
+            .unwrap(),
+        )
+    } else {
+        None
+    };
+    let ready = if let Some(scheduler) = scheduler.as_mut() {
+        for _ in 0..40 {
+            scheduler.tick().await.unwrap();
+            assert!(scheduler.run_id().is_none(), "setup alone cannot dispatch");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        assert!(store
+            .execution_status(&owner, &conversation)
+            .await
+            .unwrap()
+            .is_none());
+        None
+    } else {
+        let grant = bound.authorize_session_metadata(&binding).await.unwrap();
+        let mut preparing = PreparingClaudeExecution::open_retained(
+            bound.clone(),
+            grant,
+            &launcher,
+            dirs(),
+            Box::new(()),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !preparing.poll_ready().unwrap() {
+            assert!(Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        Some(preparing.confirm().await.unwrap())
+    };
     let binding = bound
         .ensure_role_bindings(&owner, &conversation)
         .await
@@ -123,6 +155,26 @@ for line in sys.stdin:
         )
         .await
         .unwrap();
+    if let Some(mut scheduler) = scheduler {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            scheduler.tick().await.unwrap();
+            if let Some(status) = store.execution_status(&owner, &conversation).await.unwrap() {
+                if status.phase == ExecutionPhase::AwaitingAcceptance {
+                    assert_eq!(scheduler.run_id(), status.run_id.as_ref());
+                    assert!(status.acceptance_candidate.is_some());
+                    break;
+                }
+            }
+            assert!(Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        drop(scheduler);
+        drop(bound);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+        return;
+    }
     let claim = bound
         .claim_next(
             &owner,
@@ -153,7 +205,7 @@ for line in sys.stdin:
     else {
         panic!("unique")
     };
-    let mut pump = ready.attach(cap).unwrap();
+    let mut pump = ready.unwrap().attach(cap).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         pump.tick().await.unwrap();
@@ -189,9 +241,14 @@ for line in sys.stdin:
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_claude_first_turn_persists_progress_and_proposal() {
-    exercise(false).await;
+    exercise(false, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_claude_failed_result_never_proposes_success() {
-    exercise(true).await;
+    exercise(true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parent_polled_claude_scheduler_waits_for_input_then_consumes_once() {
+    exercise(false, true).await;
 }
