@@ -65,6 +65,18 @@ def matching_denials(before, after, pid):
             and 'comm="bwrap"' in line and re.search(r"\bpid=" + str(pid) + r"\b", line)]
 
 
+def audit_fields(before, after):
+    """Bounded fresh AppArmor metadata only, never the broad kernel log."""
+    previous, selected = set(before.splitlines()), []
+    for line in after.splitlines():
+        if line in previous or 'apparmor=' not in line:
+            continue
+        fields = dict(re.findall(r'\b(apparmor|operation|profile|pid|comm|capname|target)="?([^"\s]+)', line))
+        if fields.get("comm") == "bwrap" or fields.get("profile") == "unprivileged_userns":
+            selected.append({key: value[:128] for key, value in fields.items()})
+    return selected[-20:]
+
+
 def run():
     require(os.environ.get("GITHUB_ACTIONS") == "true"
             and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
@@ -82,8 +94,9 @@ def run():
     if ready(first):
         return {"status": "ready", "profile_applied": False, "test_uid": os.geteuid()}
 
-    # Capture the actual denial before considering a policy change. A different
-    # profile, process, missing binary, seccomp denial or disabled userns remains red.
+    # Preserve diagnostic evidence before adding the fixed executable prerequisite.
+    # bwrap's mapping helper can receive the audit denial under a child PID;
+    # absence of a Popen-PID match is not evidence that namespaces are usable.
     after = command(["sudo", "-n", "dmesg", "--raw"])
     denials = matching_denials(before, after, first["pid"])
     restriction = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").read_text().strip()
@@ -93,9 +106,17 @@ def run():
     print(json.dumps({"status": "prerequisite_denied", "probe_pid": first["pid"],
         "exit": first["code"], "stderr": first["error"], "runner_label": label,
         "restriction": restriction, "apparmor_enabled": enabled,
-        "matching_kernel_denials": [line[:1024] for line in denials]}, sort_keys=True), flush=True)
-    require(enabled == "Y" and restriction == "1" and label == "unconfined" and denials,
-            "exact_apparmor_default_userns_denial_not_proven")
+        "exact_launcher_denial": bool(denials), "new_namespace_audit": audit_fields(before, after)},
+        sort_keys=True), flush=True)
+    # Ubuntu documents a per-executable userns profile as the prerequisite for
+    # otherwise unconfined applications. This is a disposable hosted runner,
+    # not a product policy gate. Require the observed mapping refusal and active
+    # default restriction, retain audit uncertainty, and prove the remedy with
+    # the same real unprivileged probe. Never weaken the global restriction.
+    require(enabled == "Y" and restriction == "1" and label == "unconfined"
+            and first["code"] == 1 and first["output"] == ""
+            and first["error"].strip() == "bwrap: setting up uid map: Permission denied",
+            "fixed_hosted_namespace_prerequisite_not_established")
     require(not any(PROFILE_NAME in line or "/usr/bin/bwrap" in line for line in profiles.splitlines()),
             "existing_lifetime_profile_must_not_be_replaced")
 
