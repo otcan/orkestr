@@ -9,8 +9,7 @@ The closed BrokerMetadata operation accepts only an owned-handle-bound frame:
 The broker admits this operation once before execution. Its matching successful
 control_response is correlated to the metadata outer request. The entire native
 response payload is discarded (including account, models, PID and capabilities).
-Only the success subtype, matching request ID and empty response object leave the
-broker. Unsolicited, duplicate, mismatched, error and malformed responses refuse.
+Only the success subtype and matching request ID leave the broker. Unsolicited, duplicate, mismatched, error and malformed responses refuse.
 Metadata cannot send user input, interrupt, hooks, models or arbitrary controls.
 Runtime must derive this typed setup frame and fence each actual FD write with
 Core metadata authority; the broker never writes provider stdin itself.

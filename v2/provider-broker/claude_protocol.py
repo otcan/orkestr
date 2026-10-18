@@ -100,7 +100,7 @@ class ClaudeChannel:
             self.initialized = True
             # Sanitize capability/account/model payload. Protocol ACK is not auth proof.
             clean = {"type": "control_response", "response": {"subtype": "success",
-                     "request_id": self.setup[1], "response": {}}}
+                     "request_id": self.setup[1]}}
             return {"method": "BrokerOutput", "params": {"owned_handle": self.handle,
                     "request_id": self.setup[0], "frame": clean}}
         require(frame.get("session_id") == self.native)
