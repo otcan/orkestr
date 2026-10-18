@@ -15,7 +15,9 @@ request forwarding remain refused.
 `offline_tool.py` validates `item/tool/call` against the currently issued native
 thread and turn identities. The parameters contain only arguments, callId,
 threadId, turnId and tool, with namespace absent or null. The request ID is a
-bounded string or positive JSON-safe integer. Validation returns a fresh wire
+UTF-8 string of 1–128 bytes without Unicode control characters, or an integer
+from 1 through 2^53−1 (booleans are refused), matching Core’s native request ID
+boundary. Validation returns a fresh wire
 object, never an execution grant.
 
 Runtime must own the sealed pending request, permit at most one outstanding
