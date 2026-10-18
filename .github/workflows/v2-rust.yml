@@ -15,9 +15,6 @@ jobs:
   rust-v2:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      ORKESTR_V2_HOME: ${{ runner.temp }}/orkestr-v2-intake
-      CARGO_TARGET_DIR: ${{ runner.temp }}/orkestr-v2-target
     defaults:
       run:
         working-directory: v2
@@ -26,6 +23,10 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Isolate candidate data and build output
+        run: |
+          echo "ORKESTR_V2_HOME=$RUNNER_TEMP/orkestr-v2-intake" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/orkestr-v2-target" >> "$GITHUB_ENV"
       - name: Install pinned Rust
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
       - name: Architecture boundaries
