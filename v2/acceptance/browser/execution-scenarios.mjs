@@ -121,20 +121,45 @@ export async function executionScenarios({page, fixture, report, signal}) {
     assert.equal(await draft(page),DRAFT);
     return {exact_request_retry:true,duplicate_receipt_identical:true};
   });
-  await step('stale_revision_conflict_does_not_accept_or_replace_draft',async()=>{
+  await step('mounted_stale_revision_conflict_requires_explicit_review',async()=>{
     target=await fixture.completed();
     await click(page,'Reconnect');
     await wait(()=>enabled(page,'Accept completion'),'new_completion_not_available');
-    const status=await read(page,`/api/v2/conversations/${target.conversation_id}/execution`);
-    const request={run_id:target.run_id,completion_event_id:target.completion_event_id,
-      expected_revision:status.body.revision-1,request_key:'synthetic-stale-review'};
-    const refused=await write(page,`/api/v2/conversations/${target.conversation_id}/accept`,'POST',request);
-    assert.equal(refused.status,409);
+    const path=`/api/v2/conversations/${target.conversation_id}/accept`;
+    const cdp=await page.createCDPSession();
+    let original, advanced=false;
+    await cdp.send('Fetch.enable',{patterns:[{urlPattern:`*${path}`,requestStage:'Request'}]});
+    cdp.on('Fetch.requestPaused',event=>{void(async()=>{
+      if(!advanced){
+        advanced=true;original=JSON.parse(event.request.postData);
+        // Real IntakeStore admission, not a revision setter or fake 409.
+        const newer=await fixture.advanceRevision();
+        assert(newer.revision>original.expected_revision);
+        assert.deepEqual(newer.acceptance_candidate,{run_id:target.run_id,completion_event_id:target.completion_event_id});
+      }
+      await cdp.send('Fetch.continueRequest',{requestId:event.requestId});
+    })().catch(()=>{void cdp.send('Fetch.failRequest',{requestId:event.requestId,errorReason:'Failed'});});});
+    try{
+      const refused=page.waitForResponse(r=>new URL(r.url()).pathname===path&&r.request().method()==='POST');
+      await click(page,'Accept completion');assert.equal((await refused).status(),409);
+    }finally{await cdp.send('Fetch.disable');await cdp.detach();}
+    await wait(()=>enabled(page,'Review updated completion'),'mounted_conflict_review_not_available');
+    assert.equal(await draft(page),DRAFT);
     const unchanged=await read(page,`/api/v2/conversations/${target.conversation_id}/execution`);
     assert.equal(unchanged.body.phase,'awaiting_acceptance');
-    assert.equal(unchanged.body.revision,status.body.revision);
+    await click(page,'Review updated completion');
+    await wait(()=>enabled(page,'Accept completion'),'explicit_review_not_ready');
+    await responseFault(page,path,async fault=>{
+      await click(page,'Accept completion');const accepted=await fault.captured;
+      assert.equal(accepted.status,200);
+      assert.equal(accepted.request.run_id,original.run_id);
+      assert.equal(accepted.request.completion_event_id,original.completion_event_id);
+      assert(accepted.request.expected_revision>original.expected_revision);
+      assert.notEqual(accepted.request.request_key,original.request_key);
+      await fault.release(false);
+    });
     assert.equal(await draft(page),DRAFT);
-    return {native_conflict_status:409,no_acceptance:true};
+    return {native_conflict_status:409,explicit_review_required:true,same_completion_new_revision:true};
   });
   await step('external_payload_tombstone_revalidates_without_revision_change',async()=>{
     const payload=await fixture.progress();
