@@ -112,3 +112,18 @@ private host paths and runtime identities stay outside this repository.
 
 Update this snapshot when a lane supplies evidence; preserve the distinction
 between admitted, running, committed, tested, reviewed and integrated work.
+
+## Isolation verification admission checkpoint
+
+- PR #80, branch `v2/s0-contract-integration`, now points to
+  `89f2d27012357f0abd731c90e55b35dd3d9d6dc3`. Its parent
+  `e61cf8956c4ef3ef0aa905325516a5d4b5e5f5ed` failed CI run
+  `39137078512` at UI formatting before compilation. Required-wrapper
+  workspace formatting and whitespace checks pass on the new head; no new
+  compiled test result is claimed. Exact-head CI remains pending.
+- Heavy admission: UI and Verification. Runtime pauses further builds; Core
+  remains light. Verification is assigned the unchanged independent alias/WAL
+  probes against exact server candidate `e61cf895`; the formatting-only child
+  does not change server/store sources. P1 remains open pending execution.
+- Newer core/runtime contract revisions are separate review candidates. They
+  have not been adopted into this integration checkpoint.
