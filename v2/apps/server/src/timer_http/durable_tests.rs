@@ -2,14 +2,21 @@ use super::*;
 use orkestr_v2_application::runtime::{
     ProductionSupervisorConfig, ProductionTakeover, ProviderKind,
 };
-use orkestr_v2_contracts::OwnerId;
+use orkestr_v2_contracts::{ConversationId, OwnerId};
 use orkestr_v2_store_sqlite::history_import::timers::{
     authority::DurableTimerEnable, TimerEnableRequest, TimerImportRequest, TimerSchedule,
 };
 
 const MACHINE: &str = "abababababababababababababababababababababababababababababababab";
 const BROWSER: &str = "browser:synthetic-timer-creator";
-async fn fixture() -> (Store, Store, OwnerId, Uuid, std::path::PathBuf) {
+async fn fixture() -> (
+    Store,
+    Store,
+    OwnerId,
+    Uuid,
+    ConversationId,
+    std::path::PathBuf,
+) {
     let dir = std::env::temp_dir().join(format!("durable-controller-{}", Uuid::new_v4()));
     std::fs::create_dir(&dir).unwrap();
     let store = Store::open(&dir.join("core.sqlite3")).await.unwrap();
@@ -63,14 +70,14 @@ async fn fixture() -> (Store, Store, OwnerId, Uuid, std::path::PathBuf) {
                     namespace,
                     expected_revision: 1,
                     request_key: "fresh-enable".into(),
-                    conversation_id: conversation,
+                    conversation_id: conversation.clone(),
                 },
                 instruction: "Fresh synthetic owner instruction".into(),
             },
         )
         .await
         .unwrap();
-    (store, bound, owner, namespace, dir)
+    (store, bound, owner, namespace, conversation, dir)
 }
 #[test]
 fn bounded_keyset_wraps_only_after_short_or_empty_page() {
@@ -81,7 +88,7 @@ fn bounded_keyset_wraps_only_after_short_or_empty_page() {
 }
 #[tokio::test]
 async fn registered_store_long_due_logout_restart_and_machine_revoke() {
-    let (store, bound, owner, namespace, dir) = fixture().await;
+    let (store, bound, owner, namespace, conversation, dir) = fixture().await;
     let mut controller = DurableTimerController::new(bound.clone());
     assert_eq!(
         controller.tick().await.unwrap(),
@@ -125,7 +132,7 @@ async fn registered_store_long_due_logout_restart_and_machine_revoke() {
 }
 #[tokio::test]
 async fn ordinary_store_refuses_and_shutdown_is_joinable_without_tick() {
-    let (store, bound, _, _, dir) = fixture().await;
+    let (store, bound, _, _, _, dir) = fixture().await;
     let mut ordinary = DurableTimerController::new(store.clone());
     assert!(matches!(
         ordinary.tick().await,
@@ -143,13 +150,7 @@ async fn ordinary_store_refuses_and_shutdown_is_joinable_without_tick() {
 
 #[tokio::test]
 async fn actual_store_clock_due_once_is_not_readmitted_after_controller_restart() {
-    let (store, bound, owner, weekly, dir) = fixture().await;
-    let conversation = store
-        .dormant_timer_detail(MACHINE, &owner, weekly)
-        .await
-        .unwrap()
-        .conversation_id
-        .unwrap();
+    let (store, bound, owner, _, conversation, dir) = fixture().await;
     let namespace = Uuid::new_v4();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
