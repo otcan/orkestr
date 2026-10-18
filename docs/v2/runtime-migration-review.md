@@ -56,7 +56,7 @@ endpoint, payload store or production fallback is introduced.
 
 ## Review and validation
 
-25 runtime tests authored: 12 offline, 7 ordering, 6 retry. Added raw-progress
+26 runtime tests authored: 13 offline, 7 ordering, 6 retry. Added raw-progress
 unavailable and committed-lost-ACK-then-revoked-authority cases; stale delivery
 coverage includes Fenced. All are unexecuted/uncompiled at this migration head.
 Spies are ready-future protocol evidence only, never durability or restart credit.
@@ -78,3 +78,21 @@ Core alone implements atomic claim consumption plus Starting or rollback.
 Renewal continues to pass the whole admission with its owner/session locator.
 Queued CompletedProposal/Failed/Lost evidence and cancel identity checks remain
 unchanged. Source import changes no durable adapter or acceptance implementation.
+
+## Metadata mapping agreement 0f825edb
+
+Core docs-only agreement 0f825edb9dc2e7101987b42db507ccf8473774fe was inspected;
+frozen shared types stay exactly 7d3c8695. Keys are now
+run:<run-uuid>:<decimal-sequence>, allocated once per pending input. The DTO has
+no numeric sequence field: no store-enforced run-local monotonicity is claimed.
+A recovered process cannot safely create a fresh cursor and assume authority.
+
+StaleLease/Fenced/Expired remove the delivery item but retain its exact admission,
+kind/key/body in one bounded volatile rejected-evidence slot, exposed for explicit
+reconciliation. It is not an ACK or durable rejected-evidence API; no terminal
+kind is relabeled or automatically restarted. ApprovalRequested stays informational,
+Completed maps only to CompletedProposal. Raw progress remains PayloadUnavailable;
+frame and 8 KiB candidate progress/result bounds apply in Codex/Claude parsers.
+The fake handles only metadata references, never durable payload creation.
+One new parser-bound test plus strengthened refusal assertions are authored;
+all 26 tests remain unexecuted. No heavy build, schema/store or dependency change.

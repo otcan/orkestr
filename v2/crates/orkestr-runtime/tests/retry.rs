@@ -75,6 +75,11 @@ fn stale_or_expired_discards_delivery_without_repoll_or_readmission() {
             );
         }
         assert!(pending.pending().is_none());
+        let (original, evidence, refusal) = pending.rejected().unwrap();
+        assert_eq!(original, &a);
+        assert_eq!(evidence.kind, ObservationKind::Lost);
+        assert_eq!(evidence.source_event_key, format!("run:{}:1", a.run_id));
+        assert_eq!(refusal, error);
         let s = store.state.lock().unwrap();
         assert!(s.accepted.is_empty());
         assert_eq!(s.attempts.len(), 1);
@@ -189,5 +194,9 @@ fn committed_lost_ack_then_revoked_authority_refuses_without_ack_or_transition()
         assert_eq!(state.attempts.len(), 2);
         assert_eq!(state.attempts[0], state.attempts[1]);
         assert_eq!(state.attempts[0].dispatch_fence, a.dispatch_fence);
+        let (original, evidence, refusal) = pending.rejected().unwrap();
+        assert_eq!(original, &a);
+        assert_eq!(evidence, &state.attempts[0]);
+        assert_eq!(refusal, error);
     }
 }

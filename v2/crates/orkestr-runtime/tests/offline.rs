@@ -232,3 +232,13 @@ fn raw_progress_requires_unavailable_payload_store_not_fabricated_reference() {
         Err(Blocker::StaleLease)
     );
 }
+
+#[test]
+fn provider_progress_bounds_apply_before_payload_mapping() {
+    let delta = serde_json::json!({"method":"item/agentMessage/delta","params":{"threadId":"t","turnId":"r","delta":"x".repeat(8193)}}).to_string();
+    assert_eq!(codex_event(&delta, "t", "r"), Err(Blocker::Protocol));
+    let assistant = serde_json::json!({"type":"assistant","session_id":"s","message":{"content":"x".repeat(8193)}}).to_string();
+    assert_eq!(claude_event(&assistant, "s"), Err(Blocker::Protocol));
+    let result = serde_json::json!({"type":"result","session_id":"s","subtype":"success","is_error":false,"result":"x".repeat(8193)}).to_string();
+    assert_eq!(claude_event(&result, "s"), Err(Blocker::Protocol));
+}

@@ -48,6 +48,7 @@ pub struct PendingObservation {
     next_sequence: u64,
     pending: Option<ProviderObservation>,
     refused: Option<RuntimeStoreError>,
+    rejected: Option<ProviderObservation>,
 }
 impl Default for PendingObservation {
     fn default() -> Self {
@@ -56,12 +57,21 @@ impl Default for PendingObservation {
             next_sequence: 1,
             pending: None,
             refused: None,
+            rejected: None,
         }
     }
 }
 impl PendingObservation {
     pub fn pending(&self) -> Option<&ProviderObservation> {
         self.pending.as_ref()
+    }
+    /// Bounded volatile evidence only; no rejected-evidence storage API exists.
+    pub fn rejected(&self) -> Option<(&RunAdmission, &ProviderObservation, RuntimeStoreError)> {
+        Some((
+            self.admission.as_ref()?,
+            self.rejected.as_ref()?,
+            self.refused?,
+        ))
     }
 }
 
@@ -90,13 +100,7 @@ pub async fn step<S: RuntimeStore, P: Provider>(
             return Ok(false);
         };
         cursor.pending = Some(ProviderObservation {
-            source_event_key: format!(
-                "runtime:{}:{}:{}:{}",
-                admission.run_id,
-                admission.attempt,
-                admission.lease_generation,
-                cursor.next_sequence
-            ),
+            source_event_key: format!("run:{}:{}", admission.run_id, cursor.next_sequence),
             run_id: admission.run_id.clone(),
             session_id: admission.session_id.clone(),
             lease_generation: admission.lease_generation,
@@ -132,7 +136,7 @@ pub async fn step<S: RuntimeStore, P: Provider>(
                     | RuntimeStoreError::Fenced
                     | RuntimeStoreError::Expired
             ) {
-                cursor.pending = None;
+                cursor.rejected = cursor.pending.take();
             }
             if matches!(
                 error,

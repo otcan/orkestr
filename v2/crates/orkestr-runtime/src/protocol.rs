@@ -3,6 +3,7 @@
 use crate::ports::{Blocker, ObservationKind};
 use serde_json::Value;
 const MAX_FRAME: usize = 64 * 1024;
+const MAX_PROGRESS: usize = 8 * 1024;
 
 fn frame(line: &str) -> Result<Value, Blocker> {
     if line.len() > MAX_FRAME {
@@ -41,7 +42,9 @@ pub fn codex_event(
         if text(p, "turnId")? != turn {
             return Err(Blocker::StaleLease);
         }
-        text(p, "delta")?;
+        if text(p, "delta")?.len() > MAX_PROGRESS {
+            return Err(Blocker::Protocol);
+        }
         // No payload store exists yet. Never fabricate a PayloadId or journal
         // raw provider text as metadata; the caller must surface this blocker.
         return Err(Blocker::PayloadUnavailable);
@@ -75,8 +78,24 @@ pub fn claude_event(line: &str, session: &str) -> Result<Option<ObservationKind>
         "system" if value.get("subtype").and_then(Value::as_str) == Some("init") => {
             Some(ObservationKind::Started)
         }
-        "assistant" => None, // content may include tools; never flatten into trusted commands
+        "assistant" => {
+            // Bound candidate content without interpreting tools as commands.
+            if value
+                .get("message")
+                .is_some_and(|message| message.to_string().len() > MAX_PROGRESS)
+            {
+                return Err(Blocker::Protocol);
+            }
+            None
+        }
         "result" => {
+            if value
+                .get("result")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.len() > MAX_PROGRESS)
+            {
+                return Err(Blocker::Protocol);
+            }
             let subtype = text(&value, "subtype")?;
             let error = value
                 .get("is_error")
