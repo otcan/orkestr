@@ -300,6 +300,15 @@ class IntakeAcceptance(unittest.TestCase):
         raw_token = cookie.split("=", 1)[1]
         self.assertEqual(self.request("GET", "/projects", authenticated=False,
                          headers={"Authorization": "Bearer " + raw_token})[0], 401)
+        # A browser namespace prefix must never become machine Bearer authority.
+        before = self.counts()
+        path = f"/conversations/{self.conversation}/messages"
+        status, _ = self.request("POST", path,
+                                 {"client_message_id": "prefixed-cookie-bypass", "text": "synthetic"},
+                                 authenticated=False,
+                                 headers={"Authorization": "Bearer browser:" + raw_token})
+        self.assertEqual(status, 401)
+        self.assertEqual(self.counts(), before)
         machine_cookie = "orkestr_v2_session=" + self.token
         self.assertEqual(self.browser_request("GET", "/browser/session", cookie=machine_cookie)[0], 401)
         # Successful login rotates and revokes the prior cookie in server storage.
