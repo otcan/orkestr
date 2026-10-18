@@ -12,8 +12,18 @@ try {
         signal: controller.signal,
         body: input.body === null ? undefined : JSON.stringify(input.body)
     });
-    const text = await response.text();
-    if (text.length > 1024 * 1024) throw new Error("Response exceeds client limit");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let bytes = 0, text = "";
+    try {
+        while (true) {
+            const {done, value} = await reader.read();
+            if (done) { text += decoder.decode(); break; }
+            bytes += value.byteLength;
+            if (bytes > 8 * 1024 * 1024) throw new Error("Response exceeds client limit");
+            text += decoder.decode(value, {stream: true});
+        }
+    } finally { await reader.cancel().catch(() => {}); }
     let body;
     try { body = JSON.parse(text); }
     catch { body = {code: "invalid_response", message: "Unexpected server response"}; }

@@ -54,7 +54,7 @@ pub struct Projection {
 impl Projection {
     pub fn page(&mut self, page: ConversationSnapshot) -> Result<(), &'static str> {
         if page.last_sequence < 0 { return Err("Invalid snapshot watermark"); }
-        for message in page.messages {
+        for message in &page.messages {
             if message.sequence <= 0 || message.sequence > page.last_sequence {
                 return Err("Invalid message sequence");
             }
@@ -63,6 +63,8 @@ impl Projection {
                     return Err("Conflicting snapshot; reconnect required");
                 }
             }
+        }
+        for message in page.messages {
             self.messages.insert(message.sequence, message);
             while self.messages.len() > WINDOW {
                 self.messages.pop_first();
