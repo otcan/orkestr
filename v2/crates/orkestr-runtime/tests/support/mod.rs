@@ -4,8 +4,8 @@ use orkestr_v2_application::runtime::*;
 use orkestr_v2_contracts::*;
 use std::{
     future::Future,
-    sync::{Arc, Mutex},
-    task::{Context, Poll, Wake, Waker},
+    sync::Mutex,
+    task::{Context, Poll, Waker},
     time::Duration,
 };
 macro_rules! id {
@@ -231,13 +231,9 @@ impl RuntimeStore for Spy {
         Err(RuntimeStoreError::Unavailable)
     }
 }
-struct NoWake;
-impl Wake for NoWake {
-    fn wake(self: Arc<Self>) {}
-}
 pub fn ready<F: Future>(future: F) -> F::Output {
-    let waker = Waker::from(Arc::new(NoWake));
-    let mut cx = Context::from_waker(&waker);
+    let waker = Waker::noop();
+    let mut cx = Context::from_waker(waker);
     match std::pin::pin!(future).as_mut().poll(&mut cx) {
         Poll::Ready(v) => v,
         Poll::Pending => panic!("spy unexpectedly pending"),

@@ -1,24 +1,22 @@
-# Runtime port v2: canonical shared handoff
+# Runtime port v1: canonical shared handoff
 
-The required V2-012/020 contract supersedes internal runtime ports v0 and v1. HTTP intake
+The required V2-012/020 contract supersedes internal runtime port v0. HTTP intake
 contract version 0, HTTP event schema 1, and migration `0001_intake.sql` remain
 unchanged. Message/event/reasoning-inbox/outbox admission is untouched.
 
 ## Exact locations and dependencies
 
 - Shared types: `v2/crates/contracts/src/runtime.rs`, Rust
-  `orkestr_v2_contracts::runtime`, `RUNTIME_PORT_VERSION = 2`.
+  `orkestr_v2_contracts::runtime`, `RUNTIME_PORT_VERSION = 1`.
 - Typed UUIDs: `orkestr_v2_contracts::{OwnerId, ConversationId, SessionId, RunId,
   MessageId, EventId}`; provider-native strings never replace these IDs.
 - Async port: `v2/crates/application/src/runtime.rs`, Rust
   `orkestr_v2_application::runtime::{RuntimeStore, SessionStore}`. Both names
-  refer to the same Send + Sync trait. Each method returns
-  `impl Future<Output = Result<T>> + Send`; no boxed future or macro is required.
-- Application depends only on contracts. Runtime protocol parsing may
+  refer to the same `async_trait`, Send + Sync trait, not competing stores.
+- Application adds only `async-trait = "=0.1.89"`. Runtime protocol parsing may
   use existing `serde_json = "=1.0.145"`. Domain remains dependency-free.
   Core changes no root membership or lockfile after handoff; coordinator alone
-  owns subsequent dependency lock and workspace integration. This revision removes
-  the unintegrated async-trait dependency and requires no root lockfile change.
+  resolves the dependency lock and workspace integration.
 
 Runtime owns provider adapters, supervisor scheduling, capability blockers,
 bounded fake source and protocol parser. Core owns the application port, all
@@ -121,25 +119,3 @@ identity confirmation, run dedup, generation/fence/expiry enforcement, cancellat
 acknowledgements, crash-consistent recovery, verified acceptance and effect ledger.
 No run, lease, effect or fixture-control HTTP routes are introduced. Passing
 provider fake/parser tests does not satisfy these durable acceptance cases.
-
-## Required next schema migration
-
-The current `0001_intake.sql` cannot represent runtime events: its unique,
-non-null `events.message_id` permits only one event per source message. Do not
-edit this applied migration. Core must introduce a subsequent migration for
-versioned event kind and aggregate identity, nullable source-message linkage,
-and partial uniqueness restricted to message-accepted events. Message-accepted
-events must still require a source message. Runtime events must share the
-conversation sequence and transactional outbox, with owner/scope association
-validated; no second journal is authorized.
-
-Core also owns session_bindings, tasks, runs, runtime_observations and inbox
-claimant/generation/expiry/durable run linkage. Admission and inbox handoff must
-commit together. These tables and constraints remain unimplemented.
-
-The current HTTP event envelope assumes MessageAccepted and concrete MessageId
-correlation. A versioned event DTO and replay compatibility decision are required
-before publishing other event kinds. The owner-only messages constraint remains
-until core implements a distinct, server-authorized provider-message path; HTTP
-callers must never gain permission to spoof provider actors. This document freezes
-the ten shared port signatures, not an implemented migration or acceptance result.

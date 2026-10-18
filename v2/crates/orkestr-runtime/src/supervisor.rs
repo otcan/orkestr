@@ -20,7 +20,7 @@ pub async fn start<S: RuntimeStore, P: Provider>(
     expected_generation: u64,
     request_key: &str,
     expected_role: Role,
-) -> Result<RunAdmission, Error> {
+) -> std::result::Result<RunAdmission, Error> {
     // This port consumes only the canonical deep claim. Workers require a
     // separately reviewed admission port, not another consumption of this inbox.
     if expected_role != Role::Deep || binding != &claim.consumer_session_id {
@@ -100,7 +100,7 @@ pub async fn step<S: RuntimeStore, P: Provider>(
     provider: &mut P,
     admission: &ProviderAdmission,
     cursor: &mut PendingObservation,
-) -> Result<bool, Error> {
+) -> std::result::Result<bool, Error> {
     let run = &admission.run;
     let binding = &admission.binding;
     if run.purpose != AdmissionPurpose::Execution
@@ -195,7 +195,7 @@ pub async fn cancel<S: RuntimeStore, P: Provider>(
     owner: &OwnerId,
     original: &RunAdmission,
     request_key: &str,
-) -> Result<(CancelReceipt, Result<(), Blocker>), RuntimeStoreError> {
+) -> std::result::Result<(CancelReceipt, std::result::Result<(), Blocker>), RuntimeStoreError> {
     if &original.owner_id != owner || original.purpose != AdmissionPurpose::Execution {
         return Err(RuntimeStoreError::InvalidInput);
     }
