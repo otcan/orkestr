@@ -5,20 +5,31 @@
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub static RECORD: &str = match option_env!("ORKESTR_V2_BUILD_IDENTITY") {
     Some(record) => record,
-    None => concat!("ORKESTR_V2_BUILD_IDENTITY_V1|server|", env!("CARGO_PKG_VERSION"), "|unknown|END"),
+    None => concat!(
+        "ORKESTR_V2_BUILD_IDENTITY_V1|server|",
+        env!("CARGO_PKG_VERSION"),
+        "|unknown|END"
+    ),
 };
 
 fn source(record: &str, version: &str) -> Result<Option<String>, &'static str> {
     let parts: Vec<_> = record.split('|').collect();
-    if parts.len() != 5 || parts[0] != "ORKESTR_V2_BUILD_IDENTITY_V1"
-        || parts[1] != "server" || parts[2] != version || parts[4] != "END"
+    if parts.len() != 5
+        || parts[0] != "ORKESTR_V2_BUILD_IDENTITY_V1"
+        || parts[1] != "server"
+        || parts[2] != version
+        || parts[4] != "END"
     {
         return Err("invalid embedded build identity");
     }
     if parts[3] == "unknown" {
         return Ok(None);
     }
-    if parts[3].len() != 40 || !parts[3].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+    if parts[3].len() != 40
+        || !parts[3]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return Err("invalid embedded source identity");
     }
     Ok(Some(parts[3].to_owned()))
@@ -26,8 +37,12 @@ fn source(record: &str, version: &str) -> Result<Option<String>, &'static str> {
 
 pub fn identity() -> serde_json::Value {
     match source(RECORD, VERSION) {
-        Ok(source) => serde_json::json!({"format":"orkestr-v2-build-identity-v1", "component":"server", "version":VERSION, "source_commit":source}),
-        Err(error) => serde_json::json!({"format":"orkestr-v2-build-identity-v1", "component":"server", "version":VERSION, "source_commit":null, "error":error}),
+        Ok(source) => {
+            serde_json::json!({"format":"orkestr-v2-build-identity-v1", "component":"server", "version":VERSION, "source_commit":source})
+        }
+        Err(error) => {
+            serde_json::json!({"format":"orkestr-v2-build-identity-v1", "component":"server", "version":VERSION, "source_commit":null, "error":error})
+        }
     }
 }
 
@@ -37,11 +52,16 @@ pub fn version_output(args: &[String]) -> Result<Option<String>, &'static str> {
     if args.is_empty() {
         return Ok(None);
     }
-    match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
         ["--version", "--json"] => {
             source(RECORD, VERSION)?;
             Ok(Some(identity().to_string()))
-        },
+        }
         ["--version"] | ["-V"] => {
             let source = source(RECORD, VERSION)?.unwrap_or_else(|| "unknown".to_owned());
             Ok(Some(format!("orkestr-v2-server {VERSION} source={source}")))
@@ -66,14 +86,25 @@ mod tests {
 
     #[test]
     fn unpinned_source_is_explicit() {
-        assert_eq!(source("ORKESTR_V2_BUILD_IDENTITY_V1|server|2.0.0-dev|unknown|END", "2.0.0-dev"), Ok(None));
+        assert_eq!(
+            source(
+                "ORKESTR_V2_BUILD_IDENTITY_V1|server|2.0.0-dev|unknown|END",
+                "2.0.0-dev"
+            ),
+            Ok(None)
+        );
     }
 
     #[test]
     fn arguments_never_fall_through_to_startup() {
         assert_eq!(version_output(&[]), Ok(None));
         assert!(version_output(&["--version".into()]).unwrap().is_some());
-        let value: serde_json::Value = serde_json::from_str(&version_output(&["--version".into(), "--json".into()]).unwrap().unwrap()).unwrap();
+        let value: serde_json::Value = serde_json::from_str(
+            &version_output(&["--version".into(), "--json".into()])
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(value["version"], VERSION);
         assert!(version_output(&["--unknown".into()]).is_err());
     }

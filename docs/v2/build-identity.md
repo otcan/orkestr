@@ -19,14 +19,14 @@ checks the clean checkout and workspace version, supplies the records and seals
 only the matching artifacts. No timestamp or private host path is included.
 Unpinned ordinary developer builds report an unknown source and cannot be sealed.
 
-The server leaf `build_identity` exposes `identity()` for read-safe health/About
-metadata and `version_output(args)` for the entry point. The entry point must
-handle this result before reading HOME, bootstrap, configuration or state:
+The registered server module `build_identity` exposes `identity()` through
+`GET /api/v2/health` in the `build` field and `version_output(args)` for the entry
+point. Native argument handling precedes even the async runtime, as well as
+reading HOME, bootstrap, configuration or state:
 `--version`, `-V` and `--version --json` return immediately; unsupported arguments
-refuse startup. Registering this leaf, exposing health metadata, and retaining
-and displaying the matching web identity are coordinated server/UI integration
-steps. Rust registration/build/CLI side-effect acceptance is pending until those
-steps and an exact successor artifact are available.
+refuse startup. The existing health fields remain unchanged. Retaining and
+displaying the matching web identity is a separate UI integration step; a native
+identity alone is not a verified native/web pair.
 
 Paired receipt format v2 verifies the embedded server and web records without
 executing either artifact. It rejects unknown, missing, malformed, conflicting,
@@ -42,6 +42,8 @@ This is deterministic identity and integrity checking, not a signed build
 attestation: a trusted producer can insert arbitrary bytes. The clean source,
 tool pins, exact inventories and independent review remain necessary. Python
 synthetic tests neither compile Rust/WASM nor qualify health/About or actual
-`--version` behavior. An integrated successor must demonstrate those checks with
-an absent HOME and a fresh configured home, byte-identical before and after the
-version query, before package/native/Docker acceptance can be credited.
+`--version` behavior. The native executable tests check an absent HOME, an absent
+V2 home and an existing home whose bytes remain unchanged; unsupported arguments
+also cannot create state. An ordinary disabled-server HTTP test compares its
+health identity to the same executable's CLI result. Exact pinned build evidence
+and the matching WASM remain necessary before package/native/Docker acceptance.
