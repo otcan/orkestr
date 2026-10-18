@@ -7,6 +7,7 @@ pub(crate) struct BrokerChannel {
     lineage: Option<std::sync::Arc<()>>,
     next: u64,
     pending: Option<(u64, Option<u64>)>,
+    cancellation_pending: bool,
     poisoned: bool,
     execution_claimed: bool,
     terminal_observed: bool,
@@ -37,6 +38,7 @@ impl OwnedMetadataHandle {
             lineage: self.lineage,
             next: 2,
             pending: None,
+            cancellation_pending: false,
             poisoned: false,
             execution_claimed: false,
             terminal_observed: false,
@@ -52,11 +54,16 @@ impl BrokerChannel {
         &mut self,
         frame: Value,
     ) -> Result<(std::sync::Arc<()>, Vec<u8>), Blocker> {
-        if !self.execution_claimed || self.preparation != Some(Preparation::Written) {
+        if !self.execution_claimed
+            || self.preparation != Some(Preparation::Written)
+            || self.active_turn.is_none()
+            || self.terminal_observed
+        {
             return Err(Blocker::Protocol);
         }
         let lineage = self.lineage.clone().ok_or(Blocker::Protocol)?;
         let bytes = self.wrap("CancelExecution", frame)?;
+        self.cancellation_pending = true;
         Ok((lineage, bytes))
     }
     /// Enable only for the actual-FD transport before submitting any setup.
@@ -266,9 +273,16 @@ impl BrokerChannel {
             self.preparation = Some(Preparation::Prepared);
             return Ok(None);
         }
+        // Notifications from the already-written active turn can precede the
+        // broker's cancellation preparation (or arrive during suffix writes).
+        // This exception never admits a correlated ACK or new-turn output.
+        let cancelling_output = self.cancellation_pending
+            && self.active_turn.is_some()
+            && value.get("method").and_then(Value::as_str) == Some("BrokerOutput");
         if self.pending.is_some()
             && self.preparation.is_some()
             && self.preparation != Some(Preparation::Written)
+            && !cancelling_output
         {
             return Err(Blocker::Protocol);
         }
@@ -320,6 +334,7 @@ impl BrokerChannel {
             }
         }
         self.pending = None;
+        self.cancellation_pending = false;
         Ok((!frame.is_null()).then(|| frame.clone()))
     }
 }
