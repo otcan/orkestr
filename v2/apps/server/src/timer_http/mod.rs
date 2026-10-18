@@ -24,6 +24,26 @@ use orkestr_v2_store_sqlite::{
     Store,
 };
 use uuid::Uuid;
+// Shared owner policy runs first; this only carries its exact credential into
+// Core's transaction-time reauthentication, never a parallel auth decision.
+async fn owner_credential(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(OwnerId, String), Error> {
+    let owner = crate::owner(state, headers).await?;
+    let credential = if headers.contains_key(axum::http::header::COOKIE) {
+        crate::browser::credential(headers)?
+    } else {
+        headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            .ok_or_else(crate::unauthorized)?
+            .to_owned()
+    };
+    Ok((owner, credential))
+}
 fn error(e: HistoryError) -> Error {
     match e {
         HistoryError::Unauthorized => crate::unauthorized(),
@@ -103,7 +123,7 @@ async fn read(
     query: Result<Query<dto::Read>, QueryRejection>,
 ) -> Result<Json<dto::Detail>, Error> {
     query.map_err(|_| error(HistoryError::Invalid))?;
-    let (owner, credential) = crate::owner_credential(&s, &headers).await?;
+    let (owner, credential) = owner_credential(&s, &headers).await?;
     let receipt = s
         .store
         .dormant_timer_detail(&credential, &owner, namespace(id)?)
@@ -119,7 +139,7 @@ async fn enable(
     query: Result<Query<dto::Read>, QueryRejection>,
     value: Result<Json<dto::Enable>, JsonRejection>,
 ) -> Result<Json<dto::Detail>, Error> {
-    let (owner, credential) = crate::owner_credential(&s, &headers).await?;
+    let (owner, credential) = owner_credential(&s, &headers).await?;
     query.map_err(|_| error(HistoryError::Invalid))?;
     let receipt = c
         .enable(
@@ -145,7 +165,7 @@ async fn control(
     query: Result<Query<dto::Read>, QueryRejection>,
     value: Result<Json<dto::Control>, JsonRejection>,
 ) -> Result<Json<dto::Detail>, Error> {
-    let (owner, credential) = crate::owner_credential(&s, &headers).await?;
+    let (owner, credential) = owner_credential(&s, &headers).await?;
     query.map_err(|_| error(HistoryError::Invalid))?;
     let namespace = namespace(id)?;
     let body = body(value)?;
