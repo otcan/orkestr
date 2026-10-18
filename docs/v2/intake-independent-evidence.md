@@ -118,3 +118,25 @@ concurrent filesystem replacement. Foreign/future/altered database identity,
 precommit/lost-ack crash boundaries, runtime durability, browser cookie/CSRF and
 other acceptance remain pending. No CI run or broader test-suite execution was
 performed in this bounded rerun. The heavy slot was released after these probes.
+
+## Reconciled core candidate rerun
+
+On 2026-10-18 independently archived and built exact core candidate
+`6d3bd66e9131c17f0f34f69a148cdba7947ebca8`, using the same verification
+isolation and wrapper command with `build --offline --locked -p orkestr-v2-server`.
+Build passed in 5.77 seconds. Binary SHA-256:
+`360ad5e5fb1fffb0c92945aac5059e02f84e21079ee252769a34b2c959bf3549`.
+The unchanged `43f6f733` independent probes passed **5/5**, zero failures, in
+7.136 seconds on port 47140. Empty-database alias refusal, held-open live-WAL
+alias byte/link/existence preservation, concurrency/conflict/SIGKILL/reopen,
+spoof/Origin/cookie rejection and SSE cursor precedence all passed.
+
+Source inspection confirmed path validation precedes copy-preflight and source
+SQLite connection. Preflight inspects an expendable database/WAL copy and closes
+the probe before returning; this is scoped to a stable caller-controlled parent,
+not a concurrent backup or filesystem sandbox. This bounded rerun does not
+independently execute core's five preflight tests or all twenty alias subcases;
+foreign/future/altered identity refusal remains outside this independent probe
+set. Core-reported workspace/preflight counts are separate evidence. No CI run,
+newer `ad8e522b` validation, runtime durability or browser acceptance is claimed.
+Heavy validation ended after these bounded probes.
