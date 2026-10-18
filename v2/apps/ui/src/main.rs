@@ -1,6 +1,8 @@
 mod acceptance_button;
 mod execution_panel;
 mod execution_poll;
+mod held_inputs_poll;
+mod held_inputs_view;
 mod history;
 mod host_resources_view;
 mod progress_view;
@@ -30,6 +32,7 @@ fn App() -> Element {
     // Owner-scoped high-water marks outlive keyed conversation and tab remounts.
     let mut execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut host_resources = use_signal(orkestr_v2_ui::host_resources::HostResources::default);
+    let mut held_inputs = use_signal(orkestr_v2_ui::held_inputs::HeldInputs::default);
     let mut workers = use_signal(orkestr_v2_ui::workers::Workers::default);
     let mut worker_execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut tab = use_signal(|| "Assistant".to_string());
@@ -51,6 +54,7 @@ fn App() -> Element {
                 execution.write().authorization_lost();
                 host_resources.write().clear_owner();
                 workers.write().clear_owner();
+                held_inputs.write().clear_owner();
                 worker_execution.write().authorization_lost();
                 session_scope
                     .write()
@@ -74,6 +78,7 @@ fn App() -> Element {
         execution.write().authorization_lost();
         host_resources.write().clear_owner();
         workers.write().clear_owner();
+        held_inputs.write().clear_owner();
         worker_execution.write().authorization_lost();
         session_scope.write().invalidate();
         projects.set(Vec::new());
@@ -99,8 +104,9 @@ fn App() -> Element {
                     if logging_out() { return; }
                     execution.write().authorization_lost();
                     host_resources.write().clear_owner();
-                workers.write().clear_owner();
-                worker_execution.write().authorization_lost();
+                    workers.write().clear_owner();
+                    held_inputs.write().clear_owner();
+                    worker_execution.write().authorization_lost();
                     session_scope.write().activate(&session.global_conversation_id, &mut drafts.write());
                     projects.set(Vec::new()); pending_project.set(None); refresh += 1;
                     tab.set("Assistant".into());
@@ -129,8 +135,9 @@ fn App() -> Element {
                                 Ok(_) => {
                                     execution.write().authorization_lost();
                                     host_resources.write().clear_owner();
-                workers.write().clear_owner();
-                worker_execution.write().authorization_lost();
+                                    workers.write().clear_owner();
+                                    held_inputs.write().clear_owner();
+                                    worker_execution.write().authorization_lost();
                                     session_scope.write().invalidate();
                                     projects.set(Vec::new()); pending_project.set(None);
                                     global.set(String::new()); current.set(String::new()); refresh += 1;
@@ -158,6 +165,7 @@ fn App() -> Element {
                     }
                     button { onclick: move |_| refresh += 1, "Reconnect and reload history" }
                     views::Conversation { id: current(), csrf: csrf(), session_scope, execution, drafts, onexpired: expired }
+                    held_inputs_poll::HeldInputsPanel { key: "held-{current()}", id: current(), session_scope, model: held_inputs, onexpired: expired }
                     }
                 } else if tab() == "History" {
                     history::History { key: "{current()}", id: current(), csrf: csrf(), session_scope, onexpired: expired }
