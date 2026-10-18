@@ -1,24 +1,25 @@
 # Personal Agent native session capabilities (OP-26 / ORK-562)
 
-Measured on 2026-10-18 against the installed command, from a disposable
-app-server and empty temporary runtime home. No inference turn, login, model
-download or live thread modification was performed. The host authentication
-check used the existing CLI status helper; no credential files were inspected
-directly.
+Measured on 2026-10-18 against installed runtime commands. Codex used a
+disposable app-server and empty temporary runtime home; Claude used only the
+operator-identified direct binary with `--version` and `--help`, as the runtime
+OS user and with `CLAUDE_CONFIG_DIR` unset. No inference turn, login, model
+download or live thread modification was performed. Codex authentication used
+the existing CLI status helper; no credential files were inspected directly.
 
 ## Installed inventory
 
-| Capability | Codex CLI 0.163.0 app-server | Claude Code |
+| Capability | Codex CLI 0.163.0 app-server | Claude Code 2.1.295 |
 |---|---|---|
-| Availability | `--version`, schema generation and stdio initialization succeeded | Command unavailable in this execution environment; version unknown |
-| Subscription status | Existing supported login status reported authenticated `chatgpt` | **UNVERIFIED**; command unavailable |
+| Availability | `--version`, schema generation and stdio initialization succeeded | Direct binary `--version` and `--help` succeeded; the original worker environment still lacks its command configuration |
+| Subscription status | Existing supported login status reported authenticated `chatgpt` | **UNVERIFIED**; unauthenticated account API GET returned HTTP 401; diagnostics GET was not invoked because it can launch a side-effecting wrapper |
 | Distinct FAST/DEEP identities | Two concurrent metadata-only `thread/start` calls returned distinct native IDs | Fake CLI coverage only |
-| Durable resume | Installed `thread/resume` schema supports it; a newly created **empty** thread refused resume with RPC -32600 (no durable rollout yet) | Existing `--resume` adapter; live behavior **UNVERIFIED** |
-| Fork | Installed `thread/fork` schema supports it; empty-thread fork refused with RPC -32600 | Bridge explicitly blocks fork; installed support **UNVERIFIED** |
+| Durable resume | Installed `thread/resume` schema supports it; a newly created **empty** thread refused resume with RPC -32600 (no durable rollout yet) | Installed help advertises `--resume [value]`; existing adapter covered by fake CLI, actual populated-history resume **UNVERIFIED** |
+| Fork | Installed `thread/fork` schema supports it; empty-thread fork refused with RPC -32600 | Installed help advertises `--fork-session` with resume/continue; bridge still explicitly blocks fork; actual fork **UNVERIFIED** |
 | Steer busy turn | Installed `turn/steer` schema requires `threadId`, `expectedTurnId`, `input`; an idle probe was refused with RPC -32600 | Existing print-mode adapter has no busy steering surface; not implemented |
 | Cancellation | Installed `turn/interrupt` schema; idle probe refused with RPC -32600. Fake active-turn cancellation covered | Existing process-group termination and permission broker covered by fake CLI tests; live **UNVERIFIED** |
 | Concurrency | Concurrent metadata creation succeeded. Separate native IDs and cross-manager per-session leases tested synthetically | Separate invocations and persisted native IDs tested synthetically |
-| Model/effort change | Metadata-only `thread/settings/update` accepted `model=gpt-6-sol`, `effort=high`; subsequent `thread/read` returned the same native ID | Existing `--model` plus managed `--effort`; fake command coverage only |
+| Model/effort change | Metadata-only `thread/settings/update` accepted `model=gpt-6-sol`, `effort=high`; subsequent `thread/read` returned the same native ID | Installed help advertises `--model <model>` and `--effort <level>`; managed execution covered by fake CLI only |
 | Quota, inference quality, busy steer, populated-history resume/fork | **UNVERIFIED**; deliberately no model turns | **UNVERIFIED** |
 
 The accepted model setting is not proof that inference with that model is
@@ -31,6 +32,41 @@ Installed schemas are authoritative for the tested binary. In particular,
 `ThreadForkParams` does not accept `dynamicTools` or `serviceName`. The bridge
 uses method-specific parameters. The [official app-server documentation](https://developers.openai.com/codex/app-server/)
 describes the protocol; it does not replace the above installed evidence.
+
+### Claude metadata-only follow-up
+
+The direct binary reported `2.1.295 (Claude Code)`. Its installed help advertises:
+
+- `-r, --resume [value]`: resume by session ID or open the picker.
+- `--fork-session`: create a new session ID when resuming, used with
+  `--resume` or `--continue`.
+- `--session-id <uuid>`: use a specific, valid UUID for the conversation.
+- `--model <model>`: select an alias or full model name.
+- `--output-format <format>`: print-mode `text`, `json` or `stream-json`.
+- `--effort <level>`: `low`, `medium`, `high`, `xhigh` or `max`. The current
+  managed bridge intentionally validates its narrower existing effort set.
+
+These are advertised CLI capabilities, not successful session operations.
+No Claude turn, resume, fork, login or auth-status command was executed. A
+missing command configuration in a worker environment remains an explicit
+blocked capability; it does not establish that the host runtime is absent.
+The runtime manager does not discover another environment's binary implicitly.
+
+Only an unauthenticated `GET /api/llm-accounts` was attempted in this follow-up;
+it returned HTTP 401. No profile identity, state or subscription authentication
+was independently verified. No browser cookies or credential files were read to
+work around that result.
+
+The diagnostics endpoint was deliberately left uncalled: the deployed
+`claude-code-subscription-diagnostics.js` resolves the configured command,
+prepares profile directories, then executes `auth status --json`. A configured
+supervisor wrapper may change ownership or ACLs when `CLAUDE_CONFIG_DIR` is set.
+Thus a GET is not sufficient evidence of a side-effect-free host probe. A
+strictly read-only inventory needs an authorized API path whose execution
+chain is verified not to invoke that wrapper or prepare profile directories.
+This observation does not change live settings or authorize bypassing profile
+isolation. Subscription authentication, quota and real Claude session behavior
+remain **UNVERIFIED** until a safe authorized path is verified.
 
 ### Reproduce without inference
 
