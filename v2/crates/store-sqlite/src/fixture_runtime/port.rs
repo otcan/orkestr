@@ -67,11 +67,11 @@ impl RuntimeStore for FixtureSupervisorStore {
     }
     async fn append_provider_event(
         &self,
-        _: &OwnerId,
-        _: &ProviderAdmission,
-        _: &ProviderEventInput,
+        owner: &OwnerId,
+        admission: &ProviderAdmission,
+        input: &ProviderEventInput,
     ) -> Result<ProviderEventReceipt> {
-        Err(RuntimeStoreError::Unavailable)
+        self.append_observation(owner, admission, input).await
     }
     async fn request_cancel(&self, _: &OwnerId, _: &RunId, _: &str) -> Result<CancelReceipt> {
         Err(RuntimeStoreError::Unavailable)
