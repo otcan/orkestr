@@ -240,3 +240,13 @@ calls. Untrusted executor network containment is a separate **unpassed** release
 gate; successful control-plane HTTP does not satisfy it. The internal alternative
 retains its recorded failed host-publication checkpoint and is not the default
 product topology. Native/current production is unchanged.
+
+A follow-up owned run explicitly selected the independently approved diagnostic
+mode and inspected effective Docker bindings before cleanup. Both HostConfig
+and NetworkSettings bound only `127.0.0.1:19842` to container TCP 19822. The
+ordinary bridge reported `Internal: false`; inside and proxy-disabled host health
+returned 200 and host UI index matched the packaged SHA-256. Nonroot/read-only,
+capability and security settings remained configured. Exact image/Compose/artifact
+identities and zero-resource cleanup are in `binding-checkpoint.json`. This run
+used the explicit diagnostic flag, so it does not exercise default policy
+selection. No provider, browser-execution or executor-containment gate passed.

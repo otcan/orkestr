@@ -1,0 +1,96 @@
+{
+  "artifacts": {
+    "acceptance": "unexecuted; reviewed bind-capable binary and compatible inspected base required",
+    "base_image": "python@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258",
+    "container_bind_opt_in": {
+      "name": "ORKESTR_V2_CONTAINER_BIND",
+      "value": "1"
+    },
+    "files": {
+      "entrypoint.py": "d6a6d6bdb13c7b3e15ed22261b860fa69db8fdeeabeb75b983d7cf86dd279c86",
+      "server": "0c373b93d24cc4631da294fb10beaa834b6bf0c388a139c87fa2ca49a81bc85c",
+      "ui/index.html": "a1deffd301c9678a710aa8b5fd6315250a8cc788e714fc86a25a07b193ca7e79",
+      "ui/orkestr_v2_ui.js": "ce8d574aeaaece13892ca747089e80a241088cac67e3d753e1b8f42308853fce",
+      "ui/orkestr_v2_ui_bg.wasm": "e0c077788a0d2d6639df3c72a7c9295272ed21a5c82cb1998749efdd9a8fc022",
+      "ui/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js": "07027f8ccbb9ba3619deeb861233594ccab582d7eb3da34ca86559c932a09e6b",
+      "ui/snippets/dioxus-interpreter-js-20451f6aefec841d/inline0.js": "cd533b7b9f2192fa535f92f4f266d03d47c23105cf500498d0bc8d6cc90dc6cf",
+      "ui/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/hydrate.js": "0659b58e105fbc8e7e97feb8aa123f455520333ae10c326fa37ec0eb4b08e833",
+      "ui/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/patch_console.js": "9ef1d21e8c05e91f5dd9e46c8f47ae574185a64497527b687f8fdb9b98045f83",
+      "ui/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/set_attribute.js": "5b56995f71fe629934f4ab5eb292d5cfccd9d99037eb9a39ede5078c78db88df",
+      "ui/snippets/dioxus-web-eae67878b22d6805/inline0.js": "853d44dbc9d2696e80d66c056e21d69e77b2bf68f9636826becd029f67c884a5",
+      "ui/snippets/dioxus-web-eae67878b22d6805/src/js/eval.js": "2cd20723c2c3cc52d648d1f5670df929733b359036044d3fd6c9507d929f28b6"
+    },
+    "format": "orkestr-v2-container-artifacts-v1",
+    "network_policy": "diagnostic-egress-allowed",
+    "origin": "http://127.0.0.1:19842",
+    "platform": "linux/amd64",
+    "project": "v2-install-6e7701dc7cb4",
+    "provider_activation": "none; no provider configured by this distribution",
+    "required_glibc_declared": "2.34",
+    "server_source_commit_declared": "8bd994132e790d38fbc01ca2c8be3d353ad9661a",
+    "ui_source_commit_declared": "e6b5441a45159d76654cb357749cbe0f6218f7c8"
+  },
+  "base_architecture": "linux/amd64",
+  "base_digest": "python@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258",
+  "base_glibc": "2.36",
+  "base_image_id": "sha256:4f228bc1cbcfc794e4878312cfc241d368eff55a21c08d1e2bb263116c4ef524",
+  "compose_sha256": "1b6b2c2dc6e2cb7e5f8cc1a0435f7d8666768ef4f947a14700e057190c62d8e5",
+  "daemon_mode": "[\"name=apparmor\",\"name=seccomp,profile=builtin\",\"name=cgroupns\"]",
+  "effective_ports": {
+    "19822/tcp": [
+      {
+        "HostIp": "127.0.0.1",
+        "HostPort": "19842"
+      }
+    ]
+  },
+  "host_http": {
+    "body": "{\"contract_version\":0,\"fixture_mode\":false,\"product\":\"orkestr-v2\",\"status\":\"ok\"}",
+    "status": 200
+  },
+  "image_id": "sha256:54e4582c38d08eace46d37a0fdd83565a590c29f3b0febc343239a65577d74f0",
+  "inside_health": "200 {\"contract_version\":0,\"fixture_mode\":false,\"product\":\"orkestr-v2\",\"status\":\"ok\"}",
+  "listeners": "State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess\nLISTEN 0      4096       127.0.0.1:19842      0.0.0.0:*",
+  "network": {
+    "driver": "bridge",
+    "internal": false
+  },
+  "owned_image_removed": true,
+  "policy": "explicit independently reviewed diagnostic-egress-allowed; default selection not exercised",
+  "private_context_removed": true,
+  "project_resources_remaining": {
+    "container": "",
+    "network": "",
+    "volume": ""
+  },
+  "requested_ports": {
+    "19822/tcp": [
+      {
+        "HostIp": "127.0.0.1",
+        "HostPort": "19842"
+      }
+    ]
+  },
+  "runtime_security": {
+    "CapDrop": [
+      "ALL"
+    ],
+    "Privileged": false,
+    "ReadonlyRootfs": true,
+    "SecurityOpt": [
+      "no-new-privileges:true"
+    ]
+  },
+  "scope": "mixed-source owned debug health/static packaging probe only",
+  "source_review_commit": "15873ed5",
+  "status": "passed",
+  "ui_index_sha256": "a1deffd301c9678a710aa8b5fd6315250a8cc788e714fc86a25a07b193ca7e79",
+  "unexecuted": [
+    "browser execution",
+    "providers/inference",
+    "untrusted executor containment",
+    "default policy selection",
+    "restore apply"
+  ],
+  "working_source_commit": "46c9fff9"
+}
