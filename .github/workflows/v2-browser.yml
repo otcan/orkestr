@@ -1,13 +1,20 @@
 name: V2 CI headless rendering
 on:
   push:
-    branches: ['v2/**']
+    branches: ['v2/rust-rewrite']
     paths: ['v2/**', '.github/workflows/v2-browser.yml', 'package-lock.json']
   pull_request:
     branches: ['v2/**']
     paths: ['v2/**', '.github/workflows/v2-browser.yml', 'package-lock.json']
+  workflow_dispatch:
+
 permissions:
   contents: read
+# Only superseded PR checks cancel; manual and integration push runs stay independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   headless-rendering:
     runs-on: ubuntu-latest
