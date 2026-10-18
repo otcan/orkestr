@@ -35,7 +35,12 @@ fn ready_rpc(native: &str) -> CodexRpc {
     rpc
 }
 
-async fn exercise(wrong_native: bool, namespace: &str, defer_flush: bool) {
+async fn exercise(
+    wrong_native: bool,
+    namespace: &str,
+    defer_flush: bool,
+    pump_progress: Option<bool>,
+) {
     let root = std::path::PathBuf::from(
         std::env::var_os("ORKESTR_V2_HOME").expect("isolated home"),
     )
@@ -125,6 +130,7 @@ async fn exercise(wrong_native: bool, namespace: &str, defer_flush: bool) {
     else {
         panic!("unique consumption")
     };
+    let provider = cap.provider().clone();
     let scope = execution_scope(&cap).unwrap();
     let fence = Arc::new(super::fence::StoreFence::from_consumed(bound.clone(), &cap).unwrap());
     let authority = Authority::new(scope.clone(), fence, 1).unwrap();
@@ -134,11 +140,25 @@ async fn exercise(wrong_native: bool, namespace: &str, defer_flush: bool) {
         &root.join("tmp"),
     )
     .unwrap();
+    let script = if pump_progress == Some(true) {
+        r#"import sys,json; r=json.loads(sys.stdin.readline()); print(json.dumps({'id':r['id'],'result':{'turn':{'id':'t1','status':'inProgress'}}}),flush=True); print(json.dumps({'method':'item/agentMessage/delta','params':{'threadId':'synthetic-native','turnId':'t1','delta':'synthetic progress'}}),flush=True); print(json.dumps({'method':'turn/completed','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'completed'}}}),flush=True); sys.stdin.read()"#
+    } else {
+        r#"import sys,json; r=json.loads(sys.stdin.readline()); print(json.dumps({'id':r['id'],'result':{'turn':{'id':'t1','status':'inProgress'}}}),flush=True); print(json.dumps({'method':'turn/started','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'inProgress'}}}),flush=True); print(json.dumps({'method':'turn/completed','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'completed'}}}),flush=True); sys.stdin.read()"#
+    };
+    let args = vec![
+        std::ffi::OsString::from("-u"),
+        std::ffi::OsString::from("-c"),
+        std::ffi::OsString::from(script),
+    ];
     let executor = authority
         .issue_executor(
             &scope,
-            Path::new("/bin/cat"),
-            &[],
+            if pump_progress.is_some() {
+                Path::new("/usr/bin/python3")
+            } else {
+                Path::new("/bin/cat")
+            },
+            if pump_progress.is_some() { &args } else { &[] },
             dirs,
             TransportBounds::default(),
         )
@@ -150,6 +170,58 @@ async fn exercise(wrong_native: bool, namespace: &str, defer_flush: bool) {
         "synthetic-native"
     });
     let result = submit_codex(cap, &mut rpc, &child);
+    if let Some(progress) = pump_progress {
+        result.unwrap();
+        child.flush_stdin(&scope).unwrap();
+        let mut pump = super::pump::CodexPump::new(
+            child,
+            scope.clone(),
+            provider,
+            crate::codex_rpc::TurnStream::new("synthetic-native", 4).unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let outcome = pump.step(&bound).await;
+            if progress && pump.pending().is_some() {
+                assert!(matches!(
+                    outcome,
+                    Err(crate::supervisor::Error::Store(
+                        RuntimeStoreError::Unavailable
+                    ))
+                ));
+                let original = pump.pending().unwrap().clone();
+                for _ in 0..3 {
+                    assert!(pump.step(&bound).await.is_err());
+                    assert_eq!(pump.pending(), Some(&original));
+                }
+                let status = store
+                    .execution_status(&owner, &conversation)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(status.phase, orkestr_v2_contracts::ExecutionPhase::Starting);
+                break;
+            }
+            outcome.unwrap();
+            let status = store
+                .execution_status(&owner, &conversation)
+                .await
+                .unwrap()
+                .unwrap();
+            if status.phase == orkestr_v2_contracts::ExecutionPhase::AwaitingAcceptance {
+                assert!(pump.pending().is_none());
+                break;
+            }
+            assert!(Instant::now() < deadline, "bounded durable pump");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        authority.revoke().unwrap();
+        drop(pump);
+        bound.close().await;
+        store.close().await;
+        std::fs::remove_dir_all(root).unwrap();
+        return;
+    }
     if wrong_native {
         assert_eq!(result, Err(SubmissionFailure::Protocol(Blocker::Protocol)));
         assert_eq!(child.flush_stdin(&scope).unwrap().written, 0);
@@ -232,20 +304,30 @@ async fn exercise(wrong_native: bool, namespace: &str, defer_flush: bool) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_committed_capability_drives_only_its_durable_synthetic_input() {
-    exercise(false, "synthetic-subscription", false).await;
+    exercise(false, "synthetic-subscription", false, None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wrong_native_refuses_io_and_reopen_cannot_reissue_consumed_grant() {
-    exercise(true, "synthetic-subscription", false).await;
+    exercise(true, "synthetic-subscription", false, None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issuer_valid_colon_namespace_reaches_owned_transport_without_reissuing_grant() {
-    exercise(false, "subscription:local", false).await;
+    exercise(false, "subscription:local", false, None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn renewal_before_flush_quarantines_uncertain_queued_turn_without_redispatch() {
-    exercise(false, "subscription:local", true).await;
+    exercise(false, "subscription:local", true, None).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ordinary_output_pump_journals_started_and_completion_proposal() {
+    exercise(false, "subscription:local", false, Some(false)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ordinary_output_pump_retains_unavailable_progress_without_reading_terminal() {
+    exercise(false, "subscription:local", false, Some(true)).await;
 }

@@ -2,6 +2,8 @@
 //! This module never starts a process or grants permission to dispatch a turn.
 use crate::ports::Blocker;
 use serde_json::{json, Value};
+mod turn;
+pub use turn::TurnStream;
 
 const MAX_FRAME: usize = 64 * 1024;
 
