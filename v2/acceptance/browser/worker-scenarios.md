@@ -46,6 +46,8 @@ The cases cover:
   unavailable held-input actions.
 - Actual browser logout while an authorized task response is delayed; releasing
   that response cannot repopulate the signed-out view, and reload requires login.
+  If logout already aborted the read, the harness requires matching browser
+  network cancellation evidence before accepting the invalid interception ID.
 
 No provider namespace PID is used as a host signal target. The fixture reuses the
 owned host identity observer, closes its exact Popen server and verifies native
