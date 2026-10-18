@@ -75,6 +75,28 @@ Core's announced intake contract (fixture paths/version/commit still pending):
 Implement against the exact published contract commit once received. An
 announced response shape alone does not prove server or client acceptance.
 
+Read-only inspection of Core's draft `v2/fixtures/*.json` and
+`docs/v2/api-v0-intake.md` confirms seven synthetic JSON examples and these
+additional integration constraints (publication commit still pending):
+
+- Scope is tagged by `kind`: global or project with `project_id`.
+- `message_accepted` events reference a message; fetch its text through the
+  snapshot. Do not render an event payload as an assistant response.
+- Finish snapshot pagination before SSE reconnect from the snapshot watermark;
+  preserve that initial watermark across pagination. Handle `resync_required`
+  by rebuilding the projection, and `session_expired` by requiring sign-in
+  without clearing unsent input. No reconnect loop on expired credentials.
+- The intake server has no run/session projections or cancel endpoint yet.
+  Render runtime/Stop capability as unavailable rather than inventing busy
+  sessions, cancellation results or an enabled no-op Stop button.
+- Binding is loopback-only. An iPhone cannot reach a different computer's
+  loopback API; remote/native device connectivity needs a separately reviewed
+  transport/auth increment. Do not enable broad binding or CORS as a workaround.
+
+All seven JSON files were parsed successfully with Python, without executing
+Core code. This is fixture syntax inspection, not seven passing HTTP tests or
+verification of Core's separately reported process probes.
+
 Keep drafts keyed by canonical conversation identity, independently of stream
 and request state. Typing remains enabled while a run is busy. Persisted
 acceptance and rendered model text are separate states. Retain the same
