@@ -211,4 +211,6 @@ mod inspection_tests;
 mod guard_tests;
 
 #[cfg(test)]
+mod observation_authority_tests;
+#[cfg(test)]
 mod observation_contract_tests;

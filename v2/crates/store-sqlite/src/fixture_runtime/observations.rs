@@ -56,17 +56,16 @@ impl FixtureSupervisorStore {
         {
             return Err(RuntimeStoreError::Conflict);
         }
-        let (kind, synthetic) = match &input.event {
-            ProviderEvent::Started => ("started", None),
-            ProviderEvent::ApprovalRequested => ("approval_requested", None),
+        let (kind, synthetic, progress) = match &input.event {
+            ProviderEvent::Started => ("started", None, None),
+            ProviderEvent::ApprovalRequested => ("approval_requested", None, None),
             ProviderEvent::CompletedProposal { synthetic } => {
-                ("completed_proposal", Some(i64::from(*synthetic)))
+                ("completed_proposal", Some(i64::from(*synthetic)), None)
             }
-            ProviderEvent::Failed => ("failed", None),
-            ProviderEvent::Lost => ("lost", None),
-            ProviderEvent::Progress(_) | ProviderEvent::Stopped => {
-                return Err(RuntimeStoreError::Unavailable)
-            }
+            ProviderEvent::Failed => ("failed", None, None),
+            ProviderEvent::Lost => ("lost", None, None),
+            ProviderEvent::Progress(text) => ("progress", None, Some(text.as_str())),
+            ProviderEvent::Stopped => ("stopped", None, None),
         };
         let digest = hash(
             "fixture-observation-v1",
@@ -78,6 +77,7 @@ impl FixtureSupervisorStore {
                 &input.dispatch_fence.to_string(),
                 kind,
                 &synthetic.map(|v| v.to_string()).unwrap_or_default(),
+                progress.unwrap_or_default(),
             ],
         );
         if let Some(committed) = sqlx::query("SELECT o.*,e.sequence AS scope_sequence FROM fixture_observations o JOIN events e ON e.id=o.event_id WHERE o.run_id=? AND o.run_sequence=?")
@@ -105,6 +105,14 @@ impl FixtureSupervisorStore {
             .bind(canonical.run.session_id.to_string()).bind(owner.to_string()).bind(canonical.run.conversation_id.to_string()).bind(canonical.binding.generation as i64).bind(&self.namespace).bind(&canonical.run.native_session_id).bind(self.context_id.to_string()).bind(self.incarnation_id.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         if ready != 1 {
             return Err(RuntimeStoreError::Fenced);
+        }
+        // Unsupported new evidence cannot be persisted, but a changed replay
+        // above must still conflict rather than masquerade as a retryable outage.
+        if matches!(
+            input.event,
+            ProviderEvent::Progress(_) | ProviderEvent::Stopped
+        ) {
+            return Err(RuntimeStoreError::Unavailable);
         }
         let next: i64 = sqlx::query_scalar(
             "SELECT coalesce(max(run_sequence),0)+1 FROM fixture_observations WHERE run_id=?",
