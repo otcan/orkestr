@@ -49,6 +49,23 @@ pub(super) fn metadata(frame: &[u8], workspace: &Path) -> Result<Vec<u8>, Error>
     // Broker subscription setup additionally pins the provider. Validate the
     // remaining fixed setup shape with the original direct-provider whitelist.
     let mut setup = inner.clone();
+    if setup.get("method").and_then(Value::as_str) == Some("thread/resume") {
+        let params = setup
+            .get_mut("params")
+            .and_then(Value::as_object_mut)
+            .ok_or(Error::InvalidFrame)?;
+        if params.len() != 5
+            || !params.remove("threadId").and_then(|id| id.as_str().map(str::to_owned))
+                .is_some_and(|id| !id.is_empty() && id.len() <= 512)
+        {
+            return Err(Error::InvalidFrame);
+        }
+        // Shape-only normalization for the existing closed setup validator.
+        // Exact issued native identity is checked by Runtime and the broker's
+        // trusted expected_native binding; JSON is never attachment authority.
+        params.insert("ephemeral".into(), Value::Bool(false));
+        setup["method"] = Value::String("thread/start".into());
+    }
     if setup.get("method").and_then(Value::as_str) == Some("thread/start") {
         let params = setup
             .get_mut("params")
@@ -188,6 +205,22 @@ mod tests {
                 Path::new("/synthetic/workspace"),
             );
             assert_eq!(result.is_ok(), provider == Some("openai"));
+        }
+    }
+    #[test]
+    fn resume_setup_is_closed_and_never_admits_inference() {
+        let frame = json!({"id":3,"method":"thread/resume","params":{
+            "threadId":"synthetic-native","cwd":"/synthetic/workspace",
+            "approvalPolicy":"never","sandbox":"read-only","modelProvider":"openai"}});
+        assert!(metadata(&envelope("BrokerMetadata", frame.clone()),
+            Path::new("/synthetic/workspace")).is_ok());
+        for (key, value) in [("threadId", json!("")), ("cwd", json!("/foreign")),
+            ("modelProvider", json!("external")), ("ephemeral", json!(false)),
+            ("input", json!([]))] {
+            let mut denied = frame.clone();
+            denied["params"][key] = value;
+            assert_eq!(metadata(&envelope("BrokerMetadata", denied),
+                Path::new("/synthetic/workspace")), Err(Error::InvalidFrame));
         }
     }
     #[test]

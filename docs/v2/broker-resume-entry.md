@@ -33,3 +33,19 @@ inside the corresponding current durable Core fence, including each partial-writ
 suffix. No broker-side native write fallback is introduced. Duplicate or late
 correlated replies refuse. The subprocess bootstrap tests and protocol tests are
 synthetic; actual authenticated resume and ordinary HTTP recovery are unexecuted.
+
+Codex now also has the fixed `resume-owned-session --protocol
+orkestr-v2-provider-broker-v1` executable entry. Its private descriptor-4 record is
+`codex-resume-v1` plus NUL, followed by a nonempty UTF-8 native identifier of at most
+512 bytes, then EOF. Control characters, oversized records, wrong-parent sockets
+and startup timeout refuse. It uses `codex_bootstrap.py`, which must be included in
+an immutable Codex package. Descriptor 3 is unchanged. The launcher must select this
+entry and send the identity solely from the opaque metadata grant binding.
+
+The containment broker-only shape validator admits precisely the five resume
+parameters above; direct raw metadata remains unchanged. This shape guard cannot
+prove an issued native identity. Runtime and the trusted broker binding enforce
+that comparison. Rust hook tests are authored but unexecuted in this checkpoint;
+the helper checkout predates Runtime's current provider-FD spawn implementation.
+Parent launcher descriptor-4 integration and matching-source Rust validation remain
+pending Runtime coordination, as does installed-native resume schema verification.
