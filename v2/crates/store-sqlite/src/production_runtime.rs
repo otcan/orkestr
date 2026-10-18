@@ -206,3 +206,5 @@ impl Context {
 
 #[cfg(test)]
 mod stop_progress_tests;
+
+mod worker_discovery;
