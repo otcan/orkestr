@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 mod auth;
 mod browser;
+pub mod claude_execution;
 pub mod control_dispatch;
 pub mod control_registry;
 mod execution;

@@ -2,6 +2,7 @@
 //! No inference frames, credentials, environment or executable selection here.
 #[allow(dead_code, reason = "owned transport composition is under review")]
 pub(crate) mod channel;
+pub(crate) mod claude;
 use crate::ports::Blocker;
 use orkestr_v2_application::runtime::ProviderKind;
 use orkestr_v2_store_sqlite::BoundSessionMetadata;
