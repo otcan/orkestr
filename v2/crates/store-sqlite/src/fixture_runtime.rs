@@ -1,10 +1,15 @@
 //! Explicit offline fixture authority. Never called by server bootstrap.
-//! This context does not yet authorize admission, readiness or provider I/O.
+//! Only synthetic readiness and durable dispatch authority; never real provider I/O.
 use crate::Store;
 use orkestr_v2_application::runtime::{Result, RuntimeStoreError};
 use orkestr_v2_contracts::OwnerId;
 use sqlx::{Row, SqliteConnection};
 use uuid::Uuid;
+
+mod admission;
+mod dispatch;
+mod port;
+mod readiness;
 
 const LEASE_MS: i64 = 60_000;
 
@@ -97,8 +102,13 @@ pub async fn bootstrap_fixture_supervisor(
             if row.get::<i64, _>("lease_deadline_ms") > clock {
                 return Err(RuntimeStoreError::Busy);
             }
-            // No admission/dispatch tables exist yet. The same transaction must
-            // quarantine predecessor candidates when those operations are added.
+            // Fence only this expired predecessor, inside the takeover transaction.
+            // Unknown delivery stays unknown; neither state permits automatic retry.
+            let context: String = row.get("context_id");
+            sqlx::query("UPDATE session_bindings SET state='lost' WHERE id IN (SELECT session_id FROM fixture_readiness WHERE context_id=? AND incarnation_id=?)")
+                .bind(&context).bind(predecessor.to_string()).execute(&mut *tx).await.map_err(db)?;
+            sqlx::query("UPDATE fixture_runs SET state='blocked',dispatch_state=CASE WHEN dispatch_state='delivery_unknown' THEN 'delivery_unknown' ELSE 'quarantined' END,candidate_hash=NULL,reservation_hash=NULL WHERE context_id=? AND incarnation_id=?")
+                .bind(&context).bind(predecessor.to_string()).execute(&mut *tx).await.map_err(db)?;
             (
                 Uuid::parse_str(&row.get::<String, _>("context_id")).map_err(db)?,
                 row.get::<i64, _>("generation")
@@ -176,5 +186,9 @@ impl FixtureSupervisorStore {
     }
 }
 
+#[cfg(test)]
+mod crash_tests;
+#[cfg(test)]
+mod dispatch_tests;
 #[cfg(test)]
 mod tests;

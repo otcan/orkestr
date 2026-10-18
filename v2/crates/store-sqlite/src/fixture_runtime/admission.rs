@@ -1,0 +1,227 @@
+use super::*;
+use orkestr_v2_application::runtime::*;
+use orkestr_v2_contracts::{ConversationId, RunId, SessionId};
+use sha2::{Digest, Sha256};
+use sqlx::sqlite::SqliteRow;
+
+pub(super) fn hash(domain: &str, parts: &[&str]) -> String {
+    let mut digest = Sha256::new();
+    for part in std::iter::once(domain).chain(parts.iter().copied()) {
+        digest.update((part.len() as u64).to_be_bytes());
+        digest.update(part.as_bytes());
+    }
+    format!("{:x}", digest.finalize())
+}
+pub(super) fn secret() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+fn uuid(row: &SqliteRow, field: &str) -> Result<Uuid> {
+    Uuid::parse_str(&row.get::<String, _>(field)).map_err(db)
+}
+pub(super) fn envelope(row: &SqliteRow) -> Result<ProviderAdmission> {
+    let owner_id = OwnerId(uuid(row, "owner_id")?);
+    let conversation_id = ConversationId(uuid(row, "conversation_id")?);
+    let session_id = SessionId(uuid(row, "session_id")?);
+    let native: String = row.get("native_session_id");
+    Ok(ProviderAdmission {
+        run: RunAdmission {
+            owner_id: owner_id.clone(),
+            conversation_id: conversation_id.clone(),
+            run_id: RunId(uuid(row, "id")?),
+            session_id: session_id.clone(),
+            role: Role::Deep,
+            native_session_id: Some(native.clone()),
+            lease_generation: u64::try_from(row.get::<i64, _>("lease_generation")).map_err(db)?,
+            dispatch_fence: u64::try_from(row.get::<i64, _>("dispatch_fence")).map_err(db)?,
+            attempt: 1,
+            lease_deadline_ms: row.get("lease_deadline_ms"),
+            purpose: AdmissionPurpose::Execution,
+        },
+        binding: Binding {
+            owner_id,
+            conversation_id,
+            session_id,
+            role: Role::Deep,
+            provider_kind: ProviderKind::ExplicitFixture,
+            native_session_id: Some(native),
+            parent_session_id: None,
+            generation: u64::try_from(row.get::<i64, _>("binding_generation")).map_err(db)?,
+            state: SessionState::Ready,
+        },
+    })
+}
+pub(super) fn run_state(row: &SqliteRow) -> RunState {
+    if row.get::<&str, _>("state") == "starting" {
+        RunState::Starting
+    } else {
+        RunState::Blocked
+    }
+}
+fn input_digest(claim: &InboxClaim, binding: &SessionId, generation: u64, key: &str) -> String {
+    hash(
+        "fixture-admission-v1",
+        &[
+            &claim.owner_id.to_string(),
+            &claim.conversation_id.to_string(),
+            &claim.message_id.to_string(),
+            &claim.event_id.to_string(),
+            &claim.consumer_session_id.to_string(),
+            &claim.scope_sequence.to_string(),
+            &claim.claim_generation.to_string(),
+            &claim.lease_deadline_ms.to_string(),
+            &binding.to_string(),
+            &generation.to_string(),
+            key,
+        ],
+    )
+}
+
+impl FixtureSupervisorStore {
+    pub(super) async fn admit(
+        &self,
+        claim: &InboxClaim,
+        binding_id: &SessionId,
+        expected_generation: u64,
+        request_key: &str,
+    ) -> Result<RunAdmissionResult> {
+        if claim.owner_id != self.owner {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        if !valid(request_key)
+            || claim.scope_sequence <= 0
+            || claim.claim_generation == 0
+            || i64::try_from(claim.claim_generation).is_err()
+            || expected_generation == 0
+            || i64::try_from(expected_generation).is_err()
+        {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
+        if *binding_id != claim.consumer_session_id {
+            return Err(RuntimeStoreError::Conflict);
+        }
+        let digest = input_digest(claim, binding_id, expected_generation, request_key);
+        let mut tx = self
+            .store
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(db)?;
+        self.validate_in(&mut tx).await?;
+        // Authenticate scope before exposing any replay receipt. Old context cannot
+        // attach another namespace's run even when all caller-supplied IDs match.
+        crate::runtime::scope(&mut tx, &self.owner, &claim.conversation_id).await?;
+        if let Some(row) = sqlx::query(
+            "SELECT * FROM fixture_runs WHERE owner_id=? AND conversation_id=? AND request_key=?",
+        )
+        .bind(self.owner.to_string())
+        .bind(claim.conversation_id.to_string())
+        .bind(request_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?
+        {
+            if row.get::<String, _>("context_id") != self.context_id.to_string() {
+                return Err(RuntimeStoreError::Unauthorized);
+            }
+            if row.get::<String, _>("input_digest") != digest {
+                return Err(RuntimeStoreError::Conflict);
+            }
+            let result = RunAdmissionResult {
+                provider: envelope(&row)?,
+                run_state: run_state(&row),
+                disposition: if row.get::<&str, _>("dispatch_state") == "candidate"
+                    && row.get::<String, _>("incarnation_id") == self.incarnation_id.to_string()
+                {
+                    AdmissionDisposition::Replay
+                } else {
+                    AdmissionDisposition::ReconciliationRequired
+                },
+                candidate_key: None,
+            };
+            tx.commit().await.map_err(db)?;
+            return Ok(result);
+        }
+        let clock = now(&mut tx).await?;
+        let inbox =
+            sqlx::query("SELECT * FROM reasoning_inbox WHERE conversation_id=? AND sequence=?")
+                .bind(claim.conversation_id.to_string())
+                .bind(claim.scope_sequence)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(db)?
+                .ok_or(RuntimeStoreError::NotFound)?;
+        if inbox.get::<&str, _>("state") != "claimed"
+            || inbox.get::<Option<String>, _>("claimant_session_id") != Some(binding_id.to_string())
+            || inbox.get::<String, _>("message_id") != claim.message_id.to_string()
+            || inbox.get::<String, _>("event_id") != claim.event_id.to_string()
+            || inbox.get::<i64, _>("claim_generation")
+                != i64::try_from(claim.claim_generation).map_err(db)?
+            || inbox.get::<Option<i64>, _>("claim_deadline_ms") != Some(claim.lease_deadline_ms)
+        {
+            return Err(RuntimeStoreError::StaleLease);
+        }
+        if claim.lease_deadline_ms <= clock {
+            return Err(RuntimeStoreError::Expired);
+        }
+        let earliest: i64 = sqlx::query_scalar("SELECT min(sequence) FROM reasoning_inbox WHERE conversation_id=? AND state <> 'consumed'")
+            .bind(claim.conversation_id.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
+        if earliest != claim.scope_sequence {
+            return Err(RuntimeStoreError::Conflict);
+        }
+        let row = sqlx::query("SELECT b.* FROM session_bindings b JOIN fixture_readiness r ON r.session_id=b.id WHERE b.id=? AND b.owner_id=? AND b.conversation_id=? AND r.context_id=? AND r.incarnation_id=? AND r.protocol_version=1 AND b.provider_kind='explicit_fixture' AND b.provider_namespace=?")
+            .bind(binding_id.to_string()).bind(self.owner.to_string()).bind(claim.conversation_id.to_string())
+            .bind(self.context_id.to_string()).bind(self.incarnation_id.to_string()).bind(&self.namespace)
+            .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Unavailable)?;
+        let binding = crate::runtime::binding(&row)?;
+        if binding.role != Role::Deep || binding.parent_session_id.is_some() {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
+        if binding.generation != expected_generation {
+            return Err(RuntimeStoreError::StaleLease);
+        }
+        if binding.state != SessionState::Ready {
+            return Err(RuntimeStoreError::Busy);
+        }
+        let native = binding
+            .native_session_id
+            .ok_or(RuntimeStoreError::Unavailable)?;
+        let supervisor_deadline: i64 = sqlx::query_scalar(
+            "SELECT lease_deadline_ms FROM fixture_supervisors WHERE context_id=?",
+        )
+        .bind(self.context_id.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
+        let deadline = claim.lease_deadline_ms.min(supervisor_deadline);
+        let candidate = secret();
+        let verifier = hash("fixture-candidate-v1", &[&candidate]);
+        let run_id = Uuid::new_v4();
+        let run = sqlx::query("INSERT INTO fixture_runs(id,context_id,incarnation_id,owner_id,conversation_id,session_id,native_session_id,binding_generation,message_id,event_id,scope_sequence,claim_generation,request_key,input_digest,lease_generation,dispatch_fence,lease_deadline_ms,attempt,state,dispatch_state,candidate_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,1,'starting','candidate',?) RETURNING *")
+            .bind(run_id.to_string()).bind(self.context_id.to_string()).bind(self.incarnation_id.to_string())
+            .bind(self.owner.to_string()).bind(claim.conversation_id.to_string()).bind(binding_id.to_string())
+            .bind(native).bind(i64::try_from(binding.generation).map_err(db)?)
+            .bind(claim.message_id.to_string()).bind(claim.event_id.to_string()).bind(claim.scope_sequence)
+            .bind(i64::try_from(claim.claim_generation).map_err(db)?).bind(request_key).bind(digest)
+            .bind(self.generation).bind(deadline).bind(verifier).fetch_one(&mut *tx).await.map_err(db)?;
+        sqlx::query("UPDATE reasoning_inbox SET state='consumed',admitted_fixture_run_id=? WHERE conversation_id=? AND sequence=?")
+            .bind(run_id.to_string()).bind(claim.conversation_id.to_string()).bind(claim.scope_sequence)
+            .execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("UPDATE session_bindings SET state='busy' WHERE id=?")
+            .bind(binding_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        let result = RunAdmissionResult {
+            provider: envelope(&run)?,
+            run_state: RunState::Starting,
+            disposition: AdmissionDisposition::FreshCandidate,
+            candidate_key: Some(candidate),
+        };
+        #[cfg(test)]
+        super::crash_tests::checkpoint("admit-before-commit");
+        tx.commit().await.map_err(db)?;
+        #[cfg(test)]
+        super::crash_tests::checkpoint("admit-after-commit");
+        Ok(result)
+    }
+}
