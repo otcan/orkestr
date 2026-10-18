@@ -93,9 +93,13 @@ class WorkerCase(ordinary.Case):
             "expected_revision": status["revision"], "request_key": key})
 
 
-def start(case, hold_worker=False, hold_started=False):
+def start(case, hold_worker=False, hold_started=False, lifetime_ms=30000):
     case.stop()
     case.configure()
+    config_file = case.root / "execution.json"
+    config = json.loads(config_file.read_text())
+    config["worker"]["lifetime_ms"] = lifetime_ms
+    config_file.write_text(json.dumps(config))
     if hold_worker:
         (case.workspace / "hold-worker").touch()
     if hold_started:
@@ -197,8 +201,38 @@ def parent_http_stop(case):
     assert all(run["state"] not in ("running", "starting", "succeeded") for run in case.runs())
 
 
+def worker_deadline_stop(case):
+    start(case, hold_worker=True, lifetime_ms=3000)
+    child = ordinary.wait_for(lambda: case.role_state("worker", "running"), "Worker did not start")
+    parent = case.role_state("deep", "running")
+    assert parent is not None
+    before = case.inbox()
+    code, status, _ = case.request(case.path + "/execution")
+    assert code == 200 and status["run_id"] == parent["id"]
+    # The current factory has one Deep gate. It must refuse browser-selected
+    # child control before issuing any cancellation, rather than misroute it.
+    code, _, _ = case.request(case.path + "/stop", "POST", {
+        "run_id": child["id"], "expected_revision": status["revision"],
+        "request_key": "unsupported-worker-browser-stop"})
+    assert code == 503
+    assert not case.rows("SELECT run_id FROM production_cancellations WHERE run_id=?", (child["id"],))
+    ordinary.wait_for(lambda: case.role_state("worker", "cancelled"),
+                      "Worker deadline needs its own actual interrupted terminal proof")
+    ordinary.wait_for(case.worker_gone, "stopped Worker was not reaped")
+    assert case.role_state("deep", "running") is not None
+    assert case.inbox() == before
+    stopped = case.rows("SELECT run_id FROM production_observations WHERE kind='stopped'")
+    assert stopped == [{"run_id": child["id"]}]
+    interrupts = [row for row in case.trace() if row["kind"] == "interrupt"]
+    assert len(interrupts) == 1 and interrupts[0]["role"] == "worker"
+    assert len([row for row in case.trace() if row["kind"] == "turn"]) == 2
+    (case.workspace / "release-deep").touch()
+    ordinary.wait_for(lambda: case.phase("awaiting_acceptance"), "parent completion missing")
+    assert case.accept(parent["id"], case.completion(parent["id"]), "after-worker-stop")[0] == 200
+
+
 SCENARIOS = [independent_completion, revoked_before_started, revoked_in_flight,
-             parent_completion_fences_child, parent_http_stop]
+             parent_completion_fences_child, parent_http_stop, worker_deadline_stop]
 
 
 def main():

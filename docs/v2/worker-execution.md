@@ -42,6 +42,8 @@ multi-run gate and is not advertised by this module.
 strict policy and owned-directory cleanup. `tests/worker_execution_http.py`
 requires the ordinary factory hooks and actual server/product-broker processes
 with a fixed synthetic native peer. It asserts distinct native sessions, exact
-input lineage, independent owner acceptance, revocation, parent-terminal fencing
-and parent HTTP Stop. These checks are not real Codex/Claude execution, normal
+input lineage, independent owner acceptance, revocation, parent-terminal fencing,
+parent HTTP Stop, and the Worker's own deadline interruption without stopping
+Deep. Direct child browser Stop must refuse before any child cancellation write.
+These checks are not real Codex/Claude execution, normal
 browser latency, production activation or full-release qualification.
