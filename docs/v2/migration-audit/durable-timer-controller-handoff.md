@@ -83,8 +83,8 @@ is unchanged. This leaf does not renew a supervisor lease or invent a bootstrap.
 Four tests are authored: page wrap/bounds; ordinary Store refusal and joinable
 shutdown; registered weekly grant across creator logout/controller restart/Store
 reattachment plus explicit revoke/machine logout; actual Store-clock once due
-admission then reopened Store/controller with no second admission. These Rust
-tests and strict lint are **unexecuted**, pending exact-source build admission.
+admission then reopened Store/controller with no second admission. These four tests and strict feature server lint now pass in the admitted
+exact-source composition; see `durable-timer-controller-build-evidence.md`.
 Format/diff checks pass. No production store, provider or live timer was touched.
 
 For an isolated build, overlay only `durable.rs`/`durable_tests.rs` on exact Core
