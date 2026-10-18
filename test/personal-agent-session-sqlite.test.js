@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { closeAgentJobDbs, openAgentJobDb } from "../packages/core/src/agent-job-store.js";
+import { agentJobDbPath, closeAgentJobDbs, openAgentJobDb } from "../packages/core/src/agent-job-store.js";
 import {
   migratePersonalAgentSessions,
   planPersonalAgentSessionMigration,
@@ -36,6 +36,58 @@ function session(id, overrides = {}) {
   };
 }
 
+function createE744SessionSchema(db) {
+  db.exec(`create table if not exists personal_agent_sessions (
+      id text primary key,
+      conversation_id text not null references personal_agent_conversations(id) on delete restrict,
+      scope_kind text not null check (scope_kind in ('global', 'project')),
+      scope_id text,
+      role text not null check (role in ('fast', 'deep', 'worker')),
+      provider text not null check (provider in ('codex', 'claude-code')),
+      account_profile_id text not null,
+      model_profile_json text not null,
+      native_session_id text,
+      fork_from_session_id text references personal_agent_sessions(id) on delete set null,
+      lifecycle text not null check (lifecycle in ('starting', 'ready', 'busy', 'blocked', 'stopped')),
+      blocked_reason text,
+      version integer not null default 0 check (version >= 0),
+      lease_token text,
+      lease_expires_at integer,
+      heartbeat_at text,
+      created_at text not null,
+      updated_at text not null,
+      check ((scope_kind = 'global' and scope_id is null) or (scope_kind = 'project' and scope_id is not null)),
+      check ((lifecycle = 'blocked' and blocked_reason is not null) or (lifecycle <> 'blocked' and blocked_reason is null)),
+      check ((lease_token is null and lease_expires_at is null) or (lease_token is not null and lease_expires_at is not null))
+    );
+    create unique index if not exists personal_agent_sessions_active_role
+      on personal_agent_sessions(conversation_id, role)
+      where role in ('fast', 'deep') and lifecycle in ('starting', 'ready', 'busy', 'blocked');
+    create unique index if not exists personal_agent_sessions_native_identity
+      on personal_agent_sessions(provider, account_profile_id, native_session_id)
+      where native_session_id is not null;
+    create index if not exists personal_agent_sessions_scope_lifecycle on personal_agent_sessions(scope_kind, scope_id, lifecycle, updated_at);
+    create index if not exists personal_agent_sessions_lease on personal_agent_sessions(lease_expires_at) where lease_token is not null;
+    create trigger personal_agent_sessions_scope_insert
+      before insert on personal_agent_sessions
+      when not exists (
+        select 1 from personal_agent_conversations c where c.id = new.conversation_id
+          and c.scope_kind = new.scope_kind
+          and ((c.scope_kind = 'global' and new.scope_id is null)
+            or (c.scope_kind = 'project' and c.project_id = new.scope_id))
+      )
+      begin select raise(abort, 'personal_agent_session_scope_mismatch'); end;
+    create trigger personal_agent_sessions_scope_update
+      before update of conversation_id, scope_kind, scope_id on personal_agent_sessions
+      when not exists (
+        select 1 from personal_agent_conversations c where c.id = new.conversation_id
+          and c.scope_kind = new.scope_kind
+          and ((c.scope_kind = 'global' and new.scope_id is null)
+            or (c.scope_kind = 'project' and c.project_id = new.scope_id))
+      )
+      begin select raise(abort, 'personal_agent_session_scope_mismatch'); end`);
+}
+
 test("session migration is additive, dry-runnable, idempotent, and fail-closed on missing conversations", () => {
   const db = new DatabaseSync(":memory:");
   try {
@@ -55,6 +107,37 @@ test("session migration is additive, dry-runnable, idempotent, and fail-closed o
     assert.equal(db.prepare("select count(*) as n from sqlite_master where type='table' and name='personal_agent_sessions'").get().n, 1);
     assert.equal(db.prepare("pragma foreign_key_list(personal_agent_sessions)").all().some(row => row.table === "personal_agent_conversations"), true);
   } finally { db.close(); }
+});
+
+test("agent-job store reopens the e744 session schema without changing its rows", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-session-e744-reopen-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: "1" };
+  try {
+    const initialized = await openAgentJobDb(env);
+    conversationFixture(initialized);
+    await closeAgentJobDbs();
+
+    const historical = new DatabaseSync(await agentJobDbPath(env));
+    try {
+      historical.exec("pragma foreign_keys = on; drop table personal_agent_sessions;");
+      createE744SessionSchema(historical);
+      historical.prepare(`insert into personal_agent_sessions
+        (id,conversation_id,scope_kind,scope_id,role,provider,account_profile_id,model_profile_json,lifecycle,version,created_at,updated_at)
+        values ('ses_e744_fixture','conv_global','global',null,'fast','codex','fixture-account','{}','ready',0,'now','now')`).run();
+    } finally {
+      historical.close();
+    }
+
+    const reopened = await openAgentJobDb(env);
+    const row = reopened.prepare("select id, conversation_id, scope_kind, scope_id, role, lifecycle from personal_agent_sessions where id = 'ses_e744_fixture'").get();
+    assert.deepEqual({ ...row }, {
+      id: "ses_e744_fixture", conversation_id: "conv_global", scope_kind: "global",
+      scope_id: null, role: "fast", lifecycle: "ready",
+    });
+  } finally {
+    await closeAgentJobDbs();
+    await fs.rm(home, { recursive: true, force: true });
+  }
 });
 
 test("session table enforces active role uniqueness, native identity non-aliasing, and conversation scope", () => {

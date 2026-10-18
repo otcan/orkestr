@@ -8,36 +8,37 @@ const requiredColumns = Object.freeze([
   "heartbeat_at", "created_at", "updated_at",
 ]);
 
-const tableDdl = `create table personal_agent_sessions (
-  id text primary key,
-  conversation_id text not null references personal_agent_conversations(id) on delete restrict,
-  scope_kind text not null check (scope_kind in ('global', 'project')),
-  scope_id text,
-  role text not null check (role in ('fast', 'deep', 'worker')),
-  provider text not null check (provider in ('codex', 'claude-code')),
-  account_profile_id text not null,
-  model_profile_json text not null,
-  native_session_id text,
-  fork_from_session_id text references personal_agent_sessions(id) on delete set null,
-  lifecycle text not null check (lifecycle in ('starting', 'ready', 'busy', 'blocked', 'stopped')),
-  blocked_reason text,
-  version integer not null default 0 check (version >= 0),
-  lease_token text,
-  lease_expires_at integer,
-  heartbeat_at text,
-  created_at text not null,
-  updated_at text not null,
-  check ((scope_kind = 'global' and scope_id is null) or (scope_kind = 'project' and scope_id is not null)),
-  check ((lifecycle = 'blocked' and blocked_reason is not null) or (lifecycle <> 'blocked' and blocked_reason is null)),
-  check ((lease_token is null and lease_expires_at is null) or (lease_token is not null and lease_expires_at is not null))
-)`;
+// These literal DDL strings are a compatibility contract; do not reformat them.
+const tableDdl = `create table if not exists personal_agent_sessions (
+      id text primary key,
+      conversation_id text not null references personal_agent_conversations(id) on delete restrict,
+      scope_kind text not null check (scope_kind in ('global', 'project')),
+      scope_id text,
+      role text not null check (role in ('fast', 'deep', 'worker')),
+      provider text not null check (provider in ('codex', 'claude-code')),
+      account_profile_id text not null,
+      model_profile_json text not null,
+      native_session_id text,
+      fork_from_session_id text references personal_agent_sessions(id) on delete set null,
+      lifecycle text not null check (lifecycle in ('starting', 'ready', 'busy', 'blocked', 'stopped')),
+      blocked_reason text,
+      version integer not null default 0 check (version >= 0),
+      lease_token text,
+      lease_expires_at integer,
+      heartbeat_at text,
+      created_at text not null,
+      updated_at text not null,
+      check ((scope_kind = 'global' and scope_id is null) or (scope_kind = 'project' and scope_id is not null)),
+      check ((lifecycle = 'blocked' and blocked_reason is not null) or (lifecycle <> 'blocked' and blocked_reason is null)),
+      check ((lease_token is null and lease_expires_at is null) or (lease_token is not null and lease_expires_at is not null))
+    )`;
 
 const indexes = Object.freeze([
   {
     name: "personal_agent_sessions_active_role",
     table: tableName,
     unique: true,
-    create: `create unique index personal_agent_sessions_active_role
+    create: `create unique index if not exists personal_agent_sessions_active_role
       on personal_agent_sessions(conversation_id, role)
       where role in ('fast', 'deep') and lifecycle in ('starting', 'ready', 'busy', 'blocked')`,
   },
@@ -45,21 +46,19 @@ const indexes = Object.freeze([
     name: "personal_agent_sessions_native_identity",
     table: tableName,
     unique: true,
-    create: `create unique index personal_agent_sessions_native_identity
+    create: `create unique index if not exists personal_agent_sessions_native_identity
       on personal_agent_sessions(provider, account_profile_id, native_session_id)
       where native_session_id is not null`,
   },
   {
     name: "personal_agent_sessions_scope_lifecycle",
     table: tableName,
-    create: `create index personal_agent_sessions_scope_lifecycle
-      on personal_agent_sessions(scope_kind, scope_id, lifecycle, updated_at)`,
+    create: `create index if not exists personal_agent_sessions_scope_lifecycle on personal_agent_sessions(scope_kind, scope_id, lifecycle, updated_at)`,
   },
   {
     name: "personal_agent_sessions_lease",
     table: tableName,
-    create: `create index personal_agent_sessions_lease
-      on personal_agent_sessions(lease_expires_at) where lease_token is not null`,
+    create: `create index if not exists personal_agent_sessions_lease on personal_agent_sessions(lease_expires_at) where lease_token is not null`,
   },
 ]);
 
