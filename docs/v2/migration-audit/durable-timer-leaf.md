@@ -95,3 +95,6 @@ proposal syntax validation (three tables), diff whitespace check. Rust compilati
 Store tests, strict clippy and process-kill acceptance are **unexecuted** until
 bounded build admission/independent verification. No live timers or messages were
 read or modified.
+
+Subsequent compilation and Core registration results are recorded separately in
+[durable-timer-build-evidence.md](durable-timer-build-evidence.md).
