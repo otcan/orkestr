@@ -13,6 +13,7 @@ import { migratePersonalAgentMemory } from "./personal-agent-memory-migration.js
 import { migratePersonalAgentEvents } from "./personal-agent-events-migration.js";
 import { migratePersonalAgentIngress } from "./personal-agent-ingress-migration.js";
 import { personalAgentFeature } from "./personal-agent-feature.js";
+import { initializeAgentJobJournal } from "./agent-job-sqlite-initialization.js";
 
 export const RUN_TERMINAL_STATES = Object.freeze(["succeeded", "failed", "cancelled", "skipped"]);
 export const RUN_ACTIVE_STATES = Object.freeze(["pending", "running", "retrying", "awaiting_approval"]);
@@ -134,15 +135,19 @@ export async function openAgentJobDb(env = process.env) {
   }
   sqliteModule ||= await import("node:sqlite");
   const db = new sqliteModule.DatabaseSync(dbPath);
-  db.exec("pragma journal_mode = WAL");
-  // FULL: an admitted run must survive power loss, not only a process crash (G1).
-  db.exec("pragma synchronous = FULL");
-  db.exec("pragma busy_timeout = 10000");
-  db.exec("pragma foreign_keys = ON");
-  db.exec(schema);
-  // Additive Personal Agent tables only when the feature is switched on, so
-  // installs with it off keep their store schema unchanged (OP-03).
-  ensurePersonalAgentSchema(db, dbPath, env);
+  try {
+    initializeAgentJobJournal(db);
+    // FULL: an admitted run must survive power loss, not only a process crash (G1).
+    db.exec("pragma synchronous = FULL");
+    db.exec("pragma foreign_keys = ON");
+    db.exec(schema);
+    // Additive Personal Agent tables only when the feature is switched on, so
+    // installs with it off keep their store schema unchanged (OP-03).
+    ensurePersonalAgentSchema(db, dbPath, env);
+  } catch (error) {
+    try { db.close(); } catch {}
+    throw error;
+  }
   databases.set(dbPath, db);
   return db;
 }
