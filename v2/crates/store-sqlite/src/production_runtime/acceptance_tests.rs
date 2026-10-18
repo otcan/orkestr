@@ -293,3 +293,94 @@ async fn authenticated_acceptance_fences_revocation_before_commit_and_receipt_re
     assert_eq!(snapshot(&other).await, before);
     other.close().await;
 }
+
+#[tokio::test]
+async fn acceptance_candidate_is_exact_atomic_completion_and_disappears_after_decision() {
+    let f = setup().await;
+    let (_, request) = proposal(&f).await;
+    let status = f
+        .store
+        .execution_status(&f.owner, &f.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(status.is_valid());
+    let candidate = status.acceptance_candidate.as_ref().unwrap();
+    assert_eq!(candidate.run_id, request.run_id);
+    assert_eq!(candidate.completion_event_id, request.completion_event_id);
+    assert_eq!(status.revision, request.expected_revision);
+    let mut forged = status.clone();
+    forged.acceptance_candidate.as_mut().unwrap().run_id =
+        orkestr_v2_contracts::RunId(Uuid::new_v4());
+    assert!(!forged.is_valid());
+    assert!(!status.same_revision_state(&forged));
+    forged = status.clone();
+    forged.phase = orkestr_v2_contracts::ExecutionPhase::Completed;
+    assert!(!forged.is_valid());
+    let mut legacy = serde_json::to_value(&status).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("acceptance_candidate");
+    let legacy: orkestr_v2_contracts::ExecutionStatus = serde_json::from_value(legacy).unwrap();
+    assert!(legacy.is_valid());
+    assert!(legacy.acceptance_candidate.is_none());
+    f.store
+        .accept_execution_authenticated(&f.token, &f.conversation, &request)
+        .await
+        .unwrap();
+    let accepted = f
+        .store
+        .execution_status(&f.owner, &f.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(accepted.is_valid());
+    assert!(accepted.acceptance_candidate.is_none());
+}
+
+#[cfg(feature = "fixture-test-controls")]
+#[tokio::test]
+async fn public_authentication_checkpoint_resumes_after_committed_logout() {
+    let mut f = setup().await;
+    let (_, request) = proposal(&f).await;
+    let marker = f.root.join("auth-checkpoint");
+    f.store
+        .production_arm_owner_checkpoint(
+            &f.owner,
+            &f.conversation,
+            crate::ProductionCheckpoint::AcceptanceAfterAuthentication,
+            marker.clone(),
+        )
+        .await
+        .unwrap();
+    let writer = f.store.clone();
+    let conversation = f.conversation.clone();
+    let token = f.token.clone();
+    let pending = tokio::spawn(async move {
+        writer
+            .accept_execution_authenticated(&token, &conversation, &request)
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !marker.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read(&marker).unwrap(),
+        b"acceptance-after-authentication"
+    );
+    let other = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
+    other.revoke_session(&f.token).await.unwrap();
+    let before = snapshot(&other).await;
+    std::fs::remove_file(&marker).unwrap();
+    assert!(matches!(
+        pending.await.unwrap(),
+        Err(RuntimeStoreError::Unauthorized)
+    ));
+    assert_eq!(snapshot(&other).await, before);
+    other.close().await;
+}

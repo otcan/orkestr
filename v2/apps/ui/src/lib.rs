@@ -1,4 +1,5 @@
 //! Client presentation only. Accepted input is not model completion.
+pub mod acceptance;
 use orkestr_v2_contracts::{ConversationEvent, ConversationSnapshot, Message, MessageInput, Scope};
 use std::collections::BTreeMap;
 
@@ -206,4 +207,11 @@ pub fn replay_notice(event: &ConversationEvent) -> &'static str {
         },
         _ => "Journal synchronized. Runtime metadata is synthetic; execution and Stop remain unavailable.",
     }
+}
+
+/// Route all canonical decoded journal variants through the same atomic reconciliation.
+pub fn is_replay_item(item: &StreamItem) -> bool {
+    item.body
+        .as_ref()
+        .is_some_and(|event| item.event == event.sse_name())
 }
