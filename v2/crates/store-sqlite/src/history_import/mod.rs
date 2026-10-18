@@ -2,6 +2,15 @@
 mod auth;
 mod fingerprint;
 mod readback;
+mod recovery_capture;
+mod recovery_codec;
+mod recovery_export;
+mod recovery_restore;
+mod recovery_rollback;
+#[cfg(test)]
+mod recovery_store_tests;
+#[cfg(test)]
+mod recovery_tests;
 mod rollback;
 #[cfg(test)]
 mod tests;
@@ -9,6 +18,7 @@ mod tests;
 use crate::Store;
 pub use fingerprint::history_source_digest;
 use orkestr_v2_contracts::*;
+pub use recovery_export::*;
 use sqlx::{Row, Sqlite, Transaction};
 use uuid::Uuid;
 
@@ -78,20 +88,7 @@ impl Store {
             receipt.active = true;
             receipt
         } else {
-            sqlx::query("INSERT INTO history_imports(owner_id,namespace,source_digest,source_conversation_id,source_scope,source_watermark,message_count) VALUES(?,?,?,?,?,?,?)")
-                .bind(owner.to_string()).bind(request.namespace.to_string()).bind(&request.source_digest)
-                .bind(request.source_conversation_id.to_string()).bind(fingerprint::scope_text(&request.source_scope))
-                .bind(request.source_watermark).bind(request.messages.len() as i64)
-                .execute(&mut *tx).await.map_err(unavailable)?;
-            for (ordinal, message) in request.messages.iter().enumerate() {
-                sqlx::query("INSERT INTO history_messages(owner_id,namespace,ordinal,source_message_id,source_sequence,actor_kind,text) VALUES(?,?,?,?,?,?,?)")
-                    .bind(owner.to_string()).bind(request.namespace.to_string()).bind(ordinal as i64)
-                    .bind(message.message_id.to_string()).bind(message.sequence).bind(&message.actor_kind).bind(&message.text)
-                    .execute(&mut *tx).await.map_err(unavailable)?;
-            }
-            readback::verified(&mut tx, owner, request.namespace)
-                .await?
-                .1
+            insert_history(&mut tx, owner, request).await?
         };
         #[cfg(feature = "fixture-test-controls")]
         self.production_checkpoint("history-import-before-commit")
@@ -104,4 +101,24 @@ impl Store {
             .map_err(|_| HistoryError::Unavailable)?;
         Ok(receipt)
     }
+}
+
+/// Sole ledger writer shared by individual import and atomic recovery restore.
+async fn insert_history(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    request: &HistoryImportRequest,
+) -> Result<HistoryImportReceipt> {
+    sqlx::query("INSERT INTO history_imports(owner_id,namespace,source_digest,source_conversation_id,source_scope,source_watermark,message_count) VALUES(?,?,?,?,?,?,?)")
+                .bind(owner.to_string()).bind(request.namespace.to_string()).bind(&request.source_digest)
+                .bind(request.source_conversation_id.to_string()).bind(fingerprint::scope_text(&request.source_scope))
+                .bind(request.source_watermark).bind(request.messages.len() as i64)
+                .execute(&mut **tx).await.map_err(unavailable)?;
+    for (ordinal, message) in request.messages.iter().enumerate() {
+        sqlx::query("INSERT INTO history_messages(owner_id,namespace,ordinal,source_message_id,source_sequence,actor_kind,text) VALUES(?,?,?,?,?,?,?)")
+                    .bind(owner.to_string()).bind(request.namespace.to_string()).bind(ordinal as i64)
+                    .bind(message.message_id.to_string()).bind(message.sequence).bind(&message.actor_kind).bind(&message.text)
+                    .execute(&mut **tx).await.map_err(unavailable)?;
+    }
+    Ok(readback::verified(tx, owner, request.namespace).await?.1)
 }

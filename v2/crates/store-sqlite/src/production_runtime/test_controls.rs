@@ -3,6 +3,10 @@ use super::*;
 /// Exact transaction boundaries; no caller-supplied SQL or arbitrary callback.
 #[derive(Clone, Copy)]
 pub enum ProductionCheckpoint {
+    RecoveryRestoreBeforeCommit,
+    RecoveryRestoreAfterCommit,
+    RecoveryRollbackBeforeCommit,
+    RecoveryRollbackAfterCommit,
     HistoryImportBeforeCommit,
     HistoryImportAfterCommit,
     HistoryRollbackBeforeCommit,
@@ -29,6 +33,10 @@ pub enum ProductionCheckpoint {
 impl ProductionCheckpoint {
     fn name(self) -> &'static str {
         match self {
+            Self::RecoveryRestoreBeforeCommit => "recovery-restore-before-commit",
+            Self::RecoveryRestoreAfterCommit => "recovery-restore-after-commit",
+            Self::RecoveryRollbackBeforeCommit => "recovery-rollback-before-commit",
+            Self::RecoveryRollbackAfterCommit => "recovery-rollback-after-commit",
             Self::HistoryImportBeforeCommit => "history-import-before-commit",
             Self::HistoryImportAfterCommit => "history-import-after-commit",
             Self::HistoryRollbackBeforeCommit => "history-rollback-before-commit",
@@ -124,7 +132,11 @@ impl Store {
         if self.authority.is_some()
             || !matches!(
                 stage,
-                ProductionCheckpoint::HistoryImportBeforeCommit
+                ProductionCheckpoint::RecoveryRestoreBeforeCommit
+                    | ProductionCheckpoint::RecoveryRestoreAfterCommit
+                    | ProductionCheckpoint::RecoveryRollbackBeforeCommit
+                    | ProductionCheckpoint::RecoveryRollbackAfterCommit
+                    | ProductionCheckpoint::HistoryImportBeforeCommit
                     | ProductionCheckpoint::HistoryImportAfterCommit
                     | ProductionCheckpoint::HistoryRollbackBeforeCommit
                     | ProductionCheckpoint::HistoryRollbackAfterCommit
