@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { resolveScope, validateScopeRequest, scanEnvironment, immutableCommit } from "./secret-scan-scope.mjs";
 import { createEvidence, aggregateFindings } from "./secret-scan-evidence.mjs";
 import { scannerLifecycle } from "./scanner-process.mjs";
+import { requireCoverage } from "./scanner-coverage.mjs";
 export { scannerLogOptions } from "./secret-scan-scope.mjs";
 
 export const scannerRelease = Object.freeze({ version: "8.30.1", archiveSha256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" });
@@ -61,16 +62,20 @@ export async function scanRepository({ binary, repository, repositoryLabel, repo
     await fs.writeFile(ignore, "", { mode: 0o600 });
     const config = fileURLToPath(new URL("./gitleaks.toml", import.meta.url));
     const args = ["git", repoRoot, "--config", config, "--ignore-gitleaks-allow", "--gitleaks-ignore-path", ignore,
-      "--log-opts", scope.logOptions, "--redact=100", "--no-banner", "--no-color",
+      "--log-opts", scope.logOptions, "--redact=100", "--no-banner", "--no-color", "--log-level", "info",
       "--report-format", "json", "--report-path", rawReport, "--exit-code", "23", "--timeout", "300"];
-    // Raw tool output can include commit text and detection context: discard it.
-    const scan = await lifecycle.run(binary, args, { env, cwd: repoRoot, timeout: 310000, stdio: "ignore" });
+    // Raw output is reduced in memory to numeric coverage and an error flag.
+    // Never return, log or persist source/detection diagnostic text.
+    const scan = await lifecycle.run(binary, args, { env, cwd: repoRoot, timeout: 310000,
+      stdio: "ignore", captureCoverage: true, maxBuffer: 1024 * 1024 });
     evidence.report.scannerExitStatus = Number.isInteger(scan.status) ? scan.status : null;
     if (![0, 23].includes(scan.status) || scan.error) throw new Error("scanner_failed_no_coverage_claim");
     const stat = await fs.lstat(rawReport);
     if (!stat.isFile() || stat.size > 64 * 1024 * 1024) throw new Error("invalid_scanner_report");
     const rawFindings = minimizeFindings(JSON.parse(await fs.readFile(rawReport, "utf8")), randomBytes(32));
     if ((scan.status === 0) !== (rawFindings.length === 0)) throw new Error("inconsistent_scanner_exit");
+    evidence.report.scannerCoverage = scan.coverage ?? null;
+    requireCoverage(scope, scan.coverage);
     const policy = JSON.parse(await fs.readFile(new URL("./reviewed-secret-findings.json", import.meta.url), "utf8"));
     const findings = applyReviewedFindings(rawFindings, policy);
     if (JSON.stringify(resolveScope(scopeOptions)) !== JSON.stringify(scope)) throw new Error("scan_refs_changed");
@@ -86,7 +91,8 @@ export async function scanRepository({ binary, repository, repositoryLabel, repo
   } catch (error) {
     const safeCodes = new Set(["explicit_scan_scope_required", "scan_revision_unavailable", "scan_history_incomplete", "scan_target_mismatch",
       "scan_stale_checkout", "scan_base_mismatch", "scan_revision_count_invalid", "pinned_scanner_required", "scanner_failed_no_coverage_claim",
-      "invalid_scanner_report", "inconsistent_scanner_exit", "invalid_finding_review_policy", "scan_refs_changed", "scan_interrupted"]);
+      "invalid_scanner_report", "inconsistent_scanner_exit", "invalid_finding_review_policy", "scan_refs_changed", "scan_interrupted",
+      "scanner_coverage_unproven", "scanner_reported_error", "scanner_zero_coverage"]);
     await evidence.finish({ complete: false, ok: false, category: safeCodes.has(error.message) ? error.message : "scan_collection_failed" });
     throw new Error(safeCodes.has(error.message) ? error.message : "scan_collection_failed");
   } finally {
