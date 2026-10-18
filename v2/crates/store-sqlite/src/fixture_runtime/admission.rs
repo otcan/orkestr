@@ -214,6 +214,15 @@ impl FixtureSupervisorStore {
             .bind(claim.message_id.to_string()).bind(claim.event_id.to_string()).bind(claim.scope_sequence)
             .bind(i64::try_from(claim.claim_generation).map_err(db)?).bind(request_key).bind(digest)
             .bind(self.generation).bind(deadline).bind(verifier).fetch_one(&mut *tx).await.map_err(db)?;
+        sqlx::query(
+            "INSERT INTO fixture_run_leases(run_id,generation,lease_deadline_ms) VALUES(?,?,?)",
+        )
+        .bind(run_id.to_string())
+        .bind(1_i64)
+        .bind(deadline)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
         #[cfg(feature = "fixture-test-controls")]
         self.fixture_checkpoint("admit-before-ack").await?;
         sqlx::query("UPDATE reasoning_inbox SET state='consumed',admitted_fixture_run_id=? WHERE conversation_id=? AND sequence=?")

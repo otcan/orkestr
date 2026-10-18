@@ -14,6 +14,9 @@ pub(super) struct Fixture {
     pub claim: InboxClaim,
 }
 pub(super) async fn fixture() -> Fixture {
+    fixture_with_claim_duration(Duration::from_secs(60)).await
+}
+pub(super) async fn fixture_with_claim_duration(duration: Duration) -> Fixture {
     let root = PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").expect("isolated home"))
         .join(format!("fixture-dispatch-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
@@ -48,12 +51,7 @@ pub(super) async fn fixture() -> Fixture {
     .await
     .unwrap();
     let claim = a
-        .claim_next(
-            &owner,
-            &conversation,
-            &binding.session_id,
-            Duration::from_secs(60),
-        )
+        .claim_next(&owner, &conversation, &binding.session_id, duration)
         .await
         .unwrap()
         .unwrap();
@@ -219,6 +217,13 @@ async fn atomic_admission_race_replay_rollback_and_followup() {
             .await
             .unwrap(),
         "claimed"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM fixture_run_leases")
+            .fetch_one(&f.b.pool)
+            .await
+            .unwrap(),
+        0
     );
     sqlx::query("DROP TRIGGER fixture_fail_ack")
         .execute(&f.a.pool)

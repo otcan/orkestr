@@ -231,6 +231,12 @@ async fn populated_dispatch_prefix_upgrade_preserves_inbound_links_and_checksums
         .is_empty());
     let links: i64 = sqlx::query_scalar("SELECT count(*) FROM reasoning_inbox i JOIN fixture_runs r ON r.id=i.admitted_fixture_run_id JOIN events e ON e.id=r.event_id JOIN outbox o ON o.event_id=e.id WHERE i.event_id=e.id AND r.message_id=e.message_id").fetch_one(&store.pool).await.unwrap();
     assert_eq!(links, 1);
+    let issued: (String, i64, i64) =
+        sqlx::query_as("SELECT run_id,generation,lease_deadline_ms FROM fixture_run_leases")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(issued, ("run".into(), 1, 9999999999999));
     store.close().await;
     Store::open(&dir.db()).await.unwrap().close().await;
 }
