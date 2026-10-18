@@ -31,6 +31,10 @@ jobs:
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
       - name: Architecture boundaries
         run: python3 tests/check_boundaries.py
+      - name: Mocked provider metadata probe safety
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s tools/tests -v
       - name: Rust format
         run: cargo +1.99.1 fmt --all -- --check
       - name: Rust lint
