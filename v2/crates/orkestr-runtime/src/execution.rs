@@ -1,7 +1,11 @@
 //! By-value bridge from Core's committed dispatch to the owned transport.
 //! This does not construct a supervisor, credentials, or a permissive fence.
 pub(crate) mod cancellation_fence;
+mod claude_pump;
+mod claude_session;
 mod fence;
+pub use claude_pump::ClaudePump;
+pub use claude_session::{PreparingClaude, ReadyClaude};
 mod provider_write;
 mod pump;
 mod session;
@@ -110,3 +114,6 @@ pub fn submit_codex(
         })
         .map_err(|failure| SubmissionFailure::Transport(failure.cause))
 }
+
+#[cfg(test)]
+mod claude_tests;
