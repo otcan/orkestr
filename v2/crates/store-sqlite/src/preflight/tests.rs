@@ -392,7 +392,11 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .unwrap(),
         17
     );
-    for table in ["history_imports", "history_messages", "worker_tool_delegations"] {
+    for table in [
+        "history_imports",
+        "history_messages",
+        "worker_tool_delegations",
+    ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
                 .fetch_one(&mut conn)
