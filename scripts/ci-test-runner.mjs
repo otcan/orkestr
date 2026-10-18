@@ -33,6 +33,11 @@ function truthy(value) {
 }
 
 const scrubbedCiEnvKeys = [
+  // Connector encryption key material (all names connectorEncryptionKey reads).
+  // Tests set their own synthetic keys and must never inherit a live one.
+  "ORKESTR_CONNECTOR_ENCRYPTION_KEY",
+  "ORKESTR_SECRET_KEY",
+  "ORKESTR_SECURE_INPUT_KEY",
   "ORKESTR_HOME",
   "ORKESTR_API_SESSION_ID",
   "CODEX_API_SESSION_ID",

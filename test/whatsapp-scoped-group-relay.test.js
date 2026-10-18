@@ -4,7 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {createScopedGroupRelay} from '../packages/connectors/src/whatsapp-scoped-group-relay.js';
 import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
 
-function fixture(t, footer = false, progress = false) {
+function fixture(t, footer = false, progress = false, extraConfig = {}) {
   const inboxDb = new DatabaseSync(':memory:'), relayDb = new DatabaseSync(':memory:');
   inboxDb.exec(`CREATE TABLE group_input(id TEXT,chat_id TEXT,body TEXT,created_at TEXT);
     CREATE TABLE group_send(state TEXT);
@@ -13,6 +13,7 @@ function fixture(t, footer = false, progress = false) {
     {chatId: 'group-1', threadId: 'thread-1', name: 'First'},
     {chatId: 'group-2', threadId: 'thread-2', name: 'Second'},
   ]};
+  Object.assign(config, extraConfig);
   const state = {posts: [], sent: [], pages: {}, retired: new Set(), failReply: false,
     suppressFooter: false, quotaFails: false, quotaCalls: 0,
     quota: {codex: {fiveHourRemainingPct: 73}, claude: {weeklyRemainingPct: 64}}};
@@ -191,3 +192,41 @@ test('enabling progress without a valid activation cutoff fails closed', () => {
     assert.throws(() => createScopedGroupRelay({config: {forwardProgressUpdates: true, forwardProgressSince}}), /group_progress_cutoff_required/);
   }
 });
+
+
+test('cutover cutoff leaves old scoped input unqueued while another group still runs', async t => {
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const {createDeliveryRouteFence} = await import('../packages/connectors/src/whatsapp-delivery-route-fence.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-fence-'));
+  const dbPath = path.join(dir, 'route.sqlite'); const now = Date.parse('2026-01-02T00:00:00Z');
+  const fence = createDeliveryRouteFence({dbPath, now: () => now});
+  fence.activate({to:'temporary',evidence:{routeId:'temporary',checkedAt:new Date(now).toISOString(),restrictionCleared:true,authenticated:true,ready:true,identityVerified:true,oldRouteStopped:true,legacyRouterDisabled:true,transportJournalsClear:true}});
+  const {relay,state,inboxDb} = fixture(t,false,false,{routeControl:{threadId:'thread-1',routeId:'temporary',dbPath}});
+  t.after(()=>{relay.close();fence.close();fs.rmSync(dir,{recursive:true,force:true});});
+  inboxDb.exec("INSERT INTO group_input VALUES('wa-2','group-2','new','2026-01-02')");
+  await relay.tick();
+  assert.equal(state.posts.length,1); assert.match(state.posts[0].url,/thread-2/);
+});
+
+for (const activeRoute of ['temporary', 'successor']) {
+  test(`explicit multi-thread relay fences persisted input with ${activeRoute} active`, async t => {
+    const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+    const {createDeliveryRouteFence} = await import('../packages/connectors/src/whatsapp-delivery-route-fence.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-multi-fence-'));
+    const dbPath = path.join(dir, 'route.sqlite'); const now = Date.parse('2026-01-02T00:00:00Z');
+    const fence = createDeliveryRouteFence({dbPath, now: () => now});
+    fence.activate({to:activeRoute,evidence:{routeId:activeRoute,checkedAt:new Date(now).toISOString(),restrictionCleared:true,authenticated:true,ready:true,identityVerified:true,oldRouteStopped:true,legacyRouterDisabled:true,transportJournalsClear:true}});
+    const {relay,state,inboxDb} = fixture(t,false,false,{routeControl:{threadIds:['thread-1','thread-2'],routeId:'temporary',dbPath}});
+    t.after(()=>{relay.close();fence.close();fs.rmSync(dir,{recursive:true,force:true});});
+    inboxDb.exec("INSERT INTO group_input VALUES('wa-old-2','group-2','old','2026-01-01'); INSERT INTO group_input VALUES('wa-new-2','group-2','new','2026-01-02')");
+    await relay.tick();
+    assert.equal(state.posts.length,activeRoute==='temporary'?1:0);
+    if (activeRoute==='temporary') {
+      assert.match(state.posts[0].url,/thread-2/);
+      assert.match(state.posts[0].body.text,/\n\nnew$/);
+    }
+    await relay.tick();
+    assert.equal(state.posts.length,activeRoute==='temporary'?1:0);
+    assert.equal(state.sent.length,0);
+  });
+}

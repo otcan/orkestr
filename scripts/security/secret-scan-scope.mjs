@@ -1,7 +1,10 @@
 import { spawnSync } from "node:child_process";
 
 export const scanEnvironment = Object.freeze({ PATH: "/usr/local/bin:/usr/bin:/bin", LC_ALL: "C",
-  GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: "/dev/null" });
+  GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: "/dev/null",
+  // Disable only the diagnostic for our fixed graft-disabling setting. This
+  // trusted command config overrides candidate-local advice without loading it.
+  GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "advice.graftFileDeprecated", GIT_CONFIG_VALUE_0: "false" });
 export const immutableCommit = value => typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
 const validRef = value => value === "HEAD" || immutableCommit(value) ||
   (typeof value === "string" && /^refs\/(?:heads|remotes|tags)\/[a-zA-Z0-9_./-]+$/.test(value) && !value.includes("..") && !value.endsWith("/") && !value.endsWith(".lock"));
@@ -44,7 +47,19 @@ export function resolveScope({ repository, targetRef, expectedCommit, baseCommit
   const revisions = baseCommit ? [`${baseCommit}..${expectedCommit}`] : commits;
   const count = git(["rev-list", "--count", ...revisions, "--"]);
   if (!/^\d+$/.test(count) || !Number.isSafeInteger(Number(count))) throw new Error("scan_revision_count_invalid");
+  const logOptions = scannerLogOptions({ commits, baseCommit });
+  // The same immutable range and separate merge diffs must contain additions
+  // before a zero-byte scanner result is considered missing coverage. Empty or
+  // deletion-only histories legitimately contain nothing for Gitleaks to scan.
+  const stats = git(["log", "--format=", "--numstat", ...logOptions.split(" "), "--"]);
+  let scannableAddedLines = 0;
+  for (const line of stats.split("\n").filter(Boolean)) {
+    const match = line.match(/^(\d+|-)\t(\d+|-)\t/);
+    if (!match) throw new Error("scan_revision_count_invalid");
+    if (match[1] !== "-") scannableAddedLines += Number(match[1]);
+    if (!Number.isSafeInteger(scannableAddedLines)) throw new Error("scan_revision_count_invalid");
+  }
   return { scope: baseCommit ? "commit_range" : approvedRefs.length ? "approved_reachable_refs" : "target_history",
     targetRef, targetCommit: expectedCommit, baseCommit: baseCommit || null, refs, refCount: refs.length,
-    revisionCount: Number(count), logOptions: scannerLogOptions({ commits, baseCommit }) };
+    revisionCount: Number(count), scannableAddedLines, logOptions };
 }

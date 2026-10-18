@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
+import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
 import {scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 
@@ -14,6 +16,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   if (!Array.isArray(heldIds) || heldIds.some(id => typeof id !== 'string' || !id.trim()))
     throw new Error('group_held_inputs_invalid');
   const heldInputIds = new Set(heldIds);
+  const fencedThreads = scopedRouteMembership(config);
   if (config.appendDebugFooter === true && !['shouldAppendWhatsAppDebugFooter', 'stripWhatsAppDebugFooter', 'whatsappDebugFooter'].every(k => typeof formatter?.[k] === 'function'))
     throw new Error('group_footer_formatter_required');
   const progressSince = Date.parse(config.forwardProgressSince || '');
@@ -28,6 +31,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     CREATE TABLE IF NOT EXISTS routed(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,message_id TEXT NOT NULL,completed INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS replies(id TEXT PRIMARY KEY,state TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS reply_payloads(id TEXT PRIMARY KEY,chunks TEXT NOT NULL);`);
+  const routeFence = config.routeControl ? createDeliveryRouteFence({dbPath:config.routeControl.dbPath}) : null;
   const groups = new Map(config.groups.map(g => [g.chatId, g]));
   const errors = new Map();
 
@@ -72,6 +76,10 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   }
 
   async function routeInput(input, group) {
+    if (routeFence && fencedThreads.has(group.threadId)) {
+      const active = routeFence.current();
+      if (active?.route !== config.routeControl.routeId || !Number.isFinite(Date.parse(input.created_at)) || Date.parse(input.created_at) < Date.parse(active.since)) return;
+    }
     let route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
     if (route?.completed) return;
     await threadFor(group);
@@ -123,7 +131,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   }
 
   return {
-    close() { if (!relayDb) db.close(); if (!inboxDb) inbox.close(); },
+    close() { routeFence?.close(); if (!relayDb) db.close(); if (!inboxDb) inbox.close(); },
     async tick() {
       if (inbox.prepare("SELECT 1 FROM group_send WHERE state IN ('sending','uncertain') LIMIT 1").get())
         return {ok: false, error: 'group_delivery_requires_review'};

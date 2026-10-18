@@ -1,3 +1,14 @@
-title = "Pinned default detection without repository-local suppressions"
+title = "Pinned default detection with reviewed exact source fingerprints"
 [extend]
 useDefault = true
+
+# Independently matched to the reviewed lifetime module's bytes. Any new digest
+# requires review. Match the whole inventory entry AND one exact manifest path;
+# other rules, adjacent fields, arbitrary hashes and other files stay in scope.
+[[allowlists]]
+description = "Reviewed broker lifetime source fingerprint"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+paths = ['''^v2/provider-broker/(codex|claude)-package\.json$''']
+regexes = ['''^\s*"reaping\.py"\s*:\s*"4632be4e94cef92a0b8a2970bad0a55a1925d07d7926eb05a6af32ef512954d7"\s*,?\s*$''']

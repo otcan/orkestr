@@ -37,7 +37,11 @@ export async function runReleaseCheck({ git, exec, sha, env = process.env, state
   const logFile = path.join(runDir, "check.log");
   const result = { ok: false, sha, startedAt: new Date(now()).toISOString(), steps: [], logFile, reportFile, worktree };
   const stepEnv = { ...env };
-  for (const key of ["ORKESTR_HOME", "ORKESTR_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]) delete stepEnv[key];
+  for (const key of [
+    "ORKESTR_HOME", "ORKESTR_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN",
+    // Build and dependency tooling need none of the control plane's key aliases.
+    "ORKESTR_CONNECTOR_ENCRYPTION_KEY", "ORKESTR_SECRET_KEY", "ORKESTR_SECURE_INPUT_KEY",
+  ]) delete stepEnv[key];
   try {
     await git(["worktree", "add", "--detach", worktree, sha]);
     for (const step of releaseCheckSteps({ worktree, sha, reportFile, testTmpDir: shortTmpDir(env) })) {
