@@ -99,10 +99,11 @@ pub trait RuntimeStore: Send + Sync {
         expected_generation: u64,
     ) -> Result<RunAdmission>;
 
-    /// Authenticate owner and run/session association FIRST; never disclose a receipt
-    /// across principals or mismatched associations. A committed identical
+    /// Authenticate immutable owner/conversation/run/session/attempt associations FIRST
+    /// against durable records; never disclose another principal's receipt. A committed identical
     /// sequence/body returns its original receipt even after expiry/fencing, without
-    /// a new write or transition. Changed replay conflicts. Core computes the digest.
+    /// a new write, transition, lease extension, dispatch authority or cancellation ACK.
+    /// Changed replay conflicts. Core computes the digest.
     /// A new contiguous sequence requires current execution authority,
     /// matching lease/fence, expiry and legal state; no provider completion is success.
     /// Progress is bounded and must use removable payload storage, never raw journal text.

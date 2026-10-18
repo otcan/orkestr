@@ -96,3 +96,9 @@ false never dispatches. True also remains DispatchUnconfirmed pending durable
 store/readiness evidence. Spy models fresh then replay and replay-only paths;
 it cannot prove concurrent single insertion or active/terminal durable replay.
 29 runtime tests are now authored, unexecuted. No Cargo/download/fmt/CI run.
+
+Comment-only association clarification from aecb1b46c2d357a4f314635296298633666eb27d
+is adapted to v5 append: authenticate immutable owner/conversation/run/session/attempt
+against durable records before receipt retrieval. Existing committed receipt creates
+no authority, lease extension or cancellation acknowledgement. No historical
+record_observation signature, new endpoint or field is introduced.
