@@ -2,6 +2,7 @@ mod execution_panel;
 mod execution_poll;
 mod history;
 mod host_resources_view;
+mod stop_button;
 mod transport;
 mod views;
 use dioxus::prelude::*;

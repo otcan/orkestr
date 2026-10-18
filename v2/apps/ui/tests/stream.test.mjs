@@ -86,3 +86,9 @@ test('production stop metadata preserves canonical SSE names',async()=>{
   assert.equal(result.event,name);assert.deepEqual(result.body,body);assert.equal(cancelled,true);
  }
 });
+
+test('owner acceptance has its own canonical SSE name',async()=>{
+ const body=JSON.parse(await readFile(new URL('../../../fixtures/execution-accepted.json',import.meta.url),'utf8'));
+ const {result}=await run([`id: ${body.sequence}\nevent: execution_accepted\ndata: ${JSON.stringify(body)}\n\n`]);
+ assert.equal(result.event,'execution_accepted');assert.deepEqual(result.body,body);
+});

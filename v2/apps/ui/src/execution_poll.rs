@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 #[component]
 pub fn ExecutionPoll(
     id: String,
+    csrf: String,
     session_scope: Signal<SessionScope>,
     mut execution: Signal<Execution>,
     onexpired: EventHandler<()>,
@@ -71,5 +72,5 @@ pub fn ExecutionPoll(
             execution.write().disconnected();
         }
     });
-    rsx! { crate::execution_panel::ExecutionPanel { execution, now_ms: now() } }
+    rsx! { crate::execution_panel::ExecutionPanel { execution, now_ms: now(), csrf, session_scope, onexpired } }
 }

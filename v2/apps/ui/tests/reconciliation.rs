@@ -451,6 +451,10 @@ fn production_observation_gap_failure_retry_preserves_cursor_and_owner_text() {
 fn production_metadata_journal_gaps_fail_atomically_and_retry_once() {
     for (raw, name) in [
         (
+            include_str!("../../../fixtures/execution-accepted.json"),
+            "execution_accepted",
+        ),
+        (
             include_str!("../../../fixtures/provider-observed-progress.json"),
             "provider_observed",
         ),

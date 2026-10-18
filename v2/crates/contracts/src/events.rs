@@ -6,6 +6,7 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 #[serde(untagged)]
 pub enum ConversationEvent {
     MessageAccepted(EventEnvelope),
+    ExecutionAccepted(ExecutionAcceptedEnvelope),
     ProviderObserved(ProviderObservedEnvelope),
     CancellationRequested(CancellationRequestedEnvelope),
     ProviderStopped(ProviderStoppedEnvelope),
@@ -17,6 +18,7 @@ impl ConversationEvent {
     pub fn sequence(&self) -> i64 {
         match self {
             Self::MessageAccepted(e) => e.sequence,
+            Self::ExecutionAccepted(e) => e.sequence,
             Self::ProviderObserved(e) => e.sequence,
             Self::CancellationRequested(e) => e.sequence,
             Self::ProviderStopped(e) => e.sequence,
@@ -28,6 +30,7 @@ impl ConversationEvent {
     pub fn sse_name(&self) -> &'static str {
         match self {
             Self::MessageAccepted(_) => "message_accepted",
+            Self::ExecutionAccepted(_) => "execution_accepted",
             Self::ProviderObserved(_) => "provider_observed",
             Self::CancellationRequested(_) => "cancellation_requested",
             Self::ProviderStopped(_) => "provider_stopped",
@@ -81,6 +84,7 @@ impl<'de> Deserialize<'de> for ConversationEvent {
         #[serde(untagged)]
         enum Wire {
             Message(EventEnvelope),
+            Acceptance(ExecutionAcceptedEnvelope),
             Production(ProviderObservedEnvelope),
             ProductionCancellation(CancellationRequestedEnvelope),
             ProductionStopped(ProviderStoppedEnvelope),
@@ -95,6 +99,7 @@ impl<'de> Deserialize<'de> for ConversationEvent {
             {
                 Ok(Self::MessageAccepted(e))
             }
+            Wire::Acceptance(e) if e.is_valid() => Ok(Self::ExecutionAccepted(e)),
             Wire::Production(e) if e.is_valid() => Ok(Self::ProviderObserved(e)),
             Wire::ProductionCancellation(e) if e.is_valid() => Ok(Self::CancellationRequested(e)),
             Wire::ProductionStopped(e) if e.is_valid() => Ok(Self::ProviderStopped(e)),

@@ -44,7 +44,7 @@ try {
                 return {status: 200, event};
             }
             if (data.length) {
-                if (!["message_accepted", "fixture_provider_observed", "fixture_cancellation_requested", "fixture_provider_stopped", "provider_observed", "cancellation_requested", "provider_stopped"].includes(event)) {
+                if (!["message_accepted", "fixture_provider_observed", "fixture_cancellation_requested", "fixture_provider_stopped", "provider_observed", "cancellation_requested", "provider_stopped", "execution_accepted"].includes(event)) {
                     return {status: 200, event: "resync_required"};
                 }
                 let body;

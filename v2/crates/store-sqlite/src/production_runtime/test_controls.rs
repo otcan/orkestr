@@ -16,6 +16,8 @@ pub enum ProductionCheckpoint {
     CancelAfterCommit,
     StoppedBeforeCommit,
     StoppedAfterCommit,
+    AcceptanceBeforeCommit,
+    AcceptanceAfterCommit,
 }
 impl ProductionCheckpoint {
     fn name(self) -> &'static str {
@@ -33,6 +35,8 @@ impl ProductionCheckpoint {
             Self::CancelAfterCommit => "cancel-after-commit",
             Self::StoppedBeforeCommit => "stopped-before-commit",
             Self::StoppedAfterCommit => "stopped-after-commit",
+            Self::AcceptanceBeforeCommit => "acceptance-before-commit",
+            Self::AcceptanceAfterCommit => "acceptance-after-commit",
         }
     }
 }
@@ -51,6 +55,37 @@ impl Store {
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(db)?;
         self.context()?.validate(&mut tx).await?;
+        tx.commit().await.map_err(db)?;
+        if marker.file_name().is_none()
+            || marker.parent().is_none_or(|p| !p.is_dir())
+            || std::fs::symlink_metadata(&marker).is_ok()
+            || self.production_checkpoint.is_some()
+        {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
+        self.production_checkpoint = Some(std::sync::Arc::new(ArmedCheckpoint { stage, marker }));
+        Ok(())
+    }
+    /// Test-only owner decision probe. Never grants provider or owner identity;
+    /// the harness supplies the same authenticated owner context as the server.
+    pub async fn production_arm_owner_checkpoint(
+        &mut self,
+        owner: &OwnerId,
+        conversation: &orkestr_v2_contracts::ConversationId,
+        stage: ProductionCheckpoint,
+        marker: std::path::PathBuf,
+    ) -> Result<()> {
+        if self.authority.is_some()
+            || !matches!(
+                stage,
+                ProductionCheckpoint::AcceptanceBeforeCommit
+                    | ProductionCheckpoint::AcceptanceAfterCommit
+            )
+        {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        crate::runtime::scope(&mut tx, owner, conversation).await?;
         tx.commit().await.map_err(db)?;
         if marker.file_name().is_none()
             || marker.parent().is_none_or(|p| !p.is_dir())

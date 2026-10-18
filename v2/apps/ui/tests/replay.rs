@@ -268,3 +268,49 @@ fn removable_progress_reference_is_schema8_only_and_never_inline_text() {
     assert_eq!(view.messages.len(), 1);
     assert_eq!(view.watermark, 1);
 }
+
+#[test]
+fn only_explicit_valid_owner_acceptance_presents_accepted_completion() {
+    let wire: serde_json::Value =
+        serde_json::from_str(include_str!("../../../fixtures/execution-accepted.json")).unwrap();
+    let event: ConversationEvent = serde_json::from_value(wire.clone()).unwrap();
+    let mut view = Projection::default();
+    view.page(snapshot()).unwrap();
+    assert_eq!(
+        replay_sequence(&view, "execution_accepted", Some("1"), &event),
+        Ok(1)
+    );
+    assert_eq!(
+        orkestr_v2_ui::replay_notice(&event),
+        "Completion accepted by owner."
+    );
+    assert!(replay_sequence(&view, "provider_observed", Some("1"), &event).is_err());
+    for (key, value) in [
+        ("schema_version", serde_json::json!(5)),
+        ("aggregate_version", serde_json::json!(2)),
+        (
+            "owner_id",
+            serde_json::json!("00000000-0000-0000-0000-000000000000"),
+        ),
+    ] {
+        let mut bad = wire.clone();
+        bad[key] = value;
+        assert!(serde_json::from_value::<ConversationEvent>(bad).is_err());
+    }
+    for value in [
+        serde_json::json!("00000000-0000-0000-0000-000000000000"),
+        wire["event_id"].clone(),
+    ] {
+        let mut bad = wire.clone();
+        bad["payload_ref_or_safe_payload"]["completion_event_id"] = value;
+        assert!(serde_json::from_value::<ConversationEvent>(bad).is_err());
+    }
+    let mut bad = wire.clone();
+    bad["payload_ref_or_safe_payload"]["outcome"] = "completed_proposal".into();
+    assert!(serde_json::from_value::<ConversationEvent>(bad).is_err());
+    let mut bad = wire.clone();
+    bad["payload_ref_or_safe_payload"]["text"] = "untrusted".into();
+    assert!(serde_json::from_value::<ConversationEvent>(bad).is_err());
+    assert_eq!(view.messages.len(), 1);
+    assert_eq!(view.watermark, 1);
+}

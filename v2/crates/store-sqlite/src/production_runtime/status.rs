@@ -36,6 +36,7 @@ impl Store {
                     "starting" => ExecutionPhase::Starting,
                     "cancel_requested" => ExecutionPhase::CancelRequested,
                     "cancelled" => ExecutionPhase::Cancelled,
+                    "succeeded" => ExecutionPhase::Completed,
                     "blocked" => ExecutionPhase::Blocked,
                     "running" => ExecutionPhase::Running,
                     "awaiting_acceptance" => ExecutionPhase::AwaitingAcceptance,

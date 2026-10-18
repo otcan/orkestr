@@ -45,6 +45,7 @@ pub(crate) fn run_state(row: &SqliteRow) -> RunState {
         "failed" => RunState::Failed,
         "cancel_requested" => RunState::CancelRequested,
         "cancelled" => RunState::Cancelled,
+        "succeeded" => RunState::Succeeded,
         _ => RunState::Blocked,
     }
 }

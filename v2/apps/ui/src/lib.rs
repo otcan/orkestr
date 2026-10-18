@@ -6,6 +6,7 @@ pub mod execution;
 pub mod host_resources;
 mod reconcile;
 pub mod session_scope;
+pub mod stop;
 pub use reconcile::reconcile;
 
 pub const WINDOW: usize = 100;
@@ -119,6 +120,9 @@ pub fn replay_sequence(
     event: &ConversationEvent,
 ) -> Result<i64, &'static str> {
     let (conversation, scope, schema) = match event {
+        ConversationEvent::ExecutionAccepted(e) => {
+            (e.aggregate_id.to_string(), &e.scope, e.is_valid())
+        }
         ConversationEvent::ProviderObserved(e) => {
             (e.aggregate_id.to_string(), &e.scope, e.is_valid())
         }
@@ -181,6 +185,7 @@ pub fn decode_stream(raw: serde_json::Value) -> StreamItem {
 pub fn replay_notice(event: &ConversationEvent) -> &'static str {
     use orkestr_v2_contracts::FixtureCancellationOutcome;
     match event {
+        ConversationEvent::ExecutionAccepted(_) => "Completion accepted by owner.",
         ConversationEvent::CancellationRequested(e) => match e.payload_ref_or_safe_payload.outcome {
             orkestr_v2_contracts::CancellationOutcome::Unknown => "Stop requested; confirmation pending.",
             orkestr_v2_contracts::CancellationOutcome::NotDispatched => "Cancelled before provider delivery.",
