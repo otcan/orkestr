@@ -20,11 +20,10 @@ pub struct CodexRpc {
     readiness: Readiness,
     native_session: Option<String>,
 }
-#[derive(Clone, Copy)]
 enum Request {
     Initialize,
     Account,
-    Thread,
+    Thread { cwd: String },
 }
 impl Default for CodexRpc {
     fn default() -> Self {
@@ -76,9 +75,22 @@ impl CodexRpc {
         if !cwd.is_absolute() {
             return Err(Blocker::Protocol);
         }
+        let normalized: std::path::PathBuf = cwd.components().collect();
+        if normalized.as_os_str() != cwd.as_os_str()
+            || cwd.components().any(|part| {
+                matches!(
+                    part,
+                    std::path::Component::ParentDir | std::path::Component::CurDir
+                )
+            })
+        {
+            return Err(Blocker::Protocol);
+        }
         let cwd = cwd.to_str().ok_or(Blocker::Protocol)?;
         self.request(
-            Request::Thread,
+            Request::Thread {
+                cwd: cwd.to_owned(),
+            },
             "thread/start",
             json!({
                 "cwd":cwd,"approvalPolicy":"never","sandbox":"read-only",
@@ -118,8 +130,8 @@ impl CodexRpc {
                 Err(Blocker::Protocol)
             };
         }
-        let (id, kind) = self.pending.ok_or(Blocker::Protocol)?;
-        if value.get("id").and_then(Value::as_u64) != Some(id) || value.get("error").is_some() {
+        let (id, kind) = self.pending.as_ref().ok_or(Blocker::Protocol)?;
+        if value.get("id").and_then(Value::as_u64) != Some(*id) || value.get("error").is_some() {
             return Err(Blocker::Protocol);
         }
         let result = value.get("result").ok_or(Blocker::Protocol)?;
@@ -137,13 +149,16 @@ impl CodexRpc {
                 self.readiness = Readiness::Initialized;
                 Some(json!({"method":"initialized"}))
             }
-            Request::Thread => {
+            Request::Thread { cwd } => {
                 let native = result
                     .pointer("/thread/id")
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty() && s.len() <= 512)
                     .ok_or(Blocker::Protocol)?;
-                if result.get("approvalPolicy").and_then(Value::as_str) != Some("never")
+                if result.pointer("/thread/ephemeral").and_then(Value::as_bool) != Some(false)
+                    || result.get("cwd").and_then(Value::as_str) != Some(cwd.as_str())
+                    || result.pointer("/thread/cwd").and_then(Value::as_str) != Some(cwd.as_str())
+                    || result.get("approvalPolicy").and_then(Value::as_str) != Some("never")
                     || result.pointer("/sandbox/type").and_then(Value::as_str) != Some("readOnly")
                     || !matches!(
                         result.pointer("/sandbox/networkAccess"),

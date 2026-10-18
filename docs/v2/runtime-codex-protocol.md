@@ -23,9 +23,19 @@ resource authority and current-fence callback must not substitute for that
 single-use durable dispatch grant. Runtime will compose those with the ordinary
 Store authority API; fixture authority cannot be used for production.
 
-Validation: five protocol tests cover ordering, correlation, unrelated
+Validation: six protocol tests cover ordering, correlation, unrelated
 notifications, subscription-only selection, bounds, and native session policy.
 These are protocol tests, not real provider lifecycle acceptance. The installed
 CLI reported Codex 0.163.0 and Claude 2.1.295; Claude was version-only. A safe
 connector status request was unavailable to this worker, so no subscription
 inference or live-session attachment was attempted.
+
+Readiness correction after independent review of the initial checkpoint: the
+pending thread request retains its expected trusted workspace. Both response
+`cwd` and `thread.cwd` must match that exact path, and `thread.ephemeral` must
+explicitly be false. Missing, malformed or inconsistent fields refuse readiness
+without publishing the native locator. Request paths must be normalized absolute
+paths; actual canonicalization and symlink containment remain the trusted
+Executor configuration's responsibility. A valid response control is required
+alongside refusal tests. The two independent refusal probes from review commit
+`17543337` were run unchanged against this correction and passed (author rerun).
