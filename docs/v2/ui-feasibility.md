@@ -130,6 +130,12 @@ device-token storage requires an audited Keychain boundary, revocation/logout,
 and a server-supported device-auth contract before native auth is accepted.
 The intake server uses Bearer auth rather than a browser cookie session;
 retain the web token only in memory and honor the server's origin policy.
+This intake mechanism does not satisfy the first-implementation browser-session/
+CSRF acceptance requirement. Live browser auth integration remains blocked until
+the original session/CSRF implementation or an independently reviewed contract
+amendment is available. Memory-only token handling is an interim client design,
+not evidence of that acceptance. Persistent browser token storage, server-side
+revocation and device auth are not implemented.
 Cross-origin WebView API access, TLS, session expiry and native reconnect need
 explicit integration tests; do not weaken server origin policy to make a demo
 work. The concrete native auth/Keychain bridge is pending, not implemented.
