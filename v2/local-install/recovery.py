@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 import sqlite3
 
-from helper import require
+from helper import filesystem_disjoint, require
 from install_state import (config, files, fresh_path, locked, package, private_home,
                            sha256, unprivileged, write_json)
 
@@ -77,8 +77,7 @@ def restore_preview(raw_home, snapshot):
         current = config(home)
         package(home / "releases" / current["release"])
         root, manifest = validate_snapshot(snapshot)
-        require(root != home and home not in root.parents and root not in home.parents,
-                "snapshot and target home overlap")
+        filesystem_disjoint(root, [home])
         require(not any((home / "data").iterdir()), "restore target data directory must be empty")
     return {"status": "validated only; nothing restored", "apply": "PENDING canonical Migration contract",
             "source_release": manifest["source_release"], "target_release": current["release"],

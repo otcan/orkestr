@@ -12,7 +12,7 @@ import socket
 import stat
 import sys
 
-from helper import overlap, require
+from helper import filesystem_disjoint, require
 
 FORMAT = "orkestr-v2-local-install-v1"
 PACKAGE_FORMAT = "orkestr-v2-directory-package-v1"
@@ -47,17 +47,35 @@ def replace_json(path, value):
         temporary.unlink(missing_ok=True)
 
 
+def protected_roots(extra=()):
+    roots = list(extra)
+    # Packaged tools do not assume a repository layout.
+    if Path(__file__).resolve().parent.name == "local-install":
+        roots.append(Path(__file__).resolve().parents[2])
+    legacy = os.environ.get("ORKESTR_HOME")
+    if legacy:
+        legacy = Path(legacy)
+        require(legacy.is_absolute() and legacy.is_dir(), "configured legacy home must exist and be absolute")
+        roots.append(legacy.resolve())
+    return roots
+
+
 def private_home(raw):
     path = Path(raw)
     require(path.is_absolute() and not path.is_symlink(), "home must be absolute and not a symlink")
     path = path.resolve()
     require(path.is_dir(), "initialized home required")
+    roots = protected_roots()
+    filesystem_disjoint(path, roots)
+    siblings = []
     info = path.stat()
     require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700,
             "home must be owned by current user with mode 0700")
     for name in ("data", "logs", "control", "releases", "provider-home"):
         child = path / name
         require(not child.is_symlink() and child.is_dir(), "invalid private home layout")
+        filesystem_disjoint(child, roots + siblings)
+        siblings.append(child)
         child_info = child.stat()
         require(child_info.st_uid == os.getuid() and stat.S_IMODE(child_info.st_mode) == 0o700,
                 "home subdirectories must be private and owned by current user")
@@ -70,18 +88,7 @@ def fresh_path(raw, protected=()):
             "destination must be absolute and nonexistent")
     path = path.resolve()
     require(path.parent.is_dir(), "destination parent must exist")
-    roots = list(protected)
-    # Protect checkout when used from source. Packaged tools do not assume a repository layout.
-    if Path(__file__).resolve().parent.name == "local-install":
-        roots.append(Path(__file__).resolve().parents[2])
-    legacy = os.environ.get("ORKESTR_HOME")
-    if legacy:
-        legacy = Path(legacy)
-        require(legacy.is_absolute() and legacy.is_dir(), "configured legacy home must exist and be absolute")
-        roots.append(legacy.resolve())
-    require(all(not overlap(path, Path(root).resolve()) for root in roots),
-            "destination overlaps protected source, package, repository or legacy home")
-    return path
+    return filesystem_disjoint(path, protected_roots(protected))
 
 
 def files(root):
@@ -191,7 +198,7 @@ def upgrade(home, source):
     with locked(home):
         current = config(home)
         source, _ = package(source)
-        require(not overlap(source, home), "upgrade source must be outside home")
+        filesystem_disjoint(source, [home])
         release, manifest = add_release(home, source)
         current["release"] = release
         replace_json(home / "install.json", current)

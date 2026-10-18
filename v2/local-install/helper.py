@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in local acceptance against an already-built server; standard library only."""
 import argparse
+import importlib
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,22 @@ def overlap(a, b):
     return a == b or a in b.parents or b in a.parents
 
 
+def filesystem_disjoint(candidate, protected_paths):
+    """Fail closed until the Linux filesystem identity guard proves isolation."""
+    candidate = Path(candidate).resolve()
+    protected_paths = [Path(path).resolve() for path in protected_paths]
+    require(all(not overlap(candidate, path) for path in protected_paths),
+            "destination overlaps protected source, package, repository or legacy home")
+    require(sys.platform == "linux",
+            "filesystem identity isolation unsupported on this platform; Linux required, macOS pending")
+    try:
+        guard = importlib.import_module("path_identity")
+    except ImportError as error:
+        raise RuntimeError("filesystem identity guard unavailable; install/package path_identity.py before proceeding") from error
+    # PathIdentityError/PathOverlapError are RuntimeError; preserve their diagnostics.
+    return guard.assert_disjoint(candidate, protected_paths)
+
+
 def preflight(binary, home, port, environ=None):
     """Read-only except a transient loopback bind; never create homes or run binaries."""
     environ = os.environ if environ is None else environ
@@ -47,11 +64,10 @@ def preflight(binary, home, port, environ=None):
         legacy = Path(environ["ORKESTR_HOME"])
         require(legacy.is_absolute() and legacy.is_dir(), "ORKESTR_HOME must name an existing absolute directory")
         protected.append(legacy.resolve())
-    for path in protected:
-        require(not overlap(home, path), "--home overlaps repository or configured legacy home")
+    home = filesystem_disjoint(home, protected)
     binary = Path(binary).resolve()
     require(binary.is_file() and os.access(binary, os.X_OK), "--binary must be an existing executable; build separately")
-    require(not overlap(home, binary), "--home overlaps executable")
+    filesystem_disjoint(home, [binary])
     require(1024 <= port <= 65535, "--port must be between 1024 and 65535")
     try:
         with socket.socket() as probe:

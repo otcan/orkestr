@@ -15,8 +15,9 @@ separate work. Web comes first; iOS is deferred.
 ## Package contract
 
 Requires an unprivileged POSIX account, Python 3.11+, and an existing compatible
-server executable. macOS and Linux are intended targets; Windows is not
-supported by this POSIX launcher. The packaging tool records the host OS/CPU;
+server executable. Linux is currently required by the fail-closed filesystem identity guard.
+macOS filesystem identity support and acceptance are pending; other platforms
+are unsupported by this launcher. The packaging tool records the host OS/CPU;
 assemble natively, not around a cross-compiled executable. A directory package
 is deliberately simple: no archive extraction, symlinks or root installation.
 
@@ -56,7 +57,13 @@ a trusted package. Native/UI build and signed distribution are unexecuted gates.
 Installation refuses root, existing destinations, overlap with package/source,
 checkout or an explicitly configured `ORKESTR_HOME`, and unavailable ports.
 It does not discover private homes automatically. Explicitly configure legacy
-home paths where relevant. Canonical paths resolve parent symlinks. This is a
+home paths where relevant. Canonical paths resolve parent symlinks. Linux filesystem identity checks also
+reject mount/device/root aliases against protected paths; unavailable, malformed
+or ambiguous mount information refuses the operation. The separately supplied
+`path_identity.py` is a required package tool: missing guard code fails closed.
+Existing private homes and their sibling data/control/log/provider/release
+directories are rechecked when opened. Configured legacy roots remain necessary
+to identify private paths the installer cannot discover automatically. This is a
 local trusted-user tool, not a sandbox against malicious same-user filesystem
 races. Failure retains the fresh diagnostic directory; it never deletes user
 state to retry.
@@ -184,8 +191,8 @@ Pending/unexecuted: remote CI, macOS, cross-version schema upgrade, browser
 bootstrap handoff/interaction, canonical restore apply, Docker packaging/run,
 signed distribution, real providers and full workflow replacement. Independent
 review of the preceding artifact passed; these subsequent changes require their
-own review. Mount/inode alias isolation remains unverified pending the separate
-path-identity helper and wiring. No production service, host privileges, cutover,
+own review. Consumer wiring has synthetic API tests; mount/inode identity proof remains
+unverified until the separately reviewed helper is integrated and its tests run. No production service, host privileges, cutover,
 legacy credential migration, Main WhatsApp or personal-account changes occur.
 
 Keep the trusted package entrypoint available, or invoke the copied package's

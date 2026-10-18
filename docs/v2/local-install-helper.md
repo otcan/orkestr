@@ -156,3 +156,9 @@ image/entrypoint, loopback port publication, private data volume mapping, and
 health/stop contract. Do not substitute legacy Docker packaging or claim
 Docker Desktop installation alone makes v2 ready. Real run/cancel, result and UI
 gates require their owning lanes to implement and document those surfaces first.
+
+Filesystem isolation now requires the separately supplied Linux
+`v2/local-install/path_identity.py` guard. Preflight refuses missing guard code,
+unsupported platforms (including macOS pending implementation), and ambiguous
+filesystem identity. Consumer wiring tests mock that API; they do not establish
+mount-alias correctness. No host mounts are modified by these tests.
