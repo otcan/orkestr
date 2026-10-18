@@ -7,7 +7,7 @@ publish = false
 
 [features]
 default = []
-web = ["dioxus/web"]
+web = ["dioxus/web", "dep:web-sys"]
 mobile = ["dioxus/mobile"]
 
 [dependencies]
@@ -15,6 +15,8 @@ orkestr-v2-contracts = { path = "../../crates/contracts" }
 serde.workspace = true
 serde_json.workspace = true
 dioxus = { version = "=0.7.3", default-features = false, features = ["macro", "html", "signals", "hooks", "launch", "document"] }
+
+web-sys = { version = "=0.3.106", optional = true, features = ["Location"] }
 
 [[bin]]
 name = "orkestr-v2-ui"

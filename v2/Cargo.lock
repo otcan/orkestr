@@ -3703,6 +3703,7 @@ dependencies = [
  "orkestr-v2-contracts",
  "serde",
  "serde_json",
+ "web-sys",
 ]
 
 [[package]]

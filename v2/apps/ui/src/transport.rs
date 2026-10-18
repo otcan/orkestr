@@ -53,7 +53,7 @@ pub async fn key() -> Result<String, Failure> {
     document::eval("return crypto.randomUUID();")
         .join()
         .await
-        .map_err(|_| Failure::from("Secure request ID generation unavailable".into()))
+        .map_err(|_| Failure::from("Secure request ID generation unavailable".to_string()))
 }
 
 pub async fn delay() {
