@@ -43,6 +43,10 @@ controls were exercised. This flag does not activate providers or execution.
 Both build children receive a minimal environment, fresh HOME, explicit offline
 caches and unique target/output directories. The declared Cargo cache bin directory
 is prepended to PATH so the canonical bundle can find its pinned wasm-bindgen.
+For a separately installed tool, pass `--bindgen-bin "$INSTALLED_BINDGEN_BIN"`;
+this executable directory takes precedence over the Cargo bin and inherited PATH.
+The canonical bundle still enforces version 0.2.129. No tool directory path is
+written into the receipt.
 An admission wrapper may enforce its own Cargo/Rustup cache paths; the build owner
 must supply matching installed caches for both wrapper and direct bundle tools. Provider and application environment
 variables are excluded. Cache paths and host environment values are never written
