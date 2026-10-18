@@ -84,6 +84,25 @@ pub struct RunRecord {
     pub lease_generation: i64,
     pub fence_generation: i64,
 }
+/// Per-call disposition computed by the admission transaction, not a persisted flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdmissionDispatch {
+    /// This invocation alone inserted Starting and acquired the session turn.
+    Fresh,
+    /// Existing admission: NEVER authorizes provider start, regardless of run state.
+    Replay,
+}
+
+/// Authoritative owner/scope/session/role snapshot after the transaction commits.
+/// No native identity is serialized or inferred from an expected-role argument.
+#[derive(Debug, Clone)]
+pub struct RunAdmissionReceipt {
+    pub owner_id: OwnerId,
+    pub run: RunRecord,
+    pub session: SessionBinding,
+    pub dispatch: AdmissionDispatch,
+}
+
 #[derive(Debug, Clone)]
 pub struct CancelReceipt {
     pub run: RunRecord,
@@ -139,7 +158,7 @@ pub struct ProviderEventReceipt {
 }
 
 /// Version of the internal runtime port shape, separate from HTTP/event versions.
-pub const RUNTIME_PORT_VERSION: u32 = 0;
+pub const RUNTIME_PORT_VERSION: u32 = 1;
 /// Storage and provider adapters must reject larger progress payloads.
 pub const MAX_PROVIDER_PROGRESS_BYTES: usize = 8192;
 
@@ -180,11 +199,20 @@ pub trait RuntimeStore: Send + Sync {
         conversation: &ConversationId,
     ) -> impl Future<Output = Result<Option<InboxClaim>>> + Send;
     /// Task must already be queued and owned by the same scope. Admission and journal are atomic.
+    /// Authenticate owner; validate task, claim, execution lease and supervisor session.
+    /// Insert Starting + consume/link claim + acquire one session turn atomically.
+    /// Only the successful insertion invocation returns Fresh; concurrent identical
+    /// calls return Replay with the same run. Changed semantic input conflicts.
+    /// Replay NEVER reissues dispatch authority, including Starting/active/terminal
+    /// runs. Do not persist and later replay a receipt containing Fresh.
+    /// Returned session role/scope comes from the owned store row, never caller role.
+    /// A crash after commit but before provider start leaves unknown dispatch for
+    /// reconciliation; it must not be repaired by blindly retrying provider.start.
     fn admit_run(
         &self,
         owner: &OwnerId,
         admission: &RunAdmission,
-    ) -> impl Future<Output = Result<RunRecord>> + Send;
+    ) -> impl Future<Output = Result<RunAdmissionReceipt>> + Send;
     fn renew_lease(
         &self,
         lease: &Lease,
