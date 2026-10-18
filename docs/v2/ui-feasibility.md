@@ -194,3 +194,23 @@ Rust/WASM validation still requires coordinator-owned workspace membership
 and lock resolution. Browser auth/CSRF amendment, same-origin serving, browser
 interaction and native gates remain pending. No macOS workflow allowlist change
 was made; the unsigned job remains a proposal pending the parent policy review.
+
+### First locked Rust validation after integration handoff
+
+Consumed integration `209b87e2fc643b5f543f3a238ec579ec610eac45` by nonforce
+merge `ba17dd8b328f2014f17aac4eb3146b9e0c7dfecd`. This supplies coordinator-owned
+UI membership and the full canonical runtime dependency lock. This lane made no
+subsequent root-manifest or lock edits. Fixed a request-ID error conversion's
+ambiguous `.into()` and moved the conversation remount key to the first node
+in its conditional block; formatted the UI crate with the pinned wrapper.
+
+Using the assigned isolated UI home/target and host compile lock:
+
+- `v2-cargo test --manifest-path v2/Cargo.toml --locked -p orkestr-v2-ui --lib --test projection`: seven projection tests passed.
+- `v2-cargo clippy --manifest-path v2/Cargo.toml --locked -p orkestr-v2-ui --all-targets -- -D warnings`: passed for default features.
+- `v2-cargo check --manifest-path v2/Cargo.toml --locked -p orkestr-v2-ui --no-default-features --features web --target wasm32-unknown-unknown`: failed because that shared toolchain target is absent (`E0463`). No target was installed by this lane.
+- The equivalent host web-feature check failed in locked `dioxus-web 0.7.10`: its history module requires `web-sys/Location`, absent from the minimal facade feature graph (`E0599`). The exact proposed feature/dependency change has been sent to the coordinator before resolution; no competing lock was generated.
+
+These results supersede earlier unexecuted-Rust labels for default-feature
+projection validation only. They establish neither a passing web build nor
+browser, secure-session/CSRF, native, simulator or physical-device acceptance.

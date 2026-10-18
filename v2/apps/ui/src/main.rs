@@ -1,19 +1,21 @@
+mod history;
 mod transport;
 mod views;
-mod history;
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{Project, ProjectInput};
 use orkestr_v2_ui::Draft;
 use std::collections::BTreeMap;
 
-fn main() { dioxus::launch(App); }
+fn main() {
+    dioxus::launch(App);
+}
 
 #[component]
 fn App() -> Element {
     let mut token = use_signal(String::new);
     let mut global = use_signal(String::new);
     let mut current = use_signal(String::new);
-    let mut projects = use_signal(Vec::<Project>::new);
+    let projects = use_signal(Vec::<Project>::new);
     let drafts = use_signal(BTreeMap::<String, Draft>::new);
     let pending_project = use_signal(|| None::<ProjectInput>);
     let mut tab = use_signal(|| "Assistant".to_string());
@@ -55,6 +57,7 @@ fn App() -> Element {
                         onopen: move |id: String| { current.set(id); tab.set("Assistant".into()); }
                     }
                 } else if tab() == "Assistant" {
+                    section { key: "{current()}-{refresh}",
                     h2 { if current() == global() { "Assistant" } else { "Project conversation" } }
                     if current() != global() {
                         for project in projects().iter().filter(|p| p.conversation_id.to_string() == current()) {
@@ -62,7 +65,8 @@ fn App() -> Element {
                         }
                     }
                     button { onclick: move |_| refresh += 1, "Reconnect and reload history" }
-                    views::Conversation { key: "{current()}-{refresh}", id: current(), token: token(), drafts, onexpired: expired }
+                    views::Conversation { id: current(), token: token(), drafts, onexpired: expired }
+                    }
                 } else if tab() == "History" {
                     history::History { key: "{current()}", id: current(), token: token(), onexpired: expired }
                 } else if tab() == "Attention" {

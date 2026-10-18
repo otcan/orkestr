@@ -29,13 +29,22 @@ pub fn History(id: String, token: String, onexpired: EventHandler<()>) -> Elemen
                         Ok(()) => {
                             page.set(projection);
                             next.set(continuation);
-                            status.set(if continuation.is_some() { "More accepted input is available." } else { "End of this history page. Refresh to check for newer input." }.into());
+                            status.set(
+                                if continuation.is_some() {
+                                    "More accepted input is available."
+                                } else {
+                                    "End of this history page. Refresh to check for newer input."
+                                }
+                                .into(),
+                            );
                         }
                         Err(message) => status.set(message.into()),
                     }
                 }
                 Err(error) => {
-                    if error.status == 401 { onexpired.call(()); }
+                    if error.status == 401 {
+                        onexpired.call(());
+                    }
                     status.set(error.message);
                 }
             }

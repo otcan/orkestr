@@ -56,7 +56,13 @@ pub fn Auth(onlogin: EventHandler<SessionResponse>) -> Element {
 }
 
 #[component]
-pub fn Projects(token: String, mut projects: Signal<Vec<Project>>, mut pending: Signal<Option<ProjectInput>>, onopen: EventHandler<String>, onexpired: EventHandler<()>) -> Element {
+pub fn Projects(
+    token: String,
+    mut projects: Signal<Vec<Project>>,
+    mut pending: Signal<Option<ProjectInput>>,
+    onopen: EventHandler<String>,
+    onexpired: EventHandler<()>,
+) -> Element {
     let mut name = use_signal(move || pending().map(|p| p.name).unwrap_or_default());
     let mut status = use_signal(|| "Loading projects…".to_string());
     let mut busy = use_signal(|| false);
@@ -65,8 +71,16 @@ pub fn Projects(token: String, mut projects: Signal<Vec<Project>>, mut pending: 
         let token = load_token.clone();
         async move {
             match transport::projects(&token).await {
-                Ok(items) => { projects.set(items); status.set("Local projects".into()); }
-                Err(error) => { if error.status == 401 { onexpired.call(()); } status.set(error.message); }
+                Ok(items) => {
+                    projects.set(items);
+                    status.set("Local projects".into());
+                }
+                Err(error) => {
+                    if error.status == 401 {
+                        onexpired.call(());
+                    }
+                    status.set(error.message);
+                }
             }
         }
     });
@@ -118,7 +132,12 @@ pub fn Projects(token: String, mut projects: Signal<Vec<Project>>, mut pending: 
 }
 
 #[component]
-pub fn Conversation(id: String, token: String, mut drafts: Signal<BTreeMap<String, Draft>>, onexpired: EventHandler<()>) -> Element {
+pub fn Conversation(
+    id: String,
+    token: String,
+    mut drafts: Signal<BTreeMap<String, Draft>>,
+    onexpired: EventHandler<()>,
+) -> Element {
     let mut projection = use_signal(Projection::default);
     let mut status = use_signal(|| "Loading history…".to_string());
     let mut sending = use_signal(|| false);
@@ -133,21 +152,41 @@ pub fn Conversation(id: String, token: String, mut drafts: Signal<BTreeMap<Strin
             loop {
                 if resync {
                     match transport::snapshot(&id, &token, 0, Projection::default()).await {
-                        Ok(snapshot) => { cursor = snapshot.watermark; projection.set(snapshot); resync = false; status.set("History synchronized. Waiting for accepted input.".into()); }
+                        Ok(snapshot) => {
+                            cursor = snapshot.watermark;
+                            projection.set(snapshot);
+                            resync = false;
+                            status.set("History synchronized. Waiting for accepted input.".into());
+                        }
                         Err(error) => {
-                            if error.status == 401 { onexpired.call(()); return; }
+                            if error.status == 401 {
+                                onexpired.call(());
+                                return;
+                            }
                             status.set(error.message);
-                            transport::delay().await; continue;
+                            transport::delay().await;
+                            continue;
                         }
                     }
                 }
                 match transport::event(&id, &token, cursor).await {
-                    Ok(item) if item.status == 401 || item.event == "session_expired" => { onexpired.call(()); return; }
-                    Ok(item) if item.status == 409 || item.event == "resync_required" => { resync = true; status.set("Cursor requires history resync.".into()); }
+                    Ok(item) if item.status == 401 || item.event == "session_expired" => {
+                        onexpired.call(());
+                        return;
+                    }
+                    Ok(item) if item.status == 409 || item.event == "resync_required" => {
+                        resync = true;
+                        status.set("Cursor requires history resync.".into());
+                    }
                     Ok(item) if item.event == "message_accepted" => {
                         if let Some(event) = item.body {
-                            if event.schema_version != 1 || event.aggregate_id.to_string() != id || item.id.as_deref() != Some(&event.sequence.to_string()) || event.payload_ref_or_safe_payload.kind != "message_accepted" {
-                                status.set("Unexpected event contract; reload required.".into()); return;
+                            if event.schema_version != 1
+                                || event.aggregate_id.to_string() != id
+                                || item.id.as_deref() != Some(&event.sequence.to_string())
+                                || event.payload_ref_or_safe_payload.kind != "message_accepted"
+                            {
+                                status.set("Unexpected event contract; reload required.".into());
+                                return;
                             }
                             if event.sequence > cursor {
                                 let previous = projection.read().clone();
@@ -158,14 +197,21 @@ pub fn Conversation(id: String, token: String, mut drafts: Signal<BTreeMap<Strin
                                         status.set("Accepted input synchronized. Model execution unavailable.".into());
                                     }
                                     Err(error) => {
-                                        if error.status == 401 { onexpired.call(()); return; }
+                                        if error.status == 401 {
+                                            onexpired.call(());
+                                            return;
+                                        }
                                         status.set(error.message);
                                     }
                                 }
                             }
-                        } else { resync = true; }
+                        } else {
+                            resync = true;
+                        }
                     }
-                    Ok(_) => status.set("Stream disconnected; reconnecting. Runtime status unavailable.".into()),
+                    Ok(_) => status.set(
+                        "Stream disconnected; reconnecting. Runtime status unavailable.".into(),
+                    ),
                     Err(error) => status.set(error.message),
                 }
                 transport::delay().await;
