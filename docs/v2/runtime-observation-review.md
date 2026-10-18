@@ -50,6 +50,28 @@ Started, retaining occupied/blocked session authority until a separate lifecycle
 operation. `tests/fixture_dispatch/observations.rs` prepares two actual-store cases
 using only existing v5 input types: first-event Failed with committed receipt
 replay after pool reopen, changed replay conflict, and refusal of another turn
-without increasing admitted/acknowledged scope counts. Both tests are explicitly
-ignored pending the exact Core DTO/migration/adapter handoff; they are not passing
-acceptance. They do not invoke provider I/O or define another durable store.
+without increasing admitted/acknowledged scope counts. Both tests were initially explicitly ignored pending the exact Core handoff;
+that historical preparation was not passing acceptance. They do not invoke provider I/O or define another durable store.
+
+## Actual adapter execution checkpoint
+
+Consumed Core `bf87414f`, `cff94b88` and replay correction `002270e0` with their
+proposal prerequisite, retaining the existing v5 append port. The two prepared
+tests are now active against actual fixture SQLite transactions. Starting + Failed
+produces the first receipt without fabricated Started; reopen returns its original
+receipt, changed input conflicts, and another admission on that occupied session
+returns Busy without another admitted attempt or inbox acknowledgement.
+
+An additional opt-in test commits Started, expires the context, then performs
+exact-predecessor takeover. Original authenticated replay returns its historical
+Running receipt before and after takeover. Changed committed events (including
+unsupported Progress/Stopped) conflict; forged owner/envelope cannot obtain the
+receipt; unseen evidence is Expired before takeover and Fenced afterward. Canonical
+event bytes remain identical across these refusals/replays. The successor projects
+blocked DeliveryUnknown without candidate/reservation verifiers. No FAKE I/O occurs.
+
+These are fixture-store receipt/occupancy checks, not production lifecycle
+acceptance, transport crash recovery or verified completion. Production starts
+remain blocked; unsupported raw Progress/Stopped and ordinary Store append remain
+unavailable. Independent full-table rollback/outbox checks remain Core/Verification
+evidence rather than assertions made by this public-projection harness.

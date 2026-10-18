@@ -1,4 +1,4 @@
-//! Prepared actual-store acceptance. Ignored until the selected Core adapter lands.
+//! Actual Core fixture observation acceptance; no production provider dispatch.
 use super::*;
 
 fn failed(provider: &ProviderAdmission) -> ProviderEventInput {
@@ -23,7 +23,6 @@ async fn consumed(f: &Fixture) -> ProviderAdmission {
 }
 
 #[tokio::test]
-#[ignore = "pending selected Core metadata event DTO/migration and append adapter"]
 async fn consumed_starting_failure_is_first_event_and_replays_original_receipt() {
     let f = Fixture::new().await;
     let provider = consumed(&f).await;
@@ -62,7 +61,6 @@ async fn consumed_starting_failure_is_first_event_and_replays_original_receipt()
 }
 
 #[tokio::test]
-#[ignore = "pending selected Core durable Failed occupancy and append adapter"]
 async fn failed_session_cannot_admit_another_turn_or_spend_its_inbox_claim() {
     let f = Fixture::new().await;
     let provider = consumed(&f).await;
@@ -132,3 +130,7 @@ async fn failed_session_cannot_admit_another_turn_or_spend_its_inbox_claim() {
     );
     f.close().await;
 }
+
+#[cfg(feature = "fixture-test-controls")]
+#[path = "observation_replay.rs"]
+mod authority;
