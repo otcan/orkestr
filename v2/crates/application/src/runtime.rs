@@ -1,7 +1,11 @@
 //! Canonical asynchronous runtime store port. No provider wait occurs in a transaction.
 //! Runtime owns providers/supervision; core owns persistence and verified acceptance.
 pub use orkestr_v2_contracts::runtime::*;
+mod authority;
+pub use authority::*;
+mod provider;
 use orkestr_v2_contracts::{ConversationId, OwnerId, RunId, SessionId};
+pub use provider::*;
 use std::{future::Future, time::Duration};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,6 +15,8 @@ pub enum RuntimeStoreError {
     Unauthorized,
     Busy,
     StaleLease,
+    /// Dispatch authority was revoked; never a successful stop acknowledgement.
+    Fenced,
     Conflict,
     Expired,
     /// Includes operations whose durable adapter has not been implemented.
@@ -52,6 +58,8 @@ pub trait RuntimeStore: Send + Sync {
     /// Validate ownership/claim/generation/fence, persist Starting and acknowledge claim
     /// in the SAME transaction, closing the admit/ack crash gap. RunId is store assigned.
     /// Identical request replay returns original admission; changed replay conflicts.
+    /// Deep only: binding_id must equal claim.consumer_session_id. Fast and workers
+    /// cannot consume this claim. Independent worker admission is not yet exposed.
     fn admit_run(
         &self,
         claim: &InboxClaim,
@@ -76,15 +84,20 @@ pub trait RuntimeStore: Send + Sync {
         expected_generation: u64,
     ) -> impl Future<Output = Result<RunAdmission>> + Send;
 
-    /// Atomic lease/expiry/state/fence check, dedup and journal/projection update.
-    /// Started -> Running; CompletedProposal -> AwaitingAcceptance, NEVER Succeeded.
-    /// Only current cancellation token may confirm Stopped -> Cancelled.
-    fn record_observation(
+    /// Authenticate owner and run/session association FIRST. A committed identical
+    /// sequence/body returns its original receipt even after expiry/fencing, without
+    /// a new write or transition. Changed replay conflicts. Core computes the digest.
+    /// A new contiguous sequence requires current execution/cancellation authority,
+    /// matching lease/fence, expiry and legal state; no provider completion is success.
+    /// Progress is bounded and must use removable payload storage, never raw journal text.
+    /// Unavailable/Busy retains exact pending input. Fenced/StaleLease is explicit refusal;
+    /// preserve original terminal evidence for reconciliation, never fabricate Stopped.
+    fn append_provider_event(
         &self,
-        admission: &RunAdmission,
-        event_key: &str,
-        observation: &ProviderObservation,
-    ) -> impl Future<Output = Result<ObservationReceipt>> + Send;
+        owner: &OwnerId,
+        admission: &ProviderAdmission,
+        input: &ProviderEventInput,
+    ) -> impl Future<Output = Result<ProviderEventReceipt>> + Send;
 
     /// Durable CancelRequested + generation/fence increment + control outbox FIRST.
     /// Idempotent request key. Returned token is cancellation-ack authority only.

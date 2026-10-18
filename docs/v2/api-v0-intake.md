@@ -45,8 +45,12 @@ The owner ID is the authenticated canonical owner ID, never a provider ID.
 JSON command bodies reject unknown fields. Client actor/owner claims cannot
 be admitted. Message text is nonblank, at most 32768 UTF-8 bytes; request keys
 are 1..128 ASCII alphanumeric or `-_.:`. Project names are nonblank and at most
-200 bytes. HTTP JSON bodies are bounded to 40 KiB and request-header/handler
-completion to 10 seconds; SSE bodies stream beyond that deadline.
+200 bytes. HTTP JSON bodies are bounded to 40 KiB. After HTTP headers have
+been parsed and the request enters application middleware, handler execution
+until a response is returned is bounded to 10 seconds. This includes JSON body
+extraction inside the handler, but does not establish a transport deadline for
+receiving request headers. No explicit request-header timeout is configured by
+the server. SSE response bodies stream beyond the handler deadline.
 API failures use `{code,message,request_id,retryable}`; malformed path extraction
 at framework routing boundaries may use Axum's rejection response.
 
@@ -72,3 +76,13 @@ Project resource status is deliberately `local_git=not_provisioned` and
 Runtime sessions, claims/leases, tasks, cancellation/effect fencing, approvals,
 UI, device auth, logout/revocation and memory are subsequent increments. Unknown
 routes are unavailable; none grant effects. Full M1 acceptance remains pending.
+
+Existing database startup now preflights an expendable main-file/WAL copy before
+opening the source in SQLite. The candidate must have WAL mode, an exact supported
+prefix of SQLx migration checksums and matching schema (including indexes/triggers).
+Pre-existing empty/foreign files, unsupported or altered histories/schemas, rollback
+journals and orphan sidecars are refused. The copied SHM is rebuilt privately; no
+read-only SQLite connection is opened against the original during refusal. This
+is not a concurrent backup API: the caller must prevent replacement or concurrent
+schema migration, and incomplete copies fail closed. Source-byte preservation
+regressions, including live uncheckpointed WAL, are authored but not yet executed.

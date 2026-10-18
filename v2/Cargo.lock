@@ -911,8 +911,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "orkestr-v2-demo"
+version = "0.0.1"
+dependencies = [
+ "orkestr-v2-domain",
+]
+
+[[package]]
 name = "orkestr-v2-domain"
 version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "orkestr-v2-server"
