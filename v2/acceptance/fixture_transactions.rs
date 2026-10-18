@@ -19,6 +19,9 @@ struct Case {
 }
 impl Case {
     async fn new() -> Self {
+        Self::with_claim_duration(Duration::from_secs(60)).await
+    }
+    async fn with_claim_duration(duration: Duration) -> Self {
         let path =
             PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").expect("owned home")).join(format!(
                 "independent-tx-{}-{}",
@@ -57,12 +60,7 @@ impl Case {
         .await
         .unwrap();
         let claim = a
-            .claim_next(
-                &owner,
-                &conversation,
-                &binding.session_id,
-                Duration::from_secs(60),
-            )
+            .claim_next(&owner, &conversation, &binding.session_id, duration)
             .await
             .unwrap()
             .unwrap();
@@ -412,3 +410,7 @@ mod negative;
 #[cfg(feature = "fixture-test-controls")]
 #[path = "independent_transactions/observations.rs"]
 mod observations;
+
+#[cfg(feature = "fixture-test-controls")]
+#[path = "independent_transactions/renewal.rs"]
+mod renewal;
