@@ -49,6 +49,13 @@ impl Store {
                 return Ok(None);
             }
         };
+        let progress = if let Some(run) = &run_id {
+            sqlx::query("SELECT p.id,CAST((julianday(e.occurred_at)-2440587.5)*86400000 AS INTEGER) AS at_ms FROM production_payloads p JOIN events e ON e.id=p.event_id WHERE p.run_id=? AND p.owner_id=? AND p.conversation_id=? ORDER BY e.sequence DESC LIMIT 1")
+                .bind(run.to_string()).bind(owner.to_string()).bind(conversation.to_string()).fetch_optional(&mut *tx).await.map_err(db)?
+                .map(|row| -> Result<_> { Ok(orkestr_v2_contracts::ExecutionProgress { payload_id: orkestr_v2_contracts::PayloadId(row.get::<String,_>("id").parse().map_err(db)?), observed_at_ms: row.get("at_ms") }) }).transpose()?
+        } else {
+            None
+        };
         let status = ExecutionStatus {
             schema_version: 1,
             conversation_id: conversation.clone(),
@@ -57,7 +64,7 @@ impl Store {
             observed_at_ms,
             phase,
             queue_age_ms: queued.map(|time| observed_at_ms.saturating_sub(time).max(0) as u64),
-            progress: None,
+            progress,
             resources: None,
             capabilities: ExecutionCapabilities {
                 stop: false,

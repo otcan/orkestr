@@ -12,7 +12,9 @@ pub struct ProviderPayload {
 }
 impl std::fmt::Debug for ProviderPayload {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProviderPayload").field("payload_id", &self.payload_id)
-            .field("removed", &self.text.is_none()).finish_non_exhaustive()
+        f.debug_struct("ProviderPayload")
+            .field("payload_id", &self.payload_id)
+            .field("removed", &self.text.is_none())
+            .finish_non_exhaustive()
     }
 }

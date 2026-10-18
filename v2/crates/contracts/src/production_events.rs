@@ -36,7 +36,9 @@ pub enum ProviderObservedTag {
 pub enum ProductionObservationKind {
     Started,
     /// Schema 8 only. Text lives in removable owner-scoped storage.
-    ProgressRef { payload_id: PayloadId },
+    ProgressRef {
+        payload_id: PayloadId,
+    },
     ApprovalRequested,
     /// Provider completion proposes output; never verified success.
     CompletedProposal,
@@ -47,7 +49,11 @@ impl ProviderObservedEnvelope {
     pub fn is_valid(&self) -> bool {
         (matches!((&self.payload_ref_or_safe_payload.observation, self.schema_version),
             (ProductionObservationKind::ProgressRef { payload_id }, 8) if !payload_id.0.is_nil())
-            || self.schema_version == 5 && !matches!(self.payload_ref_or_safe_payload.observation, ProductionObservationKind::ProgressRef { .. }))
+            || self.schema_version == 5
+                && !matches!(
+                    self.payload_ref_or_safe_payload.observation,
+                    ProductionObservationKind::ProgressRef { .. }
+                ))
             && self.sequence > 0
             && self.aggregate_version == self.sequence
             && self.payload_ref_or_safe_payload.run_sequence > 0

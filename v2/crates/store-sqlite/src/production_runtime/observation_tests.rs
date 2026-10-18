@@ -1,7 +1,7 @@
 use super::*;
 use crate::production_runtime::tests::{claim, ready, setup, snapshot, Case};
 use orkestr_v2_application::IntakeStore;
-async fn consumed(f: &Case) -> ProviderAdmission {
+pub(super) async fn consumed(f: &Case) -> ProviderAdmission {
     let b = ready(f).await;
     let claim = claim(f, &b).await;
     let run = f
@@ -23,7 +23,11 @@ async fn consumed(f: &Case) -> ProviderAdmission {
     ));
     run.provider
 }
-fn input(p: &ProviderAdmission, sequence: u64, event: ProviderEvent) -> ProviderEventInput {
+pub(super) fn input(
+    p: &ProviderAdmission,
+    sequence: u64,
+    event: ProviderEvent,
+) -> ProviderEventInput {
     ProviderEventInput {
         run_id: p.run.run_id.clone(),
         session_id: p.run.session_id.clone(),

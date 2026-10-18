@@ -83,9 +83,6 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
-        if matches!(input.event, ProviderEvent::Progress(_)) {
-            return Err(RuntimeStoreError::Unavailable);
-        }
         if matches!(
             input.event,
             ProviderEvent::CompletedProposal { synthetic: true }
@@ -104,7 +101,7 @@ impl Store {
         }
         let target = match (row.get::<&str, _>("state"), kind) {
             ("cancel_requested", "stopped") => "cancelled",
-            ("starting", "started") | ("running", "approval_requested") => "running",
+            ("starting", "started") | ("running", "approval_requested" | "progress") => "running",
             ("running", "completed_proposal") => "awaiting_acceptance",
             ("starting" | "running", "failed") => "failed",
             ("starting" | "running", "lost") => "blocked",
@@ -115,11 +112,17 @@ impl Store {
         let event_id = EventId(Uuid::new_v4());
         sqlx::query("INSERT INTO events(id,owner_id,conversation_id,message_id,sequence,kind,schema_version) VALUES(?,?,?,NULL,?,?,?)")
             .bind(event_id.to_string()).bind(owner.to_string()).bind(provider.run.conversation_id.to_string()).bind(sequence)
-            .bind(if stopping { "provider_stopped" } else { "provider_observed" }).bind(if stopping { 7 } else { 5 })
+            .bind(if stopping { "provider_stopped" } else { "provider_observed" }).bind(if stopping { 7 } else if kind == "progress" { 8 } else { 5 })
             .execute(&mut *tx).await.map_err(db)?;
         sqlx::query("INSERT INTO production_observations(event_id,run_id,run_sequence,semantic_digest,kind,lease_generation,dispatch_fence,receipt_state) VALUES(?,?,?,?,?,?,?,?)")
             .bind(event_id.to_string()).bind(input.run_id.to_string()).bind(input.sequence as i64).bind(digest).bind(kind)
             .bind(input.lease_generation as i64).bind(input.dispatch_fence as i64).bind(target).execute(&mut *tx).await.map_err(db)?;
+        if kind == "progress" {
+            sqlx::query("INSERT INTO production_payloads(id,event_id,owner_id,conversation_id,run_id,text) VALUES(?,?,?,?,?,?)")
+                .bind(Uuid::new_v4().to_string()).bind(event_id.to_string()).bind(owner.to_string())
+                .bind(provider.run.conversation_id.to_string()).bind(input.run_id.to_string()).bind(value)
+                .execute(&mut *tx).await.map_err(db)?;
+        }
         sqlx::query("INSERT INTO outbox(event_id) VALUES(?)")
             .bind(event_id.to_string())
             .execute(&mut *tx)
