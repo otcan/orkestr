@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { assertTestStoragePath } from "../../storage/src/test-storage-isolation.js";
-import { migratePersonalAgentEntities } from "./agent-job-entities-migration.js";
+import { migratePersonalAgentEntities, migratePersonalAgentTaskLifecycle } from "./agent-job-entities-migration.js";
 import { migratePersonalAgentMemory } from "./personal-agent-memory-migration.js";
 import { personalAgentFeature } from "./personal-agent-feature.js";
 
@@ -22,6 +22,7 @@ let sqliteModule = null;
 function ensurePersonalAgentSchema(db, dbPath, env) {
   if (!personalAgentFeature(env) || personalAgentSchemaReady.has(dbPath)) return;
   migratePersonalAgentEntities(db, { dryRun: false });
+  migratePersonalAgentTaskLifecycle(db, { dryRun: false });
   migratePersonalAgentMemory(db, { dryRun: false });
   personalAgentSchemaReady.add(dbPath);
 }
@@ -123,9 +124,9 @@ export async function agentJobDbPath(env = process.env) {
 export async function openAgentJobDb(env = process.env) {
   const dbPath = assertTestStoragePath(await agentJobDbPath(env), env, "agent_jobs_sqlite");
   if (databases.has(dbPath)) {
-    const db = databases.get(dbPath);
-    ensurePersonalAgentSchema(db, dbPath, env);
-    return db;
+    const cached = databases.get(dbPath);
+    ensurePersonalAgentSchema(cached, dbPath, env);
+    return cached;
   }
   sqliteModule ||= await import("node:sqlite");
   const db = new sqliteModule.DatabaseSync(dbPath);

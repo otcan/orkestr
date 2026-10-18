@@ -7,6 +7,7 @@ import test from "node:test";
 import { closeAgentJobDbs, openAgentJobDb } from "../packages/core/src/agent-job-store.js";
 import {
   migratePersonalAgentEntities,
+  migratePersonalAgentTaskLifecycle,
   planPersonalAgentEntityMigration,
 } from "../packages/core/src/agent-job-entities-migration.js";
 
@@ -45,6 +46,10 @@ test("failed partial migration rolls back DDL without deleting the incompatible 
     const names = db.prepare("select name from sqlite_master where type = 'table'").all().map((row) => row.name);
     assert.deepEqual(names, ["personal_agent_tasks"]);
     assert.deepEqual(db.prepare("pragma table_info(personal_agent_tasks)").all().map((row) => row.name), ["legacy_marker"]);
+    const lifecyclePlan = migratePersonalAgentTaskLifecycle(db);
+    assert.ok(lifecyclePlan.missingRequiredColumns.includes("id"));
+    assert.throws(() => migratePersonalAgentTaskLifecycle(db, { dryRun: false }), /personal_agent_task_lifecycle_schema_incompatible/);
+    assert.deepEqual(db.prepare("pragma table_info(personal_agent_tasks)").all().map((row) => row.name), ["legacy_marker"]);
   } finally {
     db.close();
   }
@@ -81,11 +86,45 @@ test("migration preserves sanitized legacy Agent Job records and old-schema read
   }
 });
 
+test("task lifecycle migration upgrades an existing task table additively and reruns", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    migratePersonalAgentEntities(db, { dryRun: false });
+    db.exec(`insert into personal_agent_projects (id, title, created_at, updated_at) values ('prj_old', 'Old', 'now', 'now');
+      insert into personal_agent_tasks (id, project_id, title, outcome, created_at, updated_at) values ('tsk_old', 'prj_old', 'Old task', 'Outcome', 'now', 'now')`);
+    const dryRun = migratePersonalAgentTaskLifecycle(db);
+    assert.deepEqual(dryRun.missingColumns, ["contract_json", "completion_json"]);
+    assert.equal(dryRun.transitionTablePresent, false);
+    migratePersonalAgentTaskLifecycle(db, { dryRun: false });
+    migratePersonalAgentTaskLifecycle(db, { dryRun: false });
+    assert.deepEqual({ ...db.prepare("select id, state, contract_json, completion_json from personal_agent_tasks").get() }, {
+      id: "tsk_old", state: "queued", contract_json: "{}", completion_json: null,
+    });
+    assert.equal(db.prepare("select count(*) as count from personal_agent_task_transitions").get().count, 0);
+  } finally {
+    db.close();
+  }
+});
+
 test("Agent Job store leaves its schema unchanged while the Personal Agent feature is off", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-personal-agent-migration-off-"));
   try {
     const db = await openAgentJobDb({ ORKESTR_HOME: home });
     assert.equal(db.prepare("select count(*) as count from sqlite_master where type = 'table' and name like 'personal_agent_%'").get().count, 0);
+  } finally {
+    await closeAgentJobDbs();
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("turning on the feature migrates an already-open Agent Job store", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-personal-agent-migration-toggle-"));
+  try {
+    const disabled = await openAgentJobDb({ ORKESTR_HOME: home });
+    assert.equal(disabled.prepare("select count(*) as count from sqlite_master where type = 'table' and name like 'personal_agent_%'").get().count, 0);
+    const enabled = await openAgentJobDb({ ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: "true" });
+    assert.equal(enabled, disabled);
+    assert.equal(enabled.prepare("select count(*) as count from sqlite_master where type = 'table' and name like 'personal_agent_%'").get().count, 3);
   } finally {
     await closeAgentJobDbs();
     await fs.rm(home, { recursive: true, force: true });
@@ -105,6 +144,7 @@ test("Agent Job store creates and reopens the additive entity schema", async () 
     assert.deepEqual(reopened.prepare("select name from sqlite_master where type = 'table' and name like 'personal_agent_%' order by name").all().map((row) => row.name), [
       "personal_agent_memories",
       "personal_agent_projects",
+      "personal_agent_task_transitions",
       "personal_agent_tasks",
     ]);
   } finally {
