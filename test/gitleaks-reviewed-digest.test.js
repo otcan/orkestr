@@ -28,9 +28,6 @@ async function fixture(t) {
     return result.stdout.trim();
   };
   git(["init", "--quiet", "--template="]);
-  // The scanner deliberately disables grafts. Git's deprecation hint for that
-  // fixed safety setting must not make this fixture's patch stream unreadable.
-  git(["config", "advice.graftFileDeprecated", "false"]);
   const version = spawnSync(binary, ["version"], { env: scanEnvironment, encoding: "utf8", timeout: 10000 });
   assert.equal(version.status, 0, "scanner version unavailable");
   assert.equal(version.stdout.trim().replace(/^v/, ""), scannerRelease.version);
