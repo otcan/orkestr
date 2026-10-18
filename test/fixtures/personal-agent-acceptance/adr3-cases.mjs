@@ -6,6 +6,18 @@ export const adr3Source = Object.freeze({
   sections: [2, 3, 4, 5, 9, 10],
 });
 
+// Acceptance expectations, never arguments for a real provisioning API.
+export const adr3ProvisioningExpectations = Object.freeze({
+  projectKinds: ["shopping-list", "software"],
+  defaultResources: ["github_repo", "jira_project", "oxrm_workspace", "whatsapp_conversation"],
+  trigger: "project_creation",
+  desktopInstancesCreated: 0,
+  provisioners: "fake_only",
+});
+export const adr3PluginLayers = Object.freeze([
+  "package", "connections", "capabilities", "global_or_selected_project_bindings", "resource_instances",
+]);
+
 export const adr3Cases = [
   {
     id: "AT-01", title: "Receipt while busy", lanes: ["ingress", "runtime", "ui"],
@@ -94,11 +106,12 @@ export const adr3Cases = [
   {
     id: "AT-07a", title: "Project provisioning", lanes: ["ingress", "ui"],
     ops: ["OP-03", "OP-21", "OP-22"],
-    scenario: "Create shopping-list and software projects through fake GitHub/Jira/OXRM/WhatsApp providers; retry concurrently; lose one credential and restart halfway through.",
+    scenario: "Create shopping-list and software projects with default automatic provisioning through fake GitHub/Jira/OXRM/WhatsApp providers; retry concurrently; lose one credential and restart halfway through.",
+    expectations: adr3ProvisioningExpectations,
     assertions: [
-      "Both kinds create or explicitly bind all four actual fixture resources, not placeholders; every completed step has a provider receipt and canonical project binding.",
+      "By default every new project of both kinds automatically provisions a GitHub repo, Jira project, OXRM workspace and project WhatsApp conversation; every completed step has a fake-provider receipt and canonical binding, never a placeholder.",
       "Retry/restart does not duplicate resources; missing/unsupported access leaves the exact step blocked with a remedy instead of claiming success.",
-      "Project provisioning preserves selected connection and participant intent; no real messages are sent and no desktop is instantiated without need.",
+      "Project creation instantiates zero desktops; desktops are leased only on later demand. Fake provisioning preserves connection/participant intent, sends no real messages and changes no WhatsApp sender or route.",
     ],
     gap: "Durable default project provisioning with connection-aware retries is pending; no live provider work is authorized by these tests.",
     foundations: ["PA-R01", "PA-R03"],
@@ -106,10 +119,11 @@ export const adr3Cases = [
   {
     id: "AT-07b", title: "Plugin inheritance", lanes: ["ingress", "ui"],
     ops: ["OP-14", "OP-20", "OP-22"],
-    scenario: "Use one synthetic plugin and two connections; enable globally and for a selected project, disable one project, and try to broaden an admin restriction.",
+    scenario: "Install one synthetic plugin package with two account connections; resolve capabilities, global/selected-project bindings and resource instances; narrow one project's inherited default, then try escalation.",
+    pluginLayers: adr3PluginLayers,
     assertions: [
-      "Installation, connection identity, capability and project binding remain distinct; projects choose only authorized connections/capabilities.",
-      "Disabled project use and attempts to broaden the instance ceiling fail before an effect; another allowed project still works.",
+      "All five layers remain distinct: package, connections (several accounts per plugin), capabilities, global/selected-project bindings and resource instances; a project selects only authorized accounts/capabilities.",
+      "Global defaults are inherited and can only be narrowed per project; disabled use and escalation of that ceiling fail before an effect while another allowed project works.",
       "Revocation takes effect for pending work and across restart without silently changing the sending identity.",
     ],
     gap: "ADR 0003 plugin/connection inheritance is pending; acceptance must use the owning lane's contract rather than invent a registry.",

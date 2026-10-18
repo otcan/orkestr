@@ -19,6 +19,15 @@ reasoning authority or an implicit fallback. In particular, older PA-06/PA-08
 local-model integration requirements cannot be used as the new main-assistant
 acceptance gate. Their local-adapter primitive regressions remain useful.
 
+Owner clarification (2026-10-18): every actual new project, including a shopping
+list, defaults to all four resources: GitHub repo, Jira project, OXRM workspace
+and project WhatsApp conversation. Provision idempotently or expose an exact
+blocker; lazy provisioning is not the default. Project creation instantiates
+zero desktops; desktop leases are acquired only on later demand. Plugins have
+five distinct layers from the outset: package, multiple account connections,
+capabilities, global/selected-project bindings and resource instances. Global
+defaults are inherited and projects can narrow them, never escalate them.
+
 Preserve ADR 0002 storage/lifecycle, opt-in memory, Agent Job effects/approvals,
 existing security and `ORKESTR_PERSONAL_AGENT_ENABLED` (default off). Existing
 PA-R/PA-G tests are foundations, not substitutes for the AT cases. Lane-owned
@@ -65,8 +74,8 @@ first supported integration needed, not new APIs the lanes must implement.
 | AT-05 | Lanes 1/3 task-bound correction and effects | Correction/duplicate/restart before dispatch, obsolete approval refused, uncertain effect reconciled or held; no duplicate sends |
 | AT-06 | Lanes 1/3 deterministic durable hold + Lane 4 truthful status | Closed model latches; stop before/during/after dispatch, repeated after restart; no new effect, truthful too-late/unknown status |
 | AT-07 | Lanes 1/3 canonical bindings and scoped leases | Fast/deep/workers reuse A's binding; B denied, stale heartbeat/fencing denied before effect, scoped concurrency quotas |
-| AT-07a | Lane 1 project provisioning + Lane 4 contextual auth/status | Shopping-list and software projects both provision all four authorized fake resources; partial failure/retry/restart never duplicates or fabricates readiness |
-| AT-07b | Lane 1 inheritance/policy + Lane 4 connection selection | One plugin, multiple identities, global/selected/disabled projects; cannot broaden admin ceiling, revocation applies to pending work |
+| AT-07a | Lane 1 project provisioning + Lane 4 contextual auth/status | Shopping-list and software projects both automatically provision all four default fake resources, zero desktops; exact blockers, partial failure/retry/restart never duplicates or fabricates readiness |
+| AT-07b | Lane 1 inheritance/policy + Lane 4 connection selection | All five plugin layers, multiple account identities, global/selected/disabled projects; inherited defaults can only narrow, revocation applies to pending work |
 | AT-07c | Lane 4 progressive entry/auth + Lane 1 health | Assistant before all optional connections; callback returns to same context; partial provisioning and missing provider truthful, tenant/admin boundaries intact |
 | AT-08 | Lane 3 reuse/fork/fresh lineage | Pinned snapshot/parent, explicit fresh brief and rationale, expiry/reopen history; unsupported native fork never silently fabricated |
 | AT-09 | Lanes 1/3 whole-service reconciliation | Kill/restart at four boundaries; ordering/holds/approvals/leases/lineage survive, one effect/result; injected stall yields one evidenced blocker with bounded retries |

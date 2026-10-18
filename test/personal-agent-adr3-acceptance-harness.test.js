@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { discoverTestFiles } from "../scripts/ci-test-runner.mjs";
-import { adr3Cases, adr3Source } from "./fixtures/personal-agent-acceptance/adr3-cases.mjs";
+import { adr3Cases, adr3Source, adr3ProvisioningExpectations, adr3PluginLayers } from "./fixtures/personal-agent-acceptance/adr3-cases.mjs";
 
 const expectedIds = ["AT-01", "AT-02", "AT-03", "AT-04", "AT-05", "AT-06", "AT-07", "AT-07a", "AT-07b", "AT-07c", "AT-08", "AT-09", "AT-10", "AT-11", "AT-12"];
 const pending = fileURLToPath(new URL("./personal-agent-adr3-acceptance.test.js", import.meta.url));
@@ -24,6 +24,16 @@ test("ADR3 inventory covers every AT including provisioning, inheritance and pro
   assert.equal(new Set(adr3Cases.map(item => item.id)).size, expectedIds.length);
   assert.deepEqual(adr3Source.sections, [2, 3, 4, 5, 9, 10]);
   assert.equal(adr3Source.commit, "3a5c8c37");
+  assert.deepEqual(adr3ProvisioningExpectations, {
+    projectKinds: ["shopping-list", "software"],
+    defaultResources: ["github_repo", "jira_project", "oxrm_workspace", "whatsapp_conversation"],
+    trigger: "project_creation", desktopInstancesCreated: 0, provisioners: "fake_only",
+  });
+  assert.equal(adr3Cases.find(item => item.id === "AT-07a").expectations, adr3ProvisioningExpectations);
+  assert.deepEqual(adr3PluginLayers, [
+    "package", "connections", "capabilities", "global_or_selected_project_bindings", "resource_instances",
+  ]);
+  assert.equal(adr3Cases.find(item => item.id === "AT-07b").pluginLayers, adr3PluginLayers);
   for (const item of adr3Cases) {
     assert.ok(item.title.length > 8 && item.scenario.length > 90 && item.gap.length > 60, item.id);
     assert.ok(item.lanes.length && item.lanes.every(lane => ["ingress", "runtime", "ui"].includes(lane)), item.id);
