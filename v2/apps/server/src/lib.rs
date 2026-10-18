@@ -22,6 +22,7 @@ mod auth;
 mod browser;
 mod execution;
 mod execution_accept;
+pub mod owned_execution;
 mod provider_payload;
 mod resource_health;
 mod routes;
