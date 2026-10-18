@@ -159,3 +159,51 @@ fn public_stop_receipt_never_sets_terminal_execution_state() {
     model.apply_status(g, 3, wire).unwrap();
     assert!(model.summary(3).contains("Cancelled"));
 }
+
+#[test]
+fn streaming_projection_does_not_replace_sampled_run_control_precondition() {
+    let mut stops = Stops::default();
+    let mut wire = status();
+    wire.control_revision = Some(3);
+    let original = stops.prepare(&wire, "stop:original".into()).unwrap();
+    assert_eq!(original.request.expected_control_revision, Some(3));
+    // Progress and sibling activity may advance the full projection independently.
+    wire.revision += 65;
+    stops.failed(&original, 0);
+    let retry = stops.prepare(&wire, "unused".into()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&original.request).unwrap(),
+        serde_json::to_value(&retry.request).unwrap()
+    );
+    // Even a definitive refusal cannot turn progress into automatic control review.
+    stops.failed(&original, 409);
+    assert!(!stops.can_review(&wire));
+    wire.control_revision = Some(4);
+    assert!(stops.can_review(&wire));
+    stops.review(&wire).unwrap();
+    let reviewed = stops.prepare(&wire, "stop:reviewed".into()).unwrap();
+    assert_eq!(reviewed.request.expected_revision, 75);
+    assert_eq!(reviewed.request.expected_control_revision, Some(4));
+    let mut forged = reviewed.clone();
+    forged.request.expected_control_revision = Some(3);
+    stops.failed(&forged, 409);
+    assert!(!stops.needs_review(&wire));
+    assert!(stops
+        .receipt(&original, receipt("requested_unknown"))
+        .is_err());
+}
+
+#[test]
+fn invalid_control_revision_is_refused_and_legacy_omits_new_field() {
+    let mut stops = Stops::default();
+    let mut wire = status();
+    let legacy = stops.prepare(&wire, "legacy".into()).unwrap();
+    assert!(serde_json::to_value(legacy.request)
+        .unwrap()
+        .get("expected_control_revision")
+        .is_none());
+    for revision in [0, -1] {
+        wire.control_revision = Some(revision);
+        assert!(stops.prepare(&wire, "invalid".into()).is_err());
+    }
+}

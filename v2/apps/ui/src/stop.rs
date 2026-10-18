@@ -63,7 +63,10 @@ impl Stops {
                 .run_id
                 .as_ref()
                 .and_then(|run| self.pending.get(&identity(&status.conversation_id, run)))
-                .is_some_and(|pending| status.revision > pending.request.expected_revision)
+                .is_some_and(|pending| match pending.request.expected_control_revision {
+                    Some(old) => status.control_revision.is_some_and(|current| current > old),
+                    None => status.revision > pending.request.expected_revision,
+                })
     }
     /// Explicit owner review after a definitive refusal; never used for uncertain failures.
     pub fn review(&mut self, status: &ExecutionStatus) -> Result<(), &'static str> {
@@ -130,6 +133,7 @@ impl Stops {
         let request = ExecutionControlRequest {
             run_id: run.clone(),
             expected_revision: status.revision,
+            expected_control_revision: status.control_revision,
             request_key: key,
         };
         if !request.is_valid() {
@@ -153,6 +157,8 @@ impl Stops {
                 .is_some_and(|p| {
                     p.request.run_id == pending.request.run_id
                         && p.request.expected_revision == pending.request.expected_revision
+                        && p.request.expected_control_revision
+                            == pending.request.expected_control_revision
                         && p.request.request_key == pending.request.request_key
                 })
     }
