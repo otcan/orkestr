@@ -29,7 +29,7 @@ fn query(root: &Path, home: Option<&Path>) -> serde_json::Value {
 
 #[test]
 fn binary_version_precedes_home_bootstrap_and_state() {
-    let root = std::env::temp_dir().join(format!("v2-version-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("v2-version-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&root).expect("fresh owned root");
     let result = std::panic::catch_unwind(|| {
         let unconfigured = query(&root, None);
