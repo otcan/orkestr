@@ -1,6 +1,6 @@
 # Runtime supervisor context proposal
 
-Status: proposed runtime agreement, not an implemented port or adapter. Based on
+Status: reviewed design constraints, not an implemented port or adapter. Historical basis:
 core port v2 at 93460326 and core binding/claim adapter at
  a89392c52c45612480a67c3394f7f905514bb1cf. Core owns the constructor, application
 contract, schema and durable enforcement. Runtime owns provider supervision only.
@@ -21,8 +21,10 @@ namespace strings to every runtime method. Its immutable context contains:
 
 These are server configuration and authority context, not web DTO fields. Native
 IDs and profile references remain private, non-serializable server records. A
-namespace is not itself an authorization credential. Application construction must
-bind authorized configuration; arbitrary requests cannot choose a broader handle.
+namespace is not itself an authorization credential. Construction stays private
+to trusted bootstrap: validate the configured grant, then atomically register or
+acquire the context. Arbitrary requests cannot construct or broaden a handle.
+Every RuntimeStore method must validate all supplied IDs against its bound context.
 
 The existing native identity uniqueness reservation by provider kind, namespace
 and native session ID should remain intact, including historical identities.
@@ -40,9 +42,11 @@ a second supervisor cannot obtain a second canonical pair or silently steal it.
 
 Restart takeover of the same supervisor key requires an atomic, exclusive,
 store-issued incarnation transition. A random new incarnation string alone does
-not authorize takeover. The transition fences the predecessor's authority;
-concurrent takeover has one winner. Core must define authorization and expiry
-conditions for this transition before implementing recovery or admission.
+not authorize takeover. Require an authorized handle grant, exact predecessor
+incarnation/version CAS and authoritative supervisor lease expiry. Refuse an
+active predecessor with Busy; this slice has no force path. One transaction issues
+the new incarnation and fences its predecessor, with exactly one concurrent
+winner. Preserve unknown work for reconciliation.
 
 The existing recover_runtime supervisor_instance argument must equal the bound
 incarnation. Recovery queries must also constrain owner, provider namespace and
@@ -55,7 +59,8 @@ authorized handle, never a recovery argument override.
 This can preserve the existing RuntimeStore method signatures if core supplies
 and enforces the bound handle. Until that enforcement and takeover contract are
 implemented, run admission, native binding and recovery remain Unavailable.
-The runtime's fresh-dispatch/replay guard remains independently required.
+The runtime's fresh-dispatch/replay guard remains independently required. No
+exported constructor or handle type signature is agreed by this document.
 
 ## Required independent evidence
 
