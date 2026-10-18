@@ -74,6 +74,7 @@ class Channel:
         self.terminal = False
         self.messages = set()
         self.cancelled = False
+        self.cancelled_tool = False
 
     def client(self, request):
         exact(request, ("id", "method", "params"))
@@ -123,6 +124,8 @@ class Channel:
             require(type(frame["id"]) is int and frame["id"] > 0 and frame["method"] == "turn/interrupt")
             exact(frame["params"], ("threadId", "turnId"))
             require(frame["params"] == {"threadId": self.native, "turnId": self.turn})
+            if self.offline_route is not None:
+                self.cancelled_tool = self.offline_route.cancel()
             self.cancelled = True  # a lost acknowledgement never permits retry
             kind = "turn/interrupt"
         else:
@@ -140,6 +143,7 @@ class Channel:
             if self.turn is not None:
                 self.retired_turns.add(self.turn)
             self.turn, self.terminal, self.cancelled = None, False, False
+            self.cancelled_tool = False
             self.committed = True  # latch BEFORE a possible partial provider write
             kind = "turn/start"
         self.pending = (outer, frame["id"], kind)
@@ -232,6 +236,8 @@ class Channel:
                 self.turn = turn_id
             if frame["method"] == "turn/completed":
                 require(self.offline_route is None or self.offline_route.pending is None)
+                if self.cancelled_tool:
+                    require(self.cancelled and clean["turn"]["status"] == "interrupted")
                 require(clean["turn"]["status"] in ("completed", "failed", "interrupted"))
                 self.terminal = True
             frame = {"method": frame["method"], "params": clean}

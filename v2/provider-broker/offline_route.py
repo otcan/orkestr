@@ -25,3 +25,9 @@ class OfflineRoute:
         # Latch before preparation. Partial/unknown delivery cannot resubmit.
         self.pending=None
         return clean['params']['frame']
+
+    def cancel(self):
+        had_pending=self.pending is not None
+        self.pending=None
+        # Histories remain burned; cancellation never returns a result grant.
+        return had_pending
