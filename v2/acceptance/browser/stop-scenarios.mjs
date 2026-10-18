@@ -21,46 +21,50 @@ export async function stopScenarios({page,conversation,fixture,report,signal,mod
   const initial=await read(page,base+'/execution');
   assert.equal(initial.body.phase,'running');assert.equal(initial.body.capabilities.stop,true);
   await setDraft(page,retained);
-  let original,followup;
-  // One ordinary accepted followup races the mounted request, not a fake 409.
-  let cdp=await page.createCDPSession();
-  await cdp.send('Fetch.enable',{patterns:[{urlPattern:`*${path}`,requestStage:'Request'}]});
-  let interceptionError;
-  cdp.on('Fetch.requestPaused',event=>{void(async()=>{
-    original=JSON.parse(event.request.postData);
-    followup=await write(page,base+'/messages',{client_message_id:'synthetic-stop-followup',text:'synthetic ordinary HTTP input 2'});
-    assert.equal(followup.status,202);
-    const current=await read(page,base+'/execution');
-    assert.equal(current.body.run_id,original.run_id);assert(current.body.revision>original.expected_revision);
-    await cdp.send('Fetch.continueRequest',{requestId:event.requestId});
-  })().catch(error=>{interceptionError=error;void cdp.send('Fetch.failRequest',{requestId:event.requestId,errorReason:'Failed'}).catch(()=>{});});});
-  try{
-    const response=page.waitForResponse(r=>new URL(r.url()).pathname===path&&r.request().method()==='POST',{timeout:10000});
-    await click(page,'Stop');assert.equal((await response).status(),409);if(interceptionError)throw interceptionError;
-  }finally{await cdp.send('Fetch.disable').catch(()=>{});await cdp.detach();}
-  assert(!(await fixture.trace()).some(row=>row.kind==='interrupt'));
-  await wait(()=>enabled(page,'Review updated Stop'),'stale_stop_requires_review',signal);
-  assert.equal(await draft(page),retained);
-  await click(page,'Review updated Stop');await wait(()=>enabled(page,'Stop'),'reviewed_stop_not_ready',signal);
-
-  // Drop an actual committed public response. Retry after terminal/ACK transition
-  // must keep request key/revision even when the server no longer offers Stop.
-  cdp=await page.createCDPSession();let resolve,reject,held;
+  // The runner supplies only a reviewed synthetic native Progress barrier. It
+  // must emit through the real peer/broker/Store, never edit revisions or SQL.
+  assert.equal(typeof fixture.advanceProgress,'function','reviewed_progress_barrier_required');
+  let original,followup,advanced,interceptionError,resolve,reject,held;
+  const cdp=await page.createCDPSession();
   const captured=new Promise((done,fail)=>{resolve=done;reject=fail;});
   const timer=setTimeout(()=>reject(Error('stop_response_deadline')),10000);
-  await cdp.send('Fetch.enable',{patterns:[{urlPattern:`*${path}`,requestStage:'Response'}]});
+  await cdp.send('Fetch.enable',{patterns:[
+    {urlPattern:`*${path}`,requestStage:'Request'},
+    {urlPattern:`*${path}`,requestStage:'Response'},
+  ]});
   cdp.on('Fetch.requestPaused',event=>{void(async()=>{
+    if(event.responseStatusCode===undefined){
+      original=JSON.parse(event.request.postData);
+      assert(Number.isSafeInteger(original.expected_control_revision)&&original.expected_control_revision>0);
+      const before=await read(page,base+'/execution');
+      assert.equal(before.status,200);
+      await fixture.advanceProgress();
+      await wait(async()=>{
+        advanced=await read(page,base+'/execution');
+        return advanced.status===200&&typeof advanced.body.progress?.payload_id==='string'&&advanced.body.progress.payload_id!==before.body.progress?.payload_id;
+      },'durable_progress_not_advanced',signal);
+      assert.equal(advanced.body.run_id,original.run_id);
+      assert.equal(advanced.body.control_revision,original.expected_control_revision);
+      assert(advanced.body.revision>original.expected_revision);
+      followup=await write(page,base+'/messages',{client_message_id:'synthetic-stop-followup',text:'synthetic ordinary HTTP input 2'});
+      assert.equal(followup.status,202);
+      const current=await read(page,base+'/execution');
+      assert.equal(current.body.run_id,original.run_id);
+      assert(current.body.revision>advanced.body.revision);
+      assert.equal(current.body.control_revision,original.expected_control_revision);
+      await cdp.send('Fetch.continueRequest',{requestId:event.requestId});
+      return;
+    }
     held=event;const raw=await cdp.send('Fetch.getResponseBody',{requestId:event.requestId});
     const body=JSON.parse(raw.base64Encoded?Buffer.from(raw.body,'base64').toString():raw.body);
     resolve({status:event.responseStatusCode,body,request:JSON.parse(event.request.postData)});
-  })().catch(reject);});
+  })().catch(error=>{interceptionError=error;reject(error);void cdp.send('Fetch.failRequest',{requestId:event.requestId,errorReason:'Failed'}).catch(()=>{});});});
   let committed;
   try{
     await click(page,'Stop');committed=await captured;
     assert.equal(committed.status,200);assert.equal(committed.body.outcome,'requested_unknown');
-    assert.equal(committed.request.run_id,original.run_id);
-    assert(committed.request.expected_revision>original.expected_revision);
-    assert.notEqual(committed.request.request_key,original.request_key);
+    assert.deepEqual(committed.request,original);
+    if(interceptionError)throw interceptionError;
     await cdp.send('Fetch.failRequest',{requestId:held.requestId,errorReason:'Failed'});held=null;
   }finally{
     clearTimeout(timer);if(held)await cdp.send('Fetch.continueRequest',{requestId:held.requestId}).catch(()=>{});
@@ -97,7 +101,41 @@ export async function stopScenarios({page,conversation,fixture,report,signal,mod
   assert(history.body.messages.some(message=>message.text==='synthetic ordinary HTTP input 2'));
   assert.equal(await draft(page),retained);
   report.checks.push({name:`owned_stop_${mode}`,status:'passed',duration_ms:Math.round(performance.now()-start),
-    stale_revision:409,explicit_review:true,exact_lost_response_retry:true,identical_receipt:true,
+    progress_projection_advanced:true,followup_projection_advanced:true,control_revision_stable:true,
+    original_request_accepted:true,exact_lost_response_retry:true,identical_receipt:true,
     terminal_confirmed:mode==='terminal',ack_only_unresolved:mode==='ack-only',queued_followup_retained:true,
     turns:1,interrupts:1,draft_preserved:true});
+}
+
+// Separate case: the runner must name and execute a reviewed canonical control
+// transition. A followup, Progress, fabricated 409 or revision setter is invalid.
+export async function staleControlScenario({page,conversation,transition,report,signal}) {
+  assert.equal(typeof transition?.apply,'function','canonical_control_transition_required');
+  assert.equal(typeof transition?.source,'string');assert(transition.source.length>0);
+  const base=`/api/v2/conversations/${conversation}`,path=base+'/stop';
+  await wait(()=>enabled(page,'Stop'),'owned_stop_not_advertised',signal);
+  const cdp=await page.createCDPSession();let original,current,error;
+  await cdp.send('Fetch.enable',{patterns:[{urlPattern:`*${path}`,requestStage:'Request'}]});
+  cdp.on('Fetch.requestPaused',event=>{void(async()=>{
+    original=JSON.parse(event.request.postData);
+    assert(Number.isSafeInteger(original.expected_control_revision)&&original.expected_control_revision>0);
+    await transition.apply();
+    current=await read(page,base+'/execution');assert.equal(current.status,200);
+    assert.equal(current.body.run_id,original.run_id);
+    assert(current.body.control_revision>original.expected_control_revision,'control_state_must_advance');
+    await cdp.send('Fetch.continueRequest',{requestId:event.requestId});
+  })().catch(cause=>{error=cause;void cdp.send('Fetch.failRequest',{requestId:event.requestId,errorReason:'Failed'}).catch(()=>{});});});
+  try{
+    const response=page.waitForResponse(r=>new URL(r.url()).pathname===path&&r.request().method()==='POST',{timeout:10000});
+    await click(page,'Stop');const refused=await response;if(error)throw error;
+    assert.equal(refused.status(),409);
+    assert.deepEqual(JSON.parse(refused.request().postData()),original);
+  }finally{await cdp.send('Fetch.disable').catch(()=>{});await cdp.detach();}
+  // A canonical transition may revoke Stop or make the run terminal. In that
+  // case no new request is legitimate; review is only enabled for a stoppable run.
+  await wait(()=>page.$eval('section[aria-label="Execution and resources"]',node=>node.innerText.includes('Stop not confirmed. Refresh execution status before retrying.')),'control_conflict_not_rendered',signal);
+  const reviewable=current.body.capabilities.stop&&['queued','starting','running'].includes(current.body.phase);
+  await wait(async()=>(await enabled(page,'Review updated Stop'))===reviewable,'control_conflict_review_mismatch',signal);
+  report.checks.push({name:'stale_run_control',status:'passed',transition_source:transition.source,
+    stale_control_revision:409,review_available:reviewable,original_request_preserved:true});
 }
