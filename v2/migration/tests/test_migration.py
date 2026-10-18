@@ -77,6 +77,77 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(second, repeated)
         self.assertEqual(len(second['conflicts']), 1)
 
+    def test_replay_original_parent_new_dependents_stays_quarantined(self):
+        first, _ = reconcile(self.doc)
+        changed = copy.deepcopy(self.doc)
+        changed['records'][3]['payload']['text'] = 'Conflicting synthetic parent'
+        second, _ = reconcile(seal(changed), first)
+        # Reopen persisted state, then replay the original parent bytes. New children
+        # are intentionally reversed so closure cannot depend on iteration order.
+        reopened = json.loads(json.dumps(second))
+        original = copy.deepcopy(self.doc)
+        original['records'].extend([
+            record('message', ['fixture-root', 'fixture-message-4'],
+                   references=[ref('message', ['fixture-root', 'fixture-message-3'])],
+                   payload={'position': 4}),
+            record('message', ['fixture-root', 'fixture-message-3'],
+                   references=[ref('message', ['fixture-root', 'fixture-message-1'])],
+                   payload={'position': 3}),
+        ])
+        third, _ = reconcile(seal(original), reopened)
+        for item in original['records']:
+            entry = third['entries'][map_key(original['source_instance'], item)]
+            if item['kind'] == 'message':
+                self.assertEqual(entry['disposition'], 'QUARANTINED')
+                if item['key'][1] in {'fixture-message-3', 'fixture-message-4'}:
+                    self.assertIn('quarantined_reference', entry['reasons'])
+        self.assertEqual(self.entry(third, 'project')['disposition'], 'HISTORY_ONLY')
+        self.assertEqual(self.entry(third, 'run')['disposition'], 'PAUSED')
+        fourth, _ = reconcile(original, third)
+        self.assertEqual(third, fourth)
+
+    def test_thread_cycle_propagates_through_implicit_ownership(self):
+        value = copy.deepcopy(self.doc)
+        value['records'][1]['references'] = [ref('thread', 'fixture-worker')]
+        value['records'].append(record('message', ['fixture-worker', 'fixture-worker-message'],
+                                       payload={'position': 1}))
+        ledger, _ = reconcile(seal(value))
+        for entry in ledger['entries'].values():
+            if entry['kind'] in {'thread', 'message'}:
+                self.assertEqual(entry['disposition'], 'QUARANTINED')
+            if entry['kind'] == 'message':
+                self.assertIn('quarantined_reference', entry['reasons'])
+        self.assertEqual(self.entry(ledger, 'project')['disposition'], 'HISTORY_ONLY')
+        self.assertEqual(self.entry(ledger, 'timer')['disposition'], 'PAUSED')
+
+    def test_replay_thread_conflict_quarantines_new_implicit_message(self):
+        first, _ = reconcile(self.doc)
+        changed = copy.deepcopy(self.doc)
+        changed['records'][1]['payload']['name'] = 'Conflicting synthetic root'
+        second, _ = reconcile(seal(changed), first)
+        original = copy.deepcopy(self.doc)
+        child = record('message', ['fixture-root', 'fixture-new-message'],
+                       payload={'position': 3})
+        original['records'].append(child)
+        third, _ = reconcile(seal(original), json.loads(json.dumps(second)))
+        entry = third['entries'][map_key(original['source_instance'], child)]
+        self.assertEqual(entry['disposition'], 'QUARANTINED')
+        self.assertIn('quarantined_reference', entry['reasons'])
+        self.assertEqual(self.entry(third, 'project')['disposition'], 'HISTORY_ONLY')
+
+    def test_quarantine_does_not_cross_source_instances(self):
+        first, _ = reconcile(self.doc)
+        changed = copy.deepcopy(self.doc)
+        changed['records'][1]['payload']['name'] = 'Conflicting synthetic root'
+        second, _ = reconcile(seal(changed), first)
+        other = copy.deepcopy(self.doc)
+        other['source_instance'] = 'fixture-independent-instance'
+        third, _ = reconcile(seal(other), second)
+        for item in other['records']:
+            if item['kind'] in {'thread', 'message'}:
+                entry = third['entries'][map_key(other['source_instance'], item)]
+                self.assertEqual(entry['disposition'], 'HISTORY_ONLY')
+
     def test_operational_kinds_paused(self):
         ledger, _ = reconcile(self.doc)
         for kind in ('run', 'timer', 'route', 'approval', 'automation', 'job'):
