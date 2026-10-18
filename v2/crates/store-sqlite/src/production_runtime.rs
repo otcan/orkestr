@@ -17,6 +17,8 @@ mod capability;
 pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};
 mod dispatch;
 mod fence;
+mod fast;
+pub use fast::FastAdmissionInput;
 pub(crate) mod inspection;
 mod leases;
 mod metadata;
