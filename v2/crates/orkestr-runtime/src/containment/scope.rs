@@ -26,18 +26,20 @@ impl ExecutionScope {
         run: &str,
         generation: u64,
     ) -> Result<Self, Error> {
-        fn valid(value: &str) -> bool {
+        fn valid(value: &str, namespace: bool) -> bool {
             !value.is_empty()
                 && value.len() <= 128
-                && value
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+                && value.bytes().all(|b| {
+                    b.is_ascii_alphanumeric() || b"-_.".contains(&b) || (namespace && b == b':')
+                })
         }
-        if !valid(namespace)
-            || !valid(incarnation)
-            || !valid(owner)
-            || !valid(session)
-            || !valid(run)
+        // Match the issuer's trusted provider namespace grammar. Identifier
+        // fields retain their narrower grammar; this grants no fresh dispatch.
+        if !valid(namespace, true)
+            || !valid(incarnation, false)
+            || !valid(owner, false)
+            || !valid(session, false)
+            || !valid(run, false)
             || generation == 0
         {
             return Err(Error::InvalidScope);

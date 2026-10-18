@@ -49,7 +49,7 @@ fn ready_rpc(native: &str) -> CodexRpc {
     rpc
 }
 
-async fn exercise(wrong_native: bool) {
+async fn exercise(wrong_native: bool, namespace: &str) {
     let root = std::path::PathBuf::from(
         std::env::var_os("ORKESTR_V2_HOME").expect("isolated home"),
     )
@@ -81,7 +81,7 @@ async fn exercise(wrong_native: bool) {
             &token,
             ProductionSupervisorConfig {
                 provider: ProviderKind::Codex,
-                namespace: "synthetic-subscription".into(),
+                namespace: namespace.into(),
                 supervisor_key: "synthetic-deep".into(),
                 takeover: ProductionTakeover::First,
             },
@@ -227,10 +227,15 @@ async fn exercise(wrong_native: bool) {
 
 #[tokio::test]
 async fn ordinary_committed_capability_drives_only_its_durable_synthetic_input() {
-    exercise(false).await;
+    exercise(false, "synthetic-subscription").await;
 }
 
 #[tokio::test]
 async fn wrong_native_refuses_io_and_reopen_cannot_reissue_consumed_grant() {
-    exercise(true).await;
+    exercise(true, "synthetic-subscription").await;
+}
+
+#[tokio::test]
+async fn issuer_valid_colon_namespace_reaches_owned_transport_without_reissuing_grant() {
+    exercise(false, "subscription:local").await;
 }
