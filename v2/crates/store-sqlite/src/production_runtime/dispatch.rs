@@ -38,7 +38,16 @@ impl Store {
         if row.get::<String, _>("incarnation_id") != c.incarnation {
             return Err(RuntimeStoreError::Fenced);
         }
-        let canonical = envelope(&row)?;
+        if !matches!(
+            row.get::<&str, _>("state"),
+            "starting" | "running" | "cancel_requested"
+        ) {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        let mut canonical = envelope(&row)?;
+        if row.get::<&str, _>("state") == "cancel_requested" {
+            canonical.run.purpose = AdmissionPurpose::CancellationAcknowledgement;
+        }
         if canonical.run.dispatch_fence != p.run.dispatch_fence {
             return Err(RuntimeStoreError::Fenced);
         }
@@ -47,9 +56,6 @@ impl Store {
         }
         if canonical != *p {
             return Err(RuntimeStoreError::Conflict);
-        }
-        if !matches!(row.get::<&str, _>("state"), "starting" | "running") {
-            return Err(RuntimeStoreError::Fenced);
         }
         if p.run.lease_deadline_ms <= now(conn).await? {
             return Err(RuntimeStoreError::Expired);
@@ -74,6 +80,9 @@ impl Store {
         let row = self
             .production_authorized_run(&mut tx, &candidate.provider)
             .await?;
+        if candidate.provider.run.purpose != AdmissionPurpose::Execution {
+            return Err(RuntimeStoreError::Fenced);
+        }
         if candidate.run_state != RunState::Starting {
             return Err(RuntimeStoreError::Conflict);
         }
@@ -143,6 +152,9 @@ impl Store {
         let row = self
             .production_authorized_run(&mut tx, &claim.provider)
             .await?;
+        if claim.provider.run.purpose != AdmissionPurpose::Execution {
+            return Err(RuntimeStoreError::Fenced);
+        }
         match row.get::<&str, _>("dispatch_state") {
             "delivery_unknown" | "quarantined" => {
                 return Ok(ExecutionConsumption::ReconciliationRequired)

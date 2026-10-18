@@ -13,6 +13,22 @@ pub(super) fn envelope(row: &SqliteRow) -> Result<ProviderAdmission> {
     crate::runtime::envelope::envelope(row, kind)
 }
 
+// Admission replay is execution evidence, never an issued cancellation control.
+// Return an actually issued execution token even when cancellation advanced the
+// canonical row. A replay carries no locator and cannot authorize redispatch.
+async fn replay_envelope(
+    conn: &mut SqliteConnection,
+    row: &SqliteRow,
+) -> Result<ProviderAdmission> {
+    let mut result = envelope(row)?;
+    let lease = sqlx::query("SELECT * FROM production_run_leases WHERE run_id=? AND purpose='execution' ORDER BY generation DESC LIMIT 1")
+        .bind(result.run.run_id.to_string()).fetch_one(conn).await.map_err(db)?;
+    result.run.lease_generation = u64::try_from(lease.get::<i64, _>("generation")).map_err(db)?;
+    result.run.dispatch_fence = u64::try_from(lease.get::<i64, _>("dispatch_fence")).map_err(db)?;
+    result.run.lease_deadline_ms = lease.get("lease_deadline_ms");
+    Ok(result)
+}
+
 impl Store {
     pub(crate) async fn production_admit(
         &self,
@@ -65,7 +81,7 @@ impl Store {
                 return Err(RuntimeStoreError::Conflict);
             }
             let result = RunAdmissionResult {
-                provider: envelope(&row)?,
+                provider: replay_envelope(&mut tx, &row).await?,
                 run_state: run_state(&row),
                 disposition: if row.get::<&str, _>("dispatch_state") == "candidate"
                     && row.get::<String, _>("incarnation_id") == c.incarnation
@@ -80,12 +96,13 @@ impl Store {
             return Ok(result);
         }
         c.validate(&mut tx).await?;
-        let occupied: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM production_runs WHERE session_id=?")
-                .bind(binding_id.to_string())
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(db)?;
+        let occupied: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM production_runs WHERE session_id=? AND state!='cancelled'",
+        )
+        .bind(binding_id.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
         if occupied != 0 {
             return Err(RuntimeStoreError::Busy);
         }

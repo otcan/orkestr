@@ -14,10 +14,41 @@ impl Store {
         admission: &ProviderAdmission,
         action: impl FnOnce() -> std::result::Result<T, E>,
     ) -> Result<std::result::Result<T, E>> {
+        self.with_purpose_fence(admission, AdmissionPurpose::Execution, action)
+    }
+    /// Bounded nonblocking interrupt transport only. This never grants execution
+    /// or confirms a stop: only the exact issued control token is usable here.
+    pub fn with_cancellation_fence<T, E>(
+        &self,
+        admission: &ProviderAdmission,
+        action: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> Result<std::result::Result<T, E>> {
+        self.with_purpose_fence(
+            admission,
+            AdmissionPurpose::CancellationAcknowledgement,
+            action,
+        )
+    }
+    fn with_purpose_fence<T, E>(
+        &self,
+        admission: &ProviderAdmission,
+        purpose: AdmissionPurpose,
+        action: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> Result<std::result::Result<T, E>> {
         let operation = async {
             let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
             let row = self.production_authorized_run(&mut tx, admission).await?;
-            if row.get::<&str, _>("dispatch_state") != "delivery_unknown" {
+            if admission.run.purpose != purpose
+                || match purpose {
+                    AdmissionPurpose::Execution => {
+                        !matches!(row.get::<&str, _>("state"), "starting" | "running")
+                    }
+                    AdmissionPurpose::CancellationAcknowledgement => {
+                        row.get::<&str, _>("state") != "cancel_requested"
+                    }
+                }
+                || row.get::<&str, _>("dispatch_state") != "delivery_unknown"
+            {
                 return Err(RuntimeStoreError::Fenced);
             }
             let result = action();

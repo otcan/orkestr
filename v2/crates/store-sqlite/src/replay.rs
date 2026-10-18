@@ -8,7 +8,7 @@ pub(super) async fn events(
     after: i64,
     limit: u32,
 ) -> Result<Vec<ConversationEvent>> {
-    let rows = sqlx::query("SELECT e.*,coalesce(o.run_sequence,p.run_sequence) AS run_sequence,coalesce(o.kind,p.kind) AS observation_kind,o.synthetic,coalesce(o.receipt_state,p.receipt_state) AS receipt_state,c.inflight_status AS cancel_outcome,coalesce(r.id,pr.id) AS run_id,coalesce(r.session_id,pr.session_id) AS session_id,coalesce(r.message_id,pr.message_id) AS source_message_id,coalesce(r.event_id,pr.event_id) AS source_event_id FROM events e LEFT JOIN fixture_observations o ON o.event_id=e.id LEFT JOIN fixture_cancellations c ON c.event_id=e.id LEFT JOIN fixture_runs r ON r.id=coalesce(o.run_id,c.run_id) LEFT JOIN production_observations p ON p.event_id=e.id LEFT JOIN production_runs pr ON pr.id=p.run_id WHERE e.conversation_id=? AND e.owner_id=? AND e.sequence>? ORDER BY e.sequence LIMIT ?")
+    let rows = sqlx::query("SELECT e.*,coalesce(o.run_sequence,p.run_sequence) AS run_sequence,coalesce(o.kind,p.kind) AS observation_kind,o.synthetic,coalesce(o.receipt_state,p.receipt_state) AS receipt_state,coalesce(c.inflight_status,pc.inflight_status) AS cancel_outcome,coalesce(r.id,pr.id) AS run_id,coalesce(r.session_id,pr.session_id) AS session_id,coalesce(r.message_id,pr.message_id) AS source_message_id,coalesce(r.event_id,pr.event_id) AS source_event_id FROM events e LEFT JOIN fixture_observations o ON o.event_id=e.id LEFT JOIN fixture_cancellations c ON c.event_id=e.id LEFT JOIN fixture_runs r ON r.id=coalesce(o.run_id,c.run_id) LEFT JOIN production_observations p ON p.event_id=e.id LEFT JOIN production_cancellations pc ON pc.event_id=e.id LEFT JOIN production_runs pr ON pr.id=coalesce(p.run_id,pc.run_id) WHERE e.conversation_id=? AND e.owner_id=? AND e.sequence>? ORDER BY e.sequence LIMIT ?")
         .bind(conversation.to_string()).bind(owner.to_string()).bind(after).bind(limit.clamp(1,100)).fetch_all(pool).await.map_err(db)?;
     rows.iter()
         .map(|r| {
@@ -71,6 +71,72 @@ pub(super) async fn events(
                                 )
                                 .map_err(db)?,
                                 observation,
+                            },
+                        },
+                    ))
+                }
+                ("cancellation_requested", 6) => {
+                    let outcome = match r.try_get::<&str, _>("cancel_outcome").map_err(db)? {
+                        "not_dispatched" => CancellationOutcome::NotDispatched,
+                        "unknown" => CancellationOutcome::Unknown,
+                        _ => return Err(StoreError::Unavailable),
+                    };
+                    Ok(ConversationEvent::CancellationRequested(
+                        CancellationRequestedEnvelope {
+                            event_id,
+                            schema_version: 6,
+                            owner_id: owner.clone(),
+                            scope: scope.clone(),
+                            aggregate_id: conversation.clone(),
+                            aggregate_version: sequence,
+                            sequence,
+                            occurred_at,
+                            source_message_id: MessageId(parse(
+                                r.try_get("source_message_id").map_err(db)?,
+                            )?),
+                            source_event_id: EventId(parse(
+                                r.try_get("source_event_id").map_err(db)?,
+                            )?),
+                            payload_ref_or_safe_payload: CancellationRequested {
+                                kind: CancellationTag::CancellationRequested,
+                                run_id: RunId(parse(r.try_get("run_id").map_err(db)?)?),
+                                session_id: SessionId(parse(r.try_get("session_id").map_err(db)?)?),
+                                outcome,
+                            },
+                        },
+                    ))
+                }
+                ("provider_stopped", 7) => {
+                    if r.try_get::<&str, _>("observation_kind").map_err(db)? != "stopped"
+                        || r.try_get::<&str, _>("receipt_state").map_err(db)? != "cancelled"
+                    {
+                        return Err(StoreError::Unavailable);
+                    }
+                    Ok(ConversationEvent::ProviderStopped(
+                        ProviderStoppedEnvelope {
+                            event_id,
+                            schema_version: 7,
+                            owner_id: owner.clone(),
+                            scope: scope.clone(),
+                            aggregate_id: conversation.clone(),
+                            aggregate_version: sequence,
+                            sequence,
+                            occurred_at,
+                            source_message_id: MessageId(parse(
+                                r.try_get("source_message_id").map_err(db)?,
+                            )?),
+                            source_event_id: EventId(parse(
+                                r.try_get("source_event_id").map_err(db)?,
+                            )?),
+                            payload_ref_or_safe_payload: ProviderStopped {
+                                kind: StoppedTag::ProviderStopped,
+                                run_id: RunId(parse(r.try_get("run_id").map_err(db)?)?),
+                                session_id: SessionId(parse(r.try_get("session_id").map_err(db)?)?),
+                                run_sequence: u64::try_from(
+                                    r.try_get::<i64, _>("run_sequence").map_err(db)?,
+                                )
+                                .map_err(db)?,
+                                receipt_state: StoppedReceiptState::Cancelled,
                             },
                         },
                     ))

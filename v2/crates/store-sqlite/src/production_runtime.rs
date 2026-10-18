@@ -5,6 +5,9 @@ use orkestr_v2_contracts::OwnerId;
 use sqlx::{Row, SqliteConnection};
 use uuid::Uuid;
 mod admission;
+mod cancellation;
+#[cfg(test)]
+mod cancellation_tests;
 mod capability;
 pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};
 mod dispatch;
@@ -19,7 +22,13 @@ pub use metadata::{BoundSessionMetadata, ReadySessionTransition};
 #[cfg(all(test, unix))]
 mod process_tests;
 mod readiness;
+mod recovery;
+#[cfg(test)]
+mod recovery_tests;
 mod status;
+mod stop;
+#[cfg(test)]
+mod stop_tests;
 #[cfg(feature = "fixture-test-controls")]
 pub(crate) mod test_controls;
 #[cfg(test)]

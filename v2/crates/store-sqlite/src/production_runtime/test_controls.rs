@@ -12,6 +12,10 @@ pub enum ProductionCheckpoint {
     ConsumeAfterCommit,
     ObservationBeforeCommit,
     ObservationAfterCommit,
+    CancelBeforeCommit,
+    CancelAfterCommit,
+    StoppedBeforeCommit,
+    StoppedAfterCommit,
 }
 impl ProductionCheckpoint {
     fn name(self) -> &'static str {
@@ -25,6 +29,10 @@ impl ProductionCheckpoint {
             Self::ConsumeAfterCommit => "consume-after-commit",
             Self::ObservationBeforeCommit => "observation-before-commit",
             Self::ObservationAfterCommit => "observation-after-commit",
+            Self::CancelBeforeCommit => "cancel-before-commit",
+            Self::CancelAfterCommit => "cancel-after-commit",
+            Self::StoppedBeforeCommit => "stopped-before-commit",
+            Self::StoppedAfterCommit => "stopped-after-commit",
         }
     }
 }
