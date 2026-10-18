@@ -76,8 +76,8 @@ def restore_preview(raw_home, snapshot):
     with locked(home):
         current = config(home)
         package(home / "releases" / current["release"])
-        root, manifest = validate_snapshot(snapshot)
-        filesystem_disjoint(root, [home])
+        root = filesystem_disjoint(snapshot, [home])
+        root, manifest = validate_snapshot(root)
         require(not any((home / "data").iterdir()), "restore target data directory must be empty")
     return {"status": "validated only; nothing restored", "apply": "PENDING canonical Migration contract",
             "source_release": manifest["source_release"], "target_release": current["release"],

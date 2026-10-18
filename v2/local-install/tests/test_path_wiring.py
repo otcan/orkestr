@@ -114,9 +114,10 @@ class PathWiringTests(unittest.TestCase):
              patch.object(recovery, "locked", return_value=nullcontext()), \
              patch.object(recovery, "config", return_value={"release": "synthetic"}), \
              patch.object(recovery, "package"), \
-             patch.object(recovery, "validate_snapshot", return_value=(self.target, {})):
+             patch.object(recovery, "validate_snapshot", return_value=(self.target, {})) as validate:
             with self.assertRaisesRegex(RuntimeError, "synthetic mount alias"):
-                recovery.restore_preview(self.protected, self.root)
+                recovery.restore_preview(self.protected, self.target)
+        validate.assert_not_called()
         self.assertEqual(list(self.protected.iterdir()), [])
 
     def test_existing_home_root_alias_refused(self):
@@ -139,6 +140,37 @@ class PathWiringTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "synthetic sibling alias"):
             state.private_home(self.protected)
         self.assertEqual(len(list(self.protected.iterdir())), 5)
+
+    def test_fresh_path_uses_guard_returned_canonical_path(self):
+        canonical = self.root / "canonical-target"
+        self.guard.side_effect = None
+        self.guard.return_value = canonical
+        self.assertEqual(state.fresh_path(self.target, [self.protected]), canonical)
+
+    def test_upgrade_uses_guard_returned_canonical_source(self):
+        canonical = self.root / "canonical-source"
+        self.guard.side_effect = None
+        self.guard.return_value = canonical
+        with patch.object(state, "unprivileged"), \
+             patch.object(state, "private_home", return_value=self.protected), \
+             patch.object(state, "locked", return_value=nullcontext()), \
+             patch.object(state, "config", return_value={}), \
+             patch.object(state, "package", return_value=(self.target, {})), \
+             patch.object(state, "add_release", return_value=("synthetic", {})) as copy, \
+             patch.object(state, "replace_json"):
+            state.upgrade(self.protected, self.target)
+        copy.assert_called_once_with(self.protected, canonical)
+
+    def test_packaged_home_with_no_external_roots_has_explicit_protections(self):
+        self.protected.chmod(0o700)
+        for name in ("data", "logs", "control", "releases", "provider-home"):
+            (self.protected / name).mkdir(mode=0o700)
+        with patch.object(state, "protected_roots", return_value=[]):
+            self.assertEqual(state.private_home(self.protected), self.protected)
+        self.assertEqual(self.guard.call_count, 5)
+        for call in self.guard.call_args_list:
+            self.assertIn(self.protected / "install.json", call.args[1])
+            self.assertIn(self.protected / "launcher.lock", call.args[1])
 
     def test_package_inventory_includes_guard_dependency(self):
         spec = importlib.util.spec_from_file_location("path_wiring_builder", LOCAL.parent / "packaging/package.py")

@@ -59,8 +59,8 @@ checkout or an explicitly configured `ORKESTR_HOME`, and unavailable ports.
 It does not discover private homes automatically. Explicitly configure legacy
 home paths where relevant. Canonical paths resolve parent symlinks. Linux filesystem identity checks also
 reject mount/device/root aliases against protected paths; unavailable, malformed
-or ambiguous mount information refuses the operation. The separately supplied
-`path_identity.py` is a required package tool: missing guard code fails closed.
+or ambiguous mount information refuses the operation. The reviewed
+`path_identity.py` is included as a required package tool: missing guard code fails closed.
 Existing private homes and their sibling data/control/log/provider/release
 directories are rechecked when opened. Configured legacy roots remain necessary
 to identify private paths the installer cannot discover automatically. This is a
@@ -191,8 +191,13 @@ Pending/unexecuted: remote CI, macOS, cross-version schema upgrade, browser
 bootstrap handoff/interaction, canonical restore apply, Docker packaging/run,
 signed distribution, real providers and full workflow replacement. Independent
 review of the preceding artifact passed; these subsequent changes require their
-own review. Consumer wiring has synthetic API tests; mount/inode identity proof remains
-unverified until the separately reviewed helper is integrated and its tests run. No production service, host privileges, cutover,
+own review. The reviewed Linux path helper is integrated; its mount-topology/stat tests and
+consumer wiring tests pass in the combined lightweight suite. Supported
+filesystems are ext2/3/4, xfs, tmpfs and ramfs; layered/network/other filesystems
+fail closed. The optional privileged private-mount probe was not rerun here.
+Existing-home child checks protect the install/lock files and sibling
+directories as well as configured external roots; a package copied into the
+home is deliberately not treated as an external disjoint root. No production service, host privileges, cutover,
 legacy credential migration, Main WhatsApp or personal-account changes occur.
 
 Keep the trusted package entrypoint available, or invoke the copied package's
@@ -201,3 +206,14 @@ version). This increment does not add a global PATH shim. For cleanup, stop and
 wait for the managed child, retain/delete private snapshots according to the
 owner's policy, then manually remove only the explicitly selected synthetic
 home/package directories. There is no automatic uninstaller or retention daemon.
+
+Path guard integration provenance: imported unchanged from reviewed commit
+`faa82e23caaf556a2b55e00475659d3a613f050b`. Independent source inspection covered
+mount parentage/visibility, filesystem-root mapping, inode anchors for absent
+leaves, unsupported-filesystem refusal, and mount-topology change detection.
+After canonical-return and packaged-home wiring fixes, the combined lightweight
+suite passed **74/74** tests. This includes 27 helper tests and 16 consumer API
+wiring tests. Restore-preview rejects aliases before opening the snapshot.
+No host mounts or namespaces changed; optional private-mount and actual-server
+probes were not rerun for this integration. The earlier HTTP checkpoint remains
+evidence only for its recorded revision.
