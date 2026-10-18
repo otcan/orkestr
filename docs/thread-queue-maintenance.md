@@ -43,3 +43,11 @@ ACKs are internal records, not runnable inputs. Exact duplicate report revisions
 from CLI and automatic watches share deduplication. New failure events and
 changed reports remain eligible. Provenance does not grant human authority or
 external delivery permission. Normal human inputs are not classified by wording.
+
+Validated related-thread reports and automatic worker watches default to
+`instant_steer`: they update an active Codex turn, or start a turn when idle.
+Explicit `codexDeliveryMode: "passive"` or `steerActiveTurn: false` on CLI reports
+preserves separate-turn delivery. Manual watches retain their passive default.
+During a live turn, steering inputs can pass queued passive inputs; idle input
+ordering remains FIFO and `/stop` keeps priority. Reports cannot answer a pending
+human question or approval. Operator dispatch holds still prevent delivery.

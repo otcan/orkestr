@@ -45,6 +45,11 @@ export async function prepareAgentReport(thread, input, principal, env = process
     row.role === "user" && row.reportSourceThreadId === source.id && row.reportFingerprint === body.reportFingerprint);
   if (prior && !body.reportKey) return { body, suppressed: true, suppressionReason: "agent_report_duplicate", message: { ...prior, duplicate: true } };
   body.clientMessageId = `agent-report:${source.id}:${clean(body.reportKey) || body.reportFingerprint}:${body.reportFingerprint}`;
+  // Validated worker reports update ongoing work unless the caller explicitly
+  // requested a separate turn. Human and unrelated inputs keep their defaults.
+  if (!clean(body.codexDeliveryMode) && typeof body.steerActiveTurn !== "boolean") {
+    Object.assign(body, { codexDeliveryMode: "instant_steer", steerActiveTurn: true });
+  }
   body.text = "[Agent report: act on new work, changed results or unresolved blockers. Do not send acknowledgements or confirmation loops. Use NO_REPLY when no action is needed.]\n\n" + body.text;
   return { body };
 }

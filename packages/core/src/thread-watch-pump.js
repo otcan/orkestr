@@ -142,7 +142,10 @@ async function deliver(watch, message, event, env) {
     if (existing) return { messageId: existing.id };
     Object.assign(marker, { reportSourceThreadId: watch.targetThreadId, reportCauseMessageId: message.id, reportFingerprint: fingerprint, clientMessageId: `agent-report:${watch.targetThreadId}:${fingerprint}:${fingerprint}` });
   }
-  const input = await enqueueThreadInput(watcher.id, replyDefaults(watcher, watch, { ...marker, codexDeliveryMode: "passive", steerActiveTurn: false }), env);
+  const steer = watch.auto === "worker";
+  const input = await enqueueThreadInput(watcher.id, replyDefaults(watcher, watch, {
+    ...marker, codexDeliveryMode: steer ? "instant_steer" : "passive", steerActiveTurn: steer,
+  }), env);
   const { requestThreadInputDelivery } = await import("./runtime-leases.js");
   requestThreadInputDelivery(watcher.id, env);
   return { messageId: input?.id };
