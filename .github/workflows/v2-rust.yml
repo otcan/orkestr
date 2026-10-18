@@ -36,7 +36,11 @@ jobs:
       - name: Install namespace test prerequisite
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y bubblewrap
+          sudo apt-get install --no-install-recommends -y bubblewrap apparmor
+      - name: Qualify hosted-runner lifetime namespace policy
+        run: |
+          python3 -B -m unittest discover -s tests -p test_ci_lifetime_namespace.py -v
+          python3 tests/ci_lifetime_namespace.py
       - name: Probe unprivileged provider lifetime namespaces
         run: python3 tests/probe_lifetime_namespaces.py
       - name: Install pinned Rust
