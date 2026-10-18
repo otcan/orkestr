@@ -1,72 +1,104 @@
 # Orkestr 2.0 execution program
 
-Scope: an independently testable Rust-first replacement. Work in `v2/rust-rewrite` and feature branches based on it. Each change needs a focused test, a reviewer, and written migration/rollback impact. Existing 1.x operations, pending personal-agent PRs and production release flow are **out of scope** unless specifically approved.
+Status: plan ready for first implementation, 2026-10-18. Canonical integration branch: `v2/rust-rewrite`. Follow [architecture](README.md), [first implementation](first-implementation.md), and [migration](migration.md). All task IDs below are backlog IDs, not claims that Jira issues or code already exist.
 
-## Stage 0: Baseline and freeze contracts
+## Delivery model
 
-- V2-001 Inventory 1.x endpoints/screens/processes, state stores, migration scripts, connectors, timers, authorization and release assumptions. Identify used, duplicated, legacy, and removable capabilities with evidence.
-- V2-002 Capture 1.x behavior as golden fixtures: hierarchical threads, turn stream, prompt routing, workers, approvals, crash recovery, WhatsApp outbox, timers, Git, browsers, files and OAuth.
-- V2-003 Freeze versioned event envelopes, stable IDs, time semantics, schema evolution, capability/permission policy, idempotency and API/stream contracts.
-- Gate: inventory signed off; no undocumented data destructive migrations.
+Build a replacement in successive end-to-end increments, not a file-by-file translation. Keep 1.x available as the behavioral reference. Do not wait for a complete inventory of every optional integration before starting an isolated core. Freeze the first-slice contracts first; extend them through reviewed changes.
 
-## Stage 1: Rust core
+Use five NEW threads. Existing features workers, their branches and pending PRs retain their assignments.
 
-- V2-010 Rust workspace, formatting, clippy, offline unit tests, CI and local dev CLI. Initial domain prototype is under `v2/`.
-- V2-011 Conversation/project graph: roots, children, forks, links, immutable origin, visibility, thread-scoped context.
-- V2-012 Task and worker/session FSM with verified admission, cancellation, timeouts, restarts and resource leases.
-- V2-013 Durable SQLite journal, atomic projections, migration versioning, transactions and outbox (SQLx). Current in-memory starter is **not** durable.
-- V2-014 Approval and policy engine: default deny, owner attribution, narrowing grants, signed decisions and explicit effect bounds.
-- V2-015 Effect ledger and retry/reconciliation semantics equivalent to 1.x guarantees, tested with crash faults.
-- Gate: process SIGKILL/restart tests plus full event replay preserve graph, task state and effects.
+| New thread | Initial ownership | Branch |
+|---|---|---|
+| `orkestr-v2-coordinator` | Architecture, contracts, dependency integration, backlog/evidence map | `v2/s0-coordination` |
+| `orkestr-v2-core` | Domain, SQLite, ingress/auth/API, authoritative schema | `v2/s0-core` |
+| `orkestr-v2-runtime` | Session/supervision interfaces, fake runtime, real-provider capability adapters | `v2/s0-runtime` |
+| `orkestr-v2-ui` | Dioxus web UI and early iOS feasibility/build | `v2/s0-ui` |
+| `orkestr-v2-verification` | Independent acceptance, security/failure probes, migration inventory | `v2/s0-verification` |
 
-## Stage 2: Intelligence, memory, execution
+Each uses an isolated worktree based on the finalized plan commit. Do not check out a new branch in a live worker's worktree. No shared build target directory with concurrent writers. Coordinator owns the root workspace membership, lockfile resolution and contract-change integration; Core owns the first database schema. Other workers propose schema changes rather than creating parallel databases.
 
-- V2-020 Personal-agent orchestrator: classify intent, discover current project/thread, decide direct response vs delegated work, ask approval when needed.
-- V2-021 Memory store: sources, scopes, provenance, retention, owner-controlled correction/delete, retrieval tests and isolation.
-- V2-022 Provider protocol: Codex app-server, Claude Code, local compatible models; fork/resume/stop with hard capability checks and token/cost limits.
-- V2-023 Worker execution: per-task repo/worktree/virtual desk, lifecycle telemetry, checkpoint/retry and no sandbox claims beyond adapter evidence.
-- V2-024 Scheduling and automation: durable triggers, missed fires, rate limits and dedupe.
-- Gate: golden request -> plan -> delegated run -> effect approval -> completion -> memory update -> answer; simulated and one live local subscription test.
+Provision only the development permissions needed for this repo. No new WhatsApp chats, inherited live channel routes, desktops, production credentials or external service projects just to create these threads. Use configured subscription runtimes; no API overflow or paid compute purchase. Read host capacity and existing load before admitting work. Initially allow at most two new implementation model turns concurrently and one heavy build on the shared host; review/coordination is brief and scheduled. Increase only with measured headroom, not because the token allowance is large. Do not stop old workers to make space.
 
-## Stage 3: External boundaries
+Thread creation and start must return actual IDs, delivered message IDs, runtime/account-route metadata without credentials, branch/worktree and running/queued status. Reuse an exact named v2 thread if bootstrap is retried; do not create duplicates. Record private runtime IDs in private tracking, never in this public repo.
 
-- V2-030 HTTP, WebSocket/SSE gateway and typed contracts, auth, secure-input, audit, admin vs tenant scoping.
-- V2-031 Bridge 1.x integrations read-only first; implement owner-selected, independent credentials and side-effect outbox before enabling any connector writes.
-- V2-032 WhatsApp inbound/outbound duplicate suppression and identity/routing semantics; prove zero double delivery before enabling.
-- V2-033 GitHub, browsers, desktop, Gmail and calendar; register capabilities, consent and per-provider rate/cost limits.
-- V2-034 OSS vs managed boundary and release packaging; no operator secrets in public repo.
-- Gate: every external effect guarded, observable and fault-tested; no prototype writes to live 1.x state.
+## M0: foundations and first-wave contracts
 
-## Stage 4: UI rewrite
+| ID | Owner | Work and acceptance | Dependencies |
+|---|---|---|---|
+| V2-001 | Verification | Inventory endpoints, UI workflows, jobs, channels, storage, auth, secrets, timers, Git/desktops, public/managed boundary. Each capability has evidence, keep/replace/bridge/defer decision and a parity test. Inventory gaps are visible, not guessed. | None |
+| V2-002 | Verification | Create synthetic black-box fixtures from documented behavior and discovered regressions; preserve task admission, request replay, early-stop/process-exit and permission cases. Label observed versus specified behavior. No private fixtures in repo. | V2-001, can proceed incrementally |
+| V2-003 | Coordinator + Core | Publish typed IDs, API/event/error schemas, transition tables, actor trust, inbox ordering, store/runtime ports and migration compatibility policy. Freeze the slice in first-implementation.md; version subsequent changes. | Plan |
+| V2-010 | Core + Coordinator | Actual Cargo workspace, stable rust-toolchain, lockfile, minimal server/CLI, deterministic tests and v2-only CI. Clean-checkout build; CI cannot publish a production image or trigger release. | V2-003 |
+| V2-040 | UI | Dioxus spike against the shared contracts: editable composer while streaming, cursor reconnect, long history, keyboard/IME, screen-reader semantics, iOS simulator build feasibility. Document render model and actual limitations. | V2-003; fake API permitted |
 
-- V2-040 Dioxus technical spike: navigation, chat virtualization, streaming, accessibility, forms, keyboard, responsive mobile layout, artifact rendering. Measure against existing Angular.
-- V2-041 New shell: personal-agent home, project tree, conversations and forks, important events.
-- V2-042 Workbench: task state, workers, approvals, trace/provenance, Git and virtual desks.
-- V2-043 History/search/memory controls, settings, integrations, provider billing/budget, multilingual experience.
-- V2-044 User acceptance and performance: long sessions, reconnect, degraded/offline mode, dark/light, screen readers, iPhone Safari.
-- Gate: use Dioxus only if its spike passes. If not, preserve the Rust backend plan and use a TS frontend: product quality beats one-language purity.
+M0 gate: shared contracts and a real build/test artifact, not empty crates or unchecked README commands. Dioxus is the chosen frontend; failure of a measured gate is an architecture issue to resolve, not a reason to hide the failure. iOS investigation runs now, not after backend completion.
 
-## Stage 5: local migration and replacement
+## M1: local offline vertical slice
 
-- V2-050 Snapshot importer for legacy JSON/SQLite/metadata into v2 schema with dry-run, mapping report and reconciliation; never read/write live secrets automatically.
-- V2-051 Side-by-side launch: different ports, process names and data dirs; turn off v2 external outbound by default.
-- V2-052 Local parity matrix, shadow comparisons and explicit user-controlled v2 connector enablement.
-- V2-053 Reversible local cutover and export/rollback, clear dual-write prohibition.
-- V2-054 Hardening, security review, resource benchmarks, clean install, docs and release candidate.
-- Gate: owner signs off local usage before any production migration, mainline merge or hosted rollout.
+| ID | Owner | Work and acceptance | Dependencies |
+|---|---|---|---|
+| V2-011 | Core | Local project and canonical global/project conversations, stable identities, explicit lineage, project resources. Creating a project does not require external accounts. | V2-010 |
+| V2-012 | Core + Runtime | Typed task/run/session transitions and supervisor admission evidence, session role separation, versioned leases/fences, timeout/cancel/recovery states. Stale admissions and completions fail. | V2-011 |
+| V2-013 | Core | SQLite schema/migrations, atomic message + journal + inbox write, transactional outbox, durable replay and boot reconciliation. Process kill/reopen tests; no in-memory-only durability claim. | V2-011 |
+| V2-014 | Core | First-admin/auth boundary, actor/scope authorization, default-deny capabilities and exact single-use approvals. Negative tests for worker impersonation and approval reuse. | V2-012/013 |
+| V2-015 | Core + Runtime | Effect ledger, dispatch fencing, remote-idempotency/reconciliation contract, unknown outcome quarantine. Crash around dispatch cannot cause blind retry. | V2-014 |
+| V2-030 | Core | Axum v2 API and resumable SSE, body limits, same-origin browser auth, consistent errors, request-key/body conflict detection and truthful health/readiness. | V2-013/014 |
+| V2-020 | Runtime | Nonblocking orchestrator: separate fast/deep roles, durable ordered reasoning inbox, direct answer versus bounded task/run, accepted input while busy. Start against a clearly test-only fake runtime. | V2-012/013 |
+| V2-041 | UI | Assistant/Projects/Attention/History shell with one visible conversation per scope; live server input, real state, result evidence, busy/retry/blocker rendering. | V2-030/040 |
 
-## Work allocation / dependency order
+M1 gate: the executable scenario and acceptance cases in first-implementation.md pass from a clean local installation. It must be possible to send a follow-up, stop a fake worker, restart the server and inspect the surviving messages/result without any external provider account. The fixture mode is explicit and cannot masquerade as production inference.
 
-Parallelize **after V2-003**: (A) Rust event/domain/state, (B) provider/connector adapter specifications and fixture harness, (C) Dioxus UI spike and UX, (D) legacy inventory/export and local test harness. These must share contracts rather than independently invent state formats.
+## M2: real personal-agent execution and first iOS client
 
-Critical path: V2-003 -> V2-011/012 -> V2-013 -> V2-014/015 -> V2-020/022 -> V2-030/040 -> V2-050/052.
+| ID | Owner | Work and acceptance | Dependencies |
+|---|---|---|---|
+| V2-022 | Runtime | Codex and Claude adapters with pinned/probed capabilities, streaming, distinct fast/deep session identities, resume/fork/fresh, auth and quota classification. Check installed behavior, not just CLI help. Never silently switch account/model/billing route. | V2-020, metadata/fixture work starts in M0 |
+| V2-023 | Runtime | Separately supervised execution runs, scoped worktrees, structured progress, OS containment, recovery, bounded retries and resource locks. A working directory is not a sandbox. | V2-015/022 |
+| V2-021 | Core | Opt-in memory provenance, consent records, bounded retrieval, scope isolation, correction/forget/export, deletion-aware replay. No automatic permanent memory after a successful run. | V2-013/014 |
+| V2-024 | Runtime | Durable timer/schedule triggers, missed-fire policy, deduplication, budget/admission limits, stall diagnostics. No imported timer activates itself. | V2-015/023 |
+| V2-025 | Runtime | Global-to-project fan-out/fan-in with permission checks, partial responses, causal reconciliation and worker reuse/fork/fresh lineage. | V2-022/023 |
+| V2-045 | UI | iOS native bundle using shared Dioxus UI: safe auth/device storage, connect to local/VPS host, conversation/work/approval navigation, suspend/reconnect. Unsigned simulator build first; signing/TestFlight are separate gates. | V2-040/041/030 |
+| V2-042 | UI | Work view, workers/lineage, exact approval preview, hold/cancel, acceptance evidence, files/artifacts and resource status. | V2-015/023/041 |
 
-Owner checkpoints: domain contract, actual outbound connector enablement, production credentials reuse, production deploy, data cutover and final removal of 1.x all require separate explicit decisions. Starting a rewrite does **not** authorize production actions.
+M2 gate: owner-configured test profile completes a harmless real subscription-backed flow with different fast/deep native session IDs, an independent worker, mid-run follow-up and restart/cancel evidence. Fake CI results, login metadata and CLI help do not satisfy real execution acceptance. Native iOS navigation must run in a simulator; public native release also requires on-device checks. Report each provider separately.
 
-## Engineering rules
+## M3: complete product surfaces and optional integrations
 
-- No force push, reset or wholesale revert of live worktrees. No editing 1.x files for cosmetic parity.
-- No dependencies on private environment variables or production-only host paths for the OSS path.
-- No TODO being reported as a passing acceptance test.
-- Pin dependencies, generate SBOM/license checks in a follow-up, run cargo fmt, clippy and tests in CI.
-- Report each PR with exact commit SHA, tests actually run, remaining blockers, and side effects explicitly stated.
+| ID | Owner | Work and acceptance | Dependencies |
+|---|---|---|---|
+| V2-035 | Coordinator + Runtime | Installable plugin contract: package, connections, capabilities, project bindings, actual resources; narrowing-only inheritance, health/provisioning, safe disable/update/uninstall. Isolated, policy-mediated tools; unverified third-party code is not enabled. | V2-014/015; contract work can start early |
+| V2-031 | Runtime | Optional legacy bridge, snapshot/read-only first. Inventory temporary dependencies and removal tests. The new core boots without NestJS; no shared live database/credential directories. | V2-035 |
+| V2-032 | Runtime | Optional WhatsApp adapter and multi-identity routing, owner/automation attribution, durable delivery, uncertain-send reconciliation and loop suppression. Fake tests first, channel ownership handoff only by approval. | V2-015/035 |
+| V2-033 | Runtime + Core | Local Git/worktree service, verified local OXRM workspace contract, pooled desktop isolation/leases; then optional GitHub/Jira/mail/calendar connectors. Each gets own parity/health/permission tests and explicit blockers. | V2-035/023 |
+| V2-043 | UI | Integration Hub, multiple identities, global/project settings, providers/quotas, search/history and memory controls; user-facing task/data projection without duplicate authorities. | V2-021/035/041 |
+| V2-044 | UI + Verification | Input/draft preservation, large histories, reconnect, attachments, dark/light contrast, accessibility and localized text. Real iPhone Safari plus native iOS acceptance. | V2-042/043/045 |
+| V2-034 | Coordinator | Clean Docker Compose distribution, safe local bind, versioned images/artifacts, backups/doctor, OSS/managed separation and dependency/license inventory. External runtimes/services are explicit dependencies. | V2-010, packaging starts in M1 |
+
+M3 gate: a fresh v2 installation works without 1.x. Required first-party functionality is Rust; every retained non-Rust service or temporary bridge is disclosed. Optional integration absence cannot disable core chat, work or local projects. Android follows the proven iOS client contract and is tracked separately, not a precondition for local evaluation.
+
+## M4/M5: migration, local daily use and release readiness
+
+| ID | Owner | Work and acceptance | Dependencies |
+|---|---|---|---|
+| V2-050 | Verification + Core | Versioned importer from consistent legacy snapshots; validate/mapping/quarantine/report, stable import IDs, history/artifact checksums, dormant timers/runs/routes and excluded secrets. Rerun produces no duplicates. | V2-001/013 |
+| V2-051 | Coordinator + Verification | Side-by-side installer and launcher with separate ports, home, volumes, environment, cookies, subprocess profiles and no production service changes. | V2-034 |
+| V2-052 | Verification | Parity matrix, read-only shadow comparison, controlled local test account and observable regression/performance report. No duplicated live external effects during comparison. | V2-002/044/050/051 |
+| V2-053 | Verification + Coordinator | Rehearse snapshot-only rollback and post-write cutover/rollback including dispatch fences, reconciliation, export of new v2-only work and explicit unsupported cases. | V2-052 |
+| V2-054 | Coordinator + Verification | Security and recovery review, signed local-candidate evidence, clean install on supported host architectures, usage/resource measurements, docs and release proposal. Owner local acceptance before mainline/production/1.x removal. | V2-053 |
+
+The full program is complete only when retained functionality has evidence-backed parity and the owner has tested local usage. Completing M1 is not completing the rewrite.
+
+## Work already in 1.x
+
+Read current task/memory/ingress/session/acceptance PRs as reference, including their new regressions, but do not merge unreviewed TypeScript feature branches into v2 wholesale. Pin the baseline and record later important fixes in the parity ledger. Existing ORK-534 tasks remain attached to their existing work; the v2 program links to them instead of quietly replacing their scope.
+
+Coordinator creates one dedicated v2 tracking epic and maps the stable backlog IDs to issues, checking for an existing exact-title epic first. This development tracking is authorized; it does not make Jira a runtime requirement. Failure to reach Jira must not block coding: keep repo backlog state and reconcile issue IDs when available. Public docs contain no private workspace IDs or credentials.
+
+## Review, integration and reporting
+
+The owner has authorized planning and the first implementation: do not request another architecture approval before writing code. For the first wave, create reviewable PRs targeting `v2/rust-rewrite`, never `main`. Coordinator may integrate independently reviewed, passing changes into the v2 branch under existing repository rules. This is not release approval.
+
+Every milestone requires exact commit, actual test commands/results, known skipped/pending cases, provider evidence level and reproducible local instructions. Test authors do not self-approve their own PR; coordinator or another lane reviews the Verification lane's changes. Do not weaken policy, remove tests, change security settings or force-push to obtain green CI. Any exception is reported, not hidden.
+
+Reserve implementation capacity for failure testing, independent review and integration rather than generating maximum code in parallel. Estimate later milestones only after measuring the first end-to-end build and provider test. No completion date follows from available tokens alone.
