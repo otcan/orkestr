@@ -13,7 +13,7 @@ ORK-534 is reference context only. Jira availability does not gate implementatio
 | Core | `v2/s0-core` | Running heavy: confirms contracts/application/store-sqlite/Axum durable intake on pinned baseline; API fixtures forthcoming | Awaiting first commit/PR; initial head is plan baseline | First build and test counts pending |
 | Runtime | `v2/s0-runtime` | Running heavy: offline provider/runtime slice; proposed `orkestr-runtime` implements core-owned application runtime ports, no own store | Confirmed clean at `a7ba6d59`; first PR pending | Tests pending; Codex 0.163.0 / Claude 2.1.295 version/help only, no live inference |
 | UI | `v2/s0-ui` | Queued heavy; light feasibility checkpoint committed; no Cargo/downloads | [PR #73](https://github.com/otcan/orkestr/pull/73), observed head `66965cdbb6a43df72ced848a22f7a9a7c179ee64`; reported checkpoint `28b7194e` | Web pending; iOS simulator blocked by Linux/missing Apple tools; independent review routed |
-| Verification | `v2/s0-verification` | Running light: inventory, black-box specifications, independent reviews | Awaiting first commit/PR; initial head is plan baseline | No compile until core first build; acceptance pending |
+| Verification | `v2/s0-verification` | Light inventory/spec checkpoint committed; endpoint probes blocked on core build/fixtures | [PR #75](https://github.com/otcan/orkestr/pull/75), coordinator reviewed `0fa321a291f9d3e29d92b2554068b51405f18d2d` | Reporter: 0 passed/17 pending, exit 1; false-pass mutation rejected; no compile; CI build/tests failed, integration blocked |
 
 Admission instructions were queued successfully through `orkestr send` to all
 four existing lanes. Runtime inventory subsequently reported all four threads
