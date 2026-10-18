@@ -109,6 +109,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, runtimes
       // Fork only idle parents, with the same fence used for normal turns.
       const open = parent
         ? () => leased(parent.id, async (source, parentSignal) => {
+          if (source.lifecycle !== "ready") throw sessionError("agent_session_reconciliation_required");
           const result = await adapter.open(row, { parent: source, signal: AbortSignal.any([signal, parentSignal]) });
           fenced(source, {}, true);
           return result;

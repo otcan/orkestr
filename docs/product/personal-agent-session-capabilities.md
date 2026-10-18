@@ -83,7 +83,9 @@ new connector module and never infers authentication from a selected profile.
 - A transactionally claimed, renewable lease serializes each native session
   across manager instances. FAST and DEEP can run independently. An expired
   lease is not stolen: reconciliation must establish that the old native turn
-  stopped before a future recovery operation can release it. Cancellation and
+  stopped before a future recovery operation can release it. Forks also refuse
+  parents that are not ready, including blocked parents with uncertain native
+  state; holding a fresh lease alone does not establish native readiness. Cancellation and
   lease loss reach the native signal; cancelled late output is discarded and
   later tool callbacks refused. The current supervisor remains responsible for
   its own durable job/effect lease and final admission/output validation.

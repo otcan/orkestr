@@ -201,6 +201,18 @@ test("fork lineage is same conversation/account and serialized against the paren
   await busy;
 });
 
+test("fork refuses an unreconciled parent after an uncertain provider failure", async () => {
+  const h = sessionHarness();
+  const parent = await h.manager.startOrResume(h.manager.ensure(sessionInput).id);
+  h.adapter.run = async () => { throw new Error("synthetic lost provider acknowledgement"); };
+  await assert.rejects(h.manager.runTurn(parent.id, supervisor(), {}));
+  assert.equal(h.manager.get(parent.id).lifecycle, "blocked");
+  const child = h.manager.ensure({ ...sessionInput, role: "worker", forkFromSessionId: parent.id });
+  const opens = h.calls.filter(([type]) => type === "open").length;
+  await assert.rejects(h.manager.startOrResume(child.id), /reconciliation_required/);
+  assert.equal(h.calls.filter(([type]) => type === "open").length, opens);
+});
+
 test("native callbacks use the supervisor's policy/effect decisions; no raw runner is accepted", async () => {
   const h = sessionHarness();
   const row = h.manager.ensure(sessionInput);
