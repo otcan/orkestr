@@ -338,7 +338,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
     INSERT INTO production_observations VALUES('progress','production-run',1,'progress-digest','progress',1,1,'running'),('completion','production-run',2,'completion-digest','completed_proposal',1,1,'awaiting_acceptance');
     INSERT INTO production_payloads VALUES('payload','progress','owner','production-conversation','production-run','synthetic progress');").execute(&mut conn).await.unwrap();
     async fn rows(conn: &mut SqliteConnection) -> BTreeMap<String, Vec<String>> {
-        let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('production_acceptances','history_imports','history_messages','worker_tool_delegations') ORDER BY name")
+        let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('production_acceptances','history_imports','history_messages','worker_tool_delegations','worker_provider_delegations') ORDER BY name")
             .fetch_all(&mut *conn).await.unwrap();
         let mut result = BTreeMap::new();
         for table in tables {
@@ -348,6 +348,14 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_all(&mut *conn)
             .await
             .unwrap();
+            let columns: Vec<_> = columns
+                .into_iter()
+                .filter(|column| {
+                    table != "production_runs"
+                        || !["role", "parent_session_id", "worker_delegation_id"]
+                            .contains(&column.as_str())
+                })
+                .collect();
             let expression = columns
                 .iter()
                 .map(|c| format!("quote(\"{c}\")"))
@@ -373,6 +381,8 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
     let store = Store::open(&dir.db()).await.unwrap();
     let mut conn = raw(&dir.db()).await;
     assert_eq!(rows(&mut conn).await, before);
+    let legacy:(String,Option<String>,Option<String>)=sqlx::query_as("SELECT role,parent_session_id,worker_delegation_id FROM production_runs WHERE id='production-run'").fetch_one(&mut conn).await.unwrap();
+    assert_eq!(legacy, ("deep".into(), None, None));
     assert!(sqlx::query("PRAGMA foreign_key_check")
         .fetch_all(&mut conn)
         .await
@@ -390,12 +400,13 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        17
+        19
     );
     for table in [
         "history_imports",
         "history_messages",
         "worker_tool_delegations",
+        "worker_provider_delegations",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))

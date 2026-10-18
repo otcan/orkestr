@@ -9,9 +9,10 @@ pub struct WorkerAdmissionInput {
     pub request_key: String,
     pub lifetime_ms: u32,
 }
-/// No instance is issued until the durable Worker adapter is implemented.
+/// Opaque admission locator; never inference or effect authority.
 pub struct WorkerDelegation {
-    pub(super) _unissued: (),
+    pub(super) _id: Uuid,
+    pub(super) _locator: String,
 }
 pub enum WorkerDelegationResult {
     Fresh(WorkerDelegation),
@@ -24,6 +25,7 @@ pub struct WorkerDelegationReceipt {
     pub conversation_id: ConversationId,
     pub parent_run_id: RunId,
     pub worker_session_id: SessionId,
+    pub admitted_run_id: Option<RunId>,
     pub source_message_id: MessageId,
     pub source_event_id: EventId,
     pub lease_deadline_ms: i64,

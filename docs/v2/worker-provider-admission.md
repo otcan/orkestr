@@ -1,15 +1,13 @@
 # Worker provider admission boundary
 
-Status: Core-owned exported API checkpoint for independent source review. Parent
-authorization lookup is implemented; delegation issuance and admission deliberately
-return Unavailable until the durable lineage adapter is installed. No Worker
-provider execution is authorized yet. This refines
-`role-admission-proposal.md`; it does not activate Fast or Worker admission.
+Status: durable Store adapter implemented for bounded independent review. This
+refines `role-admission-proposal.md`; no server scheduling or real provider
+activation is inferred from Store tests. Fast remains a separate authority.
 Offline Python delegation is a separate tool authority and is not accepted here.
 
 ## Store-owned typed boundary
 
-Proposed public types live in a new `production_runtime::worker` module in
+Public types live in a new `production_runtime::worker` module in
 store-sqlite. Issued handles have private fields, no public constructor, Clone,
 Deserialize or secret-bearing Debug implementation. Browser JSON and provider
 output cannot construct them. The bound supervisor supplies owner, namespace,
@@ -106,10 +104,9 @@ expiry, locator verifier and state; production run lineage reference and explici
 role. Replace conversation/source-sequence uniqueness with Deep-only claim
 uniqueness while retaining all source links and foreign keys. Preserve existing
 Deep rows, issued tokens, historical receipts and event bytes in populated
-upgrade tests. No schema write is included in this proposal.
+upgrade tests. Migrations 0018/0019 install these constraints and copy existing Deep rows.
 
-Before implementation selection, Runtime/Verification must review parent terminal
-Busy policy and the same-supervisor/provider restriction. Required executable
+Independent Runtime/Verification review remains required for activation. Required executable
 oracles: independent Worker/native binding; no inbox delta; owner/source/role/
 namespace/parent forgery; simultaneous issuance/admission/consume; changed replay;
 parent cancel/recovery versus child callback; expiry/revoke; lost reply and fresh
@@ -132,9 +129,33 @@ earlier proposal's overly broad parent-terminal Busy rule before implementation.
 The types and methods above are exported from store-sqlite. The exact parent
 lookup authenticates the current credential and full bound context, resolves the
 canonical consumed Running Deep run inside BEGIN IMMEDIATE, and checks the live
-issued lease, fence and native binding. Even a valid parent currently returns
-Unavailable: no delegation locator or Worker run is issued by this checkpoint.
+issued lease, fence and native binding. Fresh issuance persists a one-use delegation verifier; admission atomically
+consumes it and creates the Worker run without reading or acknowledging Deep inbox.
 The server helper owns only `server/src/worker_execution/` and its integration
-test; it can implement against these symbols while Core installs the ledger.
+test; it can implement against these symbols against this durable ledger.
 The exported receipt includes typed IDs, deadline and Delegated/Admitted/Blocked
 state, and contains no native identity or dispatch authority.
+
+## Implemented adapter handoff
+
+`delegate_worker` returns an opaque locator only on the inserting call. Same-key
+replay returns evidence, including optional `admitted_run_id`, never replacement
+locators. `admit_worker` consumes the locator by value and returns the existing
+`RunAdmissionResult`/FreshCandidate shape. Standard reserve/consume yields the
+same private `ConsumedProviderDispatch`, now with validated Worker lineage and
+immutable parent source text. Lost admission replies reconcile by receipt; they
+do not authorize another start.
+
+Every unseen observation, renewal and execution-fenced callback checks the exact
+parent authority captured at delegation. Parent lease/generation changes currently
+fence descendants conservatively; no delegation extension is inferred. Parent
+terminal/cancel/recovery changes atomically erase child locators and retain unknown
+delivery. Child cancellation uses its own issued control; it never cancels parent.
+The Deep conversation status filters Deep runs; helper-owned Worker presentation
+must not replace that projection.
+
+Feature-gated existing admission pre/post-commit checkpoints also cover Worker
+admission. Standard reserve/consume checkpoints remain available. Actual Worker
+SIGKILL/new-process acceptance is pending independent execution; separate-pool
+races/reopen are not process-crash evidence. No paid inference or native process
+was used for the authored Store tests.
