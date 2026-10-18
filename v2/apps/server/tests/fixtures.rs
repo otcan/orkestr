@@ -18,6 +18,12 @@ fn published_contracts_roundtrip() {
     fixture::<ConversationSnapshot>(include_str!("../../../fixtures/conversation-snapshot.json"));
     fixture::<EventEnvelope>(include_str!("../../../fixtures/event.json"));
     fixture::<ApiError>(include_str!("../../../fixtures/error-conflict.json"));
+    fixture::<runtime::ProviderObservation>(include_str!(
+        "../../../fixtures/provider-observation-started.json"
+    ));
+    fixture::<runtime::ProviderObservation>(include_str!(
+        "../../../fixtures/provider-observation-completed-proposal.json"
+    ));
 }
 #[test]
 fn reject_actor_injection_and_invalid_identifiers() {
