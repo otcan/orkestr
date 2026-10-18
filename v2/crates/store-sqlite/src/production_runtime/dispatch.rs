@@ -174,15 +174,18 @@ impl Store {
         }
         let context = self.context()?;
         let message_id: String = row.get("message_id");
-        let text: String = sqlx::query_scalar(
-            "SELECT text FROM messages WHERE id=? AND owner_id=? AND conversation_id=?",
-        )
-        .bind(&message_id)
-        .bind(context.owner.to_string())
-        .bind(claim.provider.run.conversation_id.to_string())
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(db)?;
+        let text = match self.worker_task_input_in(&mut tx, &row).await? {
+            Some(instructions) => instructions,
+            None => sqlx::query_scalar(
+                "SELECT text FROM messages WHERE id=? AND owner_id=? AND conversation_id=?",
+            )
+            .bind(&message_id)
+            .bind(context.owner.to_string())
+            .bind(claim.provider.run.conversation_id.to_string())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?,
+        };
         let parent_run = match row.get::<Option<String>, _>("worker_delegation_id") {
             Some(delegation) => {
                 let parent: String = sqlx::query_scalar(
