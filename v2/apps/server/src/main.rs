@@ -6,6 +6,7 @@ use orkestr_v2_server::{
 use orkestr_v2_store_sqlite::Store;
 use std::path::PathBuf;
 mod bind_config;
+mod shutdown_signal;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
     if let Some(output) = build_identity::version_output(&arguments)? {
@@ -97,7 +98,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     });
     let completed = tokio::select! {
         result = &mut serving => Some(result),
-        _ = tokio::signal::ctrl_c() => None,
+        _ = shutdown_signal::requested() => None,
         _ = async { match &mut timers { Some(timers) => timers.stopped().await, None => std::future::pending::<()>().await } } => None,
     };
     // An open SSE connection must not delay the owned execution fence/cleanup.

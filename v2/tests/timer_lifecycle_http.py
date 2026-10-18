@@ -107,7 +107,10 @@ def main():
         assert_inert_provider()
         # Clean process restart recreates trusted issuer but retains exact immutable grant.
         process = case.process
-        case.stop()
+        process.send_signal(signal.SIGTERM)
+        process.wait(timeout=6)
+        process.stderr.close()
+        case.process = None
         assert process.returncode == 0
         case.start()
         resumed = detail(interval)
