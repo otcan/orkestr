@@ -51,30 +51,30 @@ class AuthenticatedIsolationTests(unittest.TestCase):
                 (root/"sessions").symlink_to("/tmp")
                 with self.assertRaises(ValueError):private_state(root)
                 (root/"sessions").unlink()
-                (root/"auth.json").touch()
-                (root/"state_5.sqlite").touch()
+                (root/"auth.json").touch(mode=0o600)
+                (root/"state_5.sqlite").touch(mode=0o600)
                 self.assertEqual(private_state(root),str(root))
         self.assertEqual(AUTHENTICATED.tunnel_seconds,900)
         self.assertEqual(AUTHENTICATED.tunnel_bytes,64*1024**2)
 
     def test_role_state_alias_and_top_level_types_refuse_unchanged(self):
         with tempfile.TemporaryDirectory(prefix="state-alias-synthetic-") as tmp:
-            base=Path(tmp);root=base/"state";root.mkdir()
+            base=Path(tmp);root=base/"state";root.mkdir(mode=0o700)
             target=base/"unmounted-target";target.write_bytes(b"synthetic-original")
             with patch("isolation.authenticated.private_path",return_value=str(root)):
                 for nested in (False,True):
                     if nested:
-                        (root/"sessions").mkdir()
+                        (root/"sessions").mkdir(mode=0o700)
                     alias=root/"sessions"/"rollout" if nested else root/"state_5.sqlite"
                     os.link(target,alias)
                     with self.assertRaises(ValueError):private_state(root)
                     self.assertEqual(target.read_bytes(),b"synthetic-original")
                     alias.unlink()
                     if nested:(root/"sessions").rmdir()
-                (root/"sessions").touch()
+                (root/"sessions").touch(mode=0o600)
                 with self.assertRaises(ValueError):private_state(root)
                 (root/"sessions").unlink()
-                (root/"state_5.sqlite").mkdir()
+                (root/"state_5.sqlite").mkdir(mode=0o700)
                 with self.assertRaises(ValueError):private_state(root)
                 self.assertEqual(target.read_bytes(),b"synthetic-original")
 
@@ -82,7 +82,7 @@ class AuthenticatedIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="authenticated-profile-synthetic-") as tmp:
             root=Path(tmp);auth=root/"auth.json";auth.write_text('synthetic-selected-account')
             unrelated=root/"unrelated";unrelated.write_text("synthetic-unrelated-secret")
-            sessions=root/"sessions";sessions.mkdir();endpoint=root/"egress.sock"
+            sessions=root/"sessions";sessions.mkdir(mode=0o700);endpoint=root/"egress.sock"
             peer=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);peer.bind(str(endpoint));peer.listen();peer.settimeout(3)
             observed=[];errors=[]
             def serve():
@@ -99,7 +99,7 @@ class AuthenticatedIsolationTests(unittest.TestCase):
             # Production constructor requires immutable root config/endpoint.
             profile=object.__new__(SelectedCodexProfile)
             profile.native="/usr/bin/python3";profile.supervisor=str(Path(__file__).parent.resolve()/"isolation/supervisor.py")
-            workspace=root/"workspace";workspace.mkdir()
+            workspace=root/"workspace";workspace.mkdir(mode=0o700)
             profile.workspace=str(workspace)
             profile.auth=str(auth);profile.state_root=str(sessions);profile.sessions=None;profile.endpoint=str(endpoint)
             profile.hosts=("subscription.example.invalid",)

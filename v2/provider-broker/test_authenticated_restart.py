@@ -11,8 +11,8 @@ from isolation.authenticated import SelectedCodexProfile, private_state
 class RestartTests(unittest.TestCase):
     def test_two_actual_namespace_launches_preserve_db_not_helpers(self):
         with tempfile.TemporaryDirectory(prefix="native-restart-synthetic-") as tmp:
-            root=Path(tmp);state=root/"state";state.mkdir();auth=root/"auth.json"
-            auth.write_text("synthetic-selected");work=root/"work";work.mkdir()
+            root=Path(tmp);state=root/"state";state.mkdir(mode=0o700);auth=root/"auth.json"
+            auth.write_text("synthetic-selected");work=root/"work";work.mkdir(mode=0o700)
             endpoint=root/"endpoint"
             with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as peer:
                 peer.bind(str(endpoint));peer.listen()
@@ -51,14 +51,14 @@ class RestartTests(unittest.TestCase):
             root=Path(tmp)
             with patch('isolation.authenticated.private_path',return_value=str(root)):
                 for name in ('tmp','cache','skills','thread-writer-locks'):
-                    folder=root/name;folder.mkdir()
+                    folder=root/name;folder.mkdir(mode=0o700)
                     alias=folder/'synthetic';alias.symlink_to('/opt/provider/native')
                     with self.assertRaises(ValueError):private_state(root)
                     self.assertTrue(alias.is_symlink())
                     alias.unlink();folder.rmdir()
                 for name in ('goals_1','memories_1','queue_1','thread_history_1'):
                     for suffix in ('.sqlite','.sqlite-wal','.sqlite-shm','.sqlite-journal'):
-                        (root/(name+suffix)).touch()
+                        (root/(name+suffix)).touch(mode=0o600)
                 for name in ('models_cache.json','installation_id','.sandbox_migration'):
-                    (root/name).touch()
+                    (root/name).touch(mode=0o600)
                 self.assertEqual(private_state(root),str(root))
