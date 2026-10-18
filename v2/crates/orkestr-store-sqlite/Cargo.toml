@@ -1,0 +1,15 @@
+[package]
+name = "orkestr-v2-store-sqlite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+orkestr-v2-domain = { path = "../orkestr-domain" }
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+
+tempfile.workspace = true
