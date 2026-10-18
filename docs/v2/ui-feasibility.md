@@ -51,7 +51,12 @@ second public schema or imply fixtures are durable storage. Fixture mode must
 have a persistent visible synthetic-data label. Once available, use versioned
 JSON HTTP commands and authenticated SSE against the actual server.
 
-Core's announced intake contract (fixture paths/version/commit still pending):
+Core's published intake contract is pinned to
+`e2de7312093fdffcd7a8b6111efa546af89bf929` (PR #78): DTOs in
+`v2/crates/contracts/src/lib.rs`, routes/auth in `docs/v2/api-v0-intake.md`, and
+synthetic JSON examples in `v2/fixtures/*.json`. API `contract_version: 0`,
+event `schema_version: 1`, and SQLite migration `0001_intake.sql` are separate
+version axes. The intake contract provides:
 
 - Setup posts username/password credentials with `x-orkestr-bootstrap`.
   Session posts the same credentials and returns a Bearer token, token type,
@@ -72,12 +77,12 @@ Core's announced intake contract (fixture paths/version/commit still pending):
   required Authorization header: use authenticated fetch-stream parsing with
   cancellation, bounded buffers and reconnect. Never put the token in a query.
 
-Implement against the exact published contract commit once received. An
-announced response shape alone does not prove server or client acceptance.
+Implement against that exact published contract commit. A published response
+shape alone does not prove server or client acceptance.
 
-Read-only inspection of Core's draft `v2/fixtures/*.json` and
+Read-only inspection of Core's published `v2/fixtures/*.json` and
 `docs/v2/api-v0-intake.md` confirms seven synthetic JSON examples and these
-additional integration constraints (publication commit still pending):
+additional integration constraints:
 
 - Scope is tagged by `kind`: global or project with `project_id`.
 - `message_accepted` events reference a message; fetch its text through the
@@ -123,7 +128,7 @@ Provider credentials and native provider session identifiers stay server-side.
 Do not persist credentials in JavaScript local storage, URLs or logs. Native
 device-token storage requires an audited Keychain boundary, revocation/logout,
 and a server-supported device-auth contract before native auth is accepted.
-The announced server uses Bearer auth rather than a browser cookie session;
+The intake server uses Bearer auth rather than a browser cookie session;
 retain the web token only in memory and honor the server's origin policy.
 Cross-origin WebView API access, TLS, session expiry and native reconnect need
 explicit integration tests; do not weaken server origin policy to make a demo
@@ -154,7 +159,7 @@ close any simulator or device gate.
 
 ## Next admitted work
 
-Obtain Core's contract/fixture commit, agree dependency and workspace changes
+Use the pinned Core contract/fixture commit, agree dependency and workspace changes
 with the coordinator, then implement the shell, projection and composer tests.
 Build/test only through the host-provided locked build wrapper with the assigned
 isolated UI target/home. Report exact commit, commands, counts and CI separately
