@@ -122,3 +122,28 @@ reconstruction remains a test oracle, not a public restart attachment contract.
 The public hook does not authorize transferring a live handle across processes;
 a harness needing that must use the provided owned-child tests rather than invent
 an ID-only attachment API. Post-reply/pre-I/O remains a harness-side checkpoint.
+
+### Author guard regression coverage
+
+`fixture_runtime::guard_tests` supplements independent R02/R04/R08 probes; it is
+Core-authored evidence, not independent acceptance. Four tests compare complete,
+ordered row snapshots (all columns of supervisor, readiness, run, inbox and binding
+tables) before and after each refusal. Verifiers are compared only in memory and
+are never included in assertion output.
+
+The dispatch matrix mutates 20 envelope fields individually at reserve and consume:
+owner, conversation, run, session, role, native identity, lease generation, dispatch
+fence, attempt, deadline, purpose, and binding owner/conversation/session/role,
+provider kind, native identity, parent, generation and state. Additional cases cover
+missing/malformed/wrong candidate keys, terminal state, replay disposition,
+malformed/wrong reservation keys and a changed reservation request key. Legitimate
+reserve and consume after refusals prove the original authority was not spent.
+
+Admission cases change claim owner, conversation, message, event, consumer,
+sequence, generation, deadline and expected binding generation. Readiness cases
+remove admission readiness and change authoritative namespace, provider kind,
+binding state/generation and readiness incarnation at both dispatch boundaries.
+A matching caller snapshot with a durably expired run lease is refused using store
+time. Test-private damage/restore statements establish each baseline; they do not
+introduce any public SQL, clock or renewal control. Production starts and remaining
+lifecycle operations stay blocked/unavailable.
