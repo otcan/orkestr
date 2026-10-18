@@ -1,3 +1,4 @@
+import { prepareAgentReport } from "../../../../../packages/core/src/thread-report-policy.js";
 import fs from "node:fs/promises";
 import { getExecutorAdapter } from "../../../../../packages/core/src/executors.js";
 import path from "node:path";
@@ -982,6 +983,9 @@ export class ThreadsController {
       await getThreadForPrincipal(thread.id, principal);
       await this.assertThreadSanitized("thread.worker-reply", principal, thread, { workerReplyDelivery: body.workerReplyDelivery });
     }
+    const report = await prepareAgentReport(thread, body, principal);
+    if (report.suppressed) return { ok: true, orkestrThreadId: thread.id, message: report.message, queued: false, deliveryState: report.suppressionReason, reason: report.suppressionReason };
+    body = report.body;
     body = await prepareWorkerReplyInput(thread, body, principal);
     const message = await enqueueThreadInputForPrincipal(thread.id, body, principal);
     if (threadUsesApiAgent(thread)) {

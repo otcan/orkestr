@@ -1,3 +1,4 @@
+import { withThreadQueueBoundary } from "./thread-queue-control.js";
 import { randomUUID } from "node:crypto";
 import { checkSetupCodexSubscription } from "./setups/setup-dispatch-guard.js";
 import { resourceOwnerUserId } from "./policy.js";
@@ -1773,7 +1774,11 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
   appServerDeliveryLocks.add(lockKey);
   let delivered = [];
   try {
-    delivered = await deliverCodexAppServerPendingInputsUnlocked(thread, env);
+    delivered = await withThreadQueueBoundary(lockKey, async () => {
+      const current = await getThread(lockKey, env);
+      if (current?.queueDispatchHold?.paused) return [];
+      return deliverCodexAppServerPendingInputsUnlocked(current || thread, env);
+    }, env);
   } finally {
     appServerDeliveryLocks.delete(lockKey);
   }
@@ -1785,6 +1790,7 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
     return delivered;
   }
   const currentThread = await getThread(lockKey, env).catch(() => null) || thread;
+  if (currentThread?.queueDispatchHold?.paused) return delivered;
   if (!threadReadyForInputRetry(currentThread) || !pendingInputEligibleForReadyRetry(pending)) return delivered;
   const attempt = Math.max(0, Number(pending.deliveryReadyRetryAttempt || 0)) + 1;
   const maxAttempts = codexAppServerReadyRetryMax(env);

@@ -1,9 +1,10 @@
+import { acknowledgementOnly, reportFingerprint } from "./thread-report-policy.js";
 // Delivers thread-watch events. Scans each watched thread's messages after the
 // watch cursor, so it works for every runtime and survives restarts: a final or
 // failure that happened while the server was down is delivered afterwards.
 // The input clientMessageId (watch id + message id) makes delivery idempotent.
 import { appendEvent } from "../../storage/src/store.js";
-import { appendThreadMessage, enqueueThreadInput, getThread, getThreadMessage, listThreadMessageCandidates, threadLifecycleState } from "./threads.js";
+import { appendThreadMessage, enqueueThreadInput, getThread, getThreadMessage, listThreadMessageCandidates, listThreadMessages, threadLifecycleState } from "./threads.js";
 import { mutateThreadWatches, readThreadWatches } from "./thread-watches.js";
 
 const FULL_TEXT_LIMIT = 12_000;
@@ -67,7 +68,7 @@ export function threadWatchInputText({ watch, target, message, event }) {
     ? [error && `Error: ${error}`, clean(message.text) && `${message.role === "user" ? "Input" : "Text"}: ${clean(message.text)}`].filter(Boolean).join("\n")
     : clean(message.text);
   const header = `[Orkestr watch ${watch.id}: ${label} ${event === "final" ? "final answer" : "turn failed"}]`;
-  const lines = [header, `Thread: ${watch.targetThreadId}`, `Message: ${message.id}`];
+  const lines = [header, "Agent report: do not acknowledge or send a confirmation back. Act only on new work, a changed result or an unresolved blocker; otherwise answer NO_REPLY. DONE/BLOCKED/FAILED are substantive outcomes, never acknowledgements.", `Thread: ${watch.targetThreadId}`, `Message: ${message.id}`];
   if (event === "failed") lines.push(`State: ${clean(message.state) || "failed"}${message.phase ? ` (${message.phase})` : ""}`);
   if (watch.payload === "none") {
     lines.push(`Length: ${text.length} chars`, "", `Read it with: orkestr watch read ${watch.targetThreadId} --message ${message.id}`);
@@ -103,10 +104,15 @@ function replyDefaults(thread, watch, input) {
 // Loop guard: skip a target turn that the watcher itself started through a
 // watch delivery (A watches B and B watches A must not ping-pong).
 async function startedByWatcherWatch(watch, message, env) {
+  if (watch.auto === "worker" && acknowledgementOnly(message)) return true;
   const parentId = clean(message.parentMessageId);
   if (!parentId) return false;
   const parent = await getThreadMessage(watch.targetThreadId, parentId, env).catch(() => null);
-  return clean(parent?.source) === THREAD_WATCH_SOURCE && clean(parent?.threadWatchSourceThreadId) === watch.watcherThreadId;
+  // A substantive changed report may reply to a relay. Only acknowledgement
+  // causation is inert; old mutual watches retain their conservative guard.
+  if (parent?.reportSourceThreadId === watch.watcherThreadId && acknowledgementOnly(message)) return true;
+  return clean(parent?.source) === THREAD_WATCH_SOURCE && clean(parent?.threadWatchSourceThreadId) === watch.watcherThreadId &&
+    (watch.auto !== "worker" || acknowledgementOnly(message));
 }
 
 async function deliver(watch, message, event, env) {
@@ -126,6 +132,13 @@ async function deliver(watch, message, event, env) {
   if (!watch.wake) {
     const note = await appendThreadMessage(watcher.id, { ...marker, role: "assistant", phase: "notification", state: "completed", visibility: "internal", dedupeAssistantByIdempotencyKey: true }, env);
     return { messageId: note?.id };
+  }
+  if (watch.auto === "worker" && event === "final") {
+    const fingerprint = reportFingerprint(message.text);
+    const reports = await listThreadMessages(watcher.id, env);
+    const existing = reports.find(row => row.reportSourceThreadId === watch.targetThreadId && row.reportFingerprint === fingerprint);
+    if (existing) return { messageId: existing.id };
+    Object.assign(marker, { reportSourceThreadId: watch.targetThreadId, reportCauseMessageId: message.id, reportFingerprint: fingerprint, clientMessageId: `agent-report:${watch.targetThreadId}:${fingerprint}:${fingerprint}` });
   }
   const input = await enqueueThreadInput(watcher.id, replyDefaults(watcher, watch, { ...marker, codexDeliveryMode: "passive", steerActiveTurn: false }), env);
   const { requestThreadInputDelivery } = await import("./runtime-leases.js");
