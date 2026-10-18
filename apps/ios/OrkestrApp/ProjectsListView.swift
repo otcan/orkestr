@@ -74,6 +74,7 @@ struct ProjectDetailView: View {
         case data = "Data"
         case runs = "Runs"
         case activity = "Activity"
+        case resources = "Provisioning"
         var id: String { rawValue }
     }
 
@@ -96,7 +97,11 @@ struct ProjectDetailView: View {
             }
             .accessibilityLabel("Project sections")
             AgentPanel(title: selectedPanel.rawValue) {
-                UnavailableNote(message: "\(selectedPanel.rawValue) data for this project has not been loaded from the server.")
+                if selectedPanel == .resources {
+                    ProjectResourcesPlaceholderView()
+                } else {
+                    UnavailableNote(message: "\(selectedPanel.rawValue) data for this project has not been loaded from the server.")
+                }
             }
             Spacer(minLength: 0)
         }
@@ -104,5 +109,28 @@ struct ProjectDetailView: View {
         .background(OrkestrTheme.background)
         .navigationTitle(project.title)
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct ProjectResourcesPlaceholderView: View {
+    private let resources = ["GitHub repository", "Jira project", "OXRM workspace", "WhatsApp conversation"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            UnavailableNote(message: "Provisioning status and blockers will appear here when the ORK-563 project-resource contract is available. No provider state is inferred.")
+            ForEach(resources, id: \.self) { resource in
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "circle.dashed")
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(resource).foregroundStyle(OrkestrTheme.text)
+                        Text("Status not loaded")
+                            .font(.caption)
+                            .foregroundStyle(OrkestrTheme.muted)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
 }

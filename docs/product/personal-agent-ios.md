@@ -91,6 +91,17 @@ The feature shell is exposed only after a capability response confirms
 UI must label it stale; an unknown/offline state does not expose feature
 navigation.
 
+## Provisioning and Integration Hub placeholders
+
+Project detail includes a provisioning panel with visible slots for its
+GitHub repository, Jira project, OXRM workspace and WhatsApp conversation. It
+does not display a synthetic provider status or blocker: those fields await the
+ORK-563 contract. The Integration Hub placeholder names the ADR's layers
+(plugin packages, connections, capabilities, global/project bindings and
+resource instances) but does not connect, enable, provision or infer state; it
+awaits ORK-566 field names and authenticated read contracts. These surfaces
+introduce no endpoints and contain no fixture data in the product.
+
 ## Draft mobile threat model
 
 - **Authentication/session:** only the existing authenticated owner context may
