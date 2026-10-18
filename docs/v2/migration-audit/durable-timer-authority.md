@@ -78,3 +78,14 @@ Executed lightweight check:
 4/4 PASS (SQL immutability, reopen, FK refusal and exact credential-free columns).
 These minimal synthetic SQL parents do not qualify schema upgrades, Store
 behavior or issuer authorization. Owned Rust format and diff checks PASS.
+
+Published issuer compatibility: exact Core
+`256449100fbb4882bb9a6675a3c9714310183fb7`,
+`production_runtime/timer_issuer.rs`, implements the accepted type and transaction
+signature unchanged. Source inspection confirms namespace and exact current
+context/incarnation/generation/owner/machine-hash comparison followed by context
+validation inside BEGIN IMMEDIATE before grant lookup. Core's focused issuer
+execution is separately attributed; Migration has not rerun it. That candidate
+has authoritative migrations through 0030 only. Requested isolated leaf build
+must use the unnumbered proposal inside synthetic test fixtures; it cannot claim
+a contiguous 0033 upgrade until Core integrates real 0031/0032 predecessors.
