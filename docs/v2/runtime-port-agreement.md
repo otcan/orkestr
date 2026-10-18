@@ -1,115 +1,121 @@
-# Runtime port agreement proposal
+# Runtime port v1: canonical shared handoff
 
-Status: the data types and append-provider-event method below are published in
-`application::runtime`, internal `RUNTIME_PORT_VERSION = 0`. No runtime store
-adapter is implemented; lifecycle and persistence acceptance remain pending.
+The required V2-012/020 contract supersedes internal runtime port v0. HTTP intake
+contract version 0, HTTP event schema 1, and migration `0001_intake.sql` remain
+unchanged. Message/event/reasoning-inbox/outbox admission is untouched.
 
-Dependency: `orkestr-v2-application` (Rust `orkestr_v2_application`, path
-`v2/crates/application`) depends only on `orkestr-v2-contracts` (Rust
-`orkestr_v2_contracts`, path `v2/crates/contracts`). Runtime may use the existing
-workspace `serde_json = "=1.0.145"` for its offline protocol parser. Application
-ports must not acquire that dependency. Coordinator owns workspace/lock updates.
+## Exact locations and dependencies
 
-## Existing types to reuse
+- Shared types: `v2/crates/contracts/src/runtime.rs`, Rust
+  `orkestr_v2_contracts::runtime`, `RUNTIME_PORT_VERSION = 1`.
+- Typed UUIDs: `orkestr_v2_contracts::{OwnerId, ConversationId, SessionId, RunId,
+  MessageId, EventId}`; provider-native strings never replace these IDs.
+- Async port: `v2/crates/application/src/runtime.rs`, Rust
+  `orkestr_v2_application::runtime::{RuntimeStore, SessionStore}`. Both names
+  refer to the same `async_trait`, Send + Sync trait, not competing stores.
+- Application adds only `async-trait = "=0.1.89"`. Runtime protocol parsing may
+  use existing `serde_json = "=1.0.145"`. Domain remains dependency-free.
+  Core changes no root membership or lockfile after handoff; coordinator alone
+  resolves the dependency lock and workspace integration.
 
-Use root contracts UUID newtypes `OwnerId`, `ConversationId`, `TaskId`, `RunId`,
-`SessionId`, `EventId`. Use `contracts::runtime::SessionRole` (`Fast`, `Deep`,
-`Worker`), `SessionState`, `RunState`. Do not introduce string ID or Role aliases.
-`ConversationId` resolves the canonical scope under authenticated `OwnerId`;
-caller-supplied scope strings cannot authorize admission.
+Runtime owns provider adapters, supervisor scheduling, capability blockers,
+bounded fake source and protocol parser. Core owns the application port, all
+schema, durable state and verified acceptance. No runtime-owned persistent store.
+The prior synchronous runtime `SessionStore` and string-ID admission are obsolete.
 
-Retain `application::runtime::RuntimeStore` as the sole durable runtime port and
-its existing `RunAdmission`, `RunRecord`, `Lease`, `SupervisorAdmission`,
-`CancelReceipt`, `RecoveryRecord`, `RuntimeStoreError`. `SessionBinding.version`
-is a CAS version; `Lease.generation` and `RunRecord.fence_generation` represent
-separate authorities. Do not collapse them into one generation.
+## Contract decisions
 
-## Published additions to application::runtime
+`Role` is Fast/Deep/Worker (`SessionRole` is an alias). `Binding` carries owner,
+conversation, session, role, provider kind, optional native identity, optional
+parent, u64 generation and lifecycle state. Unconfigured bindings have
+`ProviderKind::Unconfigured`, no native identity, and Starting state. Lost native
+identity is never silently replaced. Fast and deep require distinct Orkestr IDs
+and distinct native IDs; worker identity and lineage are independent.
 
-```rust
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderAdmission {
-    pub run_id: RunId,
-    pub session_id: SessionId,
-    pub native_session_ref: String,
-    pub lease_generation: i64,
-    pub fence_generation: i64,
-    pub role: SessionRole,
-}
+`RunAdmission` carries owner/conversation/run/session IDs, role, optional native
+identity, u64 lease generation and dispatch fence, attempt, store-assigned
+`lease_deadline_ms`, and `AdmissionPurpose`. The extra purpose distinguishes
+execution authority from cancellation acknowledgement authority. Cancellation
+must never turn the new fenced token into permission to start another turn.
+Bindings, claims, admissions and recovery records deliberately have no serde
+implementation: they carry internal authority or provider identity.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProviderEvent {
-    Started,
-    Progress(String),
-    ApprovalRequested,
-    Completed { synthetic: bool },
-    Failed,
-    Stopped,
-    Lost,
-}
+`ProviderObservation` has a stable source_event_key, typed run/session IDs,
+lease generation and `ObservationKind`. The nested kind uses serde's internally
+tagged `kind` representation; see fixtures below. Keys are 1..128 ASCII
+alphanumeric or `-_.:`; Progress text is at most 8192 UTF-8 bytes. The
+`payload_is_bounded` helper validates those bounds only. Store admission also
+checks association, owner, lease expiry, cancellation fence and lifecycle in
+one transaction. `record_observation` requires its event_key to equal the
+observation's source_event_key. Same key/content retries return the original
+evidence; changed content conflicts. No arbitrary provider JSON enters the port.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderEventInput {
-    pub run_id: RunId,
-    pub session_id: SessionId,
-    pub lease_generation: i64,
-    pub fence_generation: i64,
-    pub provider_sequence: i64,
-    pub event: ProviderEvent,
-}
+Started alone moves Starting to Running. CompletedProposal moves to
+AwaitingAcceptance, including synthetic proposals. Providers cannot grant
+approval, authorize effects or transition a task to Succeeded. Core's verified
+acceptance gate is a separate, currently unimplemented operation. Only a current
+cancellation-acknowledgement token may record Stopped as Cancelled; stale
+completions fail. Failed interruption leaves CancelRequested with pending or
+unknown inflight status, never falsely confirmed cancellation.
 
-#[derive(Debug, Clone)]
-pub struct ProviderEventReceipt {
-    pub event_id: EventId,
-    pub run: RunRecord,
-}
-```
+## Atomic operations
 
-`ProviderAdmission` is server-side only: no Serialize/Deserialize derivation,
-no native reference in client DTOs. Admission cannot fabricate native identity;
-construct it only from core-validated supervisor evidence plus an admitted run.
+The Rust trait is the exact signature authority. Every operation is asynchronous,
+short and provider-free within its database transaction:
 
-Add this native asynchronous method to `RuntimeStore` (imports as in runtime.rs):
+1. `claim_next(owner, conversation, consumer, Duration)` claims the earliest
+   eligible sequence for the deep consumer without deleting/dequeuing. Lease
+   duration is 1..60 seconds by store clock. Expiry advances claim generation;
+   new ingress is independently admitted while deep is busy.
+2. `ensure_role_bindings(owner, conversation)` idempotently reserves distinct
+   fast/deep identities. `create_worker_binding(owner, conversation, parent,
+   request_key)` reserves independent same-scope worker lineage.
+3. `admit_run(claim, binding_id, expected_generation, request_key)` verifies
+   ownership, scope, claim, one active turn per native session and fence. Core
+   assigns RunId and persists Starting evidence AND claim handoff/ack in the
+   same transaction to close the admitted-run/ack crash gap. Identical replay
+   returns the original admission; changed request content conflicts. Worker
+   admission validates the deep claim and worker binding belong to the same
+   authenticated owner/conversation; it never transfers a cross-scope claim.
+4. `bind_native_session(admission, native_id, source_event_key)` confirms identity
+   without aliasing or replacement. `renew_lease(admission, expected_generation)`
+   extends by store-configured bounded duration only for current execution
+   authority; expired/stale tokens fail.
+5. `record_observation(admission, event_key, observation)` atomically deduplicates,
+   checks authority and updates ordered journal/projection.
+6. `request_cancel(owner, run, request_key)` idempotently persists CancelRequested,
+   increments lease/dispatch generation and journals a durable control request
+   before returning `CancelReceipt`. Not-dispatched attempts may cancel directly.
+   Receipt includes actual state and NotDispatched/Pending/Unknown inflight status.
+7. `acknowledge_inbox(claim, admitted_run)` confirms the atomic handoff
+   idempotently with claim generation checking; expired/reclaimed claims cannot
+   ack. Follow-ups retain separate inbox rows and original sequence.
+8. `recover_runtime(owner, supervisor_instance, now_ms, after, limit)` fences
+   prior-supervisor admissions and pages at most 100 records. Store clock is
+   authoritative; trusted now_ms cannot extend authority. Cursor binds owner and
+   supervisor pass. Preserve IDs/native references, mark Lost/Blocked or retain
+   CancelRequested with unknown outcome, recover unacked claims in order, and
+   never automatically replay provider start or external effects. Retry is an
+   explicit new attempt. Unknown effects remain quarantined.
 
-```rust
-fn append_provider_event(
-    &self,
-    owner: &OwnerId,
-    input: &ProviderEventInput,
-) -> impl Future<Output = Result<ProviderEventReceipt>> + Send;
-```
+## Fixtures and explicit blockers
 
-The transaction checks ownership, session/run association, live lease expiry,
-lease generation, scope fence and allowed lifecycle transition, then appends
-journal/outbox and changes projections atomically. Provider sequence starts at 1,
-is contiguous per run, and is unique per run. Identical sequence/payload retry
-returns the original receipt; changed payload conflicts. No progress entry over
-8192 UTF-8 bytes; no unbounded provider JSON. `ApprovalRequested` is a signal,
-not an approval grant or effect authorization. `Completed` is provider evidence,
-not task acceptance; synthetic completion stays explicitly synthetic. A stale
-post-cancel event cannot commit a success transition. Recovery handles uncertain
-terminal evidence through reconciliation rather than weakening the fence.
+Synthetic serialization examples:
+`v2/fixtures/provider-observation-started.json` and
+`v2/fixtures/provider-observation-completed-proposal.json`. These are internal
+protocol examples, not new HTTP endpoints. Existing seven intake fixtures remain
+unchanged. No native references or secret material appear in fixtures.
 
-## Provider-only code remains in runtime
+All ten trait methods (counting binding creation/lease renewal separately) are
+contract-only: SQLite runtime migration/adapter is NOT implemented. There is no
+in-memory production fallback. Implementations must return
+`RuntimeStoreError::Unavailable` for any unimplemented method; never fabricate
+successful admissions, recovered state or readiness. Other store errors are
+InvalidInput, NotFound, Unauthorized, Busy, StaleLease, Conflict and Expired.
+Unsupported provider commands remain runtime capability blockers.
 
-Keep `Provider`, `Blocker`, fake source, protocol parser and orchestration helpers
-in `orkestr-runtime`; import the proposed application data types. Nonblocking
-`start`, `poll`, `interrupt` and default `Unsupported` for `resume`, `fork`,
-`steer` are accepted. Runtime bounds its queue; core enforces storage bounds.
-
-Do not move the provisional synchronous `SessionStore` into application. SQLx
-ports are asynchronous and need explicit owner, expected version, lease expiry,
-claim/task evidence and bounded recovery. Reuse existing `admit_run`,
-`request_cancel(owner, run_id, expected_version)` and
-`recover_expired(owner, limit)` signatures. Cancellation persists the scope fence
-and control outbox before provider interruption. The returned `CancelReceipt`
-is evidence of a request, not a renewed execution admission. An interruption
-helper may carry the new fence in a server-side control envelope but must never
-start/poll a new turn with it. Failed interruption leaves cancellation requested
-and effects uncertain; recovery must not restart blindly.
-
-## Pending implementation
-
-Core migration/adapter, provider-event mapping and tests, control-envelope shape,
-task creation/evidence ports, and provider identity confirmation remain pending.
-No HTTP run/lease/effect/fixture-control endpoints are implied by this proposal.
+Pending acceptance: claim expiry/reclaim races, binding uniqueness, real native
+identity confirmation, run dedup, generation/fence/expiry enforcement, cancellation
+acknowledgements, crash-consistent recovery, verified acceptance and effect ledger.
+No run, lease, effect or fixture-control HTTP routes are introduced. Passing
+provider fake/parser tests does not satisfy these durable acceptance cases.
