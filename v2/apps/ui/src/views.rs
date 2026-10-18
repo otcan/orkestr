@@ -147,6 +147,7 @@ pub fn Conversation(
     session_scope: Signal<SessionScope>,
     execution: Signal<orkestr_v2_ui::execution::Execution>,
     mut drafts: Signal<BTreeMap<String, Draft>>,
+    held_inputs: Signal<orkestr_v2_ui::held_inputs::HeldInputs>,
     onexpired: EventHandler<()>,
 ) -> Element {
     let generation = session_scope.read().generation();
@@ -279,6 +280,7 @@ pub fn Conversation(
                     li { key: "{message.message_id}", strong { "{message.actor_kind}" } p { "{message.text}" } }
                 }
             }
+            crate::held_inputs_poll::HeldInputsPanel { id: id.clone(), session_scope, model: held_inputs, projection, onexpired }
             crate::execution_poll::ExecutionPoll { key: "{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, execution, onexpired }
             form { onsubmit: move |event| {
                 event.prevent_default();

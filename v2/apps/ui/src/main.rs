@@ -7,6 +7,8 @@ mod history;
 mod host_resources_view;
 mod progress_view;
 mod stop_button;
+#[allow(dead_code)]
+mod timer_detail_view;
 mod transport;
 mod views;
 mod worker_tasks_panel;
@@ -166,8 +168,7 @@ fn App() -> Element {
                         }
                     }
                     button { onclick: move |_| refresh += 1, "Reconnect and reload history" }
-                    views::Conversation { id: current(), csrf: csrf(), session_scope, execution, drafts, onexpired: expired }
-                    held_inputs_poll::HeldInputsPanel { key: "held-{current()}", id: current(), session_scope, model: held_inputs, onexpired: expired }
+                    views::Conversation { id: current(), csrf: csrf(), session_scope, execution, drafts, held_inputs, onexpired: expired }
                     }
                 } else if tab() == "History" {
                     history::History { key: "{current()}", id: current(), csrf: csrf(), session_scope, onexpired: expired }

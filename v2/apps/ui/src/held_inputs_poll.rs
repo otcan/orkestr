@@ -8,13 +8,14 @@ pub fn HeldInputsPanel(
     id: String,
     session_scope: Signal<SessionScope>,
     model: Signal<HeldInputs>,
+    projection: Signal<orkestr_v2_ui::Projection>,
     onexpired: EventHandler<()>,
 ) -> Element {
     let mut after = use_signal(|| 0i64);
     rsx! {
         div {
         button { disabled: after() == 0, onclick: move |_| after.set(0), "First held input" }
-        HeldInputsPoll { key: "{id}-{after()}", id, after: after(), session_scope, model, onexpired, onnext: move |cursor| after.set(cursor) }
+        HeldInputsPoll { key: "{id}-{after()}", id, after: after(), session_scope, model, projection, onexpired, onnext: move |cursor| after.set(cursor) }
         }
     }
 }
@@ -24,6 +25,7 @@ fn HeldInputsPoll(
     after: i64,
     session_scope: Signal<SessionScope>,
     mut model: Signal<HeldInputs>,
+    projection: Signal<orkestr_v2_ui::Projection>,
     onexpired: EventHandler<()>,
     onnext: EventHandler<i64>,
 ) -> Element {
@@ -84,7 +86,7 @@ fn HeldInputsPoll(
         .displayed_page()
         .and_then(|page| page.next_after_sequence);
     rsx! {
-        crate::held_inputs_view::HeldInputsView { model, now_ms: now() }
+        crate::held_inputs_view::HeldInputsView { model, projection, now_ms: now() }
         button { disabled: next.is_none(), onclick: move |_| { if let Some(cursor) = next { onnext.call(cursor); } }, "Next held input" }
     }
 }

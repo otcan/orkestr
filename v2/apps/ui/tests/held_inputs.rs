@@ -67,3 +67,37 @@ fn bad_boundary_backward_revision_and_identical_replay_cannot_replace_or_refresh
     state.apply(&refresh, 60001, original).unwrap();
     assert!(state.status(60001).contains("stale"));
 }
+
+#[test]
+fn preview_uses_only_exact_loaded_conversation_message_and_unicode_bound() {
+    use orkestr_v2_ui::{held_inputs::saved_preview, Projection};
+    let conversation: orkestr_v2_contracts::ConversationId =
+        serde_json::from_value(serde_json::json!("00000000-0000-4000-8000-000000000001")).unwrap();
+    let message =
+        serde_json::from_value(serde_json::json!("00000000-0000-4000-8000-000000000002")).unwrap();
+    let mut projection = Projection {
+        conversation_id: Some(conversation.to_string()),
+        ..Projection::default()
+    };
+    projection.messages.insert(
+        1,
+        orkestr_v2_contracts::Message {
+            message_id: message,
+            sequence: 1,
+            actor_kind: "owner".into(),
+            text: "é".repeat(200),
+        },
+    );
+    let message = &projection.messages[&1].message_id;
+    assert_eq!(
+        saved_preview(&projection, &conversation, message).unwrap(),
+        format!("{}…", "é".repeat(180))
+    );
+    let other =
+        serde_json::from_value(serde_json::json!("00000000-0000-4000-8000-000000000003")).unwrap();
+    assert!(saved_preview(&projection, &other, message).is_none());
+    let missing =
+        serde_json::from_value(serde_json::json!("00000000-0000-4000-8000-000000000004")).unwrap();
+    assert!(saved_preview(&projection, &conversation, &missing).is_none());
+    assert_eq!(projection.messages.len(), 1);
+}
