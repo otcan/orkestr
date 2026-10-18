@@ -49,6 +49,10 @@ def streaming_stop(case, wait_for, late_burst=False):
     # A genuinely old control version still refuses before any durable intent.
     stale = {**body, "expected_control_revision": control_revision - 1}
     assert case.request(case.path + "/stop", "POST", stale)[0] == 409
+    # A control token permits an older genuine sample, never a future projection
+    # value that could make the resulting durable public receipt invalid.
+    future = {**body, "expected_revision": 2**63 - 1}
+    assert case.request(case.path + "/stop", "POST", future)[0] == 409
     with sqlite3.connect(case.home / "core.sqlite3") as db:
         assert db.execute("SELECT count(*) FROM production_cancellations").fetchone()[0] == 0
     assert not any(row["kind"] == "interrupt" for row in case.trace())

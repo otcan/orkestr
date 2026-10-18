@@ -1,18 +1,22 @@
 # Browser Stop request route
 
 The server exposes `POST /api/v2/conversations/:id/stop`. Its canonical input
-`ExecutionControlRequest` and output `ExecutionStopReceipt` come from Core
-`d03d2d774b45eb7276e86618aa333ea912ee9441`, imported path-only. The request is:
+`ExecutionControlRequest` and output `ExecutionStopReceipt` come from Core.
+The request is:
 
 ```json
-{"run_id":"00000000-0000-4000-8000-000000000001","expected_revision":4,"request_key":"stop:example-1"}
+{"run_id":"00000000-0000-4000-8000-000000000001","expected_revision":4,"expected_control_revision":3,"request_key":"stop:example-1"}
 ```
 
-The revision is the conversation status revision, not a lease generation. The
-browser must retain the exact run, revision and request key after uncertain
+The original revision is the conversation status revision, not a lease generation.
+The optional control revision must come from that exact run's status. It tolerates
+intervening progress and sibling changes while preserving control-state CAS;
+future conversation revisions refuse before any cancellation. Omitting the
+control revision retains the legacy strict conversation-revision comparison.
+The browser must retain the exact run, both revisions and request key after uncertain
 transport failure. An identical replay returns HTTP 200 and the original durable
 receipt, including its original revision. Reusing the key with changed revision
-conflicts. A new request requires the current revision. Unknown input fields and
+conflicts. A new request requires the current control precondition. Unknown input fields and
 missing/invalid run identity refuse; a queued projection without a run grants no
 control identity.
 
@@ -33,8 +37,10 @@ Trusted server composition can install an already authorized bound Store using
 `AppState::with_execution_store`. Default server construction installs none and
 returns 503 for an otherwise valid Stop request. Browser IDs never authorize a
 supervisor or select its namespace. Core revalidates every supplied identity and
-revision against the bound handle. Runtime broker/process interrupt composition
-is separate and remains gated; this route durably requests cancellation only.
+revision against the bound handle. The ordinary configured factory also registers
+each owned Deep and Worker transport and publishes Core's private control receipt
+through its exact mailbox. A public receipt still proves durable intent only;
+correlated provider terminal evidence is required separately for confirmed Stop.
 Steer has no success route in this checkpoint.
 
 `execution_stop` is an actual HTTP test using public ordinary Store APIs, two

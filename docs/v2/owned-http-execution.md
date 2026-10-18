@@ -7,7 +7,7 @@ required. Without `ORKESTR_V2_EXECUTION_CONFIG`, startup remains
 
 This checkpoint supplies the server factory, not production activation. Runtime's
 actual downstream provider-write fence and sealed interruption are composed.
-Stop is available only for this factory's live registered running turn; absent
+Stop is available only for this factory's live registered running turns; absent
 or inactive configuration keeps it unavailable. The real broker and its
 actual native-stdin FD handoff are exercised with a fixed synthetic executable,
 without a real provider or credentials.
@@ -113,10 +113,10 @@ restart/recovery and real-provider multi-turn/Stop acceptance remain separate ga
 
 ## Browser Stop handoff
 
-The factory advertises Stop only for its current owned running turn, scoped to
-the configured owner and conversation. A lifetime guard removes availability on
+The factory advertises Stop for each owned running Deep or Worker turn, scoped to
+the configured owner and conversation. A per-run lifetime guard removes availability on
 exit, revocation, panic or abort. The availability check grants no authority:
-cookie/Origin/CSRF and Core's current-session, exact revision and durable
+cookie/Origin/CSRF and Core's current-session, exact run-control revision and durable
 cancellation checks still run. Core returns public and private control receipts
 from one authenticated transaction. Only the public receipt is serialized.
 
@@ -127,6 +127,9 @@ from status or creates another request key. The exact HTTP transaction and
 handoff serialize with one bounded provider observation step so cancellation
 cannot poison a normal pump write before its receipt arrives. This local lock
 is released before waiting for the provider, owner acceptance or more input.
+The parent acquires Deep then Worker when polling a child; a browser Worker Stop
+locks only that Worker. Exact retired receipt replay is bounded to the last
+64 closed registrations, with no active-entry eviction or repeated interruption.
 
 The shared Deep/Worker Stop adapter consumes the owned pump once. A native RPC
 acknowledgement leaves `cancel_requested`; only a correctly correlated terminal
@@ -175,6 +178,13 @@ The other supplies only an acknowledgement and verifies bounded cleanup with
 the original pending intent, no Stopped event and the queued follow-up retained.
 Both replay the exact public receipt without another native control frame.
 
+Two more cases force native progress after a status read and before one Stop
+request. The original control precondition succeeds while the projection advances;
+an old control version and a future projection version refuse before side effects.
+One case emits 32 legitimate late progress frames after the interrupt ACK and
+still requires the exact native terminal evidence. The public exact-run query
+is checked for authentication, scope and strict query parsing.
+
 ## Optional independent Worker
 
 The same private configuration may include
@@ -191,8 +201,10 @@ and drops it before the next Deep run. Revocation or parent exit drops both
 owned lifecycles. A Worker scheduling error closes only that Worker, preserves
 its durable unresolved state and emits a static diagnostic; it does not retry
 admission or fabricate parent failure. Runtime retains Worker scratch and global
-capacity until the child is actually reaped. Parent Stop fences descendants;
-direct Worker-run browser Stop remains unavailable in this single-Deep gate.
+capacity and shared child accounting until the child is actually reaped. Parent
+Stop fences descendants. Direct Worker Stop uses its exact-run browser status,
+the shared authenticated Core transaction and its own registered mailbox; it
+does not interrupt the parent or consume another Deep inbox entry.
 
 See [Worker scheduling](worker-execution.md) for the separate deadline, explicit
 acceptance, parent-terminal fencing and synthetic executable HTTP checks. This
