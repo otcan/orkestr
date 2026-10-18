@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
 
+# Replace stale PR checks without cancelling exact-source or publication runs.
+# PR numbers also keep identically named branches from different forks separate.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   dependency-advisories:
     runs-on: ubuntu-latest
@@ -55,7 +61,7 @@ jobs:
 
   dependency-policy:
     # Stable required-check name for the ORK-478 ruleset; skipped is not success.
-    if: ${{ always() }}
+    if: ${{ always() && !cancelled() }}
     needs: dependency-advisories
     runs-on: ubuntu-latest
     steps:
@@ -118,7 +124,7 @@ jobs:
           retention-days: 14
 
   secret-policy:
-    if: ${{ always() }}
+    if: ${{ always() && !cancelled() }}
     needs: secret-scan
     runs-on: ubuntu-latest
     steps:
@@ -283,7 +289,7 @@ jobs:
   tests:
     # Stable required-check name aggregating every test shard and the smoke
     # run, so branch protection does not track per-shard matrix names.
-    if: ${{ always() && github.event_name != 'schedule' }}
+    if: ${{ always() && !cancelled() && github.event_name != 'schedule' }}
     needs: [build, test, smoke]
     runs-on: ubuntu-latest
     steps:

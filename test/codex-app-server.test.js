@@ -6615,7 +6615,7 @@ test("Codex app-server queues WhatsApp input behind active turns by default", as
   }
 });
 
-test("Codex app-server steers marked WhatsApp input into active turns", async () => {
+test("Codex app-server steers marked input past a queued separate turn", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-wa-steer-"));
   const fake = await createFakeCodex(home);
   const env = {
@@ -6652,6 +6652,9 @@ test("Codex app-server steers marked WhatsApp input into active turns", async ()
       },
     }, env);
     await markAppServerTurnActive(started.thread, env);
+    const passive = await enqueueThreadInput(started.thread.id, {
+      text: "run separately after the active turn", codexDeliveryMode: "passive",
+    }, env);
     const input = await enqueueThreadInput(started.thread.id, {
       text: "steer this into the current turn",
       source: "whatsapp_inbound",
@@ -6675,6 +6678,7 @@ test("Codex app-server steers marked WhatsApp input into active turns", async ()
     assert.equal(completed.deliveryState, "delivered");
     assert.equal(completed.observedVia, "codex_app_server_turn_steer");
     assert.equal(completed.codexTurnId, "active-turn");
+    assert.equal(messages.find((message) => message.id === passive.id).state, "queued");
     const trace = (await listRouterTraces({ routerTraceId: "rt_codex_app_server_steer" }, env))[0];
     assert.deepEqual(
       trace.phases.map((phase) => phase.phase),
@@ -6689,6 +6693,36 @@ test("Codex app-server steers marked WhatsApp input into active turns", async ()
       call.method === "turn/start" &&
       call.params?.input?.some((item) => item.text === "steer this into the current turn")
     ));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("worker reports cannot answer pending questions or block the owner's answer", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-report-question-"));
+  const fake = await createFakeCodex(home);
+  const env = { ORKESTR_HOME: path.join(home, "orkestr"), HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`, FAKE_CODEX_STATE: fake.stateFile };
+  try {
+    const started = await startCodexAppServerThread(await createThread({ id: "report-question", cwd: home, executorId: "codex" }, env), env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    const answers = [];
+    const request = { method: "item/tool/requestUserInput" };
+    client.pendingRequestForThread = () => request;
+    client.answerPendingRequest = async (...args) => { answers.push(args); };
+    const report = await enqueueThreadInput(started.thread.id, {
+      text: "New worker result", reportSourceThreadId: "worker", codexDeliveryMode: "instant_steer", steerActiveTurn: true,
+    }, env);
+    assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env), []);
+    assert.equal(answers.length, 0);
+    await updateThread(started.thread.id, { runtime: { ...(await getThread(started.thread.id, env)).runtime, pendingRequest: request } }, env);
+    const answer = await enqueueThreadInput(started.thread.id, { text: "Use the second option", source: "ui_input" }, env);
+    assert.deepEqual(await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env), [answer.id]);
+    assert.equal(answers.length, 1);
+    assert.equal(answers[0][2].text, "Use the second option");
+    const messages = await listThreadMessages(started.thread.id, env);
+    assert.equal(messages.find(m => m.id === report.id).state, "queued");
+    assert.equal(messages.find(m => m.id === answer.id).state, "completed");
   } finally {
     stopCodexAppServerClients();
   }
