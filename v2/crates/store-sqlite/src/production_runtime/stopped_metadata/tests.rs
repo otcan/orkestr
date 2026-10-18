@@ -90,6 +90,54 @@ async fn stopped_setup_requires_canonical_stop_and_reserves_once() {
         .await
         .unwrap();
     assert_eq!(transition.binding(), &ready);
+    use orkestr_v2_application::IntakeStore;
+    f.store
+        .admit(
+            &f.owner,
+            &f.conversation,
+            &orkestr_v2_contracts::MessageInput {
+                client_message_id: "explicit-after-stop".into(),
+                text: "new owner turn".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let claim = f
+        .handle
+        .claim_next(
+            &f.owner,
+            &f.conversation,
+            &ready.session_id,
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let next = f
+        .handle
+        .admit_run(
+            &claim,
+            &ready.session_id,
+            ready.generation,
+            "new-after-stop",
+        )
+        .await
+        .unwrap();
+    assert_ne!(next.provider.run.run_id, run.provider.run.run_id);
+    let DispatchClaimResult::Reserved(reservation) = f
+        .handle
+        .claim_provider_dispatch(&next, "next-reserve")
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    let ExecutionConsumption::Dispatch(cap) =
+        f.handle.consume_execution(&reservation).await.unwrap()
+    else {
+        panic!()
+    };
+    transition.attach_execution(*cap).unwrap();
 }
 
 #[tokio::test]

@@ -1,13 +1,13 @@
 # Terminal session continuation ports
 
-This is an implementation proposal, not an enabled setup or restart path. Core
+These are sealed Store setup ports, not provider activation. Core
 owns the opaque grants, supervisor transitions, migrations and authorization;
 server composition owns child shutdown/reaping and Runtime owns protocol setup.
-Existing accepted-session setup remains unchanged until this successor is tested.
+Existing accepted-session setup retains its exact binding checks.
 
 ## Confirmed Stop continuation
 
-Proposed bound Store operation:
+Bound Store operation:
 
 ```rust
 async fn authorize_stopped_session_metadata(
@@ -37,13 +37,13 @@ it never retries the stopped run or clears queued follow-ups.
 
 ## Accepted terminal restart
 
-Proposed operation on ordinary unbound Store:
+Operation on ordinary unbound Store:
 
 ```rust
 async fn reattach_terminal_supervisor(
     &self, credential: &str, config: ProductionSupervisorConfig,
     prior_run: &RunId,
-) -> Result<Store>;
+) -> Result<(Store, BoundSessionMetadata)>;
 ```
 
 Only exact `ExpiredPredecessor` CAS is eligible. The new credential must be a
@@ -56,13 +56,14 @@ One concurrent successor wins; First never takes over an existing context.
 
 The restart transfers readiness ownership to the new incarnation without
 rewriting historical admissions, observations, acceptance or native identity.
-It then permits one separately reserved accepted-session metadata grant tied to
+It atomically returns one reserved accepted-session metadata grant tied to
 that immutable accepted predecessor and the new incarnation. The old context,
 old setup grants and all old I/O authority remain fenced. If any unresolved run,
 unknown delivery or setup uncertainty exists, ordinary recovery/quarantine is
 required instead; this port cannot declare it stopped or accepted.
 
-The existing current-credential checks and actual execution fence still apply
+Other old setup bindings become Lost; only the exact accepted native binding
+transfers. The returned grant is private and non-Clone; losing its delivery never
+reissues setup. The current-credential checks and actual execution fence still apply
 before each real provider write. A trusted child-reaped assertion alone never
-grants durable restart authority. Proposed ports require independent race,
-revocation, stale-predecessor and reopen/no-reissue tests before consumption.
+grants durable restart authority. Independent process/provider acceptance remains separate from Store tests.
