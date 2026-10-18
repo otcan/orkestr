@@ -1,5 +1,6 @@
 use super::*;
 use orkestr_v2_store_sqlite::history_import::timers::{TimerImportRequest, TimerSchedule};
+use sha2::Digest;
 use std::io::{Read, Write};
 use std::sync::{
     atomic::{AtomicI64, Ordering},
@@ -19,15 +20,31 @@ async fn request(
     token: &str,
     body: serde_json::Value,
 ) -> (u16, serde_json::Value) {
+    request_headers(
+        address,
+        method,
+        path,
+        format!("Authorization: Bearer {token}\r\n"),
+        body,
+    )
+    .await
+}
+async fn request_headers(
+    address: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    extra: String,
+    body: serde_json::Value,
+) -> (u16, serde_json::Value) {
     let body = body.to_string();
     let method = method.to_owned();
     let path = path.to_owned();
-    let token = token.to_owned();
+
     tokio::task::spawn_blocking(move || {
         let mut socket=std::net::TcpStream::connect_timeout(&address,std::time::Duration::from_secs(5)).unwrap();
         socket.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
         socket.set_write_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
-        let request=format!("{method} {path} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
+        let request=format!("{method} {path} HTTP/1.1\r\nHost: {address}\r\n{extra}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
         socket.write_all(request.as_bytes()).unwrap();
         let mut response=String::new();socket.read_to_string(&mut response).unwrap();
         let (headers,body)=response.split_once("\r\n\r\n").unwrap();
@@ -95,6 +112,90 @@ async fn timer_loopback_enable_due_input_disable_held_and_refusals() {
             .0,
         400
     );
+    let browser_token = "c2".repeat(32);
+    store
+        .save_session(&format!("browser:{browser_token}"), &owner)
+        .await
+        .unwrap();
+    let cookie = format!("Cookie: orkestr_v2_session={browser_token}\r\n");
+    let origin = format!("Origin: http://{address}\r\n");
+    let csrf = format!(
+        "{:x}",
+        sha2::Sha256::digest(format!("orkestr-v2-browser-csrf-v1:{browser_token}").as_bytes())
+    );
+    let browser_headers = format!("{cookie}{origin}x-orkestr-csrf: {csrf}\r\n");
+    assert_eq!(
+        request_headers(
+            address,
+            "GET",
+            &path,
+            cookie.clone(),
+            serde_json::Value::Null
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        request_headers(
+            address,
+            "POST",
+            &format!("{path}/enable"),
+            format!("{cookie}{origin}"),
+            enable.clone()
+        )
+        .await
+        .0,
+        403
+    );
+    assert_eq!(
+        request_headers(
+            address,
+            "POST",
+            &format!("{path}/enable"),
+            format!("{cookie}{origin}x-orkestr-csrf: wrong\r\n"),
+            enable.clone()
+        )
+        .await
+        .0,
+        403
+    );
+    assert_eq!(
+        request_headers(
+            address,
+            "POST",
+            &format!("{path}/enable"),
+            format!("{cookie}Origin: http://fake.invalid\r\nx-orkestr-csrf: {csrf}\r\n"),
+            enable.clone()
+        )
+        .await
+        .0,
+        403
+    );
+    assert_eq!(
+        request_headers(
+            address,
+            "GET",
+            &path,
+            format!("{cookie}Authorization: Bearer {token}\r\n"),
+            serde_json::Value::Null
+        )
+        .await
+        .0,
+        401
+    );
+    assert_eq!(
+        request_headers(
+            address,
+            "POST",
+            &format!("{path}/enable"),
+            browser_headers,
+            enable.clone()
+        )
+        .await
+        .0,
+        200
+    );
     let (status, enabled) = request(
         address,
         "POST",
@@ -139,6 +240,16 @@ async fn timer_loopback_enable_due_input_disable_held_and_refusals() {
     assert!(result.success());
     clock.0.store(NOW + 120_000, Ordering::SeqCst);
     assert_eq!(controller.tick().await.unwrap(), 0);
+    store
+        .revoke_session(&format!("browser:{browser_token}"))
+        .await
+        .unwrap();
+    assert_eq!(
+        request_headers(address, "GET", &path, cookie, serde_json::Value::Null)
+            .await
+            .0,
+        401
+    );
     store.revoke_session(&token).await.unwrap();
     assert_eq!(
         request(address, "GET", &path, &token, serde_json::Value::Null)
