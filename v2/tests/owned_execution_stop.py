@@ -29,11 +29,14 @@ def stop(case, wait_for, terminal):
     with sqlite3.connect(case.home / "core.sqlite3") as db:
         assert db.execute("SELECT count(*) FROM production_cancellations").fetchone()[0] == 0
     assert case.message(2)[0] == 202
-    # Intake advances the snapshot revision; use the fresh current revision.
+    # Intake and provider progress can advance the snapshot independently. Keep
+    # the legacy stale-snapshot refusal above; the valid request uses the exact
+    # run's stable control precondition, as the ordinary browser does.
     running = wait_for(available, "owned Stop remains available after queued intake")
     body["expected_revision"] = running["revision"]
+    body["expected_control_revision"] = running["control_revision"]
     code, receipt, headers = case.request(case.path + "/stop", "POST", body)
-    assert code == 200 and receipt["outcome"] == "requested_unknown"
+    assert code == 200 and receipt["outcome"] == "requested_unknown", (code, receipt)
     assert "no-store" in headers["Cache-Control"]
     # The second issued Core receipt remains server-private.
     assert set(receipt) == {"schema_version", "conversation_id", "run_id", "request_key",
