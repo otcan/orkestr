@@ -7,17 +7,20 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { browserLease, Candidate, createNetwork, digest, provenance } from './support.mjs';
 import { scenarios } from './scenarios.mjs';
+import {executionFixture, runExecution} from './execution-run.mjs';
 
 const options = {};
 for (let index = 2; index < process.argv.length; index += 1) {
   const name = process.argv[index];
-  assert(['--provenance', '--lease-receipt', '--puppeteer-module', '--output', '--verify-only'].includes(name), 'unknown_argument');
+  assert(['--provenance', '--lease-receipt', '--puppeteer-module', '--output', '--verify-only', '--execution-fixture'].includes(name), 'unknown_argument');
   assert(!(name in options), 'duplicate_argument');
   options[name] = name === '--verify-only' ? true : process.argv[++index];
   assert(options[name], 'argument_value_required');
 }
 assert(options['--provenance'], 'provenance_required');
 const artifact = await provenance(options['--provenance']);
+const fixtureConfiguration=options['--execution-fixture']
+  ? await executionFixture(options['--execution-fixture'],artifact) : null;
 if (options['--verify-only']) {
   process.stdout.write(`${JSON.stringify({ status: 'verified', server_source: artifact.server.source_sha,
     ui_source: artifact.ui.source_sha, bundle_bytes: artifact.bundle_bytes })}\n`);
@@ -38,7 +41,7 @@ const report = {
   checks: [], page_errors: [], cleanup: {},
 };
 report.harness_sha256 = Object.fromEntries(await Promise.all(
-  ['runner.mjs', 'support.mjs', 'scenarios.mjs'].map(async (name) =>
+  ['runner.mjs', 'support.mjs', 'scenarios.mjs', 'execution-run.mjs', 'execution-scenarios.mjs'].map(async (name) =>
     [name, digest(await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), name)))]),
 ));
 let browser;
@@ -84,6 +87,12 @@ try {
   });
   const network = await createNetwork(page, candidate.origin);
   await scenarios({ page, context, candidate, network, report, output, signal: controller.signal });
+  if(fixtureConfiguration) {
+    await runExecution({configuration:fixtureConfiguration,page,context,candidate,network,report,signal:controller.signal});
+    assert.equal(network.externalRequests,0,'unexpected_external_browser_request');
+    assert.equal(network.getAuthorityHeaders,0,'browser_get_sent_authority_header');
+    report.network.execution_total_request_kinds=network.requestKinds;
+  }
   assert.equal(report.page_errors.length, 0, 'browser_javascript_errors');
   report.status = 'passed';
 } catch (error) {

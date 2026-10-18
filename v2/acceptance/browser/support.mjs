@@ -221,7 +221,8 @@ export async function createNetwork(page, origin) {
     }
     if (/^\/api\/v2\/conversations\/[^/]+$/.test(url.pathname) && response.status() === 200) {
       const body = await response.buffer();
-      state.snapshots.push({ bytes: body.length, messages: JSON.parse(body).messages.length });
+      state.snapshots.push({ bytes: body.length, messages: JSON.parse(body).messages.length,
+        cursor: Number(url.searchParams.get('after') || 0), limit: Number(url.searchParams.get('limit') || 100) });
       if (state.snapshots.length > 2000) state.snapshots.shift();
     }
   })().catch(() => {}); });

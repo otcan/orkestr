@@ -20,11 +20,10 @@ const button = async (page, label) => {
   return element;
 };
 const click = async (page, label) => { const node = await button(page, label); await node.click(); await node.dispose(); };
-const enabled = async (page, label) => {
-  const node = await button(page, label);
-  const value = await node.evaluate(node => !node.disabled);
-  await node.dispose(); return value;
-};
+const enabled = (page, label) => page.evaluate(label => {
+  const node=[...document.querySelectorAll('button')].find(node=>node.textContent.trim()===label);
+  return Boolean(node&&!node.disabled);
+},label);
 const draft = page => page.$eval('#composer', node => node.value);
 const setDraft = async page => {
   await page.focus('#composer');
@@ -78,6 +77,7 @@ export async function executionScenarios({page, fixture, report, signal}) {
   // namespace. No HTTP stubs, SQL fabrication or externally supplied authority.
   const step=async(name, action)=>{
     signal.throwIfAborted(); const start=performance.now(); report.stage=name;
+    process.stdout.write(`${JSON.stringify({phase:name,state:'running'})}\n`);
     const evidence=await action(); signal.throwIfAborted();
     report.checks.push({name,status:'passed',duration_ms:Math.round(performance.now()-start),...evidence});
   };
@@ -121,24 +121,61 @@ export async function executionScenarios({page, fixture, report, signal}) {
     assert.equal(await draft(page),DRAFT);
     return {exact_request_retry:true,duplicate_receipt_identical:true};
   });
-  await step('stale_revision_conflict_does_not_accept_or_replace_draft',async()=>{
+  await step('mounted_revision_conflict_requires_explicit_review',async()=>{
     target=await fixture.completed();
-    await click(page,'Reconnect');
+    await click(page,'Reconnect and reload history');
     await wait(()=>enabled(page,'Accept completion'),'new_completion_not_available');
-    const status=await read(page,`/api/v2/conversations/${target.conversation_id}/execution`);
-    const request={run_id:target.run_id,completion_event_id:target.completion_event_id,
-      expected_revision:status.body.revision-1,request_key:'synthetic-stale-review'};
-    const refused=await write(page,`/api/v2/conversations/${target.conversation_id}/accept`,'POST',request);
-    assert.equal(refused.status,409);
-    const unchanged=await read(page,`/api/v2/conversations/${target.conversation_id}/execution`);
+    const path=`/api/v2/conversations/${target.conversation_id}/accept`;
+    const statusPath=`/api/v2/conversations/${target.conversation_id}/execution`;
+    const initial=await read(page,statusPath);
+    const cdp=await page.createCDPSession();
+    let held, resolveHeld, rejectHeld;
+    const captured=new Promise((resolve,reject)=>{resolveHeld=resolve;rejectHeld=reject;});
+    const timeout=setTimeout(()=>rejectHeld(new Error('request_race_deadline')),10000);
+    cdp.on('Fetch.requestPaused',event=>{
+      if(event.request.method==='POST'&&!held){held=event;resolveHeld(JSON.parse(event.request.postData));}
+      else void cdp.send('Fetch.continueRequest',{requestId:event.requestId}).catch(rejectHeld);
+    });
+    await cdp.send('Fetch.enable',{patterns:[{urlPattern:`*${path}`,requestStage:'Request'}]});
+    let original, advanced;
+    try{
+      await click(page,'Accept completion'); original=await captured;
+      assert.equal(original.expected_revision,initial.body.revision);
+      advanced=await fixture.advanceRevision();
+      assert(advanced.revision>original.expected_revision);
+      const response=page.waitForResponse(r=>new URL(r.url()).pathname===path&&r.request().method()==='POST');
+      await cdp.send('Fetch.continueRequest',{requestId:held.requestId});held=null;
+      assert.equal((await response).status(),409);
+    }finally{
+      clearTimeout(timeout);
+      if(held)await cdp.send('Fetch.continueRequest',{requestId:held.requestId}).catch(()=>{});
+      await cdp.send('Fetch.disable').catch(()=>{});await cdp.detach();
+    }
+    await page.waitForFunction(()=>document.body.textContent.includes('Completion changed. Refresh before reviewing again. Original request retained.'));
+    const unchanged=await read(page,statusPath);
     assert.equal(unchanged.body.phase,'awaiting_acceptance');
-    assert.equal(unchanged.body.revision,status.body.revision);
+    assert.equal(unchanged.body.revision,advanced.revision);
     assert.equal(await draft(page),DRAFT);
-    return {native_conflict_status:409,no_acceptance:true};
+    await wait(()=>enabled(page,'Review updated completion'),'updated_review_not_available');
+    await click(page,'Review updated completion');
+    await wait(()=>enabled(page,'Accept completion'),'reviewed_acceptance_not_available');
+    let reviewed;
+    await responseFault(page,path,async fault=>{
+      await click(page,'Accept completion');reviewed=await fault.captured;
+      assert.equal(reviewed.status,200);
+      assert.equal(reviewed.request.expected_revision,advanced.revision);
+      assert.notEqual(reviewed.request.request_key,original.request_key);
+      assert.equal(reviewed.request.run_id,original.run_id);
+      assert.equal(reviewed.request.completion_event_id,original.completion_event_id);
+      await fault.release(false);
+    });
+    await wait(async()=>(await read(page,statusPath)).body.phase==='completed','reviewed_completion_not_committed');
+    assert.equal(await draft(page),DRAFT);
+    return {native_conflict_status:409,mounted_conflict_notice:true,explicit_review:true,new_review_key:true,draft_preserved:true};
   });
   await step('external_payload_tombstone_revalidates_without_revision_change',async()=>{
     const payload=await fixture.progress();
-    await click(page,'Reconnect');
+    await click(page,'Reconnect and reload history');
     await page.waitForFunction(text=>document.querySelector('section[aria-label="Provider output"] pre')?.textContent===text,{},payload.text);
     const statusPath=`/api/v2/conversations/${payload.conversation_id}/execution`;
     const before=await read(page,statusPath);
@@ -153,7 +190,7 @@ export async function executionScenarios({page, fixture, report, signal}) {
   });
   await step('payload_delete_wins_delayed_predelete_read',async()=>{
     const payload=await fixture.progress();
-    await click(page,'Reconnect');
+    await click(page,'Reconnect and reload history');
     await page.waitForFunction(text=>document.querySelector('section[aria-label="Provider output"] pre')?.textContent===text,{},payload.text);
     const path=`/api/v2/conversations/${payload.conversation_id}/payloads/${payload.payload_id}`;
     await responseFault(page,path,async fault=>{

@@ -112,3 +112,27 @@ stays running. The operator must independently release the managed lease.
 An unavailable managed browser or an unqualified bundle is a blocker for the
 actual-browser result. Syntax checks, source unit tests, and fake responses alone
 must not be reported as browser acceptance.
+
+## Optional completion and payload scenarios
+
+`--execution-fixture /absolute/fixture-receipt.json` adds real rendered completion
+and payload checks after the original scenarios. The server and controls-enabled
+UI must share the receipt's exact `product_source`. The receipt pins the separate
+test-only Store driver's executable and source modules; the runner verifies their
+hashes before loading or executing them. The driver is never part of the server
+and receives only the marked, newly created second synthetic owner's database.
+
+The additive cases reload a durable completion candidate, drop an actual committed
+acceptance response, retry the identical request, and require the identical receipt.
+For the mounted conflict path, the browser's real acceptance request is held before
+delivery while a legitimate fixture admission advances the revision. The server
+returns 409; the UI must retain the draft and require an explicit updated review
+before it can submit a new request key. The candidate must be accepted before the
+fixture opens the next run for removable progress output. Payload tombstones,
+late pre-deletion responses, session revocation and unavailable Stop are checked
+through the real page and ordinary HTTP routes. No successful response is invented.
+
+These are synthetic Store authority tests, not provider execution or verified
+interruption. The receipt records that scope, the fixture pins, elapsed time and
+owned-child cleanup. Fixture authority lasts 60 seconds per claimed run; expiry
+is a failure, never an excuse to bypass authority checks.

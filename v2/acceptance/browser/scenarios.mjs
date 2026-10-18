@@ -109,6 +109,9 @@ export async function scenarios({ page, context, candidate, network, report, out
     const maximumFrameMs = Math.round(await frames);
     await delay(100);
     const pages = network.snapshots.slice(before);
+    report.history_observation = { before, total:network.snapshots.length, pages,
+      first_page_ms:firstPageMs,next_page_ms:nextPageMs,maximum_animation_frame_ms:maximumFrameMs,
+      request_kinds:{...network.requestKinds} };
     assert(pages.length >= 2 && pages.length <= 3, 'history_fetched_more_than_requested_pages');
     assert(pages.every((item) => item.messages === 100 && item.bytes <= 64 * 1024), 'history_page_unbounded');
     assert(firstPageMs < 2000 && nextPageMs < 2000, 'history_page_latency_exceeded');
