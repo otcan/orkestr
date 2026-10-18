@@ -85,12 +85,14 @@ impl FixtureSupervisorStore {
             return Ok(DispatchClaimResult::Replay);
         }
         let reservation = secret();
-        let changed = sqlx::query("UPDATE fixture_runs SET dispatch_state='reserved',reservation_hash=?,reserve_key=? WHERE id=? AND dispatch_state='candidate'")
-            .bind(hash("fixture-reservation-v1", &[&reservation])).bind(request_key).bind(candidate.provider.run.run_id.to_string())
-            .execute(&mut *tx).await.map_err(db)?.rows_affected();
-        if changed != 1 {
-            return Err(RuntimeStoreError::Conflict);
-        }
+        crate::runtime::ledger::reserve(
+            &mut tx,
+            crate::runtime::ledger::Ledger::Fixture,
+            &candidate.provider.run.run_id.to_string(),
+            &hash("fixture-reservation-v1", &[&reservation]),
+            request_key,
+        )
+        .await?;
         #[cfg(test)]
         super::crash_tests::checkpoint("reserve-before-commit");
         #[cfg(feature = "fixture-test-controls")]
@@ -127,9 +129,13 @@ impl FixtureSupervisorStore {
         {
             return Err(RuntimeStoreError::Conflict);
         }
-        let changed = sqlx::query("UPDATE fixture_runs SET dispatch_state='delivery_unknown',candidate_hash=NULL,reservation_hash=NULL WHERE id=? AND dispatch_state='reserved'")
-            .bind(claim.provider.run.run_id.to_string()).execute(&mut *tx).await.map_err(db)?.rows_affected();
-        if changed != 1 {
+        if !crate::runtime::ledger::consume(
+            &mut tx,
+            crate::runtime::ledger::Ledger::Fixture,
+            &claim.provider.run.run_id.to_string(),
+        )
+        .await?
+        {
             return Ok(DispatchConsumption::ReconciliationRequired);
         }
         #[cfg(test)]

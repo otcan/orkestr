@@ -1,83 +1,12 @@
 use super::*;
 use orkestr_v2_application::runtime::*;
-use orkestr_v2_contracts::{ConversationId, RunId, SessionId};
-use sha2::{Digest, Sha256};
+use orkestr_v2_contracts::SessionId;
 use sqlx::sqlite::SqliteRow;
 
-pub(super) fn hash(domain: &str, parts: &[&str]) -> String {
-    let mut digest = Sha256::new();
-    for part in std::iter::once(domain).chain(parts.iter().copied()) {
-        digest.update((part.len() as u64).to_be_bytes());
-        digest.update(part.as_bytes());
-    }
-    format!("{:x}", digest.finalize())
-}
-pub(super) fn secret() -> String {
-    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
-}
-fn uuid(row: &SqliteRow, field: &str) -> Result<Uuid> {
-    Uuid::parse_str(&row.get::<String, _>(field)).map_err(db)
-}
+pub(super) use crate::runtime::envelope::run_state;
+pub(super) use crate::runtime::ledger::{hash, secret};
 pub(super) fn envelope(row: &SqliteRow) -> Result<ProviderAdmission> {
-    let owner_id = OwnerId(uuid(row, "owner_id")?);
-    let conversation_id = ConversationId(uuid(row, "conversation_id")?);
-    let session_id = SessionId(uuid(row, "session_id")?);
-    let native: String = row.get("native_session_id");
-    Ok(ProviderAdmission {
-        run: RunAdmission {
-            owner_id: owner_id.clone(),
-            conversation_id: conversation_id.clone(),
-            run_id: RunId(uuid(row, "id")?),
-            session_id: session_id.clone(),
-            role: Role::Deep,
-            native_session_id: Some(native.clone()),
-            lease_generation: u64::try_from(row.get::<i64, _>("lease_generation")).map_err(db)?,
-            dispatch_fence: u64::try_from(row.get::<i64, _>("dispatch_fence")).map_err(db)?,
-            attempt: 1,
-            lease_deadline_ms: row.get("lease_deadline_ms"),
-            purpose: AdmissionPurpose::Execution,
-        },
-        binding: Binding {
-            owner_id,
-            conversation_id,
-            session_id,
-            role: Role::Deep,
-            provider_kind: ProviderKind::ExplicitFixture,
-            native_session_id: Some(native),
-            parent_session_id: None,
-            generation: u64::try_from(row.get::<i64, _>("binding_generation")).map_err(db)?,
-            state: SessionState::Ready,
-        },
-    })
-}
-pub(super) fn run_state(row: &SqliteRow) -> RunState {
-    match row.get::<&str, _>("state") {
-        "starting" => RunState::Starting,
-        "running" => RunState::Running,
-        "awaiting_acceptance" => RunState::AwaitingAcceptance,
-        "failed" => RunState::Failed,
-        "cancel_requested" => RunState::CancelRequested,
-        "cancelled" => RunState::Cancelled,
-        _ => RunState::Blocked,
-    }
-}
-fn input_digest(claim: &InboxClaim, binding: &SessionId, generation: u64, key: &str) -> String {
-    hash(
-        "fixture-admission-v1",
-        &[
-            &claim.owner_id.to_string(),
-            &claim.conversation_id.to_string(),
-            &claim.message_id.to_string(),
-            &claim.event_id.to_string(),
-            &claim.consumer_session_id.to_string(),
-            &claim.scope_sequence.to_string(),
-            &claim.claim_generation.to_string(),
-            &claim.lease_deadline_ms.to_string(),
-            &binding.to_string(),
-            &generation.to_string(),
-            key,
-        ],
-    )
+    crate::runtime::envelope::envelope(row, ProviderKind::ExplicitFixture)
 }
 
 impl FixtureSupervisorStore {
@@ -103,7 +32,12 @@ impl FixtureSupervisorStore {
         if *binding_id != claim.consumer_session_id {
             return Err(RuntimeStoreError::Conflict);
         }
-        let digest = input_digest(claim, binding_id, expected_generation, request_key);
+        let digest = crate::runtime::ledger::input_digest(
+            claim,
+            binding_id,
+            expected_generation,
+            request_key,
+        );
         let mut tx = self
             .store
             .pool
@@ -155,32 +89,7 @@ impl FixtureSupervisorStore {
             return Err(RuntimeStoreError::Busy);
         }
         let clock = now(&mut tx).await?;
-        let inbox =
-            sqlx::query("SELECT * FROM reasoning_inbox WHERE conversation_id=? AND sequence=?")
-                .bind(claim.conversation_id.to_string())
-                .bind(claim.scope_sequence)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(db)?
-                .ok_or(RuntimeStoreError::NotFound)?;
-        if inbox.get::<&str, _>("state") != "claimed"
-            || inbox.get::<Option<String>, _>("claimant_session_id") != Some(binding_id.to_string())
-            || inbox.get::<String, _>("message_id") != claim.message_id.to_string()
-            || inbox.get::<String, _>("event_id") != claim.event_id.to_string()
-            || inbox.get::<i64, _>("claim_generation")
-                != i64::try_from(claim.claim_generation).map_err(db)?
-            || inbox.get::<Option<i64>, _>("claim_deadline_ms") != Some(claim.lease_deadline_ms)
-        {
-            return Err(RuntimeStoreError::StaleLease);
-        }
-        if claim.lease_deadline_ms <= clock {
-            return Err(RuntimeStoreError::Expired);
-        }
-        let earliest: i64 = sqlx::query_scalar("SELECT min(sequence) FROM reasoning_inbox WHERE conversation_id=? AND state <> 'consumed'")
-            .bind(claim.conversation_id.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
-        if earliest != claim.scope_sequence {
-            return Err(RuntimeStoreError::Conflict);
-        }
+        crate::runtime::ledger::validate_claim(&mut tx, claim, binding_id, clock).await?;
         let row = sqlx::query("SELECT b.* FROM session_bindings b JOIN fixture_readiness r ON r.session_id=b.id WHERE b.id=? AND b.owner_id=? AND b.conversation_id=? AND r.context_id=? AND r.incarnation_id=? AND r.protocol_version=1 AND b.provider_kind='explicit_fixture' AND b.provider_namespace=?")
             .bind(binding_id.to_string()).bind(self.owner.to_string()).bind(claim.conversation_id.to_string())
             .bind(self.context_id.to_string()).bind(self.incarnation_id.to_string()).bind(&self.namespace)

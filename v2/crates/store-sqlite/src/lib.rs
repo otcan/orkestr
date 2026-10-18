@@ -12,12 +12,17 @@ pub mod fixture_runtime;
 mod intake;
 mod paths;
 mod preflight;
+mod production_runtime;
 mod replay;
 mod runtime;
+pub use production_runtime::{
+    ConsumedProviderDispatch, ExecutionConsumption, ProductionSupervisorStore,
+};
 
 #[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,
+    authority: Option<production_runtime::Context>,
 }
 fn db(_: impl std::fmt::Display) -> StoreError {
     StoreError::Unavailable
@@ -52,7 +57,10 @@ impl Store {
             .run(&pool)
             .await
             .map_err(db)?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            authority: None,
+        })
     }
     pub async fn close(&self) {
         self.pool.close().await;

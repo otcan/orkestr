@@ -48,3 +48,32 @@ snapshot and reject regressing revisions. Stop/steer remain false until reviewed
 routes and durable authority exist. No route path or control request shape is
 approved by this DTO; Runtime owns the route proposal with existing browser
 CSRF/Origin/Host guards and idempotency. This does not expand fixture schemas.
+
+## Ordinary Store implementation checkpoint
+
+Migration 0008 introduces production supervisor/readiness/run authority, separate
+from fixture authority. `Store::authorize_supervisor` validates an existing
+machine session and trusted provider namespace; each bound operation checks the
+session and store-clock context lease again. `confirm_native_session` accepts
+trusted protocol readiness evidence only. Native protocol persistence and
+canonical workspace validation remain adapter obligations.
+
+Bound admission atomically creates Starting evidence and acknowledges its inbox
+claim. Reserve and consume are single-winner transactions. `consume_execution`
+returns a non-Clone, non-serializable `ConsumedProviderDispatch` with private
+fields only after DeliveryUnknown commits. The contained message text comes
+from the admitted durable message. An executor must consume this capability by
+value; the legacy dispatch disposition alone grants no process authority.
+
+The initial schema deliberately permits one admitted run per binding. Terminal
+lifecycle work must replace this restriction with active exclusivity and an
+explicit safe reuse gate; takeover must then fence only active runs and preserve
+terminal outcomes. Production renewal, observations, cancellation and recovery
+are still unavailable. No provider process is activated by this checkpoint.
+
+Author validation: feature-enabled store library tests passed 56, with three
+owned-child entry points ignored by discovery and invoked by their parents.
+The production parent covers seven actual SIGKILL windows and fresh-process
+expiry/takeover, without private authority reconstruction. Strict feature-enabled
+all-target store clippy passed. These results establish the bounded storage
+slice, not full provider or release acceptance.
