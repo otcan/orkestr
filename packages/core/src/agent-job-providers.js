@@ -32,7 +32,13 @@ export function setAgentJobProviderProbe(provider, probe, { ifAbsent = false } =
 // Jobs are admitted and started only on runnable providers.
 export async function agentJobProviderStatus(provider, env = process.env, providerRef = {}) {
   const id = String(provider || "");
-  if (id === "openai-compatible") return { provider: id, ...await discoverLocalModel(env, providerRef) };
+  if (id === "openai-compatible") {
+    // The flag gates the local provider before any probe; a registered probe
+    // (overlay or test fixture) is honoured like every other provider, and the
+    // pinned loopback endpoint is discovered only when none is registered.
+    if (!personalAgentFeature(env)) return { provider: id, connected: false, runnable: false, reason: "personal_agent_disabled" };
+    if (!probes.has(id)) return { provider: id, ...await discoverLocalModel(env, providerRef) };
+  }
   if (id === "simulated") {
     return agentJobTestProvidersAllowed(env)
       ? { provider: id, connected: true, runnable: true, reason: "test_fixture" }

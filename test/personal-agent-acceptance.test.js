@@ -120,7 +120,8 @@ test("PA-R05 [OP-14 OP-20]: explicit permission denial is durable and never perf
 });
 
 test("PA-R06 [OP-09 OP-10]: local provider loss makes no cloud attempt and preserves the admitted run", async (t) => {
-  const env = await offlineFixture(t);
+  // The local provider is only admitted with the Personal Agent feature on (OP-09).
+  const env = { ...await offlineFixture(t), ORKESTR_PERSONAL_AGENT_ENABLED: "1" };
   let available = true;
   let localCalls = 0;
   let cloudCalls = 0;
