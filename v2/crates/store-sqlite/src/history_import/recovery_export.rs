@@ -133,3 +133,6 @@ pub struct HistoryRecoveryRollbackReceipt {
     pub revision: i64,
     pub active: bool,
 }
+
+#[path = "recovery_json.rs"]
+pub mod json;
