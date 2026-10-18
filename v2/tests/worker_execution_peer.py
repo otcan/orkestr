@@ -48,6 +48,7 @@ def main():
     active = None
     completed = False
     started = False
+    extra_progress = False
     timeout = time.monotonic() + 40
     while time.monotonic() < timeout:
         if active is not None and not started:
@@ -58,6 +59,12 @@ def main():
                     "threadId": native, "turnId": active,
                     "delta": f"synthetic {role} independent progress"}})
                 started = True
+        if started and not completed and not extra_progress and (workspace / "progress-after-status").exists():
+            emit({"method": "item/agentMessage/delta", "params": {
+                "threadId": native, "turnId": active,
+                "delta": f"synthetic {role} progress after control status"}})
+            record("extra-progress")
+            extra_progress = True
         if active is not None and started and not completed:
             held = (workspace / f"hold-{role}").exists()
             released = (workspace / f"release-{role}").exists()
@@ -106,8 +113,15 @@ def main():
                 assert frame["params"]["turnId"] == active
                 record("interrupt", turn=active)
                 emit({"id": frame["id"], "result": {}})
-                emit({"method": "turn/completed", "params": {"threadId": native,
-                    "turn": {"id": active, "status": "interrupted"}}})
+                if (workspace / f"{role}-late-progress").exists():
+                    for index in range(32):
+                        emit({"method": "item/agentMessage/delta", "params": {
+                            "threadId": native, "turnId": active,
+                            "delta": f"synthetic late progress {index}"}})
+                    record("late-progress", count=32)
+                if not (workspace / f"{role}-ack-only").exists():
+                    emit({"method": "turn/completed", "params": {"threadId": native,
+                        "turn": {"id": active, "status": "interrupted"}}})
                 completed = True
                 continue
             else:

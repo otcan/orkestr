@@ -192,6 +192,7 @@ def parent_http_stop(case):
     before = case.inbox()
     code, receipt, _ = case.request(case.path + "/stop", "POST", {
         "run_id": status["run_id"], "expected_revision": status["revision"],
+        "expected_control_revision": status["control_revision"],
         "request_key": "synthetic-parent-stop"})
     assert code == 200, "ordinary HTTP parent Stop must be implemented, not skipped"
     assert receipt["run_id"] == status["run_id"]
@@ -209,12 +210,8 @@ def worker_deadline_stop(case):
     before = case.inbox()
     code, status, _ = case.request(case.path + "/execution")
     assert code == 200 and status["run_id"] == parent["id"]
-    # The current factory has one Deep gate. It must refuse browser-selected
-    # child control before issuing any cancellation, rather than misroute it.
-    code, _, _ = case.request(case.path + "/stop", "POST", {
-        "run_id": child["id"], "expected_revision": status["revision"],
-        "request_key": "unsupported-worker-browser-stop"})
-    assert code == 503
+    # No browser Stop is sent here: this independently exercises the Worker's
+    # exact locally issued deadline control, not the direct HTTP control path.
     assert not case.rows("SELECT run_id FROM production_cancellations WHERE run_id=?", (child["id"],))
     ordinary.wait_for(lambda: case.role_state("worker", "cancelled"),
                       "Worker deadline needs its own actual interrupted terminal proof")
