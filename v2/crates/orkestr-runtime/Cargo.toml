@@ -1,0 +1,10 @@
+[package]
+name = "orkestr-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+orkestr-v2-application = { path = "../application" }
+orkestr-v2-contracts = { path = "../contracts" }

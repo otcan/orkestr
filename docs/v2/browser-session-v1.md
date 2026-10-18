@@ -44,3 +44,9 @@ wrong Host, rejected-write row preservation, successful intake, logout/revoked-t
 reuse, cookie rotation, expiry, duplicate cookies and machine/browser separation.
 A Rust regression checks HTTPS Secure and host-only cookie attributes. Browser UI
 boot and independent security review remain separate acceptance gates.
+
+## Same-origin UI assets
+
+Set `ORKESTR_V2_UI_DIST` to an absolute, trusted UI build directory containing `index.html` to serve an immutable startup snapshot alongside the API. Keep the directory unchanged while startup loads it. Without this setting, the server remains API-only. The snapshot accepts at most 4096 supported assets, 8 MiB per asset and 64 MiB total; symlinks and reserved API paths are refused. Only GET/HEAD assets are served, with no SPA fallback for missing paths or `/api` routes. WASM uses `application/wasm`; responses use `no-store` and `nosniff`.
+
+This serves already-built assets; it does not generate a browser bundle or establish browser/native acceptance. Cookie, Origin, Host and CSRF checks remain unchanged.

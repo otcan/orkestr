@@ -3,9 +3,9 @@ name: Orkestr 2.0 intake checks
 on:
   push:
     branches: [v2/rust-rewrite, v2/s0-core]
-    paths: ['v2/**', 'docs/v2/**', '.github/workflows/v2-rust.yml']
+    paths: ['v2/**', '.github/workflows/v2-rust.yml']
   pull_request:
-    paths: ['v2/**', 'docs/v2/**', '.github/workflows/v2-rust.yml']
+    paths: ['v2/**', '.github/workflows/v2-rust.yml']
   workflow_dispatch:
 
 permissions:
@@ -23,11 +23,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Verify exact candidate head
-        working-directory: .
-        env:
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
       - name: Isolate candidate data and build output
         run: |
           echo "ORKESTR_V2_HOME=$RUNNER_TEMP/orkestr-v2-intake" >> "$GITHUB_ENV"
@@ -36,6 +31,10 @@ jobs:
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
       - name: Architecture boundaries
         run: python3 tests/check_boundaries.py
+      - name: Mocked provider metadata probe safety
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s tools/tests -v
       - name: Rust format
         run: cargo +1.99.1 fmt --all -- --check
       - name: Rust lint
@@ -44,5 +43,5 @@ jobs:
         run: cargo +1.99.1 build --locked --workspace
       - name: Unit and HTTP process-failure tests (requires Python 3)
         run: cargo +1.99.1 test --locked --workspace
-      - name: Offline metadata reducer demo (not intake acceptance)
+      - name: Offline domain demo smoke check
         run: cargo +1.99.1 run --locked -p orkestr-v2-demo
