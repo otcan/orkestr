@@ -258,7 +258,7 @@ async fn independent_connections_issue_one_resume_reservation_without_replacemen
             .count(),
         1
     );
-    let rows: Vec<String> = sqlx::query_scalar("SELECT json_object('id',id,'run',prior_run_id,'acceptance',acceptance_event_id,'context',context_id,'incarnation',incarnation_id,'session',session_id,'generation',binding_generation,'state',state,'digest',confirmation_digest) FROM production_resume_metadata ORDER BY id")
+    let rows: Vec<String> = sqlx::query_scalar("SELECT json_object('id',id,'run',prior_run_id,'acceptance',terminal_event_id,'context',context_id,'incarnation',incarnation_id,'session',session_id,'generation',binding_generation,'state',state,'digest',confirmation_digest) FROM production_resume_metadata ORDER BY id")
         .fetch_all(&f.store.pool).await.unwrap();
     assert_eq!(rows.len(), 1);
     drop(results); // Simulate loss of the only opaque grant, not a transport ACK.
@@ -268,7 +268,7 @@ async fn independent_connections_issue_one_resume_reservation_without_replacemen
             .await,
         Err(RuntimeStoreError::Conflict)
     ));
-    let after:Vec<String>=sqlx::query_scalar("SELECT json_object('id',id,'run',prior_run_id,'acceptance',acceptance_event_id,'context',context_id,'incarnation',incarnation_id,'session',session_id,'generation',binding_generation,'state',state,'digest',confirmation_digest) FROM production_resume_metadata ORDER BY id")
+    let after:Vec<String>=sqlx::query_scalar("SELECT json_object('id',id,'run',prior_run_id,'acceptance',terminal_event_id,'context',context_id,'incarnation',incarnation_id,'session',session_id,'generation',binding_generation,'state',state,'digest',confirmation_digest) FROM production_resume_metadata ORDER BY id")
         .fetch_all(&f.store.pool).await.unwrap();
     assert_eq!(after, rows);
 }

@@ -41,6 +41,7 @@ mod retirement;
 mod retirement_tests;
 mod status;
 mod stop;
+mod stopped_metadata;
 mod worker;
 pub use worker::*;
 mod worker_tool;
@@ -202,3 +203,4 @@ impl Context {
         Ok(())
     }
 }
+

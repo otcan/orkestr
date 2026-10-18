@@ -5,7 +5,7 @@ use orkestr_v2_contracts::{EventId, RunId};
 pub(super) struct ResumeLink {
     id: String,
     prior_run: RunId,
-    acceptance_event: EventId,
+    terminal_event: EventId,
 }
 impl Store {
     /// Reserve setup once for the exact owner-accepted predecessor. Reopening or
@@ -21,9 +21,20 @@ impl Store {
         let c = self.context()?;
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         c.validate(&mut tx).await?;
-        let acceptance: String = sqlx::query_scalar("SELECT event_id FROM production_acceptances WHERE run_id=? AND owner_id=? AND conversation_id=?")
+        let terminal: String = sqlx::query_scalar("SELECT event_id FROM production_acceptances WHERE run_id=? AND owner_id=? AND conversation_id=?")
             .bind(prior_run.to_string()).bind(c.owner.to_string()).bind(binding.conversation_id.to_string())
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
+        self.reserve_terminal_metadata(tx, prior_run, binding, terminal)
+            .await
+    }
+    pub(super) async fn reserve_terminal_metadata(
+        &self,
+        mut tx: sqlx::Transaction<'_, sqlx::Sqlite>,
+        prior_run: &RunId,
+        binding: &Binding,
+        terminal: String,
+    ) -> Result<BoundSessionMetadata> {
+        let c = self.context()?;
         let grant = BoundSessionMetadata {
             context: c.clone(),
             binding: binding.clone(),
@@ -31,7 +42,7 @@ impl Store {
             resume: Some(ResumeLink {
                 id: Uuid::new_v4().to_string(),
                 prior_run: prior_run.clone(),
-                acceptance_event: EventId(acceptance.parse().map_err(db)?),
+                terminal_event: EventId(terminal.parse().map_err(db)?),
             }),
         };
         self.validate_accepted_binding(&mut tx, &grant).await?;
@@ -46,8 +57,8 @@ impl Store {
         if existing != 0 {
             return Err(RuntimeStoreError::Conflict);
         }
-        sqlx::query("INSERT INTO production_resume_metadata(id,prior_run_id,acceptance_event_id,context_id,incarnation_id,session_id,binding_generation,state) VALUES(?,?,?,?,?,?,?,'issued')")
-            .bind(&link.id).bind(prior_run.to_string()).bind(link.acceptance_event.to_string()).bind(&c.id).bind(&c.incarnation)
+        sqlx::query("INSERT INTO production_resume_metadata(id,prior_run_id,terminal_event_id,context_id,incarnation_id,session_id,binding_generation,state) VALUES(?,?,?,?,?,?,?,'issued')")
+            .bind(&link.id).bind(prior_run.to_string()).bind(link.terminal_event.to_string()).bind(&c.id).bind(&c.incarnation)
             .bind(binding.session_id.to_string()).bind(i64::try_from(binding.generation).map_err(db)?)
             .execute(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;
@@ -87,11 +98,11 @@ impl Store {
         if crate::runtime::binding(&row)? != grant.binding {
             return Err(RuntimeStoreError::Fenced);
         }
-        let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN production_acceptances a ON a.run_id=r.id JOIN production_readiness rd ON rd.session_id=r.session_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.session_id=? AND r.context_id=? AND r.incarnation_id=? AND r.state='succeeded' AND r.role='deep' AND r.native_session_id=? AND r.provider_kind=? AND r.binding_generation+1=? AND a.event_id=? AND rd.context_id=r.context_id AND rd.incarnation_id=r.incarnation_id AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation)")
+        let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN production_readiness rd ON rd.session_id=r.session_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.session_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role='deep' AND r.native_session_id=? AND r.provider_kind=? AND r.binding_generation+1=? AND ((r.state='succeeded' AND EXISTS(SELECT 1 FROM production_acceptances a WHERE a.run_id=r.id AND a.event_id=?)) OR (r.state='cancelled' AND EXISTS(SELECT 1 FROM production_observations o JOIN production_cancellations pc ON pc.run_id=r.id JOIN production_control_outbox co ON co.run_id=r.id WHERE o.run_id=r.id AND o.event_id=? AND o.kind='stopped' AND o.receipt_state='cancelled' AND o.lease_generation=r.lease_generation AND o.dispatch_fence=r.dispatch_fence AND pc.inflight_status='unknown' AND co.state='acknowledged'))) AND rd.context_id=r.context_id AND rd.incarnation_id=r.incarnation_id AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation)")
             .bind(link.prior_run.to_string()).bind(c.owner.to_string()).bind(grant.binding.conversation_id.to_string())
             .bind(grant.binding.session_id.to_string()).bind(&c.id).bind(&c.incarnation)
             .bind(grant.binding.native_session_id.as_ref()).bind(provider_name(c.provider)?)
-            .bind(i64::try_from(grant.binding.generation).map_err(db)?).bind(link.acceptance_event.to_string())
+            .bind(i64::try_from(grant.binding.generation).map_err(db)?).bind(link.terminal_event.to_string()).bind(link.terminal_event.to_string())
             .fetch_one(&mut *tx).await.map_err(db)?;
         if valid != 1 {
             return Err(RuntimeStoreError::Fenced);
@@ -105,8 +116,8 @@ impl Store {
     ) -> Result<()> {
         self.validate_accepted_binding(tx, grant).await?;
         let link = grant.resume.as_ref().ok_or(RuntimeStoreError::Fenced)?;
-        let valid:i64 = sqlx::query_scalar("SELECT count(*) FROM production_resume_metadata WHERE id=? AND prior_run_id=? AND acceptance_event_id=? AND context_id=? AND incarnation_id=? AND session_id=? AND binding_generation=? AND state='issued'")
-            .bind(&link.id).bind(link.prior_run.to_string()).bind(link.acceptance_event.to_string()).bind(&grant.context.id).bind(&grant.context.incarnation)
+        let valid:i64 = sqlx::query_scalar("SELECT count(*) FROM production_resume_metadata WHERE id=? AND prior_run_id=? AND terminal_event_id=? AND context_id=? AND incarnation_id=? AND session_id=? AND binding_generation=? AND state='issued'")
+            .bind(&link.id).bind(link.prior_run.to_string()).bind(link.terminal_event.to_string()).bind(&grant.context.id).bind(&grant.context.incarnation)
             .bind(grant.binding.session_id.to_string()).bind(i64::try_from(grant.binding.generation).map_err(db)?)
             .fetch_one(&mut *tx).await.map_err(db)?;
         if valid != 1 {
