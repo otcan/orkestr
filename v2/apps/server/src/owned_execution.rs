@@ -6,6 +6,7 @@ mod config;
 #[cfg(all(test, unix))]
 mod config_tests;
 mod directory;
+mod liveness;
 mod retirement;
 mod session;
 mod stopping;

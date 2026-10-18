@@ -34,3 +34,8 @@ fn trusted_run_and_idle_budgets_stop_and_hold_existing_queue() {
 fn same_owned_process_survives_natural_lease_and_original_control_still_stops() {
     check(&["--long-only"], 1);
 }
+
+#[test]
+fn revocation_reaps_the_renewed_child_without_fabricating_terminal_evidence() {
+    check(&["--revoked-only"], 1);
+}

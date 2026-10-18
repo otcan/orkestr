@@ -78,10 +78,38 @@ def natural_lease_renewal():
         case.cleanup()
 
 
+def revoked_after_renewal():
+    case = Case()
+    try:
+        original = configure(case, {"max_run_ms": 120_000})
+        def renewed():
+            with sqlite3.connect(case.home / "core.sqlite3") as db:
+                return db.execute("SELECT count(*) FROM production_run_leases WHERE purpose='execution'").fetchone()[0] >= 2
+        wait_for(renewed, "same-child lease must renew before auth revocation", seconds=30)
+        assert case.phase("running")["run_id"] == original["run_id"]
+        case.revoke_machine()
+        wait_for(case.peer_gone, "revoked machine must reap the renewed child")
+        wait_for(lambda: not case.request(case.path + "/execution")[1]["capabilities"]["stop"],
+                 "retired renewed child must close local control availability")
+        with sqlite3.connect(case.home / "core.sqlite3") as db:
+            assert db.execute("SELECT count(*) FROM production_runs").fetchone()[0] == 1
+            assert db.execute("SELECT count(*) FROM production_observations WHERE kind IN ('stopped','completed_proposal')").fetchone()[0] == 0
+            assert db.execute("SELECT count(*) FROM production_cancellations").fetchone()[0] == 0
+            assert db.execute("SELECT state FROM production_runs").fetchone()[0] not in ("cancelled", "succeeded")
+        assert sum(row["kind"] == "spawn" for row in case.trace()) == 1
+        assert sum(row["kind"] == "turn" for row in case.trace()) == 1
+        assert not any(row["kind"] == "interrupt" for row in case.trace())
+    finally:
+        case.cleanup()
+
+
 if __name__ == "__main__":
     if "--long-only" in sys.argv:
         natural_lease_renewal()
         print("case passed: natural_lease_renewal", flush=True)
+    elif "--revoked-only" in sys.argv:
+        revoked_after_renewal()
+        print("case passed: revoked_after_renewal", flush=True)
     else:
         for policy, key in [
             ({"max_run_ms": 2_000}, "execution-run-budget-expired"),

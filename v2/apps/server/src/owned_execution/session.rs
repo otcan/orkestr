@@ -94,6 +94,7 @@ impl ConfiguredExecution {
             return Ok(SessionExit::Shutdown);
         };
         let mut run = capability.provider().run.run_id.clone();
+        let mut liveness = liveness::RunningLease::capture(&self.store, &capability).await?;
         let mut worker = self.prepare_worker(&capability)?;
         let (mut authority, mut pump) = ready
             .attach(self.store.clone(), capability)
@@ -149,6 +150,7 @@ impl ConfiguredExecution {
                     return Ok(SessionExit::Shutdown);
                 };
                 run = capability.provider().run.run_id.clone();
+                liveness = liveness::RunningLease::capture(&self.store, &capability).await?;
                 worker = self.prepare_worker(&capability)?;
                 let (next_authority, next_pump) = pump
                     .attach_next(self.store.clone(), capability)
@@ -237,6 +239,27 @@ impl ConfiguredExecution {
             } else {
                 status.phase
             };
+            if phase == ExecutionPhase::Running
+                && liveness.due(Instant::now())
+                && pump.renewal_quiescent()
+            {
+                // Same scheduling lock as HTTP Stop and provider observation.
+                // Core rechecks auth/state inside the sealed transition. The
+                // transfer preserves this exact child, turn and event cursor.
+                // Keep selection available while HTTP waits on this lock;
+                // explicitly disable it before releasing a failed transfer.
+                let (next_authority, next_pump) =
+                    match liveness.refresh(self.store.clone(), pump).await {
+                        Ok(refreshed) => refreshed,
+                        Err(reason) => {
+                            run_control.disable();
+                            return Err(reason);
+                        }
+                    };
+                let _ = authority.revoke();
+                authority = next_authority;
+                pump = next_pump;
+            }
             // A persistence retry may retain an observation during this step.
             // Refuse new control handoff until that exact evidence is committed.
             run_control.set_available(phase == ExecutionPhase::Running && pump.pending().is_none());
