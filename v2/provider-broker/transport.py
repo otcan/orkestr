@@ -1,4 +1,5 @@
 """Bounded nonblocking stdio pump; provider shares Runtime-owned process group."""
+from reaping import become_subreaper, reap_owned, contained_command
 from collections import deque
 import os
 import array
@@ -15,6 +16,8 @@ class Pump:
         self.config, self.channel = config, channel
         self.incoming, self.outgoing = incoming, outgoing
         self.child = None
+        self.reaped = False
+        self.parent_eof = False
         self.handoff = handoff
         self.buffers = {}
         self.queues = {outgoing: deque()}
@@ -26,12 +29,14 @@ class Pump:
         queue.append(encode(value))
 
     def launch(self):
-        # No new session/group: revoking the enclosing owned broker group must
-        # also stop the trusted connector. Never daemonize/adopt a live session.
-        self.child = subprocess.Popen(self.config.command(), env=self.config.environment(),
+        # A private native group can be killed without killing this subreaper.
+        become_subreaper()
+        self.child = subprocess.Popen(contained_command(self.config.command()), env=self.config.environment(),
                                       cwd=self.config.workspace, stdin=subprocess.PIPE,
                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                      close_fds=True)
+                                      close_fds=True, process_group=0)
+        if hasattr(self.config, "owned_spawned"):
+            self.config.owned_spawned(self.child)
         for pipe in (self.child.stdin, self.child.stdout):
             os.set_blocking(pipe.fileno(), False)
         if self.handoff is None:
@@ -101,6 +106,7 @@ class Pump:
         if not chunk:
             require(not self.buffers.get(fd))
             if fd == self.incoming:
+                self.parent_eof = True
                 return False
             raise Refused("provider EOF; delivery may be unknown")
         self.buffers[fd] += chunk
@@ -155,15 +161,4 @@ class Pump:
                             pipe.close()
                     except OSError:
                         pass
-                try:
-                    self.child.terminate()
-                except ProcessLookupError:
-                    pass
-                try:
-                    self.child.wait(timeout=0.5)
-                except subprocess.TimeoutExpired:
-                    try:
-                        self.child.kill()
-                    except ProcessLookupError:
-                        pass
-                    self.child.wait(timeout=1)
+                self.reaped = reap_owned(self.child)
