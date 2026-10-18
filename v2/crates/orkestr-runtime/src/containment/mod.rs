@@ -5,6 +5,7 @@ mod broker_frames;
 mod cancellation;
 mod environment;
 mod framing;
+mod lease_refresh;
 pub mod metadata;
 mod process;
 mod provider_fd;
