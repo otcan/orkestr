@@ -189,3 +189,85 @@ schema14 home with the original executable. Only a disposable migrated copy is
 opened by the old executable to verify refusal; the working migrated database is
 never downgraded. The old package uses the supplied UI solely as static packaging
 input; this does not claim historical old-server/old-UI browser compatibility.
+
+## Segmented monitor preparation (no production window started)
+
+The release-evidence contract requires actual daily-use production, at least 72
+hours after the candidate build, zero incidents/material fixes, and contiguous
+segments no longer than one hour. It rejects gaps, overlaps, changed revision,
+artifact/configuration, fixture-only observation and invented elapsed time. The
+release validator remains authoritative; this monitor does not issue a release
+approval or change the existing release contract.
+
+The existing `attended.py` supervisor now accepts `--journal-dir` (fresh, disjoint
+absolute directory) and `--segment-seconds` (1–3500, default 300). This is the same
+supervisor and owned child, not another service or scheduler. The optional mode
+supports a finite maximum of 259200 observations/spacing seconds. Do not launch a
+72-hour invocation before candidate gates and explicit daily-use authorization.
+No timer, service, automatic retry or recurring job is installed.
+
+The durable journal contains fsynced JSONL observations and an atomically replaced
+`window.json`. Samples carry actual UTC time, monotonic offsets, health/latency
+and owned-process RSS. Segment boundaries use actual observation times, with the
+previous end exactly equal to the next start; final cleanup time is excluded.
+Identity includes exact source, candidate inventory hash, and a digest of the
+installed configuration plus monitor limits/port/provider policy. Configuration
+contents and secrets are never exported. Artifact inventory is reverified and
+configuration rehashed on each observation. Sampling gaps beyond the declared
+10-second-or-interval-plus-five limit and wall-clock drift over two seconds
+invalidate the window. Segments have a 100-second safety margin below one hour;
+a suspended monitor is an incident, not missing time filled afterward.
+
+Any failure, interruption, hash change, graceful restart, or cleanup failure
+writes a reset-required incident. A material identity change also increments the
+material-fix count. Restart evidence remains useful diagnostically but cannot be
+concatenated into an uninterrupted passing window. Resuming an existing journal
+is refused. SIGKILL/power loss may leave `observing` rather than a final incident;
+that unfinished journal is invalid and must never be resumed or promoted.
+`segments.validate` rejects incomplete, invalidated, discontinuous or changed
+identity records; release evidence additionally requires its own duration,
+environment and freshness gates plus independent inspection of the raw logs.
+
+The currently implemented supervisor adapter owns **fresh synthetic native
+state** and deliberately emits `environment: synthetic_owned`. It does not attach
+to or restart an existing daily-use service and cannot satisfy the production
+soak gate. An approved persistent daily-use launcher/lifecycle adapter, exact
+configuration identity and owner-approved daily-use routing remain prerequisites
+before that environment can honestly be recorded. Do not relabel synthetic
+records or concatenate separate successful runs. No production monitor or
+72-hour window has been started by this implementation.
+
+## Final Core20 rerun checklist (build owner coordinates exact pins)
+
+Once Core20 and the final reviewed runtime/UI are integrated, freeze one clean
+commit and obtain the coordinator's **single** qualified release server + matching
+controls-enabled web pair. Record source, profile/default features, web features
+and exact server binding, artifact hashes, migrations through 0020 and compatible
+glibc base. Do not rebuild or relabel stale aa8 as Core20.
+
+1. Coordinator reruns the repository's locked/offline fmt, strict all-target
+   Clippy, server/store/runtime/UI tests, UI scenario/Node checks and canonical
+   WASM bundle. Core independently verifies populated migration inventories,
+   checksums, foreign keys, reopen and current execution/Stop fencing. Exact final
+   source/test commands belong to those owners; no schema logic is inferred here.
+2. Run candidate receipt verification, candidate synthetic tests, Docker
+   packaging tests, assembly verification and deterministic archive checks against
+   the new pinned pair. Reinspect architecture/required ELF glibc vs pinned base.
+3. Run `accept_native.py` and `accept_docker.py` on newly assigned private
+   state/port/image/project. Require actual migrations 1–20, all served UI hashes,
+   synthetic auth/history/idempotency, stopped consistent backup, dormant
+   apply/refusal/rollback, loopback publication, restrictions and owned cleanup.
+4. Run `cross_revision.py --new-schema 20` with retained schema14 source31d8 and
+   new Core20 artifacts; then separately extend/use the harness for a pinned
+   populated schema17 aa8→20 case after Core confirms supported migration edges.
+   Current harness insists old14 and cannot honestly claim17→20 yet. Preserve
+   complete stopped pre-upgrade homes/backups; use only disposable migrated
+   copies for old-binary refusal. Never downgrade a migrated live database.
+5. After review of segmented monitoring, run a short fresh owned segmented probe
+   and finite graceful-restart diagnostic separately (restart invalidates a
+   continuous journal). Verify incidents/gaps/hash-change refusals and cleanup.
+   Existing aa8 evidence is historical; none of these Core20 runs is executed yet.
+6. Release owner validates all full-candidate gates before authorizing any real
+   persistent daily-use adapter/window. Production soak, crash/revocation,
+   providers, executor containment and production deployment remain separate
+   unpassed gates unless supported by new exact evidence.
