@@ -50,3 +50,21 @@ Browser controls still require server owner/CSRF/origin checks and an atomic
 conversation expected-revision guard; these store operations do not themselves
 activate HTTP Stop or advertise a capability. No real provider execution,
 deployment or acceptance gate is implied by adapter tests.
+
+## Predecessor recovery
+
+`recover_runtime` now reports only this bound context's predecessor-incarnation
+Blocked or CancelRequested runs after the existing atomic exact-predecessor
+bootstrap takeover. The supplied instance must equal the authenticated handle's
+incarnation. Current-incarnation work and terminal Failed/AwaitingAcceptance/
+Cancelled history are excluded. The store clock controls expiry; caller `now_ms`
+cannot fence live work, extend a lease or advance time. Takeover is the operation
+that fences active authority and quarantines locators, before recovery paging.
+
+Records retain run/session/native identity, actual Lost binding projection and
+Unknown delivery where applicable; cancellation stays CancelRequested, never
+inferred Cancelled. Every returned record requires reconciliation. Opaque page
+cursors bind owner, context and current incarnation; another supervisor cannot
+reuse them. Reads are idempotent and do not grant provider restart, replacement
+reservation, session recreation or external-effect retry. This is a scoped
+reconciliation report, not implemented automatic recovery of a provider process.

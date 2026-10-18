@@ -162,13 +162,14 @@ impl RuntimeStore for Store {
     }
     async fn recover_runtime(
         &self,
-        _: &OwnerId,
-        _: &str,
-        _: i64,
-        _: Option<&str>,
-        _: u32,
+        owner: &OwnerId,
+        instance: &str,
+        now_ms: i64,
+        after: Option<&str>,
+        limit: u32,
     ) -> Result<RecoveryPage> {
-        Err(RuntimeStoreError::Unavailable)
+        self.production_recover(owner, instance, now_ms, after, limit)
+            .await
     }
 }
 

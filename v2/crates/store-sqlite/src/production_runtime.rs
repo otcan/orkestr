@@ -22,6 +22,9 @@ pub use metadata::{BoundSessionMetadata, ReadySessionTransition};
 #[cfg(all(test, unix))]
 mod process_tests;
 mod readiness;
+mod recovery;
+#[cfg(test)]
+mod recovery_tests;
 mod status;
 #[cfg(feature = "fixture-test-controls")]
 pub(crate) mod test_controls;
