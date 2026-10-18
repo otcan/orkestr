@@ -8,6 +8,9 @@ use crate::{
 };
 use orkestr_v2_application::runtime::ProviderAdmission;
 use orkestr_v2_store_sqlite::Store;
+#[path = "control.rs"]
+mod control;
+pub use control::{StopFailure, StoppingCodex};
 
 pub(super) struct CodexOutput {
     pub(super) child: OwnedChild,

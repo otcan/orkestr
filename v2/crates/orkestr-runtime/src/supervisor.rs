@@ -82,6 +82,12 @@ impl Default for PendingObservation {
     }
 }
 impl PendingObservation {
+    pub(crate) fn next_control_sequence(&self) -> std::result::Result<u64, RuntimeStoreError> {
+        if self.pending.is_some() || self.rejected.is_some() || self.refused.is_some() {
+            return Err(RuntimeStoreError::Busy);
+        }
+        Ok(self.next_sequence)
+    }
     pub fn pending(&self) -> Option<&ProviderEventInput> {
         self.pending.as_ref()
     }

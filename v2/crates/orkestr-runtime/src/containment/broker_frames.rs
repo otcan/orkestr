@@ -135,6 +135,44 @@ pub(super) fn turn(
     serde_json::to_vec(&value).map_err(|_| Error::InvalidFrame)
 }
 
+pub(super) fn cancellation(
+    bytes: &[u8],
+    lineage: &Arc<()>,
+    process: &Arc<Process>,
+) -> Result<Vec<u8>, Error> {
+    if !process
+        .broker_launcher
+        .load(std::sync::atomic::Ordering::Acquire)
+        || !Arc::ptr_eq(lineage, &process.broker_lineage)
+    {
+        return Err(Error::WrongScope);
+    }
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| Error::InvalidFrame)?;
+    let frame = outer(&value, "CancelExecution")?;
+    let object = frame.as_object().ok_or(Error::InvalidFrame)?;
+    let params = frame
+        .get("params")
+        .and_then(Value::as_object)
+        .ok_or(Error::InvalidFrame)?;
+    if object.len() != 3
+        || frame.get("method").and_then(Value::as_str) != Some("turn/interrupt")
+        || !frame
+            .get("id")
+            .and_then(Value::as_u64)
+            .is_some_and(|id| id > 0 && id < (1 << 53))
+        || params.len() != 2
+        || !["threadId", "turnId"].iter().all(|key| {
+            params
+                .get(*key)
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.is_empty() && text.len() <= 512)
+        })
+    {
+        return Err(Error::InvalidFrame);
+    }
+    serde_json::to_vec(&value).map_err(|_| Error::InvalidFrame)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
