@@ -31,6 +31,23 @@ pub fn admission(role: Role, n: u64) -> RunAdmission {
         purpose: AdmissionPurpose::Execution,
     }
 }
+// Fixture-only envelope; this does not establish durable binding or readiness.
+pub fn provider_admission(a: &RunAdmission) -> ProviderAdmission {
+    ProviderAdmission {
+        run: a.clone(),
+        binding: Binding {
+            owner_id: a.owner_id.clone(),
+            conversation_id: a.conversation_id.clone(),
+            session_id: a.session_id.clone(),
+            role: a.role,
+            provider_kind: ProviderKind::ExplicitFixture,
+            native_session_id: a.native_session_id.clone(),
+            parent_session_id: None,
+            generation: 1,
+            state: SessionState::Busy,
+        },
+    }
+}
 pub fn claim(a: &RunAdmission) -> InboxClaim {
     InboxClaim {
         owner_id: a.owner_id.clone(),
@@ -59,8 +76,8 @@ pub struct State {
     pub fail_once: bool,
     pub lose_ack_once: bool,
     pub refusal: Option<RuntimeStoreError>,
-    pub attempts: Vec<ProviderObservation>,
-    pub accepted: Vec<ProviderObservation>,
+    pub attempts: Vec<ProviderEventInput>,
+    pub accepted: Vec<ProviderEventInput>,
 }
 pub struct Spy {
     pub a: RunAdmission,
@@ -117,43 +134,52 @@ impl RuntimeStore for Spy {
     async fn renew_lease(&self, _: &RunAdmission, _: u64) -> Result<RunAdmission> {
         Err(RuntimeStoreError::Unavailable)
     }
-    async fn record_observation(
+    async fn append_provider_event(
         &self,
-        a: &RunAdmission,
-        key: &str,
-        input: &ProviderObservation,
-    ) -> Result<ObservationReceipt> {
-        assert_eq!(key, input.source_event_key);
-        assert_eq!(a.run_id, input.run_id);
-        assert_eq!(a.dispatch_fence, input.dispatch_fence);
-        assert_eq!(a.lease_generation, input.lease_generation);
+        owner: &OwnerId,
+        admission: &ProviderAdmission,
+        input: &ProviderEventInput,
+    ) -> Result<ProviderEventReceipt> {
+        let a = &admission.run;
+        if owner != &a.owner_id || a.run_id != input.run_id || a.session_id != input.session_id {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
         let mut s = self.state.lock().unwrap();
         s.calls.push("record");
         s.attempts.push(input.clone());
-        if let Some(error) = s.refusal {
-            return Err(error);
-        }
-        if std::mem::take(&mut s.fail_once) {
-            return Err(RuntimeStoreError::Unavailable);
-        }
-        let previous = s
-            .accepted
-            .iter()
-            .position(|i| i.source_event_key == input.source_event_key);
+        let previous = s.accepted.iter().position(|i| i.sequence == input.sequence);
         if let Some(index) = previous {
             if s.accepted[index] != *input {
                 return Err(RuntimeStoreError::Conflict);
             }
         } else {
+            if let Some(error) = s.refusal {
+                return Err(error);
+            }
+            if input.lease_generation != a.lease_generation
+                || input.dispatch_fence != a.dispatch_fence
+            {
+                return Err(RuntimeStoreError::Fenced);
+            }
+            if !input.is_bounded() || input.sequence != s.accepted.len() as u64 + 1 {
+                return Err(RuntimeStoreError::InvalidInput);
+            }
+            if std::mem::take(&mut s.fail_once) {
+                return Err(RuntimeStoreError::Unavailable);
+            }
+            if matches!(input.event, ProviderEvent::Progress(_)) {
+                return Err(RuntimeStoreError::Unavailable);
+            }
             s.accepted.push(input.clone());
+            if std::mem::take(&mut s.lose_ack_once) {
+                return Err(RuntimeStoreError::Unavailable);
+            }
         }
-        if std::mem::take(&mut s.lose_ack_once) {
-            return Err(RuntimeStoreError::Unavailable);
-        }
-        Ok(ObservationReceipt {
+        Ok(ProviderEventReceipt {
             event_id: id!(EventId, 5),
             scope_sequence: previous.map_or(s.accepted.len() as i64, |i| i as i64 + 1),
-            state: if matches!(input.kind, ObservationKind::CompletedProposal { .. }) {
+            sequence: input.sequence,
+            state: if matches!(input.event, ProviderEvent::CompletedProposal { .. }) {
                 RunState::AwaitingAcceptance
             } else {
                 RunState::Running

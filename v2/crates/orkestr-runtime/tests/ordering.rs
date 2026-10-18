@@ -17,11 +17,11 @@ impl Provider for SpyProvider<'_> {
         self.starts += 1;
         Ok(())
     }
-    fn poll(&mut self, _: &RunAdmission) -> Result<Option<ObservationKind>, Blocker> {
+    fn poll(&mut self, _: &RunAdmission) -> Result<Option<ProviderEvent>, Blocker> {
         Ok(if self.hung {
             None
         } else {
-            Some(ObservationKind::Started)
+            Some(ProviderEvent::Started)
         })
     }
     fn interrupt(&mut self, control: &InterruptControl) -> Result<(), Blocker> {
@@ -91,10 +91,22 @@ fn running_needs_provider_event() {
         hung: true,
     };
     let mut pending = supervisor::PendingObservation::default();
-    assert!(!ready(supervisor::step(&store, &mut p, &store.a, &mut pending)).unwrap());
+    assert!(!ready(supervisor::step(
+        &store,
+        &mut p,
+        &provider_admission(&store.a),
+        &mut pending
+    ))
+    .unwrap());
     assert!(store.state.lock().unwrap().calls.is_empty());
     p.hung = false;
-    assert!(ready(supervisor::step(&store, &mut p, &store.a, &mut pending)).unwrap());
+    assert!(ready(supervisor::step(
+        &store,
+        &mut p,
+        &provider_admission(&store.a),
+        &mut pending
+    ))
+    .unwrap());
     assert_eq!(store.state.lock().unwrap().calls, vec!["record"]);
 }
 #[test]
@@ -128,7 +140,12 @@ fn late_provider_event_cannot_bypass_store_fence() {
     };
     let mut pending = supervisor::PendingObservation::default();
     assert_eq!(
-        ready(supervisor::step(&store, &mut p, &store.a, &mut pending)),
+        ready(supervisor::step(
+            &store,
+            &mut p,
+            &provider_admission(&store.a),
+            &mut pending
+        )),
         Err(Error::Store(RuntimeStoreError::StaleLease))
     );
     assert!(pending.pending().is_none());

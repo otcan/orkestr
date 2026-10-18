@@ -1,6 +1,6 @@
 //! Controllable FAKE provider. Explicit fixture mode, bounded queues, no timers,
 //! threads, inference, persistence or implicit fallback to synthetic results.
-use crate::ports::{Blocker, InterruptControl, ObservationKind, Provider, RunAdmission};
+use crate::ports::{Blocker, InterruptControl, Provider, ProviderEvent, RunAdmission};
 use orkestr_v2_application::runtime::AdmissionPurpose;
 use orkestr_v2_contracts::SessionId;
 use std::collections::{HashMap, VecDeque};
@@ -12,7 +12,7 @@ const MAX_SESSIONS: usize = 64;
 #[derive(Debug)]
 struct Turn {
     admission: RunAdmission,
-    events: VecDeque<ObservationKind>,
+    events: VecDeque<ProviderEvent>,
     terminal: bool,
 }
 
@@ -29,16 +29,12 @@ impl FakeProvider {
         })
     }
     /// Empty queue means busy indefinitely: deterministic tests control progress.
-    pub fn emit(
-        &mut self,
-        admission: &RunAdmission,
-        event: ObservationKind,
-    ) -> Result<(), Blocker> {
-        if matches!(
-            event,
-            ObservationKind::CompletedProposal { synthetic: false }
-        ) {
+    pub fn emit(&mut self, admission: &RunAdmission, event: ProviderEvent) -> Result<(), Blocker> {
+        if matches!(event, ProviderEvent::CompletedProposal { synthetic: false }) {
             return Err(Blocker::FixtureOnly);
+        }
+        if !event.is_bounded() {
+            return Err(Blocker::QueueFull);
         }
         let turn = self.checked(admission)?;
         if turn.terminal {
@@ -49,10 +45,10 @@ impl FakeProvider {
         }
         turn.terminal = matches!(
             event,
-            ObservationKind::CompletedProposal { .. }
-                | ObservationKind::Failed
-                | ObservationKind::Stopped
-                | ObservationKind::Lost
+            ProviderEvent::CompletedProposal { .. }
+                | ProviderEvent::Failed
+                | ProviderEvent::Stopped
+                | ProviderEvent::Lost
         );
         turn.events.push_back(event);
         Ok(())
@@ -97,13 +93,13 @@ impl Provider for FakeProvider {
             admission.session_id.clone(),
             Turn {
                 admission: admission.clone(),
-                events: VecDeque::from([ObservationKind::Started]),
+                events: VecDeque::from([ProviderEvent::Started]),
                 terminal: false,
             },
         );
         Ok(())
     }
-    fn poll(&mut self, admission: &RunAdmission) -> Result<Option<ObservationKind>, Blocker> {
+    fn poll(&mut self, admission: &RunAdmission) -> Result<Option<ProviderEvent>, Blocker> {
         let turn = self.checked(admission)?;
         let event = turn.events.pop_front();
         if turn.terminal && turn.events.is_empty() {
@@ -131,10 +127,10 @@ impl Provider for FakeProvider {
         if turn.terminal {
             return Err(Blocker::Busy);
         }
-        // Only a confirmed control dispatch can bind cancellation acknowledgement.
-        turn.admission = cancelled.clone();
+        // Control does not turn a CancelReceipt into execution/poll authority.
+        // The original identity is retained; core must reconcile a stale stop.
         turn.events.clear();
-        turn.events.push_back(ObservationKind::Stopped);
+        turn.events.push_back(ProviderEvent::Stopped);
         turn.terminal = true;
         Ok(())
     }

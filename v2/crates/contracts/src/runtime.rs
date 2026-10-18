@@ -2,7 +2,7 @@
 use crate::{EventId, PayloadId, RunId, SessionId};
 use serde::{Deserialize, Serialize};
 
-pub const RUNTIME_PORT_VERSION: u32 = 4;
+pub const RUNTIME_PORT_VERSION: u32 = 5;
 pub const MAX_SOURCE_EVENT_KEY_BYTES: usize = 128;
 pub const MAX_RECOVERY_PAGE_SIZE: u32 = 100;
 
