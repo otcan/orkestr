@@ -51,7 +51,10 @@ def encode(value):
 
 
 class Channel:
-    def __init__(self, workspace):
+    def __init__(self, workspace, *, expected_native=None):
+        require(expected_native is None or identifier(expected_native))
+        # Trusted launcher-only binding, never taken from OpenOwnedSession JSON.
+        self.expected_native = expected_native
         self.workspace = str(workspace)
         self.handle = None
         self.stage = "new"
@@ -149,8 +152,17 @@ class Channel:
         elif kind == "account/read":
             require(self.stage == "initialized" and params == {"refreshToken": False}
                     and params["refreshToken"] is False)
-        elif kind == "thread/start":
+        elif kind in ("thread/start", "thread/resume"):
             require(self.stage == "subscription")
+            require((kind == "thread/resume") == (self.expected_native is not None))
+            if kind == "thread/resume":
+                require(isinstance(params, dict) and params.get("threadId") == self.expected_native)
+                params = dict(params)
+                del params["threadId"]
+                # Resume has no ephemeral request option; persistent identity is
+                # checked in the native reply, never inferred from this request.
+                require("ephemeral" not in params)
+                params["ephemeral"] = False
             require(params == {"cwd": self.workspace, "approvalPolicy": "never",
                                "sandbox": "read-only", "ephemeral": False, "modelProvider": "openai"}
                     and params["ephemeral"] is False)
@@ -222,11 +234,12 @@ class Channel:
             frame = {"id": inner, "result": {"requiresOpenaiAuth": result["requiresOpenaiAuth"],
                                              "account": {"type": "chatgpt"}}}
             self.stage = "subscription"
-        elif kind == "thread/start":
+        elif kind in ("thread/start", "thread/resume"):
             thread = result.get("thread")
             require(isinstance(thread, dict))
             require(result.get("modelProvider") == thread.get("modelProvider") == "openai")
             require(identifier(thread.get("id")) and thread.get("ephemeral") is False)
+            require(self.expected_native is None or thread["id"] == self.expected_native)
             require(thread.get("cwd") == self.workspace and result.get("cwd") == self.workspace)
             require(result.get("approvalPolicy") == "never")
             sandbox = result.get("sandbox")
