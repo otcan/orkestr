@@ -1,5 +1,5 @@
 //! Client presentation only. Accepted input is not model completion.
-use orkestr_v2_contracts::{ConversationSnapshot, Message, MessageInput};
+use orkestr_v2_contracts::{ConversationEvent, ConversationSnapshot, Message, MessageInput, Scope};
 use std::collections::BTreeMap;
 
 pub const WINDOW: usize = 100;
@@ -55,10 +55,23 @@ impl Draft {
 pub struct Projection {
     pub messages: BTreeMap<i64, Message>,
     pub watermark: i64,
+    pub scope: Option<Scope>,
+    pub conversation_id: Option<String>,
 }
 
 impl Projection {
     pub fn page(&mut self, page: ConversationSnapshot) -> Result<(), &'static str> {
+        if self
+            .scope
+            .as_ref()
+            .is_some_and(|scope| scope != &page.scope)
+            || self
+                .conversation_id
+                .as_ref()
+                .is_some_and(|id| id != &page.conversation_id.to_string())
+        {
+            return Err("Snapshot scope mismatch");
+        }
         if page.last_sequence < 0 {
             return Err("Invalid snapshot watermark");
         }
@@ -79,6 +92,8 @@ impl Projection {
                 }
             }
         }
+        self.scope = Some(page.scope);
+        self.conversation_id = Some(page.conversation_id.to_string());
         for message in page.messages {
             self.messages.insert(message.sequence, message);
             while self.messages.len() > WINDOW {
@@ -88,4 +103,36 @@ impl Projection {
         self.watermark = self.watermark.max(page.last_sequence);
         Ok(())
     }
+}
+
+/// Validate metadata without interpreting it as text or provider readiness.
+pub fn replay_sequence(
+    view: &Projection,
+    name: &str,
+    id: Option<&str>,
+    event: &ConversationEvent,
+) -> Result<i64, &'static str> {
+    let (conversation, scope, schema) = match event {
+        ConversationEvent::MessageAccepted(e) => (
+            e.aggregate_id.to_string(),
+            &e.scope,
+            e.schema_version == 1 && e.payload_ref_or_safe_payload.kind == "message_accepted",
+        ),
+        ConversationEvent::FixtureProviderObserved(e) => (
+            e.aggregate_id.to_string(),
+            &e.scope,
+            e.schema_version == 2 && e.payload_ref_or_safe_payload.run_sequence > 0,
+        ),
+    };
+    let sequence = event.sequence();
+    if !schema
+        || name != event.sse_name()
+        || sequence <= 0
+        || id != Some(sequence.to_string().as_str())
+        || view.conversation_id.as_ref() != Some(&conversation)
+        || view.scope.as_ref() != Some(scope)
+    {
+        return Err("Unexpected event contract; history resync required");
+    }
+    Ok(sequence)
 }
