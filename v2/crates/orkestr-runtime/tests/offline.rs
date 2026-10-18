@@ -135,7 +135,7 @@ fn claude_offline_fixture_checks_identity_and_error_status() {
     assert_eq!(
         events,
         vec![
-            Some(ProviderEvent::Started),
+            None,
             None,
             Some(ProviderEvent::CompletedProposal { synthetic: false }),
             Some(ProviderEvent::Failed)
@@ -228,4 +228,20 @@ fn provider_progress_bounds_apply_before_payload_mapping() {
     assert_eq!(claude_event(&assistant, "s"), Err(Blocker::Protocol));
     let result = serde_json::json!({"type":"result","session_id":"s","subtype":"success","is_error":false,"result":"x".repeat(8193)}).to_string();
     assert_eq!(claude_event(&result, "s"), Err(Blocker::Protocol));
+}
+
+#[test]
+fn claude_session_initialization_never_claims_turn_execution() {
+    let init = r#"{"type":"system","subtype":"init","session_id":"synthetic-session"}"#;
+    assert_eq!(claude_event(init, "synthetic-session"), Ok(None));
+    assert_eq!(
+        claude_event(init, "other-session"),
+        Err(Blocker::StaleLease)
+    );
+    // Even a success result remains only a completion proposal, not acceptance.
+    let result = r#"{"type":"result","session_id":"synthetic-session","subtype":"success","is_error":false}"#;
+    assert_eq!(
+        claude_event(result, "synthetic-session"),
+        Ok(Some(ProviderEvent::CompletedProposal { synthetic: false }))
+    );
 }

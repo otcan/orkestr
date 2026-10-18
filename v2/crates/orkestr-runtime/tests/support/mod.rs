@@ -77,6 +77,11 @@ pub struct State {
     pub disposition: Option<AdmissionDisposition>,
     pub run_state: Option<RunState>,
     pub faulty_binding: bool,
+    // Opt-in volatile dispatch oracle; never a durable store implementation.
+    pub dispatch_fixture_enabled: bool,
+    pub dispatch_reserved: bool,
+    pub dispatch_consumed: bool,
+    pub lose_consume_ack: bool,
     pub fail_once: bool,
     pub lose_ack_once: bool,
     pub refusal: Option<RuntimeStoreError>,
@@ -144,6 +149,56 @@ impl RuntimeStore for Spy {
             candidate_key: (disposition == AdmissionDisposition::FreshCandidate)
                 .then(|| "FAKE-candidate-only".into()),
         })
+    }
+    async fn claim_provider_dispatch(
+        &self,
+        candidate: &RunAdmissionResult,
+        _: &str,
+    ) -> Result<DispatchClaimResult> {
+        let mut state = self.state.lock().unwrap();
+        if !state.dispatch_fixture_enabled {
+            return Err(RuntimeStoreError::Unavailable);
+        }
+        if candidate.provider != provider_admission(&self.a) {
+            return Err(RuntimeStoreError::StaleLease);
+        }
+        if state.dispatch_reserved || candidate.disposition != AdmissionDisposition::FreshCandidate
+        {
+            return Ok(DispatchClaimResult::ReconciliationRequired);
+        }
+        if candidate.candidate_key.as_deref() != Some("FAKE-candidate-only") {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        state.dispatch_reserved = true;
+        state.calls.push("reserved");
+        Ok(DispatchClaimResult::Reserved(Box::new(DispatchClaim {
+            provider: candidate.provider.clone(),
+            reservation_key: "FAKE-reservation-only".into(),
+        })))
+    }
+    async fn consume_provider_dispatch(
+        &self,
+        claim: &DispatchClaim,
+    ) -> Result<DispatchConsumption> {
+        let mut state = self.state.lock().unwrap();
+        if !state.dispatch_fixture_enabled {
+            return Err(RuntimeStoreError::Unavailable);
+        }
+        if claim.provider != provider_admission(&self.a) {
+            return Err(RuntimeStoreError::StaleLease);
+        }
+        if !state.dispatch_reserved || claim.reservation_key != "FAKE-reservation-only" {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        if state.dispatch_consumed {
+            return Ok(DispatchConsumption::ReconciliationRequired);
+        }
+        state.dispatch_consumed = true;
+        state.calls.push("delivery_unknown");
+        if std::mem::take(&mut state.lose_consume_ack) {
+            return Err(RuntimeStoreError::Unavailable);
+        }
+        Ok(DispatchConsumption::DispatchNow)
     }
     async fn bind_native_session(
         &self,

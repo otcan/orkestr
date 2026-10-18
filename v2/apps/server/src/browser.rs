@@ -64,6 +64,13 @@ fn same_origin(state: &AppState, headers: &HeaderMap) -> Result<(), Error> {
     }
     Ok(())
 }
+/// Exact stored browser credential for transaction-time authentication.
+pub(crate) fn credential(headers: &HeaderMap) -> Result<String, Error> {
+    if headers.contains_key(header::AUTHORIZATION) {
+        return Err(unauthorized());
+    }
+    Ok(stored(&token(headers)?))
+}
 pub(crate) async fn owner(state: &AppState, headers: &HeaderMap) -> Result<OwnerId, Error> {
     if single(headers, "host") != Some(state.authority.as_str()) {
         return Err(forbidden("host_rejected"));

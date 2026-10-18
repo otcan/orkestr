@@ -149,6 +149,8 @@ mod cancellation;
 #[cfg(feature = "fixture-test-controls")]
 #[path = "fixture_dispatch/controlled.rs"]
 mod controlled;
+#[path = "fixture_dispatch/observations.rs"]
+mod observations;
 #[cfg(feature = "fixture-test-controls")]
 #[path = "fixture_dispatch/takeover.rs"]
 mod takeover;
@@ -302,6 +304,3 @@ async fn store_refuses_changed_role_or_fence_before_fake_io() {
         .unwrap());
     f.close().await;
 }
-
-#[path = "fixture_dispatch/observations.rs"]
-mod observations;

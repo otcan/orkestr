@@ -71,9 +71,9 @@ pub fn claude_event(line: &str, session: &str) -> Result<Option<ProviderEvent>, 
         return Err(Blocker::StaleLease);
     }
     Ok(match kind {
-        "system" if value.get("subtype").and_then(Value::as_str) == Some("init") => {
-            Some(ProviderEvent::Started)
-        }
+        // Session metadata is not evidence that a durably admitted turn started.
+        // The live adapter must correlate its own dispatch/turn acknowledgement.
+        "system" if value.get("subtype").and_then(Value::as_str) == Some("init") => None,
         "assistant" => {
             // Bound candidate content without interpreting tools as commands.
             if value
