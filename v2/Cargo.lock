@@ -3690,6 +3690,7 @@ dependencies = [
  "orkestr-v2-application",
  "orkestr-v2-contracts",
  "orkestr-v2-domain",
+ "serde",
  "serde_json",
  "sha2",
  "sqlx",
