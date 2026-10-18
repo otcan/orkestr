@@ -414,3 +414,7 @@ mod observations;
 #[cfg(feature = "fixture-test-controls")]
 #[path = "independent_transactions/renewal.rs"]
 mod renewal;
+
+#[cfg(feature = "fixture-test-controls")]
+#[path = "independent_transactions/cancellation.rs"]
+mod cancellation;

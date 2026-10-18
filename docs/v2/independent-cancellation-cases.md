@@ -1,7 +1,8 @@
 # Independent fixture cancellation acceptance cases
 
-Status: authored procedures only; all C01–C08 are pending. No adapter source or
-executable cancellation handoff has been reviewed or run. Contract baseline is
+Status: original procedure checkpoint. The later bounded execution report is
+[Independent cancellation evidence](independent-cancellation-evidence.md); use its
+per-case results and limits rather than treating this original pending list as current. Contract baseline is
 Core `537b7add3106b5089dc7d5188bfcd84ceda52b69`, with matching UI consumer
 `450f8399431902e7fc6a6ab9f2ce5e12e8b57764`. Their compatibility reviews do not
 approve future persistence or provider control.
