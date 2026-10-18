@@ -1,3 +1,4 @@
+import { QUEUED_INPUT_STATES } from "./thread-queue-control.js";
 // Messages from a connected assistant (MCP) into Orkestr threads. Unlike
 // comments, a message is queued as input and the thread's agent acts on it,
 // so it needs the separate "message" grant scope. Messages are labelled as
@@ -83,9 +84,9 @@ function summarize(message, limit = 600) {
 export async function bridgeThreadStatus(threadId, principal, env = process.env) {
   const grant = await authorization(principal, env);
   const thread = await target(threadId, grant, "observe", env);
-  const messages = await listThreadMessageCandidates(threadId, { tailLimit: 200 }, env);
+  const messages = await listThreadMessageCandidates(threadId, { tailLimit: 200, states: [...QUEUED_INPUT_STATES, "running"] }, env);
   const inputs = messages.filter((message) => message.role === "user");
-  const queued = inputs.filter((message) => ["queued", "awaiting_ack", "delivering", "claimed"].includes(message.state)).length;
+  const queued = inputs.filter((message) => QUEUED_INPUT_STATES.includes(message.state)).length;
   const running = inputs.some((message) => message.state === "running") || Boolean(thread.runtime?.activeTurnId);
   const lastInput = inputs.at(-1);
   const state = running ? "working" : queued ? "queued" : lastInput?.state === "failed" ? "last_turn_failed" : "idle";
@@ -94,6 +95,7 @@ export async function bridgeThreadStatus(threadId, principal, env = process.env)
     name: String(thread.bindingName || thread.name || threadId),
     state,
     queuedMessages: queued,
+    dispatchPaused: thread.queueDispatchHold?.paused === true,
     runtime: thread.runtimeKind || thread.executorId || null,
     model: thread.claudeModelResolved || thread.codexModel || null,
     lastError: state === "last_turn_failed" ? String(lastInput?.error || "").slice(0, 300) || null : null,
