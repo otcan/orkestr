@@ -1,6 +1,7 @@
 //! Capability-scoped, bounded Linux child transport. This is not an OS sandbox.
 //! Runtime owns provider protocols and the private consumed-turn adapter.
-mod broker;
+pub(crate) mod broker;
+mod broker_frames;
 mod environment;
 mod framing;
 pub mod metadata;

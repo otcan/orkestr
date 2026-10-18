@@ -115,6 +115,18 @@ impl CodexPump {
         self.source.broker = Some(channel);
         self
     }
+    pub(super) fn flush(&mut self) -> Result<(), crate::containment::Error> {
+        if self.source.failed.is_some() {
+            return Err(crate::containment::Error::Revoked);
+        }
+        match self.source.child.flush_stdin(&self.source.scope) {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                self.source.failed = Some(Blocker::Protocol);
+                Err(error)
+            }
+        }
+    }
     pub(super) async fn step(&mut self, store: &Store) -> Result<bool, supervisor::Error> {
         supervisor::step(store, &mut self.source, &self.admission, &mut self.cursor).await
     }

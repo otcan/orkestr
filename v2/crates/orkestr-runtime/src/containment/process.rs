@@ -308,7 +308,9 @@ pub(super) fn validate_metadata(
         // Read-only sandbox has network off; no configuration, tool, prompt or
         // network overrides accepted. Runtime must validate the server reply.
         "thread/start" => {
-            params.len() == 4
+            (params.len() == 4
+                || (params.len() == 5
+                    && params.get("modelProvider").and_then(Value::as_str) == Some("openai")))
                 && params
                     .get("cwd")
                     .and_then(Value::as_str)

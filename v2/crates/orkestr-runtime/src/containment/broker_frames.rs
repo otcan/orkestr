@@ -40,6 +40,14 @@ fn outer<'a>(value: &'a Value, method: &str) -> Result<&'a Value, Error> {
 pub(super) fn metadata(frame: &[u8], workspace: &Path) -> Result<Vec<u8>, Error> {
     let value: Value = serde_json::from_slice(frame).map_err(|_| Error::InvalidFrame)?;
     let inner = outer(&value, "BrokerMetadata")?;
+    if inner.get("method").and_then(Value::as_str) == Some("thread/start")
+        && inner
+            .pointer("/params/modelProvider")
+            .and_then(Value::as_str)
+            != Some("openai")
+    {
+        return Err(Error::InvalidFrame);
+    }
     // Existing closed metadata whitelist is reused, never expanded.
     validate_metadata(
         &serde_json::to_vec(inner).map_err(|_| Error::InvalidFrame)?,
@@ -148,6 +156,41 @@ mod tests {
         assert_eq!(
             metadata(
                 &envelope("CommitExecution", json!({"method":"initialized"})),
+                Path::new("/synthetic/workspace")
+            ),
+            Err(Error::InvalidFrame)
+        );
+    }
+    #[test]
+    fn broker_thread_setup_requires_exact_openai_pin() {
+        let mut frame = serde_json::json!({"id":3,"method":"thread/start","params":{"cwd":"/synthetic/workspace","approvalPolicy":"never","sandbox":"read-only","ephemeral":false,"modelProvider":"openai"}});
+        assert!(metadata(
+            &envelope("BrokerMetadata", frame.clone()),
+            Path::new("/synthetic/workspace")
+        )
+        .is_ok());
+        for provider in [
+            Value::Null,
+            Value::Bool(true),
+            serde_json::json!("external"),
+            serde_json::json!(""),
+        ] {
+            frame["params"]["modelProvider"] = provider;
+            assert_eq!(
+                metadata(
+                    &envelope("BrokerMetadata", frame.clone()),
+                    Path::new("/synthetic/workspace")
+                ),
+                Err(Error::InvalidFrame)
+            );
+        }
+        frame["params"]
+            .as_object_mut()
+            .unwrap()
+            .remove("modelProvider");
+        assert_eq!(
+            metadata(
+                &envelope("BrokerMetadata", frame),
                 Path::new("/synthetic/workspace")
             ),
             Err(Error::InvalidFrame)

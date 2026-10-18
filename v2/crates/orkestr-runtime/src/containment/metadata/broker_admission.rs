@@ -21,7 +21,8 @@ impl MetadataChild {
                 if frame.len() > self.process.max_frame {
                     return Err(Error::FrameTooLarge);
                 }
-                let canonical = super::super::broker_frames::metadata(&frame, &self.process.workspace)?;
+                let canonical =
+                    super::super::broker_frames::metadata(&frame, &self.process.workspace)?;
                 let grant = state.grant.as_ref().ok_or(Error::Revoked)?;
                 self.shared
                     .store

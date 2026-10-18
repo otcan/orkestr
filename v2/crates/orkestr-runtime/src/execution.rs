@@ -2,6 +2,9 @@
 //! This does not construct a supervisor, credentials, or a permissive fence.
 mod fence;
 mod pump;
+mod session;
+#[cfg(test)]
+mod session_tests;
 #[cfg(test)]
 mod tests;
 use crate::{
