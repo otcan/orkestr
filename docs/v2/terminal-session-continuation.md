@@ -67,3 +67,23 @@ transfers. The returned grant is private and non-Clone; losing its delivery neve
 reissues setup. The current-credential checks and actual execution fence still apply
 before each real provider write. A trusted child-reaped assertion alone never
 grants durable restart authority. Independent process/provider acceptance remains separate from Store tests.
+
+## Graceful terminal shutdown
+
+`bound_store.retire_terminal_supervisor(original_machine_credential, prior_run)`
+is a trusted server teardown operation, called only after all owned native
+children have been waited/reaped. It accepts no client cleanup assertions, PIDs,
+or replacement credentials. Inside one immediate transaction it authenticates
+the original credential and exact sealed context, proves the exact Deep run was
+owner-accepted with its unreused Ready binding, and refuses any unresolved run
+or descendant. A cancelled terminal label without a durable Stopped observation
+and acknowledged control outbox is insufficient.
+
+It only sets that exact supervisor lease deadline to zero; receipts, history,
+held input and bindings remain unchanged. Repetition before takeover is harmless.
+The existing exact expired-predecessor restart CAS may then succeed promptly
+without sleeping or changing the clock. Old metadata/execution authority is
+expired, and the old handle cannot retire a replacement incarnation. This is not
+proof that a native process reaped: server composition must supply that ordering
+and independent process tests. This first port covers accepted clean retirement;
+unknown delivery, ACK-only cancellation and unaccepted proposals remain refused.
