@@ -15,6 +15,12 @@ impl From<String> for Failure {
     }
 }
 
+#[derive(Clone, Deserialize)]
+pub struct BrowserSession {
+    pub csrf_token: String,
+    pub global_conversation_id: String,
+}
+
 #[derive(Deserialize)]
 struct Response {
     status: u16,
@@ -25,11 +31,11 @@ pub async fn request<T: DeserializeOwned>(
     method: &str,
     path: &str,
     body: Value,
-    token: &str,
+    csrf: &str,
     bootstrap: &str,
 ) -> Result<T, Failure> {
     let eval = document::eval(include_str!("request.js"));
-    eval.send(json!({"method":method,"path":path,"body":body,"token":token,"bootstrap":bootstrap}))
+    eval.send(json!({"method":method,"path":path,"body":body,"csrf":csrf,"bootstrap":bootstrap}))
         .map_err(|_| Failure::from("Browser bridge unavailable".to_string()))?;
     let response: Response = eval.join().await.map_err(|_| {
         Failure::from(
@@ -61,7 +67,7 @@ pub async fn delay() {
         .await;
 }
 
-pub async fn projects(token: &str) -> Result<Vec<Project>, Failure> {
+pub async fn projects(csrf: &str) -> Result<Vec<Project>, Failure> {
     let mut result = Vec::new();
     let mut after = 0;
     loop {
@@ -69,7 +75,7 @@ pub async fn projects(token: &str) -> Result<Vec<Project>, Failure> {
             "GET",
             &format!("/api/v2/projects?after={after}&limit=100"),
             Value::Null,
-            token,
+            csrf,
             "",
         )
         .await?;
@@ -87,14 +93,14 @@ pub async fn projects(token: &str) -> Result<Vec<Project>, Failure> {
 
 pub async fn history_page(
     id: &str,
-    token: &str,
+    csrf: &str,
     after: i64,
 ) -> Result<ConversationSnapshot, Failure> {
     let page: ConversationSnapshot = request(
         "GET",
         &format!("/api/v2/conversations/{id}?after={after}&limit=100"),
         Value::Null,
-        token,
+        csrf,
         "",
     )
     .await?;
@@ -117,7 +123,7 @@ pub async fn history_page(
 
 pub async fn snapshot(
     id: &str,
-    token: &str,
+    csrf: &str,
     after: i64,
     mut projection: Projection,
 ) -> Result<Projection, Failure> {
@@ -133,7 +139,7 @@ pub async fn snapshot(
                     .into(),
             );
         }
-        let page = history_page(id, token, after).await?;
+        let page = history_page(id, csrf, after).await?;
         let watermark = *initial_watermark.get_or_insert(page.last_sequence);
         let next = page.next_cursor;
         projection
@@ -158,12 +164,10 @@ pub struct StreamItem {
     pub body: Option<orkestr_v2_contracts::EventEnvelope>,
 }
 
-pub async fn event(id: &str, token: &str, cursor: i64) -> Result<StreamItem, Failure> {
+pub async fn event(id: &str, cursor: i64) -> Result<StreamItem, Failure> {
     let eval = document::eval(include_str!("stream.js"));
-    eval.send(
-        json!({"path":format!("/api/v2/conversations/{id}/events"),"token":token,"cursor":cursor}),
-    )
-    .map_err(|_| Failure::from("Stream bridge unavailable".to_string()))?;
+    eval.send(json!({"path":format!("/api/v2/conversations/{id}/events"),"cursor":cursor}))
+        .map_err(|_| Failure::from("Stream bridge unavailable".to_string()))?;
     eval.join().await.map_err(|_| {
         Failure::from("Disconnected; reconnecting from last applied cursor".to_string())
     })

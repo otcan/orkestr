@@ -1,5 +1,5 @@
 // One event per bounded fetch; Rust applies it before reconnecting from its cursor.
-// No EventSource, token URLs, DOM injection, storage, or unbounded message channel.
+// HttpOnly session cookie; no Bearer, token URLs, storage or unbounded channel.
 const input = await dioxus.recv();
 if (!/^\/api\/v2\/conversations\/[a-f0-9-]+\/events$/.test(input.path)) {
     throw new Error("Invalid stream path");
@@ -9,8 +9,8 @@ const timer = setTimeout(() => controller.abort(), 25000);
 let reader;
 try {
     const response = await fetch(input.path, {
-        headers: {Authorization: `Bearer ${input.token}`, "Last-Event-ID": String(input.cursor)},
-        credentials: "omit", cache: "no-store", signal: controller.signal
+        headers: {"Last-Event-ID": String(input.cursor)},
+        credentials: "same-origin", cache: "no-store", signal: controller.signal
     });
     if (!response.ok) return {status: response.status, event: "http_error"};
     if (!response.headers.get("content-type")?.startsWith("text/event-stream")) {
