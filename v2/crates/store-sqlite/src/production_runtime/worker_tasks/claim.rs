@@ -66,6 +66,9 @@ impl Store {
         self.worker_credential(credential)?;
         let context = self.context()?;
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        // Revocation may already have durably cleared the claim. Authenticate
+        // the current principal before reporting any historical claim state.
+        context.validate(&mut tx).await?;
         let row = sqlx::query("SELECT * FROM worker_tasks WHERE id=? AND owner_id=? AND context_id=? AND incarnation_id=?")
             .bind(claim.id.to_string()).bind(context.owner.to_string()).bind(&context.id).bind(&context.incarnation)
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::NotFound)?;

@@ -300,3 +300,4 @@ mod auth_tests;
 mod durable_hold_tests;
 mod payload_tests;
 mod replay_tests;
+mod upgrade_tests;

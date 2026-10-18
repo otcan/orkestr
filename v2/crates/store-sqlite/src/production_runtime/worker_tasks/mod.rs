@@ -9,6 +9,7 @@ use sqlx::sqlite::SqliteRow;
 
 mod claim;
 mod creation;
+mod hold;
 mod input;
 mod presentation;
 
@@ -115,6 +116,7 @@ impl Store {
         if row.get::<&str, _>("owner_id") != context.owner.to_string()
             || row.get::<&str, _>("context_id") != context.id
             || row.get::<&str, _>("incarnation_id") != context.incarnation
+            || row.get::<Option<&str>, _>("issuer_token_hash") != Some(context.token_hash.as_str())
         {
             return Err(RuntimeStoreError::Fenced);
         }

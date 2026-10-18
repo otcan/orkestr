@@ -70,6 +70,8 @@ def stop_parent(case):
     status = ordinary.wait_for(lambda: (s if (s := exact_status(case, case.parent["id"]))["capabilities"]["stop"] else None),
                                "parent Stop unavailable")
     assert case.request(case.path + "/stop", "POST", intent(status, "stop-task-parent"))[0] == 200
+    assert not case.rows("SELECT id FROM worker_tasks WHERE state IN ('queued','claimed') OR claim_hash IS NOT NULL"), \
+        "parent Stop must durably hold pending claims before its response"
     ordinary.wait_for(case.peer_gone, "parent Stop must reap every owned task child")
     assert not case.task_list()["can_create"]
 
@@ -190,10 +192,46 @@ def bounded_parallel_tasks_hold_delete_and_parent_stop(case):
     assert not case.rows("SELECT run_id FROM production_observations WHERE kind='stopped' AND run_id!=?", (case.parent["id"],))
 
 
+def pending_with_live_siblings(case):
+    begin(case)
+    for name in ["alpha", "beta", "gamma", "delta"]:
+        task_running(case, case.create(name)[1])
+    _, queued = case.create("queued")
+    assert case.task(queued, "queued")
+    case.trace()  # own every native host identity before the parent is fenced
+    return queued
+
+
+def parent_proposal_durably_holds_unissued_tasks(case):
+    queued = pending_with_live_siblings(case)
+    (case.workspace / "release-deep").touch()
+    ordinary.wait_for(lambda: case.phase("awaiting_acceptance"), "parent proposal missing")
+    assert case.rows("SELECT state,claim_hash FROM worker_tasks WHERE id=?", (queued["task_id"],)) == [
+        {"state": "held", "claim_hash": None}]
+    ordinary.wait_for(case.worker_gone, "parent proposal must reap its fenced Workers")
+    assert case.task(queued, "held")
+    assert not any(row.get("task") == "queued" for row in case.trace() if row["kind"] == "turn")
+    assert not case.rows("SELECT run_id FROM production_observations WHERE kind='stopped'")
+
+
+def machine_revocation_durably_holds_unissued_tasks(case):
+    queued = pending_with_live_siblings(case)
+    case.revoke_machine()
+    # No task-list or scheduling call precedes this raw durability check.
+    assert case.rows("SELECT state,claim_hash FROM worker_tasks WHERE id=?", (queued["task_id"],)) == [
+        {"state": "held", "claim_hash": None}]
+    ordinary.wait_for(case.peer_gone, "revocation must reap parent and independent Workers")
+    assert case.task(queued, "held")
+    assert not any(row.get("task") == "queued" for row in case.trace() if row["kind"] == "turn")
+    assert not case.rows("SELECT run_id FROM production_observations WHERE kind IN ('stopped','completed_proposal')")
+
+
 if __name__ == "__main__":
     worker.WorkerCase = TaskCase
     worker.SCENARIOS = [distinct_tasks_acceptance_and_independent_stop,
                         task_auth_and_control_refusals_have_no_effects,
                         lost_create_response_replays_one_task_and_one_native_turn,
-                        bounded_parallel_tasks_hold_delete_and_parent_stop]
+                        bounded_parallel_tasks_hold_delete_and_parent_stop,
+                        parent_proposal_durably_holds_unissued_tasks,
+                        machine_revocation_durably_holds_unissued_tasks]
     worker.main()
