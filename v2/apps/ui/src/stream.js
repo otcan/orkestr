@@ -23,9 +23,9 @@ try {
         const {done, value} = await reader.read();
         if (done) return {status: 200, event: "disconnected"};
         buffer += decoder.decode(value, {stream: true});
-        if (buffer.length > 65536) throw new Error("SSE frame exceeds client limit");
         let match;
         while ((match = /\r?\n\r?\n/.exec(buffer))) {
+            if (match.index > 65536) throw new Error("SSE frame exceeds client limit");
             const frame = buffer.slice(0, match.index);
             buffer = buffer.slice(match.index + match[0].length);
             let event = "message", id = null;
@@ -45,6 +45,7 @@ try {
             }
             if (data.length) return {status: 200, event, id, body: JSON.parse(data.join("\n"))};
         }
+        if (buffer.length > 65536) throw new Error("SSE frame exceeds client limit");
     }
 } finally {
     clearTimeout(timer);

@@ -35,3 +35,16 @@ test('resync and HTTP expiry are explicit',async()=>{
 test('oversized incomplete SSE is rejected',async()=>{
     await assert.rejects(run(['data: '+ 'x'.repeat(65537)]),/exceeds client limit/);
 });
+
+
+test('coalesced small backlog frames do not trip the individual frame limit',async()=>{
+    const frame = 'id: 8\nevent: message_accepted\ndata: {"sequence":8}\n\n';
+    const {result,cancelled} = await run([frame.repeat(2000)]);
+    assert.equal(result.id,'8');
+    assert.equal(result.body.sequence,8);
+    assert.equal(cancelled,true);
+});
+
+test('oversized complete frame remains rejected',async()=>{
+    await assert.rejects(run(['data: '+ 'x'.repeat(65537)+'\n\n']),/exceeds client limit/);
+});
