@@ -175,3 +175,22 @@ fn owner_scoped_model_survives_component_selection_remount_without_rejuvenation(
         .apply_status(new_owner_mount, 60003, backwards)
         .unwrap();
 }
+
+#[test]
+fn absent_then_identical_old_status_keeps_resources_stale() {
+    let mut state = Execution::default();
+    let mut status = wire();
+    let generation = state.select(&status.conversation_id.to_string(), "");
+    state.apply_status(generation, 1, status.clone()).unwrap();
+    assert!(state.absent(generation));
+    state
+        .apply_status(generation, 60002, status.clone())
+        .unwrap();
+    assert!(!state.fresh(60002));
+    assert!(state.resources(60002).contains("unavailable"));
+    assert!(state.can_stop(60002));
+    status.observed_at_ms += 60001;
+    state.apply_status(generation, 60003, status).unwrap();
+    assert!(state.fresh(60003));
+    assert!(state.resources(60003).contains("unavailable"));
+}
