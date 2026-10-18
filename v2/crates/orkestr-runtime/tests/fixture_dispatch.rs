@@ -147,6 +147,8 @@ async fn consume_then_fake(
 #[cfg(feature = "fixture-test-controls")]
 #[path = "fixture_dispatch/controlled.rs"]
 mod controlled;
+#[path = "fixture_dispatch/observations.rs"]
+mod observations;
 #[cfg(feature = "fixture-test-controls")]
 #[path = "fixture_dispatch/takeover.rs"]
 mod takeover;

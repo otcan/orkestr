@@ -42,3 +42,14 @@ handoff and actual append implementation. Runtime can then test fail-once retry,
 committed reply loss plus reopen, concurrent identical input, and authenticated
 replay after takeover using the existing append operation. Production starts and
 ordinary Store append remain blocked. Pool reopen is not process recovery.
+
+## Selected follow-up and prepared tests
+
+The owner selected consumed Starting + Failed -> Failed without an invented
+Started, retaining occupied/blocked session authority until a separate lifecycle
+operation. `tests/fixture_dispatch/observations.rs` prepares two actual-store cases
+using only existing v5 input types: first-event Failed with committed receipt
+replay after pool reopen, changed replay conflict, and refusal of another turn
+without increasing admitted/acknowledged scope counts. Both tests are explicitly
+ignored pending the exact Core DTO/migration/adapter handoff; they are not passing
+acceptance. They do not invoke provider I/O or define another durable store.
