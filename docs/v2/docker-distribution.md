@@ -271,3 +271,35 @@ zero-resource cleanup are recorded in `combined-checkpoint.json`. No host or
 image policy was weakened. Combined Docker health/static/recovery acceptance
 requires a coordinator-integrated bind-capable binary; it remains unexecuted.
 Native same-package dormant recovery was separately implemented and passed.
+
+### Successor combined checkpoint and dormant volume recovery
+
+The admitted successor `31d8d0395369b32306d14412843a9f9bf5eb2c01`, binary SHA-256
+`c6eca93f7119dbd9cbbfe6e42cf1cc894a62fc8e97123938fabfc82a47cd2f0e`, passed
+owned normal-bridge image build, effective 127.0.0.1 binding, inside/host health,
+UI index verification and cleanup. Exact hashes are in `successor-checkpoint.json`.
+The separately pinned `e6b5441a` UI remains mixed-source; no browser/provider
+acceptance is implied. The successor also passed native same-package dormant
+backup/apply/start-refusal/rollback; native evidence is in
+`v2/local-install/tests/successor-dormant-checkpoint.json`.
+
+New container dormant recovery source is reviewable, **actual execution pending
+independent review**. `dormant.py` uses the SQLite backup API, binds its snapshot
+to the exact image artifact manifest, applies only into fresh empty state, verifies
+hash/integrity and writes a dormant receipt before copying. The entrypoint refuses
+activation while that receipt exists. Rollback removes only an untouched restored
+database and receipt, returning the empty target. Opaque database auth is retained;
+bootstrap/provider HOME is excluded. No activation or cross-version migration exists.
+
+`recovery_probe.exercise(context, stopped_owned_container_id)` verifies stopped
+container/project/image/volume identity, then runs short nonroot/read-only helpers
+with network=none and capability/no-new-privileges restrictions. Helpers mount only
+owned named volumes, never host paths or the Docker socket. A fresh second owned
+volume receives the dormant restore. Hash and message count must match the snapshot;
+entrypoint activation refusal and actual rollback must pass. The fresh restore
+volume is removed in `finally`; caller retains responsibility for original project,
+image/context cleanup. An existing restore volume or running source is refused
+without modifying occupants. Helpers are not a concurrent-writer lock: the exclusive
+owned probe must keep the source stopped throughout. An abrupt crash may require
+inspection; neither power-loss durability nor canonical Core state/auth rebinding
+is claimed. Executor containment remains a separate unpassed gate.

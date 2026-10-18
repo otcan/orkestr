@@ -74,7 +74,7 @@ def prepare(binary, ui, output, binary_sha256, ui_inventory_sha256, source_commi
     shutil.copy2(binary, output / "server")
     (output / "server").chmod(0o555)
     shutil.copytree(ui, output / "ui")
-    for filename in ("Dockerfile", "entrypoint.py"):
+    for filename in ("Dockerfile", "entrypoint.py", "dormant.py"):
         shutil.copy2(HERE / filename, output / filename)
     require(sha256(output / "server") == binary_sha256 and ui_files(output / "ui") == inventory,
             "copied artifact identity changed")
@@ -85,6 +85,7 @@ def prepare(binary, ui, output, binary_sha256, ui_inventory_sha256, source_commi
                 "required_glibc_declared": required_glibc, "network_policy": network_policy,
                 "provider_activation": "none; no provider configured by this distribution", "container_bind_opt_in": {"name": name, "value": value},
                 "files": {"server": binary_sha256, "entrypoint.py": sha256(output / "entrypoint.py"),
+                          "dormant.py": sha256(output / "dormant.py"),
                           **{"ui/" + key: value for key, value in inventory.items()}},
                 "acceptance": "unexecuted; reviewed bind-capable binary and compatible inspected base required"}
     write_json(output / "artifact-manifest.json", manifest)
@@ -100,7 +101,7 @@ def prepare(binary, ui, output, binary_sha256, ui_inventory_sha256, source_commi
                    "interval": "2s", "timeout": "3s", "retries": 15}}
     write_json(output / "compose.json", {"name": project, "services": {"server": service},
                "volumes": {"state": {"name": project + "-state"}}, "networks": {"isolated": {"internal": network_policy == "outbound-denied"}}})
-    (output / ".dockerignore").write_text("**\n!Dockerfile\n!server\n!ui\n!ui/**\n!entrypoint.py\n!artifact-manifest.json\n")
+    (output / ".dockerignore").write_text("**\n!Dockerfile\n!server\n!ui\n!ui/**\n!entrypoint.py\n!dormant.py\n!artifact-manifest.json\n")
     return output
 
 

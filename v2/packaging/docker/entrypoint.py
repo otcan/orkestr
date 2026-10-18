@@ -22,7 +22,9 @@ def verify(root):
             checked(not path.is_symlink() and (path.is_dir() or path.is_file()), "invalid image artifact")
             if path.is_file():
                 actual[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
-    actual["entrypoint.py"] = hashlib.sha256((root / "entrypoint.py").read_bytes()).hexdigest()
+    for name in ("entrypoint.py", "dormant.py"):
+        checked(not (root / name).is_symlink(), "image tool symlink refused")
+        actual[name] = hashlib.sha256((root / name).read_bytes()).hexdigest()
     checked(actual == inventory, "image artifact checksum mismatch")
     return manifest
 
@@ -36,6 +38,8 @@ def environment(root, state, incoming):
     checked(state.is_dir() and not state.is_symlink(), "explicit state volume required")
     checked(state.stat().st_uid == os.getuid() and stat.S_IMODE(state.stat().st_mode) == 0o700,
             "state volume must be owned by runtime user and private")
+    marker = state / "restore-dormant.json"
+    checked(not marker.exists() and not marker.is_symlink(), "dormant restore prohibits activation; rollback required")
     for name in ("control", "data", "provider-home"):
         path = state / name
         if not path.exists():
