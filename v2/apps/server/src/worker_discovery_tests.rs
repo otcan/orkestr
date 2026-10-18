@@ -46,7 +46,8 @@ async fn authenticated_query_and_context_boundaries() {
         .unwrap();
     let state = AppState::new(store.clone(), "x".repeat(32), "http://localhost".into())
         .unwrap()
-        .with_execution_store(bound);
+        .with_execution_store(owner.clone(), conversation.clone(), bound)
+        .unwrap();
     let mut headers = HeaderMap::new();
     headers.insert(header::HOST, "localhost".parse().unwrap());
     headers.insert(

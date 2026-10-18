@@ -1,4 +1,8 @@
-use orkestr_v2_server::{build_identity, owned_execution::ConfiguredExecution, router, AppState};
+use orkestr_v2_server::{
+    build_identity,
+    owned_execution::{ConfiguredExecution, ConfiguredExecutions},
+    router, AppState,
+};
 use orkestr_v2_store_sqlite::Store;
 use std::path::PathBuf;
 mod bind_config;
@@ -42,15 +46,24 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let origin = config.origin;
     let mut state = AppState::new(store.clone(), token, origin)?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
-    let execution = match std::env::var_os("ORKESTR_V2_EXECUTION_CONFIG") {
-        None => None,
-        Some(file) => {
+    let execution = match (
+        std::env::var_os("ORKESTR_V2_EXECUTION_CONFIG"),
+        std::env::var_os("ORKESTR_V2_EXECUTION_SET"),
+    ) {
+        (None, None) => None,
+        (Some(file), None) => {
             let execution =
                 ConfiguredExecution::load(&store, &home, bind, &PathBuf::from(file)).await?;
-            state = execution.install_control(state);
-            Some(execution)
+            Some(ConfiguredExecutions::single(execution))
         }
+        (None, Some(file)) => {
+            Some(ConfiguredExecutions::load_set(&store, &home, bind, &PathBuf::from(file)).await?)
+        }
+        (Some(_), Some(_)) => return Err("select one execution configuration mode".into()),
     };
+    if let Some(execution) = &execution {
+        state = execution.install_control(state)?;
+    }
     eprintln!(
         "orkestr-v2-server schema=1 home={} bind={} execution={} connections=none",
         home.display(),
@@ -65,7 +78,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(dist) = std::env::var_os("ORKESTR_V2_UI_DIST") {
         app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
     }
-    let execution = execution.map(ConfiguredExecution::start);
+    let execution = execution.map(ConfiguredExecutions::start);
     let (shutdown, mut requested) = tokio::sync::watch::channel(false);
     let mut serving = tokio::spawn(async move {
         axum::serve(listener, app)

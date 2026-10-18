@@ -145,7 +145,8 @@ async fn cookie_csrf_accept_requires_committed_completion() {
             origin.clone(),
         )
         .unwrap()
-        .with_execution_store(bound);
+        .with_execution_store(owner.clone(), conversation.clone(), bound)
+        .unwrap();
         let task = tokio::spawn(async move {
             axum::serve(listener, router(state)).await.unwrap();
         });

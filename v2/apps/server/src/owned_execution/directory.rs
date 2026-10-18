@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 
 pub(super) fn create(home: &Path) -> Result<PathBuf, &'static str> {
     let directory = home.join("owned-execution");
+    create_directory(directory)
+}
+
+fn create_directory(directory: PathBuf) -> Result<PathBuf, &'static str> {
     for path in [&directory, &directory.join("home"), &directory.join("tmp")] {
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
@@ -19,6 +23,10 @@ pub(super) fn create(home: &Path) -> Result<PathBuf, &'static str> {
 
 pub(super) fn existing(home: &Path) -> Result<PathBuf, &'static str> {
     let directory = home.join("owned-execution");
+    existing_directory(home, directory)
+}
+
+fn existing_directory(home: &Path, directory: PathBuf) -> Result<PathBuf, &'static str> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -42,6 +50,56 @@ pub(super) fn existing(home: &Path) -> Result<PathBuf, &'static str> {
     {
         Err("owned execution requires Unix file ownership checks")
     }
+}
+
+fn scoped_root(home: &Path) -> Result<PathBuf, &'static str> {
+    let root = home.join("owned-executions");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+        match std::fs::DirBuilder::new().mode(0o700).create(&root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err("execution scope root unavailable"),
+        }
+        let info =
+            std::fs::symlink_metadata(&root).map_err(|_| "execution scope root unavailable")?;
+        let owner = std::fs::metadata(home)
+            .map_err(|_| "execution home unavailable")?
+            .uid();
+        if !info.is_dir()
+            || info.uid() != owner
+            || info.mode() & 0o777 != 0o700
+            || root.canonicalize().ok().as_deref() != Some(root.as_path())
+        {
+            return Err("execution scope root is not private and canonical");
+        }
+        Ok(root)
+    }
+    #[cfg(not(unix))]
+    {
+        Err("owned execution requires Unix file ownership checks")
+    }
+}
+
+pub(super) fn create_for(
+    home: &Path,
+    conversation: &orkestr_v2_contracts::ConversationId,
+) -> Result<PathBuf, &'static str> {
+    if conversation.0.is_nil() {
+        return Err("execution scope requires a conversation");
+    }
+    create_directory(scoped_root(home)?.join(conversation.to_string()))
+}
+
+pub(super) fn existing_for(
+    home: &Path,
+    conversation: &orkestr_v2_contracts::ConversationId,
+) -> Result<PathBuf, &'static str> {
+    if conversation.0.is_nil() {
+        return Err("execution scope requires a conversation");
+    }
+    existing_directory(home, scoped_root(home)?.join(conversation.to_string()))
 }
 
 #[cfg(all(test, unix))]

@@ -18,13 +18,6 @@ pub(crate) struct ListQuery {
 #[serde(deny_unknown_fields)]
 pub(crate) struct EmptyRequest {}
 
-impl AppState {
-    /// Availability composition only; Core remains the authority for all writes.
-    pub fn with_worker_task_access(mut self, access: WorkerTaskAccess) -> Self {
-        self.worker_task_access = Some(access);
-        self
-    }
-}
 fn conversation(id: &str) -> Result<ConversationId, Error> {
     let id = Uuid::parse_str(id).map_err(|_| invalid())?;
     if id.is_nil() {
@@ -46,12 +39,19 @@ fn invalid() -> Error {
         "Invalid Worker task request",
     )
 }
-fn store(state: &AppState) -> Result<&Store, Error> {
-    state.execution_store.as_ref().ok_or(Error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "worker_tasks_unavailable",
-        "Worker task service unavailable",
-    ))
+async fn scope<'a>(
+    state: &'a AppState,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+) -> Result<&'a crate::execution_registry::ExecutionScope, Error> {
+    state
+        .execution_scope(owner, conversation)
+        .await?
+        .ok_or(Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "worker_tasks_unavailable",
+            "Worker task service unavailable",
+        ))
 }
 fn error(error: RuntimeStoreError) -> Error {
     match error {
@@ -105,11 +105,13 @@ pub(crate) async fn create(
     if !input.is_valid() {
         return Err(invalid());
     }
-    let available = state
-        .worker_task_access
+    let scope = scope(&state, &owner, &conversation).await?;
+    let available = scope
+        .tasks
         .as_ref()
         .is_some_and(|access| access.available(&owner, &conversation, &input.parent_run_id));
-    let receipt = store(&state)?
+    let receipt = scope
+        .store
         .create_worker_task_if_available_authenticated(
             &browser::credential(&headers)?,
             &conversation,
@@ -138,7 +140,9 @@ pub(crate) async fn list(
     if query.parent_run_id.0.is_nil() {
         return Err(invalid());
     }
-    let mut list = store(&state)?
+    let scope = scope(&state, &owner, &conversation).await?;
+    let mut list = scope
+        .store
         .worker_tasks_authenticated(
             &browser::credential(&headers)?,
             &conversation,
@@ -146,8 +150,8 @@ pub(crate) async fn list(
         )
         .await
         .map_err(error)?;
-    list.can_create &= state
-        .worker_task_access
+    list.can_create &= scope
+        .tasks
         .as_ref()
         .is_some_and(|access| access.available(&owner, &conversation, &query.parent_run_id));
     if !list.is_valid()
@@ -164,7 +168,7 @@ pub(crate) async fn hold(
     Path((id, task_id)): Path<(String, String)>,
     body: Result<Json<EmptyRequest>, JsonRejection>,
 ) -> Result<Response, Error> {
-    browser::owner(&state, &headers).await?;
+    let owner = browser::owner(&state, &headers).await?;
     browser::guard(
         &state,
         &axum::http::Method::POST,
@@ -173,10 +177,13 @@ pub(crate) async fn hold(
     )
     .await?;
     let Json(EmptyRequest {}) = body.map_err(|_| invalid())?;
-    store(&state)?
+    let conversation = conversation(&id)?;
+    scope(&state, &owner, &conversation)
+        .await?
+        .store
         .hold_worker_task_authenticated(
             &browser::credential(&headers)?,
-            &conversation(&id)?,
+            &conversation,
             &task(&task_id)?,
         )
         .await
@@ -188,7 +195,7 @@ pub(crate) async fn remove(
     headers: HeaderMap,
     Path((id, task_id)): Path<(String, String)>,
 ) -> Result<Response, Error> {
-    browser::owner(&state, &headers).await?;
+    let owner = browser::owner(&state, &headers).await?;
     browser::guard(
         &state,
         &axum::http::Method::DELETE,
@@ -196,10 +203,13 @@ pub(crate) async fn remove(
         &headers,
     )
     .await?;
-    store(&state)?
+    let conversation = conversation(&id)?;
+    scope(&state, &owner, &conversation)
+        .await?
+        .store
         .delete_worker_task_payload_authenticated(
             &browser::credential(&headers)?,
-            &conversation(&id)?,
+            &conversation,
             &task(&task_id)?,
         )
         .await

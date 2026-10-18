@@ -34,7 +34,11 @@ fn canonical(path: &Path) -> Result<(), &'static str> {
 }
 
 #[cfg(unix)]
-fn private_file(path: &Path, home: &Path, max_bytes: u64) -> Result<Vec<u8>, &'static str> {
+pub(super) fn private_file(
+    path: &Path,
+    home: &Path,
+    max_bytes: u64,
+) -> Result<Vec<u8>, &'static str> {
     use std::os::unix::fs::MetadataExt;
     canonical(path)?;
     let info = fs::symlink_metadata(path).map_err(|_| "execution private file unavailable")?;
@@ -57,7 +61,7 @@ fn private_file(path: &Path, home: &Path, max_bytes: u64) -> Result<Vec<u8>, &'s
 }
 
 #[cfg(not(unix))]
-fn private_file(_: &Path, _: &Path, _: u64) -> Result<Vec<u8>, &'static str> {
+pub(super) fn private_file(_: &Path, _: &Path, _: u64) -> Result<Vec<u8>, &'static str> {
     Err("owned execution requires Unix file ownership checks")
 }
 
