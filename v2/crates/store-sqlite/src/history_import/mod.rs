@@ -14,6 +14,7 @@ mod recovery_tests;
 mod rollback;
 #[cfg(test)]
 mod tests;
+pub mod timers;
 
 use crate::Store;
 pub use fingerprint::history_source_digest;
