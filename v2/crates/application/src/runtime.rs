@@ -84,14 +84,16 @@ pub trait RuntimeStore: Send + Sync {
         expected_generation: u64,
     ) -> impl Future<Output = Result<RunAdmission>> + Send;
 
-    /// Authenticate owner and run/session association FIRST. A committed identical
+    /// Authenticate owner and run/session association FIRST; never disclose a receipt
+    /// across principals or mismatched associations. A committed identical
     /// sequence/body returns its original receipt even after expiry/fencing, without
     /// a new write or transition. Changed replay conflicts. Core computes the digest.
-    /// A new contiguous sequence requires current execution/cancellation authority,
+    /// A new contiguous sequence requires current execution authority,
     /// matching lease/fence, expiry and legal state; no provider completion is success.
     /// Progress is bounded and must use removable payload storage, never raw journal text.
     /// Unavailable/Busy retains exact pending input. Fenced/StaleLease is explicit refusal;
     /// preserve original terminal evidence for reconciliation, never fabricate Stopped.
+    /// A newer cancellation fence is control-only, never execution start/poll authority.
     fn append_provider_event(
         &self,
         owner: &OwnerId,

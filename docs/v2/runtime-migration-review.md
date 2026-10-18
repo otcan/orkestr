@@ -61,3 +61,14 @@ protocol tests, not durability/restart acceptance. Wrapper package fmt and
 source diff checks are the only local validation. Independent exact-head source
 review precedes coordinator root/lock integration and exact-head build/tests.
 Historical aec7475b 16/16 results and inherited PR #80 CI do not transfer here.
+
+## Comment-only replay clarification
+
+The application append comments incorporate the semantic clarification from core
+PR #91, d0e0d8e0062e609e0c9494e8440b08d6c08d9074, without its historical e2de
+ancestry or signature. The v5 owner/admission/input signature and types remain
+unchanged. Authentication must prevent receipt disclosure across principals;
+cancellation fences remain control-only. New append input requires execution
+authority. Cancellation confirmation/reconciliation has no implemented substitute.
+This comment-only adaptation supersedes the earlier ambiguous reference to new
+cancellation authority; core owns the eventual durable enforcement.
