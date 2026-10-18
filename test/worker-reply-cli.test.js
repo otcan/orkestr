@@ -16,6 +16,7 @@ async function sendBodies(cases) {
       apiBase: "http://fixture.invalid", stdout: { write() {} }, stderr: { write() {} },
       fetchImpl: async (url, options = {}) => {
         if ((options.method || "GET") === "GET") {
+          if (String(url).includes("/api/whereiam")) return new Response(JSON.stringify({ thread: { id: "source-demo" } }), { status: 200 });
           lookups.push(String(url));
           return new Response(JSON.stringify({ thread }), { status: 200 });
         }
@@ -55,4 +56,12 @@ test("CLI sends stay private by default for non-workers and ineligible bindings"
     { flags: [], thread: { ...boundWorker, binding: null } },
   ]);
   assert.deepEqual(bodies.map((body) => body.workerReplyDelivery), [undefined, undefined, undefined, undefined, undefined]);
+});
+
+ test("CLI report metadata is separated from text and carries discovered source", async () => {
+  const { bodies } = await sendBodies([{ flags: ["--report-kind", "result", "--report-key", "artifact-v2"], thread: {} }]);
+  assert.equal(bodies[0].text, "Implement task");
+  assert.equal(bodies[0].agentSourceThreadId, "source-demo");
+  assert.equal(bodies[0].reportKind, "result");
+  assert.equal(bodies[0].reportKey, "artifact-v2");
 });
