@@ -26,7 +26,10 @@ invalidates old read callbacks while retaining the editable draft. Fresh reads
 are required before new mutations. Auth refusal invokes the shared expiry path.
 
 Enabled and locally armed are distinct. Restart or expired grants require
-explicit owner rearm; the UI discloses the one-hour grant limit. Dormant reasons
+disable at the current revision, then a fresh enable request and key. An exact
+retry cannot extend permission or rearm after restart/expiry, and a new enable
+key while still enabled cannot rearm it either. The UI discloses the one-hour
+grant limit. Dormant reasons
 remain held, and unsupported or unavailable details never imply readiness.
 Identity and source digest are in optional provenance details.
 
@@ -34,3 +37,6 @@ This source checkpoint does not qualify server registration, actual timer
 delivery, long-lived unattended execution, or managed-browser behavior. The
 server owner must register the reviewed leaf with shared auth and lifecycle;
 the coordinator owns the matching artifact pair and subsequent browser gate.
+
+The disable-before-enable correction follows server leaf
+`5b7762d35478ea02434176db867d215082e3d1a8`; published wire fields are unchanged.

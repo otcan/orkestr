@@ -22,6 +22,8 @@ fn dormant_reasons_remain_explicit_and_unknown_reason_never_implies_ready() {
 fn enabled_schedule_is_not_armed_after_restart_and_never_claims_execution() {
     assert!(controller_notice("enabled", false).contains("not armed"));
     assert!(controller_notice("enabled", false).contains("after a restart"));
+    assert!(controller_notice("enabled", false).contains("Disable it first"));
+    assert!(controller_notice("enabled", false).contains("cannot rearm"));
     assert!(controller_notice("enabled", true).contains("does not confirm"));
     for state in [
         "paused",
