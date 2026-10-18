@@ -4,3 +4,5 @@ pub mod fake;
 pub mod ports;
 pub mod protocol;
 pub mod supervisor;
+
+pub mod codex_rpc;
