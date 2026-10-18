@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 const code = await readFile(new URL('../src/stream.js', import.meta.url), 'utf8');
 const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
 async function run(chunks, status = 200) {
-    const input = {path:'/api/v2/conversations/00000000-0000-4000-8000-000000000003/events',token:'synthetic-test-token',cursor:7};
+    const input = {path:'/api/v2/conversations/00000000-0000-4000-8000-000000000003/events',cursor:7};
     let cancelled = false;
     const response = new Response(new ReadableStream({
         start(controller) { for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk)); },
@@ -12,9 +12,9 @@ async function run(chunks, status = 200) {
     }), {status,headers:{'Content-Type':'text/event-stream'}});
     const fetch = async (path, options) => {
         assert.equal(path, input.path);
-        assert.equal(options.headers.Authorization, 'Bearer synthetic-test-token');
+        assert.equal(options.headers.Authorization, undefined);
         assert.equal(options.headers['Last-Event-ID'], '7');
-        assert.equal(options.credentials, 'omit');
+        assert.equal(options.credentials, 'same-origin');
         return response;
     };
     const result = await new AsyncFunction('dioxus','fetch',code)({recv:async()=>input},fetch);

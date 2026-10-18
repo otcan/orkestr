@@ -1,12 +1,12 @@
 use crate::transport::{self, Failure};
 use dioxus::prelude::*;
-use orkestr_v2_contracts::{Credentials, Project, ProjectInput, Receipt, SessionResponse};
+use orkestr_v2_contracts::{Credentials, Project, ProjectInput, Receipt};
 use orkestr_v2_ui::{Draft, Projection};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 #[component]
-pub fn Auth(onlogin: EventHandler<SessionResponse>) -> Element {
+pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
     let mut username = use_signal(String::new);
     let mut password = use_signal(String::new);
     let mut bootstrap = use_signal(String::new);
@@ -29,7 +29,7 @@ pub fn Auth(onlogin: EventHandler<SessionResponse>) -> Element {
                 } else { Ok(()) };
                 match result {
                     Err(error) => status.set(error.message),
-                    Ok(()) => match transport::request("POST", "/api/v2/session", body, "", "").await {
+                    Ok(()) => match transport::request("POST", "/api/v2/browser/session", body, "", "").await {
                         Ok(session) => onlogin.call(session),
                         Err(error) => status.set(error.message),
                     }
@@ -37,8 +37,8 @@ pub fn Auth(onlogin: EventHandler<SessionResponse>) -> Element {
                 busy.set(false);
             });
         },
-            h2 { if setup() { "Create first administrator" } else { "Experimental intake sign-in" } }
-            p { "Memory-only Bearer path pending contract amendment and security review. This does not establish browser session/CSRF acceptance. Reload requires sign-in; server revocation and device auth are unavailable." }
+            h2 { if setup() { "Create first administrator" } else { "Sign in" } }
+            p { "Browser cookie session with CSRF-protected writes. Browser integration and security review remain pending. Native device auth is unavailable." }
             label { r#for: "username", "Username" }
             input { id: "username", autocomplete: "username", required: true, value: "{username}", oninput: move |e| username.set(e.value()) }
             label { r#for: "password", "Password" }
@@ -57,7 +57,7 @@ pub fn Auth(onlogin: EventHandler<SessionResponse>) -> Element {
 
 #[component]
 pub fn Projects(
-    token: String,
+    csrf: String,
     mut projects: Signal<Vec<Project>>,
     mut pending: Signal<Option<ProjectInput>>,
     onopen: EventHandler<String>,
@@ -66,11 +66,11 @@ pub fn Projects(
     let mut name = use_signal(move || pending().map(|p| p.name).unwrap_or_default());
     let mut status = use_signal(|| "Loading projects…".to_string());
     let mut busy = use_signal(|| false);
-    let load_token = token.clone();
+    let load_csrf = csrf.clone();
     use_future(move || {
-        let token = load_token.clone();
+        let csrf = load_csrf.clone();
         async move {
-            match transport::projects(&token).await {
+            match transport::projects(&csrf).await {
                 Ok(items) => {
                     projects.set(items);
                     status.set("Local projects".into());
@@ -97,7 +97,7 @@ pub fn Projects(
                 event.prevent_default();
                 if busy() { return; }
                 busy.set(true);
-                let token = token.clone();
+                let csrf = csrf.clone();
                 spawn(async move {
                     let result: Result<Project, Failure> = async {
                         let input = if let Some(input) = pending() { input } else {
@@ -106,7 +106,7 @@ pub fn Projects(
                             pending.set(Some(input.clone()));
                             input
                         };
-                        transport::request("POST", "/api/v2/projects", json!(input), &token, "").await
+                        transport::request("POST", "/api/v2/projects", json!(input), &csrf, "").await
                     }.await;
                     match result {
                         Ok(project) => {
@@ -134,7 +134,7 @@ pub fn Projects(
 #[component]
 pub fn Conversation(
     id: String,
-    token: String,
+    csrf: String,
     mut drafts: Signal<BTreeMap<String, Draft>>,
     onexpired: EventHandler<()>,
 ) -> Element {
@@ -142,16 +142,16 @@ pub fn Conversation(
     let mut status = use_signal(|| "Loading history…".to_string());
     let mut sending = use_signal(|| false);
     let stream_id = id.clone();
-    let stream_token = token.clone();
+    let stream_csrf = csrf.clone();
     use_future(move || {
         let id = stream_id.clone();
-        let token = stream_token.clone();
+        let csrf = stream_csrf.clone();
         async move {
             let mut cursor = 0;
             let mut resync = true;
             loop {
                 if resync {
-                    match transport::snapshot(&id, &token, 0, Projection::default()).await {
+                    match transport::snapshot(&id, &csrf, 0, Projection::default()).await {
                         Ok(snapshot) => {
                             cursor = snapshot.watermark;
                             projection.set(snapshot);
@@ -169,7 +169,7 @@ pub fn Conversation(
                         }
                     }
                 }
-                match transport::event(&id, &token, cursor).await {
+                match transport::event(&id, cursor).await {
                     Ok(item) if item.status == 401 || item.event == "session_expired" => {
                         onexpired.call(());
                         return;
@@ -190,7 +190,7 @@ pub fn Conversation(
                             }
                             if event.sequence > cursor {
                                 let previous = projection.read().clone();
-                                match transport::snapshot(&id, &token, cursor, previous).await {
+                                match transport::snapshot(&id, &csrf, cursor, previous).await {
                                     Ok(snapshot) => {
                                         cursor = snapshot.watermark;
                                         projection.set(snapshot);
@@ -236,12 +236,12 @@ pub fn Conversation(
                 if sending() { return; }
                 sending.set(true);
                 let id = submit_id.clone();
-                let token = token.clone();
+                let csrf = csrf.clone();
                 spawn(async move {
                     let result: Result<Receipt, Failure> = async {
                         let key = transport::key().await?;
                         let input = drafts.write().entry(id.clone()).or_default().prepare(key).map_err(|m| Failure::from(m.to_string()))?;
-                        transport::request("POST", &format!("/api/v2/conversations/{id}/messages"), json!(input), &token, "").await
+                        transport::request("POST", &format!("/api/v2/conversations/{id}/messages"), json!(input), &csrf, "").await
                     }.await;
                     match result {
                         Ok(receipt) => {

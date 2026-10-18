@@ -4,27 +4,29 @@ import assert from 'node:assert/strict';
 const code = await readFile(new URL('../src/request.js', import.meta.url), 'utf8');
 const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
 const execute = new AsyncFunction('dioxus', 'fetch', code);
-const base = {method:'POST',path:'/api/v2/session',body:{username:'synthetic-user',password:'synthetic-password'},token:'',bootstrap:''};
+const base = {method:'POST',path:'/api/v2/browser/session',body:{username:'synthetic-user',password:'synthetic-password'},csrf:'',bootstrap:''};
 
-test('credentials travel only in JSON, without browser cookies or caching', async () => {
+test('login credentials use JSON and same-origin cookies without caching', async () => {
     const input = {...base,bootstrap:'synthetic-bootstrap'};
     const result = await execute({recv:async()=>input},async(path, options)=>{
-        assert.equal(path,'/api/v2/session');
-        assert.equal(options.credentials,'omit');
+        assert.equal(path,'/api/v2/browser/session');
+        assert.equal(options.credentials,'same-origin');
         assert.equal(options.cache,'no-store');
         assert.equal(options.headers['x-orkestr-bootstrap'],'synthetic-bootstrap');
         assert.equal(options.headers.Authorization,undefined);
         assert.deepEqual(JSON.parse(options.body),input.body);
         assert.ok(options.signal instanceof AbortSignal);
-        return new Response('{"token":"synthetic-session"}',{status:200});
+        return new Response('{"csrf_token":"synthetic-csrf","global_conversation_id":"synthetic-scope"}',{status:200});
     });
-    assert.equal(result.body.token,'synthetic-session');
+    assert.equal(result.body.csrf_token,'synthetic-csrf');
+    assert.equal(result.body.token,undefined);
 });
 
-test('authenticated GET uses bearer header and omits JSON body',async()=>{
-    await execute({recv:async()=>({...base,method:'GET',path:'/api/v2/projects',body:null,token:'synthetic-session'})},async(path,options)=>{
+test('authenticated GET uses cookies without CSRF or Authorization headers',async()=>{
+    await execute({recv:async()=>({...base,method:'GET',path:'/api/v2/projects',body:null,csrf:'synthetic-csrf'})},async(path,options)=>{
         assert.equal(path.includes('synthetic-session'),false);
-        assert.equal(options.headers.Authorization,'Bearer synthetic-session');
+        assert.equal(options.headers.Authorization,undefined);
+        assert.equal(options.headers['x-orkestr-csrf'],undefined);
         assert.equal(options.body,undefined);
         assert.equal(options.headers['x-orkestr-bootstrap'],undefined);
         return new Response('{"projects":[],"next_cursor":null}');
@@ -32,7 +34,7 @@ test('authenticated GET uses bearer header and omits JSON body',async()=>{
 });
 
 test('non-API URLs fail before fetch',async()=>{
-    for(const path of ['https://example.invalid/api/v2/session','//example.invalid/api/v2/session','/api/v1/session','/api/v2/../../session','/api/v2/%2e%2e/session','/api/v2/session#token','/api/v2/unknown','/api/v2/projects?token=synthetic']) {
+    for(const path of ['https://example.invalid/api/v2/browser/session','//example.invalid/api/v2/browser/session','/api/v1/session','/api/v2/../../session','/api/v2/%2e%2e/session','/api/v2/browser/session#token','/api/v2/unknown','/api/v2/projects?token=synthetic']) {
         await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
     }
 });
@@ -68,4 +70,31 @@ test('canonical snapshot pagination remains a relative API request',async()=>{
         return new Response('{"messages":[]}');
     });
     assert.deepEqual(result.body,{messages:[]});
+});
+
+
+test('cookie writes carry CSRF header without Authorization or token URLs',async()=>{
+    await execute({recv:async()=>({...base,path:'/api/v2/projects',csrf:'synthetic-csrf'})},async(path,options)=>{
+        assert.equal(path,'/api/v2/projects');
+        assert.equal(options.headers['x-orkestr-csrf'],'synthetic-csrf');
+        assert.equal(options.headers.Authorization,undefined);
+        assert.equal(options.credentials,'same-origin');
+        return new Response('{}');
+    });
+});
+
+test('session resume and logout handle HttpOnly cookie authority and empty 204',async()=>{
+    await execute({recv:async()=>({...base,method:'GET',body:null})},async(path,options)=>{
+        assert.equal(path,'/api/v2/browser/session');
+        assert.equal(options.headers['x-orkestr-csrf'],undefined);
+        assert.equal(options.credentials,'same-origin');
+        return new Response('{"csrf_token":"synthetic-csrf","global_conversation_id":"synthetic-scope"}');
+    });
+    const result = await execute({recv:async()=>({...base,method:'DELETE',body:null,csrf:'synthetic-csrf'})},async(path,options)=>{
+        assert.equal(path,'/api/v2/browser/session');
+        assert.equal(options.headers['x-orkestr-csrf'],'synthetic-csrf');
+        assert.equal(options.headers.Authorization,undefined);
+        return new Response(null,{status:204});
+    });
+    assert.deepEqual(result,{status:204,body:null});
 });
