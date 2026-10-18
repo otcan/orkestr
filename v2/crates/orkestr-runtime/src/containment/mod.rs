@@ -8,6 +8,8 @@ mod framing;
 pub mod metadata;
 mod process;
 mod provider_fd;
+mod retirement;
+pub use retirement::{ReapedBroker, RetiringBroker};
 mod reuse;
 mod scope;
 mod sys;
