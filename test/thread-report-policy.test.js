@@ -34,6 +34,8 @@ test("CLI ACK records no queued input; CLI result retries and automatic copy del
   assert.equal(prepared.body.controlAllowed, false);
   assert.equal(prepared.body.originOwner, false);
   assert.equal(prepared.body.parseCommands, false);
+  assert.equal(prepared.body.codexDeliveryMode, "instant_steer");
+  assert.equal(prepared.body.steerActiveTurn, true);
   await enqueueThreadInput(parent.id, prepared.body, env);
   assert.equal((await prepareAgentReport(parent, input, principal, env)).suppressed, true);
   await appendThreadMessage(worker.id, { role: "assistant", phase: "final_answer", text, state: "completed" }, env);
@@ -42,6 +44,17 @@ test("CLI ACK records no queued input; CLI result retries and automatic copy del
   await appendThreadMessage(worker.id, { role: "assistant", phase: "final_answer", text: "BLOCKED: newly failing isolation probe", state: "completed" }, env);
   await runThreadWatchPump(env);
   assert.equal((await listThreadMessages(parent.id, env)).filter(m => m.role === "user").length, 2);
+  const watched = (await listThreadMessages(parent.id, env)).find(m => m.threadWatchEvent === "final");
+  assert.equal(watched.codexDeliveryMode, "instant_steer");
+  assert.equal(watched.steerActiveTurn, true);
+});
+test("explicit separate-turn delivery is preserved for validated reports", async t => {
+  const { env, parent, worker } = await fixture(t);
+  for (const setting of [{ codexDeliveryMode: "passive" }, { steerActiveTurn: false }]) {
+    const result = await prepareAgentReport(parent, { agentSourceThreadId: worker.id, text: "New result", ...setting }, principal, env);
+    for (const [key, value] of Object.entries(setting)) assert.equal(result.body[key], value);
+    assert.notEqual(result.body.codexDeliveryMode, "instant_steer");
+  }
 });
 test("automatic ACK finals cannot regenerate a relay; explicit cancellation survives startup", async t => {
   const { env, parent, worker } = await fixture(t);
@@ -64,4 +77,6 @@ test("cross-owner report provenance cannot confer authority or suppress human in
   assert.equal(plain.suppressed, undefined);
   assert.equal(plain.body.reportKind, undefined);
   assert.equal(plain.body.reportSourceThreadId, undefined);
+  assert.equal(plain.body.codexDeliveryMode, undefined);
+  assert.equal(plain.body.steerActiveTurn, undefined);
 });
