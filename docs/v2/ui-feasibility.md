@@ -170,3 +170,19 @@ with the coordinator, then implement the shell, projection and composer tests.
 Build/test only through the host-provided locked build wrapper with the assigned
 isolated UI target/home. Report exact commit, commands, counts and CI separately
 from runnable-server and native acceptance. No live inference is needed.
+
+### Incremental intake source checkpoint
+
+The live view now refreshes snapshots after its applied SSE cursor instead of
+rescanning all historical input on each accepted-message event. It retains its
+bounded projection and advances the replay cursor only after all snapshot pages
+apply successfully. Explicit resync still starts from the beginning. History has
+a separate bounded page projection with beginning, next-page and refresh controls;
+live updates cannot replace the historical page being read. Pagination rejects
+backwards watermarks, mismatched conversations and nonadvancing cursors.
+
+These are source changes, not compiled UI acceptance. Four Node SSE bridge tests
+pass; Rust/WASM validation still requires coordinator-owned workspace membership
+and lock resolution. Browser auth/CSRF amendment, same-origin serving, browser
+interaction and native gates remain pending. No macOS workflow allowlist change
+was made; the unsigned job remains a proposal pending the parent policy review.

@@ -47,16 +47,25 @@ pub async fn projects(token: &str) -> Result<Vec<Project>, Failure> {
     }
 }
 
-pub async fn snapshot(id: &str, token: &str) -> Result<Projection, Failure> {
-    let mut projection = Projection::default();
-    let mut after = 0;
+pub async fn history_page(id: &str, token: &str, after: i64) -> Result<ConversationSnapshot, Failure> {
+    let page: ConversationSnapshot = request("GET", &format!("/api/v2/conversations/{id}?after={after}&limit=100"), Value::Null, token, "").await?;
+    if page.conversation_id.to_string() != id { return Err("Snapshot scope mismatch".to_string().into()); }
+    if page.last_sequence < after { return Err("Snapshot watermark moved backwards".to_string().into()); }
+    if page.messages.iter().any(|message| message.sequence <= after)
+        || page.next_cursor.is_some_and(|next| next <= after) {
+        return Err("Invalid snapshot cursor".to_string().into());
+    }
+    Ok(page)
+}
+
+pub async fn snapshot(id: &str, token: &str, after: i64, mut projection: Projection) -> Result<Projection, Failure> {
+    let mut after = after;
     let mut initial_watermark = None;
     let mut pages = 0;
     loop {
         pages += 1;
         if pages > 1000 { return Err("History changed too quickly or exceeds the current scan limit; retry snapshot".to_string().into()); }
-        let page: ConversationSnapshot = request("GET", &format!("/api/v2/conversations/{id}?after={after}&limit=100"), Value::Null, token, "").await?;
-        if page.conversation_id.to_string() != id { return Err("Snapshot scope mismatch".to_string().into()); }
+        let page = history_page(id, token, after).await?;
         let watermark = *initial_watermark.get_or_insert(page.last_sequence);
         let next = page.next_cursor;
         projection.page(page).map_err(|message| Failure::from(message.to_string()))?;

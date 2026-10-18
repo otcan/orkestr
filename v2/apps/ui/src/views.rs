@@ -131,7 +131,7 @@ pub fn Conversation(id: String, token: String, mut drafts: Signal<BTreeMap<Strin
             let mut resync = true;
             loop {
                 if resync {
-                    match transport::snapshot(&id, &token).await {
+                    match transport::snapshot(&id, &token, 0, Projection::default()).await {
                         Ok(snapshot) => { cursor = snapshot.watermark; projection.set(snapshot); resync = false; status.set("History synchronized. Waiting for accepted input.".into()); }
                         Err(error) => {
                             if error.status == 401 { onexpired.call(()); return; }
@@ -148,7 +148,20 @@ pub fn Conversation(id: String, token: String, mut drafts: Signal<BTreeMap<Strin
                             if event.schema_version != 1 || event.aggregate_id.to_string() != id || item.id.as_deref() != Some(&event.sequence.to_string()) || event.payload_ref_or_safe_payload.kind != "message_accepted" {
                                 status.set("Unexpected event contract; reload required.".into()); return;
                             }
-                            if event.sequence > cursor { resync = true; }
+                            if event.sequence > cursor {
+                                let previous = projection.read().clone();
+                                match transport::snapshot(&id, &token, cursor, previous).await {
+                                    Ok(snapshot) => {
+                                        cursor = snapshot.watermark;
+                                        projection.set(snapshot);
+                                        status.set("Accepted input synchronized. Model execution unavailable.".into());
+                                    }
+                                    Err(error) => {
+                                        if error.status == 401 { onexpired.call(()); return; }
+                                        status.set(error.message);
+                                    }
+                                }
+                            }
                         } else { resync = true; }
                     }
                     Ok(_) => status.set("Stream disconnected; reconnecting. Runtime status unavailable.".into()),

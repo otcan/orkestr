@@ -1,5 +1,6 @@
 mod transport;
 mod views;
+mod history;
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{Project, ProjectInput};
 use orkestr_v2_ui::Draft;
@@ -62,7 +63,7 @@ fn App() -> Element {
                     button { onclick: move |_| refresh += 1, "Reconnect and reload history" }
                     views::Conversation { key: "{current()}-{refresh}", id: current(), token: token(), drafts, onexpired: expired }
                 } else if tab() == "History" {
-                    p { "Accepted messages appear in each canonical conversation. Result evidence and run history are unavailable in this intake increment." }
+                    history::History { key: "{current()}", id: current(), token: token(), onexpired: expired }
                 } else if tab() == "Attention" {
                     p { "Approvals, blockers and task attention are unavailable. No pending-work count is inferred." }
                 } else {
