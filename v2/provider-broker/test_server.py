@@ -47,7 +47,7 @@ class ServerTests(unittest.TestCase):
     def owned_case(self, commit, stop_before_write=False):
         with tempfile.TemporaryDirectory(prefix="provider-broker-synthetic-") as root:
             root = Path(root).resolve()
-            for name in ["configuration.py", "protocol.py", "transport.py", "server.py"]:
+            for name in ["configuration.py", "protocol.py", "transport.py", "server.py", "reaping.py"]:
                 shutil.copy(Path(__file__).with_name(name), root / name)
             for name in ["account", "workspace", "home", "tmp"]:
                 (root / name).mkdir()
@@ -122,7 +122,7 @@ class ServerTests(unittest.TestCase):
                 self.assertNotIn(str(root / "account"), str(response))
                 inspection = json.loads((root / "inspection.json").read_text())
                 self.assertEqual(inspection["argv"], ["app-server", "--listen", "stdio://"])
-                self.assertEqual(inspection["env"], sorted(["PATH", "LANG", "LC_ALL", "HOME", "TMPDIR", "CODEX_HOME"]))
+                self.assertEqual(inspection["env"], sorted(["PATH", "LANG", "LC_ALL", "HOME", "TMPDIR", "CODEX_HOME", "PWD"]))
                 if commit:
                     def send(outer, frame, method="BrokerMetadata"):
                         child.stdin.write(encode({"id":outer,"method":method,"params":{
@@ -142,9 +142,9 @@ class ServerTests(unittest.TestCase):
                     child.stdin.close()
                 else:
                     child.stdin.close()
-                    self.assertEqual(child.wait(timeout=5), 0)
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(inspection["pid"], 0)  # observation only; never signals
+                    self.assertEqual(child.wait(timeout=5), 73)
+                # Provider-reported PID is namespace-local, never a host cleanup oracle.
+                # test_reaping checks actual inherited-FD EOF and owned ECHILD.
             finally:
                 if child.returncode is None:
                     child.terminate()

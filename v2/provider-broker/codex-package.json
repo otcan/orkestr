@@ -2,11 +2,12 @@
   "format": "orkestr-v2-codex-package-v1",
   "entry": "server.py",
   "files": {
-    "server.py": "3260eb794963ed4626af4983a707600a12f78e603f441ce0f6399172e95e9830",
+    "server.py": "eec117bbbfcd5a22c896f59a0f0e42e77cc3697c9766d5791e404130b21c23e0",
     "configuration.py": "1fba545e87e0834d2b3ba36a2c1249ca825631dfa5d6b29cd1b7fa573a8d22ec",
     "protocol.py": "97fbf47df6c55d2979e9551e81cf2c13d3db9e8100ae0597cbec309e34f30549",
-    "transport.py": "7cfd3094381170a88e14d6ec2aab7f96da45d7721d67be89e67906d590a901b9",
-    "codex_bootstrap.py": "04bf9751c1da6d5366380ce6589afb27cb5b1c8671425681dbb5a21778843276"
+    "transport.py": "fe7821673c927f3a8a6226ca8f9e08e9c8a5ea4eb9526b62a2a44e3789e8264c",
+    "codex_bootstrap.py": "04bf9751c1da6d5366380ce6589afb27cb5b1c8671425681dbb5a21778843276",
+    "reaping.py": "4632be4e94cef92a0b8a2970bad0a55a1925d07d7926eb05a6af32ef512954d7"
   },
   "activation": "held-resume-issuer-reap-and-native-schema-qualification"
 }

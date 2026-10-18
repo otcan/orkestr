@@ -7,6 +7,7 @@ from pathlib import Path
 from configuration import Configuration
 from protocol import Channel, PROTOCOL, Refused
 from transport import Pump
+from reaping import REAPED_EXIT
 
 
 def main(configuration_path=None):
@@ -33,7 +34,10 @@ def main(configuration_path=None):
             if handoff.family != socket.AF_UNIX or handoff.type != socket.SOCK_STREAM:
                 raise Refused("invalid private handoff")
             handoff.getpeername()
-            Pump(config, Channel(config.workspace, expected_native=expected_native), handoff=handoff).run()
+            pump = Pump(config, Channel(config.workspace, expected_native=expected_native), handoff=handoff)
+            pump.run()
+            if pump.parent_eof and pump.child is not None and pump.reaped:
+                return REAPED_EXIT
         return 0
     except Exception:
         # Never print provider output, private paths, account data or tokens.
