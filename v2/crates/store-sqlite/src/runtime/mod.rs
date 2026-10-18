@@ -143,11 +143,11 @@ impl RuntimeStore for Store {
     }
     async fn append_provider_event(
         &self,
-        _: &OwnerId,
-        _: &ProviderAdmission,
-        _: &ProviderEventInput,
+        owner: &OwnerId,
+        provider: &ProviderAdmission,
+        input: &ProviderEventInput,
     ) -> Result<ProviderEventReceipt> {
-        Err(RuntimeStoreError::Unavailable)
+        self.production_observe(owner, provider, input).await
     }
     async fn request_cancel(&self, _: &OwnerId, _: &RunId, _: &str) -> Result<CancelReceipt> {
         Err(RuntimeStoreError::Unavailable)

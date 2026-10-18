@@ -1,0 +1,153 @@
+//! Production evidence is metadata, never an acceptance or effect grant.
+use super::*;
+use crate::runtime::ledger::hash;
+use orkestr_v2_contracts::EventId;
+
+impl Store {
+    pub(crate) async fn production_observe(
+        &self,
+        owner: &OwnerId,
+        provider: &ProviderAdmission,
+        input: &ProviderEventInput,
+    ) -> Result<ProviderEventReceipt> {
+        if !input.is_bounded() {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
+        let context = self.context()?;
+        if owner != &context.owner || owner != &provider.run.owner_id {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        // Authenticate principal and exact issued historical envelope BEFORE
+        // receipt lookup, but defer current expiry/incarnation checks for replay.
+        context.authenticate(&mut tx).await?;
+        let row =
+            sqlx::query("SELECT * FROM production_runs WHERE id=? AND owner_id=? AND context_id=?")
+                .bind(input.run_id.to_string())
+                .bind(owner.to_string())
+                .bind(&context.id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(db)?
+                .ok_or(RuntimeStoreError::NotFound)?;
+        super::leases::authenticate(&mut tx, &row, provider).await?;
+        if input.run_id != provider.run.run_id
+            || input.session_id != provider.run.session_id
+            || input.lease_generation != provider.run.lease_generation
+            || input.dispatch_fence != provider.run.dispatch_fence
+        {
+            return Err(RuntimeStoreError::Conflict);
+        }
+        let (kind, value) = match &input.event {
+            ProviderEvent::Started => ("started", ""),
+            ProviderEvent::ApprovalRequested => ("approval_requested", ""),
+            ProviderEvent::CompletedProposal { synthetic: false } => {
+                ("completed_proposal", "false")
+            }
+            ProviderEvent::CompletedProposal { synthetic: true } => ("completed_proposal", "true"),
+            ProviderEvent::Failed => ("failed", ""),
+            ProviderEvent::Lost => ("lost", ""),
+            ProviderEvent::Progress(text) => ("progress", text.as_str()),
+            ProviderEvent::Stopped => ("stopped", ""),
+        };
+        let digest = hash(
+            "production-observation-v1",
+            &[
+                &input.run_id.to_string(),
+                &input.session_id.to_string(),
+                &input.sequence.to_string(),
+                &input.lease_generation.to_string(),
+                &input.dispatch_fence.to_string(),
+                kind,
+                value,
+            ],
+        );
+        if let Some(committed) = sqlx::query("SELECT o.*,e.sequence AS scope_sequence FROM production_observations o JOIN events e ON e.id=o.event_id WHERE o.run_id=? AND o.run_sequence=?")
+            .bind(input.run_id.to_string()).bind(input.sequence as i64).fetch_optional(&mut *tx).await.map_err(db)? {
+            if committed.get::<String,_>("semantic_digest") != digest { return Err(RuntimeStoreError::Conflict); }
+            return Ok(ProviderEventReceipt {
+                event_id: EventId(Uuid::parse_str(&committed.get::<String,_>("event_id")).map_err(db)?),
+                scope_sequence: committed.get("scope_sequence"), sequence: input.sequence,
+                state: state(committed.get("receipt_state"))?, duplicate: true,
+            });
+        }
+        let row = self.production_authorized_run(&mut tx, provider).await?;
+        if provider.run.purpose != AdmissionPurpose::Execution
+            || row.get::<&str, _>("dispatch_state") != "delivery_unknown"
+        {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        if matches!(
+            input.event,
+            ProviderEvent::Progress(_) | ProviderEvent::Stopped
+        ) {
+            return Err(RuntimeStoreError::Unavailable);
+        }
+        if matches!(
+            input.event,
+            ProviderEvent::CompletedProposal { synthetic: true }
+        ) {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
+        let next: i64 = sqlx::query_scalar(
+            "SELECT coalesce(max(run_sequence),0)+1 FROM production_observations WHERE run_id=?",
+        )
+        .bind(input.run_id.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
+        if next != input.sequence as i64 {
+            return Err(RuntimeStoreError::Conflict);
+        }
+        let target = match (row.get::<&str, _>("state"), kind) {
+            ("starting", "started") | ("running", "approval_requested") => "running",
+            ("running", "completed_proposal") => "awaiting_acceptance",
+            ("starting" | "running", "failed") => "failed",
+            ("starting" | "running", "lost") => "blocked",
+            _ => return Err(RuntimeStoreError::Conflict),
+        };
+        let sequence: i64 = sqlx::query_scalar("UPDATE conversations SET sequence=sequence+1 WHERE id=? AND owner_id=? RETURNING sequence")
+            .bind(provider.run.conversation_id.to_string()).bind(owner.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
+        let event_id = EventId(Uuid::new_v4());
+        sqlx::query("INSERT INTO events(id,owner_id,conversation_id,message_id,sequence,kind,schema_version) VALUES(?,?,?,NULL,?,'provider_observed',5)")
+            .bind(event_id.to_string()).bind(owner.to_string()).bind(provider.run.conversation_id.to_string()).bind(sequence)
+            .execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("INSERT INTO production_observations(event_id,run_id,run_sequence,semantic_digest,kind,lease_generation,dispatch_fence,receipt_state) VALUES(?,?,?,?,?,?,?,?)")
+            .bind(event_id.to_string()).bind(input.run_id.to_string()).bind(input.sequence as i64).bind(digest).bind(kind)
+            .bind(input.lease_generation as i64).bind(input.dispatch_fence as i64).bind(target).execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("INSERT INTO outbox(event_id) VALUES(?)")
+            .bind(event_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        sqlx::query("UPDATE production_runs SET state=? WHERE id=?")
+            .bind(target)
+            .bind(input.run_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("observation-before-commit")
+            .await?;
+        tx.commit().await.map_err(db)?;
+        #[cfg(feature = "fixture-test-controls")]
+        self.production_checkpoint("observation-after-commit")
+            .await?;
+        Ok(ProviderEventReceipt {
+            event_id,
+            scope_sequence: sequence,
+            sequence: input.sequence,
+            state: state(target)?,
+            duplicate: false,
+        })
+    }
+}
+fn state(value: &str) -> Result<RunState> {
+    match value {
+        "running" => Ok(RunState::Running),
+        "awaiting_acceptance" => Ok(RunState::AwaitingAcceptance),
+        "failed" => Ok(RunState::Failed),
+        "blocked" => Ok(RunState::Blocked),
+        _ => Err(RuntimeStoreError::Unavailable),
+    }
+}
