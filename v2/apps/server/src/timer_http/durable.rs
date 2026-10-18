@@ -76,6 +76,12 @@ impl DurableTimerController {
     ) -> Result<(), HistoryError> {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Refresh a still-current session at startup too; a session may be near
+        // expiry when an operator restarts the trusted service. Never resurrect it.
+        self.supervisor
+            .renew_timer_supervisor_credential()
+            .await
+            .map_err(|_| HistoryError::Unauthorized)?;
         let mut renewal = tokio::time::Instant::now();
         loop {
             if *shutdown.borrow() {

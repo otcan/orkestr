@@ -215,3 +215,34 @@ async fn actual_store_clock_due_once_is_not_readmitted_after_controller_restart(
     store.close().await;
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn trusted_controller_start_renews_current_service_and_retires_exact_context() {
+    let (store, _other, _, _, _, dir) = fixture().await;
+    let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
+    let pool =
+        sqlx::SqlitePool::connect(&format!("sqlite://{}", dir.join("core.sqlite3").display()))
+            .await
+            .unwrap();
+    sqlx::query("UPDATE auth_sessions SET expires_at=unixepoch()+30")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (_shutdown, receiver) = tokio::sync::watch::channel(true);
+    DurableTimerController::new(bound.clone())
+        .run(receiver)
+        .await
+        .unwrap();
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT max(expires_at)-unixepoch() FROM auth_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!((43199..=43200).contains(&remaining));
+    assert!(bound.timer_scheduler_candidates(None, 1).await.is_err());
+    let successor = store.authorize_timer_supervisor(MACHINE).await.unwrap();
+    successor.retire_timer_supervisor().await.unwrap();
+    pool.close().await;
+    store.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
