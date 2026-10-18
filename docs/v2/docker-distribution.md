@@ -250,3 +250,12 @@ capability and security settings remained configured. Exact image/Compose/artifa
 identities and zero-resource cleanup are in `binding-checkpoint.json`. This run
 used the explicit diagnostic flag, so it does not exercise default policy
 selection. No provider, browser-execution or executor-containment gate passed.
+
+The reviewed trusted-control-plane **default** was subsequently exercised without
+passing a network-policy override. Build, inside/host health, effective loopback
+binding inspection, UI index SHA check and cleanup passed; exact evidence is in
+`default-checkpoint.json`. The assigned artifact directory did not contain a
+combined `b79e6abe` server, so this run explicitly used the already admitted
+`8bd99413` debug server plus current `e6b5441a` UI. Combined-candidate acceptance
+remains unexecuted. The default recorded outbound routing allowed and zero
+configured providers; it does not pass browser, inference or executor gates.
