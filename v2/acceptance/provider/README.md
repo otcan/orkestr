@@ -136,3 +136,38 @@ The event stream refuses redirects just like the ordinary HTTP helper. Output
 text remains private; receipts contain digests and counters. Synthetic native
 validation must pass `evidence_scope="synthetic_native_fixture"` to `run` and
 must never be reported as real provider evidence.
+
+`codex_stop.py` is a separate attended activation against an explicitly reviewed
+Stop-capable server. It requires a fresh preparation and asks the native provider
+for a harmless number list without tools. After real streamed progress and a live
+Stop capability, it submits revision-guarded owner intent. Only an explicit
+revision conflict with no committed cancellation permits a bounded refresh;
+uncertain delivery never triggers a new intent.
+
+```sh
+python3 -B v2/acceptance/provider/codex_stop.py \
+  /opt/example-stop-acceptance/manifest.json /srv/example-stop-acceptance
+```
+
+The receipt initially means `requested_unknown`. Passing requires one durable
+terminal stopped observation, a cancelled run, an acknowledged control outbox,
+idempotent receipt replay, and normal reaping of the same owned provider tree
+before server shutdown. An acknowledgement alone must fail this acceptance as
+unconfirmed. A disabled restart must retain cancelled status while returning
+503 for control delivery; this does not qualify configured restart recovery.
+No completion is accepted, no successor is dispatched, and no raw output enters
+the receipt. Streaming is bounded to 45 seconds, terminal evidence to 6 seconds,
+and the CLI to 75 seconds with protected bounded cleanup. Synthetic terminal and
+ACK-only fixtures must use the explicit synthetic evidence scope. Steering,
+other provider roles, and OS credential isolation remain separate gates.
+
+`codex_stop_peer.c` is the synthetic native fixture for both outcomes. Compile
+once with `-DACK_ONLY=0` and once with `-DACK_ONLY=1`, using
+`cc -O2 -Wall -Wextra -Werror`. Install each as the reviewed manifest's native
+executable in a separate private preparation, with an empty synthetic Codex home.
+It makes no inference or network requests. Its workspace trace records only
+spawn/turn/interrupt counters and PID; require one turn, one interrupt, and one
+PID in each case. The terminal variant must pass the driver. The ACK-only variant
+must fail with `provider_stop_unconfirmed`, zero stopped observations, pending
+control, and complete normal cleanup. Never use a real provider identity for
+these synthetic tests.
