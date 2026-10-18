@@ -85,51 +85,7 @@ impl Case {
         (binding, claim)
     }
     async fn rows(&self) -> Vec<String> {
-        let mut db = sqlx::SqliteConnection::connect_with(
-            &sqlx::sqlite::SqliteConnectOptions::new()
-                .filename(self.root.join("core.sqlite3"))
-                .read_only(true),
-        )
-        .await
-        .unwrap();
-        sqlx::query("PRAGMA query_only=ON")
-            .execute(&mut db)
-            .await
-            .unwrap();
-        let mut tx = db.begin().await.unwrap();
-        let mut result = Vec::new();
-        for table in [
-            "production_supervisors",
-            "production_readiness",
-            "production_runs",
-            "production_run_leases",
-            "reasoning_inbox",
-            "session_bindings",
-            "messages",
-            "events",
-            "outbox",
-            "conversations",
-        ] {
-            let columns = sqlx::query(&format!("PRAGMA table_info({table})"))
-                .fetch_all(&mut *tx)
-                .await
-                .unwrap()
-                .iter()
-                .map(|r| format!("\"{}\"", r.get::<String, _>("name")))
-                .collect::<Vec<_>>()
-                .join(",");
-            result.push(table.into());
-            let rows: Vec<String> = sqlx::query_scalar(&format!(
-                "SELECT json_array({columns}) FROM {table} ORDER BY rowid"
-            ))
-            .fetch_all(&mut *tx)
-            .await
-            .unwrap();
-            result.extend(rows);
-        }
-        tx.commit().await.unwrap();
-        db.close().await.unwrap();
-        result
+        snapshot_rows(&self.root).await
     }
     async fn finish(self) {
         self.store.close().await;
@@ -385,3 +341,54 @@ async fn independent_durable_fence_tracks_renewal_and_revocation() {
 
 #[path = "production_authority/metadata.rs"]
 mod metadata;
+#[cfg(all(feature = "fixture-test-controls", unix))]
+#[path = "production_authority/process.rs"]
+mod process;
+
+async fn snapshot_rows(root: &std::path::Path) -> Vec<String> {
+    let mut db = sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(root.join("core.sqlite3"))
+            .read_only(true),
+    )
+    .await
+    .unwrap();
+    sqlx::query("PRAGMA query_only=ON")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    let mut tx = db.begin().await.unwrap();
+    let mut result = Vec::new();
+    for table in [
+        "production_supervisors",
+        "production_readiness",
+        "production_runs",
+        "production_run_leases",
+        "reasoning_inbox",
+        "session_bindings",
+        "messages",
+        "events",
+        "outbox",
+        "conversations",
+    ] {
+        let columns = sqlx::query(&format!("PRAGMA table_info({table})"))
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| format!("\"{}\"", r.get::<String, _>("name")))
+            .collect::<Vec<_>>()
+            .join(",");
+        result.push(table.into());
+        let rows: Vec<String> = sqlx::query_scalar(&format!(
+            "SELECT json_array({columns}) FROM {table} ORDER BY rowid"
+        ))
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+        result.extend(rows);
+    }
+    tx.commit().await.unwrap();
+    db.close().await.unwrap();
+    result
+}
