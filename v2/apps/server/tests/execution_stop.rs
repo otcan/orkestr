@@ -98,11 +98,11 @@ async fn cookie_csrf_stop_replays_original_durable_receipt() {
             .await
             .unwrap()
             .unwrap();
-        let port = std::env::var("ORKESTR_V2_TEST_PORT").unwrap_or_else(|_| "47123".into());
+        let port = std::env::var("ORKESTR_V2_TEST_PORT").unwrap_or_else(|_| "0".into());
         let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
             .await
             .unwrap();
-        let origin = format!("http://127.0.0.1:{port}");
+        let origin = format!("http://{}", listener.local_addr().unwrap());
         let state = AppState::new(
             store.clone(),
             "synthetic-bootstrap-token-at-least-32-bytes".into(),
