@@ -41,6 +41,12 @@ unknown and unconfigured conversation refusal, durable follow-up holds, joined
 shutdown and invalid-manifest refusal. Existing single-conversation, Worker and
 authentication checks remain required.
 
+`owned_execution_group_recovery` checks accepted restart of both conversations,
+fresh-input-only continuation, exact native/session lineage and inert receipt
+replay. An ACK-only slot refuses the entire configured restart. An earlier
+accepted slot may retain an issued setup reservation after that refusal, but no
+reservation is confirmed and no provider starts; reconciliation remains required.
+
 This is an explicit isolated acceptance composition. Creating a project through
 HTTP does not configure a provider. Dynamic conversation registration, real
 provider isolation and final release qualification remain separate work.
