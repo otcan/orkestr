@@ -2,6 +2,9 @@
 use orkestr_v2_contracts::{ConversationEvent, ConversationSnapshot, Message, MessageInput, Scope};
 use std::collections::BTreeMap;
 
+mod reconcile;
+pub use reconcile::reconcile;
+
 pub const WINDOW: usize = 100;
 
 #[derive(Clone, Default)]
@@ -135,4 +138,21 @@ pub fn replay_sequence(
         return Err("Unexpected event contract; history resync required");
     }
     Ok(sequence)
+}
+
+/// Browser bridge wrapper; canonical event variants remain core-owned.
+#[derive(serde::Deserialize)]
+pub struct StreamItem {
+    pub status: u16,
+    pub event: String,
+    pub id: Option<String>,
+    pub body: Option<ConversationEvent>,
+}
+pub fn decode_stream(raw: serde_json::Value) -> StreamItem {
+    serde_json::from_value(raw).unwrap_or(StreamItem {
+        status: 200,
+        event: "resync_required".into(),
+        id: None,
+        body: None,
+    })
 }
