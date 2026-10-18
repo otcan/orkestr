@@ -87,8 +87,12 @@ class IntakeProbes(unittest.TestCase):
     def counts(self):
         uri = (self.home / "core.sqlite3").as_uri() + "?mode=ro"
         with sqlite3.connect(uri, uri=True) as db:
-            return tuple(db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
-                         for table in ("messages", "events", "reasoning_inbox", "outbox"))
+            db.execute("PRAGMA query_only=ON")
+            db.execute("BEGIN")
+            counts = tuple(db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                           for table in ("messages", "events", "reasoning_inbox", "outbox"))
+            db.execute("COMMIT")
+            return counts
 
     def test_receipt_concurrency_conflict_and_restart(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
@@ -114,24 +118,52 @@ class IntakeProbes(unittest.TestCase):
         self.assertEqual(self.call("GET", "/projects", headers={"Cookie": "session=" + token})[0], 401)
         self.assertEqual(self.counts(), (0, 0, 0, 0))
 
+    def assert_alias_refused(self, legacy):
+        def files(directory):
+            # Include existence, link identity and bytes, including WAL/SHM.
+            return {p.name: (os.readlink(p) if p.is_symlink() else None, p.read_bytes())
+                    for p in directory.iterdir()}
+
+        target = self.root / "symlink-candidate"
+        target.mkdir()
+        (target / "core.sqlite3").symlink_to(legacy / "core.sqlite3")
+        before = (files(legacy), files(target))
+        self.process = self.launch(target, {"ORKESTR_HOME": str(legacy)})
+        exited = True
+        try:
+            self.process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            exited = False
+        # Capture before killing the child or closing the synthetic WAL writer:
+        # cleanup must not checkpoint/delete sidecars and conceal a mutation.
+        during = (files(legacy), files(target))
+        self.stop()
+        after = (files(legacy), files(target))
+        self.assertEqual(during, before, "startup mutated database/sidecars before cleanup")
+        self.assertEqual(after, before, "child cleanup changed database/sidecars")
+        self.assertTrue(exited, "server accepted database symlink into legacy home")
+        self.assertNotEqual(self.process.returncode, 0)
+
     def test_database_symlink_into_legacy_is_refused_without_mutation(self):
         self.stop()
         legacy = self.root / "legacy-synthetic"
         legacy.mkdir()
-        database = legacy / "core.sqlite3"
-        database.touch()
-        target = self.root / "symlink-candidate"
-        target.mkdir()
-        (target / "core.sqlite3").symlink_to(database)
-        self.process = self.launch(target, {"ORKESTR_HOME": str(legacy)})
-        # Rejection must precede opening/migrating the aliased database.
-        try:
-            self.process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            self.stop()
-            self.fail(f"server accepted database symlink into legacy home; target now {database.stat().st_size} bytes")
-        self.assertNotEqual(self.process.returncode, 0)
-        self.assertEqual(database.read_bytes(), b"", "refused startup mutated legacy database")
+        (legacy / "core.sqlite3").touch()
+        self.assert_alias_refused(legacy)
+
+    def test_live_wal_database_alias_is_refused_without_sidecar_mutation(self):
+        self.stop()
+        legacy = self.root / "legacy-wal-synthetic"
+        legacy.mkdir()
+        with sqlite3.connect(legacy / "core.sqlite3") as writer:
+            self.assertEqual(writer.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
+            writer.execute("PRAGMA wal_autocheckpoint=0")
+            writer.execute("CREATE TABLE synthetic_legacy(value TEXT)")
+            writer.execute("INSERT INTO synthetic_legacy VALUES ('preserve')")
+            writer.commit()
+            self.assertTrue((legacy / "core.sqlite3-wal").exists())
+            self.assertTrue((legacy / "core.sqlite3-shm").exists())
+            self.assert_alias_refused(legacy)
 
     def test_sse_header_cursor_precedes_query_cursor(self):
         first = self.admit()[1]
