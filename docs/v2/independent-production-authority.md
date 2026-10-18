@@ -46,3 +46,34 @@ commit/before reply, equivalent reserve/consume windows, and scoped read-only
 projections. An independent child must use public machine bootstrap and real
 expiry/exact predecessor takeover. Core-authored SIGKILL results remain separate
 from independently authored acceptance; pool reopen is not process recovery.
+
+## Fence and renewal successor
+
+Exact implementation: `4d66e605de5883fbb88356bc4a8957c43a62dbf8`.
+The current independent source has four tests; all four passed against this
+successor (0 failed, 0 ignored). Historical three-test evidence above remains
+at its original implementation pin. Snapshots now also include every issued
+production lease-history row.
+
+The added test refuses an unconsumed candidate before callback invocation,
+executes a consumed current admission callback, races renewal through two
+independent pools (one winner, one StaleLease), and refuses the old envelope.
+A current callback returning a synthetic enqueue error preserves all rows;
+consumption still cannot issue another capability. Revocation prevents a later
+callback. Callback count is asserted explicitly. This tests callback error
+propagation, not a real provider transport.
+
+Source review confirms the synchronous fence holds BEGIN IMMEDIATE through
+current authority validation and the bounded callback. Renewal cannot revive an
+expired context, preserves run identity/purpose/fence, and records the exact
+issued generation/deadline atomically. The seven opt-in public checkpoints are
+positioned after the relevant writes before commit, or after durable commit
+before reply; the admission-before-ack window deliberately precedes inbox ACK.
+The checkpoint marker contains only a stage name. No blocking source finding
+for this bounded trusted composition. Callback boundedness is a caller contract,
+not an enforced execution timeout; a fence is not an inference capability.
+
+Public ordinary process facilities now exist, superseding the earlier facility
+request. Independently authored seven-window owned-child SIGKILL/new-process
+acceptance remains pending. Core-authored process results do not close that gate.
+Lifecycle append/cancellation and live provider execution remain pending.

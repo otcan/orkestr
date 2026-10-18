@@ -102,6 +102,7 @@ impl Case {
             "production_supervisors",
             "production_readiness",
             "production_runs",
+            "production_run_leases",
             "reasoning_inbox",
             "session_bindings",
             "messages",
@@ -286,5 +287,98 @@ async fn independent_machine_namespace_and_unbound_dispatch_refuse() {
         Err(RuntimeStoreError::Unavailable)
     ));
     assert_eq!(before, c.rows().await);
+    c.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn independent_durable_fence_tracks_renewal_and_revocation() {
+    let c = Case::new().await;
+    let h = c
+        .store
+        .authorize_supervisor(&c.token, config())
+        .await
+        .unwrap();
+    let (b, claim) = c.ready_claim(&h).await;
+    let fresh = h
+        .admit_run(&claim, &b.session_id, b.generation, "run:1")
+        .await
+        .unwrap();
+    let mut calls = 0;
+    assert!(matches!(
+        h.with_execution_fence(&fresh.provider, || {
+            calls += 1;
+            Ok::<_, ()>(())
+        }),
+        Err(RuntimeStoreError::Fenced)
+    ));
+    let DispatchClaimResult::Reserved(reserved) = h
+        .claim_provider_dispatch(&fresh, "reserve:1")
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    let ExecutionConsumption::Dispatch(cap) = h.consume_execution(&reserved).await.unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        h.with_execution_fence(cap.provider(), || {
+            calls += 1;
+            Ok::<_, ()>(7)
+        })
+        .unwrap(),
+        Ok(7)
+    );
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    h.heartbeat_supervisor().await.unwrap();
+    let other_store = Store::open(&c.root.join("core.sqlite3")).await.unwrap();
+    let other = h.reattach_supervisor(&other_store).await.unwrap();
+    let old = &cap.provider().run;
+    let (a, z) = tokio::join!(
+        h.renew_lease(old, old.lease_generation),
+        other.renew_lease(old, old.lease_generation)
+    );
+    let renewed = match (a, z) {
+        (Ok(a), Err(RuntimeStoreError::StaleLease))
+        | (Err(RuntimeStoreError::StaleLease), Ok(a)) => a,
+        _ => panic!("one renewal CAS winner"),
+    };
+    let before = c.rows().await;
+    assert!(matches!(
+        h.with_execution_fence(cap.provider(), || {
+            calls += 1;
+            Ok::<_, ()>(())
+        }),
+        Err(RuntimeStoreError::StaleLease)
+    ));
+    let mut current = cap.provider().clone();
+    current.run = renewed;
+    assert_eq!(
+        h.with_execution_fence(&current, || {
+            calls += 1;
+            Err::<(), _>("synthetic enqueue failure")
+        })
+        .unwrap(),
+        Err("synthetic enqueue failure")
+    );
+    assert_eq!(before, c.rows().await);
+    // Fence freshness never replaces the consumed one-shot grant.
+    let mut updated_reservation = (*reserved).clone();
+    updated_reservation.provider = current.clone();
+    assert!(matches!(
+        h.consume_execution(&updated_reservation).await.unwrap(),
+        ExecutionConsumption::ReconciliationRequired
+    ));
+    c.store.revoke_session(&c.token).await.unwrap();
+    assert!(matches!(
+        h.with_execution_fence(&current, || {
+            calls += 1;
+            Ok::<_, ()>(())
+        }),
+        Err(RuntimeStoreError::Unauthorized)
+    ));
+    assert_eq!(calls, 2);
+    assert_eq!(before, c.rows().await);
+    other_store.close().await;
     c.finish().await;
 }
