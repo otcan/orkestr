@@ -1,4 +1,5 @@
 mod execution_panel;
+mod execution_poll;
 mod history;
 mod transport;
 mod views;
@@ -69,13 +70,15 @@ fn App() -> Element {
         style { "{include_str!(\"style.css\")}" }
         main {
             header { h1 { "Orkestr" } p { "Local assistant" } }
-            p { class: "notice", "Preview: messages are saved locally. Provider execution is not connected." }
-            p { class: "notice", "Execution, Stop, approvals and memory are unavailable. Project resources are not connected." }
+            p { class: "notice", "Stop, steering, approvals and memory are unavailable. Project resources are not connected." }
             p { role: "status", "{notice}" }
             if resuming() {
                 p { role: "status", "Checking browser session…" }
+            } else if logging_out() && csrf().is_empty() {
+                p { role: "status", "Finishing sign-out before another sign-in…" }
             } else if csrf().is_empty() {
                 views::Auth { onlogin: move |session: transport::BrowserSession| {
+                    if logging_out() { return; }
                     session_scope.write().activate(&session.global_conversation_id, &mut drafts.write());
                     projects.set(Vec::new()); pending_project.set(None); refresh += 1;
                     tab.set("Assistant".into());

@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use orkestr_v2_ui::execution::Execution;
 
-/// Intentionally no guessed routes: ordinary API capabilities await Core/Runtime.
+/// Read-only status is live; controls await durable command contracts.
 #[component]
 pub fn ExecutionPanel(execution: Signal<Execution>, now_ms: u64) -> Element {
     let execution = execution.read();

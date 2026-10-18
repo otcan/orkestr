@@ -73,3 +73,18 @@ This is a validated read adapter, not live polling: no guessed route registratio
 request, Stop or steering call is added. Runtime owns routes, CSRF and idempotent
 control receipts. Local validation now includes 27 Rust tests (three canonical
 status adapter cases), 22 Node cases, locked offline WASM and strict UI Clippy.
+
+Read-only polling checkpoint: the conversation mounts a keyed execution-status
+channel using relative `GET /api/v2/conversations/:id/execution`, same-origin
+cookies and no Bearer or CSRF header on reads. A 200 is decoded and validated as
+canonical `ExecutionStatus`; 204 removes displayed execution/control authority.
+401/403 expires the session. Other failures leave the last confirmed status stale.
+The channel polls serially, bounds bodies to 64 KiB, times out requests after ten
+seconds, and cancels fetch/retry/tick timers on component teardown. Owner/session
+generations fence every callback; conversation/owner selection remounts the channel.
+Receipt time and visible freshness ticks use browser `performance.now()`.
+Equal-revision identity uses Core's canonical comparison: only read-time clock and
+queue age may vary. Identical/receding observation replays do not refresh the
+client receipt anchor. Resource sample age remains separate from status freshness.
+Stop/steer buttons remain unavailable. Server-route integration and delayed-fetch
+browser acceptance still need separate proof; unit/bridge builds do not prove them.

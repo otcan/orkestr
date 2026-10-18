@@ -55,6 +55,9 @@ pub struct Execution {
 }
 impl Execution {
     pub const STALE_MS: u64 = 15_000;
+    pub fn selection_generation(&self) -> u64 {
+        self.generation
+    }
     /// Select explicitly, even when returning to the same run. Late responses retain old generation.
     pub fn select(&mut self, conversation: &str, run: &str) -> u64 {
         self.generation = self
@@ -116,10 +119,17 @@ impl Execution {
             || self.received_ms.is_some_and(|last| received_ms < last)
             || self.canonical.get(&conversation).is_some_and(|old| {
                 status.revision < old.revision
-                    || (status.revision == old.revision && status != *old)
+                    || (status.revision == old.revision && !status.same_revision_state(old))
             })
         {
             return Err("Invalid or regressing execution status");
+        }
+        // A replay is not a new observation. Preserve the original client freshness anchor.
+        if self.canonical.get(&conversation).is_some_and(|old| {
+            status.revision == old.revision && status.observed_at_ms <= old.observed_at_ms
+        }) && self.sample.is_some()
+        {
+            return Ok(());
         }
         let run = status
             .run_id
@@ -163,6 +173,18 @@ impl Execution {
         self.authorized = true;
         self.canonical.insert(conversation, status);
         Ok(())
+    }
+    /// An authenticated 204 removes displayed authority without erasing revision history.
+    pub fn absent(&mut self, generation: u64) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        self.sample = None;
+        self.authorized = false;
+        self.connected = true;
+        self.received_ms = None;
+        self.control_error = None;
+        true
     }
     pub fn disconnected(&mut self) {
         self.connected = false;

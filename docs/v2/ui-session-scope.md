@@ -20,3 +20,10 @@ Executable regressions cover same-binding draft retention, owner change, late
 receipt fencing, invalid identity and execution projection clearing. These are
 client state/build checks, not multi-owner browser/session security acceptance.
 No ordinary execution routes or controls are activated by this change.
+
+Reauthentication is withheld while a logout DELETE remains in flight, even if a
+concurrent expiry has already cleared the current UI session. A callback generation
+check cannot prevent the browser from applying a delayed Set-Cookie response. The
+sign-in surface therefore stays unmounted until that request settles. This bounds
+the single-page owner-switch race; multi-tab cookie ordering and delayed-response
+browser acceptance remain separate server/integration considerations.

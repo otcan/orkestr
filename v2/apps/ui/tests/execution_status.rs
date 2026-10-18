@@ -94,3 +94,44 @@ fn awaiting_acceptance_blocked_and_missing_telemetry_are_not_completion() {
         assert!(!state.resources(1).contains("0%"));
     }
 }
+
+#[test]
+fn absent_status_clears_controls_but_preserves_revision_and_generation_fence() {
+    let mut state = Execution::default();
+    let status = wire();
+    let generation = state.select(&status.conversation_id.to_string(), "");
+    state.apply_status(generation, 100, status.clone()).unwrap();
+    assert!(!state.absent(generation + 1));
+    assert!(state.can_stop(100));
+    assert!(state.absent(generation));
+    assert!(!state.can_stop(100));
+    assert!(state.resources(100).contains("unavailable"));
+    let mut regressing = status.clone();
+    regressing.revision -= 1;
+    assert!(state.apply_status(generation, 101, regressing).is_err());
+    state.apply_status(generation, 102, status).unwrap();
+    assert!(state.fresh(102));
+}
+
+#[test]
+fn sampled_clock_advances_without_revision_but_identical_replay_never_refreshes() {
+    let mut state = Execution::default();
+    let mut status = wire();
+    let generation = state.select(&status.conversation_id.to_string(), "");
+    state.apply_status(generation, 100, status.clone()).unwrap();
+    state
+        .apply_status(generation, 60100, status.clone())
+        .unwrap();
+    assert!(!state.fresh(60100));
+    assert!(state.resources(60100).contains("unavailable"));
+    assert!(state.can_stop(60100));
+    status.observed_at_ms += 60000;
+    status.queue_age_ms = Some(60000);
+    state
+        .apply_status(generation, 60101, status.clone())
+        .unwrap();
+    assert!(state.fresh(60101));
+    assert!(state.resources(60101).contains("unavailable"));
+    status.capabilities.stop = false;
+    assert!(state.apply_status(generation, 60102, status).is_err());
+}

@@ -149,12 +149,6 @@ pub fn Conversation(
     onexpired: EventHandler<()>,
 ) -> Element {
     let generation = session_scope.read().generation();
-    let execution_id = id.clone();
-    let mut execution = use_signal(move || {
-        let mut state = orkestr_v2_ui::execution::Execution::default();
-        state.select(&execution_id, "");
-        state
-    });
     let mut projection = use_signal(Projection::default);
     let mut status = use_signal(|| "Loading history…".to_string());
     let mut sending = use_signal(|| false);
@@ -168,14 +162,12 @@ pub fn Conversation(
             let mut resync = true;
             loop {
                 if !session_scope.read().is_current(generation) {
-                    execution.write().authorization_lost();
                     projection.set(Projection::default());
                     return;
                 }
                 if resync {
                     let result = transport::snapshot(&id, &csrf, 0, Projection::default(), 0).await;
                     if !session_scope.read().is_current(generation) {
-                        execution.write().authorization_lost();
                         projection.set(Projection::default());
                         return;
                     }
@@ -199,7 +191,6 @@ pub fn Conversation(
                 }
                 let result = transport::event(&id, cursor).await;
                 if !session_scope.read().is_current(generation) {
-                    execution.write().authorization_lost();
                     projection.set(Projection::default());
                     return;
                 }
@@ -238,7 +229,6 @@ pub fn Conversation(
                                     transport::snapshot(&id, &csrf, cursor, previous, sequence)
                                         .await;
                                 if !session_scope.read().is_current(generation) {
-                                    execution.write().authorization_lost();
                                     projection.set(Projection::default());
                                     return;
                                 }
@@ -290,7 +280,7 @@ pub fn Conversation(
                     li { key: "{message.message_id}", strong { "{message.actor_kind}" } p { "{message.text}" } }
                 }
             }
-            crate::execution_panel::ExecutionPanel { execution, now_ms: 0 }
+            crate::execution_poll::ExecutionPoll { key: "{id}-{generation}", id: id.clone(), session_scope, onexpired }
             form { onsubmit: move |event| {
                 event.prevent_default();
                 if sending() || !session_scope.read().is_current(generation) { return; }
