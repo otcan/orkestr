@@ -484,10 +484,145 @@
       ],
       "next": "Blocked on OP-21..23.",
       "tracker": "ORK-558"
+    },
+    {
+      "id": "OP-25",
+      "priority": "P0",
+      "title": "Durable nonblocking ingress, acknowledgement and per-scope reasoning inbox",
+      "owner": "A",
+      "deps": [
+        "OP-05"
+      ],
+      "state": "in_progress",
+      "tracker": "ORK-561",
+      "scope": "See ADR 0003 (rev 3a5c8c37) and the Jira description.",
+      "acceptance": [
+        "See Jira ORK-561 and ADR 0003 section 10"
+      ],
+      "next": "See Jira ORK-561."
+    },
+    {
+      "id": "OP-26",
+      "priority": "P0",
+      "title": "Persistent fast and deep Codex/Claude Code sessions per global and project scope",
+      "owner": "B",
+      "deps": [
+        "OP-25"
+      ],
+      "state": "in_progress",
+      "tracker": "ORK-562",
+      "scope": "See ADR 0003 (rev 3a5c8c37) and the Jira description.",
+      "acceptance": [
+        "See Jira ORK-562 and ADR 0003 section 10"
+      ],
+      "next": "See Jira ORK-562."
+    },
+    {
+      "id": "OP-27",
+      "priority": "P0",
+      "title": "Automatic idempotent project resource provisioning and shared bindings (GitHub, Jira, OXRM, WhatsApp; desktops on demand)",
+      "owner": "A",
+      "deps": [
+        "OP-03",
+        "OP-25",
+        "OP-30"
+      ],
+      "state": "blocked",
+      "tracker": "ORK-563",
+      "scope": "See ADR 0003 (rev 3a5c8c37) and the Jira description.",
+      "acceptance": [
+        "See Jira ORK-563 and ADR 0003 section 10"
+      ],
+      "next": "See Jira ORK-563."
+    },
+    {
+      "id": "OP-28",
+      "priority": "P0",
+      "title": "Native iOS app: global assistant, project navigation, tasks/resources/approvals",
+      "owner": "C",
+      "deps": [
+        "OP-25"
+      ],
+      "state": "in_progress",
+      "tracker": "ORK-564",
+      "scope": "See ADR 0003 (rev 3a5c8c37) and the Jira description.",
+      "acceptance": [
+        "See Jira ORK-564 and ADR 0003 section 10"
+      ],
+      "next": "See Jira ORK-564."
+    },
+    {
+      "id": "OP-29",
+      "priority": "P2",
+      "title": "Android app following the iOS contract",
+      "owner": "C",
+      "deps": [
+        "OP-28"
+      ],
+      "state": "blocked",
+      "tracker": "ORK-565",
+      "scope": "See ADR 0003 (rev 3a5c8c37) and the Jira description.",
+      "acceptance": [
+        "See Jira ORK-565 and ADR 0003 section 10"
+      ],
+      "next": "See Jira ORK-565."
+    },
+    {
+      "id": "OP-30",
+      "priority": "P0",
+      "title": "Installable plugin platform: package, connections, capabilities, project bindings, resource instances; Integration Hub",
+      "owner": "coordinator",
+      "deps": [],
+      "state": "ready",
+      "tracker": "ORK-566",
+      "scope": "See ADR 0003 (rev 3a5c8c37) and the Jira description.",
+      "acceptance": [
+        "See Jira ORK-566 and ADR 0003 section 10"
+      ],
+      "next": "See Jira ORK-566."
+    },
+    {
+      "id": "OP-31",
+      "priority": "P1",
+      "title": "Global-to-project reasoning fan-out/fan-in",
+      "owner": "A",
+      "deps": [
+        "OP-26",
+        "OP-27"
+      ],
+      "state": "blocked",
+      "tracker": "ORK-567",
+      "scope": "See ADR 0003 (rev 3a5c8c37) and the Jira description.",
+      "acceptance": [
+        "See Jira ORK-567 and ADR 0003 section 10"
+      ],
+      "next": "See Jira ORK-567."
+    },
+    {
+      "id": "OP-32",
+      "priority": "P0",
+      "title": "Deterministic control-plane holds: stop, cancel and deployment hold",
+      "owner": "A",
+      "deps": [
+        "OP-25",
+        "OP-14"
+      ],
+      "state": "blocked",
+      "tracker": "ORK-568",
+      "scope": "See ADR 0003 (rev 3a5c8c37) and the Jira description.",
+      "acceptance": [
+        "See Jira ORK-568 and ADR 0003 section 10"
+      ],
+      "next": "See Jira ORK-568."
     }
   ],
   "tracker": {
     "system": "Jira project ORK (private)",
     "epic": "ORK-534"
+  },
+  "productDirection": {
+    "adr": "docs/adr/0003-opinionated-personal-agent.md",
+    "revision": "3a5c8c3763511a579edc2e3bd766cf25fd913af5",
+    "precedence": "ADR 0003 governs product direction where it conflicts with this backlog or ADR 0002; ADR 0002 stays the storage/lifecycle contract until reconciled."
   }
 }

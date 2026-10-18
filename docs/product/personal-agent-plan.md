@@ -130,3 +130,15 @@ OP-01 ─▶ OP-02 ─▶ OP-03 ─┬▶ OP-04 ─┬▶ OP-06 ─┬▶ OP-08 
   OP-02, OP-06, OP-08 ─▶ OP-18 ─▶ OP-19, OP-20 ─▶ OP-21 ─▶ OP-24
   OP-22 (from now, across OP-03..21) ─▶ OP-23 ─▶ OP-24
 ```
+
+## Update 2026-10-18: ADR 0003 product direction
+
+[ADR 0003](../adr/0003-opinionated-personal-agent.md) (revision `3a5c8c37`, PR #65) is the newer product-direction contract. Where it conflicts with this plan or ADR 0002, ADR 0003 governs. ADR 0002 remains the storage/lifecycle contract until a gap review reconciles them. Security, opt-in memory and effect/approval contracts are unchanged.
+
+Owner decisions:
+- One global conversation plus one conversation per project, each backed by persistent fast and deep Codex/Claude Code sessions. A local model is never the authority.
+- Every new project, including a shopping list, gets a GitHub repository, a Jira project, an OXRM workspace and a project WhatsApp conversation by default, provisioned idempotently with explicit blockers. Desktops alone are leased on demand.
+- Installable plugins from the outset, in five layers: package, connections (several accounts per plugin), capabilities, global or selected-project bindings, and resource instances. Projects may narrow inherited defaults, never escalate them.
+- An Integration Hub with standardized auth, health and provisioning, plus progressive onboarding. Native iOS first, Android after.
+
+Added items (Jira ORK-561 to ORK-568): OP-25 ingress/inbox, OP-26 fast/deep sessions, OP-27 automatic provisioning and bindings, OP-28 iOS, OP-29 Android, OP-30 plugin platform, OP-31 global-to-project fan-out, OP-32 control-plane holds.
