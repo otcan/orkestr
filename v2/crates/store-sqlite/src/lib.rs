@@ -26,7 +26,8 @@ pub use production_runtime::{
     BoundSessionMetadata, ConsumedOfflinePython, ConsumedProviderDispatch, ExecutionConsumption,
     OfflinePythonAdmission, OfflinePythonConsumption, OfflinePythonDelegation,
     OfflinePythonOutcome, OfflinePythonReceipt, OfflinePythonState, ProductionSupervisorStore,
-    ReadySessionTransition,
+    ReadySessionTransition, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
+    WorkerDelegationResult, WorkerDelegationState,
 };
 
 pub use production_runtime::inspection::{

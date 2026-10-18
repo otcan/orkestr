@@ -1,7 +1,9 @@
 # Worker provider admission boundary
 
-Status: Core-owned additive proposal for independent source review. No API below
-is implemented or authorized for production use yet. This refines
+Status: Core-owned exported API checkpoint for independent source review. Parent
+authorization lookup is implemented; delegation issuance and admission deliberately
+return Unavailable until the durable lineage adapter is installed. No Worker
+provider execution is authorized yet. This refines
 `role-admission-proposal.md`; it does not activate Fast or Worker admission.
 Offline Python delegation is a separate tool authority and is not accepted here.
 
@@ -124,3 +126,15 @@ then returns evidence only; fresh issuance requires current parent authority.
 Parent terminal observation persistence and descendant fencing must share a
 transaction, including Failed before/after Started and Lost. This corrects the
 earlier proposal's overly broad parent-terminal Busy rule before implementation.
+
+## Exported checkpoint
+
+The types and methods above are exported from store-sqlite. The exact parent
+lookup authenticates the current credential and full bound context, resolves the
+canonical consumed Running Deep run inside BEGIN IMMEDIATE, and checks the live
+issued lease, fence and native binding. Even a valid parent currently returns
+Unavailable: no delegation locator or Worker run is issued by this checkpoint.
+The server helper owns only `server/src/worker_execution/` and its integration
+test; it can implement against these symbols while Core installs the ledger.
+The exported receipt includes typed IDs, deadline and Delegated/Admitted/Blocked
+state, and contains no native identity or dispatch authority.

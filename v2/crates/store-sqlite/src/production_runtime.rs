@@ -38,6 +38,8 @@ mod retirement;
 mod retirement_tests;
 mod status;
 mod stop;
+mod worker;
+pub use worker::*;
 mod worker_tool;
 pub use worker_tool::*;
 #[cfg(test)]
