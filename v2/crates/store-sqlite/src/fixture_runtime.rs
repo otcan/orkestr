@@ -8,7 +8,11 @@ use uuid::Uuid;
 
 mod admission;
 mod dispatch;
+mod inspection;
 mod port;
+#[cfg(feature = "fixture-test-controls")]
+pub mod test_controls;
+pub use inspection::{FixtureAttemptInspection, FixtureDispatchState, FixtureScopeInspection};
 mod readiness;
 
 const LEASE_MS: i64 = 60_000;
@@ -35,6 +39,8 @@ pub struct FixtureSupervisorStore {
     context_id: Uuid,
     incarnation_id: Uuid,
     generation: i64,
+    #[cfg(feature = "fixture-test-controls")]
+    checkpoint: Option<test_controls::ArmedCheckpoint>,
 }
 
 fn db(_: impl std::fmt::Display) -> RuntimeStoreError {
@@ -131,6 +137,8 @@ pub async fn bootstrap_fixture_supervisor(
         context_id,
         incarnation_id,
         generation,
+        #[cfg(feature = "fixture-test-controls")]
+        checkpoint: None,
     })
 }
 
@@ -180,6 +188,8 @@ impl FixtureSupervisorStore {
             context_id: self.context_id,
             incarnation_id: self.incarnation_id,
             generation: self.generation,
+            #[cfg(feature = "fixture-test-controls")]
+            checkpoint: None,
         };
         handle.validate_context().await?;
         Ok(handle)
@@ -192,3 +202,6 @@ mod crash_tests;
 mod dispatch_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod inspection_tests;
