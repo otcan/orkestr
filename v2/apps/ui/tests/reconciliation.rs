@@ -156,3 +156,111 @@ fn malformed_canonical_variant_uses_real_rust_decoder_resync() {
     assert!(frame.id.is_none());
     assert!(frame.body.is_none());
 }
+
+#[test]
+fn cancellation_metadata_failure_retry_with_schema1_2_interleaving_stays_unconfirmed() {
+    let view = original();
+    let before = fingerprint(&view);
+    let mut wire: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/fixture-cancellation-requested.json"
+    ))
+    .unwrap();
+    wire["sequence"] = 9.into();
+    let event: ConversationEvent = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(
+        replay_sequence(&view, "fixture_cancellation_requested", Some("9"), &event),
+        Ok(9)
+    );
+    assert!(orkestr_v2_ui::replay_notice(&event).contains("unconfirmed"));
+    for (name, source, sequence) in [
+        (
+            "message_accepted",
+            include_str!("../../../fixtures/event.json"),
+            3,
+        ),
+        (
+            "fixture_provider_observed",
+            include_str!("../../../fixtures/fixture-provider-observed.json"),
+            4,
+        ),
+        (
+            "fixture_cancellation_requested",
+            include_str!("../../../fixtures/fixture-cancellation-requested.json"),
+            9,
+        ),
+    ] {
+        let mut value: serde_json::Value = serde_json::from_str(source).unwrap();
+        value["sequence"] = sequence.into();
+        let event: ConversationEvent = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            replay_sequence(&view, name, Some(&sequence.to_string()), &event),
+            Ok(sequence)
+        );
+    }
+    // Message/schema1 at 3, observation/schema2 at 4, cancellation/schema3 at 9.
+    let failed = run(
+        &view,
+        9,
+        vec![
+            Ok(page(&[3], 9, Some(3))),
+            Err("page two unavailable".into()),
+        ],
+    )
+    .0;
+    assert!(failed.is_err());
+    assert_eq!(fingerprint(&view), before);
+    let result = run(
+        &view,
+        9,
+        vec![Ok(page(&[3], 9, Some(3))), Ok(page(&[7], 9, None))],
+    )
+    .0
+    .unwrap();
+    assert_eq!(result.watermark, 9);
+    assert_eq!(
+        result.messages.keys().copied().collect::<Vec<_>>(),
+        vec![1, 3, 7]
+    );
+    let replayed = run(&result, 9, vec![Ok(page(&[], 9, None))]).0.unwrap();
+    assert_eq!(fingerprint(&result), fingerprint(&replayed));
+    wire["payload_ref_or_safe_payload"]["outcome"] = "not_dispatched".into();
+    let event: ConversationEvent = serde_json::from_value(wire).unwrap();
+    assert!(orkestr_v2_ui::replay_notice(&event).contains("no provider delivery"));
+    assert!(orkestr_v2_ui::replay_notice(&event).contains("Stop remain unavailable"));
+}
+
+#[test]
+fn cancellation_schema_identity_and_forbidden_fields_fail_closed() {
+    let view = original();
+    let wire: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/fixture-cancellation-requested.json"
+    ))
+    .unwrap();
+    for (key, value) in [
+        ("schema_version", serde_json::json!(2)),
+        ("native_id", serde_json::json!("synthetic")),
+    ] {
+        let mut bad = wire.clone();
+        bad[key] = value;
+        let frame = orkestr_v2_ui::decode_stream(
+            serde_json::json!({"status":200,"event":"fixture_cancellation_requested","id":"1","body":bad}),
+        );
+        assert_eq!(frame.event, "resync_required");
+    }
+    let event: ConversationEvent = serde_json::from_value(wire.clone()).unwrap();
+    assert!(replay_sequence(&view, "fixture_cancellation_requested", Some("2"), &event).is_err());
+    assert!(replay_sequence(&view, "fixture_provider_observed", Some("1"), &event).is_err());
+    let mut bad = wire.clone();
+    bad["scope"] = serde_json::json!({"kind":"global"});
+    assert!(replay_sequence(
+        &view,
+        "fixture_cancellation_requested",
+        Some("1"),
+        &serde_json::from_value(bad).unwrap()
+    )
+    .is_err());
+    let mut bad = wire;
+    bad["payload_ref_or_safe_payload"]["outcome"] = "stopped".into();
+    assert!(serde_json::from_value::<ConversationEvent>(bad).is_err());
+    assert_eq!(view.watermark, 1);
+}
