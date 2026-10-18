@@ -126,6 +126,11 @@ async fn consume_then_fake(
 ) -> Result<bool> {
     match handle.consume_provider_dispatch(claim).await? {
         DispatchConsumption::DispatchNow => {
+            let scope = handle
+                .inspect_fixture_scope(&claim.provider.run.conversation_id)
+                .await?;
+            assert_eq!(scope.delivery_unknown, 1);
+            assert_eq!(scope.reservations, 0);
             // Test oracle: a new transaction already sees unknown BEFORE FAKE I/O.
             assert_eq!(
                 handle.consume_provider_dispatch(claim).await?,
@@ -138,6 +143,10 @@ async fn consume_then_fake(
         DispatchConsumption::ReconciliationRequired => Ok(false),
     }
 }
+
+#[cfg(feature = "fixture-test-controls")]
+#[path = "fixture_dispatch/controlled.rs"]
+mod controlled;
 
 #[tokio::test]
 async fn independent_admission_reservation_consumption_have_one_winner_and_one_fake_start() {

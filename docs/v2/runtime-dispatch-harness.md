@@ -15,9 +15,23 @@ These are fixture-table transaction checks. Deliberately discarding a successful
 consume reply is not a transport lost-ACK injection. Pool reopen with the original
 live handle is not process recovery. Core's private unit-test child executes the
 SIGKILL checkpoints; runtime does not expose or recreate those hooks. Public
-projection and deterministic expiry facilities are still pending. No production
+projections and opt-in deterministic expiry controls are covered below. No production
 start, provider observation journal, cancellation/recovery acceptance or verified
 completion is enabled by this checkpoint.
+
+## Opt-in real-store controls
+
+Core successor `44ecdb30` supplies read-only attempt/scope projections and the
+`fixture-test-controls` feature. Runtime forwards that feature only for explicit
+offline tests; default and server builds do not enable it.
+
+Three additional tests check committed DeliveryUnknown after Core deliberately
+returns Unavailable instead of the consume reply, live-handle pool reattachment
+without FAKE I/O, and exact-predecessor takeover after deterministic expiry.
+Snapshots check acknowledged inboxes, absent candidate/reservation verifiers,
+quarantined reservations, preserved unknown delivery and isolation from another
+supervisor key. A fenced predecessor cannot inspect or dispatch. The dropped reply
+is a controlled application result, not a process or transport crash.
 
 ## Earlier volatile protocol harness
 
