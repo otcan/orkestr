@@ -54,6 +54,7 @@ import { describeUiSendFailure, UiSendFailureDescription } from "./ui-send-failu
 import { ProviderQuotaIndicatorComponent } from "./provider-quota-indicator.component";
 import { ExecutorSwitcherComponent } from "./executor-switcher.component";
 import { ActiveThreadRefresh } from "./active-thread-refresh";
+import { ThreadSystemUsageComponent } from "./thread-system-usage.component";
 import { WhatsAppSelfChatCardComponent } from "./whatsapp-self-chat-card.component";
 import { whatsappReachLabel } from "./whatsapp-thread-reach";
 import { QuotaProvider, claudeEffortLabel, claudeModelName, executorLabel, threadExecutorProvider } from "./provider-quota";
@@ -92,7 +93,7 @@ const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, OwnerLoginPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, VaultPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent, WhatsAppSelfChatCardComponent],
+  imports: [DatePipe, FormsModule, ModelSettingsComponent, AttachmentPreviewComponent, AppLauncherPageComponent, FirstThreadWizardComponent, FilesPageComponent, InstanceSettingsPageComponent, OnboardingPageComponent, OwnerLoginPageComponent, PairingRequiredPageComponent, PublicAppsPageComponent, SharedAppPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent, VaultPageComponent, ProviderQuotaIndicatorComponent, ExecutorSwitcherComponent, WhatsAppSelfChatCardComponent, ThreadSystemUsageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {

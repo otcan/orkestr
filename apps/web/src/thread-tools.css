@@ -28,6 +28,23 @@
   padding: 8px;
 }
 
+.deployment-version { min-width: 0; max-width: 100%; }
+.deployment-version[open] { flex: 1 1 100%; }
+.chat-head .deployment-version > .version-pill { display: inline-flex; cursor: pointer; max-width: 100%; }
+.deployment-version > summary::after { content: " ▾"; }
+.deployment-version[open] > summary::after { content: " ▴"; }
+.deployment-version > summary:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 3px; }
+.deployment-version-details {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
+  color: var(--ui-text);
+  background: var(--ui-raised);
+}
+.deployment-version-details p { margin: 0 0 8px; }
+.deployment-version-details pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+
 .thread-tools-popover {
   justify-content: flex-start;
 }
