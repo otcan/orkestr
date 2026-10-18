@@ -408,3 +408,7 @@ async fn unavailable_reply_control_persists_unknown_without_locator_verifiers() 
 
 #[path = "independent_transactions/negative.rs"]
 mod negative;
+
+#[cfg(feature = "fixture-test-controls")]
+#[path = "independent_transactions/observations.rs"]
+mod observations;
