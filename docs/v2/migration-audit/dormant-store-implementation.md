@@ -27,11 +27,25 @@ Core source_digest. Both Rust and Python pin Core's independent empty-byte vecto
 The complete collector-to-request adapter and additional Unicode/project vectors
 remain follow-up work; no live import is authorized.
 
-Verification for this source candidate: Python suite 101/101 PASS; rustfmt check
-PASS; git diff --check PASS. Six Rust tests are authored but UNEXECUTED, covering
-validation/vector, replay/rollback/inactive paging, conflict/corruption, current
-auth/expiry and transaction failure. Compilation and strict lint are UNEXECUTED.
-Next dependency: Core source review/minimal registration and bounded build admission
-against exact Core885eeb90 in a disposable archive with unchanged manifests/lock.
-No executable importer, live restore, multi-authority consistency, complete workflow
-parity or release acceptance is claimed.
+Verification of exact Migration2d491562 against disposable Core885eeb90:
+Python suite 101/101 PASS; six Rust history_import tests PASS; strict all-target
+clippy with warnings denied PASS; rustfmt and git diff --check PASS. The archive
+added only the committed module and temporary module registration; all eleven
+manifest/lock/toolchain files were byte-verified unchanged. No source correction
+was necessary. Test binary SHA256:
+`b825d648d68327043879afdc7bc195087e0bbfbdff17d5f0be3c35fbe335d315`.
+
+Executed through the admitted isolated wrapper/home/target:
+
+```sh
+v2-cargo test --offline --locked -p orkestr-v2-store-sqlite history_import -- --test-threads=1
+v2-cargo clippy --offline --locked -p orkestr-v2-store-sqlite --all-targets -- -D warnings
+```
+
+Core registered successor f316db09c16bffb5ce5778725eb286c9e9dd88c0 contains an
+identical history_import subtree, Core-owned registration/reexports and a separate
+Core integration oracle. Core separately reports its six Migration tests plus
+one concurrent two-pool/reopen/logout/inert-ledger test PASS; this is attributed
+to Core, not rerun here. Independent review of the registered successor requested.
+No live import, crash acceptance, multi-authority consistency, complete workflow
+parity or release acceptance is claimed. Private build receipt stays outside OSS.
