@@ -3,6 +3,7 @@
 mod claim;
 mod control;
 mod import;
+pub mod input;
 mod schedule;
 #[cfg(test)]
 mod tests;
