@@ -405,3 +405,6 @@ async fn unavailable_reply_control_persists_unknown_without_locator_verifiers() 
     );
     c.close().await;
 }
+
+#[path = "independent_transactions/negative.rs"]
+mod negative;
