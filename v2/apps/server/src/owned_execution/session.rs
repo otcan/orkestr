@@ -14,7 +14,7 @@ enum SessionExit {
 }
 
 impl ConfiguredExecution {
-    pub(super) async fn run(
+    pub(super) async fn run_codex(
         mut self,
         mut shutdown: watch::Receiver<bool>,
     ) -> Result<(), &'static str> {

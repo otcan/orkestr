@@ -8,6 +8,23 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Provider {
+    #[default]
+    Codex,
+    Claude,
+}
+
+impl Provider {
+    pub(super) fn kind(self) -> orkestr_v2_application::runtime::ProviderKind {
+        match self {
+            Self::Codex => orkestr_v2_application::runtime::ProviderKind::Codex,
+            Self::Claude => orkestr_v2_application::runtime::ProviderKind::Claude,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Config {
@@ -20,6 +37,8 @@ pub(super) struct Config {
     pub workspace: PathBuf,
     pub namespace: String,
     pub supervisor_key: String,
+    #[serde(default)]
+    pub provider: Provider,
     #[serde(default)]
     pub execution_budget: super::budget::ExecutionBudget,
     #[serde(default)]
@@ -101,6 +120,11 @@ impl Config {
             policy.validate()?;
         }
         config.execution_budget.validate()?;
+        if config.provider == Provider::Claude
+            && (config.worker.is_some() || config.execution_budget.max_run_ms > 45_000)
+        {
+            return Err("Claude Worker execution and extended leases are not available");
+        }
         canonical(&config.workspace)?;
         if !config.workspace.is_dir()
             || config.workspace.starts_with(home)

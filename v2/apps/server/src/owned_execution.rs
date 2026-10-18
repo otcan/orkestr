@@ -2,6 +2,7 @@
 mod admission;
 mod bootstrap;
 mod budget;
+mod claude;
 mod config;
 #[cfg(all(test, unix))]
 mod config_tests;
@@ -12,9 +13,7 @@ mod session;
 mod stopping;
 mod worker;
 use config::Config;
-use orkestr_v2_application::runtime::{
-    ProductionSupervisorConfig, ProductionTakeover, ProviderKind,
-};
+use orkestr_v2_application::runtime::{ProductionSupervisorConfig, ProductionTakeover};
 use orkestr_v2_contracts::OwnerId;
 use orkestr_v2_store_sqlite::{BoundSessionMetadata, Store};
 use std::{
@@ -63,12 +62,15 @@ impl ConfiguredExecution {
             .await
             .map_err(|_| "execution conversation is unavailable to this owner")?;
         let mut supervisor = ProductionSupervisorConfig {
-            provider: ProviderKind::Codex,
+            provider: config.provider.kind(),
             namespace: config.namespace.clone(),
             supervisor_key: config.supervisor_key.clone(),
             takeover: ProductionTakeover::First,
         };
         let (bound, initial_grant, directory) = if let Some(status) = status {
+            if config.provider == config::Provider::Claude {
+                return Err("existing Claude execution requires reviewed resume authority");
+            }
             if status.phase != orkestr_v2_contracts::ExecutionPhase::Completed
                 || config.worker.is_some()
             {
@@ -143,6 +145,13 @@ impl ConfiguredExecution {
             shutdown,
             task,
             children,
+        }
+    }
+
+    async fn run(self, shutdown: watch::Receiver<bool>) -> Result<(), &'static str> {
+        match self.config.provider {
+            config::Provider::Codex => self.run_codex(shutdown).await,
+            config::Provider::Claude => self.run_claude(shutdown).await,
         }
     }
 

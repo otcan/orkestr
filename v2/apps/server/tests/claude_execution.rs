@@ -28,9 +28,13 @@ async fn exercise(failure: bool, scheduled: bool) {
     let source = r#"#!/usr/bin/python3
 import sys,json
 native=sys.argv[sys.argv.index('--session-id')+1]
-print(json.dumps({'type':'system','subtype':'init','session_id':native}),flush=True)
 for line in sys.stdin:
  f=json.loads(line)
+ if f['type']=='control_request':
+  assert f=={'type':'control_request','request_id':'initialize:2','request':{'subtype':'initialize','hooks':None}}
+  print(json.dumps({'type':'control_response','response':{'subtype':'success','request_id':f['request_id'],'response':{}}}),flush=True)
+  continue
+ print(json.dumps({'type':'system','subtype':'init','session_id':native}),flush=True)
  assert f['session_id']==native and f['message']['content']=='synthetic isolated input'
  print(json.dumps({'type':'assistant','session_id':native,'message':{'role':'assistant','content':[{'type':'text','text':'synthetic output'}]}}),flush=True)
  print(json.dumps({'type':'result','session_id':native,'subtype':'success','is_error':False,'result':'synthetic output'}),flush=True)
@@ -39,8 +43,8 @@ for line in sys.stdin:
         source
             .replace("\'is_error\':False", "\'is_error\':True")
             .replace(
-                "\'subtype\':\'success\'",
-                "\'subtype\':\'error_during_execution\'",
+                "\'subtype\':\'success\',\'is_error\'",
+                "\'subtype\':\'error_during_execution\',\'is_error\'",
             )
     } else {
         source.into()
