@@ -1,42 +1,152 @@
 //! Bounded JSON-to-Store boundary. Authentication remains in the sole writer.
 use super::*;
-use serde::Deserialize;
+use serde_json::Value;
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Bundle {
-    schema_version: u32,
-    original: HistoryImportRequest,
-    current_receipt: HistoryImportReceipt,
-    native_delta: HistoryImportRequest,
-    bundle_digest: String,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Request {
-    restore_id: Uuid,
-    bundle: Bundle,
-    original_namespace: Uuid,
-    delta_namespace: Uuid,
+fn fields(value: &Value, expected: &[&str]) -> Result<()> {
+    let object = value.as_object().ok_or(HistoryError::Invalid)?;
+    if object.len() != expected.len() || expected.iter().any(|key| !object.contains_key(*key)) {
+        return Err(HistoryError::Invalid);
+    }
+    Ok(())
 }
 
-/// Decode the adapter wire request, independently recomputing binary fingerprints.
-/// This format is distinct from the Python transfer envelope and its JSON hash.
+// Match Python canonical ensure_ascii JSON exactly. Duplicate keys, alternate
+// spellings, whitespace and noncanonical numbers cannot survive this comparison.
+fn canonical(value: &Value, output: &mut String) -> Result<()> {
+    use std::fmt::Write;
+    match value {
+        Value::String(text) => {
+            output.push('"');
+            for ch in text.chars() {
+                match ch {
+                    '"' => output.push_str("\\\""),
+                    '\\' => output.push_str("\\\\"),
+                    '\n' => output.push_str("\\n"),
+                    '\r' => output.push_str("\\r"),
+                    '\t' => output.push_str("\\t"),
+                    '\u{08}' => output.push_str("\\b"),
+                    '\u{0c}' => output.push_str("\\f"),
+                    ' '..='~' => output.push(ch),
+                    _ => {
+                        for unit in ch.encode_utf16(&mut [0; 2]) {
+                            write!(output, "\\u{unit:04x}").map_err(|_| HistoryError::Invalid)?;
+                        }
+                    }
+                }
+            }
+            output.push('"');
+        }
+        Value::Array(items) => {
+            output.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                canonical(item, output)?;
+            }
+            output.push(']');
+        }
+        Value::Object(items) => {
+            output.push('{');
+            let mut keys: Vec<_> = items.keys().collect();
+            keys.sort();
+            for (index, key) in keys.iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                canonical(&Value::String((*key).clone()), output)?;
+                output.push(':');
+                canonical(&items[*key], output)?;
+            }
+            output.push('}');
+        }
+        Value::Number(number) if number.is_i64() || number.is_u64() => {
+            output.push_str(&number.to_string())
+        }
+        Value::Bool(true) => output.push_str("true"),
+        Value::Bool(false) => output.push_str("false"),
+        Value::Null => output.push_str("null"),
+        _ => return Err(HistoryError::Invalid),
+    }
+    Ok(())
+}
+
+fn source(value: &Value) -> Result<HistoryImportRequest> {
+    fields(
+        value,
+        &[
+            "namespace",
+            "source_digest",
+            "source_conversation_id",
+            "source_scope",
+            "source_watermark",
+            "messages",
+        ],
+    )?;
+    let scope = &value["source_scope"];
+    fields(
+        scope,
+        if scope["kind"] == "global" {
+            &["kind"]
+        } else {
+            &["kind", "project_id"]
+        },
+    )?;
+    for message in value["messages"].as_array().ok_or(HistoryError::Invalid)? {
+        fields(message, &["message_id", "sequence", "actor_kind", "text"])?;
+    }
+    serde_json::from_value(value.clone()).map_err(|_| HistoryError::Invalid)
+}
+
+/// Decode canonical adapter JSON; independently verify Core binary fingerprints.
 pub fn decode_history_recovery_restore(encoded: &[u8]) -> Result<HistoryRecoveryRestoreRequest> {
     if encoded.len() > 40 * 1024 * 1024 {
         return Err(HistoryError::Invalid);
     }
-    let value: Request = serde_json::from_slice(encoded).map_err(|_| HistoryError::Invalid)?;
+    let value: Value = serde_json::from_slice(encoded).map_err(|_| HistoryError::Invalid)?;
+    let mut text = String::new();
+    canonical(&value, &mut text)?;
+    if text.as_bytes() != encoded {
+        return Err(HistoryError::Invalid);
+    }
+    fields(
+        &value,
+        &[
+            "restore_id",
+            "bundle",
+            "original_namespace",
+            "delta_namespace",
+        ],
+    )?;
+    let bundle = &value["bundle"];
+    fields(
+        bundle,
+        &[
+            "schema_version",
+            "original",
+            "current_receipt",
+            "native_delta",
+            "bundle_digest",
+        ],
+    )?;
     let request = HistoryRecoveryRestoreRequest {
-        restore_id: value.restore_id,
-        original_namespace: value.original_namespace,
-        delta_namespace: value.delta_namespace,
+        restore_id: serde_json::from_value(value["restore_id"].clone())
+            .map_err(|_| HistoryError::Invalid)?,
+        original_namespace: serde_json::from_value(value["original_namespace"].clone())
+            .map_err(|_| HistoryError::Invalid)?,
+        delta_namespace: serde_json::from_value(value["delta_namespace"].clone())
+            .map_err(|_| HistoryError::Invalid)?,
         bundle: HistoryRecoveryBundle {
-            schema_version: value.bundle.schema_version,
-            original: value.bundle.original,
-            current_receipt: value.bundle.current_receipt,
-            native_delta: value.bundle.native_delta,
-            bundle_digest: value.bundle.bundle_digest,
+            schema_version: serde_json::from_value(bundle["schema_version"].clone())
+                .map_err(|_| HistoryError::Invalid)?,
+            original: source(&bundle["original"])?,
+            current_receipt: serde_json::from_value(bundle["current_receipt"].clone())
+                .map_err(|_| HistoryError::Invalid)?,
+            native_delta: source(&bundle["native_delta"])?,
+            bundle_digest: bundle["bundle_digest"]
+                .as_str()
+                .ok_or(HistoryError::Invalid)?
+                .to_owned(),
         },
     };
     request.validate()?;
@@ -61,6 +171,17 @@ impl Store {
 mod tests {
     use super::*;
     const FIXTURE: &[u8] = include_bytes!("recovery_wire_fixture.json");
+
+    #[test]
+    fn canonical_unicode_controls_match_python_ascii_encoding() {
+        let value = serde_json::json!({"text": "é😀\u{7f}\n\t\u{08}\u{0c}\\\""});
+        let mut encoded = String::new();
+        canonical(&value, &mut encoded).unwrap();
+        assert_eq!(
+            encoded,
+            r#"{"text":"\u00e9\ud83d\ude00\u007f\n\t\b\f\\\""}"#
+        );
+    }
 
     #[test]
     fn python_wire_matches_core_binary_fingerprint() {
