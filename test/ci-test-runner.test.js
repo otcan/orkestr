@@ -159,3 +159,17 @@ test("CI test runner accepts --shard i/n", () => {
   assert.throws(() => parseCiTestRunnerArgs(["--shard", "3"], {}), /expected i\/n/);
   assert.throws(() => parseCiTestRunnerArgs(["--shard", "5/4"], {}), /Invalid test shard index/);
 });
+
+test("CI test runner scrubs connector encryption key material", () => {
+  const env = buildCiTestEnv({
+    PATH: "/bin",
+    ORKESTR_CONNECTOR_ENCRYPTION_KEY: "synthetic-connector-key",
+    ORKESTR_SECRET_KEY: "synthetic-secret-key",
+    ORKESTR_SECURE_INPUT_KEY: "synthetic-secure-input-key",
+  });
+  // Key names only: a failing assertion must never print key values.
+  const leaked = ["ORKESTR_CONNECTOR_ENCRYPTION_KEY", "ORKESTR_SECRET_KEY", "ORKESTR_SECURE_INPUT_KEY"]
+    .filter((key) => Object.hasOwn(env, key));
+  assert.deepEqual(leaked, []);
+  assert.equal(env.PATH, "/bin");
+});
