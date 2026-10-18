@@ -51,6 +51,7 @@ pub struct Execution {
     received_ms: Option<u64>,
     authorized: bool,
     control_error: Option<String>,
+    canonical_received: std::collections::BTreeMap<String, u64>,
     canonical: std::collections::BTreeMap<String, orkestr_v2_contracts::ExecutionStatus>,
 }
 impl Execution {
@@ -105,8 +106,8 @@ impl Execution {
     pub fn apply_status(
         &mut self,
         generation: u64,
-        received_ms: u64,
-        status: orkestr_v2_contracts::ExecutionStatus,
+        mut received_ms: u64,
+        mut status: orkestr_v2_contracts::ExecutionStatus,
     ) -> Result<(), &'static str> {
         use orkestr_v2_contracts::ExecutionPhase as Wire;
         let conversation = status.conversation_id.to_string();
@@ -124,12 +125,18 @@ impl Execution {
         {
             return Err("Invalid or regressing execution status");
         }
-        // A replay is not a new observation. Preserve the original client freshness anchor.
-        if self.canonical.get(&conversation).is_some_and(|old| {
-            status.revision == old.revision && status.observed_at_ms <= old.observed_at_ms
-        }) && self.sample.is_some()
-        {
-            return Ok(());
+        // Rehydrating a remounted selection must retain the original observation anchor.
+        if let Some(old) = self.canonical.get(&conversation) {
+            if status.revision == old.revision && status.observed_at_ms <= old.observed_at_ms {
+                if self.sample.is_some() {
+                    return Ok(());
+                }
+                status = old.clone();
+                received_ms = *self
+                    .canonical_received
+                    .get(&conversation)
+                    .expect("canonical receipt");
+            }
         }
         let run = status
             .run_id
@@ -171,6 +178,8 @@ impl Execution {
         self.received_ms = Some(received_ms);
         self.connected = true;
         self.authorized = true;
+        self.canonical_received
+            .insert(conversation.clone(), received_ms);
         self.canonical.insert(conversation, status);
         Ok(())
     }
@@ -197,6 +206,7 @@ impl Execution {
         self.authorized = false;
         self.sample = None;
         self.canonical.clear();
+        self.canonical_received.clear();
         self.scope = None;
         self.received_ms = None;
         self.connected = false;

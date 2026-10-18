@@ -7,16 +7,12 @@ use serde_json::{json, Value};
 pub fn ExecutionPoll(
     id: String,
     session_scope: Signal<SessionScope>,
+    mut execution: Signal<Execution>,
     onexpired: EventHandler<()>,
 ) -> Element {
     let generation = session_scope.read().generation();
     let selected = id.clone();
-    let mut execution = use_signal(move || {
-        let mut state = Execution::default();
-        state.select(&selected, "");
-        state
-    });
-    let selection_generation = use_hook(move || execution.read().selection_generation());
+    let selection_generation = use_hook(move || execution.write().select(&selected, ""));
     let mut now = use_signal(|| 0u64);
     let channel = use_hook(move || {
         let eval = document::eval(include_str!("execution_poll.js"));
@@ -30,7 +26,10 @@ pub fn ExecutionPoll(
         let mut channel = channel;
         while let Ok(message) = channel.recv::<Value>().await {
             if !session_scope.read().is_current(generation) {
-                execution.write().authorization_lost();
+                let _ = channel.send(json!({"stop":true}));
+                return;
+            }
+            if execution.read().selection_generation() != selection_generation {
                 let _ = channel.send(json!({"stop":true}));
                 return;
             }
@@ -68,7 +67,9 @@ pub fn ExecutionPoll(
             }
         }
         let _ = channel.send(json!({"stop":true}));
-        execution.write().disconnected();
+        if execution.read().selection_generation() == selection_generation {
+            execution.write().disconnected();
+        }
     });
     rsx! { crate::execution_panel::ExecutionPanel { execution, now_ms: now() } }
 }

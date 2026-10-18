@@ -22,6 +22,8 @@ fn App() -> Element {
     let mut drafts = use_signal(BTreeMap::<String, Draft>::new);
     let mut pending_project = use_signal(|| None::<ProjectInput>);
     let mut session_scope = use_signal(SessionScope::default);
+    // Owner-scoped high-water marks outlive keyed conversation and tab remounts.
+    let mut execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut tab = use_signal(|| "Assistant".to_string());
     let mut notice = use_signal(|| "Sign in to your local server.".to_string());
     let mut refresh = use_signal(|| 0_u64);
@@ -38,6 +40,7 @@ fn App() -> Element {
         .await
         {
             Ok(session) => {
+                execution.write().authorization_lost();
                 session_scope
                     .write()
                     .activate(&session.global_conversation_id, &mut drafts.write());
@@ -57,6 +60,7 @@ fn App() -> Element {
         resuming.set(false);
     });
     let mut expired = move |_| {
+        execution.write().authorization_lost();
         session_scope.write().invalidate();
         projects.set(Vec::new());
         pending_project.set(None);
@@ -79,6 +83,7 @@ fn App() -> Element {
             } else if csrf().is_empty() {
                 views::Auth { onlogin: move |session: transport::BrowserSession| {
                     if logging_out() { return; }
+                    execution.write().authorization_lost();
                     session_scope.write().activate(&session.global_conversation_id, &mut drafts.write());
                     projects.set(Vec::new()); pending_project.set(None); refresh += 1;
                     tab.set("Assistant".into());
@@ -105,6 +110,7 @@ fn App() -> Element {
                             if !session_scope.read().is_current(generation) { logging_out.set(false); return; }
                             match result {
                                 Ok(_) => {
+                                    execution.write().authorization_lost();
                                     session_scope.write().invalidate();
                                     projects.set(Vec::new()); pending_project.set(None);
                                     global.set(String::new()); current.set(String::new()); refresh += 1;
@@ -131,7 +137,7 @@ fn App() -> Element {
                         }
                     }
                     button { onclick: move |_| refresh += 1, "Reconnect and reload history" }
-                    views::Conversation { id: current(), csrf: csrf(), session_scope, drafts, onexpired: expired }
+                    views::Conversation { id: current(), csrf: csrf(), session_scope, execution, drafts, onexpired: expired }
                     }
                 } else if tab() == "History" {
                     history::History { key: "{current()}", id: current(), csrf: csrf(), session_scope, onexpired: expired }

@@ -145,6 +145,7 @@ pub fn Conversation(
     id: String,
     csrf: String,
     session_scope: Signal<SessionScope>,
+    execution: Signal<orkestr_v2_ui::execution::Execution>,
     mut drafts: Signal<BTreeMap<String, Draft>>,
     onexpired: EventHandler<()>,
 ) -> Element {
@@ -280,7 +281,7 @@ pub fn Conversation(
                     li { key: "{message.message_id}", strong { "{message.actor_kind}" } p { "{message.text}" } }
                 }
             }
-            crate::execution_poll::ExecutionPoll { key: "{id}-{generation}", id: id.clone(), session_scope, onexpired }
+            crate::execution_poll::ExecutionPoll { key: "{id}-{generation}", id: id.clone(), session_scope, execution, onexpired }
             form { onsubmit: move |event| {
                 event.prevent_default();
                 if sending() || !session_scope.read().is_current(generation) { return; }

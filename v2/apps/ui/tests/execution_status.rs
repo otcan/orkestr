@@ -132,6 +132,46 @@ fn sampled_clock_advances_without_revision_but_identical_replay_never_refreshes(
         .unwrap();
     assert!(state.fresh(60101));
     assert!(state.resources(60101).contains("unavailable"));
+    let mut older_sample = status.clone();
+    older_sample.observed_at_ms -= 60000;
+    older_sample.queue_age_ms = None;
+    state
+        .apply_status(generation, 120102, older_sample)
+        .unwrap();
+    assert!(!state.fresh(120102));
+    assert!(state.resources(120102).contains("unavailable"));
+    assert!(state.can_stop(120102));
     status.capabilities.stop = false;
-    assert!(state.apply_status(generation, 60102, status).is_err());
+    assert!(state.apply_status(generation, 120103, status).is_err());
+}
+
+#[test]
+fn owner_scoped_model_survives_component_selection_remount_without_rejuvenation() {
+    let mut owner_model = Execution::default();
+    let status = wire();
+    let id = status.conversation_id.to_string();
+    let first_mount = owner_model.select(&id, "");
+    owner_model
+        .apply_status(first_mount, 1, status.clone())
+        .unwrap();
+    let second_mount = owner_model.select(&id, "");
+    assert!(owner_model.summary(60001).contains("unavailable"));
+    assert!(owner_model
+        .apply_status(first_mount, 60001, status.clone())
+        .is_err());
+    owner_model
+        .apply_status(second_mount, 60001, status.clone())
+        .unwrap();
+    assert!(!owner_model.fresh(60001));
+    assert!(owner_model.resources(60001).contains("unavailable"));
+    let mut backwards = status.clone();
+    backwards.revision -= 1;
+    assert!(owner_model
+        .apply_status(second_mount, 60002, backwards.clone())
+        .is_err());
+    owner_model.authorization_lost();
+    let new_owner_mount = owner_model.select(&id, "");
+    owner_model
+        .apply_status(new_owner_mount, 60003, backwards)
+        .unwrap();
 }

@@ -88,3 +88,11 @@ queue age may vary. Identical/receding observation replays do not refresh the
 client receipt anchor. Resource sample age remains separate from status freshness.
 Stop/steer buttons remain unavailable. Server-route integration and delayed-fetch
 browser acceptance still need separate proof; unit/bridge builds do not prove them.
+
+Lifecycle correction: `App` owns the execution model, canonical revisions, and
+original observation receipt anchors. Keyed poll components select/clear only the
+displayed projection and fence their own requests; tab/reconnect remounts cannot
+reset the authenticated owner's high-water marks or make identical old telemetry
+fresh. Resume/login, expiry and confirmed logout clear the owner-scoped model.
+The state regression exercises successive component selection lifetimes against
+that shared model; actual mounted-browser navigation is still an integration gate.
