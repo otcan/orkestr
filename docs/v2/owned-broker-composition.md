@@ -68,3 +68,16 @@ revalidated inside Core's acceptance transaction, including receipt replay.
 foreign/missing scope 404, conflicting revision/state 409, unavailable store 503.
 The request preserves its completion EventId/run/revision/key across uncertain
 retries. Provider proposals never invoke this owner decision automatically.
+
+### Actual provider-write activation hold
+
+The current broker pipe is a second hop: fencing Runtime's write into that pipe
+alone does not serialize a later broker write into provider stdin with durable
+revocation. The synthetic composition tests do not prove that missing boundary.
+Real provider activation remains held until the broker relinquishes its provider
+writer and the trusted Runtime owns each bounded nonblocking provider write
+under the appropriate Core fence, or another reviewed equivalent is implemented.
+Waiting for a broker/provider acknowledgement inside a SQLite fence callback is
+not an acceptable replacement for a bounded write. Sealed cancellation/control
+must use the same actual-write boundary; a durable Stop receipt alone remains
+intent, not interruption evidence.
