@@ -43,7 +43,9 @@ pub struct ExecutionStatus {
     pub schema_version: u32,
     pub conversation_id: ConversationId,
     pub run_id: Option<RunId>,
-    /// Monotonic per-conversation snapshot revision, assigned by the store.
+    /// Monotonic per-conversation durable-state revision, assigned by the store.
+    /// observed_at_ms and derived queue_age_ms are read-time samples, excluded
+    /// from equal-revision semantic identity; all other fields must match.
     pub revision: i64,
     pub observed_at_ms: i64,
     pub phase: ExecutionPhase,
@@ -53,6 +55,19 @@ pub struct ExecutionStatus {
     pub capabilities: ExecutionCapabilities,
 }
 impl ExecutionStatus {
+    /// Compare equal-revision durable meaning, excluding only read-time clock
+    /// sampling and derived queue age. Call is_valid and scope/auth checks first.
+    pub fn same_revision_state(&self, other: &Self) -> bool {
+        self.schema_version == other.schema_version
+            && self.conversation_id == other.conversation_id
+            && self.run_id == other.run_id
+            && self.revision == other.revision
+            && self.phase == other.phase
+            && self.progress == other.progress
+            && self.resources == other.resources
+            && self.capabilities == other.capabilities
+    }
+
     pub fn is_valid(&self) -> bool {
         self.schema_version == 1
             && self.revision >= 0
@@ -67,5 +82,37 @@ impl ExecutionStatus {
                     && s.observed_at_ms > 0
                     && s.observed_at_ms <= self.observed_at_ms
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn equal_revision_excludes_only_clock_and_queue_age_samples() {
+        let first = ExecutionStatus {
+            schema_version: 1,
+            conversation_id: ConversationId(uuid::Uuid::from_u128(1)),
+            run_id: None,
+            revision: 1,
+            observed_at_ms: 1000,
+            phase: ExecutionPhase::Queued,
+            queue_age_ms: Some(0),
+            progress: None,
+            resources: None,
+            capabilities: ExecutionCapabilities {
+                stop: false,
+                steer: false,
+            },
+        };
+        let mut sampled = first.clone();
+        sampled.observed_at_ms = 2000;
+        sampled.queue_age_ms = Some(1000);
+        assert!(first.same_revision_state(&sampled));
+        sampled.capabilities.stop = true;
+        assert!(!first.same_revision_state(&sampled));
+        sampled.capabilities.stop = false;
+        sampled.phase = ExecutionPhase::Blocked;
+        assert!(!first.same_revision_state(&sampled));
     }
 }

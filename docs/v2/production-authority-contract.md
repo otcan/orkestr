@@ -130,3 +130,34 @@ execution_revisions, reasoning_inbox, session_bindings, owners, auth_sessions,
 conversations, messages, events and outbox. New-process authorization uses only
 the machine session and exact public predecessor after its real deadline;
 there is no private-context reconstruction API.
+
+## Read sampling and next canonical observation compatibility gate
+
+At equal execution revision, `ExecutionStatus::same_revision_state` excludes
+ONLY observed_at_ms and derived queue_age_ms. They are read-time samples; GET
+never writes merely to change time. Identity, phase, capabilities, progress and
+resources (including sample timestamps) must match. Consumers still validate
+structure, authentication, scope and selection generation before comparison.
+
+Production observation writes require a new public replay variant, not a
+fixture event. `ProviderObservedEnvelope` and
+`v2/fixtures/provider-observed-proposal.json` propose schema 5, SSE name
+provider_observed, with explicit source message/event linkage and typed
+Started/ApprovalRequested/CompletedProposal/Failed/Lost metadata. No native ID,
+lease/fence, locator, raw progress or synthetic provider-success flag appears.
+The production adapter will reject synthetic completion; CompletedProposal
+remains AwaitingAcceptance. Starting+Failed is permitted after consumed dispatch.
+Terminal failure alone does not authorize session reuse. Progress and Stopped
+remain unavailable until their payload/control authority is implemented.
+
+This DTO is deliberately NOT yet in ConversationEvent and no production event
+is written. Independent DTO and UI consumer compatibility review must precede
+adding the replay union variant and production observation transactions. Legacy
+schema 1-4 serializers and fixtures remain byte-for-byte unchanged.
+
+ExecutionControlRequest and ExecutionSteerRequest establish input-only shapes:
+required nonnil run_id, per-conversation expected_revision, bounded request_key,
+and bounded nonempty steering text. They are not authority or a success receipt.
+Runtime owns cookie/CSRF relative /api/v2/conversations/:id/execution routes;
+Stop/steer remain unavailable until owner/run/revision/idempotency/fence checks
+and durable result receipts are implemented. Do not manufacture a success DTO.
