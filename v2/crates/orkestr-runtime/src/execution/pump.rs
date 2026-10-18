@@ -17,6 +17,7 @@ struct CodexOutput {
     failed: Option<Blocker>,
     eof: bool,
     broker: Option<crate::broker::channel::BrokerChannel>,
+    writing: Option<super::provider_write::PendingWrite>,
 }
 impl Provider for CodexOutput {
     fn start(&mut self, _: &RunAdmission) -> Result<(), Blocker> {
@@ -32,6 +33,23 @@ impl Provider for CodexOutput {
         if let Some(error) = &self.failed {
             return Err(error.clone());
         }
+        if let Some(writing) = self.writing.as_mut() {
+            if writing.prepared() {
+                let result = writing
+                    .write(self.broker.as_mut().ok_or(Blocker::Protocol)?, |bytes| {
+                        self.child.write_provider_suffix(&self.scope, bytes)
+                    });
+                match result {
+                    Ok(true) => self.writing = None,
+                    Ok(false) => return Ok(None),
+                    Err(_) => {
+                        self.failed = Some(Blocker::Protocol);
+                        self.child.quarantine();
+                        return Err(Blocker::Protocol);
+                    }
+                }
+            }
+        }
         if let Some(event) = self.stream.next_event() {
             return Ok(Some(event));
         }
@@ -44,7 +62,18 @@ impl Provider for CodexOutput {
                 let bytes = match self.broker.as_mut() {
                     Some(broker) => match broker.receive(&bytes) {
                         Ok(Some(frame)) => frame.to_string().into_bytes(),
-                        Ok(None) => return Ok(None),
+                        Ok(None) => {
+                            if serde_json::from_slice::<serde_json::Value>(&bytes)
+                                .ok()
+                                .is_some_and(|v| v["method"] == "BrokerPrepared")
+                            {
+                                self.writing
+                                    .as_mut()
+                                    .ok_or(Blocker::Protocol)?
+                                    .prepare(broker)?;
+                            }
+                            return Ok(None);
+                        }
                         Err(error) => {
                             self.failed = Some(error.clone());
                             return Err(error);
@@ -106,6 +135,7 @@ impl CodexPump {
                 failed: None,
                 eof: false,
                 broker: None,
+                writing: None,
             },
             cursor: PendingObservation::default(),
             admission,
@@ -113,6 +143,13 @@ impl CodexPump {
     }
     pub(super) fn with_broker(mut self, channel: crate::broker::channel::BrokerChannel) -> Self {
         self.source.broker = Some(channel);
+        self
+    }
+    pub(super) fn with_provider_write(
+        mut self,
+        writing: Option<super::provider_write::PendingWrite>,
+    ) -> Self {
+        self.source.writing = writing;
         self
     }
     pub fn flush(&mut self) -> Result<(), crate::containment::Error> {
@@ -129,6 +166,14 @@ impl CodexPump {
     }
     pub async fn step(&mut self, store: &Store) -> Result<bool, supervisor::Error> {
         supervisor::step(store, &mut self.source, &self.admission, &mut self.cursor).await
+    }
+    #[cfg(test)]
+    pub(super) fn prepared_for_provider_write(&self) -> bool {
+        self.source.writing.as_ref().is_some_and(|w| w.prepared())
+    }
+    #[cfg(test)]
+    pub(super) fn provider_offset(&self) -> usize {
+        self.source.writing.as_ref().map_or(0, |w| w.offset())
     }
     pub fn pending(&self) -> Option<&orkestr_v2_application::runtime::ProviderEventInput> {
         self.cursor.pending()

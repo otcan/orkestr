@@ -49,6 +49,20 @@ impl TrustedLauncher {
         })
     }
 
+    pub(crate) fn open_metadata_fd(
+        &self,
+        store: Store,
+        grant: BoundSessionMetadata,
+        directories: ChildDirectories,
+        bounds: TransportBounds,
+    ) -> Result<(MetadataAuthority, MetadataChild), Error> {
+        let authority = MetadataAuthority::new(store, grant)?;
+        let child = authority
+            .issue_executor(&self.executable, &launch_arguments(), directories, bounds)?
+            .spawn_with_provider_fd()?;
+        Ok((authority, child.mark_broker_launcher(BrokerLaunch(()))))
+    }
+
     /// No client args, account ID, environment, profile directory or socket.
     /// The provider/account selection belongs inside this specific launcher.
     pub(crate) fn open_metadata(

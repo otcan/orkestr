@@ -170,6 +170,12 @@ pub struct MetadataExecutor {
 }
 impl MetadataExecutor {
     pub fn spawn(&self) -> Result<MetadataChild, Error> {
+        self.spawn_mode(false)
+    }
+    pub(super) fn spawn_with_provider_fd(&self) -> Result<MetadataChild, Error> {
+        self.spawn_mode(true)
+    }
+    fn spawn_mode(&self, provider_fd: bool) -> Result<MetadataChild, Error> {
         let mut state = self.shared.state.lock().map_err(|_| Error::Revoked)?;
         if state.phase != Phase::Setup {
             return Err(Error::Revoked);
@@ -180,13 +186,14 @@ impl MetadataExecutor {
         let grant = state.grant.as_ref().ok_or(Error::Revoked)?;
         let mut process = None;
         let result = self.shared.store.with_metadata_fence(grant, || {
-            process = Some(Process::spawn_config(
+            process = Some(Process::spawn_config_mode(
                 &self.program,
                 &self.args,
                 &self.directories,
                 self.bounds,
                 &self.shared.active,
                 &self.shared.reaper,
+                provider_fd,
             )?);
             Ok::<_, Error>(())
         });
@@ -210,6 +217,38 @@ pub struct MetadataChild {
     broker_launcher: bool,
 }
 impl MetadataChild {
+    pub(crate) fn receive_provider_writer(&self) -> Result<bool, Error> {
+        self.shared.setup(|| {
+            let mut live = self.process.live.lock().map_err(|_| Error::Revoked)?;
+            if live.provider_writer.is_some() {
+                return Ok(true);
+            }
+            let writer = live
+                .handoff
+                .as_mut()
+                .ok_or(Error::AuthorityProtocol)?
+                .receive()?;
+            if let Some(writer) = writer {
+                live.provider_writer = Some(writer);
+                live.handoff = None;
+                return Ok(true);
+            }
+            Ok(false)
+        })
+    }
+    pub(crate) fn write_provider_metadata(&self, bytes: &[u8]) -> Result<usize, Error> {
+        self.shared.setup(|| {
+            self.process
+                .live
+                .lock()
+                .map_err(|_| Error::Revoked)?
+                .provider_writer
+                .as_mut()
+                .ok_or(Error::AuthorityProtocol)?
+                .write_suffix(bytes)
+        })
+    }
+
     /// Only the trusted fixed-launcher module can construct this marker.
     pub(super) fn mark_broker_launcher(mut self, _: super::broker::BrokerLaunch) -> Self {
         self.broker_launcher = true;

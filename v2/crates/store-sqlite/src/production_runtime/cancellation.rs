@@ -31,7 +31,7 @@ impl Store {
         key: &str,
     ) -> Result<CancelReceipt> {
         Ok(self
-            .production_cancel_guarded(owner, run, key, None)
+            .production_cancel_guarded(owner, run, key, None, None)
             .await?
             .0)
     }
@@ -41,6 +41,7 @@ impl Store {
         run: &RunId,
         key: &str,
         guard: Option<(&orkestr_v2_contracts::ConversationId, i64)>,
+        credential: Option<&str>,
     ) -> Result<(CancelReceipt, i64)> {
         let context = self.context()?;
         if owner != &context.owner {
@@ -50,6 +51,14 @@ impl Store {
             return Err(RuntimeStoreError::InvalidInput);
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        if let Some(credential) = credential {
+            let authorized: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
+                .bind(crate::digest(credential)).bind(owner.to_string())
+                .fetch_one(&mut *tx).await.map_err(db)?;
+            if authorized != 1 {
+                return Err(RuntimeStoreError::Unauthorized);
+            }
+        }
         // Replay authenticates immutable scope, not present-day dispatch authority.
         context.authenticate(&mut tx).await?;
         let row =
