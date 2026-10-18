@@ -2,6 +2,7 @@
 import secrets
 import uuid
 from protocol import PROTOCOL, exact, identifier, require
+from claude_telemetry import validate_telemetry
 
 
 class ClaudeChannel:
@@ -19,6 +20,7 @@ class ClaudeChannel:
         self.system_seen = False
         self.active = None
         self.terminal = False
+        self.telemetry_uuids = set()
 
     def client(self, request):
         require(not self.poisoned)
@@ -94,7 +96,11 @@ class ClaudeChannel:
             require(self.setup is not None and not self.initialized and self.active is None)
             exact(frame, ("type", "response"))
             response = frame["response"]
-            exact(response, ("subtype", "request_id", "response"))
+            require(isinstance(response, dict))
+            pending = ("pending_permission_requests", "pending_user_dialog_requests")
+            require(set(response) <= {"subtype", "request_id", "response", *pending})
+            require(all(response[key] == [] for key in pending if key in response))
+            require({"subtype", "request_id", "response"} <= set(response))
             require(response["subtype"] == "success" and response["request_id"] == self.setup[1]
                     and isinstance(response["response"], dict))
             self.initialized = True
@@ -107,6 +113,15 @@ class ClaudeChannel:
         require(not any(key in frame for key in ("sessionId", "parent_tool_use_id"))
                 or frame.get("parent_tool_use_id") is None and "sessionId" not in frame)
         kind = frame.get("type")
+        if kind in ("command_lifecycle", "rate_limit_event"):
+            validate_telemetry(frame, self.input_uuid)
+            require(self.initialized and self.active is not None)
+            value = frame["uuid"]
+            require(isinstance(value, str) and str(uuid.UUID(value)) == value)
+            require(value not in self.telemetry_uuids and len(self.telemetry_uuids) < 128)
+            self.telemetry_uuids.add(value)
+            # Even post-terminal telemetry cannot advance readiness or execution state.
+            return None
         if kind in ("assistant", "result") and getattr(self.session, "resumed", False):
             # No relabeling even for unseen historical frames on a fresh reader.
             require(self.input_uuid is not None
