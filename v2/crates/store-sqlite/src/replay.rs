@@ -8,7 +8,7 @@ pub(super) async fn events(
     after: i64,
     limit: u32,
 ) -> Result<Vec<ConversationEvent>> {
-    let rows = sqlx::query("SELECT e.*,coalesce(o.run_sequence,p.run_sequence) AS run_sequence,coalesce(o.kind,p.kind) AS observation_kind,o.synthetic,coalesce(o.receipt_state,p.receipt_state) AS receipt_state,coalesce(c.inflight_status,pc.inflight_status) AS cancel_outcome,coalesce(r.id,pr.id) AS run_id,coalesce(r.session_id,pr.session_id) AS session_id,coalesce(r.message_id,pr.message_id) AS source_message_id,coalesce(r.event_id,pr.event_id) AS source_event_id FROM events e LEFT JOIN fixture_observations o ON o.event_id=e.id LEFT JOIN fixture_cancellations c ON c.event_id=e.id LEFT JOIN fixture_runs r ON r.id=coalesce(o.run_id,c.run_id) LEFT JOIN production_observations p ON p.event_id=e.id LEFT JOIN production_cancellations pc ON pc.event_id=e.id LEFT JOIN production_runs pr ON pr.id=coalesce(p.run_id,pc.run_id) WHERE e.conversation_id=? AND e.owner_id=? AND e.sequence>? ORDER BY e.sequence LIMIT ?")
+    let rows = sqlx::query("SELECT e.*,coalesce(o.run_sequence,p.run_sequence) AS run_sequence,coalesce(o.kind,p.kind) AS observation_kind,o.synthetic,pp.id AS payload_id,coalesce(o.receipt_state,p.receipt_state) AS receipt_state,coalesce(c.inflight_status,pc.inflight_status) AS cancel_outcome,coalesce(r.id,pr.id) AS run_id,coalesce(r.session_id,pr.session_id) AS session_id,coalesce(r.message_id,pr.message_id) AS source_message_id,coalesce(r.event_id,pr.event_id) AS source_event_id FROM events e LEFT JOIN fixture_observations o ON o.event_id=e.id LEFT JOIN fixture_cancellations c ON c.event_id=e.id LEFT JOIN fixture_runs r ON r.id=coalesce(o.run_id,c.run_id) LEFT JOIN production_observations p ON p.event_id=e.id LEFT JOIN production_cancellations pc ON pc.event_id=e.id LEFT JOIN production_runs pr ON pr.id=coalesce(p.run_id,pc.run_id) LEFT JOIN production_payloads pp ON pp.event_id=e.id WHERE e.conversation_id=? AND e.owner_id=? AND e.sequence>? ORDER BY e.sequence LIMIT ?")
         .bind(conversation.to_string()).bind(owner.to_string()).bind(after).bind(limit.clamp(1,100)).fetch_all(pool).await.map_err(db)?;
     rows.iter()
         .map(|r| {
@@ -37,9 +37,17 @@ pub(super) async fn events(
                         },
                     }))
                 }
-                ("provider_observed", 5) => {
+                ("provider_observed", version @ (5 | 8)) => {
+                    if version == 8
+                        && r.try_get::<&str, _>("observation_kind").map_err(db)? != "progress"
+                    {
+                        return Err(StoreError::Unavailable);
+                    }
                     let observation = match r.try_get::<&str, _>("observation_kind").map_err(db)? {
-                        "started" => ProductionObservationKind::Started,
+                        "progress" if version == 8 => ProductionObservationKind::ProgressRef {
+                            payload_id: PayloadId(parse(r.try_get("payload_id").map_err(db)?)?),
+                        },
+                        "started" if version == 5 => ProductionObservationKind::Started,
                         "approval_requested" => ProductionObservationKind::ApprovalRequested,
                         "completed_proposal" => ProductionObservationKind::CompletedProposal,
                         "failed" => ProductionObservationKind::Failed,
@@ -49,7 +57,7 @@ pub(super) async fn events(
                     Ok(ConversationEvent::ProviderObserved(
                         ProviderObservedEnvelope {
                             event_id,
-                            schema_version: 5,
+                            schema_version: version as u32,
                             owner_id: owner.clone(),
                             scope: scope.clone(),
                             aggregate_id: conversation.clone(),

@@ -18,6 +18,9 @@ mod metadata;
 #[cfg(test)]
 mod observation_tests;
 mod observations;
+#[cfg(test)]
+mod payload_tests;
+mod payloads;
 pub use metadata::{BoundSessionMetadata, ReadySessionTransition};
 #[cfg(all(test, unix))]
 mod process_tests;
