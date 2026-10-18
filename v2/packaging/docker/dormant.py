@@ -105,7 +105,7 @@ def rollback(state, image_manifest):
             receipt['image_manifest_sha256'] == digest(image_manifest), 'same-image receipt required')
     require(set(p.name for p in state.iterdir()) <= {'restore-dormant.json', 'data'}, 'unexpected state files')
     data = state / 'data'
-    if data.exists():
+    if data.exists() or data.is_symlink():
         private(data)
         require(set(p.name for p in data.iterdir()) <= {'core.sqlite3'}, 'unexpected data files')
         database = data / 'core.sqlite3'

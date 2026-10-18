@@ -55,6 +55,17 @@ class DormantTests(unittest.TestCase):
             recovery.rollback(self.state, self.image)
         self.assertTrue((self.state / 'restore-dormant.json').exists())
 
+    def test_dangling_data_symlink_preserves_receipt_and_symlink(self):
+        recovery.apply(self.snapshot, self.state, self.image)
+        (self.state / 'data/core.sqlite3').unlink()
+        (self.state / 'data').rmdir()
+        (self.state / 'data').symlink_to(self.root / 'missing-synthetic-data')
+        receipt = (self.state / 'restore-dormant.json').read_bytes()
+        with self.assertRaisesRegex(RuntimeError, 'private owned directory'):
+            recovery.rollback(self.state, self.image)
+        self.assertTrue((self.state / 'data').is_symlink())
+        self.assertEqual((self.state / 'restore-dormant.json').read_bytes(), receipt)
+
     def test_copy_failure_remains_dormant_then_rollback(self):
         with patch.object(recovery.shutil, 'copyfile', side_effect=OSError('synthetic copy failure')):
             with self.assertRaises(OSError):
