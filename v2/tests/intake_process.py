@@ -298,6 +298,13 @@ class IntakeAcceptance(unittest.TestCase):
     def test_browser_expiry_rotation_and_machine_separation(self):
         cookie, csrf = self.browser_login()
         raw_token = cookie.split("=", 1)[1]
+        # Browser storage keys must never be usable as machine Bearer credentials.
+        for malformed in ["browser:" + raw_token, raw_token[:-1], raw_token + "0", "g" * 64]:
+            status, _ = self.request("POST", f"/conversations/{self.conversation}/messages",
+                {"client_message_id": "namespace-bypass", "text": "Synthetic exploit probe"},
+                authenticated=False, headers={"Authorization": "Bearer " + malformed})
+            self.assertEqual(status, 401)
+        self.assertEqual(self.counts(), [0, 0, 0, 0])
         self.assertEqual(self.request("GET", "/projects", authenticated=False,
                          headers={"Authorization": "Bearer " + raw_token})[0], 401)
         machine_cookie = "orkestr_v2_session=" + self.token

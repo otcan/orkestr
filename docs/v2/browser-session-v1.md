@@ -11,7 +11,9 @@ The host-only `orkestr_v2_session` cookie is HttpOnly, SameSite=Strict,
 Path=/api/v2, Max-Age=43200, with Secure when the configured origin is HTTPS.
 The database enforces expiry independently of the cookie lifetime. Cookie sessions
 are stored in a separate hashed-token namespace; cookie values cannot authenticate
-as machine Bearer tokens, and machine tokens cannot authenticate as cookies.
+as machine Bearer tokens, and machine tokens cannot authenticate as cookies. Machine
+Bearer input must be exactly 64 ASCII hexadecimal characters before any store lookup;
+prefixed browser storage keys are rejected rather than interpreted as machine tokens.
 Ambiguous cookie plus Authorization authentication and duplicate session cookies
 are rejected. Only hashed session material is stored; no schema change is needed.
 

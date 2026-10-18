@@ -135,7 +135,7 @@ pub(crate) async fn owner(state: &AppState, headers: &HeaderMap) -> Result<Owner
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
-        .filter(|s| s.len() <= 256)
+        .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
         .ok_or_else(unauthorized)?;
     state
         .store
