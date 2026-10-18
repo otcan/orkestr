@@ -12,7 +12,7 @@ the existing CLI status helper; no credential files were inspected directly.
 | Capability | Codex CLI 0.163.0 app-server | Claude Code 2.1.295 |
 |---|---|---|
 | Availability | `--version`, schema generation and stdio initialization succeeded | Direct binary `--version` and `--help` succeeded; the original worker environment still lacks its command configuration |
-| Subscription status | Existing supported login status reported authenticated `chatgpt` | **UNVERIFIED**; unauthenticated account API GET returned HTTP 401; diagnostics GET was not invoked because it can launch a side-effecting wrapper |
+| Subscription status | Existing supported login status reported authenticated `chatgpt` | Operator-supplied stored profile metadata: subscription/ready, last verified 2026-09-25 (about three weeks old). **LIVE auth UNVERIFIED**; no wrapper-free live auth probe exists today |
 | Distinct FAST/DEEP identities | Two concurrent metadata-only `thread/start` calls returned distinct native IDs | Fake CLI coverage only |
 | Durable resume | Installed `thread/resume` schema supports it; a newly created **empty** thread refused resume with RPC -32600 (no durable rollout yet) | Installed help advertises `--resume [value]`; existing adapter covered by fake CLI, actual populated-history resume **UNVERIFIED** |
 | Fork | Installed `thread/fork` schema supports it; empty-thread fork refused with RPC -32600 | Installed help advertises `--fork-session` with resume/continue; bridge still explicitly blocks fork; actual fork **UNVERIFIED** |
@@ -52,21 +52,28 @@ missing command configuration in a worker environment remains an explicit
 blocked capability; it does not establish that the host runtime is absent.
 The runtime manager does not discover another environment's binary implicitly.
 
-Only an unauthenticated `GET /api/llm-accounts` was attempted in this follow-up;
-it returned HTTP 401. No profile identity, state or subscription authentication
-was independently verified. No browser cookies or credential files were read to
-work around that result.
+The worker's unauthenticated account API GET returned HTTP 401. The coordinator
+subsequently supplied allowlisted stored metadata from the authorized read-only
+`GET /api/llm-accounts?provider=claude-code`: `provider=claude-code`,
+`authMode=subscription`, `authenticationMethod=subscription_token`, `state=ready`,
+last verified 2026-09-25 (about three weeks before this inventory), with no
+recorded failure or revocation. The coordinator also confirmed that Claude Code
+is enabled on the instance. This is attributed historical profile metadata,
+not an independently executed live authentication check. Private profile IDs and
+labels are omitted. No browser cookies or credential files were read.
 
 The diagnostics endpoint was deliberately left uncalled: the deployed
 `claude-code-subscription-diagnostics.js` resolves the configured command,
 prepares profile directories, then executes `auth status --json`. A configured
 supervisor wrapper may change ownership or ACLs when `CLAUDE_CONFIG_DIR` is set.
-Thus a GET is not sufficient evidence of a side-effect-free host probe. A
-strictly read-only inventory needs an authorized API path whose execution
-chain is verified not to invoke that wrapper or prepare profile directories.
-This observation does not change live settings or authorize bypassing profile
-isolation. Subscription authentication, quota and real Claude session behavior
-remain **UNVERIFIED** until a safe authorized path is verified.
+The coordinator retracted the earlier diagnostics recommendation. The profile
+list route reads stored records without exec, spawn or directory creation;
+diagnostics is a separate operation and must not be called for this inventory.
+No wrapper-free live auth probe exists today, and this PR does not build one.
+**Binary and advertised flags are verified; LIVE authentication, quota and turn
+behaviour remain UNVERIFIED.** Historical subscription/ready metadata is not
+proof that a new turn would authenticate. No live settings or profile isolation
+were changed.
 
 ### Reproduce without inference
 
