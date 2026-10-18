@@ -45,6 +45,17 @@ def bounds(samples,interval,latency,rss,segmented=False):
     receipt.require(0 < latency <= 10000 and 0 < rss <= 16*1024**3,'explicit bounded latency/resource limits required')
 
 
+def finish_home(root,passed,journal):
+    if passed:
+        try:shutil.rmtree(root)
+        except BaseException:
+            if journal is not None:journal.finish(False)
+            raise
+    else:print('Failed private attended probe retained: '+str(root),file=sys.stderr)
+    # A passing journal certifies both child termination and owned-home removal.
+    if journal is not None:journal.finish(passed)
+
+
 def exercise(candidate,parent,port,samples,interval,max_latency_ms,max_rss_bytes,restart=False,journal_dir=None,segment_seconds=300):
     bounds(samples,interval,max_latency_ms,max_rss_bytes,journal_dir is not None)
     receipt.require(sys.platform=='linux','Linux /proc required')
@@ -103,9 +114,7 @@ def exercise(candidate,parent,port,samples,interval,max_latency_ms,max_rss_bytes
             except BaseException:
                 if journal is not None:journal.finish(False)
                 raise
-        if journal is not None:journal.finish(passed)
-        if passed:shutil.rmtree(root)
-        else:print('Failed private attended probe retained: '+str(root),file=sys.stderr)
+        finish_home(root,passed,journal)
     return {'status':'passed','source_commit':manifest['source_commit'],'candidate_manifest_sha256':receipt.sha(candidate/'candidate.json'),
             'scope':'finite attended synthetic native nonprovider probe; production soak window not started',
             'limits':{'max_latency_ms':max_latency_ms,'max_rss_bytes':max_rss_bytes},

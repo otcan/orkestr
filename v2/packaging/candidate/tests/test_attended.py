@@ -1,5 +1,6 @@
 """Bounded supervisor validation; no server/build/Docker."""
 import os
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -38,6 +39,29 @@ class AttendedTests(unittest.TestCase):
                     attended.exercise(parent/'candidate',parent,19842,2,0,100,1024)
             stop.assert_called_once_with(process)
             self.assertTrue((owned/'private.log').exists())
+
+    def test_home_removal_failure_persists_invalidated_window(self):
+        with tempfile.TemporaryDirectory(prefix='v2-attended-cleanup-test-') as directory:
+            parent=Path(directory);owned=parent/'owned';owned.mkdir()
+            identity=dict(zip(attended.segments.KEYS,('a'*40,'b'*64,'c'*64)))
+            journal=attended.segments.Journal(parent/'journal',identity)
+            with patch.object(attended.shutil,'rmtree',side_effect=OSError('synthetic removal failure')):
+                with self.assertRaisesRegex(OSError,'synthetic removal failure'):
+                    attended.finish_home(owned,True,journal)
+            state=json.loads((parent/'journal/window.json').read_text())
+            self.assertEqual(state['status'],'invalidated')
+            self.assertEqual(state['events'][-1]['kind'],'owned_cleanup_failed')
+            self.assertTrue(state['events'][-1]['requires_new_window'])
+            self.assertTrue(owned.exists())
+            with self.assertRaises(RuntimeError):attended.segments.validate(state)
+
+    def test_success_finalizes_only_after_home_removal(self):
+        with tempfile.TemporaryDirectory(prefix='v2-attended-cleanup-test-') as directory:
+            owned=Path(directory)/'owned';owned.mkdir()
+            journal=MagicMock()
+            journal.finish.side_effect=lambda passed:self.assertFalse(owned.exists())
+            attended.finish_home(owned,True,journal)
+            journal.finish.assert_called_once_with(True)
 
     def test_valid_bounded_parameters(self):
         attended.bounds(2,0,1000,1024**3)
