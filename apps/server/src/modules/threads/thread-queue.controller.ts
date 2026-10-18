@@ -1,4 +1,5 @@
 import { listThreadWatches, restoreThreadWatch } from "../../../../../packages/core/src/thread-watches.js";
+import { watchMaintenanceSnapshot, reconcileWatchFinals, rollbackWatchFinals } from "../../../../../packages/core/src/thread-watch-maintenance.js";
 import { Body, Controller, Get, Param, Post, Req } from "@nestjs/common";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
@@ -41,6 +42,21 @@ export class ThreadQueueController {
     const watches = await listThreadWatches({ threadId: thread.id, includeClosed: true });
     if (!watches.some(w => w.id === body.watchId && w.watcherThreadId === thread.id)) throw httpError("thread_watch_not_found", 404);
     return { watch: await restoreThreadWatch(body.watchId) };
+  }
+  @Get(":threadId/queue/watch/:watchId")
+  async inspectWatch(@Req() request: any, @Param("threadId") id: string, @Param("watchId") watchId: string) {
+    const { thread } = await this.authorize(request, id, "inspect");
+    return watchMaintenanceSnapshot(thread.id, watchId);
+  }
+  @Post(":threadId/queue/reconcile-watch")
+  async reconcileWatch(@Req() request: any, @Param("threadId") id: string, @Body() body: any) {
+    const { thread } = await this.authorize(request, id, "reconcile-watch", body);
+    return reconcileWatchFinals(thread.id, body);
+  }
+  @Post(":threadId/queue/rollback-watch")
+  async rollbackWatch(@Req() request: any, @Param("threadId") id: string, @Body() body: any) {
+    const { thread } = await this.authorize(request, id, "rollback-watch", body);
+    return rollbackWatchFinals(thread.id, body.operationId);
   }
   @Post(":threadId/queue/rollback")
   async rollback(@Req() request: any, @Param("threadId") id: string, @Body() body: any) {

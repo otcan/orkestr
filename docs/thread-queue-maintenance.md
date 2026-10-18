@@ -26,6 +26,16 @@ restores only still-superseded, unexecuted originals. Restore cancelled watches
 with `POST queue/restore-watch` and `watchId`; their cursors, rate limits and fired
 IDs are preserved. No backlog or watch recreation happens implicitly.
 
+Automatic watches can also contain old finals not yet forwarded because of rate
+limits. Inspect `GET queue/watch/:watchId`, cancel the watch, then submit every
+returned final ID/digest to `POST queue/reconcile-watch`, with `watchId`, stable
+`operationId`, summary and `retain` or `summarize` decisions plus evidence. The
+write-ahead ledger preserves the source messages. Only those exact completed
+final revisions are skipped; cursors, rate history, pending inputs and failures
+remain untouched. Changed or new reports remain eligible. Restore the watch
+normally. `POST queue/rollback-watch` reverses this while held and cancelled,
+revisiting the preserved cursor with original delivery idempotency keys intact.
+
 Worker reports reserve DONE/BLOCKED/FAILED for substantive outcomes. Use NO_REPLY
 for acknowledgements. CLI `send` records caller-thread provenance and supports
 `--report-kind ack|result|blocked|failed|decision` and `--report-key <revision>`.

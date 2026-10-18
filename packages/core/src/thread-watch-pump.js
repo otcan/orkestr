@@ -1,4 +1,5 @@
 import { acknowledgementOnly, reportFingerprint } from "./thread-report-policy.js";
+import { reconciledWatchFinal } from "./thread-watch-maintenance.js";
 // Delivers thread-watch events. Scans each watched thread's messages after the
 // watch cursor, so it works for every runtime and survives restarts: a final or
 // failure that happened while the server was down is delivered afterwards.
@@ -104,6 +105,7 @@ function replyDefaults(thread, watch, input) {
 // Loop guard: skip a target turn that the watcher itself started through a
 // watch delivery (A watches B and B watches A must not ping-pong).
 async function startedByWatcherWatch(watch, message, env) {
+  if (reconciledWatchFinal(watch, message)) return true;
   if (watch.auto === "worker" && acknowledgementOnly(message)) return true;
   const parentId = clean(message.parentMessageId);
   if (!parentId) return false;
