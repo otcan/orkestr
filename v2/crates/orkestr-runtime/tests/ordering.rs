@@ -4,8 +4,8 @@ use orkestr_runtime::{
     ports::*,
     supervisor::{self, Error},
 };
-use orkestr_v2_application::runtime::RuntimeStoreError;
-use orkestr_v2_contracts::runtime::{InflightStatus, Role};
+use orkestr_v2_application::runtime::{InflightStatus, RuntimeStoreError};
+use orkestr_v2_contracts::runtime::Role;
 use support::*;
 struct SpyProvider<'a> {
     store: &'a Spy,
@@ -131,5 +131,67 @@ fn late_provider_event_cannot_bypass_store_fence() {
         ready(supervisor::step(&store, &mut p, &store.a, &mut pending)),
         Err(Error::Store(RuntimeStoreError::StaleLease))
     );
-    assert!(pending.pending().is_some());
+    assert!(pending.pending().is_none());
+}
+
+#[test]
+fn worker_admission_is_blocked_before_consuming_any_deep_claim() {
+    let store = Spy::new(admission(Role::Worker, 10));
+    let mut p = SpyProvider {
+        store: &store,
+        starts: 0,
+        hung: true,
+    };
+    assert_eq!(
+        ready(supervisor::start(
+            &store,
+            &mut p,
+            &claim(&store.a),
+            &store.a.session_id,
+            1,
+            "worker",
+            Role::Worker
+        )),
+        Err(Error::Store(RuntimeStoreError::InvalidInput))
+    );
+    assert_eq!(p.starts, 0);
+    assert!(store.state.lock().unwrap().calls.is_empty());
+    // Even a faulty store response cannot manufacture a deep role.
+    assert_eq!(
+        ready(supervisor::start(
+            &store,
+            &mut p,
+            &claim(&store.a),
+            &store.a.session_id,
+            1,
+            "deep",
+            Role::Deep
+        )),
+        Err(Error::Store(RuntimeStoreError::InvalidInput))
+    );
+    assert_eq!(p.starts, 0);
+}
+#[test]
+fn deep_binding_must_match_claim_consumer_before_admission() {
+    let store = Spy::new(admission(Role::Deep, 10));
+    let mut p = SpyProvider {
+        store: &store,
+        starts: 0,
+        hung: true,
+    };
+    let other = admission(Role::Deep, 11).session_id;
+    assert_eq!(
+        ready(supervisor::start(
+            &store,
+            &mut p,
+            &claim(&store.a),
+            &other,
+            1,
+            "deep",
+            Role::Deep
+        )),
+        Err(Error::Store(RuntimeStoreError::InvalidInput))
+    );
+    assert_eq!(p.starts, 0);
+    assert!(store.state.lock().unwrap().calls.is_empty());
 }

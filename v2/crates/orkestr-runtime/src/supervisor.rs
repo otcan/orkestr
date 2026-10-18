@@ -1,7 +1,7 @@
 //! Short async core transactions around nonblocking provider operations.
 use crate::ports::{Blocker, InterruptControl, Provider};
-use orkestr_v2_application::runtime::{RuntimeStore, RuntimeStoreError};
-use orkestr_v2_contracts::{runtime::*, OwnerId, SessionId};
+use orkestr_v2_application::runtime::*;
+use orkestr_v2_contracts::{OwnerId, SessionId};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
@@ -21,6 +21,11 @@ pub async fn start<S: RuntimeStore, P: Provider>(
     request_key: &str,
     expected_role: Role,
 ) -> Result<RunAdmission, Error> {
+    // This port consumes only the canonical deep claim. Workers require a
+    // separately reviewed admission port, not another consumption of this inbox.
+    if expected_role != Role::Deep || binding != &claim.consumer_session_id {
+        return Err(Error::Store(RuntimeStoreError::InvalidInput));
+    }
     let admission = store
         .admit_run(claim, binding, expected_generation, request_key)
         .await

@@ -1,7 +1,7 @@
 //! Controllable FAKE provider. Explicit fixture mode, bounded queues, no timers,
 //! threads, inference, persistence or implicit fallback to synthetic results.
 use crate::ports::{Blocker, InterruptControl, ObservationKind, Provider, RunAdmission};
-use orkestr_v2_contracts::runtime::AdmissionPurpose;
+use orkestr_v2_application::runtime::AdmissionPurpose;
 use orkestr_v2_contracts::SessionId;
 use std::collections::{HashMap, VecDeque};
 

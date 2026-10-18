@@ -1,5 +1,6 @@
 //! Runtime-owned process capabilities; all durable authority belongs to core.
-pub use orkestr_v2_contracts::runtime::{ObservationKind, RunAdmission};
+pub use orkestr_v2_application::runtime::RunAdmission;
+pub use orkestr_v2_contracts::runtime::ObservationKind;
 
 /// A cancellation token can control an existing turn, never admit a new one.
 #[derive(Clone, Debug)]

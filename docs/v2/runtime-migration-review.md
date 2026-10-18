@@ -1,7 +1,7 @@
-# Runtime v3 source migration review
+# Runtime v4 source migration review
 
-Canonical origin: core 1ecfd1e84af05af580186f171f954f28ef3a9e27, frozen port
-version 3, PR #82. Migration parent: 330375d8a3ed32281dd6fed571a16f49c5a47d9b.
+Canonical origin: core 7d3c8695e4db2bca3f39c3e4a922086239e10852, frozen port
+version 4, PR #82. Migration parent: afff3c3df7b7563d13944ad7e6d4e10f69635c27.
 Contracts/application crate paths are imported exactly from that origin, including
 crate-local manifests. This supersedes the owner-selected d4cf6934 async-trait
 migration; the canonical trait again uses native Future + Send. Runtime removes
@@ -9,7 +9,9 @@ its test-only async-trait dependency and spy annotation. No competing port/store
 or new dependency is introduced. Root manifest/lock, toolchain, schema/store,
 domain/demo and CI remain untouched by this migration.
 
-Runtime imports core UUID IDs, admissions and observation types. There is only
+Runtime imports core UUID IDs and web-safe observation types from contracts;
+native bindings/admissions/claims/cancel/recovery authority comes only from
+application::runtime, absent from the web-safe contracts crate. There is only
 RuntimeStore::record_observation(admission, event_key, observation); runtime owns
 Provider/Blocker, fake source, protocol parsing and supervision. Core owns all
 schema, payload storage, durable operations and acceptance tests.
@@ -34,7 +36,7 @@ invalid input remain visible latched blockers, not acknowledgements. Refusal
 never changes Stopped into successful cancellation. Only core's committed receipt
 can acknowledge; CompletedProposal remains AwaitingAcceptance evidence.
 
-Core's frozen v3 rule checks authority before duplicate acknowledgement too.
+Core's frozen v4 rule checks authority before duplicate acknowledgement too.
 Thus a committed event whose ACK was lost may subsequently receive explicit
 Fenced/Expired refusal. That neither undoes the earlier commit nor acknowledges
 the retry. The authored spy regression models this ordering; it establishes no
@@ -54,7 +56,7 @@ endpoint, payload store or production fallback is introduced.
 
 ## Review and validation
 
-23 runtime tests authored: 12 offline, 5 ordering, 6 retry. Added raw-progress
+25 runtime tests authored: 12 offline, 7 ordering, 6 retry. Added raw-progress
 unavailable and committed-lost-ACK-then-revoked-authority cases; stale delivery
 coverage includes Fenced. All are unexecuted/uncompiled at this migration head.
 Spies are ready-future protocol evidence only, never durability or restart credit.
@@ -62,3 +64,17 @@ Prior canonical/migration source reviews and historical exact aec7475b 16/16
 results do not transfer to this revision. No heavy compilation, tests or CI pass
 is claimed. Coordinator alone resolves root/lock and final source union after
 independent review. Exact-head build/tests remain pending that handoff.
+
+## Deep-only handoff boundary
+
+Before calling admit_run, runtime rejects non-Deep expectations and any binding
+that differs from claim.consumer_session_id. Returned scope/session/role/purpose
+is still validated. Worker allocation remains a separate lifecycle; worker run
+admission has no reviewed port and is blocked before consuming a deep claim.
+Tests cover both cases plus a faulty store returning Worker for expected Deep.
+The stale-delivery ordering test now expects the canonical discard behavior
+rather than its obsolete retained-queue assertion; no test execution is claimed.
+Core alone implements atomic claim consumption plus Starting or rollback.
+Renewal continues to pass the whole admission with its owner/session locator.
+Queued CompletedProposal/Failed/Lost evidence and cancel identity checks remain
+unchanged. Source import changes no durable adapter or acceptance implementation.
