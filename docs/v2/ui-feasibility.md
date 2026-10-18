@@ -147,7 +147,7 @@ Avoid exposing message text in background notifications or device logs.
 
 | Gate | Required evidence | Current status |
 |---|---|---|
-| Web build | Pinned locked WASM build on exact PR head | Pending admission |
+| Web build | Pinned locked WASM build on exact PR head | Admission active; pending coordinator workspace/lock resolution and build |
 | Busy input | Type/edit/send during a 30-second fake deep turn | Pending implementation |
 | Reconnect | Duplicate replay, stale cursor, offline retry, draft preservation | Pending implementation |
 | History | 10,000 messages, bounded rendering and stable scroll/focus | Pending implementation |
@@ -182,8 +182,15 @@ a separate bounded page projection with beginning, next-page and refresh control
 live updates cannot replace the historical page being read. Pagination rejects
 backwards watermarks, mismatched conversations and nonadvancing cursors.
 
-These are source changes, not compiled UI acceptance. Four Node SSE bridge tests
-pass; Rust/WASM validation still requires coordinator-owned workspace membership
+These are source changes, not compiled UI acceptance. At source checkpoint
+`bfa9e21dc51fc69449fea7732b05ec2ccaafb7b5`, the UI author ran
+`node --test v2/apps/ui/tests/*.test.mjs`: 13 passed (seven HTTP bridge and six
+SSE bridge cases). The last two SSE cases cover coalesced backlog and oversized
+complete frames. Independent source review applies to the earlier
+`8d4049dcf67922d583eb0c21231105922ce52b26` with eleven authored Node cases;
+that review did not execute Node or Rust tests and does not cover the later fix.
+Seven Rust projection cases remain authored but unexecuted.
+Rust/WASM validation still requires coordinator-owned workspace membership
 and lock resolution. Browser auth/CSRF amendment, same-origin serving, browser
 interaction and native gates remain pending. No macOS workflow allowlist change
 was made; the unsigned job remains a proposal pending the parent policy review.
