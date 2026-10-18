@@ -82,6 +82,18 @@ impl Default for PendingObservation {
     }
 }
 impl PendingObservation {
+    pub(crate) fn refresh_admission(
+        &mut self,
+        transition: &orkestr_v2_store_sqlite::RunLeaseTransition,
+    ) -> std::result::Result<(), RuntimeStoreError> {
+        self.next_control_sequence()?;
+        if self.admission.as_ref() != Some(transition.previous()) {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        self.admission = Some(transition.current().clone());
+        Ok(())
+    }
+
     pub(crate) fn next_control_sequence(&self) -> std::result::Result<u64, RuntimeStoreError> {
         if self.pending.is_some() || self.rejected.is_some() || self.refused.is_some() {
             return Err(RuntimeStoreError::Busy);

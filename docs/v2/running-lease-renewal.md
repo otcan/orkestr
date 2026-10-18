@@ -46,3 +46,21 @@ revoked refusal, independent-pool generation CAS, old observation replay versus
 old I/O rejection, and preserved active Worker lineage without child extension.
 Expiry control and private parent locator setup in two author cases are test-only;
 no process, transport-refresh or long-running native-provider acceptance is claimed.
+
+## Runtime same-child adapter
+
+Capture `authorize_running_renewal(&cap)` before `ReadyCodex::attach` consumes the
+capability. Under the same per-run scheduling lock used for polling and Stop,
+check `CodexPump::renewal_quiescent()` before consuming the pump with
+`renew_lease(store, &mut authority)`. `lease_deadline_ms()` is a trusted scheduling
+hint, never browser authority. Pending observations, buffered parser events,
+provider suffixes, interrupted/terminal streams, and refused receipts prevent
+refresh. A failed consuming refresh quarantines the owned child.
+
+The successful result returns a replacement local `Authority` and the original
+pump with a new sealed Store fence. Parser/native/request state and the cursor's
+next observation sequence remain intact. No process is spawned and no frame is
+enqueued. The old local authority is retired before transfer completes, so its
+later revoke cannot signal the refreshed process. A post-action transaction
+failure closes the writer and returns no usable handle. This adapter does not
+raise server budgets or qualify long-running native-provider execution.

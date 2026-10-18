@@ -15,7 +15,7 @@ pub use control::{StopFailure, StoppingCodex};
 pub(super) struct CodexOutput {
     pub(super) child: OwnedChild,
     pub(super) scope: ExecutionScope,
-    admission: RunAdmission,
+    pub(super) admission: RunAdmission,
     pub(super) stream: TurnStream,
     pub(super) failed: Option<Blocker>,
     pub(super) eof: bool,
