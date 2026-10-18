@@ -2,8 +2,9 @@
 
 `v2/migration/live_census.py::count_live(path, family=...)` supports the fixed
 `threads` and `jobs` table families from `census.py::TABLES`. This increment
-implements and tests the edge; production counts remain unexecuted pending
-independent review of this exact source. No secret/config file, registry JSON,
+implements and tests the edge. Root subsequently reviewed and executed this
+exact committed adapter against the selector-confirmed production thread/job
+stores. The private receipt was reviewed by Migration; its values stay private. No secret/config file, registry JSON,
 message body, identifier, route content, profile or database row was read during
 source-path discovery.
 
@@ -81,9 +82,10 @@ ATTACH, schema access, extension calls, missing/corrupt files, symlinks and
 URI metacharacters. A guard-removal test independently confirms mode=ro still
 rejects writes. Views/virtual tables and absent tables have explicit statuses.
 
-Next: independent source review of this adapter, then run only the reviewed
-thread/job candidate stores and write aggregate reports in the authorized
-private directory. Confirm any service-side job-path override through safe
-metadata first. Production counting, private report persistence and CI are
-unexecuted in this increment. Cross-store export/import and release readiness
-remain outside this edge's claims.
+Completed subsequently by root: independent source review, active runtime
+selector confirmation, bounded live per-store counts and private receipt
+persistence. Migration reviewed that receipt and saved a private coverage
+derivation; no additional database reads were performed. Actual semantic
+usage remains unestablished. See `usage-projections.md` for the next proposed
+minimal aggregate edge. Cross-store export/import and release readiness remain
+outside this edge's claims; CI for this follow-up is unexecuted.
