@@ -15,6 +15,32 @@ or dynamic runners, local/reusable actions and secret expressions. Build runs
 the checker before compilation; ordinary test shards include policy fixtures.
 Fixtures are parsed only: no synthetic credential or untrusted action executes.
 
+## Replacing superseded checks
+
+Each pull request has one concurrency group per workflow. A newer run replaces
+older pending and running checks for that PR; the current revision still runs
+the complete required check set. The group uses the PR number, so matching
+branch names in different forks cannot cancel each other's checks.
+
+Main and version-tag pushes, merge groups, scheduled scans, and explicit manual
+runs each get a unique run group. They cannot cancel each other or a PR run;
+this preserves exact-source validation and publication. A shared group with
+`cancel-in-progress: false` would still evict older pending runs, so these
+events use `github.run_id` instead.
+
+CI accepts branch pushes only on `main`, plus `v*` tag pushes. Feature branches
+run through `pull_request`, avoiding a duplicate push build for each PR update.
+Use `workflow_dispatch` when a branch needs an explicit independent run.
+These rules change scheduling only; job names, dependencies, checkout refs,
+permissions, and immutable scanner policy remain intact. See GitHub's
+[workflow concurrency documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency).
+
+The dependency, secret, and test aggregate jobs run after failures but stop on
+workflow cancellation (`always() && !cancelled()`). An obsolete aggregate must
+not hold the PR concurrency group while waiting for a runner. Their commands
+still reject failed, skipped, or missing upstream results. Step-level evidence
+uploads and registry logout keep their cancellation cleanup behavior.
+
 ## Updating or reverting
 
 1. Review the official upstream action release and resolve its tag to the full
@@ -59,3 +85,15 @@ approved inventory of remote refs before claiming complete private-repository
 history coverage. A clean synthetic or range scan does not qualify all refs or
 justify closing security alerts. Retain only aggregate schema-v2 evidence; never
 attach raw/redacted finding payloads to Jira or CI artifacts.
+
+## V2 unsigned iOS runner exception
+
+Only `.github/workflows/v2-ios.yml` may use the exact GitHub-hosted image
+`macos-15`. Other workflows retain the Ubuntu-only runner allowlist. Floating,
+larger, self-hosted and dynamic runner selections remain rejected. This file
+must use only pull-request/push triggers with explicit `v2/` branch filters,
+read-only contents permissions and the existing reviewed immutable action pins;
+checkout must disable credential persistence. No secrets, signing, provisioning
+profiles, certificates, TestFlight or App Store operations are authorized.
+The exception permits unsigned simulator build verification; policy tests are
+not evidence of simulator execution or native acceptance.
