@@ -16,7 +16,7 @@ import urllib.request
 PENDING = (
     "PENDING conversation-to-result: server admits messages but has no execution loop/result route.\n"
     "PENDING run/cancel: no HTTP routes or CLI commands implemented.\n"
-    "PENDING UI: server has no UI route/static bundle.\n"
+    "PENDING UI acceptance: candidate supports an optional static bundle; real UI checks unexecuted.\n"
     "PENDING Docker: no v2 image/Dockerfile/Compose packaging supplied.\n"
     "UNEXECUTED macOS/Docker acceptance: must be performed on the owner's local machine."
 )
@@ -194,7 +194,7 @@ def main():
     parser.add_argument("command", choices=("preflight", "launch", "smoke"))
     parser.add_argument("--binary", required=True, help="already-built orkestr-v2-server executable")
     parser.add_argument("--home", required=True, help="absolute nonexistent isolated directory")
-    parser.add_argument("--port", type=int, default=48122)
+    parser.add_argument("--port", type=int, required=True, help="explicit isolated lane/local port")
     args = parser.parse_args()
     try:
         run(args)

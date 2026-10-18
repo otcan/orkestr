@@ -1,5 +1,10 @@
 # Local installation and acceptance helper
 
+For the newer directory package, persistent private launcher, upgrades and recovery
+gates, see [product installation](local-install-product.md). This page describes
+the original intake-only helper. Its capability table reflects that helper base,
+not the newer combined server's optional static UI support.
+
 This helper targets the combined v2 intake candidate. It is a local acceptance
 harness for an **already-built** `orkestr-v2-server`, not an installer or proof
 of complete product readiness. All examples use fresh synthetic state. It does
