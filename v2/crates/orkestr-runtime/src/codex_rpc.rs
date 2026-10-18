@@ -21,7 +21,6 @@ pub struct CodexRpc {
     pending: Option<(u64, Request)>,
     readiness: Readiness,
     native_session: Option<String>,
-    #[cfg(test)]
     turn_submitted: bool,
 }
 enum Request {
@@ -36,7 +35,6 @@ impl Default for CodexRpc {
             pending: None,
             readiness: Readiness::Uninitialized,
             native_session: None,
-            #[cfg(test)]
             turn_submitted: false,
         }
     }
@@ -44,7 +42,6 @@ impl Default for CodexRpc {
 impl CodexRpc {
     // One consumed turn per connection in this slice. Any enqueue/transport
     // failure leaves it latched; reconnect never restores the consumed grant.
-    #[cfg(test)]
     pub(crate) fn claim_turn_request(&mut self, native: &str) -> Result<u64, Blocker> {
         if self.readiness != Readiness::Subscription
             || self.native_session() != Some(native)

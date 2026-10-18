@@ -40,17 +40,25 @@ fn outer<'a>(value: &'a Value, method: &str) -> Result<&'a Value, Error> {
 pub(super) fn metadata(frame: &[u8], workspace: &Path) -> Result<Vec<u8>, Error> {
     let value: Value = serde_json::from_slice(frame).map_err(|_| Error::InvalidFrame)?;
     let inner = outer(&value, "BrokerMetadata")?;
-    if inner.get("method").and_then(Value::as_str) == Some("thread/start")
-        && inner
-            .pointer("/params/modelProvider")
+    let mut validation = inner.clone();
+    if inner.get("method").and_then(Value::as_str) == Some("thread/start") {
+        let params = validation
+            .get_mut("params")
+            .and_then(Value::as_object_mut)
+            .ok_or(Error::InvalidFrame)?;
+        if params
+            .remove("modelProvider")
+            .as_ref()
             .and_then(Value::as_str)
             != Some("openai")
-    {
-        return Err(Error::InvalidFrame);
+        {
+            return Err(Error::InvalidFrame);
+        }
     }
-    // Existing closed metadata whitelist is reused, never expanded.
+    // Only the broker envelope adds the fixed provider field. The raw setup
+    // whitelist remains unchanged; forward the original pinned envelope.
     validate_metadata(
-        &serde_json::to_vec(inner).map_err(|_| Error::InvalidFrame)?,
+        &serde_json::to_vec(&validation).map_err(|_| Error::InvalidFrame)?,
         workspace,
     )?;
     serde_json::to_vec(&value).map_err(|_| Error::InvalidFrame)

@@ -3,6 +3,8 @@
 mod fence;
 mod pump;
 mod session;
+pub use pump::CodexPump;
+pub use session::{PreparingCodex, ReadyCodex, SetupFailure};
 #[cfg(test)]
 mod session_tests;
 #[cfg(test)]

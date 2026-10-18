@@ -43,3 +43,28 @@ subscription-provider execution, fenced broker interruption and persistent
 follow-up remain separate pending work. The client deliberately allows one
 execution per owned channel in this checkpoint. No credentials, existing native
 sessions or production socket are imported by these tests.
+
+## Trusted server library boundary
+
+`orkestr_runtime::execution` exports opaque `PreparingCodex`, `ReadyCodex`,
+`CodexPump` and `SetupFailure`. `PreparingCodex::open` takes the ordinary Store,
+Core's non-Clone BoundSessionMetadata, a trusted fixed launcher path, canonical
+workspace and ChildDirectories. `poll` performs bounded setup; only successful
+`confirm(self).await` returns ReadyCodex. `attach(self, Store,
+Box<ConsumedProviderDispatch>)` consumes both readiness lineage and committed
+single-use dispatch, returning Authority and CodexPump for the same child.
+`flush` and async `step(&Store)` perform bounded fenced writes and durable
+observation acknowledgement. No constructor accepts caller inference JSON.
+
+These exports allow a separately reviewed trusted server factory; they do not
+configure one, activate HTTP dispatch, establish credential access, or implement
+broker interruption. Stop currently persists intent; actual sealed broker
+control submission remains a separate prerequisite. Defaults stay unconfigured.
+
+POST `/api/v2/conversations/{id}/accept` uses canonical schema-9 request/receipt,
+Origin/CSRF and cookie-only authentication. The exact namespaced credential is
+revalidated inside Core's acceptance transaction, including receipt replay.
+200 returns the validated receipt; malformed input is 400, authentication 401,
+foreign/missing scope 404, conflicting revision/state 409, unavailable store 503.
+The request preserves its completion EventId/run/revision/key across uncertain
+retries. Provider proposals never invoke this owner decision automatically.

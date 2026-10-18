@@ -11,7 +11,7 @@ use orkestr_v2_store_sqlite::{BoundSessionMetadata, Store};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
-pub(super) enum SetupFailure {
+pub enum SetupFailure {
     Protocol(Blocker),
     Transport(crate::containment::Error),
 }
@@ -37,7 +37,7 @@ enum Phase {
 
 /// One Core Starting grant owns one child and one closed setup state machine.
 /// The caller supplies trusted installation/workspace configuration only.
-pub(super) struct PreparingCodex {
+pub struct PreparingCodex {
     authority: MetadataAuthority,
     child: Option<MetadataChild>,
     binding: Binding,
@@ -49,7 +49,7 @@ pub(super) struct PreparingCodex {
     failed: bool,
 }
 impl PreparingCodex {
-    pub(super) fn open(
+    pub fn open(
         store: Store,
         grant: BoundSessionMetadata,
         launcher: &Path,
@@ -94,7 +94,7 @@ impl PreparingCodex {
         Ok(())
     }
     /// Bounded nonblocking setup progress; errors quarantine without replay.
-    pub(super) fn poll(&mut self) -> Result<bool, SetupFailure> {
+    pub fn poll(&mut self) -> Result<bool, SetupFailure> {
         if self.failed {
             return Err(Blocker::Protocol.into());
         }
@@ -173,7 +173,7 @@ impl PreparingCodex {
     }
     /// Only complete validated persistence/workspace/subscription setup reaches
     /// Core confirmation. Core checks its original grant again atomically.
-    pub(super) async fn confirm(mut self) -> Result<ReadyCodex, SetupFailure> {
+    pub async fn confirm(mut self) -> Result<ReadyCodex, SetupFailure> {
         if self.failed || !matches!(self.phase, Phase::Ready) {
             return Err(Blocker::Protocol.into());
         }
@@ -202,7 +202,7 @@ impl PreparingCodex {
     }
 }
 
-pub(super) struct ReadyCodex {
+pub struct ReadyCodex {
     _metadata_authority: MetadataAuthority,
     child: ReadyMetadataChild,
     channel: BrokerChannel,
@@ -212,7 +212,7 @@ pub(super) struct ReadyCodex {
 impl ReadyCodex {
     /// Consume Core's single-use capability while transferring the very same
     /// metadata child. Failure cannot return or recreate the capability.
-    pub(super) fn attach(
+    pub fn attach(
         mut self,
         store: Store,
         capability: Box<ConsumedProviderDispatch>,

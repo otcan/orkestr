@@ -21,6 +21,7 @@ use uuid::Uuid;
 mod auth;
 mod browser;
 mod execution;
+mod execution_accept;
 mod provider_payload;
 mod routes;
 
@@ -207,6 +208,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
         .route("/api/v2/conversations/{id}/execution",get(execution::status))
         .route("/api/v2/conversations/{id}/stop",post(execution::stop))
+        .route("/api/v2/conversations/{id}/accept",post(execution_accept::accept))
         .route("/api/v2/conversations/{id}/payloads/{payload}",get(provider_payload::read).delete(provider_payload::remove))
         .route("/api/v2/conversations/{id}/messages",post(routes::message))
         .route("/api/v2/conversations/{id}/events",get(routes::events))

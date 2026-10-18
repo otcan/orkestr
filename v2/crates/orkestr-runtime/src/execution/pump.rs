@@ -81,7 +81,7 @@ impl Provider for CodexOutput {
     dead_code,
     reason = "metadata attachment composition is independently gated"
 )]
-pub(super) struct CodexPump {
+pub struct CodexPump {
     source: CodexOutput,
     cursor: PendingObservation,
     admission: ProviderAdmission,
@@ -115,7 +115,7 @@ impl CodexPump {
         self.source.broker = Some(channel);
         self
     }
-    pub(super) fn flush(&mut self) -> Result<(), crate::containment::Error> {
+    pub fn flush(&mut self) -> Result<(), crate::containment::Error> {
         if self.source.failed.is_some() {
             return Err(crate::containment::Error::Revoked);
         }
@@ -127,10 +127,10 @@ impl CodexPump {
             }
         }
     }
-    pub(super) async fn step(&mut self, store: &Store) -> Result<bool, supervisor::Error> {
+    pub async fn step(&mut self, store: &Store) -> Result<bool, supervisor::Error> {
         supervisor::step(store, &mut self.source, &self.admission, &mut self.cursor).await
     }
-    pub(super) fn pending(&self) -> Option<&orkestr_v2_application::runtime::ProviderEventInput> {
+    pub fn pending(&self) -> Option<&orkestr_v2_application::runtime::ProviderEventInput> {
         self.cursor.pending()
     }
 }
