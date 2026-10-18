@@ -50,7 +50,7 @@ class UpgradePlanTests(unittest.TestCase):
         self.assertEqual(args.new_schema,24)
 
     def test_future_inventory_inspection_never_admits_execution(self):
-        for successor in (25,26,32,33):
+        for successor in (25,26,32,34):
             self.new['schema']['migrations'].update({f'{i:04d}_fixture.sql':'d'*64 for i in range(25,successor+1)})
             with patch.object(accept_upgrade.package_candidate,'verify',side_effect=[self.old,self.new]),patch.object(accept_upgrade.receipt,'sha',side_effect=lambda p:('e'*64 if str(p).startswith('/old') else 'f'*64)),patch.object(accept_upgrade,'source_inventory',return_value='1'*64),patch.object(accept_upgrade,'sqlx_inventory',return_value={}):
                 plan=accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,successor,Path('/core-migrations'))
@@ -105,3 +105,23 @@ class UpgradePlanTests(unittest.TestCase):
         with patch.object(accept_upgrade.package_candidate,'verify',side_effect=[self.old,self.new]),patch.object(accept_upgrade.receipt,'sha',side_effect=lambda p:('e'*64 if str(p).startswith('/old') else 'f'*64)):
             with self.assertRaisesRegex(RuntimeError,'exact Core sources'):
                 accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,31)
+
+    def test_schema33_requires_exact_immutable_inventory(self):
+        self.new['schema']['migrations'].update({f'{i:04d}_fixture.sql':'d'*64 for i in range(25,34)})
+        for digest in (accept_upgrade.SCHEMA33_INVENTORY,'0'*64):
+            with patch.object(accept_upgrade.package_candidate,'verify',side_effect=[self.old,self.new]),patch.object(accept_upgrade.receipt,'sha',side_effect=lambda p:('e'*64 if str(p).startswith('/old') else 'f'*64)),patch.object(accept_upgrade,'source_inventory',return_value=digest),patch.object(accept_upgrade,'sqlx_inventory',return_value={str(i):'a'*96 for i in range(1,34)}):
+                if digest==accept_upgrade.SCHEMA33_INVENTORY:
+                    plan=accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,33,Path('/core'))
+                    self.assertTrue(plan['execution_edge_admitted'])
+                    self.assertEqual(len(plan['sqlx_checksums']),33)
+                else:
+                    with self.assertRaisesRegex(RuntimeError,'reviewed Core941'):
+                        accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,33,Path('/core'))
+
+    def test_schema31_to33_keeps_exact_prior_prefix(self):
+        self.new['schema']['migrations'].update({f'{i:04d}_fixture.sql':'d'*64 for i in range(25,34)})
+        self.old['schema']['migrations']=dict(list(self.new['schema']['migrations'].items())[:31])
+        with patch.object(accept_upgrade.package_candidate,'verify',side_effect=[self.old,self.new]),patch.object(accept_upgrade.receipt,'sha',side_effect=lambda p:('e'*64 if str(p).startswith('/old') else 'f'*64)),patch.object(accept_upgrade,'source_inventory',return_value=accept_upgrade.SCHEMA33_INVENTORY),patch.object(accept_upgrade,'sqlx_inventory',return_value={str(i):'a'*96 for i in range(1,34)}):
+            plan=accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,33,Path('/core'))
+            self.assertTrue(plan['execution_edge_admitted'])
+            self.assertEqual(plan['old_schema'],31)

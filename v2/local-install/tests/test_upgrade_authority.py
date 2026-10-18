@@ -28,3 +28,12 @@ class AuthorityTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'created or removed'):audit.verify(self.before,after)
         after=copy.deepcopy(self.after);after['authority']['production_runs']['run']=('running','quarantined')
         with self.assertRaisesRegex(RuntimeError,'reactivated'):audit.verify(self.before,after)
+
+    def test_added_result_authority_or_reenabled_timer_refused(self):
+        for table in ('dormant_timers','worker_tool_results','durable_timer_authorities'):
+            after=copy.deepcopy(self.after);after['ledgers']={table:[('new-authority',)]}
+            with self.subTest(table=table),self.assertRaisesRegex(RuntimeError,'authority ledger'):
+                audit.verify(self.before,after)
+        before=copy.deepcopy(self.before);before['ledgers']={'dormant_timers':[('paused',)]}
+        after=copy.deepcopy(self.after);after['ledgers']={'dormant_timers':[('enabled',)]}
+        with self.assertRaisesRegex(RuntimeError,'authority ledger'):audit.verify(before,after)
