@@ -134,3 +134,6 @@ async fn failed_session_cannot_admit_another_turn_or_spend_its_inbox_claim() {
 #[cfg(feature = "fixture-test-controls")]
 #[path = "observation_replay.rs"]
 mod authority;
+
+#[path = "observation_matrix.rs"]
+mod matrix;
