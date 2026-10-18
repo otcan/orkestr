@@ -1,4 +1,5 @@
 //! Local API with separate machine Bearer and browser cookie authentication.
+mod static_ui;
 use axum::{
     extract::{DefaultBodyLimit, State},
     http::{header, HeaderMap, StatusCode},
@@ -10,6 +11,7 @@ use axum::{
 use orkestr_v2_application::StoreError;
 use orkestr_v2_contracts::*;
 use orkestr_v2_store_sqlite::Store;
+pub use static_ui::with_static_ui;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
