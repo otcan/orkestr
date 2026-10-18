@@ -53,3 +53,14 @@ def validate_result(frame, pending_id):
     require(items[0]['type']=='inputText' and isinstance(text,str) and len(text.encode())<=8192)
     return {'id':pending_id,'result':{'contentItems':[{'type':'inputText','text':text}],
                                     'success':result['success']}}
+
+
+def validate_submission(envelope, owned_handle, pending_id):
+    """Validate the agreed outer wire only; preparation creates no authority."""
+    exact(envelope,('id','method','params'))
+    require(request_id(envelope['id']) and envelope['method']=='ToolResult')
+    params=envelope['params'];exact(params,('owned_handle','frame'))
+    require(identifier(owned_handle) and params['owned_handle']==owned_handle)
+    frame=validate_result(params['frame'],pending_id)
+    return {'id':envelope['id'],'method':'ToolResult',
+            'params':{'owned_handle':owned_handle,'frame':frame}}
