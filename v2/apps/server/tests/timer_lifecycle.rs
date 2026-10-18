@@ -58,7 +58,7 @@ async fn ordinary_durable_timer_binary_logout_restart_crash_and_revocation() {
         (
             revoked,
             TimerSchedule::Once {
-                due_ms: now + 20_000,
+                due_ms: now + 300_000,
             },
         ),
     ] {

@@ -3,6 +3,12 @@ use crate::timer_http::durable::DurableTimerController;
 use std::time::Duration;
 use tokio::{sync::watch, task::JoinHandle};
 
+struct Ready(std::sync::Arc<std::sync::atomic::AtomicBool>);
+impl Drop for Ready {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
 pub struct TimerTask {
     shutdown: watch::Sender<bool>,
     stopped: watch::Receiver<bool>,
@@ -17,12 +23,13 @@ impl TimerTask {
         let (shutdown, requested) = watch::channel(false);
         let (finished, stopped) = watch::channel(false);
         ready.store(true, std::sync::atomic::Ordering::Release);
+        let guard = Ready(ready);
         Self {
             shutdown,
             stopped,
             task: tokio::spawn(async move {
+                let _guard = guard;
                 let result = controller.run(requested).await;
-                ready.store(false, std::sync::atomic::Ordering::Release);
                 let _ = finished.send(true);
                 result
             }),

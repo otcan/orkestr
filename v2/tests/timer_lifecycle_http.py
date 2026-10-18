@@ -100,6 +100,7 @@ def main():
         assert case.request(path(interval))[0] == 401
         ordinary.wait_for(lambda: detail(once)["state"] == "exhausted",
                           "due intake survives creator logout", seconds=12)
+        grant_rows = db_rows("SELECT * FROM durable_timer_authorities ORDER BY namespace,generation")
         committed = ledger()
         assert len(committed) == 1
         assert db_rows("SELECT count(*) FROM messages") == [(1,)]
@@ -129,6 +130,7 @@ def main():
         case.process = None
         case.start()
         assert ledger() == committed
+        assert db_rows("SELECT * FROM durable_timer_authorities ORDER BY namespace,generation") == grant_rows
         assert detail(interval)["controller_armed"]
         case.revoke_machine()  # controlled synthetic auth fence, no production database
         ordinary.wait_for(lambda: case.process.poll() is not None,
