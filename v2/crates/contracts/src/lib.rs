@@ -1,5 +1,7 @@
 //! Version 0 HTTP contracts. No storage or provider dependencies.
+mod events;
 pub mod runtime;
+pub use events::*;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -92,6 +94,7 @@ pub struct ConversationSnapshot {
     pub next_cursor: Option<i64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EventEnvelope {
     pub event_id: EventId,
     pub schema_version: u32,
@@ -108,6 +111,7 @@ pub struct EventEnvelope {
     pub payload_ref_or_safe_payload: MessageAccepted,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MessageAccepted {
     pub kind: String,
     pub message_id: MessageId,

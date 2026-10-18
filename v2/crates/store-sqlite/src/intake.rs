@@ -195,7 +195,7 @@ impl IntakeStore for Store {
         conversation: &ConversationId,
         after: i64,
         limit: u32,
-    ) -> Result<Vec<EventEnvelope>> {
+    ) -> Result<Vec<ConversationEvent>> {
         let (scope, last) = self.scope(owner, conversation).await?;
         if after < 0 || after > last {
             return Err(StoreError::Invalid);
@@ -206,7 +206,7 @@ impl IntakeStore for Store {
             .map(|r| {
                 let message_id = MessageId(parse(r.get("message_id"))?);
                 let sequence = r.get("sequence");
-                Ok(EventEnvelope {
+                Ok(ConversationEvent::MessageAccepted(EventEnvelope {
                     event_id: EventId(parse(r.get("id"))?),
                     schema_version: 1,
                     owner_id: owner.clone(),
@@ -223,7 +223,7 @@ impl IntakeStore for Store {
                         kind: "message_accepted".into(),
                         message_id,
                     },
-                })
+                }))
             })
             .collect()
     }
