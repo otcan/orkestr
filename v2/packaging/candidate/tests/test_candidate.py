@@ -12,6 +12,7 @@ from unittest.mock import patch
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 import receipt
+import embedded_identity
 import package_candidate as package
 import soak
 
@@ -21,12 +22,13 @@ class CandidateTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='v2-candidate-test-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        (self.root/'v2').mkdir();(self.root/'v2/Cargo.toml').write_text('[workspace.package]\nversion="2.0.0-rc.1"\n')
         self.binary = self.root/'server'
-        self.binary.write_bytes(b'\x7fELF\x02\x01'+b'\0'*12+b'\x3e\0'+b'never executed')
+        self.binary.write_bytes(b'\x7fELF\x02\x01'+b'\0'*12+b'\x3e\0'+b'never executed'+embedded_identity.record('server','2.0.0-rc.1','a'*40).encode())
         self.binary.chmod(0o755)
         self.ui = self.root/'web'; self.ui.mkdir()
         (self.ui/'index.html').write_text('synthetic')
-        (self.ui/'app.wasm').write_bytes(b'synthetic not executed')
+        (self.ui/'app.wasm').write_bytes(b'synthetic not executed'+embedded_identity.record('web','2.0.0-rc.1','a'*40).encode())
         (self.ui/'manifest.json').write_text('{"synthetic":true}')
         web = receipt.inventory(self.ui)
         self.value = {'format':receipt.FORMAT,'source_commit':'a'*40,'version':'2.0.0-rc.1','target':'linux-x86_64',
@@ -34,6 +36,7 @@ class CandidateTests(unittest.TestCase):
                       'web':{'files':web,'inventory_sha256':receipt.digest(web)},
                       'schema':{'migrations':{'0001_fixture.sql':'b'*64}},
                       'build_contract':{'required_glibc':'2.34'}}
+        self.value['embedded_identity'] = embedded_identity.verify(self.binary,self.ui,'2.0.0-rc.1','a'*40)
         self.paired = self.root/'paired.json';self.paired.write_text(json.dumps(self.value))
 
     def assemble(self):
@@ -151,15 +154,18 @@ class CandidateTests(unittest.TestCase):
     def test_build_owner_runner_is_offline_and_excludes_provider_environment(self):
         import build_pair
         checkout=self.root/'checkout';checkout.mkdir()
+        (checkout/'v2').mkdir();(checkout/'v2/Cargo.toml').write_text('[workspace.package]\nversion="2.0.0-rc.1"\n')
         cargo=self.root/'cargo-cache';cargo.mkdir()
         rustup=self.root/'rustup-cache';rustup.mkdir()
         wrapper=self.root/'authorized-cargo';wrapper.write_text('synthetic never executed')
         out=self.root/'build-output'
         def fake_run(command,**kwargs):
             if command[0]==str(wrapper):
+                self.assertEqual(kwargs['env']['ORKESTR_V2_BUILD_IDENTITY'],embedded_identity.record('server','2.0.0-rc.1','a'*40))
                 target=out/'target/release';target.mkdir(parents=True)
                 (target/'orkestr-v2-server').write_bytes(self.binary.read_bytes())
             else:
+                self.assertEqual(kwargs['env']['ORKESTR_V2_BUILD_IDENTITY'],embedded_identity.record('web','2.0.0-rc.1','a'*40))
                 (out/'ui').mkdir()
             self.assertEqual(kwargs['env']['CARGO_NET_OFFLINE'],'true')
             self.assertEqual(kwargs['env']['PATH'].split(build_pair.os.pathsep)[0],str(cargo/'bin'))
@@ -195,6 +201,7 @@ class CandidateTests(unittest.TestCase):
     def test_controls_build_passes_exact_binding_and_seals_opt_in(self):
         import build_pair
         checkout=self.root/'checkout';checkout.mkdir()
+        (checkout/'v2').mkdir();(checkout/'v2/Cargo.toml').write_text('[workspace.package]\nversion="2.0.0-rc.1"\n')
         cargo=self.root/'cargo';cargo.mkdir()
         rustup=self.root/'rustup';rustup.mkdir()
         wrapper=self.root/'wrapper';wrapper.write_text('not executed')
@@ -215,6 +222,7 @@ class CandidateTests(unittest.TestCase):
     def test_explicit_bindgen_directory_precedes_inherited_path(self):
         import build_pair
         checkout=self.root/'checkout';checkout.mkdir()
+        (checkout/'v2').mkdir();(checkout/'v2/Cargo.toml').write_text('[workspace.package]\nversion="2.0.0-rc.1"\n')
         cargo=self.root/'cargo';cargo.mkdir()
         rustup=self.root/'rustup';rustup.mkdir()
         wrapper=self.root/'wrapper';wrapper.write_text('not executed')

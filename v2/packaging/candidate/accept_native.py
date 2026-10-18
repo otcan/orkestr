@@ -14,6 +14,7 @@ import tempfile
 import shutil
 import package_candidate
 import receipt
+import probe_version
 import soak
 
 LOCAL = Path(__file__).resolve().parents[2]/'local-install'
@@ -23,6 +24,9 @@ from real_package import Client, invoke, launch, stop_owned, smoke, verify_histo
 
 def exercise(candidate, parent, port):
     manifest=package_candidate.verify(candidate)
+    paired=json.loads((candidate/'paired-artifacts.json').read_text())
+    version_check=probe_version.check(candidate/'native/server/orkestr-v2-server',
+                                      paired['embedded_identity']['server'],parent)
     entry=candidate/'native/bin/orkestr-v2'
     receipt.require(parent.is_absolute() and parent.is_dir(), 'existing private parent required')
     root=Path(tempfile.mkdtemp(prefix='v2-candidate-probe-',dir=parent))
@@ -30,7 +34,7 @@ def exercise(candidate, parent, port):
     result={'source_commit':manifest['source_commit'],'version':manifest['version'],
             'candidate_manifest_sha256':receipt.sha(candidate/'candidate.json'),
             'scope':'Linux x86_64 same-source fresh native package; explicit initialization, no existing-state migration',
-            'checks':[],'unexecuted':['Browser interaction','Providers','Cross-version upgrade','Dormant activation','Executor isolation']}
+            'version_query':version_check,'checks':[],'unexecuted':['Browser interaction','Providers','Cross-version upgrade','Dormant activation','Executor isolation']}
     passed=False
     try:
         invoke(entry,'install',home,'--package',candidate/'native','--port',port)

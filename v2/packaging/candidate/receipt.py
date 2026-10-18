@@ -6,8 +6,10 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import tomllib
+import embedded_identity
 
-FORMAT = 'orkestr-v2-paired-artifacts-v1'
+FORMAT = 'orkestr-v2-paired-artifacts-v2'
 
 
 def require(value, message):
@@ -56,17 +58,21 @@ def schema(root, source):
 
 def seal(checkout, binary, ui, source, version, profile, features, required_glibc, execution_controls=False):
     require(re.fullmatch(r'[0-9a-f]{40}', source), 'exact full source required')
-    require(re.fullmatch(r'2\.0\.0-rc\.[1-9][0-9]*', version), 'explicit 2.0.0 release-candidate version required')
+    require(embedded_identity.VERSION.fullmatch(version), 'explicit embedded development/candidate version required')
     require(profile in ('debug', 'release'), 'supported profile required')
     require(re.fullmatch(r'2\.[0-9]+', required_glibc), 'explicit glibc requirement required')
     require(git(checkout, 'rev-parse', 'HEAD') == source, 'producer checkout must match exact source')
     require(not git(checkout, 'status', '--porcelain', '--untracked-files=normal'), 'clean tracked producer checkout required')
+    manifest = tomllib.loads((checkout/'v2/Cargo.toml').read_text())
+    require(manifest['workspace']['package']['version'] == version,
+            'receipt version must equal source workspace version; relabel refused')
     require(binary.is_file() and not binary.is_symlink(), 'regular built server required')
     header = binary.read_bytes()[:20]
     require(header[:6] == b'\x7fELF\x02\x01' and header[18:20] == b'\x3e\x00', 'Linux x86_64 ELF required')
     web = inventory(ui)
+    identities = embedded_identity.verify(binary, ui, version, source)
     require(all(re.fullmatch(r'[a-zA-Z0-9_-]+', f) for f in features), 'explicit feature names required')
-    value = {'format': FORMAT, 'version': version, 'source_commit': source, 'target': 'linux-x86_64',
+    value = {'format': FORMAT, 'embedded_identity': identities, 'version': version, 'source_commit': source, 'target': 'linux-x86_64',
             'server': {'sha256': sha(binary), 'bytes': binary.stat().st_size, 'profile': profile,
                        'features': sorted(set(features)), 'default_features': True},
             'web': {'files': web, 'inventory_sha256': digest(web), 'profile': 'release',
@@ -86,17 +92,21 @@ def seal(checkout, binary, ui, source, version, profile, features, required_glib
     return value
 
 
-def verify(receipt, binary, ui):
-    require(receipt['format'] == FORMAT and receipt['target'] == 'linux-x86_64', 'supported paired receipt required')
+def verify(receipt, binary, ui, *, historical=False):
+    legacy = historical and receipt.get("format") == "orkestr-v2-paired-artifacts-v1"
+    require((receipt['format'] == FORMAT or legacy) and receipt['target'] == 'linux-x86_64', 'supported paired receipt required')
     require(re.fullmatch(r'[0-9a-f]{40}', receipt['source_commit']), 'full paired source required')
     require(binary.is_file() and not binary.is_symlink(), 'regular server artifact required')
-    require(re.fullmatch(r'2\.0\.0-rc\.[1-9][0-9]*', receipt['version']), 'supported candidate version required')
+    require(embedded_identity.VERSION.fullmatch(receipt['version']), 'supported development/candidate version required')
     require(sha(binary) == receipt['server']['sha256'] and
             binary.stat().st_size == receipt['server']['bytes'], 'server identity mismatch')
     with binary.open('rb') as stream:header=stream.read(20)
     require(header[:6]==b'\x7fELF\x02\x01' and header[18:20]==b'\x3e\x00', 'Linux x86_64 ELF required')
     actual = inventory(ui)
     require(actual == receipt['web']['files'] and digest(actual) == receipt['web']['inventory_sha256'], 'web identity mismatch')
+    if not legacy:
+        identities = embedded_identity.verify(binary, ui, receipt['version'], receipt['source_commit'])
+        require(receipt.get('embedded_identity') == identities, 'paired embedded identity mismatch')
     controls = 'execution-controls' in receipt['web'].get('features', [])
     binding = receipt['web'].get('server_candidate')
     require((controls and receipt['web']['features'] == ['web','execution-controls'] and binding == receipt['source_commit']) or

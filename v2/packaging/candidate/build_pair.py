@@ -11,7 +11,9 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import tomllib
 import receipt
+import embedded_identity
 
 
 def build(checkout, output, source, version, wrapper, cargo_home, rustup_home, glibc, execution_controls=False, bindgen_bin=None):
@@ -27,6 +29,9 @@ def build(checkout, output, source, version, wrapper, cargo_home, rustup_home, g
                         (bindgen_bin/'wasm-bindgen').is_file() and
                         os.access(bindgen_bin/'wasm-bindgen',os.X_OK),
                         'explicit executable wasm-bindgen directory required')
+    manifest = tomllib.loads((checkout/'v2/Cargo.toml').read_text())
+    receipt.require(manifest['workspace']['package']['version'] == version,
+                    'requested version must equal workspace package version; relabel refused')
     # Reuse native path identity guards on the host, never inside overlay images.
     import sys
     sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'local-install'))
@@ -42,8 +47,10 @@ def build(checkout, output, source, version, wrapper, cargo_home, rustup_home, g
         env['PATH'] = str(bindgen_bin)+os.pathsep+env['PATH']
     if execution_controls:
         env.update(UI_EXECUTION_CONTROLS='1', UI_SERVER_CANDIDATE=source)
+    env['ORKESTR_V2_BUILD_IDENTITY'] = embedded_identity.record('server',version,source)
     subprocess.run([str(wrapper),'build','--release','--offline','--locked','-p','orkestr-v2-server'],
                    cwd=checkout/'v2',env=env,check=True)
+    env['ORKESTR_V2_BUILD_IDENTITY'] = embedded_identity.record('web',version,source)
     subprocess.run(['bash',str(checkout/'v2/apps/ui/scripts/bundle.sh')],cwd=checkout,env=env,check=True)
     shutil.copy2(output/'target/release/orkestr-v2-server',output/'server')
     value = receipt.seal(checkout,output/'server',output/'ui',source,version,'release',[],glibc,execution_controls=execution_controls)

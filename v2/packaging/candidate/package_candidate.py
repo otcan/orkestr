@@ -50,14 +50,14 @@ def assemble(binary, ui, paired, output, base, port):
     return result
 
 
-def verify(root):
+def verify(root, *, historical=False):
     manifest = root/'candidate.json'
     receipt.require(not manifest.is_symlink(), 'candidate manifest symlink refused')
     value = json.loads(manifest.read_text())
     actual = container.ui_files(root)
     actual.pop('candidate.json', None)
     receipt.require(value['format'] == 'orkestr-v2-candidate-v1' and actual == value['files'], 'candidate inventory mismatch')
-    paired = receipt.verify(json.loads((root/'paired-artifacts.json').read_text()), root/'native/server/orkestr-v2-server', root/'native/ui')
+    paired = receipt.verify(json.loads((root/'paired-artifacts.json').read_text()), root/'native/server/orkestr-v2-server', root/'native/ui', historical=historical)
     receipt.require(value['target']==paired['target']=='linux-x86_64', 'candidate target mismatch')
     receipt.require(paired['server']['profile']=='release' and paired['server']['features']==[] and paired['server']['default_features'] is True, 'ordinary release server required')
     receipt.require(paired['source_commit'] == value['source_commit'] and paired['schema'] == value['schema'], 'candidate source/schema mismatch')
@@ -69,7 +69,7 @@ def verify(root):
     metadata = {'version': paired['version'], 'source_commit': paired['source_commit'],
                 'schema': paired['schema'], 'paired_receipt_sha256': sha256(root/'paired-artifacts.json')}
     receipt.require(docker.get('release_metadata') == metadata == native_manifest.get('release_metadata'), 'release metadata mismatch')
-    receipt.verify(paired, root/'docker/server', root/'docker/ui')
+    receipt.verify(paired, root/'docker/server', root/'docker/ui', historical=historical)
     return value
 
 

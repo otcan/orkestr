@@ -51,7 +51,7 @@ def sqlx_inventory(directory, expected):
 
 
 def prepare(old, new, old_source, new_source, old_sha, new_sha, successor=24, migrations=None):
-    old_value=package_candidate.verify(old);new_value=package_candidate.verify(new)
+    old_value=package_candidate.verify(old,historical=True);new_value=package_candidate.verify(new)
     for root,value,source,pin in ((old,old_value,old_source,old_sha),(new,new_value,new_source,new_sha)):
         receipt.require(re.fullmatch(r'[0-9a-f]{40}',source) and value['source_commit']==source,'exact candidate source mismatch')
         receipt.require(re.fullmatch(r'[0-9a-f]{64}',pin) and receipt.sha(root/'native/server/orkestr-v2-server')==pin,'pinned candidate binary mismatch')
@@ -74,6 +74,7 @@ def prepare(old, new, old_source, new_source, old_sha, new_sha, successor=24, mi
     return {'status':'prepared_only_unexecuted' if admitted else 'pending_core_edge_admission',
             'execution_edge_admitted':admitted,'core_source_inventory_sha256':inventory_digest,
             'sqlx_checksums':sqlx_checksums,'old_source':old_source,'new_source':new_source,
+            'predecessor_identity_scope':'retained original integrity pins; historical labels are not embedded identity qualification',
             'old_schema':predecessor,'new_schema':successor,'old_version':old_value['version'],'new_version':new_value['version'],
             'old_candidate_sha256':receipt.sha(old/'candidate.json'),'new_candidate_sha256':receipt.sha(new/'candidate.json'),
             'old_server_sha256':old_sha,'new_server_sha256':new_sha,
