@@ -43,3 +43,5 @@ jobs:
         run: cargo +1.99.1 build --locked --workspace
       - name: Unit and HTTP process-failure tests (requires Python 3)
         run: cargo +1.99.1 test --locked --workspace
+      - name: Offline domain demo smoke check
+        run: cargo +1.99.1 run --locked -p orkestr-v2-demo
