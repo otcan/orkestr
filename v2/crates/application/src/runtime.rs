@@ -11,6 +11,8 @@ pub enum RuntimeStoreError {
     Unauthorized,
     Busy,
     StaleLease,
+    /// Dispatch authority was revoked; never a successful stop acknowledgement.
+    Fenced,
     Conflict,
     Expired,
     /// Includes operations whose durable adapter has not been implemented.
@@ -76,9 +78,16 @@ pub trait RuntimeStore: Send + Sync {
         expected_generation: u64,
     ) -> impl Future<Output = Result<RunAdmission>> + Send;
 
+    /// Owner/scope/run/session and observation tokens must match the admission.
+    /// Store computes the semantic digest; caller digests never grant authority.
+    /// Check current lease/expiry/fence before acknowledging even a duplicate.
     /// Atomic lease/expiry/state/fence check, dedup and journal/projection update.
     /// Started -> Running; CompletedProposal -> AwaitingAcceptance, NEVER Succeeded.
     /// Only current cancellation token may confirm Stopped -> Cancelled.
+    /// Receipt acknowledges a committed observation (including identical replay).
+    /// Unavailable/Busy retain the exact pending event and key for retry;
+    /// StaleLease/Fenced/Expired discard it from the delivery queue without start/replay.
+    /// Conflict is a protocol blocker, never a successful acknowledgement.
     fn record_observation(
         &self,
         admission: &RunAdmission,
