@@ -55,7 +55,7 @@ def serve(home):
     unprivileged()
     home = private_home(home)
     process = None
-    with locked(home):
+    with locked(home) as lock_fd:
         require(not (home / "control/restore-dormant.json").exists() and
                 not (home / "control/restore-dormant.json").is_symlink(),
                 "dormant restore prohibits activation; rollback required")
@@ -81,7 +81,7 @@ def serve(home):
             signal.signal(signal.SIGTERM, interrupted)
             try:
                 process = start(root / "server" / "orkestr-v2-server", home / "logs",
-                                child_environment(home, root, current["port"]), Client(current["port"]))
+                                child_environment(home, root, current["port"]), Client(current["port"]), lock_fd=lock_fd)
                 print("READY; stop with this package's stop --home command or Ctrl-C", flush=True)
                 while process.poll() is None:
                     try:

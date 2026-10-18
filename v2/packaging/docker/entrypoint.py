@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import secrets
 import stat
+import state_lock
 
 
 def checked(condition, message):
@@ -22,7 +23,7 @@ def verify(root):
             checked(not path.is_symlink() and (path.is_dir() or path.is_file()), "invalid image artifact")
             if path.is_file():
                 actual[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
-    for name in ("entrypoint.py", "dormant.py"):
+    for name in ("entrypoint.py", "dormant.py", "state_lock.py"):
         checked(not (root / name).is_symlink(), "image tool symlink refused")
         actual[name] = hashlib.sha256((root / name).read_bytes()).hexdigest()
     checked(actual == inventory, "image artifact checksum mismatch")
@@ -64,5 +65,6 @@ def environment(root, state, incoming):
 
 if __name__ == "__main__":
     root = Path("/opt/v2")
+    lock_fd = state_lock.acquire(Path("/state"))
     env = environment(root, Path("/state"), os.environ)
     os.execve(root / "server", [str(root / "server")], env)

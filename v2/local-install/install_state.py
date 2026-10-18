@@ -173,7 +173,10 @@ def locked(home):
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise RuntimeError("home is busy; stop its launcher before this operation") from error
-        yield
+        info = os.fstat(descriptor)
+        require(info.st_uid == os.getuid() and info.st_nlink == 1 and
+                stat.S_IMODE(info.st_mode) == 0o600, "invalid private launcher lock")
+        yield descriptor
     finally:
         os.close(descriptor)
 

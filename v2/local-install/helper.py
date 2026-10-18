@@ -124,10 +124,11 @@ def stop(process):
             process.wait(timeout=5)
 
 
-def start(binary, home, env, client):
+def start(binary, home, env, client, lock_fd=None):
     # Log stays private and contains no HTTP credential payloads.
     with (home / "server.log").open("ab") as log:
-        process = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log)
+        process = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log,
+                                   pass_fds=() if lock_fd is None else (lock_fd,))
     try:
         for _ in range(100):
             require(process.poll() is None, "server exited; inspect private server.log")

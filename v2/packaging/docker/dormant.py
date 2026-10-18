@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import stat
 import time
+from state_lock import locked
 
 
 def require(condition, message):
@@ -44,6 +45,11 @@ def write(path, value):
 
 
 def snapshot(database, output, image_manifest):
+    with locked(database.parent.parent):
+        return _snapshot(database, output, image_manifest)
+
+
+def _snapshot(database, output, image_manifest):
     """SQLite backup API includes WAL; caller guarantees stopped source ownership."""
     regular(database)
     regular(image_manifest)
@@ -68,6 +74,11 @@ def snapshot(database, output, image_manifest):
 
 
 def apply(snapshot_root, state, image_manifest):
+    with locked(state):
+        return _apply(snapshot_root, state, image_manifest)
+
+
+def _apply(snapshot_root, state, image_manifest):
     private(snapshot_root)
     private(state)
     regular(snapshot_root / 'manifest.json')
@@ -97,6 +108,11 @@ def apply(snapshot_root, state, image_manifest):
 
 
 def rollback(state, image_manifest):
+    with locked(state):
+        return _rollback(state, image_manifest)
+
+
+def _rollback(state, image_manifest):
     private(state)
     regular(state / 'restore-dormant.json')
     regular(image_manifest)

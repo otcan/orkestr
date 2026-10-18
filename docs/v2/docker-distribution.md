@@ -310,3 +310,27 @@ without modifying occupants. Helpers are not a concurrent-writer lock: the exclu
 owned probe must keep the source stopped throughout. An abrupt crash may require
 inspection; neither power-loss durability nor canonical Core state/auth rebinding
 is claimed. Executor containment remains a separate unpassed gate.
+
+### Exclusive managed-state ownership
+
+The container entrypoint acquires a nonblocking exclusive Linux `flock` on the
+state volume's directory inode before checking layout or creating bootstrap data.
+The descriptor survives `exec` into the server and is released by process exit.
+Offline snapshot/apply/rollback take the same lock before validation or writes;
+contention fails with `state busy` rather than waiting or taking a live snapshot.
+No removable lock file or new persistent state entry is needed. Directory identity
+must stay fixed for the operation. Named-volume mounts share that inode across
+helpers. This is cooperative exclusion for these managed entrypoints on Linux;
+raw binaries or external writers bypassing the protocol are not protected.
+
+Native recovery already shares the launcher's `launcher.lock`; the launcher now
+passes that descriptor into its server child so a launcher crash cannot release
+ownership while the child remains alive. Private ownership/mode and single-link
+checks reject aliased launcher lock files. Do not remove or replace a managed
+home, volume or lock inode while any process is using it. Neither protocol claims
+protection against hostile same-UID writers, network filesystems or power loss.
+
+Synthetic subprocess tests execute competing lock acquisition, refusal before
+backup/apply/rollback writes, exec inheritance, alias contention and release after
+exit. Actual rebuilt-image contention acceptance remains unexecuted pending exact
+source review; the earlier dormant checkpoint predates this locking increment.

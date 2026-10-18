@@ -18,7 +18,8 @@ class DormantTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.image = self.root / 'artifact-manifest.json'
         self.image.write_text('{"synthetic_image":"a"}')
-        self.database = self.root / 'source.sqlite3'
+        (self.root / 'data').mkdir(mode=0o700)
+        self.database = self.root / 'data/core.sqlite3'
         with closing(sqlite3.connect(self.database)) as db:
             db.execute('CREATE TABLE messages(body TEXT)')
             db.execute("INSERT INTO messages VALUES ('synthetic history')")
