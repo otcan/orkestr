@@ -126,6 +126,10 @@ async fn exact_successful_suffixes_commit_delivery_without_completing_worker() {
     let before = crate::production_runtime::tests::snapshot(&f.store).await;
     assert_eq!(d.native_call().call_id, "call:1");
     assert_eq!(d.source_digest(), crate::digest("print(1)"));
+    assert!(d.matches_source("print(1)"));
+    assert!(!d.matches_source("print(2)"));
+    assert!(!d.matches_source("print(1)\0"));
+    assert!(!d.matches_source(&"x".repeat(32769)));
     assert!(d.success());
     assert!(d.text().contains("1\n"));
     assert_eq!(
