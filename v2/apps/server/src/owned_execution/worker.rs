@@ -23,6 +23,7 @@ impl ConfiguredExecution {
                         directory: self.directory.clone(),
                         controls: self.control.clone(),
                         children: self.children.clone(),
+                        tasks: self.tasks.clone(),
                     },
                     parent,
                 )

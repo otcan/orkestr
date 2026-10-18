@@ -27,7 +27,7 @@ pub use production_runtime::{
     FastAdmissionInput, OfflinePythonAdmission, OfflinePythonConsumption, OfflinePythonDelegation,
     OfflinePythonOutcome, OfflinePythonReceipt, OfflinePythonState, ProductionSupervisorStore,
     ReadySessionTransition, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
-    WorkerDelegationResult, WorkerDelegationState,
+    WorkerDelegationResult, WorkerDelegationState, WorkerTaskClaim,
 };
 
 pub use production_runtime::inspection::{
