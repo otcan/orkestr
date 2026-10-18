@@ -4,7 +4,7 @@ use orkestr_v2_ui::{execution::Execution, session_scope::SessionScope};
 use serde_json::{json, Value};
 
 // Default activation remains off until exact route/composition verification is accepted.
-const STOP_ACTIVATED: bool = false;
+const STOP_ACTIVATED: bool = cfg!(feature = "execution-controls");
 #[component]
 pub fn StopButton(
     mut execution: Signal<Execution>,

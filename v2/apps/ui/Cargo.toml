@@ -7,6 +7,8 @@ publish = false
 
 [features]
 default = []
+# Candidate-only: coordinator registers matching reviewed server composition before use.
+execution-controls = []
 web = ["dioxus/web", "dep:web-sys"]
 mobile = ["dioxus/mobile"]
 

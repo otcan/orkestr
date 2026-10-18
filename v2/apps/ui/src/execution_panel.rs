@@ -16,7 +16,11 @@ pub fn ExecutionPanel(
             h3 { "Execution" }
             p { role: "status", "{model.summary(now_ms)}" }
             details { summary { "CPU and RAM" } p { "{model.resources(now_ms)}" } }
-            crate::stop_button::StopButton { execution, csrf, session_scope, onexpired }
+            crate::stop_button::StopButton { execution, csrf: csrf.clone(), session_scope, onexpired }
+            if let Some(status) = model.control_status().filter(|s| s.progress.is_some()) {
+                crate::progress_view::ProgressView { key: "{status.conversation_id}/{status.progress.as_ref().unwrap().payload_id}", status, csrf: csrf.clone(), execution, session_scope, onexpired }
+            }
+            crate::acceptance_button::AcceptanceButton { execution, csrf, session_scope, onexpired, now_ms }
             button { r#type: "button", disabled: true, title: "Steering is unavailable. You can still send a message.", "Steer unavailable" }
             p { "Keep editing or send another message while work runs. A cancellation request is not a confirmed stop. Stale or disconnected status never implies completion." }
         }

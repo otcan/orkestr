@@ -12,7 +12,12 @@ command -v wasm-bindgen >/dev/null || { echo 'BLOCKED: wasm-bindgen CLI 0.2.129 
 [[ $(wasm-bindgen --version) == 'wasm-bindgen 0.2.129' ]] || { echo 'BLOCKED: expected wasm-bindgen 0.2.129 matching Cargo.lock' >&2; exit 2; }
 [[ ! -e "$UI_BUNDLE_DIR" ]] || { echo 'Refusing to overwrite existing bundle directory' >&2; exit 2; }
 cd -- "$workspace_dir"
-"$V2_CARGO" build --release --offline --locked -p orkestr-v2-ui --no-default-features --features web --target wasm32-unknown-unknown
+features=web
+if [[ ${UI_EXECUTION_CONTROLS:-0} == 1 ]]; then
+    [[ ${UI_SERVER_CANDIDATE:-} =~ ^[0-9a-f]{40}$ ]] || { echo 'Control bundle requires an exact registered matching server candidate SHA' >&2; exit 2; }
+    features=web,execution-controls
+fi
+"$V2_CARGO" build --release --offline --locked -p orkestr-v2-ui --no-default-features --features "$features" --target wasm32-unknown-unknown
 mkdir -- "$UI_BUNDLE_DIR"
 wasm-bindgen "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/orkestr-v2-ui.wasm" --target web --out-dir "$UI_BUNDLE_DIR" --out-name orkestr_v2_ui --no-typescript
 cat > "$UI_BUNDLE_DIR/index.html" <<'HTML'

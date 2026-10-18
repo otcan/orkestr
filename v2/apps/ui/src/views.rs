@@ -204,12 +204,7 @@ pub fn Conversation(
                         resync = true;
                         status.set("Cursor requires history resync.".into());
                     }
-                    Ok(item)
-                        if item.event == "message_accepted"
-                            || item.event == "fixture_provider_observed"
-                            || item.event == "fixture_cancellation_requested"
-                            || item.event == "fixture_provider_stopped" =>
-                    {
+                    Ok(item) if orkestr_v2_ui::is_replay_item(&item) => {
                         let previous = projection.read().clone();
                         let sequence = item.body.as_ref().and_then(|event| {
                             orkestr_v2_ui::replay_sequence(
@@ -237,6 +232,9 @@ pub fn Conversation(
                                     Ok(snapshot) if snapshot.watermark >= sequence => {
                                         cursor = snapshot.watermark;
                                         projection.set(snapshot);
+                                        if let Some(event) = item.body.as_ref() {
+                                            execution.write().acceptances.observe(event);
+                                        }
                                         status.set(
                                             orkestr_v2_ui::replay_notice(
                                                 item.body.as_ref().expect("validated event body"),

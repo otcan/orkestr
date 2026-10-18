@@ -45,6 +45,7 @@ pub struct Sample {
 #[derive(Clone, Default)]
 pub struct Execution {
     pub stops: crate::stop::Stops,
+    pub acceptances: crate::acceptance::Acceptances,
     sample: Option<Sample>,
     connected: bool,
     generation: u64,
@@ -181,6 +182,7 @@ impl Execution {
         self.authorized = true;
         self.canonical_received
             .insert(conversation.clone(), received_ms);
+        self.acceptances.observe_status(&status);
         self.canonical.insert(conversation, status);
         Ok(())
     }
@@ -207,6 +209,7 @@ impl Execution {
         self.authorized = false;
         self.sample = None;
         self.stops.clear_owner();
+        self.acceptances.clear_owner();
         self.canonical.clear();
         self.canonical_received.clear();
         self.scope = None;
