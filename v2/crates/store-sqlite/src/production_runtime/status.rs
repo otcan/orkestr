@@ -10,7 +10,7 @@ impl Store {
         owner: &OwnerId,
         conversation: &ConversationId,
     ) -> Result<Option<ExecutionStatus>> {
-        self.execution_status_in_scope(owner, conversation, None)
+        self.execution_status_in_scope(owner, conversation, None, None)
             .await
     }
     /// Bound supervisor read of one exact run, including independent Workers.
@@ -27,7 +27,27 @@ impl Store {
         if self.context()?.owner != *owner {
             return Err(RuntimeStoreError::Unauthorized);
         }
-        self.execution_status_in_scope(owner, conversation, Some(run))
+        self.execution_status_in_scope(owner, conversation, Some(run), None)
+            .await
+    }
+    /// Browser read boundary. The exact current credential and bound supervisor
+    /// are authenticated in the same snapshot as the exact-run projection.
+    /// This read issues no execution or cancellation authority.
+    pub async fn execution_run_status_authenticated(
+        &self,
+        credential: &str,
+        conversation: &ConversationId,
+        run: &RunId,
+    ) -> Result<Option<ExecutionStatus>> {
+        if credential.is_empty() || credential.len() > 1024 {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        let owner = &self
+            .authority
+            .as_ref()
+            .ok_or(RuntimeStoreError::Unauthorized)?
+            .owner;
+        self.execution_status_in_scope(owner, conversation, Some(run), Some(credential))
             .await
     }
     async fn execution_status_in_scope(
@@ -35,8 +55,17 @@ impl Store {
         owner: &OwnerId,
         conversation: &ConversationId,
         exact_run: Option<&RunId>,
+        credential: Option<&str>,
     ) -> Result<Option<ExecutionStatus>> {
         let mut tx = self.pool.begin().await.map_err(db)?;
+        if let Some(credential) = credential {
+            let authorized: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
+                .bind(crate::digest(credential)).bind(owner.to_string())
+                .fetch_one(&mut *tx).await.map_err(db)?;
+            if authorized != 1 {
+                return Err(RuntimeStoreError::Unauthorized);
+            }
+        }
         crate::runtime::scope(&mut tx, owner, conversation).await?;
         if let Some(context) = &self.authority {
             if context.owner != *owner {
@@ -210,6 +239,67 @@ mod tests {
         assert!(matches!(
             f.store.execution_status(&stranger, &f.conversation).await,
             Err(RuntimeStoreError::NotFound)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod browser_tests {
+    use super::*;
+    use crate::production_runtime::tests::{claim, ready, setup};
+
+    #[tokio::test]
+    async fn exact_run_browser_read_checks_current_credential_and_scope() {
+        let f = setup().await;
+        let binding = ready(&f).await;
+        let claim = claim(&f, &binding).await;
+        let admitted = f
+            .handle
+            .admit_run(
+                &claim,
+                &binding.session_id,
+                binding.generation,
+                "browser-status",
+            )
+            .await
+            .unwrap();
+        let run = &admitted.provider.run.run_id;
+        let token = format!("browser:{}", "ab".repeat(32));
+        f.store.save_session(&token, &f.owner).await.unwrap();
+        let status = f
+            .handle
+            .execution_run_status_authenticated(&token, &f.conversation, run)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.run_id.as_ref(), Some(run));
+        assert!(status.control_revision.is_some());
+        assert!(status.is_valid());
+        assert!(f
+            .handle
+            .execution_run_status_authenticated(&token, &f.conversation, &RunId(Uuid::new_v4()))
+            .await
+            .unwrap()
+            .is_none());
+        let foreign = format!("browser:{}", "cd".repeat(32));
+        assert!(matches!(
+            f.handle
+                .execution_run_status_authenticated(&foreign, &f.conversation, run)
+                .await,
+            Err(RuntimeStoreError::Unauthorized)
+        ));
+        f.store.revoke_session(&token).await.unwrap();
+        assert!(matches!(
+            f.handle
+                .execution_run_status_authenticated(&token, &f.conversation, run)
+                .await,
+            Err(RuntimeStoreError::Unauthorized)
+        ));
+        assert!(matches!(
+            f.store
+                .execution_run_status_authenticated(&token, &f.conversation, run)
+                .await,
+            Err(RuntimeStoreError::Unauthorized)
         ));
     }
 }
