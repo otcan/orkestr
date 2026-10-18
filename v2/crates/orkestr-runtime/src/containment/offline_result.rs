@@ -5,6 +5,27 @@ use orkestr_v2_application::runtime::ProviderAdmission;
 use orkestr_v2_store_sqlite::{CompletedToolDelivery, Store};
 
 impl OwnedChild {
+    pub(crate) fn enqueue_tool_result(
+        &self,
+        scope: &ExecutionScope,
+        lineage: &std::sync::Arc<()>,
+        envelope: &[u8],
+    ) -> Result<(), Error> {
+        if !std::sync::Arc::ptr_eq(lineage, &self.process.broker_lineage) || envelope.len() > 65536
+        {
+            self.quarantine();
+            return Err(Error::AuthorityProtocol);
+        }
+        self.shared.dispatch(scope, |_| {
+            self.process
+                .live
+                .lock()
+                .map_err(|_| Error::Revoked)?
+                .framing
+                .enqueue(envelope)
+        })
+    }
+    #[allow(clippy::too_many_arguments)] // Exact child, call and issuer identities remain explicit.
     pub(crate) fn write_tool_result_suffix(
         &self,
         store: &Store,
@@ -22,6 +43,7 @@ impl OwnedChild {
             || scope.generation() != original.run.dispatch_fence
             || !pending.matches_lineage(&self.process.broker_lineage)
             || delivery.parent() != original
+            || !delivery.matches_source(pending.source())
             || call.request_id != *pending.request_id()
             || call.call_id != pending.call_id()
             || call.thread_id != pending.thread_id()

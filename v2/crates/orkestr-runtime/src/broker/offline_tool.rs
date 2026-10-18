@@ -34,7 +34,7 @@ impl PendingOfflinePythonCall {
     pub(crate) fn matches_lineage(&self, lineage: &Arc<()>) -> bool {
         Arc::ptr_eq(&self.lineage, lineage)
     }
-    pub(super) fn decode(
+    pub(crate) fn decode(
         frame: &Value,
         native: &str,
         turn: &str,

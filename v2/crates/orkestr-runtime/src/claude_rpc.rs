@@ -277,7 +277,7 @@ fn uuid(value: &str) -> bool {
 
 // Syntax was already checked by serde_json. Scan only object keys so duplicate
 // fields cannot silently replace identity/result flags (including escaped keys).
-fn unique_keys(line: &str) -> Result<(), Blocker> {
+pub(crate) fn unique_keys(line: &str) -> Result<(), Blocker> {
     let bytes = line.as_bytes();
     let mut objects: Vec<HashSet<String>> = Vec::new();
     let mut cursor = 0;

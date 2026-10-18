@@ -48,9 +48,36 @@ pub struct PreparingCodex {
     phase: Phase,
     failed: bool,
     actual_fd: bool,
+    offline_python: bool,
     writing: Option<super::provider_write::PendingWrite>,
 }
 impl PreparingCodex {
+    /// Trusted fixed-profile Worker setup. No caller schemas or execution bytes.
+    pub fn open_worker_offline_python_retained(
+        store: Store,
+        grant: BoundSessionMetadata,
+        launcher: &Path,
+        workspace: &Path,
+        directories: ChildDirectories,
+        resources: Box<dyn Send + 'static>,
+    ) -> Result<Self, SetupFailure> {
+        if grant.binding().role != orkestr_v2_application::runtime::Role::Worker
+            || grant.binding().native_session_id.is_some()
+        {
+            return Err(Blocker::Protocol.into());
+        }
+        Self::open_mode(
+            store,
+            grant,
+            launcher,
+            workspace,
+            directories,
+            true,
+            true,
+            resources,
+        )
+    }
+
     pub fn open(
         store: Store,
         grant: BoundSessionMetadata,
@@ -76,6 +103,7 @@ impl PreparingCodex {
             workspace,
             directories,
             true,
+            false,
             resources,
         )
     }
@@ -94,6 +122,7 @@ impl PreparingCodex {
             workspace,
             directories,
             false,
+            false,
             Box::new(()),
         )
     }
@@ -105,6 +134,7 @@ impl PreparingCodex {
         workspace: &Path,
         directories: ChildDirectories,
         actual_fd: bool,
+        offline_python: bool,
         resources: Box<dyn Send + 'static>,
     ) -> Result<Self, SetupFailure> {
         if grant.provider() != ProviderKind::Codex
@@ -114,7 +144,15 @@ impl PreparingCodex {
         }
         let binding = grant.binding().clone();
         let launcher = TrustedLauncher::configured(launcher)?;
-        let (authority, child) = if actual_fd {
+        let (authority, child) = if offline_python {
+            launcher.open_worker_metadata_fd_retained(
+                store,
+                grant,
+                directories,
+                TransportBounds::default(),
+                resources,
+            )?
+        } else if actual_fd {
             launcher.open_metadata_fd_retained(
                 store,
                 grant,
@@ -125,6 +163,9 @@ impl PreparingCodex {
         } else {
             launcher.open_metadata(store, grant, directories, TransportBounds::default())?
         };
+        if offline_python {
+            child.enable_offline_python()?;
+        }
         let open = child.open_broker_metadata()?;
         Ok(Self {
             authority,
@@ -137,10 +178,14 @@ impl PreparingCodex {
             phase: Phase::Open,
             failed: false,
             actual_fd,
+            offline_python,
             writing: None,
         })
     }
-    fn queue(&mut self, frame: serde_json::Value) -> Result<(), SetupFailure> {
+    fn queue(&mut self, mut frame: serde_json::Value) -> Result<(), SetupFailure> {
+        if self.offline_python {
+            crate::broker::offline_setup::enable(&mut frame);
+        }
         if self.actual_fd {
             self.writing = Some(super::provider_write::PendingWrite::new(&frame)?);
         }
@@ -204,6 +249,9 @@ impl PreparingCodex {
                 .receive(&bytes)?;
             self.open = None;
             let mut channel = handle.into_channel();
+            if self.offline_python {
+                channel.enable_offline_python()?;
+            }
             if self.actual_fd {
                 channel.require_prepared()?;
             }

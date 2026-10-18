@@ -8,6 +8,8 @@ pub(crate) mod claude;
     reason = "Core requested-native protocol readiness issuer pending"
 )]
 pub(crate) mod claude_initialize;
+pub(crate) mod offline_setup;
+pub mod offline_tool;
 use crate::ports::Blocker;
 use orkestr_v2_application::runtime::ProviderKind;
 use orkestr_v2_store_sqlite::BoundSessionMetadata;

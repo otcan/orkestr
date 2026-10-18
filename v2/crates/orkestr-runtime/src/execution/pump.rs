@@ -20,6 +20,7 @@ pub(super) struct CodexOutput {
     pub(super) failed: Option<Blocker>,
     pub(super) eof: bool,
     pub(super) broker: Option<crate::broker::channel::BrokerChannel>,
+    pub(super) tool_write: Option<super::offline_result::ToolResultWrite>,
     pub(super) writing: Option<super::provider_write::PendingWrite>,
 }
 impl Provider for CodexOutput {
@@ -35,6 +36,13 @@ impl Provider for CodexOutput {
         }
         if let Some(error) = &self.failed {
             return Err(error.clone());
+        }
+        if self
+            .tool_write
+            .as_ref()
+            .is_some_and(|w| w.prepared() && !w.finished())
+        {
+            return Ok(None);
         }
         if let Some(writing) = self.writing.as_mut() {
             if writing.prepared() {
@@ -70,10 +78,14 @@ impl Provider for CodexOutput {
                                 .ok()
                                 .is_some_and(|v| v["method"] == "BrokerPrepared")
                             {
-                                self.writing
-                                    .as_mut()
-                                    .ok_or(Blocker::Protocol)?
-                                    .prepare(broker)?;
+                                if let Some(tool) = self.tool_write.as_mut() {
+                                    tool.prepare(broker)?;
+                                } else {
+                                    self.writing
+                                        .as_mut()
+                                        .ok_or(Blocker::Protocol)?
+                                        .prepare(broker)?;
+                                }
                             }
                             return Ok(None);
                         }
@@ -141,6 +153,7 @@ impl CodexPump {
                 eof: false,
                 broker: None,
                 writing: None,
+                tool_write: None,
             },
             #[cfg(all(test, feature = "fixture-test-controls"))]
             test_fence: None,
@@ -148,7 +161,11 @@ impl CodexPump {
             admission,
         }
     }
-    pub(super) fn with_broker(mut self, channel: crate::broker::channel::BrokerChannel) -> Self {
+    pub(super) fn with_broker(
+        mut self,
+        mut channel: crate::broker::channel::BrokerChannel,
+    ) -> Self {
+        channel.bind_tool_native(self.admission.binding.native_session_id.clone());
         self.source.broker = Some(channel);
         self
     }

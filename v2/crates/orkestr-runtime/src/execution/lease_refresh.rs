@@ -17,6 +17,8 @@ impl CodexPump {
         self.source.failed.is_none()
             && !self.source.eof
             && self.source.writing.is_none()
+            && self.pending_offline_python().is_none()
+            && self.source.tool_write.is_none()
             && self.source.stream.renewal_quiescent()
             && self.cursor.next_control_sequence().is_ok()
     }
