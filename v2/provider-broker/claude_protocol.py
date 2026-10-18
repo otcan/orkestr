@@ -15,6 +15,8 @@ class ClaudeChannel:
         self.seen = set()
         self.messages = set()
         self.initialized = False
+        self.setup = None
+        self.system_seen = False
         self.active = None
         self.terminal = False
 
@@ -36,6 +38,17 @@ class ClaudeChannel:
             self.handle = secrets.token_hex(24)
             return None, {"id": outer, "result": {"protocol": PROTOCOL, "identity": identity,
                 "metadata_only": True, "owned_handle": self.handle, "native_session": self.native}}
+        if request["method"] == "BrokerMetadata":
+            require(self.setup is None and not self.initialized and self.active is None)
+            exact(request["params"], ("owned_handle", "frame"))
+            require(request["params"]["owned_handle"] == self.handle)
+            frame = request["params"]["frame"]
+            exact(frame, ("type", "request_id", "request"))
+            require(frame["type"] == "control_request" and identifier(frame["request_id"]))
+            exact(frame["request"], ("subtype", "hooks"))
+            require(frame["request"] == {"subtype": "initialize", "hooks": None})
+            self.setup = (outer, frame["request_id"])
+            return frame, None
         require(request["method"] == "CommitExecution")
         params = request["params"]
         exact(params, ("owned_handle", "message_id", "frame"))
@@ -77,6 +90,19 @@ class ClaudeChannel:
 
     def _provider(self, frame):
         require(isinstance(frame, dict) and self.handle is not None)
+        if frame.get("type") == "control_response":
+            require(self.setup is not None and not self.initialized and self.active is None)
+            exact(frame, ("type", "response"))
+            response = frame["response"]
+            exact(response, ("subtype", "request_id", "response"))
+            require(response["subtype"] == "success" and response["request_id"] == self.setup[1]
+                    and isinstance(response["response"], dict))
+            self.initialized = True
+            # Sanitize capability/account/model payload. Protocol ACK is not auth proof.
+            clean = {"type": "control_response", "response": {"subtype": "success",
+                     "request_id": self.setup[1], "response": {}}}
+            return {"method": "BrokerOutput", "params": {"owned_handle": self.handle,
+                    "request_id": self.setup[0], "frame": clean}}
         require(frame.get("session_id") == self.native)
         require(not any(key in frame for key in ("sessionId", "parent_tool_use_id"))
                 or frame.get("parent_tool_use_id") is None and "sessionId" not in frame)
@@ -88,8 +114,8 @@ class ClaudeChannel:
             if "user_message_uuids" in frame:
                 require(frame["user_message_uuids"] == [self.input_uuid])
         if kind == "system":
-            require(frame.get("subtype") == "init" and not self.initialized and self.active is None)
-            self.initialized = True
+            require(frame.get("subtype") == "init" and self.initialized and not self.system_seen)
+            self.system_seen = True
             clean = {"type": "system", "subtype": "init", "session_id": self.native}
         elif kind == "assistant":
             require(self.initialized and self.active is not None and not self.terminal)

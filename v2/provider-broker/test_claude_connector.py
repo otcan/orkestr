@@ -54,7 +54,9 @@ class ClaudeLauncherTests(unittest.TestCase):
             executable.write_text('''#!/usr/bin/python3
 import json,sys
 session=sys.argv[sys.argv.index("--session-id")+1]
-print(json.dumps({"type":"system","subtype":"init","session_id":session}),flush=True)
+setup=json.loads(sys.stdin.readline())
+assert setup["request"]=={"subtype":"initialize","hooks":None}
+print(json.dumps({"type":"control_response","response":{"subtype":"success","request_id":setup["request_id"],"response":{}}}),flush=True)
 for line in sys.stdin:
  value=json.loads(line)
  assert value["session_id"]==session
@@ -80,6 +82,9 @@ for line in sys.stdin:
                     self.assertTrue(ready)
                     raw = os.read(pump.child.stdout.fileno(), 65536)
                     return channel.provider(json.loads(raw))
+                setup={"type":"control_request","request_id":"setup:1","request":{"subtype":"initialize","hooks":None}}
+                channel.client({"id":100,"method":"BrokerMetadata","params":{"owned_handle":channel.handle,"frame":setup}})
+                os.write(writer,encode(setup))
                 observation()
                 for outer in (2,):
                     frame = {"type":"user","session_id":str(session.native),

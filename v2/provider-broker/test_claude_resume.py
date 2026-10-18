@@ -26,7 +26,9 @@ class ResumeTests(unittest.TestCase):
 import json,sys,uuid
 flag="--resume" if "--resume" in sys.argv else "--session-id"
 session=sys.argv[sys.argv.index(flag)+1]
-print(json.dumps({"type":"system","subtype":"init","session_id":session}),flush=True)
+setup=json.loads(sys.stdin.readline())
+assert setup["request"]=={"subtype":"initialize","hooks":None}
+print(json.dumps({"type":"control_response","response":{"subtype":"success","request_id":setup["request_id"],"response":{}}}),flush=True)
 value=json.loads(sys.stdin.readline())
 print(json.dumps({"type":"result","subtype":"success","is_error":False,
 "session_id":session,"uuid":str(uuid.uuid4()),"user_message_uuid":value["uuid"],
@@ -63,6 +65,9 @@ print(json.dumps({"type":"result","subtype":"success","is_error":False,
         descriptors = array.array("i"); descriptors.frombytes(ancillary[0][2])
         writer = descriptors[0]
         self.resources.append([pump, writer, parent])
+        setup={"type":"control_request","request_id":"setup:1","request":{"subtype":"initialize","hooks":None}}
+        channel.client({"id":100,"method":"BrokerMetadata","params":{"owned_handle":channel.handle,"frame":setup}})
+        os.write(writer,(json.dumps(setup)+"\n").encode())
         self.observe(pump, channel)
         return pump, channel, writer
 
@@ -140,7 +145,11 @@ print(json.dumps({"type":"result","subtype":"success","is_error":False,
             channel = ClaudeChannel(session)
             channel.client({"id":1,"method":"OpenOwnedSession","params":{
                 "protocol":PROTOCOL,"identity":dict(IDENTITY,provider="claude")}})
-            channel.provider({"type":"system","subtype":"init","session_id":str(session.native)})
+            channel.client({"id":100,"method":"BrokerMetadata","params":{
+                "owned_handle":channel.handle,"frame":{"type":"control_request",
+                "request_id":"setup:1","request":{"subtype":"initialize","hooks":None}}}})
+            channel.provider({"type":"control_response","response":{
+                "subtype":"success","request_id":"setup:1","response":{}}})
             key = str(uuid.uuid4())
             channel.client({"id":2,"method":"CommitExecution","params":{
                 "owned_handle":channel.handle,"message_id":"message:1","frame":{
