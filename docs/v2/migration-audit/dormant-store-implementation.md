@@ -24,8 +24,7 @@ history_digest.py implements the exact Core binary digest for producer mapping;
 it is distinct from the older proposed-port dormant_history.py oracle and the
 collector's JSON snapshot digest. Those earlier digests cannot be supplied as the
 Core source_digest. Both Rust and Python pin Core's independent empty-byte vector.
-The complete collector-to-request adapter and additional Unicode/project vectors
-remain follow-up work; no live import is authorized.
+core_history.py now maps complete collector pages to the published request and validates import receipts. Additional pinned Unicode/project vectors remain follow-up work; no live import is authorized.
 
 Verification of exact Migration2d491562 against disposable Core885eeb90:
 Python suite 101/101 PASS; six Rust history_import tests PASS; strict all-target

@@ -1,0 +1,59 @@
+# Used-workflow and migration checkpoint
+
+This supplements the source baseline in ../parity-inventory.md and reconciles
+against ../full-release.md's current web-first scope. iOS deferral does not waive
+web or currently used specialist workflow gates. No count establishes non-use.
+Private observations and actual counts remain outside OSS.
+
+| Full-release obligation | Actual evidence | Remaining blocking acceptance/dependency |
+|---|---|---|
+| Primary conversations / workers / provider runtime | Reviewed live structural thread aggregates; persisted roles, runtime class, lifecycle and binding-object shape | Activity, effective grants and end-to-end provider parity remain separate runtime/UI evidence. |
+| Job/project/task / approval / effect history | Reviewed live table and fixed run-state/provider/trigger aggregates | Empty engine tables cannot eliminate other authorities. Paused task/approval/effect import contracts absent; no uncertain effects replay. |
+| Personal memory and consent | Exact reviewed personal_memory count receipt consumed privately, including actual counts | Count gives neither content portability nor consent. No external-memory coverage or deletion-aware import contract. |
+| Independent timers | New fixed bounded structural parser, synthetic refusal tests; real registry still unopened pending current runtime selector confirmation | Persisted enabled/status/cadence fields do not prove firing or effective normalized state. No timer import/paused apply port. |
+| Binding and connector workflows | Primary thread binding-object presence only | Effective capability/held route inventory incomplete. Session binding registries excluded. Never migrate active routes or sessions. |
+| Mail/calendar / specialist tools / OXRM | Existing code establishes feature surfaces; Gmail account GET excluded because it migrates credentials | Need inert authoritative selectors and retained external-tool acceptance. Excluded selector is not an absent feature. No credential/profile inspection. |
+| Durable ordinary history transfer | Actual registered Store stable export to fresh-owner dormant import, reopen, replay/conflict/auth refusal, rollback and native-delta export checks | One conversation only. Legacy multi-authority consistent exporter and reviewed scope mapping still absent. |
+| Crash and rollback recovery | Synthetic child exits without destructors before ledger commit and after acknowledged import; reopen/integrity/FK checks | Before-commit case exercises a real ledger transaction, not a fault injected inside import_history. Storage/power-loss and all instruction-boundary crash acceptance unexecuted. |
+| Preserve V2-only delta on return | Synthetic native message survives dormant rollback and is exported using actual stable conversation cut | Native export excludes dormant ledger; no complete portable ledger export/restore or reverse legacy import. Explicit external-effect reconciliation still required. |
+
+## Timer structural selector source review
+
+Deployed generic source: packages/storage/src/paths.js::dataPaths defines only
+home/timers.json for this authority. repositories.js::createTimerRepository.list
+calls ensureDataDirs then reads that JSON array; the new reader calls neither.
+packages/core/src/timers.js::normalizeStoredTimer defines cadence, enabled, status,
+targetType, requiredConnector/requiredDesktop and legacy/repeat handling. Parser
+reports exact raw known values and missing/unknown buckets, without imitating
+normalization, deriving next-run time or opening referenced files. It does not
+read user timer registries, API session bindings, routes or connector secrets.
+
+Reader opens one fixed file under the reviewed home via directory fd, O_NOFOLLOW
+and read-only flags; bounds size/rows; rejects aliases/nonregular files, duplicate
+keys and malformed JSON; checks fd/path identity and change metadata. Output keys
+are fixed. Unknown raw strings, IDs, prompts, paths, connector names and identities
+are never returned. One stable-metadata file read is not cross-store consistency.
+Concurrent mutation tests verify refusal; filesystem timestamp guarantees do not
+constitute an atomic scheduler snapshot.
+
+The earlier private live personal_memory receipt was reviewed and a private
+coverage reconciliation saved. Timer execution was held before file access when
+current MainPID differed from prior reviewed selector receipts. Root confirmation
+of current selector is required; the older home must not be assumed authoritative.
+
+## Concrete next migration dependencies
+
+1. Current runtime-home selector confirmation for the bounded timer read; independent
+   selector review remains possible from the exact parser/test source.
+2. Core/authority-owned consistent legacy thread/history export, explicit owner and
+   scope mapping, and separate approval/effect/resource/timer dormant ports. Counts
+   and a single V2 conversation export cannot substitute for these.
+3. Portable export/readback of the inert ledger plus native V2 delta, with manifest
+   completeness and reverse reconciliation. Current rollback only deactivates the
+   untouched separate ledger and preserves all rows/native state.
+4. Per-workflow owner acceptance of effective bindings, mail/calendar, memory and
+   OXRM; source feature presence and aggregate counts are insufficient for cutover.
+
+Main messaging mute/holds and personal skill-only router/autostart exclusion stay
+intact. No production mutation, credential copy, activation, dispatcher or cutover
+is authorized by this checkpoint.

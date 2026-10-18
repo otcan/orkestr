@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from registry_inventory import read_timer_inventory, project_timers
 
@@ -52,3 +53,29 @@ class RegistryInventoryTests(unittest.TestCase):
         self.assertEqual(result['cadence']['unknown'], 2)
         self.assertEqual(result['cadence']['missing'], 1)
         self.assertEqual(result['legacy_object_present'], 1)
+
+    def test_writer_change_is_refused(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = Path(home)/'timers.json'
+            path.write_text('[{}]')
+            original = os.read
+            changed = False
+            def reading(fd, size):
+                nonlocal changed
+                value = original(fd, size)
+                if not changed:
+                    changed = True
+                    path.write_text('[{},{}]')
+                return value
+            with patch('registry_inventory.os.read', side_effect=reading):
+                with self.assertRaisesRegex(ValueError, 'registry changed'):
+                    read_timer_inventory(home)
+
+    def test_oversized_file_refused_before_read(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = Path(home)/'timers.json'
+            with path.open('wb') as stream:
+                stream.truncate(16*1024*1024+1)
+            with patch('registry_inventory.os.read', side_effect=AssertionError('must not read')):
+                with self.assertRaises(ValueError):
+                    read_timer_inventory(home)
