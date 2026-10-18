@@ -35,6 +35,7 @@ mod readiness;
 mod recovery;
 #[cfg(test)]
 mod recovery_tests;
+mod resume_metadata;
 mod retirement;
 #[cfg(test)]
 mod retirement_tests;

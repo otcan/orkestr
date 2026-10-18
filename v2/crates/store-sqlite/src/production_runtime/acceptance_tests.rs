@@ -5,7 +5,7 @@ use orkestr_v2_application::IntakeStore;
 use orkestr_v2_contracts::{ExecutionAcceptanceRequest, ExecutionPhase, MessageInput};
 use std::time::Duration;
 
-async fn proposal(f: &tests::Case) -> (ProviderAdmission, ExecutionAcceptanceRequest) {
+pub(super) async fn proposal(f: &tests::Case) -> (ProviderAdmission, ExecutionAcceptanceRequest) {
     let p = consumed(f).await;
     f.handle
         .append_provider_event(&f.owner, &p, &input(&p, 1, ProviderEvent::Started))
