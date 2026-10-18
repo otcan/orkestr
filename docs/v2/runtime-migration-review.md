@@ -39,7 +39,7 @@ fence/control outbox, stale observation/effect rejection, and restart recovery
 preserving unknown dispatches for explicit reconciliation. Core must extend the
 shared journal/event DTO compatibly; runtime owns no alternate journal.
 
-Verification status: 19 migrated Rust tests are defined, not compiled at this
+Verification status: 21 migrated Rust tests are defined, not compiled at this
 proposal head. Prior combined-base 16-test results do not transfer. Cargo and
 download work remain held until coordinator readmission. No formal approval,
 build pass, dispatch implementation or durable acceptance is claimed.
@@ -58,5 +58,7 @@ validate lease/fence/expiry, derive payload digest, require matching event key,
 and return the original receipt on identical retry after durable commit.
 SQLite observation support remains Unavailable. The spy models receipt dedup,
 not durability. 21 tests are authored, unexecuted at this revision. No cargo,
-formatting, root/lock mutation or CI pass is claimed. Publication is held pending
-coordinator root/lock sequencing.
+formatting, root/lock mutation or CI pass is claimed. Source was published in
+draft PR #76 at 2c9fd0fa72ea849d8beb39e73f2e0c485fef029d and independently
+reviewed with no blocking source finding for the bounded migration. This is
+source review only; root/lock and integration gates remain coordinator-owned.
