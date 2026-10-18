@@ -43,7 +43,16 @@ try {
             if (event === "session_expired" || event === "resync_required") {
                 return {status: 200, event};
             }
-            if (data.length) return {status: 200, event, id, body: JSON.parse(data.join("\n"))};
+            if (data.length) {
+                if (!["message_accepted", "fixture_provider_observed"].includes(event)) {
+                    return {status: 200, event: "resync_required"};
+                }
+                let body;
+                try { body = JSON.parse(data.join("\n")); }
+                catch { return {status: 200, event: "resync_required"}; }
+                // Canonical DTO/schema/conversation/cursor validation belongs to Rust.
+                return {status: 200, event, id, body};
+            }
         }
         if (buffer.length > 65536) throw new Error("SSE frame exceeds client limit");
     }

@@ -48,3 +48,15 @@ test('coalesced small backlog frames do not trip the individual frame limit',asy
 test('oversized complete frame remains rejected',async()=>{
     await assert.rejects(run(['data: '+ 'x'.repeat(65537)+'\n\n']),/exceeds client limit/);
 });
+
+test('unknown event variants require resync without exposing an unvalidated body',async()=>{
+    const {result,cancelled} = await run(['id: 8\nevent: future_runtime_success\ndata: {"text":"must not render"}\n\n']);
+    assert.deepEqual(result,{status:200,event:'resync_required'});
+    assert.equal(cancelled,true);
+});
+
+test('malformed known event JSON requires resync rather than repeat decoding',async()=>{
+    const {result,cancelled} = await run(['id: 8\nevent: message_accepted\ndata: {broken\n\n']);
+    assert.deepEqual(result,{status:200,event:'resync_required'});
+    assert.equal(cancelled,true);
+});
