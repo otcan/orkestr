@@ -261,3 +261,50 @@ Current source SHA256:
 
 Executed transaction binary SHA256:
 `582316f4ffbe88b5c20639eeff96c642b620bd14800f563266d610f954ec3968`.
+
+## Observation adapter checkpoint: 002270e0
+
+Independent candidate source: Core `002270e03abfcc642b80e3face4c8347699527a5`
+(PR78), including canonical DTO bf87414f and migration/append cff94b88.
+The verification lane exported that exact v2 tree into an isolated candidate
+workspace, retaining its manifest and lock unchanged, then installed the authored
+transaction/negative/observation integration-test modules. Synthetic owned homes
+only; no server, provider or production activation.
+
+Required wrapper commands (from the exported v2 workspace, with assigned
+verification target/home):
+
+- `v2-cargo test --locked --offline -p orkestr-v2-store-sqlite --features fixture-test-controls`: **34 passed, 0 failed, 1 ignored child entry**; the core-authored crash parents invoke that child. This is independent execution of core-authored tests, not independently authored acceptance.
+- `v2-cargo test --locked --offline -p orkestr-v2-store-sqlite --features fixture-test-controls --test independent_transactions`: **11 passed, 0 failed, 0 ignored** (0.52s), including nine earlier transaction checks rerun on this candidate and two newly authored observation tests.
+- `v2-cargo clippy --locked --offline -p orkestr-v2-store-sqlite --features fixture-test-controls --test independent_transactions -- -D warnings`: passed.
+- Wrapper package formatting and `git diff --check`: passed.
+
+New authored source: `v2/acceptance/fixture_observations.rs`, SHA-256
+`273110b6cbc7045bcebee9a79fabea36794f34427677b3def4f97aece9567b1f`.
+Executed independent-test binary SHA-256:
+`4516582987cbff4c0690d45cf1b740527576ccf8c2200c97f03536479d5422b7`.
+
+The first new case races identical Started observations across independent pools,
+requires one original receipt and one duplicate, then appends non-synthetic
+CompletedProposal and checks canonical sequences 1/2/3 with distinct metadata and
+original source linkage. After deterministic expiry/exact predecessor takeover,
+both original and successor handles replay the original Running receipt; changed
+Stopped replay conflicts and unseen evidence is refused. Full-row read-only
+snapshots show these retries/refusals do not mutate durable rows.
+
+The second injects SQL trigger failures at event insertion, observation insertion,
+outbox insertion and run projection update. Each refusal preserves every column
+of conversations/events/outbox/observations/runs/inbox/bindings in a single
+read-only snapshot transaction; retry starts at run sequence1/conversation
+sequence2 and transitions Starting directly to Failed. A real next inbox claim
+then receives Busy without durable mutation, proving this slice grants no reuse.
+Private values are compared only in memory and never printed.
+
+No blocking bounded source finding was identified in migration/append/replay.
+The independently rerun core suite includes populated prefix4 foreign-key/checksum
+upgrade and failed copy-rehearsal live-WAL preservation checks. These migration
+cases remain core-authored. New observation tests use SQL failure injection and
+controlled expiry, **not observation SIGKILL, transport lost-ACK, or process
+recovery**. Independent migration fixture construction, observation crash windows,
+broader adversarial matrices, live browser mixed replay, lifecycle/effects and
+production dispatch remain pending. No CI result or blanket acceptance claimed.
