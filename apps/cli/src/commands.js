@@ -2205,10 +2205,14 @@ async function send(argv, ctx) {
   const text = values.slice(1).join(" ").trim();
   if (!target || !text) throw new Error('Usage: orkestr send <thread> "<message>"');
   const replyWhatsApp = await sendRepliesToWhatsApp(argv, target, ctx);
+  const origin = resolveThreadId(argv, ctx) || (await taskAgentWhereAmI(argv, ctx))?.thread?.id || "";
   const payload = await requestJson(`/api/threads/${encodeURIComponent(target)}/input`, {
     ...ctx,
     method: "POST",
     body: { text, source: "cli", parseCommands: true, controlAllowed: true,
+      ...(origin ? { agentSourceThreadId: origin } : {}),
+      ...(flagValue(argv, "--report-kind") ? { reportKind: flagValue(argv, "--report-kind") } : {}),
+      ...(flagValue(argv, "--report-key") ? { reportKey: flagValue(argv, "--report-key") } : {}),
       ...(replyWhatsApp ? { workerReplyDelivery: "bound_whatsapp" } : {}),
       ...(flagValue(argv, "--idempotency-key") ? { idempotencyKey: flagValue(argv, "--idempotency-key") } : {}),
     },
@@ -2466,6 +2470,7 @@ function formatWhereAmI(payload = {}) {
 function positional(argv) {
   const values = [];
   const flagsWithValues = new Set([
+    "--report-kind", "--report-key",
     "--idempotency-key",
     "--branch",
     "--branch-name",
