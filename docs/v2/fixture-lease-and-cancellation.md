@@ -77,3 +77,24 @@ replay and changed-body conflict; control outbox/event/fence rollback together;
 terminal-before-cancel snapshot equality; process loss before/after cancel COMMIT.
 These are pending cases, not passing acceptance. No shared port or root dependency
 change is proposed, and cancellation is not partially activated by renewal.
+
+## Selected cancellation replay checkpoint
+
+The selected additive DTO is `FixtureCancellationRequestedEnvelope`, exposed
+through `ConversationEvent::FixtureCancellationRequested`, with schema version
+3 and SSE name `fixture_cancellation_requested`. The JSON fixture is
+`v2/fixtures/fixture-cancellation-requested.json`. Legacy schema-1 message and
+schema-2 provider observation bytes are unchanged. The envelope retains explicit
+source message/event linkage and canonical conversation sequence. Its payload
+contains only typed run/session IDs and `outcome`: `not_dispatched` for a
+Candidate/Reserved cancellation committed before delivery, or `unknown` for a
+DeliveryUnknown cancellation request. Unknown never confirms cancellation.
+Neither outcome authorizes execution or interruption. Unknown fields, wrong
+variant/schema combinations and invented confirmed outcomes are rejected.
+
+This checkpoint defines replay compatibility only. No cancellation rows, control
+outbox, Stopped observation, public endpoint or provider activation is implemented
+by this DTO change. The dedicated control outbox will remain separate from public
+metadata and contain no replay-visible control authority. Stopped acknowledgement
+and its receipt-state extension will accompany the adapter slice under the exact
+issued control-purpose/new-fence rule; no binding reuse is granted.
