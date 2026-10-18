@@ -45,7 +45,10 @@ def elf_platform(binary):
 
 
 def prepare(binary, ui, output, binary_sha256, ui_inventory_sha256, source_commit,
-            ui_source_commit, base_image, origin, port, bind_opt_in, required_glibc):
+            ui_source_commit, base_image, origin, port, bind_opt_in, required_glibc,
+            network_policy="outbound-denied"):
+    require(network_policy in ("outbound-denied", "diagnostic-egress-allowed"),
+            "explicit supported network policy required")
     require(re.fullmatch(r"[^\s$;]+@sha256:[0-9a-f]{64}", base_image), "immutable inspected local base image digest required")
     require(1024 <= port <= 65535, "explicit unprivileged host port required")
     parsed = urlsplit(origin)
@@ -79,7 +82,8 @@ def prepare(binary, ui, output, binary_sha256, ui_inventory_sha256, source_commi
     manifest = {"format": "orkestr-v2-container-artifacts-v1", "project": project,
                 "server_source_commit_declared": source_commit, "ui_source_commit_declared": ui_source_commit,
                 "origin": origin, "base_image": base_image, "platform": platform,
-                "required_glibc_declared": required_glibc, "container_bind_opt_in": {"name": name, "value": value},
+                "required_glibc_declared": required_glibc, "network_policy": network_policy,
+                "provider_activation": "none; no provider configured by this distribution", "container_bind_opt_in": {"name": name, "value": value},
                 "files": {"server": binary_sha256, "entrypoint.py": sha256(output / "entrypoint.py"),
                           **{"ui/" + key: value for key, value in inventory.items()}},
                 "acceptance": "unexecuted; reviewed bind-capable binary and compatible inspected base required"}
@@ -95,7 +99,7 @@ def prepare(binary, ui, output, binary_sha256, ui_inventory_sha256, source_commi
                    "import urllib.request; urllib.request.urlopen('http://127.0.0.1:19822/api/v2/health',timeout=2)"],
                    "interval": "2s", "timeout": "3s", "retries": 15}}
     write_json(output / "compose.json", {"name": project, "services": {"server": service},
-               "volumes": {"state": {"name": project + "-state"}}, "networks": {"isolated": {"internal": True}}})
+               "volumes": {"state": {"name": project + "-state"}}, "networks": {"isolated": {"internal": network_policy == "outbound-denied"}}})
     (output / ".dockerignore").write_text("**\n!Dockerfile\n!server\n!ui\n!ui/**\n!entrypoint.py\n!artifact-manifest.json\n")
     return output
 
@@ -105,6 +109,8 @@ if __name__ == "__main__":
     for name in ("binary", "ui", "output", "binary-sha256", "ui-inventory-sha256", "source-commit",
                  "ui-source-commit", "base-image", "origin", "bind-opt-in", "required-glibc"):
         parser.add_argument("--" + name, required=True)
+    parser.add_argument("--network-policy", choices=("outbound-denied", "diagnostic-egress-allowed"),
+                        default="outbound-denied", help="normal bridge permits outbound routing; requires explicit topology admission")
     parser.add_argument("--port", type=int, required=True)
     args = vars(parser.parse_args())
     try:

@@ -173,3 +173,20 @@ it therefore requires independent design/source review before implementation.
 Simply changing `internal` to false would remove the egress boundary and is not
 proposed. A fully Docker-native ingress alternative needs an independently
 reviewed enforceable egress policy; disabling masquerading alone is insufficient.
+
+### Explicit diagnostic egress policy (source proposal)
+
+`prepare.py --network-policy diagnostic-egress-allowed` selects a normal private
+Compose bridge while retaining loopback-only publication, fresh state, runtime
+privilege restrictions and absence of host/socket/credential mounts. This policy
+**permits outbound network routing**; it is not an outbound-denied sandbox. No
+provider is configured or activated. The default remains `outbound-denied` and
+continues to use the internal bridge. Both policies are recorded in the artifact
+manifest. Unknown policies are rejected before creating a context.
+
+This option is a concrete proposal for a root-admitted no-provider HTTP
+checkpoint, not a product inference-routing decision. Independent source review
+and explicit root topology admission precede an actual run with this option.
+The earlier failed internal-bridge evidence remains valid. No host relay,
+daemon/firewall changes or production workload modifications are required by
+this proposal. Provider-enabled product routing and its acceptance stay separate.
