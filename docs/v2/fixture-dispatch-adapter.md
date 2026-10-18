@@ -75,3 +75,50 @@ lease renewal, effect authority and production recovery remain unimplemented.
 Independent verification and Runtime's real-store harness must review these
 transactions before any start path is enabled. Volatile fake tests are separate
 from durable acceptance, and pool reopen is separate from process recovery.
+
+### External harness inspection and opt-in controls
+
+`inspect_fixture_attempt(conversation, request_key)` returns one read-only,
+owner/context-scoped snapshot: run ID, blocked flag, dispatch phase,
+atomic inbox acknowledgement, and verifier-presence booleans. It returns no native
+identity, key, verifier or digest, and grants no dispatch permission. A different
+context cannot inspect the attempt. Expired/fenced handles are refused.
+
+The store-only `fixture-test-controls` feature adds two explicit fixture-handle
+methods; it adds no dependency or default feature and is not enabled by server
+bootstrap. `fixture_expire_context()` only shortens the bound live incarnation's
+lease to store time; it cannot extend authority or expire another context.
+`fixture_consume_without_reply(claim)` invokes the real consume transaction,
+discards the result and returns `Unavailable`. A committed consume therefore
+reopens as `DeliveryUnknown`; retry cannot return `DispatchNow`. This is a
+deliberately discarded reply, **not** a subprocess/transport-crash claim. Core's
+seven SIGKILL checkpoints remain test-binary-only. External harnesses should
+separately identify pool reopen, discarded reply and actual process recovery.
+
+`inspect_fixture_scope(conversation)` returns exact counts of attempts,
+acknowledged run links, reservations, unknown deliveries and quarantined attempts
+in the handle's owner/conversation/context. Both inspectors include predecessor
+attempts in that same context: a valid successor can inspect quarantine, while an
+expired/fenced predecessor cannot inspect or act. Other keys/namespaces remain
+invisible.
+
+With `fixture-test-controls`, an owned child may call
+`fixture_arm_checkpoint(FixtureCheckpoint, fresh_marker_path)` on its own mutable
+live handle. Typed stages are AdmitBeforeAck (after run insertion),
+AdmitBeforeCommit, AdmitAfterCommit, ReserveBeforeCommit, ReserveAfterCommit,
+ConsumeBeforeCommit and ConsumeAfterCommit. At the selected boundary the child
+creates a new private marker containing only the exact stage name, then waits up
+to 30 seconds before returning Unavailable. Parent must bound its wait, verify
+marker bytes, and kill/reap **its owned child**. Before-commit kill rolls back;
+after-commit kill loses the reply. Reattached handles never inherit checkpoints.
+The marker directory must be caller-controlled and stable. No production endpoint,
+SQL setter, clock setter, native identity or locator is exposed.
+
+Independent reproduction: run the store test suite with
+`--locked --offline --features fixture-test-controls`. The three crash parent
+tests launch the ignored owned-child entry themselves and exercise eight SIGKILL
+windows (including run-insert-before-ack). Their child-only private context
+reconstruction remains a test oracle, not a public restart attachment contract.
+The public hook does not authorize transferring a live handle across processes;
+a harness needing that must use the provided owned-child tests rather than invent
+an ID-only attachment API. Post-reply/pre-I/O remains a harness-side checkpoint.
