@@ -9,8 +9,8 @@ from live_census import _read_transaction, _now
 RUN_STATES = ('pending', 'running', 'retrying', 'awaiting_approval',
               'succeeded', 'failed', 'cancelled', 'skipped')
 RUN_QUERY = 'SELECT count(*), ' + ', '.join(
-    'coalesce(sum(CASE WHEN state = ? THEN 1 ELSE 0 END), 0)'
-    for _ in RUN_STATES) + ' FROM "runs"'
+    'coalesce(sum(CASE WHEN source.state COLLATE BINARY = ? THEN 1 ELSE 0 END), 0)'
+    for _ in RUN_STATES) + ' FROM main."runs" AS source'
 
 
 def _authorize(action, arg1, arg2, database, trigger):

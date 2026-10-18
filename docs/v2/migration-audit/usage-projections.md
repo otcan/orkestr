@@ -25,10 +25,10 @@ at the pinned source baseline
 The fixed query consists of `count(*)` and eight repetitions of:
 
 ```sql
-coalesce(sum(CASE WHEN state = ? THEN 1 ELSE 0 END), 0)
+coalesce(sum(CASE WHEN source.state COLLATE BINARY = ? THEN 1 ELSE 0 END), 0)
 ```
 
-from the ordinary main `runs` table. Bound values, in order, are `pending`,
+from the ordinary main `runs` table with fixed alias `source`. Bound values, in order, are `pending`,
 `running`, `retrying`, `awaiting_approval`, `succeeded`, `failed`, `cancelled`,
 `skipped`. Unknown count is total minus these buckets, including null values.
 Raw/grouped state strings never leave SQLite. Future enum changes require
@@ -66,3 +66,9 @@ including four new projection tests for fixed/unknown buckets, empty-store
 semantics, forbidden columns/functions and view refusal. Root subsequently executed the reviewed run-state projection and Migration
 reviewed its private receipt. Provider/role/registry queries and CI for this
 follow-up remain unexecuted.
+
+
+Follow-up schema-drift guards: the state column is explicitly source-qualified
+and compared with COLLATE BINARY. Missing-state and NOCASE regressions pass.
+The previously executed private receipt is unchanged; this hardened source has
+not been re-executed live. Full follow-up synthetic suite: 73/73 PASS.

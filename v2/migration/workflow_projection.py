@@ -17,8 +17,8 @@ PROJECTIONS = (
 def _query(table, column, values):
     # All identifiers come from PROJECTIONS, never from caller input.
     return 'SELECT count(*), ' + ', '.join(
-        f'coalesce(sum(CASE WHEN "{column}" = ? THEN 1 ELSE 0 END), 0)'
-        for _ in values) + f' FROM "{table}"'
+        f'coalesce(sum(CASE WHEN source."{column}" COLLATE BINARY = ? THEN 1 ELSE 0 END), 0)'
+        for _ in values) + f' FROM main."{table}" AS source'
 
 
 def _authorize(table, column):

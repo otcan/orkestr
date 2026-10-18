@@ -94,3 +94,10 @@ coverage, not used-workflow parity. The next inventory checkpoint should execute
 this grouped projection after review, then identify specific missing authorities
 from its fixed buckets without publishing private values. Dormant apply/export,
 provenance and revision-safe rollback remain a separate Core dependency.
+
+
+Follow-up count-integrity review applied fixed source-column qualification and
+explicit COLLATE BINARY enum comparisons. New tests reject a missing data column
+and preserve unknown uppercase role values even with NOCASE data storage.
+All 73 synthetic tests pass. These guards do not add JSON paths or broaden data
+authority. The updated exact source still awaits independent review/live execution.

@@ -31,9 +31,9 @@ The fixed SQL for each row above is:
 
 ```sql
 SELECT count(*),
-       coalesce(sum(CASE WHEN "COLUMN" = ? THEN 1 ELSE 0 END), 0),
+       coalesce(sum(CASE WHEN source."COLUMN" COLLATE BINARY = ? THEN 1 ELSE 0 END), 0),
        ...
-FROM "TABLE"
+FROM main."TABLE" AS source
 ```
 
 COLUMN/TABLE are internal constants from the two-row allowlist, never caller
@@ -81,3 +81,21 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s v2/migration/tests -q
 case variants, views/virtuals, zero-count semantics, forbidden data/operations,
 and a concurrent WAL commit invisible to both aggregates until a later
 transaction. Live provider/trigger projection and CI are unexecuted.
+
+
+## Independent count-integrity correction
+
+Independent source review found two schema-drift cases in the original provider/
+trigger candidate: an unqualified double-quoted missing column could become a
+SQLite string literal, and a NOCASE column could fold unknown uppercase values
+into known buckets. The corrected query qualifies every expected column with
+its fixed source alias and explicitly selects COLLATE BINARY. A missing expected
+column now aborts the complete report, including failure of the second query;
+no partial result is returned. This does not widen the authorizer.
+
+Both cases now have synthetic regressions for provider and trigger columns.
+Related state/thread projections also use qualified data columns and explicit
+binary enum comparisons, with matching missing-column and NOCASE controls.
+The complete suite passes 73/73 tests. No live provider/trigger projection was
+run; the corrected exact commit still requires independent review. Earlier
+review of the original predicate is superseded for count integrity.

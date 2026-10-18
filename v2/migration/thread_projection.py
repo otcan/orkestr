@@ -39,7 +39,7 @@ def _invalid_ancestor(path):
 
 
 def _enum(path, values):
-    kind, value = f"json_type(doc, '{path}')", f"json_extract(doc, '{path}')"
+    kind, value = f"json_type(doc, '{path}')", f"(json_extract(doc, '{path}') COLLATE BINARY)"
     return (f"CASE WHEN quality <> 'object' THEN quality "
             f"WHEN ({_invalid_ancestor(path)}) THEN 'unsupported' "
             f"WHEN {kind} IS NULL OR {kind} = 'null' THEN 'missing' "
@@ -74,14 +74,14 @@ def _build():
         fields.update({name: _flag(path, kind) for name, path in definitions.items()})
     # Explicit CASE guards prevent malformed/non-text JSON from reaching JSON paths.
     source = """(
-      SELECT CASE WHEN typeof(data) = 'text' THEN
-                    CASE WHEN json_valid(data) THEN data ELSE 'null' END
+      SELECT CASE WHEN typeof(source.data) = 'text' THEN
+                    CASE WHEN json_valid(source.data) THEN source.data ELSE 'null' END
                   ELSE 'null' END AS doc,
-             CASE WHEN typeof(data) <> 'text' THEN 'unsupported_storage'
-                  WHEN NOT json_valid(data) THEN 'malformed_json'
-                  WHEN json_type(data) <> 'object' THEN 'non_object'
+             CASE WHEN typeof(source.data) <> 'text' THEN 'unsupported_storage'
+                  WHEN NOT json_valid(source.data) THEN 'malformed_json'
+                  WHEN json_type(source.data) <> 'object' THEN 'non_object'
                   ELSE 'object' END AS quality
-      FROM main.orkestr_threads
+      FROM main.orkestr_threads AS source
     ) AS safe"""
     expressions, slots = [], []
     for name, (expression, buckets) in fields.items():

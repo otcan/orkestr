@@ -53,3 +53,19 @@ class UsageProjectionTests(unittest.TestCase):
         db.execute('DROP TABLE runs'); db.execute('CREATE VIEW runs AS SELECT 1 AS state')
         db.commit(); db.close()
         self.assertEqual(run_state_projection(self.path)['status'], 'unavailable')
+
+    def test_nocase_state_stays_exact(self):
+        db = sqlite3.connect(self.path)
+        db.executescript("DROP TABLE runs; CREATE TABLE runs (state TEXT COLLATE NOCASE);"
+                         "INSERT INTO runs VALUES ('RUNNING'), ('running');")
+        db.close()
+        report = run_state_projection(self.path)
+        self.assertEqual(report['buckets']['running'],1)
+        self.assertEqual(report['buckets']['unknown'],1)
+
+    def test_missing_state_column_fails(self):
+        db = sqlite3.connect(self.path)
+        db.execute('ALTER TABLE runs RENAME COLUMN state TO unexpected')
+        db.close()
+        with self.assertRaises(sqlite3.DatabaseError):
+            run_state_projection(self.path)

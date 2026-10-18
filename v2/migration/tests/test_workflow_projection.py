@@ -80,3 +80,24 @@ class WorkflowProjectionTests(unittest.TestCase):
         self.assertEqual(report['reports']['trigger_audit_class']['buckets']['schedule'], 1)
         later = projection.workflow_class_projection(self.path)
         self.assertEqual(later['reports']['attempt_provider']['buckets']['codex'], 2)
+
+    def test_missing_expected_column_aborts_instead_of_reporting_unknown(self):
+        for table, column in (('attempts','provider'), ('trigger_audit','trigger_type')):
+            with self.subTest(table=table):
+                self.db.execute(f'ALTER TABLE {table} RENAME COLUMN {column} TO unexpected')
+                self.db.commit()
+                with self.assertRaises(sqlite3.DatabaseError):
+                    projection.workflow_class_projection(self.path)
+                self.db.execute(f'ALTER TABLE {table} RENAME COLUMN unexpected TO {column}')
+                self.db.commit()
+
+    def test_nocase_schema_does_not_change_exact_bucket_mapping(self):
+        self.db.executescript("DROP TABLE attempts; DROP TABLE trigger_audit;"
+            "CREATE TABLE attempts (provider TEXT COLLATE NOCASE);"
+            "CREATE TABLE trigger_audit (trigger_type TEXT COLLATE NOCASE);"
+            "INSERT INTO attempts VALUES ('CODEX'), ('codex');"
+            "INSERT INTO trigger_audit VALUES ('SCHEDULE'), ('schedule');")
+        report = projection.workflow_class_projection(self.path)
+        for name, bucket in (('attempt_provider','codex'), ('trigger_audit_class','schedule')):
+            self.assertEqual(report['reports'][name]['buckets'][bucket],1)
+            self.assertEqual(report['reports'][name]['buckets']['unknown'],1)

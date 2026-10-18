@@ -117,3 +117,17 @@ class ThreadProjectionTests(unittest.TestCase):
         self.assertEqual(b['role']['task-agent'],1)
         self.assertEqual(b['role']['missing'],2)
         self.assertEqual(b['parent_reference']['present'],1)
+
+    def test_missing_data_column_fails(self):
+        self.writer.execute('ALTER TABLE orkestr_threads RENAME COLUMN data TO unexpected')
+        self.writer.commit()
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.report()
+
+    def test_nocase_data_does_not_fold_enum_values(self):
+        self.writer.executescript('DROP TABLE orkestr_threads;'
+            'CREATE TABLE orkestr_threads (data TEXT COLLATE NOCASE);')
+        self.insert(json.dumps({'threadKind':'WORKER'}), json.dumps({'threadKind':'worker'}))
+        buckets = self.report()['buckets']['role']
+        self.assertEqual(buckets['worker'],1)
+        self.assertEqual(buckets['unknown'],1)
