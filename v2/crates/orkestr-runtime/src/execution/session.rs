@@ -250,7 +250,10 @@ impl PreparingCodex {
             Phase::Account => {
                 let frame = response.ok_or(Blocker::Protocol)?;
                 self.rpc.receive(&frame.to_string())?;
-                let thread = self.rpc.create_session(&self.workspace)?;
+                let thread = match self.binding.native_session_id.as_deref() {
+                    Some(native) => self.rpc.resume_session(&self.workspace, native)?,
+                    None => self.rpc.create_session(&self.workspace)?,
+                };
                 self.queue(thread)?;
                 self.phase = Phase::Thread;
             }
