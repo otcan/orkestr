@@ -1,14 +1,14 @@
 #!/usr/bin/python3
-"""Synthetic owned broker protocol peer. Never imports a provider or credentials."""
+"""Synthetic native peer behind the real broker. No provider or credentials."""
 import json
 import os
 from pathlib import Path
 import sys
 
-assert sys.argv[1:] == ["open-owned-session", "--protocol", "orkestr-v2-provider-broker-v1"]
-assert set(os.environ) <= {"PATH", "LANG", "LC_ALL", "HOME", "TMPDIR"}
+assert sys.argv[1:] == ["app-server", "--listen", "stdio://"]
+assert set(os.environ) == {"PATH", "LANG", "LC_ALL", "HOME", "TMPDIR", "CODEX_HOME"}
+assert os.environ["HOME"] == os.environ["CODEX_HOME"]
 trace = Path.cwd() / "synthetic-peer.jsonl"
-handle = "synthetic_owned"
 
 
 def record(kind):
@@ -22,15 +22,7 @@ def emit(value):
 
 record("spawn")
 for line in sys.stdin:
-    request = json.loads(line)
-    if request["method"] == "OpenOwnedSession":
-        emit({"id": request["id"], "result": {
-            "protocol": request["params"]["protocol"],
-            "identity": request["params"]["identity"],
-            "metadata_only": True, "owned_handle": handle}})
-        continue
-    assert request["params"]["owned_handle"] == handle
-    frame = request["params"]["frame"]
+    frame = json.loads(line)
     method = frame["method"]
     reply = None
     if method == "initialize":
@@ -49,17 +41,17 @@ for line in sys.stdin:
             "approvalPolicy": "never", "sandbox": {"type": "readOnly"}}}
         record("ready")
     elif method == "turn/start":
-        assert request["method"] == "CommitExecution"
         assert frame["params"]["input"][0]["text"] == "synthetic ordinary HTTP input"
         record("turn")
         reply = {"id": frame["id"], "result": {"turn": {"id": "synthetic-turn", "status": "inProgress"}}}
     else:
         assert method == "initialized"
-    emit({"id": request["id"], "result": {"owned_handle": handle, "frame": reply}})
+    if reply is not None:
+        emit(reply)
     if method == "turn/start":
         for output in [
             {"method": "turn/started", "params": {"threadId": "synthetic-http-native", "turn": {"id": "synthetic-turn", "status": "inProgress"}}},
             {"method": "item/agentMessage/delta", "params": {"threadId": "synthetic-http-native", "turnId": "synthetic-turn", "delta": "synthetic progress <untrusted>"}},
             {"method": "turn/completed", "params": {"threadId": "synthetic-http-native", "turn": {"id": "synthetic-turn", "status": "completed"}}},
         ]:
-            emit({"method": "BrokerOutput", "params": {"owned_handle": handle, "frame": output}})
+            emit(output)
