@@ -32,7 +32,10 @@ python3 -B v2/packaging/candidate/build_pair.py \
 ```
 
 Both build children receive a minimal environment, fresh HOME, explicit offline
-caches and unique target/output directories. Provider and application environment
+caches and unique target/output directories. The declared Cargo cache bin directory
+is prepended to PATH so the canonical bundle can find its pinned wasm-bindgen.
+An admission wrapper may enforce its own Cargo/Rustup cache paths; the build owner
+must supply matching installed caches for both wrapper and direct bundle tools. Provider and application environment
 variables are excluded. Cache paths and host environment values are never written
 into receipts. Authorized wrappers requiring additional operator environment must
 be adapted by their owner; do not bypass their admission controls. Required glibc
@@ -124,13 +127,18 @@ control plane has allowed bridge egress; untrusted executor containment is separ
 ```sh
 python3 -B v2/packaging/candidate/soak.py \
   --origin "$EXPLICIT_LOOPBACK_ORIGIN" --samples 60 --interval 1 \
-  --timeout 2 --output "$NEW_SOAK_EVIDENCE"
+  --timeout 2 --max-latency-ms 1000 --output "$NEW_SOAK_EVIDENCE"
 ```
 
 This finite command never launches a server, opens a database, sends auth or
 registers a recurring job. It disables proxies and records sample latency/success,
-error type and p50/p95/max only, without response bodies or credentials. Any failed
-sample exits nonzero. Results are health latency, not load capacity, browser,
+UTC timestamps, monotonic offsets/duration, error type, consecutive failure count,
+health recovery transitions and p50/p95/max, without response bodies or credentials. Any failed
+sample or exceeded explicit latency threshold exits nonzero. Output is reserved
+before requests so an existing evidence file prevents any sampling. A recovered
+health endpoint does not prove a process restart. Crash, restart and revocation
+coverage are explicitly unexecuted in this read-only recorder; owned lifecycle
+acceptance and authenticated revocation checks require separate evidence. Results are health latency, not load capacity, browser,
 provider reliability or a production acceptance claim. Choose the duration and
 latency thresholds explicitly in the release gate; this helper supplies evidence,
 not an implicit passing threshold.

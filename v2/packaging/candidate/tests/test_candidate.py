@@ -97,6 +97,28 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(value['samples'][1]['error_type'],'TimeoutError')
         self.assertNotIn('private diagnostic',json.dumps(value))
 
+    def test_health_recovery_is_not_claimed_as_process_restart(self):
+        def response():
+            stream=io.BytesIO(b'{"status":"ok","product":"orkestr-v2","fixture_mode":false}')
+            stream.status=200
+            return stream
+        with patch.object(soak.urllib.request,'build_opener') as build:
+            build.return_value.open.side_effect=[TimeoutError(),TimeoutError(),response(),response()]
+            value=soak.measure('http://127.0.0.1:19842',4,0,1,1000)
+        self.assertEqual(value['longest_consecutive_failures'],2)
+        self.assertEqual(value['health_recovery_transitions'],1)
+        self.assertFalse(value['latency_threshold_passed'])
+        self.assertEqual(value['coverage']['crash'],'unexecuted')
+        self.assertEqual(value['coverage']['restart'],'unexecuted')
+        self.assertEqual(value['coverage']['revocation'],'unexecuted')
+        self.assertTrue(all('observed_at' in row and 'offset_ms' in row for row in value['samples']))
+        self.assertGreaterEqual(value['duration_ms'],0)
+
+    def test_latency_threshold_is_explicit_and_finite(self):
+        for threshold in (0,-1,float('nan'),float('inf')):
+            with self.assertRaisesRegex(RuntimeError,'finite latency'):
+                soak.measure('http://127.0.0.1:19842',1,0,1,threshold)
+
     def test_soak_refuses_remote_unbounded_and_credentials(self):
         for origin in ('http://example.invalid:80','http://user@127.0.0.1:19842','http://127.0.0.1:19842/path'):
             with self.assertRaises(RuntimeError):soak.measure(origin,1,0,1)
@@ -140,6 +162,8 @@ class CandidateTests(unittest.TestCase):
             else:
                 (out/'ui').mkdir()
             self.assertEqual(kwargs['env']['CARGO_NET_OFFLINE'],'true')
+            self.assertEqual(kwargs['env']['PATH'].split(build_pair.os.pathsep)[0],str(cargo/'bin'))
+            self.assertEqual(kwargs['env']['HOME'],str(out/'build-home'))
             self.assertNotIn('OPENAI_API_KEY',kwargs['env'])
         with patch.object(receipt,'git',side_effect=['a'*40,'']), \
              patch.object(receipt,'seal',return_value=self.value), \
