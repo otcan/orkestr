@@ -183,6 +183,7 @@ async function runClaudeJobAttempt(ctx, jobInput) {
   let stop = null; // { kind: "park"|"expired"|"cancelled"|"bypass"|"aborted", approval?, reason? }
   let proc = null;
   let sessionAnnounced = false;
+  let sessionVerified = false;
   const toolsById = new Map();
   const toolUseNames = new Map(); // tool_use id -> provider tool name
 
@@ -197,10 +198,10 @@ async function runClaudeJobAttempt(ctx, jobInput) {
     owner,
     async authorize({ tool, args, callId }) {
       if (stop || ctx.signal?.aborted) return { decision: "deny", reason: "the Orkestr job attempt is stopping" };
-      // Hooks and stdout are independent channels. A first managed turn may
-      // not grant effects until its native identity has been durably emitted.
+      // Hooks and stdout are independent channels. Every managed turn must
+      // verify its observed native identity and durably emit it before effects.
       // Deny rather than wait: a hook can itself block the provider's stdout.
-      if (managed && !input.resumeSessionRef && !sessionAnnounced) return { decision: "deny", reason: "the Orkestr session identity is not persisted yet; retry after session start" };
+      if (managed && !sessionVerified) return { decision: "deny", reason: "the Orkestr session identity is not persisted yet; retry after session start" };
       toolsById.set(callId, tool);
       ctx.emit({ type: "tool.requested", callId, tool });
       const verdict = await ctx.authorizeTool({ tool, args, callId });
@@ -247,7 +248,7 @@ async function runClaudeJobAttempt(ctx, jobInput) {
         return;
       }
       if (observed) sessionRef = observed;
-      if (sessionRef && !sessionAnnounced) {
+      if (sessionRef && !sessionAnnounced && (!managed || observed)) {
         // emit is the supervisor's synchronous prepared-store/journal write.
         // The manager aborts its signal on a failed identity CAS; other
         // supervisors may throw. Neither path may open the permission gate.
@@ -255,6 +256,7 @@ async function runClaudeJobAttempt(ctx, jobInput) {
         catch { terminate({ kind: "error", reason: "claude_code_session_persistence_failed" }); return; }
         if (ctx.signal?.aborted) return;
         sessionAnnounced = true;
+        sessionVerified = Boolean(observed);
       }
       const type = clean(event.type).toLowerCase();
       if (type === "result") {

@@ -10,7 +10,7 @@
 //                          turns[i] (or the last). A turn:
 //                          { text, tools: [{ name, input }], final, slow,
 //                            skipHook, noToolUseId, fail: "auth"|"rate"|"task", hang,
-//                            preInitTools, initBarrier (synthetic ordering) }
+//                            preInitTools, preInitEvent, preInitBarrier, initBarrier, sessionId (synthetic ordering) }
 //   FAKE_CLAUDE_JOB_CALLS  JSONL log: one line per invocation
 //   FAKE_CLAUDE_JOB_RAN    JSONL log: one line per tool call that actually ran
 //   FAKE_CLAUDE_RUN_UID    simulates a wrapper that runs Claude as another user
@@ -81,8 +81,18 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { prompt += chunk; });
 process.stdin.on("end", async () => {
   const resumed = flag("--resume");
-  const session = resumed || `fake-claude-session-${process.pid}`;
+  const session = turn.sessionId || resumed || `fake-claude-session-${process.pid}`;
   fs.appendFileSync(callsFile, `${JSON.stringify({ resumed, prompt: prompt.trim(), cwd: process.cwd(), hooks: hooks.length, permissionMode: flag("--permission-mode"), strictMcp: args.includes("--strict-mcp-config"), home: process.env.HOME || "", configDir: process.env.CLAUDE_CONFIG_DIR || "", leaked: Object.keys(process.env).filter((key) => key.startsWith("ORKESTR_") && !key.startsWith("ORKESTR_AGENT_JOB_PERMISSION_")) })}\n`);
+  const waitForBarrier = async (barrier) => {
+    if (!barrier) return;
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(barrier)) {
+      if (Date.now() > deadline) throw new Error("synthetic persistence barrier timed out");
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  };
+  if (turn.preInitEvent) write(turn.preInitEvent);
+  await waitForBarrier(turn.preInitBarrier);
   // Adversarial independent hook channel: no stdout session event yet.
   for (const [index, tool] of (turn.preInitTools || []).entries()) {
     const verdict = runHooks(session, `toolu_before_init_${index}`, tool);
@@ -90,13 +100,7 @@ process.stdin.on("end", async () => {
   }
   write({ type: "system", subtype: "init", session_id: session });
   // Deterministic test barrier: the parent releases this only after persistence.
-  if (turn.initBarrier) {
-    const deadline = Date.now() + 5000;
-    while (!fs.existsSync(turn.initBarrier)) {
-      if (Date.now() > deadline) throw new Error("synthetic init persistence barrier timed out");
-      await new Promise(resolve => setTimeout(resolve, 5));
-    }
-  }
+  await waitForBarrier(turn.initBarrier);
   if (turn.fail === "auth") {
     write({ type: "result", session_id: session, is_error: true, result: "Failed to authenticate. API Error: 401" });
     process.exit(1);
