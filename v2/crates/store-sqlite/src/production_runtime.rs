@@ -42,6 +42,7 @@ mod retirement_tests;
 mod status;
 mod stop;
 mod stopped_metadata;
+mod terminal_restart;
 mod worker;
 mod worker_discovery;
 pub use worker::*;
