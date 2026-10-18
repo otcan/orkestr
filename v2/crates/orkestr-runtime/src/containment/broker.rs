@@ -10,8 +10,8 @@
 //! MetadataChild::confirm and ReadyMetadataChild::attach_and_enqueue remain the
 //! only readiness/consumed-dispatch transfer. There is intentionally no generic
 //! forward, interrupt, environment override, or client-selected command method.
-//! Runtime codec OpenOwnedSession is not yet an admitted metadata operation;
-//! typed whitelist integration requires separate review, never raw JSON forwarding.
+//! OpenOwnedSession is admitted only by the typed, one-attempt metadata method;
+//! the raw metadata whitelist remains unchanged.
 //! This is NOT OS isolation: same-UID filesystem and /proc access remain open,
 //! including access to canonical credentials outside this clean environment.
 //! Host integration must separate trusted connector privilege from untrusted
@@ -21,6 +21,8 @@ use super::{ChildDirectories, Error, TransportBounds};
 use orkestr_v2_store_sqlite::{BoundSessionMetadata, Store};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+
+pub(super) struct BrokerLaunch(());
 
 pub(crate) const PROTOCOL: &str = "orkestr-v2-provider-broker-v1";
 
@@ -60,7 +62,7 @@ impl TrustedLauncher {
         let child = authority
             .issue_executor(&self.executable, &launch_arguments(), directories, bounds)?
             .spawn()?;
-        Ok((authority, child))
+        Ok((authority, child.mark_broker_launcher(BrokerLaunch(()))))
     }
 }
 
@@ -121,10 +123,25 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn real_metadata_grant_opens_only_fixed_owned_launcher_and_revokes() {
+        owned_case(0).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn revoked_grant_cannot_open_broker() {
+        owned_case(1).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn queue_full_open_quarantines_without_retry() {
+        owned_case(2).await;
+    }
+
+    async fn owned_case(mode: u8) {
         use orkestr_v2_application::runtime::*;
         use std::os::unix::fs::PermissionsExt;
         use std::time::{Duration, Instant};
-        let root = std::env::temp_dir().join(format!("broker-owned-test-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("broker-owned-test-{}-{mode}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         for name in ["workspace", "home", "tmp"] {
             std::fs::create_dir(root.join(name)).unwrap();
@@ -217,6 +234,59 @@ for line in sys.stdin:
             Err(Error::InvalidFrame)
         ));
         assert!(child.poll_exit().unwrap().is_none());
+        match mode {
+            0 => {
+                let mut codec = child.open_broker_metadata().unwrap();
+                assert!(codec.request().is_err()); // already submitted internally
+                child.flush_stdin().unwrap();
+                let request = loop {
+                    match child.poll_stdout().unwrap() {
+                        super::super::Output::Frame(frame) => break frame,
+                        super::super::Output::Pending if Instant::now() < deadline => {
+                            std::thread::yield_now()
+                        }
+                        other => panic!("unexpected synthetic request: {other:?}"),
+                    }
+                };
+                let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
+                assert_eq!(request["method"], "OpenOwnedSession");
+                assert_eq!(
+                    request["params"]["identity"]["session_id"],
+                    serde_json::json!(binding.session_id)
+                );
+                let mut response = serde_json::json!({"id":1,"result":{
+                    "protocol":PROTOCOL,"identity":request["params"]["identity"],
+                    "metadata_only":true,"owned_handle":"synthetic_owned"}});
+                response["result"]["identity"]["session_id"] = serde_json::json!("foreign-session");
+                assert!(codec.receive(response.to_string().as_bytes()).is_err());
+                assert!(matches!(
+                    child.open_broker_metadata(),
+                    Err(Error::AuthorityProtocol)
+                ));
+                assert!(matches!(child.flush_stdin(), Err(Error::Revoked)));
+            }
+            1 => {
+                store.revoke_session(&token).await.unwrap();
+                assert!(matches!(child.open_broker_metadata(), Err(Error::Revoked)));
+                assert!(matches!(child.flush_stdin(), Err(Error::Revoked)));
+            }
+            2 => {
+                for _ in 0..TransportBounds::default().max_pending_frames {
+                    child
+                        .enqueue_metadata(
+                            br#"{"id":2,"method":"account/read","params":{"refreshToken":false}}"#,
+                        )
+                        .unwrap();
+                }
+                assert!(matches!(
+                    child.open_broker_metadata(),
+                    Err(Error::Backpressure)
+                ));
+                assert!(child.open_broker_metadata().is_err());
+                assert!(matches!(child.flush_stdin(), Err(Error::Revoked)));
+            }
+            _ => unreachable!(),
+        }
         store.revoke_session(&token).await.unwrap();
         assert!(matches!(child.flush_stdin(), Err(Error::Revoked)));
         authority.revoke().unwrap();

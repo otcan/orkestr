@@ -63,6 +63,7 @@ struct MetadataState {
     phase: Phase,
     grant: Option<BoundSessionMetadata>,
     process: Option<Weak<Process>>,
+    broker_open_attempted: bool,
 }
 struct MetadataShared {
     store: Store,
@@ -114,6 +115,7 @@ impl MetadataAuthority {
                     phase: Phase::Setup,
                     grant: Some(grant),
                     process: None,
+                    broker_open_attempted: false,
                 }),
                 active,
                 reaper,
@@ -196,6 +198,7 @@ impl MetadataExecutor {
         Ok(MetadataChild {
             shared: self.shared.clone(),
             process: process.ok_or(Error::AuthorityProtocol)?,
+            broker_launcher: false,
         })
     }
 }
@@ -204,8 +207,62 @@ impl MetadataExecutor {
 pub struct MetadataChild {
     shared: Arc<MetadataShared>,
     process: Arc<Process>,
+    broker_launcher: bool,
 }
 impl MetadataChild {
+    /// Only the trusted fixed-launcher module can construct this marker.
+    pub(super) fn mark_broker_launcher(mut self, _: super::broker::BrokerLaunch) -> Self {
+        self.broker_launcher = true;
+        self
+    }
+
+    /// One typed open derived internally from the original issuer grant. No
+    /// caller JSON, handle or identity is accepted. Latch before enqueue; an
+    /// uncertain queue/transaction outcome quarantines instead of retrying.
+    pub fn open_broker_metadata(&self) -> Result<crate::broker::BrokerOpen, Error> {
+        let result = (|| {
+            let mut state = self.shared.state.lock().map_err(|_| Error::Revoked)?;
+            let outcome = (|| {
+                if !self.broker_launcher || state.phase != Phase::Setup {
+                    return Err(Error::Revoked);
+                }
+                if state.broker_open_attempted {
+                    return Err(Error::AuthorityProtocol);
+                }
+                state.broker_open_attempted = true;
+                let grant = state.grant.as_ref().ok_or(Error::Revoked)?;
+                let mut codec = crate::broker::BrokerOpen::from_metadata(grant)
+                    .map_err(|_| Error::InvalidFrame)?;
+                let frame = codec.request().map_err(|_| Error::InvalidFrame)?;
+                if frame.len() > self.process.max_frame {
+                    return Err(Error::FrameTooLarge);
+                }
+                self.shared
+                    .store
+                    .with_metadata_fence(grant, || {
+                        self.process
+                            .live
+                            .lock()
+                            .map_err(|_| Error::Revoked)?
+                            .framing
+                            .enqueue(&frame)
+                    })
+                    .map_err(|_| Error::Revoked)??;
+                Ok(codec)
+            })();
+            // Close the phase under the same gate before another thread can
+            // flush a previously queued setup frame after an uncertain open.
+            if outcome.is_err() {
+                state.phase = Phase::Revoked;
+            }
+            outcome
+        })();
+        if result.is_err() {
+            self.shared.quarantine(&self.process);
+        }
+        result
+    }
+
     pub fn enqueue_metadata(&self, frame: &[u8]) -> Result<(), Error> {
         if frame.len() > self.process.max_frame {
             return Err(Error::FrameTooLarge);
