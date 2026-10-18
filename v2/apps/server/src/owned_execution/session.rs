@@ -66,6 +66,7 @@ impl ConfiguredExecution {
             return Ok(());
         };
         let mut run = capability.provider().run.run_id.clone();
+        let mut worker = self.prepare_worker(&capability)?;
         let (mut authority, mut pump) = ready
             .attach(self.store.clone(), capability)
             .map_err(|_| "execution attachment is uncertain; automatic replay refused")?;
@@ -73,6 +74,7 @@ impl ConfiguredExecution {
         let mut deadline = Instant::now() + Duration::from_secs(45);
         loop {
             self.maintain(&mut heartbeat).await?;
+            Self::poll_worker(&mut worker).await;
             let schedule = self.control.serialize().await;
             let status = self
                 .store
@@ -89,12 +91,16 @@ impl ConfiguredExecution {
             );
             if status.phase == ExecutionPhase::CancelRequested {
                 drop(schedule);
+                drop(worker.take());
                 return self
                     .stop_owned(&mut controls, authority, pump, &mut heartbeat)
                     .await;
             }
             if status.phase == ExecutionPhase::Completed {
                 drop(schedule);
+                // The previous parent's scheduler cannot survive into a new
+                // Deep grant, including while the next inbox input is awaited.
+                drop(worker.take());
                 // Only explicit committed owner acceptance releases the binding.
                 // Inputs received during an active turn remain ordered in Core;
                 // neither queued text nor browser JSON can mint a new capability.
@@ -102,6 +108,7 @@ impl ConfiguredExecution {
                     break;
                 };
                 run = capability.provider().run.run_id.clone();
+                worker = self.prepare_worker(&capability)?;
                 let (next_authority, next_pump) = pump
                     .attach_next(self.store.clone(), capability)
                     .map_err(|_| "execution continuation is uncertain; automatic replay refused")?;
@@ -147,6 +154,7 @@ impl ConfiguredExecution {
                     .publish(receipt)
                     .map_err(|_| "execution shutdown handoff requires reconciliation")?;
                 drop(schedule);
+                drop(worker.take());
                 return self
                     .stop_owned(&mut controls, authority, pump, &mut heartbeat)
                     .await;

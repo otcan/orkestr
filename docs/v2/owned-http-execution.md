@@ -170,3 +170,27 @@ then verifies exactly one durable Stopped event after releasing the barrier.
 The other supplies only an acknowledgement and verifies bounded cleanup with
 the original pending intent, no Stopped event and the queued follow-up retained.
 Both replay the exact public receipt without another native control frame.
+
+## Optional independent Worker
+
+The same private configuration may include
+`"worker":{"mode":"parent-input-once-v1","lifetime_ms":30000}`. Omission
+keeps Worker scheduling disabled. The strict bounded policy is validated before
+any supervisor or child authority is issued; HTTP cannot configure or override it.
+The Worker receives the parent's immutable input through Core's separate
+lineage-bound admission, with a distinct native child and session. It consumes
+no additional Deep inbox entry.
+
+The factory prepares one scheduler before moving each Deep capability into
+Runtime, polls it in the parent's loop while running and awaiting acceptance,
+and drops it before the next Deep run. Revocation or parent exit drops both
+owned lifecycles. A Worker scheduling error closes only that Worker, preserves
+its durable unresolved state and emits a static diagnostic; it does not retry
+admission or fabricate parent failure. Runtime retains Worker scratch and global
+capacity until the child is actually reaped. Parent Stop fences descendants;
+direct Worker-run browser Stop remains unavailable in this single-Deep gate.
+
+See [Worker scheduling](worker-execution.md) for the separate deadline, explicit
+acceptance, parent-terminal fencing and synthetic executable HTTP checks. This
+opt-in policy is a bounded implementation checkpoint, not general task planning
+or OS isolation of provider tools.

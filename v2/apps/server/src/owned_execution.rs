@@ -6,6 +6,7 @@ mod config_tests;
 pub(crate) mod control;
 mod session;
 mod stopping;
+mod worker;
 use config::Config;
 use orkestr_v2_application::runtime::{
     ProductionSupervisorConfig, ProductionTakeover, ProviderKind,

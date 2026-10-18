@@ -20,6 +20,8 @@ pub(super) struct Config {
     pub workspace: PathBuf,
     pub namespace: String,
     pub supervisor_key: String,
+    #[serde(default)]
+    pub worker: Option<crate::worker_execution::WorkerPolicy>,
 }
 
 fn canonical(path: &Path) -> Result<(), &'static str> {
@@ -92,6 +94,9 @@ impl Config {
             || !key(&config.supervisor_key)
         {
             return Err("unsupported execution configuration");
+        }
+        if let Some(policy) = &config.worker {
+            policy.validate()?;
         }
         canonical(&config.workspace)?;
         if !config.workspace.is_dir()

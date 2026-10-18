@@ -27,6 +27,7 @@ pub mod owned_execution;
 mod provider_payload;
 mod routes;
 pub mod stop_execution;
+pub mod worker_execution;
 
 #[derive(Clone)]
 pub struct AppState {
