@@ -1,7 +1,7 @@
 //! Owner decisions use the ordinary server Store; provider authority cannot accept.
 use super::*;
 use orkestr_v2_contracts::{ExecutionAcceptanceRequest, ExecutionPhase};
-async fn proposal() -> (Case, Store, ProviderAdmission, ExecutionAcceptanceRequest) {
+pub(super) async fn proposal() -> (Case, Store, ProviderAdmission, ExecutionAcceptanceRequest) {
     let (c, h, p) = active().await;
     let receipt = h
         .append_provider_event(

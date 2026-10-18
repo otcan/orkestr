@@ -128,3 +128,10 @@ async fn active() -> (Case, Store, ProviderAdmission) {
 mod acceptance;
 #[path = "production_owner_acceptance/oracle.rs"]
 mod oracle;
+
+#[cfg(all(unix, feature = "fixture-test-controls"))]
+#[path = "production_owner_acceptance/process.rs"]
+mod process;
+
+#[path = "production_owner_acceptance/authentication.rs"]
+mod authentication;

@@ -45,8 +45,36 @@ pool and replaying its receipt leaves all rows unchanged. Read-only snapshots us
 query_only and a single transaction, including issued leases, payloads and owner
 decisions. Verifier values are never printed.
 
-This is pool concurrency/reopen and deliberate write-failure evidence. Actual
-SIGKILL at the owner checkpoints, fresh-exec replay, populated historical-prefix
-migration/FK checks, revoked-session HTTP behavior, browser approval interaction,
-live provider execution and release activation remain pending independent gates.
+Additional execution on the same implementation pin passed three parents (zero
+failures, one invoked child entry) in 0.60 seconds, including two actual owned
+SIGKILL windows and two fresh executable reopens. The process oracle checks exact
+16-table rollback before commit and explicit expected field/row deltas after
+commit, then original receipt replay and changed-request refusal. Its binary
+SHA256 was `a82f2b26c0ce60a700586345bd8af836b49f31ddf2298e8b360f40a54fa4a871`.
+
+The separate `production_acceptance_upgrade.rs` runner passed one test on two
+owned synthetic populated migration-14 databases in 1.26 seconds. It copies
+DB/sidecars before opening, requires clean foreign keys before/after migration15,
+and compares every prior application row and migration checksum, permitting only
+the new migration record and empty acceptance table. Register it as an ordinary
+Store integration test and supply the owned source directories through
+`ORKESTR_V2_PREFIX14_SOURCES` (platform path-list syntax). An initial oracle failed
+because SQLite JSON rejects BLOB checksums; the corrected oracle encodes BLOBs as
+hex without changing the database. Final binary SHA256 was
+`a80d57af1058433340a2adb602415b3da160732d6e73b074834e1e96d99b6bdc`.
+Failed-upgrade refusal, revoked-session HTTP behavior, browser approval interaction,
+live provider execution and release activation remain separate pending gates.
 No CI pass is inferred from this selected local runner.
+
+Current-session successor `f6a211fbbd4316fd648455b68927abf4721e81c0`
+was exported separately and independently ran three ordinary tests successfully
+(zero failed/ignored, 2.73 seconds). The additional public-API matrix checks
+revoked and expired namespaced browser credentials before fresh acceptance and
+before historical receipt replay, through original and newly opened pools.
+Every refusal leaves all 16 execution ledger tables equal. Expiry is deliberate
+synthetic auth-row mutation; auth contents are never printed. This proves
+current-session refusal, not a deterministic interleaving after preliminary
+lookup: that transaction-entry race awaits a public synchronization facility.
+HTTP route/session/CSRF composition remains pending. One initial registration
+attempt failed before compilation because the test had not yet been copied into
+the export; the completed run above used the registered unchanged test.
