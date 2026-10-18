@@ -74,7 +74,7 @@ test("session table enforces active role uniqueness, native identity non-aliasin
   } finally { db.close(); }
 });
 
-test("session migration accepts an existing owner-free schema without inventing ownership", () => {
+test("session migration refuses a table whose stored DDL differs from the canonical schema", () => {
   const db = new DatabaseSync(":memory:");
   try {
     conversationFixture(db);
@@ -97,9 +97,12 @@ test("session migration accepts an existing owner-free schema without inventing 
       create trigger personal_agent_sessions_scope_update before update of conversation_id, scope_kind, scope_id on personal_agent_sessions begin select 1; end`);
     const plan = planPersonalAgentSessionMigration(db);
     assert.equal(plan.missingColumns.length, 0);
-    migratePersonalAgentSessions(db, { dryRun: false });
+    const before = db.prepare("select sql from sqlite_master where type='table' and name='personal_agent_sessions'").get().sql;
+    assert.throws(() => migratePersonalAgentSessions(db, { dryRun: false }), {
+      message: "personal_agent_session_schema_incompatible",
+    });
     assert.equal(db.prepare("select count(*) as n from pragma_table_info('personal_agent_sessions') where name='owner_user_id'").get().n, 0);
-    migratePersonalAgentSessions(db, { dryRun: false });
+    assert.equal(db.prepare("select sql from sqlite_master where type='table' and name='personal_agent_sessions'").get().sql, before);
   } finally { db.close(); }
 });
 
@@ -233,6 +236,78 @@ test("session migration repairs same-name scope triggers before accepting an exi
       "ses_wrong_scope_after_rerun", "conv_project", "global", null,
       "worker", "codex", "acct", "{}", "starting",
     ), /personal_agent_session_scope_mismatch/);
+  } finally { db.close(); }
+});
+
+test("session migration rebuilds a stale non-unique active-role index", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    conversationFixture(db);
+    migratePersonalAgentSessions(db, { dryRun: false });
+    db.exec("drop index personal_agent_sessions_active_role;");
+    db.exec("create index personal_agent_sessions_active_role on personal_agent_sessions(role);");
+
+    assert.equal(planPersonalAgentSessionMigration(db).schemaCompatible, true);
+    migratePersonalAgentSessions(db, { dryRun: false });
+    const index = db.prepare("pragma index_list(personal_agent_sessions)").all()
+      .find(row => row.name === "personal_agent_sessions_active_role");
+    assert.equal(index.unique, 1);
+  } finally { db.close(); }
+});
+
+test("session migration refuses no-op triggers when existing rows violate scope", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    conversationFixture(db);
+    migratePersonalAgentSessions(db, { dryRun: false });
+    db.exec(`drop trigger personal_agent_sessions_scope_insert;
+      drop trigger personal_agent_sessions_scope_update;
+      create trigger personal_agent_sessions_scope_insert before insert on personal_agent_sessions begin select 1; end;
+      create trigger personal_agent_sessions_scope_update before update of conversation_id, scope_kind, scope_id on personal_agent_sessions begin select 1; end;
+      insert into personal_agent_sessions
+        (id,conversation_id,scope_kind,scope_id,role,provider,account_profile_id,model_profile_json,lifecycle,version,created_at,updated_at)
+        values ('bad_scope','conv_project','global',null,'worker','codex','acct','{}','ready',0,'now','now');`);
+
+    assert.throws(() => migratePersonalAgentSessions(db, { dryRun: false }), {
+      message: "personal_agent_session_scope_mismatch",
+    });
+    assert.equal(db.prepare("select count(*) as n from personal_agent_sessions where id='bad_scope'").get().n, 1);
+    assert.match(db.prepare("select sql from sqlite_master where type='trigger' and name='personal_agent_sessions_scope_insert'").get().sql, /select 1/i);
+  } finally { db.close(); }
+});
+
+test("session migration refuses duplicate active roles before rebuilding a stale index", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    conversationFixture(db);
+    migratePersonalAgentSessions(db, { dryRun: false });
+    db.exec(`drop index personal_agent_sessions_active_role;
+      create index personal_agent_sessions_active_role on personal_agent_sessions(role);
+      insert into personal_agent_sessions
+        (id,conversation_id,scope_kind,role,provider,account_profile_id,model_profile_json,lifecycle,version,created_at,updated_at)
+        values ('role_a','conv_global','global','fast','codex','acct','{}','ready',0,'now','now');
+      insert into personal_agent_sessions
+        (id,conversation_id,scope_kind,role,provider,account_profile_id,model_profile_json,lifecycle,version,created_at,updated_at)
+        values ('role_b','conv_global','global','fast','codex','acct','{}','busy',0,'now','now');`);
+
+    assert.throws(() => migratePersonalAgentSessions(db, { dryRun: false }), {
+      message: "personal_agent_session_active_role_duplicates",
+    });
+    assert.equal(db.prepare("select count(*) as n from personal_agent_sessions where role='fast'").get().n, 2);
+    assert.equal(db.prepare("pragma index_list(personal_agent_sessions)").all().find(row => row.name === "personal_agent_sessions_active_role").unique, 0);
+  } finally { db.close(); }
+});
+
+test("session migration refuses a foreign-table namesake without touching it", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    conversationFixture(db);
+    db.exec("create table unrelated_sessions(role text); create index personal_agent_sessions_active_role on unrelated_sessions(role);");
+    assert.throws(() => migratePersonalAgentSessions(db, { dryRun: false }), {
+      message: "personal_agent_session_schema_incompatible",
+    });
+    assert.equal(db.prepare("select tbl_name from sqlite_master where type='index' and name='personal_agent_sessions_active_role'").get().tbl_name, "unrelated_sessions");
+    assert.equal(db.prepare("select count(*) as n from sqlite_master where type='table' and name='personal_agent_sessions'").get().n, 0);
   } finally { db.close(); }
 });
 
