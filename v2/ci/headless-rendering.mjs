@@ -74,10 +74,17 @@ try {
   assert.deepEqual(errors, [], 'Browser rendering errors');
   console.log('PASS: CI headless rendering, cookie resume, durable intake, CSRF rejection and logout');
 } finally {
-  await browser?.close();
-  if (server.exitCode === null) {
-    const exited = new Promise(resolve => server.once('exit', resolve));
-    server.kill('SIGKILL'); await exited;
+  try {
+    await browser?.close();
+  } finally {
+    try {
+      if (server.exitCode === null) {
+        const exited = new Promise(resolve => server.once('exit', resolve));
+        server.kill('SIGKILL');
+        await exited;
+      }
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   }
-  await rm(home, { recursive: true, force: true });
 }
