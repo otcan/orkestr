@@ -78,3 +78,16 @@ lookup: that transaction-entry race awaits a public synchronization facility.
 HTTP route/session/CSRF composition remains pending. One initial registration
 attempt failed before compilation because the test had not yet been copied into
 the export; the completed run above used the registered unchanged test.
+
+At exact successor `ec38c13b962bccbd7c3a64e5d32a2c27e33fc83e`, two selected
+authentication tests passed (zero failed/ignored; four unrelated tests filtered)
+in 1.51 seconds. The new public checkpoint test deterministically reaches the
+post-authentication/pre-transaction marker, then commits revocation or synthetic
+expiry through an independent connection before releasing the writer. Fresh
+acceptance and already-committed receipt replay both return Unauthorized, with
+all 16 execution tables unchanged. An initial test compile required making the
+armed Store binding mutable; no implementation change was needed. Removing only
+the transaction-time credential guard in the private export caused this oracle
+to fail (zero passed, one failed), establishing that preliminary authentication
+alone cannot satisfy it. The mutation was restored immediately afterward. This
+is task/pool interleaving, not additional SIGKILL or HTTP evidence.
