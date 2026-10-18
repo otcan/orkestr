@@ -21,12 +21,16 @@ struct ClaudeOutput {
     offset: usize,
     prepared: bool,
     started: bool,
+    pending_native: bool,
     eof: bool,
     failed: bool,
     events: VecDeque<ProviderEvent>,
 }
 impl ClaudeOutput {
     fn poll_inner(&mut self) -> Result<Option<ProviderEvent>, Blocker> {
+        if self.pending_native {
+            return Ok(None);
+        }
         if self.prepared && self.offset < self.bytes.len() {
             let end = (self.offset + 16384).min(self.bytes.len());
             let count = self
@@ -55,7 +59,7 @@ impl ClaudeOutput {
             Output::Frame(bytes) => bytes,
             Output::Eof => {
                 self.eof = true;
-                return if self.rpc.finish("turn:2").is_ok() {
+                return if self.rpc.finish("turn:3").is_ok() {
                     Ok(None)
                 } else {
                     Ok(Some(ProviderEvent::Lost))
@@ -70,10 +74,16 @@ impl ClaudeOutput {
             self.prepared = true;
             return Ok(None);
         };
-        let observation = self.rpc.receive("turn:2", &frame.to_string())?;
-        if !self.started {
-            self.started = true;
-            self.events.push_back(ProviderEvent::Started);
+        let observation = self.rpc.receive("turn:3", &frame.to_string())?;
+        if observation == Some(ClaudeObservation::Initialized) {
+            if self.started || self.pending_native {
+                return Err(Blocker::Protocol);
+            }
+            self.pending_native = true;
+            return Ok(None);
+        }
+        if !self.started && !matches!(observation, Some(ClaudeObservation::Failed) | None) {
+            return Err(Blocker::Protocol);
         }
         match observation {
             Some(ClaudeObservation::Progress) => {
@@ -102,6 +112,7 @@ impl ClaudeOutput {
                 self.events.push_back(ProviderEvent::Failed)
             }
             Some(ClaudeObservation::Failed) => {} // notice is not a terminal result
+            None => {} // Validated non-authoritative telemetry produces no event.
             _ => return Err(Blocker::Protocol),
         }
         Ok(self.events.pop_front())
@@ -158,6 +169,7 @@ impl ClaudePump {
                 offset: 0,
                 prepared: false,
                 started: false,
+                pending_native: false,
                 eof: false,
                 failed: false,
                 events: VecDeque::new(),
@@ -179,7 +191,37 @@ impl ClaudePump {
             }
         }
     }
+    #[cfg(test)]
+    pub(super) fn awaiting_native_observation(&self) -> bool {
+        self.source.pending_native
+    }
     pub async fn step(&mut self, store: &Store) -> Result<bool, supervisor::Error> {
+        if self.source.failed {
+            return Err(supervisor::Error::Provider(Blocker::Protocol));
+        }
+        if self.source.pending_native {
+            let key = format!(
+                "claude-observed:{}:{}",
+                self.admission.run.run_id, self.admission.binding.generation
+            );
+            let result = store
+                .observe_claude_session(&self.admission, self.source.channel.native(), &key)
+                .await;
+            if let Err(error) = result {
+                if !matches!(
+                    error,
+                    orkestr_v2_application::runtime::RuntimeStoreError::Busy
+                        | orkestr_v2_application::runtime::RuntimeStoreError::Unavailable
+                ) {
+                    self.source.failed = true;
+                    self.source.child.quarantine();
+                }
+                return Err(supervisor::Error::Store(error));
+            }
+            self.source.pending_native = false;
+            self.source.started = true;
+            self.source.events.push_back(ProviderEvent::Started);
+        }
         supervisor::step(store, &mut self.source, &self.admission, &mut self.cursor).await
     }
     pub fn pending(&self) -> Option<&orkestr_v2_application::runtime::ProviderEventInput> {

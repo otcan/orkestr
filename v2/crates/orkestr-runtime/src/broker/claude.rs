@@ -8,6 +8,7 @@ pub(crate) struct ClaudeChannel {
     handle: String,
     lineage: Arc<()>,
     initialized: bool,
+    system_seen: bool,
     reserved: bool,
     prepared: bool,
     writing: bool,
@@ -24,7 +25,7 @@ impl ClaudeExecutionEnvelope {
         self.lineage.clone()
     }
     pub(crate) fn wrap(self, message_id: &str, frame: Value) -> Value {
-        serde_json::json!({"id":2,"method":"CommitExecution","params":{
+        serde_json::json!({"id":3,"method":"CommitExecution","params":{
             "owned_handle":self.handle,"message_id":message_id,"frame":frame}})
     }
 }
@@ -53,6 +54,7 @@ impl ClaudeChannel {
             handle: handle._handle,
             lineage: handle.lineage.ok_or(Blocker::Protocol)?,
             initialized: false,
+            system_seen: false,
             reserved: false,
             prepared: false,
             writing: false,
@@ -60,9 +62,23 @@ impl ClaudeChannel {
             poisoned: false,
         })
     }
-    #[allow(dead_code, reason = "Core requested-native readiness issuer pending")]
     pub(crate) fn initialize_protocol(&self) -> super::claude_initialize::ClaudeInitialize {
         super::claude_initialize::ClaudeInitialize::new(self.handle.clone(), self.lineage.clone())
+    }
+    pub(crate) fn complete_initialization(
+        &mut self,
+        proof: super::claude_initialize::ClaudeInitialize,
+    ) -> Result<(), Blocker> {
+        if self.poisoned
+            || self.initialized
+            || self.reserved
+            || !proof.matches_completed(&self.handle, &self.lineage)
+        {
+            self.poisoned = true;
+            return Err(Blocker::Protocol);
+        }
+        self.initialized = true;
+        Ok(())
     }
     pub(crate) fn native(&self) -> &str {
         &self.native
@@ -123,7 +139,7 @@ impl ClaudeChannel {
                 if params.len() == 2
                     && self.reserved
                     && !self.prepared
-                    && params.get("request_id").and_then(Value::as_u64) == Some(2) =>
+                    && params.get("request_id").and_then(Value::as_u64) == Some(3) =>
             {
                 self.prepared = true;
                 Ok(None)
@@ -136,15 +152,16 @@ impl ClaudeChannel {
                 let init = frame.get("type").and_then(Value::as_str) == Some("system")
                     && frame.get("subtype").and_then(Value::as_str) == Some("init");
                 if init {
-                    if self.initialized
-                        || self.reserved
-                        || params.get("request_id") != Some(&Value::Null)
+                    if self.system_seen
+                        || !self.initialized
+                        || !self.written
+                        || params.get("request_id").and_then(Value::as_u64) != Some(3)
                     {
                         return Err(Blocker::Protocol);
                     }
-                    self.initialized = true;
+                    self.system_seen = true;
                 } else if !self.written
-                    || params.get("request_id").and_then(Value::as_u64) != Some(2)
+                    || params.get("request_id").and_then(Value::as_u64) != Some(3)
                 {
                     return Err(Blocker::Protocol);
                 }
@@ -173,11 +190,23 @@ mod tests {
         .unwrap()
     }
     fn initialize(c: &mut ClaudeChannel) {
-        let frame = serde_json::to_vec(&json!({"method":"BrokerOutput","params":{
-            "owned_handle":"synthetic","request_id":null,"frame":{
-                "type":"system","subtype":"init","session_id":c.native()}}}))
+        let mut init = c.initialize_protocol();
+        init.request().unwrap();
+        init.receive(
+            &serde_json::to_vec(&json!({"method":"BrokerPrepared","params":{
+            "owned_handle":"synthetic","request_id":2}}))
+            .unwrap(),
+        )
         .unwrap();
-        assert!(c.receive(&frame).unwrap().is_some());
+        init.write(|bytes| Ok(bytes.len())).unwrap();
+        init.receive(
+            &serde_json::to_vec(&json!({"method":"BrokerOutput","params":{
+            "owned_handle":"synthetic","request_id":2,"frame":{"type":"control_response",
+            "response":{"subtype":"success","request_id":"initialize:2"}}}}))
+            .unwrap(),
+        )
+        .unwrap();
+        c.complete_initialization(init).unwrap();
     }
     #[test]
     fn setup_is_required_once_and_does_not_grant_authentication() {
@@ -203,10 +232,10 @@ mod tests {
         assert!(Arc::ptr_eq(&envelope.lineage(), &c.lineage));
         assert!(c.reserve().is_err());
         assert!(c.begin_write().is_err());
-        assert!(c.receive(br#"{"method":"BrokerPrepared","params":{"owned_handle":"synthetic","request_id":2}}"#).unwrap().is_none());
+        assert!(c.receive(br#"{"method":"BrokerPrepared","params":{"owned_handle":"synthetic","request_id":3}}"#).unwrap().is_none());
         c.begin_write().unwrap();
         c.finish_write().unwrap();
-        let frame = c.receive(&output(&c, json!(2))).unwrap().unwrap();
+        let frame = c.receive(&output(&c, json!(3))).unwrap().unwrap();
         assert_eq!(frame["type"], "result");
         assert!(c.reserve().is_err());
         assert!(c.finish_write().is_err());
@@ -218,11 +247,11 @@ mod tests {
         let mut c = channel();
         initialize(&mut c);
         c.reserve().unwrap();
-        let frame = output(&c, json!(2));
+        let frame = output(&c, json!(3));
         assert!(c.receive(&frame).is_err());
         assert!(c.reserve().is_err());
         let mut c = channel();
-        let frame = output(&c, json!(3));
+        let frame = output(&c, json!(4));
         assert!(c.receive(&frame).is_err());
     }
 }

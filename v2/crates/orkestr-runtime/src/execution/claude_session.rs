@@ -6,14 +6,14 @@ use crate::broker::{
     claude::{ClaudeChannel, ClaudeExecutionEnvelope},
     BrokerOpen,
 };
-use crate::claude_rpc::{ClaudeObservation, ClaudeRpc};
+use crate::claude_rpc::ClaudeRpc;
 use crate::containment::{
     broker::TrustedLauncher,
     metadata::{MetadataAuthority, MetadataChild, ReadyMetadataChild},
     ChildDirectories, Output, TransportBounds,
 };
-use orkestr_v2_application::runtime::{Binding, NativeSessionConfirmation};
-use orkestr_v2_store_sqlite::{BoundSessionMetadata, Store};
+use orkestr_v2_application::runtime::Binding;
+use orkestr_v2_store_sqlite::{BoundSessionMetadata, ClaudeProcessInitialization, Store};
 use std::path::Path;
 
 pub struct PreparingClaude {
@@ -23,6 +23,7 @@ pub struct PreparingClaude {
     open: Option<BrokerOpen>,
     channel: Option<ClaudeChannel>,
     rpc: Option<ClaudeRpc>,
+    initializing: Option<crate::broker::claude_initialize::ClaudeInitialize>,
     ready: bool,
     failed: bool,
 }
@@ -61,6 +62,7 @@ impl PreparingClaude {
             open: Some(open),
             channel: None,
             rpc: None,
+            initializing: None,
             ready: false,
             failed: false,
         })
@@ -85,6 +87,11 @@ impl PreparingClaude {
         if !child.receive_provider_writer()? {
             return Ok(false);
         }
+        if let Some(initializing) = self.initializing.as_mut() {
+            if initializing.write_ready() {
+                initializing.write(|bytes| child.write_provider_metadata(bytes))?;
+            }
+        }
         let bytes = match child.poll_stdout()? {
             Output::Pending => return Ok(false),
             Output::Frame(b) => b,
@@ -92,25 +99,21 @@ impl PreparingClaude {
         };
         if let Some(open) = self.open.take() {
             let channel = ClaudeChannel::open(open, &bytes)?;
-            self.rpc = Some(ClaudeRpc::new(channel.native(), "turn:2")?);
+            self.rpc = Some(ClaudeRpc::new(channel.native(), "turn:3")?);
+            let mut initializing = channel.initialize_protocol();
+            child.enqueue_broker_metadata(initializing.request()?)?;
+            self.initializing = Some(initializing);
             self.channel = Some(channel);
         } else {
-            let frame = self
-                .channel
-                .as_mut()
-                .ok_or(Blocker::Protocol)?
-                .receive(&bytes)?
-                .ok_or(Blocker::Protocol)?;
-            if self
-                .rpc
-                .as_mut()
-                .ok_or(Blocker::Protocol)?
-                .receive("turn:2", &frame.to_string())?
-                != Some(ClaudeObservation::Initialized)
-            {
-                return Err(Blocker::Protocol.into());
+            let initializing = self.initializing.as_mut().ok_or(Blocker::Protocol)?;
+            if initializing.receive(&bytes)? {
+                let proof = self.initializing.take().ok_or(Blocker::Protocol)?;
+                self.channel
+                    .as_mut()
+                    .ok_or(Blocker::Protocol)?
+                    .complete_initialization(proof)?;
+                self.ready = true;
             }
-            self.ready = true;
         }
         Ok(self.ready)
     }
@@ -119,10 +122,8 @@ impl PreparingClaude {
             return Err(Blocker::Protocol.into());
         }
         let channel = self.channel.take().ok_or(Blocker::Protocol)?;
-        let evidence = NativeSessionConfirmation {
-            session_id: self.binding.session_id.clone(),
-            expected_generation: self.binding.generation,
-            native_session_id: channel.native().into(),
+        let evidence = ClaudeProcessInitialization {
+            requested_native_session_id: channel.native().into(),
             protocol_version: "claude-stream-1".into(),
             source_event_key: format!(
                 "claude-ready:{}:{}",
@@ -133,7 +134,7 @@ impl PreparingClaude {
             .child
             .take()
             .ok_or(Blocker::Protocol)?
-            .confirm(evidence)
+            .initialize_claude(evidence)
             .await?;
         Ok(ReadyClaude {
             _authority: self.authority,

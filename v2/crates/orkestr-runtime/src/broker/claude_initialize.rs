@@ -32,6 +32,12 @@ impl ClaudeInitialize {
             poisoned: false,
         }
     }
+    pub(super) fn matches_completed(&self, handle: &str, lineage: &Arc<()>) -> bool {
+        self.finished
+            && !self.poisoned
+            && self.handle == handle
+            && Arc::ptr_eq(&self.lineage, lineage)
+    }
     pub(crate) fn request(&mut self) -> Result<BrokerMetadataRequest, Blocker> {
         if self.queued || self.poisoned {
             return Err(Blocker::Protocol);
@@ -42,6 +48,9 @@ impl ClaudeInitialize {
         .to_string()
         .into_bytes();
         Ok(BrokerMetadataRequest::sealed(self.lineage.clone(), bytes))
+    }
+    pub(crate) fn write_ready(&self) -> bool {
+        self.prepared && !self.poisoned && !self.finished && self.offset < self.bytes.len()
     }
     pub(crate) fn write(
         &mut self,

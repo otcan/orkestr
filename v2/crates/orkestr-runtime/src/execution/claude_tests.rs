@@ -11,9 +11,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-async fn exercise(failure: bool) {
-    let root = std::path::PathBuf::from(std::env::var("ORKESTR_V2_HOME").unwrap())
-        .join(format!("claude-owned-{}-{failure}", std::process::id()));
+async fn exercise(failure: bool, revoke_before_observation: bool) {
+    let root = std::path::PathBuf::from(std::env::var("ORKESTR_V2_HOME").unwrap()).join(format!(
+        "claude-owned-{}-{failure}-{revoke_before_observation}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&root).unwrap();
     for dir in ["workspace", "home", "tmp", "account"] {
         std::fs::create_dir_all(root.join(dir)).unwrap();
@@ -23,9 +25,13 @@ async fn exercise(failure: bool) {
     let source = r#"#!/usr/bin/python3
 import sys,json
 native=sys.argv[sys.argv.index('--session-id')+1]
-print(json.dumps({'type':'system','subtype':'init','session_id':native}),flush=True)
 for line in sys.stdin:
  f=json.loads(line)
+ if f['type']=='control_request':
+  assert f=={'type':'control_request','request_id':'initialize:2','request':{'subtype':'initialize','hooks':None}}
+  print(json.dumps({'type':'control_response','response':{'subtype':'success','request_id':f['request_id'],'response':{},'pending_permission_requests':[],'pending_user_dialog_requests':[]}}),flush=True)
+  continue
+ print(json.dumps({'type':'system','subtype':'init','session_id':native}),flush=True)
  assert f['session_id']==native and f['message']['content']=='synthetic isolated input'
  print(json.dumps({'type':'assistant','session_id':native,'message':{'role':'assistant','content':[{'type':'text','text':'synthetic output'}]}}),flush=True)
  print(json.dumps({'type':'result','session_id':native,'subtype':'success','is_error':False,'result':'synthetic output'}),flush=True)
@@ -34,8 +40,8 @@ for line in sys.stdin:
         source
             .replace("\'is_error\':False", "\'is_error\':True")
             .replace(
-                "\'subtype\':\'success\'",
-                "\'subtype\':\'error_during_execution\'",
+                "\'subtype\':\'success\',\'is_error\'",
+                "\'subtype\':\'error_during_execution\',\'is_error\'",
             )
     } else {
         source.into()
@@ -141,11 +147,47 @@ for line in sys.stdin:
     else {
         panic!("unique")
     };
+    let p = cap.provider().clone();
+    let early = orkestr_v2_application::runtime::ProviderEventInput {
+        run_id: p.run.run_id.clone(),
+        session_id: p.run.session_id.clone(),
+        lease_generation: p.run.lease_generation,
+        dispatch_fence: p.run.dispatch_fence,
+        sequence: 1,
+        event: orkestr_v2_application::runtime::ProviderEvent::Started,
+    };
+    assert!(bound
+        .append_provider_event(&owner, &p, &early)
+        .await
+        .is_err());
     let (authority, mut pump) = ready.attach(bound.clone(), cap).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         pump.flush().unwrap();
+        if pump.awaiting_native_observation() && revoke_before_observation {
+            store.revoke_session(&token).await.unwrap();
+            assert!(pump.step(&bound).await.is_err());
+            assert!(pump.step(&bound).await.is_err());
+            let status = store
+                .execution_status(&owner, &conversation)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(status.phase, ExecutionPhase::Starting);
+            assert!(status.progress.is_none());
+            assert!(status.acceptance_candidate.is_none());
+            break;
+        }
         pump.step(&bound).await.unwrap();
+        if pump.awaiting_native_observation() {
+            let status = store
+                .execution_status(&owner, &conversation)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(status.phase, ExecutionPhase::Starting);
+            assert!(pump.pending().is_none());
+        }
         let status = store
             .execution_status(&owner, &conversation)
             .await
@@ -178,9 +220,14 @@ for line in sys.stdin:
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_claude_first_turn_persists_progress_and_proposal() {
-    exercise(false).await;
+    exercise(false, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_claude_failed_result_never_proposes_success() {
-    exercise(true).await;
+    exercise(true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_revoked_after_emitted_init_never_appends_started_or_output() {
+    exercise(false, true).await;
 }

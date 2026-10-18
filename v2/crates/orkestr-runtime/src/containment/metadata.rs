@@ -500,3 +500,6 @@ impl ReadyMetadataChild {
 mod broker_admission;
 #[cfg(test)]
 mod tests;
+
+#[path = "metadata/claude.rs"]
+mod claude;
