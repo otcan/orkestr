@@ -62,3 +62,32 @@ Use a fixture principal explicitly lacking access to project B, rather than
 assuming two projects of the same owner are mutually inaccessible. Attempt B's
 conversation, events, run, cancellation, holds and approval decisions. Require
 denial before mutation, no transcript leakage, and unchanged sink counts.
+
+## Announced authentication and isolation intake
+
+Core has announced a passing first build; exact build evidence and fixture
+commit remain required before executable probes bind to its DTOs. The announced
+contract uses Bearer session JSON, not cookies. This differs from the original
+browser-session wording and must be reconciled in core's reviewed contract.
+Never place a Bearer or bootstrap token in a URL, fixture commit or test log.
+
+Generate synthetic bootstrap and password values inside each test process.
+Setup uses `x-orkestr-bootstrap` matching `ORKESTR_V2_BOOTSTRAP_TOKEN` (minimum
+32 bytes); credentials obey the announced minimum 12-byte requirement. Confirm
+exact username validation in fixtures before encoding assumptions. Test missing,
+incorrect and undersized bootstrap values, repeated setup, invalid credentials,
+missing/invalid/expired Bearer tokens and forged actor fields. Assert failures
+leave durable message/effect counts unchanged and return no secret material.
+
+Exercise absent, matching and foreign Origin headers according to the published
+policy; token possession must not silently waive the intended browser boundary.
+Check that no cookie-based authentication is accidentally accepted or emitted.
+Use authenticated streaming fetch rather than query-token EventSource. Test
+Last-Event-ID and `after` separately and resolve precedence from core's contract.
+
+Missing `ORKESTR_V2_HOME` and non-loopback `ORKESTR_V2_BIND` must refuse startup
+without touching another home. Run negative-start probes in an isolated temporary
+working directory with synthetic environment only. Runtime is disabled for these
+probes; no inference, account session or integration is needed. WAL/FULL settings
+are configuration claims until crash/reopen assertions establish observed durable
+behavior; they do not alone prove acceptance.
