@@ -1,6 +1,7 @@
 # Personal Agent acceptance plan — OP-22 / ORK-556
 
-Status: initial offline acceptance scaffold, 2026-10-18. The vertical slice is **not accepted**.
+Status: offline acceptance scaffold plus integrated migration regressions, 2026-10-18.
+The vertical slice is **not accepted**.
 This document and its tests do not implement product features or authorize a release.
 
 Canonical requirements: [plan](https://github.com/otcan/orkestr/blob/1426c9ae/docs/product/personal-agent-plan.md)
@@ -14,6 +15,36 @@ labels here are test reporting metadata, not another API, task schema, event env
 Once the contract is frozen, bind these tests to its actual exports/routes and version. Do not infer
 table or field names from the test names. The implementation must reuse threads, thread workers,
 task agents, `agent-jobs.sqlite`, existing journals, approvals and policy.
+
+### Integrated foundation follow-up
+
+Follow-up baseline: `origin/main` at `b479c6d9481a786117b9e94756bc9dac48f95855`
+(integration PR #54). The initial gap ledger below remains historical baseline evidence, not a
+claim that merged foundations are missing. ADR 0002 is now present (still marked Proposed),
+OP-03's additive schema and OP-09's local adapter are integrated, and OP-18's flagged home shell
+exists. This follow-up owns tests only; it does not freeze or change Lane A's contract.
+
+`personal-agent-migration-acceptance.test.js` binds directly to the integrated
+`openAgentJobDb` and `migratePersonalAgentEntities` exports and the actual Project/Task tables.
+PA-R10/R11 add two **blocking regressions**, not TODOs or allowances:
+
+- PA-R10 creates real legacy runs, checkpoints, sealed audit and a pending approval/effect, closes
+  the fixture DB and copies a pre-migration backup. It activates the actual migration, seeds rows
+  in Lane A's schema, reruns twice, and compares every legacy row, entity row, schema definition
+  and schema version. Feature disable/re-enable preserves task-to-project/thread/run links and
+  still permits legacy admission without a model or external effect. Restoring the pre-migration
+  copy into a separate fixture home preserves its original records and passes SQLite integrity
+  and foreign-key checks; neither the backup nor later work in the current home is overwritten.
+- PA-R11 kills only its isolated fixture process after both real entity CREATE statements but
+  before COMMIT. Reopening with the feature off recovers the original schema and all legacy
+  records. Re-enabling safely completes the migration without losing legacy evidence.
+
+This narrows OP-03/24's migration gap but does **not** close PA-10: a previous supported binary
+has not been run against a copied migrated home, and this DB-focused test does not validate
+complete thread/message/resource/timer backup and restore. Feature-disable rollback uses the
+current binary and is explicitly not evidence for binary downgrade compatibility. Project/task
+fixture inserts do not prove lifecycle API, scoped reads, dispatch or result verification.
+PA-01..15 remain pending; OP-04/05/06/07/08/12/13/14 integration is still needed for the milestone.
 
 ## Acceptance boundary and evidence
 
@@ -102,6 +133,8 @@ the app's complete milestone works:
 | PA-R07 | Existing desk lease guard refuses a stale heartbeat before the fixture effect; fencing record is unchanged. | PA-09 needs task projection and controlled recovery, not a real browser. |
 | PA-R08 | Existing Agent Job initialization reopens twice with integrity and sealed legacy audit intact in the same DB. | PA-10 still needs Lane A's actual additive migration and previous-version rollback; this is not migration acceptance. |
 | PA-R09 | A local artifact digest oracle detects modified bytes. | PA-05 needs the product verifier and cited summary, not this oracle alone. |
+| PA-R10 | Integrated on-disk entity migration reruns unchanged; flag-off rollback retains legacy approval/audit and task resource links; a separate backup restore is verified. | PA-10 still needs actual previous-binary and whole-home compatibility/restore evidence. |
+| PA-R11 | SIGKILL after real entity DDL, before COMMIT; reopen recovers the original schema and records, then migration succeeds. | This is migration crash recovery, not PA-03's full service/child/notification restart. |
 
 `PA-G01` (failed required tool), `PA-G02` (unknown required tool), and `PA-G03` (denied required tool)
 are **executed expected failures** in `personal-agent-acceptance-gaps.test.js`. The existing runner
@@ -123,7 +156,7 @@ npm ci --ignore-scripts --no-audit
 npm run test:personal-agent-acceptance
 ```
 
-The existing `npm run test:ci` discovery includes all three top-level acceptance test files and
+The existing `npm run test:ci` discovery includes all four top-level acceptance test files and
 assigns them to the regular four shards. No separate CI workflow, retries or product feature flag
 is introduced. CI's TAP output records three distinct categories:
 
@@ -156,9 +189,15 @@ and zero TODOs, as required for an unfinished milestone. The existing Agent Job 
 approvals, provider and spec suites pass 55/55. These counts are a scaffold baseline, not milestone
 acceptance; subsequent CI must report the counts for its own commit.
 
+Integrated foundation follow-up: **40 tests, 22 pass, 0 fail, 18 TODO** (the same three executed
+known gaps plus 15 pending integration cases). Strict mode must still exit 1 with 18 failures and
+zero TODOs; the two new migration regressions remain blocking in both modes. No known gap was
+removed or reclassified merely because its foundation merged.
+
 ## Gap ledger by OP item
 
-These statuses report acceptance evidence, not Jira implementation status. Existing baseline tests
+These statuses report initial acceptance evidence, not current Jira implementation status. See
+the integrated follow-up above for OP-02/03/09/18/24 changes at `b479c6d9`. Existing baseline tests
 are named where reusable; other lanes' changes require a requested independent PR review.
 
 | OP / tracker | Initial gap and next acceptance evidence |
