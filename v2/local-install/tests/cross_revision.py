@@ -14,6 +14,8 @@ import sqlite3
 import subprocess
 import tempfile
 
+import dormant_checkpoint
+
 from real_package import (Client, builder, invoke, launch, require, sha256,
                           smoke, stop_owned, verify_history)
 
@@ -24,6 +26,18 @@ def versions(home):
         require(connection.execute('PRAGMA integrity_check').fetchall() == [('ok',)], 'database integrity')
         require(not connection.execute('PRAGMA foreign_key_check').fetchall(), 'database foreign keys')
         return [r[0] for r in connection.execute('SELECT version FROM _sqlx_migrations WHERE success ORDER BY version')]
+
+
+def verify_schema(home, count, checksums=None):
+    require(versions(home)==list(range(1,count+1)),'executable schema differs from declared migration inventory')
+    if checksums is not None:
+        require(all(str(version) in checksums for version in range(1,count+1)), 'missing exact source SQLx checksum')
+        with closing(sqlite3.connect((home/'data/core.sqlite3').as_uri()+'?mode=ro',uri=True)) as db:
+            actual={str(version):bytes(checksum).hex() for version,checksum in
+                    db.execute('SELECT version,checksum FROM _sqlx_migrations WHERE success')}
+        require(actual=={str(version):checksums[str(version)] for version in range(1,count+1)},
+                'actual SQLx migration checksum differs from exact Core source')
+    return list(range(1,count+1))
 
 
 def migration_edge(old, new):
@@ -56,6 +70,7 @@ def exercise(args):
                 'old_binary_sha256': args.old_sha256, 'new_binary_sha256': args.new_sha256,
                 'scope': f'same-owner populated package migration {predecessor} to {successor}; rollback uses untouched pre-migration full-home copy',
                 'old_schema':predecessor, 'new_schema':successor,
+                'exact_source_sqlx_checksums_checked':getattr(args,'sqlx_checksums',None) is not None,
                 'checks': [], 'unexecuted': ['cross-version dormant import', 'owner rebinding', 'providers',
                                             'browser', 'production', 'power-loss recovery']}
     process = None
@@ -73,7 +88,7 @@ def exercise(args):
             process = launch(old_entry, home, client, log)
             path, receipt, message = smoke(client, (home/'control/bootstrap.token').read_text())
             invoke(old_entry, 'stop', home); require(process.wait(timeout=10) == 0, 'old stop'); process = None
-            require(versions(home) == list(range(1, predecessor+1)), 'old artifact must create declared exact schema')
+            verify_schema(home,predecessor,getattr(args,'sqlx_checksums',None))
             invoke(old_entry, 'backup', home, '--output', root/'preserved-snapshot')
             backup_hash = sha256(root/'preserved-snapshot/core.sqlite3')
             # Complete stopped copy includes the original owner's bootstrap/config;
@@ -86,14 +101,17 @@ def exercise(args):
             verify_history(client, path, receipt, message)
             require(client.request('POST', path+'/messages', message) == (200, receipt), 'upgraded idempotency')
             invoke(new_entry, 'stop', home); require(process.wait(timeout=10) == 0, 'new stop'); process = None
-            require(versions(home) == list(range(1, successor+1)), 'successor must migrate to declared exact schema')
+            verify_schema(home,successor,getattr(args,'sqlx_checksums',None))
             evidence['checks'].append(f'new executable migrated populated{predecessor} to{successor}; original session/history/idempotency retained')
             process = launch(new_entry, home, client, log)
             verify_history(client, path, receipt, message)
             require(client.request('POST', path+'/messages', message) == (200, receipt), 'successor reopen idempotency')
             invoke(new_entry, 'stop', home); require(process.wait(timeout=10) == 0, 'successor reopen stop'); process = None
-            require(versions(home) == list(range(1, successor+1)), 'successor reopen schema changed')
+            verify_schema(home,successor,getattr(args,'sqlx_checksums',None))
             evidence['checks'].append('successor reopened migrated home with original history/idempotency and unchanged schema')
+            evidence['successor_dormant_restore']=dormant_checkpoint.exercise(
+                new_entry,new_package,home,root,args.port,root/'preserved-snapshot',list(range(1,successor+1)))
+            evidence['checks'].append('successor stopped backup/dormant apply/refused activation/rollback; old-package snapshot refused')
             # Never downgrade the migrated working fixture. Only an isolated copy
             # is passed to the older executable to measure its refusal behavior.
             shutil.copytree(home, refused)
@@ -116,16 +134,27 @@ def exercise(args):
             verify_history(client, path, receipt, message)
             require(client.request('POST', path+'/messages', message) == (200, receipt), 'rollback idempotency')
             invoke(old_entry, 'stop', rollback); require(process.wait(timeout=10) == 0, 'rollback stop'); process = None
-            require(versions(rollback) == list(range(1, predecessor+1)), 'rollback schema changed')
+            verify_schema(rollback,predecessor,getattr(args,'sqlx_checksums',None))
             require(sha256(root/'preserved-snapshot/core.sqlite3') == backup_hash, 'preserved backup changed')
             evidence['preserved_backup_sha256'] = backup_hash
             evidence['checks'].append(f'old executable recovered original owner/history on untouched schema{predecessor} rollback home; backup preserved')
         evidence['status'] = 'passed'
+    except BaseException as error:
+        evidence['status']='failed'
+        evidence['failure']={'type':type(error).__name__,'detail':str(error)}
+        raise
     finally:
-        if process is not None:
-            stop_owned(process)
-        (root/'evidence.json').write_text(json.dumps(evidence, indent=2, sort_keys=True)+'\n')
-        print('Private synthetic backup/rollback evidence retained at '+str(root))
+        try:
+            if process is not None:
+                stop_owned(process)
+            evidence['owned_supervisor_stopped']=process is None or process.poll() is not None
+        except BaseException as error:
+            evidence['status']='failed'
+            evidence['cleanup_failure']={'type':type(error).__name__,'detail':str(error)}
+            raise
+        finally:
+            (root/'evidence.json').write_text(json.dumps(evidence, indent=2, sort_keys=True)+'\n')
+            print('Private synthetic backup/rollback evidence retained at '+str(root))
     return evidence
 
 

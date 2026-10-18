@@ -5,6 +5,7 @@ No builds or downloads. Reuses original native packages and their versions.
 Backward open occurs only on the existing harness's disposable refusal copy.
 """
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import platform
@@ -38,6 +39,17 @@ def source_inventory(directory, expected):
     return receipt.digest(actual)
 
 
+def sqlx_inventory(directory, expected):
+    result={}
+    for name,digest in expected.items():
+        path=directory/name
+        receipt.require(path.is_file() and not path.is_symlink(),'regular Core migration source required')
+        data=path.read_bytes()
+        receipt.require(hashlib.sha256(data).hexdigest()==digest,'Core migration changed while preparing SQLx checksum')
+        result[str(int(name.split('_')[0]))]=hashlib.sha384(data).hexdigest()
+    return result
+
+
 def prepare(old, new, old_source, new_source, old_sha, new_sha, successor=24, migrations=None):
     old_value=package_candidate.verify(old);new_value=package_candidate.verify(new)
     for root,value,source,pin in ((old,old_value,old_source,old_sha),(new,new_value,new_source,new_sha)):
@@ -46,6 +58,7 @@ def prepare(old, new, old_source, new_source, old_sha, new_sha, successor=24, mi
     predecessor=schema_version(old_value)
     receipt.require(schema_version(new_value)==successor,'successor schema differs from requested target')
     inventory_digest=source_inventory(migrations,new_value['schema']['migrations']) if migrations is not None else None
+    sqlx_checksums=sqlx_inventory(migrations,new_value['schema']['migrations']) if migrations is not None else None
     admitted=True
     try:
         cross_revision.migration_edge(predecessor,successor)
@@ -58,7 +71,8 @@ def prepare(old, new, old_source, new_source, old_sha, new_sha, successor=24, mi
     prior=old_value['schema']['migrations'];current=new_value['schema']['migrations']
     receipt.require(all(current.get(name)==digest for name,digest in prior.items()),'historical migration checksum changed')
     return {'status':'prepared_only_unexecuted' if admitted else 'pending_core_edge_admission',
-            'execution_edge_admitted':admitted,'core_source_inventory_sha256':inventory_digest,'old_source':old_source,'new_source':new_source,
+            'execution_edge_admitted':admitted,'core_source_inventory_sha256':inventory_digest,
+            'sqlx_checksums':sqlx_checksums,'old_source':old_source,'new_source':new_source,
             'old_schema':predecessor,'new_schema':successor,'old_version':old_value['version'],'new_version':new_value['version'],
             'old_candidate_sha256':receipt.sha(old/'candidate.json'),'new_candidate_sha256':receipt.sha(new/'candidate.json'),
             'old_server_sha256':old_sha,'new_server_sha256':new_sha,
@@ -77,7 +91,7 @@ def execute(plan,old,new,parent,port):
         old_binary=old/'native/server/orkestr-v2-server',new_binary=new/'native/server/orkestr-v2-server',
         old_sha256=plan['old_server_sha256'],new_sha256=plan['new_server_sha256'],
         old_source=plan['old_source'],new_source=plan['new_source'],
-        old_schema=plan['old_schema'],new_schema=plan['new_schema'],
+        old_schema=plan['old_schema'],new_schema=plan['new_schema'],sqlx_checksums=plan.get('sqlx_checksums'),
         old_package=old/'native',new_package=new/'native',ui=new/'native/ui',parent=parent,port=port))
 
 

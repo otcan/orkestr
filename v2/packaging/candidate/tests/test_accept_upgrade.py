@@ -50,9 +50,9 @@ class UpgradePlanTests(unittest.TestCase):
         self.assertEqual(args.new_schema,24)
 
     def test_future_inventory_inspection_never_admits_execution(self):
-        for successor in (25,26):
+        for successor in (25,26,28):
             self.new['schema']['migrations'].update({f'{i:04d}_fixture.sql':'d'*64 for i in range(25,successor+1)})
-            with patch.object(accept_upgrade.package_candidate,'verify',side_effect=[self.old,self.new]),patch.object(accept_upgrade.receipt,'sha',side_effect=lambda p:('e'*64 if str(p).startswith('/old') else 'f'*64)),patch.object(accept_upgrade,'source_inventory',return_value='1'*64):
+            with patch.object(accept_upgrade.package_candidate,'verify',side_effect=[self.old,self.new]),patch.object(accept_upgrade.receipt,'sha',side_effect=lambda p:('e'*64 if str(p).startswith('/old') else 'f'*64)),patch.object(accept_upgrade,'source_inventory',return_value='1'*64),patch.object(accept_upgrade,'sqlx_inventory',return_value={}):
                 plan=accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,successor,Path('/core-migrations'))
             self.assertEqual(plan['status'],'pending_core_edge_admission')
             with patch.object(accept_upgrade.cross_revision,'exercise') as run,self.assertRaisesRegex(RuntimeError,'inspection only'):
@@ -67,3 +67,14 @@ class UpgradePlanTests(unittest.TestCase):
                 accept_upgrade.source_inventory(root,{'0001_fixture.sql':'0'*64})
             expected={'0001_fixture.sql':accept_upgrade.receipt.sha(root/'0001_fixture.sql')}
             self.assertEqual(accept_upgrade.source_inventory(root,expected),accept_upgrade.receipt.digest(expected))
+
+
+    def test_sqlx_digest_uses_the_same_verified_core_source_bytes(self):
+        import hashlib
+        import tempfile
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw);data=b'-- public synthetic SQL\n';(root/'0001_fixture.sql').write_bytes(data)
+            inventory={'0001_fixture.sql':hashlib.sha256(data).hexdigest()}
+            self.assertEqual(accept_upgrade.sqlx_inventory(root,inventory),{'1':hashlib.sha384(data).hexdigest()})
+            (root/'0001_fixture.sql').write_bytes(b'changed')
+            with self.assertRaisesRegex(RuntimeError,'changed while preparing'):accept_upgrade.sqlx_inventory(root,inventory)
