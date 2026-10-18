@@ -92,7 +92,7 @@ async fn worker_parent_lookup_is_current_and_never_fabricates_grant() {
     assert_eq!(snapshot(&f.store).await, before);
 }
 
-pub(super) async fn running(
+pub(in crate::production_runtime) async fn running(
     f: &crate::production_runtime::tests::Case,
 ) -> (ProviderAdmission, WorkerAdmissionInput) {
     let b = ready(f).await;

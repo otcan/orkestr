@@ -19,6 +19,7 @@ async fn stop_revision_cas_and_request_replay_are_atomic_and_owner_scoped() {
         .unwrap()
         .revision;
     let mut input = ExecutionControlRequest {
+        expected_control_revision: None,
         run_id: run.provider.run.run_id.clone(),
         expected_revision: revision - 1,
         request_key: "stop".into(),
@@ -102,6 +103,7 @@ async fn authenticated_stop_checks_original_browser_credential_before_fresh_and_
         .await
         .unwrap();
     let input = ExecutionControlRequest {
+        expected_control_revision: None,
         run_id: run.provider.run.run_id,
         expected_revision: f
             .store
@@ -197,6 +199,7 @@ async fn stop_public_authentication_checkpoint_refuses_logout_before_write_lock(
         .await
         .unwrap();
     let input = ExecutionControlRequest {
+        expected_control_revision: None,
         run_id: run.provider.run.run_id,
         expected_revision: f
             .store

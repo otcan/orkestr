@@ -204,3 +204,5 @@ impl Context {
     }
 }
 
+#[cfg(test)]
+mod stop_progress_tests;

@@ -112,11 +112,25 @@ impl Store {
         } else {
             None
         };
+        let control_revision = if let Some(run) = &run_id {
+            Some(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT revision FROM production_control_revisions WHERE run_id=?",
+                )
+                .bind(run.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db)?,
+            )
+        } else {
+            None
+        };
         let status = ExecutionStatus {
             schema_version: 1,
             conversation_id: conversation.clone(),
             run_id,
             revision,
+            control_revision,
             observed_at_ms,
             phase,
             acceptance_candidate,

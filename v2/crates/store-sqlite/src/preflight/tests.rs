@@ -338,7 +338,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
     INSERT INTO production_observations VALUES('progress','production-run',1,'progress-digest','progress',1,1,'running'),('completion','production-run',2,'completion-digest','completed_proposal',1,1,'awaiting_acceptance');
     INSERT INTO production_payloads VALUES('payload','progress','owner','production-conversation','production-run','synthetic progress');").execute(&mut conn).await.unwrap();
     async fn rows(conn: &mut SqliteConnection) -> BTreeMap<String, Vec<String>> {
-        let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('production_acceptances','history_imports','history_messages','worker_tool_delegations','worker_provider_delegations','history_recovery_restores','history_recovery_children','production_resume_metadata') ORDER BY name")
+        let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('production_acceptances','history_imports','history_messages','worker_tool_delegations','worker_provider_delegations','history_recovery_restores','history_recovery_children','production_resume_metadata','production_control_revisions') ORDER BY name")
             .fetch_all(&mut *conn).await.unwrap();
         let mut result = BTreeMap::new();
         for table in tables {
@@ -351,9 +351,11 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             let columns: Vec<_> = columns
                 .into_iter()
                 .filter(|column| {
-                    table != "production_runs"
+                    (table != "production_runs"
                         || !["role", "parent_session_id", "worker_delegation_id"]
-                            .contains(&column.as_str())
+                            .contains(&column.as_str()))
+                        && (table != "production_cancellations"
+                            || column != "request_control_revision")
                 })
                 .collect();
             let expression = columns
@@ -400,7 +402,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        23
+        24
     );
     for table in [
         "history_imports",

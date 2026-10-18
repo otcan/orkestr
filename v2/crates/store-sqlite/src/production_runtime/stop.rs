@@ -88,7 +88,11 @@ impl Store {
                 owner,
                 &input.run_id,
                 &input.request_key,
-                Some((conversation, input.expected_revision)),
+                Some((
+                    conversation,
+                    input.expected_revision,
+                    input.expected_control_revision,
+                )),
                 credential,
             )
             .await?;
