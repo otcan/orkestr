@@ -13,6 +13,7 @@ async fn snapshot(f: &Fixture) -> Vec<String> {
         "fixture_supervisors",
         "fixture_readiness",
         "fixture_runs",
+        "fixture_observations",
         "reasoning_inbox",
         "session_bindings",
     ] {
@@ -39,7 +40,7 @@ fn unchanged(before: &[String], after: &[String], case: &str) {
 }
 
 type Tamper = (&'static str, fn(&mut ProviderAdmission), RuntimeStoreError);
-fn provider_tampers() -> Vec<Tamper> {
+pub(super) fn provider_tampers() -> Vec<Tamper> {
     use RuntimeStoreError::*;
     vec![
         (
