@@ -56,9 +56,14 @@ export async function taskButton(page, title, label) {
 export async function responseFault(page, origin, pathname, method, action) {
   const cdp = await page.createCDPSession();
   let resolve, reject, held, capturedOnce = false;
+  const failedRequests = new Map();
   const captured = new Promise((done, fail) => { resolve = done; reject = fail; });
   const bounded = deadline(captured, 12000, 'response_fault_deadline');
   bounded.catch(() => {}); // An earlier caller failure still owns final cleanup.
+  await cdp.send('Network.enable');
+  cdp.on('Network.loadingFailed', event => {
+    if (failedRequests.size < 32) failedRequests.set(event.requestId, event);
+  });
   await cdp.send('Fetch.enable', { patterns: [{ urlPattern: `${origin}${pathname}*`, requestStage: 'Response' }] });
   cdp.on('Fetch.requestPaused', event => { void (async () => {
     const url = new URL(event.request.url);
@@ -73,11 +78,28 @@ export async function responseFault(page, origin, pathname, method, action) {
   })().catch(reject); });
   try {
     return await action({ captured: bounded,
-      release: async failed => {
+      release: async (failed, allowCancelled = false) => {
         assert(held, 'response_not_held');
-        await cdp.send(failed ? 'Fetch.failRequest' : 'Fetch.continueRequest',
-          { requestId: held.requestId, ...(failed ? { errorReason: 'Failed' } : {}) });
-        held = null;
+        const original = held;
+        try {
+          await cdp.send(failed ? 'Fetch.failRequest' : 'Fetch.continueRequest',
+            { requestId: original.requestId, ...(failed ? { errorReason: 'Failed' } : {}) });
+          held = null;
+          return { continued: !failed, cancelled: false };
+        } catch (error) {
+          if (!allowCancelled || failed || error.message !== 'Protocol error (Fetch.continueRequest): Invalid InterceptionId.')
+            throw error;
+          // Logout may abort the exact pending read before a held response can
+          // be continued. Invalid ID alone is not proof of safe cancellation.
+          const until = performance.now() + 1000;
+          while (!failedRequests.has(original.networkId) && performance.now() < until)
+            await new Promise(resolve => setTimeout(resolve, 10));
+          const cancellation = failedRequests.get(original.networkId);
+          assert(cancellation?.canceled === true && cancellation.errorText === 'net::ERR_ABORTED',
+            'held_response_cancellation_not_proven');
+          held = null;
+          return { continued: false, cancelled: true };
+        }
       } });
   } finally {
     reject(Error('response_fault_closed'));

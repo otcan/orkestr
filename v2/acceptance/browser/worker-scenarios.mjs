@@ -173,7 +173,10 @@ export async function workerScenarios({ page, fixture, mode, report, signal }) {
         'worker_terminal_truth_mismatch', signal);
       assert.equal((await status(page, base, other.run_id)).phase, 'running');
       assert.equal((await status(page, base, originalParent.id)).phase, 'running');
-      const summary = await fixture.request('summary');
+      const summary = await wait(async () => {
+        const observed = await fixture.request('summary');
+        return observed.trace.some(row => row.kind === 'interrupt') && observed;
+      }, 'native_interrupt_not_observed', signal);
       assert.equal(summary.trace.filter(row => row.kind === 'interrupt').length, 1);
       assert.equal(summary.trace.find(row => row.kind === 'interrupt').role, 'worker');
       assert.equal(await value(page, '#composer'), DRAFT);
@@ -222,19 +225,21 @@ export async function workerScenarios({ page, fixture, mode, report, signal }) {
     const alpha = await createTask(page, base, 'alpha', signal);
     await runningTask(fixture, alpha, signal);
     await step('logout_fences_delayed_worker_task_response', async () => {
+      let delivery;
       await responseFault(page, fixture.info.origin, `${base}/worker-tasks`, 'GET', async fault => {
         await click(page, 'Refresh worker task history', TASKS);
         const held = await fault.captured; assert.equal(held.status, 200);
         await click(page, 'Sign out', 'nav');
         await page.waitForSelector('#username');
-        await fault.release(false);
+        delivery = await fault.release(false, true);
       });
       assert.equal((await read(page, `${base}/worker-tasks?parent_run_id=${originalParent.id}`)).status, 401);
       assert.equal(await page.$(TASKS), null);
       assert(!(await page.$eval('body', node => node.innerText)).includes('Synthetic alpha'));
       await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForSelector('#username');
       assert.equal(await page.$(TASKS), null);
-      return { real_cookie_revoked: true, late_response_not_restored: true, reload_requires_login: true };
+      return { real_cookie_revoked: true, late_response_not_restored: true, reload_requires_login: true,
+        delayed_read_cancelled: delivery.cancelled };
     });
   }
 }
