@@ -83,3 +83,35 @@ fn canonical_replay_preserves_legacy_bytes_and_distinguishes_fixture_metadata() 
         assert!(serde_json::from_value::<ConversationEvent>(value).is_err());
     }
 }
+
+#[test]
+fn cancellation_replay_is_metadata_only_and_schema_distinct() {
+    let body = include_str!("../../../fixtures/fixture-cancellation-requested.json");
+    fixture::<ConversationEvent>(body);
+    let event: ConversationEvent = serde_json::from_str(body).unwrap();
+    assert_eq!(event.sse_name(), "fixture_cancellation_requested");
+    assert_eq!(event.sequence(), 1);
+    for outcome in ["unknown", "not_dispatched"] {
+        let mut value: serde_json::Value = serde_json::from_str(body).unwrap();
+        value["payload_ref_or_safe_payload"]["outcome"] = outcome.into();
+        assert!(serde_json::from_value::<ConversationEvent>(value).is_ok());
+    }
+    for field in [
+        "schema_version",
+        "kind",
+        "outcome",
+        "dispatch_fence",
+        "native_session_id",
+    ] {
+        let mut value: serde_json::Value = serde_json::from_str(body).unwrap();
+        match field {
+            "schema_version" => value[field] = 2.into(),
+            "kind" => {
+                value["payload_ref_or_safe_payload"][field] = "fixture_provider_observed".into()
+            }
+            "outcome" => value["payload_ref_or_safe_payload"][field] = "cancelled".into(),
+            _ => value["payload_ref_or_safe_payload"][field] = "forbidden".into(),
+        }
+        assert!(serde_json::from_value::<ConversationEvent>(value).is_err());
+    }
+}
