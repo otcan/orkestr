@@ -2,6 +2,8 @@
 mod auth;
 mod fingerprint;
 mod readback;
+#[cfg(test)]
+mod recovery_tests;
 mod rollback;
 #[cfg(test)]
 mod tests;
