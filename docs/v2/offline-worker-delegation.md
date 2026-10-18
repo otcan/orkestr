@@ -115,3 +115,27 @@ Its INTERNAL actual spawn needs an Isolation-owned bounded launch callback or
 consumed-capability integration; waiting for child completion must occur outside
 the transaction. Coordinate this API with the sandbox owner before claiming a
 runnable fenced callsite. A fence around spawn_blocking scheduling is insufficient.
+
+## Schema 0017 implementation handoff
+
+`0017_worker_tool_delegations.sql` is the authoritative allocation. Exact column
+names are `id`, `context_id`, `incarnation_id`, and `source_text`.
+`requested_lifetime_ms` is immutable input (1..30000); replay compares it rather
+than a recomputed expiry. State values are lowercase. Grant hashes exist only
+in `delegated`; consuming or fencing erases them. Historical incarnation IDs
+intentionally do not reference the mutable current incarnation. Parent lineage
+and full envelope consistency remain mandatory transaction checks beyond FKs.
+
+The helper exclusively owns the new `production_runtime/worker_tool` subtree,
+its tests, server `offline_python` subtree/tests, and spawn-only sandbox refactor.
+Core registers/reexports those implementations after their scoped source handoff;
+no empty module or alternate implementation is registered ahead of that handoff.
+
+The monitor API is approved as an additional Store-owned method:
+`async check_offline_python(&self, credential: &str,
+launch: &ConsumedOfflinePython) -> Result<()>`.
+It authenticates the current credential and exact canonical parent/delegation
+under one transaction. It returns no grant, receipt or permission to spawn.
+Actual spawn still requires `with_offline_python_fence`; waiting stays outside.
+Monitor refusal kills/reaps the owned child and quarantines output, without
+inventing a Cancelled acknowledgement. No provider Worker role is enabled.
