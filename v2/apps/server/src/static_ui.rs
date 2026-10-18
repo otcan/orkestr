@@ -29,6 +29,7 @@ fn mime(path: &Path) -> Option<&'static str> {
         "js" | "mjs" => "text/javascript; charset=utf-8",
         "css" => "text/css; charset=utf-8",
         "json" => "application/json",
+        "wasm" => "application/wasm",
         "svg" => "image/svg+xml",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -156,6 +157,37 @@ mod tests {
             ("text/html; charset=utf-8", Bytes::from_static(b"UI")),
         )])
     }
+    #[test]
+    fn wasm_is_loaded_and_served_with_correct_content_type() {
+        struct OwnedDirectory(std::path::PathBuf);
+        impl Drop for OwnedDirectory {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let directory = OwnedDirectory(
+            std::env::temp_dir().join(format!("orkestr-static-test-{}", uuid::Uuid::new_v4())),
+        );
+        fs::create_dir(&directory.0).unwrap();
+        let wasm = b"\0asm\x01\0\0\0";
+        fs::write(directory.0.join("app.wasm"), wasm).unwrap();
+        let mut assets = Assets::new();
+        let mut total = 0;
+        load(&directory.0, &directory.0, 0, &mut assets, &mut total).unwrap();
+        assert_eq!(total, wasm.len());
+        assert_eq!(assets["/app.wasm"].1.as_ref(), wasm);
+        for method in [Method::GET, Method::HEAD] {
+            let response = respond(method, "/app.wasm".parse().unwrap(), &assets);
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "application/wasm");
+            assert_eq!(response.headers()[header::CONTENT_LENGTH], "8");
+            assert_eq!(
+                response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+                "nosniff"
+            );
+        }
+    }
+
     #[test]
     fn api_unknown_is_json_and_never_spa() {
         for path in ["/api", "/api/v2/missing"] {
