@@ -39,3 +39,35 @@ empty private state, closed credential FD and denied direct Unix/external socket
 access. Existing exact-host synthetic proxy tests cover permitted egress; no
 real DNS, authentication or inference request is made. Parent-controlled path
 and concurrent-replacement assumptions remain those of the authenticated profile.
+
+## Immutable compatibility probe handoff
+
+Stage exactly the eight files and SHA-256 values in
+`v2/provider-broker/authenticated-package.json`, retaining the `isolation/`
+package layout. The entry is `isolation.claude_selected.SelectedClaudeProfile`;
+there is no standalone account-selection CLI. The trusted private launcher
+loads the immutable configuration, obtains the existing selected-account
+callback capability, and calls `exec_native` with its issued requested UUID.
+Root-controlled native, workspace, endpoint and configuration ownership checks
+remain mandatory. The broker protocol package has a separate inventory;
+`claude_telemetry.py` must accompany `claude_protocol.py` there.
+
+For the next isolated compatibility probe, keep stdin open, send the exact
+closed initialize control request, verify its correlated sanitized success,
+then submit the separately authorized user frame with a fresh UUID. Empty
+optional pending arrays are supported; nonempty arrays refuse readiness.
+Initialize proves process readiness only. Require the later system/init native
+UUID and both assistant/result input UUID echoes before recording compatibility.
+Command lifecycle and rate-limit telemetry provide no completion evidence.
+No probe belongs inside a Store transaction or replaces the ordinary admitted
+server path.
+
+After owned cleanup, report only state entry names, types, modes, ownership,
+link counts and sizes, plus process/endpoint cleanup counts. Do not export file
+contents, account response payloads, token values or prompts. The initial
+profile still requires fresh state: actual generated persistence layout is a
+prerequisite for the closed restart validator and isolated resume entry. A
+synthetic namespace test proves writable session metadata survives child exit,
+the credential memfd is absent from native descriptors, and the selected token
+is absent from that persisted fixture; it also proves reuse currently refuses.
+This does not qualify actual Claude persistence or authenticated egress.

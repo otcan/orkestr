@@ -23,7 +23,7 @@ class SelectedClaudeTests(unittest.TestCase):
 
     def test_actual_selected_namespace_and_private_fd(self):
         with tempfile.TemporaryDirectory(prefix="claude-selected-synthetic-") as tmp:
-            root=Path(tmp);state=root/"state";state.mkdir();workspace=root/"work";workspace.mkdir()
+            root=Path(tmp);state=root/"state";state.mkdir(mode=0o700);workspace=root/"work";workspace.mkdir(mode=0o700)
             endpoint=root/"egress.sock"
             with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as peer:
                 peer.bind(str(endpoint));peer.listen()
@@ -48,6 +48,14 @@ class SelectedClaudeTests(unittest.TestCase):
                         "assert not os.listdir('/account')",
                         "try:\n socket.socket(socket.AF_UNIX);raise AssertionError('unix endpoint access')\nexcept OSError:pass",
                         "try:\n socket.create_connection(('192.0.2.1',443),timeout=.1);raise AssertionError('host network')\nexcept OSError:pass",
+                        "from pathlib import Path",
+                        "for entry in Path('/proc/self/fd').iterdir():",
+                        " try: target=os.readlink(entry)",
+                        " except FileNotFoundError: continue",
+                        " assert 'memfd:selected-account' not in target",
+                        "os.makedirs('/account/projects/synthetic',mode=0o700)",
+                        "session=os.open('/account/projects/synthetic/session.jsonl',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)",
+                        "os.write(session,b'synthetic-session-metadata\\n');os.close(session)",
                         "print('selected-profile-ok')",
                     ])
                     child=subprocess.Popen(argv,env={"INHERITED_SECRET":"synthetic-unrelated"},
@@ -58,6 +66,11 @@ class SelectedClaudeTests(unittest.TestCase):
                         self.assertEqual((child.returncode,out,err),(0,b"selected-profile-ok\n",b""))
                     finally:
                         if child.poll() is None:child.kill();child.wait(timeout=2)
-                    self.assertEqual(list(state.iterdir()),[])
+                    retained=state/'projects/synthetic/session.jsonl'
+                    self.assertEqual(retained.read_bytes(),b'synthetic-session-metadata\n')
+                    self.assertNotIn(b'synthetic-selected',retained.read_bytes())
+                    # Persistence exists, but reuse is deliberately closed until
+                    # actual native layout and issuer-bound resume are admitted.
+                    with self.assertRaises(ValueError):profile._state(state)
                     with self.assertRaises(ValueError):cap._take(profile)
                 finally:os.close(fd);os.close(secret)
