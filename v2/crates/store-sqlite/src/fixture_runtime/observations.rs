@@ -149,7 +149,11 @@ impl FixtureSupervisorStore {
             .execute(&mut *tx)
             .await
             .map_err(db)?;
+        #[cfg(feature = "fixture-test-controls")]
+        self.fixture_checkpoint("observation-before-commit").await?;
         tx.commit().await.map_err(db)?;
+        #[cfg(feature = "fixture-test-controls")]
+        self.fixture_checkpoint("observation-after-commit").await?;
         Ok(ProviderEventReceipt {
             event_id,
             scope_sequence: sequence,

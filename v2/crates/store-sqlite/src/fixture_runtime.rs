@@ -214,3 +214,6 @@ mod guard_tests;
 mod observation_authority_tests;
 #[cfg(test)]
 mod observation_contract_tests;
+
+#[cfg(all(test, feature = "fixture-test-controls", unix))]
+mod observation_process_tests;
