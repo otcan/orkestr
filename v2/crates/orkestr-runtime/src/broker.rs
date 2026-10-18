@@ -3,6 +3,11 @@
 #[allow(dead_code, reason = "owned transport composition is under review")]
 pub(crate) mod channel;
 pub(crate) mod claude;
+#[allow(
+    dead_code,
+    reason = "Core requested-native protocol readiness issuer pending"
+)]
+pub(crate) mod claude_initialize;
 use crate::ports::Blocker;
 use orkestr_v2_application::runtime::ProviderKind;
 use orkestr_v2_store_sqlite::BoundSessionMetadata;
