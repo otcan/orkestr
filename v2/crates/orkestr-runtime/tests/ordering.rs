@@ -236,3 +236,64 @@ fn deep_binding_must_match_claim_consumer_before_admission() {
     assert_eq!(p.starts, 0);
     assert!(store.state.lock().unwrap().calls.is_empty());
 }
+
+#[test]
+fn active_terminal_and_uncertain_admissions_never_dispatch() {
+    use orkestr_v2_application::runtime::{AdmissionDisposition, RunState};
+    for disposition in [
+        AdmissionDisposition::Replay,
+        AdmissionDisposition::ReconciliationRequired,
+    ] {
+        for state in [RunState::Running, RunState::Succeeded] {
+            let store = Spy::new(admission(Role::Deep, 10));
+            {
+                let mut spy = store.state.lock().unwrap();
+                spy.disposition = Some(disposition);
+                spy.run_state = Some(state);
+            }
+            let mut p = SpyProvider {
+                store: &store,
+                starts: 0,
+                hung: true,
+            };
+            assert_eq!(
+                ready(supervisor::start(
+                    &store,
+                    &mut p,
+                    &claim(&store.a),
+                    &store.a.session_id,
+                    1,
+                    "replay",
+                    Role::Deep
+                )),
+                Err(Error::Provider(Blocker::DispatchUnconfirmed))
+            );
+            assert_eq!(p.starts, 0);
+            assert_eq!(store.state.lock().unwrap().calls, vec!["admitted"]);
+        }
+    }
+}
+
+#[test]
+fn mismatched_provider_binding_never_dispatches() {
+    let store = Spy::new(admission(Role::Deep, 10));
+    store.state.lock().unwrap().faulty_binding = true;
+    let mut p = SpyProvider {
+        store: &store,
+        starts: 0,
+        hung: true,
+    };
+    assert_eq!(
+        ready(supervisor::start(
+            &store,
+            &mut p,
+            &claim(&store.a),
+            &store.a.session_id,
+            1,
+            "mismatch",
+            Role::Deep
+        )),
+        Err(Error::Store(RuntimeStoreError::InvalidInput))
+    );
+    assert_eq!(p.starts, 0);
+}

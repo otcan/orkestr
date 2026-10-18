@@ -10,8 +10,8 @@ pub enum Error {
 }
 
 /// Admission is atomic in core; replay is NOT permission to dispatch again.
-/// Until core returns a per-call dispatch disposition, this path never starts
-/// a provider. Low-level fixture commands remain explicitly test-only.
+/// Candidate disposition is not provider permission. Until durable consumption is
+/// implemented and accepted, no provider starts. Low-level fixtures are test-only.
 pub async fn start<S: RuntimeStore, P: Provider>(
     store: &S,
     _provider: &mut P,
@@ -30,19 +30,34 @@ pub async fn start<S: RuntimeStore, P: Provider>(
         .admit_run(claim, binding, expected_generation, request_key)
         .await
         .map_err(Error::Store)?;
-    let admission = result.admission;
+    let admission = &result.provider.run;
+    let returned_binding = &result.provider.binding;
     if admission.owner_id != claim.owner_id
         || admission.conversation_id != claim.conversation_id
         || &admission.session_id != binding
         || admission.role != expected_role
         || admission.purpose != AdmissionPurpose::Execution
+        || returned_binding.owner_id != admission.owner_id
+        || returned_binding.conversation_id != admission.conversation_id
+        || returned_binding.session_id != admission.session_id
+        || returned_binding.role != admission.role
+        || returned_binding.native_session_id != admission.native_session_id
     {
         return Err(Error::Store(RuntimeStoreError::InvalidInput));
     }
-    if !result.is_new {
-        return Err(Error::Provider(Blocker::DispatchUnconfirmed));
+    match result.disposition {
+        AdmissionDisposition::Replay | AdmissionDisposition::ReconciliationRequired => {
+            return Err(Error::Provider(Blocker::DispatchUnconfirmed));
+        }
+        AdmissionDisposition::FreshCandidate => {
+            if result.run_state != RunState::Starting
+                || result.candidate_key.as_ref().is_none_or(String::is_empty)
+            {
+                return Err(Error::Store(RuntimeStoreError::InvalidInput));
+            }
+        }
     }
-    // Freshness alone is not implemented durable dispatch/readiness evidence.
+    // Never claim/consume a candidate until durable authority acceptance exists.
     Err(Error::Provider(Blocker::DispatchUnconfirmed))
 }
 

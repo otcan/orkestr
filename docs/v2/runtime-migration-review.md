@@ -1,3 +1,29 @@
+# Selected reconciled async v5 adaptation
+
+Current selected shared origin: 8acc370d0ced3c808d5af02c1b70ef95557b0a24,
+including reconciled core 9c0725c5 and boxed reservation successor. Application
+and contracts paths match that origin exactly. Selection was explicitly batched;
+older alternatives and their test counts below are historical provenance only.
+
+Runtime now reads RunAdmissionResult.provider, run_state and disposition. It
+validates run owner/scope/session/role/Execution plus returned binding association.
+Replay/ReconciliationRequired return DispatchUnconfirmed, including active and
+terminal snapshots. FreshCandidate requires Starting and a nonempty candidate
+locator but also returns DispatchUnconfirmed: runtime never invokes claim/consume
+or provider start. The locator is never logged or serialized. Only core may
+establish namespace/supervisor/protocol readiness and durable one-use authority.
+Default claim/consume remain Unavailable. No local authority/store is introduced.
+
+31 authored runtime tests: 13 offline, 10 ordering, 8 retry. New source tests cover
+active/terminal replay and uncertain dispositions, and mismatched provider binding.
+All 31 remain unexecuted at this adaptation; earlier 19/21/29 results do not transfer.
+Wrapper package fmt and diff check passed. Shared path comparison to selected core
+is empty. Coordinator combines the matching store adapter, boundary rule and lock;
+this change imports no store/schema/root/lock or CI. Independent exact-head source
+review precedes integration/build evidence. Main dispatch holds remain in force.
+
+---
+
 # Runtime v5 source migration review
 
 Canonical origin: core 9880a53e01a964d85c4c94ee5308bb7a8236ab14, port version 5,

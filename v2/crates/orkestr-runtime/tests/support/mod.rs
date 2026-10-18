@@ -74,6 +74,9 @@ pub fn control(a: &RunAdmission) -> orkestr_runtime::ports::InterruptControl {
 pub struct State {
     pub calls: Vec<&'static str>,
     pub admission_replay: bool,
+    pub disposition: Option<AdmissionDisposition>,
+    pub run_state: Option<RunState>,
+    pub faulty_binding: bool,
     pub fail_once: bool,
     pub lose_ack_once: bool,
     pub refusal: Option<RuntimeStoreError>,
@@ -124,11 +127,22 @@ impl RuntimeStore for Spy {
     ) -> Result<RunAdmissionResult> {
         let mut state = self.state.lock().unwrap();
         state.calls.push("admitted");
-        let is_new = !state.admission_replay;
+        let disposition = state.disposition.unwrap_or(if state.admission_replay {
+            AdmissionDisposition::Replay
+        } else {
+            AdmissionDisposition::FreshCandidate
+        });
         state.admission_replay = true;
+        let mut provider = provider_admission(&self.a);
+        if state.faulty_binding {
+            provider.binding.role = Role::Worker;
+        }
         Ok(RunAdmissionResult {
-            admission: self.a.clone(),
-            is_new,
+            provider,
+            run_state: state.run_state.unwrap_or(RunState::Starting),
+            disposition,
+            candidate_key: (disposition == AdmissionDisposition::FreshCandidate)
+                .then(|| "FAKE-candidate-only".into()),
         })
     }
     async fn bind_native_session(
