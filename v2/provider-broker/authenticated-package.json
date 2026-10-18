@@ -1,0 +1,12 @@
+{
+  "format": "orkestr-v2-authenticated-profile-package-v1",
+  "files": {
+    "isolation/__init__.py": "414f2685af867c285e929b54ccc92d95007017394057cc24b2baba1133284187",
+    "isolation/policy.py": "ad17658c8a400525c690edf5443a46da79d02f791977d042cae71a512337c5da",
+    "isolation/launch.py": "b000fddacbc4d1d6ea76663298adf8f65f84d0e9a103667ce6942ee154eac468",
+    "isolation/authenticated.py": "619bec4d87dc5346aef27e22f2a3673e155a903d26be759e076a27a727d362f5",
+    "isolation/supervisor.py": "8e7b25eaad5186329c10b40b4f46cca98d3305053efae7d79a504ae4b28c17be",
+    "isolation/egress.py": "5a5167cc4af3d2972b32dd750228271bda8dc005cbeb8724326c25b0f391eba1"
+  },
+  "activation": "held-root-provisioning-and-authenticated-compatibility-review"
+}

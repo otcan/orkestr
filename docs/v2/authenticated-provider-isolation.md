@@ -1,0 +1,92 @@
+# Opt-in selected-account Codex isolation
+
+`isolation.authenticated.SelectedCodexProfile` is a concrete trusted-connector
+profile, separate from the offline untrusted Worker-tool boundary. It is not
+registered or enabled by default. No authenticated provider has been launched.
+
+Root stages an immutable private JSON file, an immutable supervisor and fixed
+launcher wrapper. The JSON has exactly these fields (all examples are synthetic):
+
+```json
+{
+  "format": "orkestr-v2-codex-isolated-v1",
+  "native": "/opt/example/provider/native",
+  "auth_file": "/srv/example/canonical-codex/auth.json",
+  "sessions": "/srv/example/role-state/sessions",
+  "workspace": "/srv/example/role-workspace",
+  "egress_socket": "/run/example-provider/egress.sock",
+  "supervisor": "/opt/example/provider/supervisor.py",
+  "hosts": ["subscription.example.invalid"]
+}
+```
+
+The private manifest and all its ancestors must be root-owned and not group/world
+writable. Native must be a canonical root-owned ELF. Supervisor is root-owned and
+executable. Root selects the existing canonical Codex auth file; it must not create
+another login. Only this single file is mounted read-only at `/account/auth.json`;
+no home, parent account directory, config, overlays or unrelated projects enter.
+Auth contents are neither read nor copied by the launcher. Auth rotation/refresh
+that needs writes is unsupported and must fail rather than fall back to host home.
+The selected sessions directory alone is writable/persistent, at
+`/account/sessions`. Selected workspace is mounted read-only at its exact canonical
+path so Runtime's native cwd checks remain meaningful. These paths must be private,
+canonical, owned by root or the current managed UID, with no writable ancestors
+outside that ownership. Root must choose role-specific state, never V1 threads.
+
+A root-staged wrapper calls `launcher_main(fixed_private_configuration_path)`.
+It accepts only `app-server --listen stdio://`, executes the namespace profile in
+place, and preserves the broker's owned stdin/stdout pipes. It has no client
+path/account/env/command selectors. Root must explicitly configure this wrapper
+as the isolated provider launch entry and retain native ELF provenance separately.
+It is not interchangeable with an unreviewed shim. No production wrapper changed.
+
+The namespace profile preserves the managed UID and private mount/user/PID/net/
+IPC/UTS/cgroup namespaces. A trusted supervisor has only a loopback CONNECT proxy
+and a bind of one root-owned Unix egress socket (root-owned immutable parent,
+no world permission). Native receives a fresh strict seccomp filter before exec:
+only AF_INET stream sockets are possible, no AF_UNIX, fork, independent process,
+namespace changes, ptrace or process-memory access. The private network namespace
+has no host interface or route. There is no host-network fallback. Native receives
+only fixed runtime/home/account/proxy environment, not parent secrets. Public CA
+trust is mounted read-only; TLS remains end-to-end with native certificate checks.
+
+Supervisor accepts exact allowlisted hostnames on port 443, CONNECT only, bounded
+4096-byte headers, four simultaneous tunnels, 4 MiB aggregate bytes per tunnel,
+and 30-second tunnel lifetimes. Caller headers are stripped. This deliberately
+bounded initial profile may refuse longer sessions; it does not claim full-release
+limits. Native cannot directly access the Unix endpoint. The supervisor handles
+network bytes, not inference capabilities or durable authority.
+
+Root must provision the Unix service before activation. `isolation.egress` provides
+`serve_connection(accepted_unix_socket, exact_hosts)` as its per-connection handler.
+Root owns socket creation, group access, bounded worker pool and teardown. It
+revalidates CONNECT, resolves once, rejects every answer containing any nonpublic
+address (including mixed answers), then connects only a validated numeric address.
+It never forwards plaintext HTTP or accepts client-selected ports. The deployment
+must bound DNS resolution/service-worker lifetime independently; the supervisor
+closes its connection on deadline but cannot kill a blocked host resolver thread.
+No root listener, DNS request or outbound Internet connection was started here.
+
+The immutable profile hostname list and root service list must match exactly;
+actual subscription destinations need independent root review. No wildcard,
+API-key billing fallback, custom CA or proxy override is supported. This checkpoint
+is Codex-only. Managed Claude token injection requires a separate reviewed profile;
+it is not enabled through inherited environment or auth copies.
+
+Runtime retains its actual provider-stdin writer and must fence each bounded
+metadata/execution/control suffix with the exact Core purpose capability. The
+supervisor reads native stdin only in test mode; production simply passes its read
+end to native. Stdio ownership alone is not an issuer or process-reap proof.
+Persistent resume requires the existing grant/native identity/retired-child gates;
+this filesystem projection does not replace them. Codex's native session-index
+requirements beyond the projected sessions directory remain an authenticated
+compatibility gate: do not silently mount the full canonical home if it refuses.
+
+Synthetic validation exercises actual namespaces, selected read-only account
+sentinel, persistent session writes, native stdin/stdout, allowed proxy exchange,
+direct external/Unix/fork refusal, and hidden unrelated host state. The synthetic
+fixture bypasses root profile provisioning validation explicitly; another test
+proves unprovisioned private configuration refuses before spawn. DNS policy tests
+use synthetic resolver answers only. Actual authenticated launch, real destination
+selection, root endpoint provisioning, ordinary HTTP integration, Stop/resume and
+persistent native compatibility remain unexecuted.
