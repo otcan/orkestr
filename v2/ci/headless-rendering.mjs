@@ -70,9 +70,17 @@ try {
   await page.waitForSelector('#username');
   await page.reload({ waitUntil: 'networkidle2' });
   await page.waitForSelector('#username');
+  // Exercise a fresh password login after server-confirmed revocation, not just resume.
+  await page.type('#username', 'synthetic-admin');
+  await page.type('#password', 'synthetic-password-000000');
+  await clickText('Continue');
+  await page.waitForSelector('#composer');
+  const replacement = (await browser.cookies()).find(cookie => cookie.name === 'orkestr_v2_session');
+  assert.ok(replacement?.httpOnly);
+  assert.notEqual(replacement.value, session.value, 'Login reused revoked session');
   assert.equal(bearerSeen, false, 'Browser sent machine authority');
   assert.deepEqual(errors, [], 'Browser rendering errors');
-  console.log('PASS: CI headless rendering, cookie resume, durable intake, CSRF rejection and logout');
+  console.log('PASS: CI headless rendering, cookie resume, durable intake, CSRF rejection, logout and fresh password re-login');
 } finally {
   try {
     await browser?.close();
