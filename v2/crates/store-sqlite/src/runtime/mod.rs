@@ -107,7 +107,7 @@ impl RuntimeStore for Store {
         _: &SessionId,
         _: u64,
         _: &str,
-    ) -> Result<RunAdmission> {
+    ) -> Result<RunAdmissionResult> {
         Err(RuntimeStoreError::Unavailable)
     }
     async fn bind_native_session(

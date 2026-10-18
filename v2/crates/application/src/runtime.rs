@@ -2,6 +2,8 @@
 //! Runtime owns providers/supervision; core owns persistence and verified acceptance.
 pub use orkestr_v2_contracts::runtime::*;
 mod authority;
+mod dispatch;
+pub use dispatch::*;
 pub use authority::*;
 use orkestr_v2_contracts::{ConversationId, OwnerId, RunId, SessionId};
 use std::{future::Future, time::Duration};
@@ -55,7 +57,9 @@ pub trait RuntimeStore: Send + Sync {
 
     /// Validate ownership/claim/generation/fence, persist Starting and acknowledge claim
     /// in the SAME transaction, closing the admit/ack crash gap. RunId is store assigned.
-    /// Identical request replay returns original admission; changed replay conflicts.
+    /// Identical replay returns Replay or ReconciliationRequired, never FreshCandidate;
+    /// changed replay conflicts. FreshCandidate is per inserting invocation only and
+    /// grants no provider permission. Unknown dispatch always requires reconciliation.
     /// Deep only: binding_id must equal claim.consumer_session_id. Fast and workers
     /// cannot consume this claim. Independent worker admission is not yet exposed.
     fn admit_run(
@@ -64,7 +68,34 @@ pub trait RuntimeStore: Send + Sync {
         binding_id: &SessionId,
         expected_generation: u64,
         request_key: &str,
-    ) -> impl Future<Output = Result<RunAdmission>> + Send;
+    ) -> impl Future<Output = Result<RunAdmissionResult>> + Send;
+
+    /// Reserve only a fresh candidate under the authorized supervisor-bound handle.
+    /// Atomically validate owner/scope/role/session/attempt, Execution purpose,
+    /// live store-clock lease/fence and never-dispatched state; persist reservation.
+    /// Concurrent contenders have one winner. Repeated requests never issue another
+    /// reservation; changed content conflicts. Replays do not drive automatic dispatch.
+    /// No supervisor-context enforcement means Unavailable, not an unbound grant.
+    fn claim_provider_dispatch(
+        &self,
+        _candidate: &RunAdmissionResult,
+        _request_key: &str,
+    ) -> impl Future<Output = Result<DispatchClaimResult>> + Send {
+        async { Err(RuntimeStoreError::Unavailable) }
+    }
+
+    /// Recheck reservation, bound supervisor incarnation, identity, purpose and live
+    /// lease/fence atomically. Commit Reserved -> DeliveryUnknown BEFORE provider I/O.
+    /// Only the CAS-winning invocation returns DispatchNow. Repeated/lost-ACK calls
+    /// return ReconciliationRequired, never DispatchNow. A crash before/after provider
+    /// invocation stays unknown; neither timeout nor missing Started authorizes retry.
+    /// Cancellation/recovery must fence reservation consumption in the same authority.
+    fn consume_provider_dispatch(
+        &self,
+        _claim: &DispatchClaim,
+    ) -> impl Future<Output = Result<DispatchConsumption>> + Send {
+        async { Err(RuntimeStoreError::Unavailable) }
+    }
 
     /// Confirm opaque native identity with event-key dedup; reject cross-role aliasing.
     /// Return updated admission. A missing identity never means a session is Ready.
