@@ -47,3 +47,12 @@ Run `npm run security:workflows` plus workflow/secret/dependency security tests,
 obtain independent verification at the exact head, and require green exact-head
 CI. This lane has not edited either policy or its tests. Checkout is the existing
 reviewed action; no action inventory addition is proposed.
+
+Policy candidate cross-check: `ba3aeb0e41a79cf3760431942ebd45cb6775291f`
+recognizes the exact filename `v2-ios.yml`, not the proposal's current filename.
+The uninstalled proposal matches its required `macos-15` runner and explicit
+`v2/**` PR/push branch filters; it declares no tag filters, alternate trigger,
+secrets, elevated permission or new action. Keep the file under `v2/ci/` until
+independent policy review and exact-head CI pass and the coordinator authorizes
+activation. This read-only policy comparison did not run the checker against
+the proposal and does not establish policy or simulator acceptance.
