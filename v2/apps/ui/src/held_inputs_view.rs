@@ -17,14 +17,19 @@ pub fn HeldInputsView(model: Signal<HeldInputs>, now_ms: u64) -> Element {
                 ol {
                     for input in &page.held {
                         li { key: "{input.message_id}",
+                            h4 { "Saved message held after Stop" }
                             p { "{reason(input)}" }
-                            dl {
+                            p { "Message preview and saved time are unavailable in this list. Your message remains saved." }
+                            details {
+                              summary { "Message provenance" }
+                              dl {
                                 dt { "Saved message" } dd { "{input.message_id}" }
                                 dt { "Source event" } dd { "{input.source_event_id}" }
                                 dt { "Input sequence" } dd { "{input.scope_sequence}" }
                                 dt { "Stop boundary run" } dd { "{input.boundary_run_id}" }
                                 dt { "Stop boundary event" } dd { "{input.boundary_event_id}" }
                                 dt { "Held through input sequence" } dd { "{input.through_scope_sequence}" }
+                              }
                             }
                             button { disabled: true, title: RESUME_UNAVAILABLE, "Resume held input" }
                             p { "{RESUME_UNAVAILABLE}" }
