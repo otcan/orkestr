@@ -5,7 +5,8 @@ const base = `/api/v2/conversations/${uuid}`;
 const executionPath = new RegExp(`^${base}/execution(?:\\?run_id=${uuid})?$`);
 const workersPath = new RegExp(`^${base}/workers\\?${"(?:after=" + uuid + "&)?"}limit=25$`);
 const heldPath = new RegExp(`^${base}/held-inputs\\?after_sequence=(?:0|[1-9][0-9]{0,18})&limit=50$`);
-if (path !== "/api/v2/resources" && !executionPath.test(path) && !workersPath.test(path) && !heldPath.test(path)) throw new Error("Invalid status path");
+const tasksPath = new RegExp(`^${base}/worker-tasks\\?parent_run_id=${uuid}$`);
+if (path !== "/api/v2/resources" && !executionPath.test(path) && !workersPath.test(path) && !heldPath.test(path) && !tasksPath.test(path)) throw new Error("Invalid status path");
 let stopped = false, controller, wake, retryTimer;
 const now = () => Math.floor(performance.now());
 dioxus.recv().then(() => {

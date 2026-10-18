@@ -9,7 +9,7 @@ mod progress_view;
 mod stop_button;
 mod transport;
 mod views;
-#[allow(dead_code)]
+mod worker_tasks_panel;
 mod worker_tasks_view;
 mod workers_view;
 use dioxus::prelude::*;

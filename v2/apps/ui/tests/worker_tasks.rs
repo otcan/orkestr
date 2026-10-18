@@ -77,7 +77,7 @@ fn refused_parent_requires_explicit_review_and_invalid_or_foreign_intent_is_not_
 fn payload_removal_masks_late_history_without_fabricating_hold_or_completion() {
     let (conversation, parent) = ids();
     let mut history = TaskHistory::default();
-    let list:WorkerTaskList=serde_json::from_value(serde_json::json!({"schema_version":1,"conversation_id":conversation,"parent_run_id":parent,"tasks":[{"task":receipt(),"phase":"claimed","title":"Private task title","instructions_available":true,"run_id":null}]})).unwrap();
+    let list:WorkerTaskList=serde_json::from_value(serde_json::json!({"schema_version":1,"conversation_id":conversation,"parent_run_id":parent,"can_create":false,"tasks":[{"task":receipt(),"phase":"claimed","title":"Private task title","instructions_available":true,"run_id":null}]})).unwrap();
     history.apply(&conversation, &parent, list.clone()).unwrap();
     history.removed(&receipt().task_id);
     history.apply(&conversation, &parent, list.clone()).unwrap();
@@ -93,4 +93,21 @@ fn payload_removal_masks_late_history_without_fabricating_hold_or_completion() {
         history.list().unwrap().tasks[0].phase,
         WorkerTaskPhase::Claimed
     );
+}
+
+#[test]
+fn task_history_refuses_foreign_parent_and_retains_current_observed_availability() {
+    let (conversation, parent) = ids();
+    let mut history = TaskHistory::default();
+    let mut list:WorkerTaskList=serde_json::from_value(serde_json::json!({"schema_version":1,"conversation_id":conversation,"parent_run_id":parent,"can_create":true,"tasks":[]})).unwrap();
+    history.apply(&conversation, &parent, list.clone()).unwrap();
+    assert!(history.list().unwrap().can_create);
+    list.can_create = false;
+    history.apply(&conversation, &parent, list.clone()).unwrap();
+    assert!(!history.list().unwrap().can_create);
+    list.parent_run_id =
+        serde_json::from_value(serde_json::json!("00000000-0000-4000-8000-000000000099")).unwrap();
+    assert!(history.apply(&conversation, &parent, list).is_err());
+    assert_eq!(history.list().unwrap().parent_run_id, parent);
+    assert!(!history.list().unwrap().can_create);
 }

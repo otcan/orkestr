@@ -12,6 +12,7 @@ pub fn ExecutionPoll(
     mut execution: Signal<Execution>,
     onexpired: EventHandler<()>,
 ) -> Element {
+    let parent_tasks = run.is_empty();
     let generation = session_scope.read().generation();
     let selected = id.clone();
     let selected_run = run.clone();
@@ -79,5 +80,5 @@ pub fn ExecutionPoll(
             execution.write().disconnected();
         }
     });
-    rsx! { crate::execution_panel::ExecutionPanel { execution, now_ms: now(), csrf, session_scope, onexpired } }
+    rsx! { crate::execution_panel::ExecutionPanel { execution, now_ms: now(), csrf, session_scope, onexpired, parent_tasks } }
 }

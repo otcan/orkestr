@@ -112,3 +112,19 @@ test('held input uses canonical exclusive inbox cursor and never sends mutation 
         await assert.rejects(execute({recv:async()=>({path:base+query})},()=>assert.fail('no fetch')),/Invalid status path/);
     }
 });
+
+test('worker task history accepts only canonical exact-parent query and cookie read', async()=>{
+    const base='/api/v2/conversations/00000000-0000-4000-8000-000000000001/worker-tasks';
+    const parent='00000000-0000-4000-8000-000000000002';
+    for (const path of [base,`${base}?parent_run_id=${parent}&limit=32`,`${base}?parent_run_id=${parent}&parent_run_id=${parent}`]) {
+        await assert.rejects(execute({recv:async()=>({path})},()=>assert.fail('no fetch')),/Invalid status path/);
+    }
+    let first=true,stop; const messages=[]; let signal;
+    const path=`${base}?parent_run_id=${parent}`;
+    const run=execute({recv:()=>first?(first=false,Promise.resolve({path})):new Promise(resolve=>{stop=resolve;}),send:m=>messages.push(m)},async(url,options)=>{
+        assert.equal(url,path);assert.equal(options.credentials,'same-origin');assert.equal(options.headers,undefined);
+        signal=options.signal;return new Response(JSON.stringify({schema_version:1,can_create:false,tasks:[]}));
+    });
+    while(!messages.length)await new Promise(resolve=>setImmediate(resolve));
+    stop();await run;assert.equal(messages[0].body.can_create,false);assert.ok(signal.aborted);
+});
