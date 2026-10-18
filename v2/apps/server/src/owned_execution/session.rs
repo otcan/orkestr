@@ -176,6 +176,10 @@ impl ConfiguredExecution {
                 )) => {}
                 Err(_) => return Err("execution observation refused; reconciliation required"),
             }
+            // A persistence retry may retain an observation during this step.
+            // Refuse new control handoff until that exact evidence is committed.
+            run_control
+                .set_available(status.phase == ExecutionPhase::Running && pump.pending().is_none());
             drop(schedule);
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(10)) => {},

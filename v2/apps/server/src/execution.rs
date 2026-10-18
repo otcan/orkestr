@@ -1,14 +1,35 @@
 //! Authenticated execution projection and revision-guarded Stop handoff.
 use super::*;
-use axum::extract::Path;
+use axum::extract::{rejection::QueryRejection, Path, Query};
 use orkestr_v2_application::runtime::RuntimeStoreError;
+
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StatusQuery {
+    run_id: Option<RunId>,
+}
 
 pub(crate) async fn status(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    query: Result<Query<StatusQuery>, QueryRejection>,
 ) -> Result<Response, Error> {
     let owner = owner(&state, &headers).await?;
+    let Query(query) = query.map_err(|_| {
+        Error(
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+            "Invalid execution query",
+        )
+    })?;
+    if query.run_id.as_ref().is_some_and(|run| run.0.is_nil()) {
+        return Err(Error(
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+            "Invalid execution query",
+        ));
+    }
     let conversation = ConversationId(Uuid::parse_str(&id).map_err(|_| {
         Error(
             StatusCode::BAD_REQUEST,
@@ -16,23 +37,49 @@ pub(crate) async fn status(
             "Invalid conversation ID",
         )
     })?);
-    let status = state
-        .store
-        .execution_status(&owner, &conversation)
-        .await
-        .map_err(|error| match error {
-            RuntimeStoreError::NotFound | RuntimeStoreError::Unauthorized => {
-                Error(StatusCode::NOT_FOUND, "not_found", "Conversation not found")
-            }
-            _ => Error(
+    let status = if let Some(run) = &query.run_id {
+        // A run locator selects a read, never provider authority. Core checks
+        // the browser credential and exact scope in the projection snapshot.
+        let credential = browser::credential(&headers)?;
+        state
+            .execution_store
+            .as_ref()
+            .ok_or(Error(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "store_unavailable",
+                "status_unavailable",
                 "Execution status unavailable",
-            ),
-        })?;
+            ))?
+            .execution_run_status_authenticated(&credential, &conversation, run)
+            .await
+    } else {
+        state.store.execution_status(&owner, &conversation).await
+    }
+    .map_err(|error| match error {
+        RuntimeStoreError::Unauthorized if query.run_id.is_some() => unauthorized(),
+        RuntimeStoreError::NotFound | RuntimeStoreError::Unauthorized => {
+            Error(StatusCode::NOT_FOUND, "not_found", "Conversation not found")
+        }
+        _ => Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_unavailable",
+            "Execution status unavailable",
+        ),
+    })?;
     match status {
+        None if query.run_id.is_some() => Err(Error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "Execution not found",
+        )),
         None => Ok(StatusCode::NO_CONTENT.into_response()),
-        Some(mut status) if status.conversation_id == conversation && status.is_valid() => {
+        Some(mut status)
+            if status.conversation_id == conversation
+                && status.is_valid()
+                && query
+                    .run_id
+                    .as_ref()
+                    .is_none_or(|run| status.run_id.as_ref() == Some(run)) =>
+        {
             status.capabilities.stop = status.phase == ExecutionPhase::Running
                 && state.execution_control.as_ref().is_some_and(|control| {
                     status

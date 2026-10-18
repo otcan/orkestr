@@ -61,6 +61,15 @@ for line in sys.stdin:
         if Path("stop-mode").exists():
             mode = Path("stop-mode").read_text()
             assert mode in ("terminal", "ack-only")
+            if Path("hold-before-stop").exists():
+                deadline = time.monotonic() + 15
+                while not Path("release-progress").exists():
+                    assert time.monotonic() < deadline
+                    time.sleep(0.01)
+                emit({"method": "item/agentMessage/delta", "params": {
+                    "threadId": "synthetic-http-native", "turnId": f"synthetic-turn-{turn}",
+                    "delta": "synthetic interleaved progress"}})
+                record("interleaved-progress")
             interrupt = json.loads(sys.stdin.readline())
             assert interrupt["method"] == "turn/interrupt"
             assert interrupt["params"] == {"threadId": "synthetic-http-native", "turnId": f"synthetic-turn-{turn}"}
@@ -75,6 +84,13 @@ for line in sys.stdin:
             while not Path("release-stop").exists():
                 assert time.monotonic() < deadline
                 time.sleep(0.01)
+            if Path("late-stop-progress").exists():
+                # Native progress already in flight is valid after an interrupt
+                # ACK. It cannot be mistaken for terminal evidence or conceal it.
+                for _ in range(32):
+                    emit({"method": "item/agentMessage/delta", "params": {
+                        "threadId": "synthetic-http-native", "turnId": f"synthetic-turn-{turn}",
+                        "delta": "synthetic late progress"}})
             emit({"method": "turn/completed", "params": {"threadId": "synthetic-http-native",
                 "turn": {"id": f"synthetic-turn-{turn}", "status": "interrupted"}}})
             continue
