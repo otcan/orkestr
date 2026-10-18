@@ -10,7 +10,7 @@ Private observations and actual counts remain outside OSS.
 | Primary conversations / workers / provider runtime | Reviewed live structural thread aggregates; persisted roles, runtime class, lifecycle and binding-object shape | Activity, effective grants and end-to-end provider parity remain separate runtime/UI evidence. |
 | Job/project/task / approval / effect history | Reviewed live table and fixed run-state/provider/trigger aggregates | Empty engine tables cannot eliminate other authorities. Paused task/approval/effect import contracts absent; no uncertain effects replay. |
 | Personal memory and consent | Exact reviewed personal_memory count receipt consumed privately, including actual counts | Count gives neither content portability nor consent. No external-memory coverage or deletion-aware import contract. |
-| Independent timers | New fixed bounded structural parser, synthetic refusal tests; real registry still unopened pending current runtime selector confirmation | Persisted enabled/status/cadence fields do not prove firing or effective normalized state. No timer import/paused apply port. |
+| Independent timers | Reviewed fixed structural parser and completed private live registry count receipt; synthetic refusal tests | Persisted enabled/status/cadence fields do not prove firing or effective normalized state. No timer import/paused apply port. |
 | Binding and connector workflows | Primary thread binding-object presence only | Effective capability/held route inventory incomplete. Session binding registries excluded. Never migrate active routes or sessions. |
 | Mail/calendar / specialist tools / OXRM | Existing code establishes feature surfaces; Gmail account GET excluded because it migrates credentials | Need inert authoritative selectors and retained external-tool acceptance. Excluded selector is not an absent feature. No credential/profile inspection. |
 | Durable ordinary history transfer | Actual registered Store stable export to fresh-owner dormant import, reopen, replay/conflict/auth refusal, rollback and native-delta export checks | One conversation only. Legacy multi-authority consistent exporter and reviewed scope mapping still absent. |
@@ -36,15 +36,15 @@ are never returned. One stable-metadata file read is not cross-store consistency
 Concurrent mutation tests verify refusal; filesystem timestamp guarantees do not
 constitute an atomic scheduler snapshot.
 
-The earlier private live personal_memory receipt was reviewed and a private
-coverage reconciliation saved. Timer execution was held before file access when
-current MainPID differed from prior reviewed selector receipts. Root confirmation
-of current selector is required; the older home must not be assumed authoritative.
+The private live personal_memory and timer receipts were consumed and coverage
+reconciled privately. Timer execution used refreshed runtime selectors and the
+reviewed fixed reader, without initialization. Persisted structure does not prove
+current scheduling activity, capability availability or cross-authority coherence.
 
 ## Concrete next migration dependencies
 
-1. Current runtime-home selector confirmation for the bounded timer read; independent
-   selector review remains possible from the exact parser/test source.
+1. Effective timer and binding capabilities still need authoritative inert metadata
+   and workflow acceptance; completed structural counts cannot establish parity.
 2. Core/authority-owned consistent legacy thread/history export, explicit owner and
    scope mapping, and separate approval/effect/resource/timer dormant ports. Counts
    and a single V2 conversation export cannot substitute for these.
