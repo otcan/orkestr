@@ -2,9 +2,14 @@
 //! In-memory only. No persisted event journal, policies, approvals or real effects.
 //! A replay-safe state machine is the narrow first milestone, not an agent runtime.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+mod record;
+pub use record::{JournalRecord, SCHEMA_VERSION};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum ConversationKind {
     Home,
     Project,
@@ -12,29 +17,38 @@ pub enum ConversationKind {
     Worker,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Conversation {
     pub id: String,
     pub kind: ConversationKind,
     pub parent_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum TaskState {
     Queued,
-    Running { worker_id: String },
-    Completed { worker_id: String, summary: String },
+    Running {
+        worker_id: String,
+    },
+    Completed {
+        worker_id: String,
+        result_ref: String,
+    },
     Cancelled,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Task {
     pub id: String,
     pub conversation_id: String,
     pub state: TaskState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Event {
     ConversationCreated {
         id: String,
@@ -52,26 +66,29 @@ pub enum Event {
     TaskCompleted {
         task_id: String,
         worker_id: String,
-        summary: String,
+        result_ref: String,
     },
     TaskCancelled {
         task_id: String,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Envelope {
     pub event_id: String,
     pub event: Event,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum ApplyResult {
     Applied,
     Duplicate,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum ApplyError {
     EmptyIdentifier,
     ConflictingEventId,
@@ -187,8 +204,11 @@ impl Engine {
             Event::TaskCompleted {
                 task_id,
                 worker_id,
-                summary,
+                result_ref,
             } => {
+                if result_ref.trim().is_empty() {
+                    return Err(ApplyError::EmptyIdentifier);
+                }
                 let task = self.tasks.get_mut(task_id).ok_or(ApplyError::MissingTask)?;
                 match &task.state {
                     TaskState::Running {
@@ -201,7 +221,7 @@ impl Engine {
                 }
                 task.state = TaskState::Completed {
                     worker_id: worker_id.clone(),
-                    summary: summary.clone(),
+                    result_ref: result_ref.clone(),
                 };
             }
             Event::TaskCancelled { task_id } => {
@@ -277,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn running_requires_confirmed_worker_start() {
+    fn completion_requires_recorded_start() {
         let mut engine = with_project();
         engine
             .apply(event(
@@ -294,7 +314,7 @@ mod tests {
                 Event::TaskCompleted {
                     task_id: "task".into(),
                     worker_id: "w1".into(),
-                    summary: "unexpected".into(),
+                    result_ref: "unexpected".into(),
                 }
             )),
             Err(ApplyError::InvalidTransition)
@@ -329,7 +349,7 @@ mod tests {
                 Event::TaskCompleted {
                     task_id: "task".into(),
                     worker_id: "w2".into(),
-                    summary: "wrong worker".into(),
+                    result_ref: "wrong worker".into(),
                 }
             )),
             Err(ApplyError::WorkerMismatch)
@@ -360,7 +380,7 @@ mod tests {
                 Event::TaskCompleted {
                     task_id: "t1".into(),
                     worker_id: "codex".into(),
-                    summary: "completed".into(),
+                    result_ref: "completed".into(),
                 },
             ),
         ];
