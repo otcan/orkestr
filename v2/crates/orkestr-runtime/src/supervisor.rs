@@ -26,10 +26,11 @@ pub async fn start<S: RuntimeStore, P: Provider>(
     if expected_role != Role::Deep || binding != &claim.consumer_session_id {
         return Err(Error::Store(RuntimeStoreError::InvalidInput));
     }
-    let admission = store
+    let result = store
         .admit_run(claim, binding, expected_generation, request_key)
         .await
         .map_err(Error::Store)?;
+    let admission = result.admission;
     if admission.owner_id != claim.owner_id
         || admission.conversation_id != claim.conversation_id
         || &admission.session_id != binding
@@ -38,6 +39,10 @@ pub async fn start<S: RuntimeStore, P: Provider>(
     {
         return Err(Error::Store(RuntimeStoreError::InvalidInput));
     }
+    if !result.is_new {
+        return Err(Error::Provider(Blocker::DispatchUnconfirmed));
+    }
+    // Freshness alone is not implemented durable dispatch/readiness evidence.
     Err(Error::Provider(Blocker::DispatchUnconfirmed))
 }
 

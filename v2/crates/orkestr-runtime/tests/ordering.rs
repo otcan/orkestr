@@ -59,7 +59,7 @@ fn mismatched_authoritative_role_never_starts_provider() {
     assert_eq!(p.starts, 0);
 }
 #[test]
-fn identical_admission_replay_never_blindly_dispatches() {
+fn fresh_then_identical_admission_replay_never_blindly_dispatches() {
     let store = Spy::new(admission(Role::Deep, 10));
     let mut p = SpyProvider {
         store: &store,
@@ -82,6 +82,30 @@ fn identical_admission_replay_never_blindly_dispatches() {
     }
     assert_eq!(p.starts, 0);
 }
+#[test]
+fn replay_only_admission_never_starts_provider() {
+    let store = Spy::new(admission(Role::Deep, 10));
+    store.state.lock().unwrap().admission_replay = true;
+    let mut p = SpyProvider {
+        store: &store,
+        starts: 0,
+        hung: true,
+    };
+    assert_eq!(
+        ready(supervisor::start(
+            &store,
+            &mut p,
+            &claim(&store.a),
+            &store.a.session_id,
+            1,
+            "replay",
+            Role::Deep
+        )),
+        Err(Error::Provider(Blocker::DispatchUnconfirmed))
+    );
+    assert_eq!(p.starts, 0);
+}
+
 #[test]
 fn running_needs_provider_event() {
     let store = Spy::new(admission(Role::Deep, 10));

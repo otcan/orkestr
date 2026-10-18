@@ -85,3 +85,14 @@ This supersedes native runtime signatures only. Coordinator owns lock integratio
 after independent source review. No Cargo/download/fmt/test run accompanies this
 source-light adaptation. Historical isolated v1 clippy failed double_must_use in
 async-trait expansion; that concrete risk remains unresolved, not waived here.
+
+## Per-call admission result
+
+Adapted core d06eae164a3c20310b9dd6fc22247b95f0c53fa8 (PR #92 checkpoint
+76d8caaf) onto current async v5. Application RunAdmissionResult wraps the
+application-only RunAdmission and is_new. No historical contracts authority types
+are restored. Validate returned identity/role/Execution before checking freshness;
+false never dispatches. True also remains DispatchUnconfirmed pending durable
+store/readiness evidence. Spy models fresh then replay and replay-only paths;
+it cannot prove concurrent single insertion or active/terminal durable replay.
+29 runtime tests are now authored, unexecuted. No Cargo/download/fmt/CI run.

@@ -26,6 +26,16 @@ pub enum RuntimeStoreError {
 }
 pub type Result<T> = std::result::Result<T, RuntimeStoreError>;
 
+/// Per-call outcome, not a persisted dispatch permission that can be replayed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunAdmissionResult {
+    /// Core validates owner, scope, session and role against the durable binding.
+    pub admission: RunAdmission,
+    /// True only for the unique invocation committing insertion of this attempt.
+    /// Every identical replay returns false, including active and terminal runs.
+    pub is_new: bool,
+}
+
 /// SQLite implements bindings and inbox claims; remaining operations are unavailable.
 /// Implementations must return Unavailable for any unimplemented operation.
 /// Unsupported provider commands are a separate runtime capability blocker.
@@ -60,7 +70,9 @@ pub trait RuntimeStore: Send + Sync {
 
     /// Validate ownership/claim/generation/fence, persist Starting and acknowledge claim
     /// in the SAME transaction, closing the admit/ack crash gap. RunId is store assigned.
-    /// Identical request replay returns original admission; changed replay conflicts.
+    /// Identical replay returns original admission with is_new=false; changed input conflicts.
+    /// Only the inserting invocation returns true, never persisted/replayed true.
+    /// Admission role is store-validated; missing dispatch requires reconciliation.
     /// Deep only: binding_id must equal claim.consumer_session_id. Fast and workers
     /// cannot consume this claim. Independent worker admission is not yet exposed.
     async fn admit_run(
@@ -69,7 +81,7 @@ pub trait RuntimeStore: Send + Sync {
         binding_id: &SessionId,
         expected_generation: u64,
         request_key: &str,
-    ) -> Result<RunAdmission>;
+    ) -> Result<RunAdmissionResult>;
 
     /// Confirm opaque native identity with event-key dedup; reject cross-role aliasing.
     /// Return updated admission. A missing identity never means a session is Ready.
