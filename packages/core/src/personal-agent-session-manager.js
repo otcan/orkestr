@@ -12,7 +12,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
   const { conversation, owned, available, claim, currentLease, fenced, time } = sessionAccess({ store, ownerUserId, authorizeOwner, resolveConversation, enabled, now, leaseMs });
   // Transient account/profile authorization context, never persisted ownership.
   const runtimeRow = row => ({ ...row, ...storedSessionProfile(row), ownerUserId });
-  async function leased(id, operation, { blockOnFailure = true } = {}) {
+  async function leased(id, operation, { blockOnFailure = true, cancelSignal } = {}) {
     const row = claim(id);
     const controller = new AbortController();
     let lost = false, admitted = false;
@@ -32,6 +32,13 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
       // our own token/expiry/CAS history before any cleanup write.
       if (lost) throw sessionError("agent_session_lease_lost");
       const current = currentLease(row);
+      // Classify every awaited failure here: our own fence always wins over
+      // caller cancellation, which wins over refusal/provider failure cleanup.
+      // In particular, discovery can fail before runTurn reaches its abort check.
+      if (cancelSignal?.aborted) {
+        fenced(row, {}, true);
+        return { type: "cancelled" };
+      }
       // Eligibility refusals borrow a fence, but must not rewrite status. Once
       // admitted, retain any specific diagnosis already stored by supervision.
       fenced(row, blockOnFailure && admitted ? { lifecycle: "blocked", blockedReason: current.blockedReason ?? sessionBlockedReason(error) } : {}, true);
@@ -167,12 +174,9 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
           return ctx.emit(event);
         },
       }, input).catch(error => {
-        // Native executors propagate guarded workspace/tool aborts. An owner
-        // cancellation is terminal, not a runtime outage; own fence failure
-        // still takes precedence and must never trigger a cleanup retry.
-        if (persistenceError) throw persistenceError;
-        if (leaseSignal.aborted) throw sessionError("agent_session_lease_lost");
-        currentLease(row);
+        // Normalize a native abort into the normal turn finalization below,
+        // which restores an already-busy session. Fence/persistence checks still
+        // precede that write; all escaping failures are classified by leased().
         if (ctx.signal.aborted) return { type: "cancelled" };
         throw error;
       });
@@ -188,7 +192,7 @@ export function createPersonalAgentSessionManager({ store, ownerUserId, authoriz
       if (result.type === "final" && !current.nativeSessionId) throw sessionError("agent_session_native_session_missing");
       fenced(row, { lifecycle: !current.nativeSessionId || (result.type === "cancelled" && row.lifecycle === "starting") ? "starting" : "ready", blockedReason: null }, true);
       return result;
-    });
+    }, { cancelSignal: ctx.signal });
   }
   return Object.freeze({ ensure, startOrResume, runTurn,
     get: owned,
