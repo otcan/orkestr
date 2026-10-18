@@ -98,10 +98,21 @@ def install_filter(fd):
 
 
 def main():
+    if len(sys.argv)==4 and sys.argv[1]=="claude-native":
+        import uuid
+        native=str(uuid.UUID(sys.argv[3]))
+        install_filter(int(sys.argv[2]))
+        command=["native","-p","--input-format","stream-json","--output-format","stream-json",
+            "--verbose","--permission-mode","dontAsk","--permission-prompts","none",
+            "--safe-mode","--restricted","--disable-slash-commands","--no-chrome",
+            "--prompt-suggestions","false","--tools","","--strict-mcp-config",
+            "--mcp-config",'{"mcpServers":{}}',"--setting-sources","","--session-id",native]
+        os.execve("/opt/provider/native",command,dict(os.environ))
     if len(sys.argv)==3 and sys.argv[1]=="native":
         install_filter(int(sys.argv[2]))
         os.execve("/opt/provider/native",["native","app-server","--listen","stdio://"],dict(os.environ))
-    if len(sys.argv)!=4 or sys.argv[3] not in ("codex","synthetic"):return 2
+    claude=len(sys.argv)==6 and sys.argv[3] in ("claude","claude-synthetic")
+    if not claude and (len(sys.argv)!=4 or sys.argv[3] not in ("codex","synthetic")):return 2
     fd=int(sys.argv[1]);hosts=tuple(sys.argv[2].split(","))
     listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     listener.bind(("127.0.0.1",0));listener.listen(MAX_CONNECTIONS);listener.settimeout(.05)
@@ -109,7 +120,18 @@ def main():
     environment={"PATH":"/usr/bin","HOME":"/home/provider","TMPDIR":"/tmp",
         "LANG":"C.UTF-8","CODEX_HOME":"/account","HTTPS_PROXY":proxy,
         "HTTP_PROXY":proxy,"ALL_PROXY":proxy,"NO_PROXY":""}
-    if sys.argv[3]=="synthetic":
+    if claude:
+        secret=int(sys.argv[5])
+        try:
+            raw=os.read(secret,16385)
+            if not 0<len(raw)<=16384 or b"\0" in raw or b"\n" in raw or os.read(secret,1):
+                raise ValueError("selected account refused")
+            token=raw.decode("utf-8")
+        finally:os.close(secret)
+        environment.pop("CODEX_HOME")
+        environment["CLAUDE_CONFIG_DIR"]="/account"
+        environment["CLAUDE_CODE_OAUTH_TOKEN"]=token
+    if sys.argv[3] in ("synthetic","claude-synthetic"):
         # Only used by isolated synthetic tests; no production source parameter.
         source=bytearray()
         while not source.endswith(b"\n"):
@@ -120,6 +142,7 @@ def main():
         command=["/usr/bin/python3","-I","-B","-c",
             "import sys;sys.path.insert(0,'/opt/provider');from supervisor import install_filter;"
             "install_filter(int(sys.argv[1]));exec(sys.argv[2])",str(fd),source.decode()]
+    elif claude:command=["/usr/bin/python3","-I","-B",__file__,"claude-native",str(fd),sys.argv[4]]
     else:command=["/usr/bin/python3","-I","-B",__file__,"native",str(fd)]
     child=subprocess.Popen(command,env=environment,close_fds=True,pass_fds=(fd,),stdin=sys.stdin,stdout=sys.stdout,stderr=sys.stderr)
     os.close(fd)

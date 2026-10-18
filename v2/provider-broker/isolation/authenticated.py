@@ -62,6 +62,8 @@ def private_state(path):
 
 class SelectedCodexProfile:
     """Server-private immutable configuration, never deserialize request JSON here."""
+    _provider="codex"
+
     def __init__(self, configuration):
         path=Path(configuration)
         if path.resolve(strict=True)!=path or not path.is_file():
@@ -71,13 +73,14 @@ class SelectedCodexProfile:
             if info.st_uid!=0 or info.st_mode & 0o022:
                 raise ValueError("immutable profile required")
         value=json.loads(Path(path).read_text())
-        fields={"format","native","auth_file","egress_socket","supervisor","hosts","workspace"}
+        fields={"format","native","egress_socket","supervisor","hosts","workspace"}
+        if self._provider=="codex":fields.add("auth_file")
         if not isinstance(value,dict):
             raise ValueError("invalid selected profile")
-        modern=value.get("format")=="orkestr-v2-codex-isolated-v2"
+        modern=value.get("format")=="orkestr-v2-codex-isolated-v2" or self._provider=="claude"
         fields.add("state_root" if modern else "sessions")
-        if set(value)!=fields or value["format"] not in (
-            "orkestr-v2-codex-isolated-v1","orkestr-v2-codex-isolated-v2"):
+        formats=("orkestr-v2-codex-isolated-v1","orkestr-v2-codex-isolated-v2") if self._provider=="codex" else ("orkestr-v2-claude-isolated-v1",)
+        if set(value)!=fields or value["format"] not in formats:
             raise ValueError("invalid selected profile")
         policy.trusted("/etc/ssl/certs",True)
         certificate=Path("/etc/ssl/certs/ca-certificates.crt").stat()
@@ -94,10 +97,10 @@ class SelectedCodexProfile:
             info=item.stat()
             if info.st_uid!=0 or info.st_mode & 0o022:
                 raise ValueError("untrusted authenticated budget")
-        self.auth=private_path(value["auth_file"])
-        if Path(self.auth).name!="auth.json":
+        self.auth=private_path(value["auth_file"]) if self._provider=="codex" else None
+        if self.auth is not None and Path(self.auth).name!="auth.json":
             raise ValueError("selected canonical Codex auth file required")
-        self.state_root=private_state(value["state_root"]) if modern else None
+        self.state_root=self._state(value["state_root"]) if modern else None
         self.sessions=None if modern else private_path(value["sessions"],True)
         self.workspace=private_path(value["workspace"],True)
         endpoint=Path(value["egress_socket"])
@@ -116,6 +119,8 @@ class SelectedCodexProfile:
             "." not in h for h in hosts):
             raise ValueError("invalid exact egress hosts")
         self.hosts=tuple(hosts)
+
+    _state=staticmethod(private_state)
 
     def start(self):
         return self._start(None)
@@ -164,7 +169,8 @@ class SelectedCodexProfile:
             mounts += ["--bind",self.state_root,"/account"]
         else:
             mounts += ["--bind",self.sessions,"/account/sessions"]
-        mounts += ["--ro-bind",self.auth,"/account/auth.json"]
+        if self.auth is not None:
+            mounts += ["--ro-bind",self.auth,"/account/auth.json"]
         mount_index=argv.index("--chdir")
         argv[mount_index:mount_index]=mounts
         return argv
