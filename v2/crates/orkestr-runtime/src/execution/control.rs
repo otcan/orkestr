@@ -26,9 +26,19 @@ pub struct StoppingCodex {
     omitted_nonterminal: u64,
     failed: bool,
     stopped: bool,
+    retain_terminal: bool,
 }
 
 impl StoppingCodex {
+    /// Retain the owned broker after durable Stopped for explicit graceful
+    /// retirement. Errors and competing terminal evidence still quarantine;
+    /// dropping this handle still cleans up. This grants no replacement right.
+    #[must_use]
+    pub fn retaining_terminal(mut self) -> Self {
+        self.retain_terminal = true;
+        self
+    }
+
     /// Cleanup evidence remains separate from durable cancellation evidence.
     pub fn retire_broker(
         self,
@@ -89,6 +99,7 @@ impl CodexPump {
                 omitted_nonterminal: 0,
                 failed: false,
                 stopped: false,
+                retain_terminal: false,
             }),
             Err(cause) => {
                 self.source.child.quarantine();
@@ -155,7 +166,9 @@ impl StoppingCodex {
             {
                 self.pending = None;
                 self.stopped = true;
-                self.pump.source.child.quarantine();
+                if !self.retain_terminal {
+                    self.pump.source.child.quarantine();
+                }
                 Ok(true)
             }
             Ok(_) => {
