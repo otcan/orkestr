@@ -52,6 +52,18 @@ impl Store {
                 return Err(RuntimeStoreError::Fenced);
             }
             let result = action();
+            #[cfg(feature = "fixture-test-controls")]
+            if purpose == AdmissionPurpose::Execution {
+                if let Err(error) = self
+                    .production_checkpoint("execution-fence-after-action-rollback")
+                    .await
+                {
+                    // Inject an unavailable outcome only AFTER the real callback.
+                    // Roll back explicitly; no value/grant escapes on this path.
+                    tx.rollback().await.map_err(db)?;
+                    return Err(error);
+                }
+            }
             // This transaction makes no durable change. Once action ran, a
             // failed COMMIT cannot justify retrying inference or granting a token.
             tx.commit().await.map_err(db)?;
@@ -134,3 +146,7 @@ mod tests {
         assert_eq!(calls, 1);
     }
 }
+
+#[cfg(all(test, feature = "fixture-test-controls", unix))]
+#[path = "fence_failure_tests.rs"]
+mod failure_tests;
