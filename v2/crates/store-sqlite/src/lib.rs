@@ -8,6 +8,7 @@ use sqlx::{
 };
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
+pub mod fixture_runtime;
 mod intake;
 mod paths;
 mod preflight;
