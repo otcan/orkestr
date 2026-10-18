@@ -32,7 +32,7 @@ export async function prepareAgentReport(thread, input, principal, env = process
   const cause = [...inputs].reverse().find(row => row.role === "user" &&
     source.runtime?.activeTurnId && (row.codexTurnId || row.executorTurnId) === source.runtime.activeTurnId);
   Object.assign(body, { reportSourceThreadId: source.id, reportCauseMessageId: cause?.id || "",
-    reportFingerprint: reportFingerprint(body.text), controlAllowed: false, parseCommands: false });
+    reportFingerprint: reportFingerprint(body.text), controlAllowed: false, originOwner: false, parseCommands: false });
   if (acknowledgementOnly(body)) {
     const message = await appendThreadMessage(thread.id, { ...body, role: "assistant", phase: "notification",
       state: "completed", visibility: "internal", source: "agent_report_ack", reportKind: "ack",

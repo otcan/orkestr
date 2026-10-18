@@ -32,6 +32,8 @@ test("CLI ACK records no queued input; CLI result retries and automatic copy del
   const input = { source: "cli", agentSourceThreadId: worker.id, reportKind: "result", text };
   const prepared = await prepareAgentReport(parent, input, principal, env);
   assert.equal(prepared.body.controlAllowed, false);
+  assert.equal(prepared.body.originOwner, false);
+  assert.equal(prepared.body.parseCommands, false);
   await enqueueThreadInput(parent.id, prepared.body, env);
   assert.equal((await prepareAgentReport(parent, input, principal, env)).suppressed, true);
   await appendThreadMessage(worker.id, { role: "assistant", phase: "final_answer", text, state: "completed" }, env);
