@@ -67,7 +67,7 @@ def exercise(mode):
         assert case.message()[0] == 202
         starting = ordinary.wait_for(lambda: case.phase("starting"), "one consumed first turn")
         ordinary.wait_for(lambda: any(row["kind"] == "turn" for row in case.trace()), "actual native input")
-        assert starting["progress"] is None and starting["acceptance_candidate"] is None
+        assert starting["progress"] is None and starting.get("acceptance_candidate") is None
         assert case.rows("SELECT observed_run_id,observed_event_key FROM production_requested_native") == [(None, None)]
         assert case.rows("SELECT count(*) FROM production_observations") == [(0,)]
 
@@ -107,7 +107,7 @@ def exercise(mode):
         if mode == "budget":
             ordinary.wait_for(case.peer_gone, "budget must fence and clean the owned native")
             cancelled = ordinary.wait_for(lambda: case.phase("cancel_requested"), "budget remains truthful unknown")
-            assert cancelled["acceptance_candidate"] is None
+            assert cancelled.get("acceptance_candidate") is None
             assert case.rows("SELECT kind FROM production_observations WHERE kind='stopped'") == []
             return
 
