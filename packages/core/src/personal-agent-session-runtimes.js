@@ -26,7 +26,7 @@ export function createPersonalAgentSessionRuntimes({ env = process.env, cwd, res
     const runtimeEnv = row.provider === "codex"
       ? { ...env, HOME: path.join(profile.credentialRoot, "runtime-home"), CODEX_HOME: profile.credentialRoot,
         OPENAI_API_KEY: "", CODEX_API_KEY: "", ORKESTR_CODEX_APP_SERVER_MODE: "stdio", ORKESTR_CODEX_APP_SERVER_SOCKET: "" }
-      : { ...env, ...await claudeEnv(profile, {}, env), ORKESTR_AGENT_JOB_CLAUDE_CONFIG_DIR: profile.credentialRoot };
+      : { ...env, CLAUDE_CODE_OAUTH_TOKEN: "", ...await claudeEnv(profile, {}, env), ORKESTR_AGENT_JOB_CLAUDE_CONFIG_DIR: profile.credentialRoot };
     return { profile, runtimeEnv };
   }
   return Object.freeze(Object.fromEntries(["codex", "claude-code"].map(provider => [provider, Object.freeze({

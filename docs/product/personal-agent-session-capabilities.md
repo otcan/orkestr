@@ -65,6 +65,9 @@ new connector module and never infers authentication from a selected profile.
   project conversation; worker sessions may be numerous. Fork lineage stays
   within the same conversation and subscription account.
 - Existing LLM account profiles resolve the selected subscription credentials.
+  An ambient Claude OAuth token is cleared before applying the selected
+  profile's execution environment; another account's token cannot survive
+  when that profile uses its own CLI login instead.
   An explicit model and optional effort are pinned to the session. A model or
   effort change retains conversation, Orkestr session and native IDs. Switching
   provider/account requires an explicit rebind workflow, which is not provided

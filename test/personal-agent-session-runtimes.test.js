@@ -45,6 +45,20 @@ test("Claude subscription discovery is explicit and never auto-enables its execu
   assert.equal((await createPersonalAgentSessionRuntimes({ ...settings, claudeDiagnostics: async () => ({ available: true, authenticated: true, authMethod: "api_key" }) })["claude-code"].probe(claudeRow)).available, false);
 });
 
+test("Claude runtime uses only the selected profile OAuth token, never an ambient account token", async () => {
+  for (const selectedToken of ["", "synthetic-selected-profile"]) {
+    let captured;
+    const runtime = createPersonalAgentSessionRuntimes({ ...options,
+      env: { ...options.env, CLAUDE_CODE_OAUTH_TOKEN: "synthetic-ambient-account" },
+      resolveProfile: async () => ({ ...profile, provider: "claude-code" }),
+      claudeEnv: async () => selectedToken ? { CLAUDE_CODE_OAUTH_TOKEN: selectedToken } : {},
+      executors: { "claude-code": { enabled: () => true, async run(ctx) { captured = ctx.env; return { type: "cancelled" }; } } },
+    })["claude-code"];
+    await runtime.run({ ...row, provider: "claude-code" }, supervisor(), {});
+    assert.equal(captured.CLAUDE_CODE_OAUTH_TOKEN, selectedToken);
+  }
+});
+
 test("Codex open uses method-specific supported fields and retains an empty loaded session", async () => {
   const requests = [];
   const client = { async request(method, params) { requests.push({ method, params }); return { thread: { id: params.threadId || "native-empty", turns: [] } }; } };
