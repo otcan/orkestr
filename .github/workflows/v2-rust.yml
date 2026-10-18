@@ -1,16 +1,11 @@
-name: Orkestr 2.0 Rust prototype
+name: Orkestr 2.0 intake checks
 
 on:
   push:
-    branches:
-      - v2/rust-rewrite
-    paths:
-      - 'v2/**'
-      - '.github/workflows/v2-rust.yml'
+    branches: [v2/rust-rewrite, v2/s0-core]
+    paths: ['v2/**', '.github/workflows/v2-rust.yml']
   pull_request:
-    paths:
-      - 'v2/**'
-      - '.github/workflows/v2-rust.yml'
+    paths: ['v2/**', '.github/workflows/v2-rust.yml']
   workflow_dispatch:
 
 permissions:
@@ -19,20 +14,27 @@ permissions:
 jobs:
   rust-v2:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ORKESTR_V2_HOME: ${{ runner.temp }}/orkestr-v2-intake
+      CARGO_TARGET_DIR: ${{ runner.temp }}/orkestr-v2-target
     defaults:
       run:
         working-directory: v2
     steps:
-      - uses: actions/checkout@v4
-      - name: Install stable Rust with lint and formatter
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup component add rustfmt clippy --toolchain stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - name: Architecture boundaries
+        run: python3 tests/check_boundaries.py
       - name: Rust format
-        run: cargo +stable fmt --all -- --check
+        run: cargo +1.99.1 fmt --all -- --check
       - name: Rust lint
-        run: cargo +stable clippy --workspace --all-targets -- -D warnings
-      - name: Rust tests
-        run: cargo +stable test --workspace
-      - name: Smoke CLI
-        run: cargo +stable run -p orkestr-v2-demo
+        run: cargo +1.99.1 clippy --locked --workspace --all-targets -- -D warnings
+      - name: Locked build
+        run: cargo +1.99.1 build --locked --workspace
+      - name: Unit and HTTP process-failure tests (requires Python 3)
+        run: cargo +1.99.1 test --locked --workspace
