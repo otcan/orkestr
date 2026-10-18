@@ -17,6 +17,7 @@ import time
 import attended
 import package_candidate
 import receipt
+import prerequisites
 import segments
 import soak
 from install_state import config, fresh_path, private_home, write_json
@@ -107,6 +108,8 @@ def serve(plan, gate, journal_dir=None, samples=2, interval=1, latency=1000, rss
             index=0
             while journal is None or index<samples:
                 receipt.require(process.poll() is None,'persistent owned launcher exited')
+                if 'execution_dependencies' in gate:
+                    receipt.require(prerequisites.trusted_binary()==gate['execution_dependencies']['bwrap'], 'execution dependency changed')
                 current=monitoring_identity()
                 health=soak.measure('http://127.0.0.1:'+str(plan['port']),1,0,2,latency)
                 resource=attended.resources(process.pid)
@@ -143,7 +146,9 @@ def main():
     if a.command=='prepare':prepare(a.candidate,a.home,a.plan,a.port);return
     plan=load(a.plan);entry=Path(plan['candidate'])/'native/bin/orkestr-v2';home=Path(plan['home'])
     if a.command=='start':
+        dependencies=prerequisites.check()
         gate=candidate_gate(plan,a.validator,a.evidence,a.scope,a.artifact_root)
+        gate['execution_dependencies']=dependencies
         serve(plan,gate,a.journal_dir,a.samples,a.interval,a.max_latency_ms,a.max_rss_bytes)
     else:
         command='doctor' if a.command=='health' else a.command

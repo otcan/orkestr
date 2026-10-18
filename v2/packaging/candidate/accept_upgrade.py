@@ -28,18 +28,37 @@ def schema_version(candidate):
     return len(versions)
 
 
-def prepare(old, new, old_source, new_source, old_sha, new_sha, successor=24):
+def source_inventory(directory, expected):
+    paths=sorted(directory.glob('*.sql'))
+    receipt.require(paths and all(path.is_file() and not path.is_symlink() for path in paths),
+                    'regular exact Core migration sources required')
+    actual={path.name:receipt.sha(path) for path in paths}
+    schema_version({'schema':{'migrations':actual}})
+    receipt.require(actual==expected,'Core migration source inventory mismatch')
+    return receipt.digest(actual)
+
+
+def prepare(old, new, old_source, new_source, old_sha, new_sha, successor=24, migrations=None):
     old_value=package_candidate.verify(old);new_value=package_candidate.verify(new)
     for root,value,source,pin in ((old,old_value,old_source,old_sha),(new,new_value,new_source,new_sha)):
         receipt.require(re.fullmatch(r'[0-9a-f]{40}',source) and value['source_commit']==source,'exact candidate source mismatch')
         receipt.require(re.fullmatch(r'[0-9a-f]{64}',pin) and receipt.sha(root/'native/server/orkestr-v2-server')==pin,'pinned candidate binary mismatch')
     predecessor=schema_version(old_value)
     receipt.require(schema_version(new_value)==successor,'successor schema differs from requested target')
-    cross_revision.migration_edge(predecessor,successor)
+    inventory_digest=source_inventory(migrations,new_value['schema']['migrations']) if migrations is not None else None
+    admitted=True
+    try:
+        cross_revision.migration_edge(predecessor,successor)
+    except RuntimeError:
+        # Inspection of forthcoming Core sources is useful, but never admits execution.
+        receipt.require(predecessor in (14,17) and successor>24 and inventory_digest is not None,
+                        'unsupported migration edge; exact forthcoming Core inventory required for inspection only')
+        admitted=False
     receipt.require(old_source!=new_source and old_sha!=new_sha,'distinct revision/artifact required')
     prior=old_value['schema']['migrations'];current=new_value['schema']['migrations']
     receipt.require(all(current.get(name)==digest for name,digest in prior.items()),'historical migration checksum changed')
-    return {'status':'prepared_only_unexecuted','old_source':old_source,'new_source':new_source,
+    return {'status':'prepared_only_unexecuted' if admitted else 'pending_core_edge_admission',
+            'execution_edge_admitted':admitted,'core_source_inventory_sha256':inventory_digest,'old_source':old_source,'new_source':new_source,
             'old_schema':predecessor,'new_schema':successor,'old_version':old_value['version'],'new_version':new_value['version'],
             'old_candidate_sha256':receipt.sha(old/'candidate.json'),'new_candidate_sha256':receipt.sha(new/'candidate.json'),
             'old_server_sha256':old_sha,'new_server_sha256':new_sha,
@@ -52,6 +71,7 @@ def host_target():
 
 
 def execute(plan,old,new,parent,port):
+    receipt.require(plan.get('execution_edge_admitted',True),'Core migration edge not admitted; inspection only')
     host_target()
     return cross_revision.exercise(SimpleNamespace(
         old_binary=old/'native/server/orkestr-v2-server',new_binary=new/'native/server/orkestr-v2-server',
@@ -65,10 +85,10 @@ if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('old','new'):p.add_argument('--'+name,type=Path,required=True)
     for name in ('old-source','new-source','old-sha','new-sha'):p.add_argument('--'+name,required=True)
-    p.add_argument('--new-schema',type=int,default=24);p.add_argument('--execute',action='store_true')
+    p.add_argument('--migrations-dir',type=Path);p.add_argument('--new-schema',type=int,default=24);p.add_argument('--execute',action='store_true')
     p.add_argument('--parent',type=Path);p.add_argument('--port',type=int)
     a=p.parse_args()
-    result=prepare(a.old,a.new,a.old_source,a.new_source,a.old_sha,a.new_sha,a.new_schema)
+    result=prepare(a.old,a.new,a.old_source,a.new_source,a.old_sha,a.new_sha,a.new_schema,a.migrations_dir)
     if a.execute:
         receipt.require(a.parent is not None and a.port is not None,'explicit private parent and assigned port required')
         result={'preflight':result,'execution':execute(result,a.old,a.new,a.parent,a.port)}

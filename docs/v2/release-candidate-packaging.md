@@ -245,7 +245,7 @@ records or concatenate separate successful runs. No production monitor or
 Once Core24 and the final reviewed runtime/UI are integrated, freeze one clean
 commit and obtain the coordinator's **single** qualified release server + matching
 controls-enabled web pair. Record source, profile/default features, web features
-and exact server binding, artifact hashes, migrations through 0020 and compatible
+and exact server binding, artifact hashes, migrations through the exact successor inventory and compatible
 glibc base. Do not rebuild or relabel stale aa8 as Core24.
 
 1. Coordinator reruns the repository's locked/offline fmt, strict all-target
@@ -257,7 +257,7 @@ glibc base. Do not rebuild or relabel stale aa8 as Core24.
    packaging tests, assembly verification and deterministic archive checks against
    the new pinned pair. Reinspect architecture/required ELF glibc vs pinned base.
 3. Run `accept_native.py` and `accept_docker.py` on newly assigned private
-   state/port/image/project. Require actual migrations 1–20, all served UI hashes,
+   state/port/image/project. Require actual migrations 1 through the pinned successor, all served UI hashes,
    synthetic auth/history/idempotency, stopped consistent backup, dormant
    apply/refusal/rollback, loopback publication, restrictions and owned cleanup.
 4. Run `cross_revision.py --new-schema 24` with retained schema14 source31d8 and
@@ -430,3 +430,41 @@ candidate manifest, when the canonical evidence packet is legitimately assembled
 This exports no provider credentials. The paths in this file are private runtime
 configuration; do not commit it. Validator selection remains trusted operator
 input and is not cryptographic canonical-provenance attestation.
+
+Execution host prerequisites are a separate gate from artifact verification.
+Before gated persistent start, run:
+
+```sh
+python3 -B v2/local-install/prerequisites.py
+```
+
+New native packages also expose `orkestr-v2 doctor --home PRIVATE_HOME
+--execution-prerequisites`; ordinary doctor explicitly reports this check unexecuted.
+Old packages remain readable without the new optional tool.
+
+The check requires Linux x86_64, exact `/usr/bin/bwrap`, root-owned nonsymlink
+ancestors and executable, no group/world write or setuid/setgid bits, native ELF,
+and a successful bounded user/PID namespace startup with `--die-with-parent`.
+It uses no sudo, installs nothing and never falls back to privileged execution.
+Failures have explicit `unsupported_target`, `missing_dependency`,
+`untrusted_dependency`, `unreadable_dependency`, `architecture_mismatch`, `namespace_probe_failed`,
+`namespace_unavailable` or `dependency_changed` codes and captured child diagnostics.
+The returned inventory binds the binary SHA256/size/mode/owner and probe contract
+into persistent start's monitoring configuration hash. Each health sample rechecks
+that dependency identity; changes invalidate the window. This is a startup probe,
+not broker reaping, executor isolation or production qualification. Running inside
+an ordinary Docker diagnostic container does not imply namespace support; do not
+add container privileges to make this pass. Existing native services are unchanged.
+
+Core recovery migrations after 24 remain pending exact source inventories and
+independent original-executable upgrade acceptance. `--new-schema` alone cannot
+admit a new migration edge: unsupported edges fail before launch. Do not relabel
+an old receipt or infer compatibility from an additive-looking SQL filename.
+
+For forthcoming schema25/26 packages, `accept_upgrade.py --new-schema N
+--migrations-dir EXACT_CORE_MIGRATIONS` can inspect the complete contiguous Core
+SQL name/SHA inventory against the pinned paired candidate. Historical checksum
+prefix checks still apply. Until Core admits the new executable edge, this emits
+`pending_core_edge_admission` and execution refuses before opening any database.
+The supplied SQL directory is an operator-selected comparison input, not a build
+attestation; the paired receipt remains the source/artifact identity anchor.

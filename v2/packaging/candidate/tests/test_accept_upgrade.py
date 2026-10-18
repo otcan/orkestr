@@ -48,3 +48,22 @@ class UpgradePlanTests(unittest.TestCase):
         self.assertEqual(args.old_package,Path('/old/native'))
         self.assertEqual(args.new_package,Path('/new/native'))
         self.assertEqual(args.new_schema,24)
+
+    def test_future_inventory_inspection_never_admits_execution(self):
+        for successor in (25,26):
+            self.new['schema']['migrations'].update({f'{i:04d}_fixture.sql':'d'*64 for i in range(25,successor+1)})
+            with patch.object(accept_upgrade.package_candidate,'verify',side_effect=[self.old,self.new]),patch.object(accept_upgrade.receipt,'sha',side_effect=lambda p:('e'*64 if str(p).startswith('/old') else 'f'*64)),patch.object(accept_upgrade,'source_inventory',return_value='1'*64):
+                plan=accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,successor,Path('/core-migrations'))
+            self.assertEqual(plan['status'],'pending_core_edge_admission')
+            with patch.object(accept_upgrade.cross_revision,'exercise') as run,self.assertRaisesRegex(RuntimeError,'inspection only'):
+                accept_upgrade.execute(plan,Path('/old'),Path('/new'),Path('/private'),19842)
+            run.assert_not_called()
+
+    def test_exact_source_inventory_rejects_changed_content(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw);(root/'0001_fixture.sql').write_text('synthetic SQL')
+            with self.assertRaisesRegex(RuntimeError,'source inventory mismatch'):
+                accept_upgrade.source_inventory(root,{'0001_fixture.sql':'0'*64})
+            expected={'0001_fixture.sql':accept_upgrade.receipt.sha(root/'0001_fixture.sql')}
+            self.assertEqual(accept_upgrade.source_inventory(root,expected),accept_upgrade.receipt.digest(expected))

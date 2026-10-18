@@ -119,7 +119,7 @@ def request_stop(home):
     return {"status": "stop requested; wait for foreground launcher to exit before upgrade/backup"}
 
 
-def doctor(home, health=False):
+def doctor(home, health=False, execution_prerequisites=False):
     home = private_home(home)
     report = identity(home)
     child_environment(home, home / "releases" / config(home)["release"], config(home)["port"])
@@ -135,6 +135,10 @@ def doctor(home, health=False):
         report["health"] = "passed; HTTP identity only"
     report["platform_acceptance"] = "unexecuted; package hashes do not prove runtime compatibility"
     report["restore"] = "same-package dormant apply/rollback only; activation and migration gated"
+    report["execution_prerequisites"] = "unexecuted; doctor --execution-prerequisites required before execution readiness"
+    if execution_prerequisites:
+        import prerequisites
+        report["execution_prerequisites"] = prerequisites.check()
     return report
 
 
@@ -165,6 +169,7 @@ def main():
         command.add_argument("--home", required=True)
         if name == "doctor":
             command.add_argument("--health", action="store_true")
+            command.add_argument("--execution-prerequisites", action="store_true")
         if name == "logs":
             command.add_argument("--lines", type=int, default=100)
         if name == "backup":
@@ -186,7 +191,7 @@ def main():
         elif args.command == "stop":
             result = request_stop(args.home)
         elif args.command == "doctor":
-            result = doctor(args.home, args.health)
+            result = doctor(args.home, args.health, args.execution_prerequisites)
         elif args.command == "version":
             result = identity(private_home(args.home))
         elif args.command == "logs":
