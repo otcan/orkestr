@@ -1,0 +1,18 @@
+:root { font-family: system-ui, sans-serif; color: #182333; background: #f6f7fa; }
+body { margin: 0; }
+main { max-width: 60rem; margin: auto; padding: 1rem; }
+header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+section, form { background: #fff; padding: 1rem; margin-block: 1rem; border: 1px solid #c2c9d2; border-radius: .5rem; }
+h1 { font-size: 1.7rem; } h2 { font-size: 1.25rem; }
+.notice { padding: .8rem; background: #fff3c4; color: #322600; }
+button, input, textarea { font: inherit; }
+button { padding: .6rem; margin: .25rem; border: 1px solid #627083; background: #f4f6f8; color: #182333; border-radius: .3rem; min-height: 2.75rem; }
+button:disabled { opacity: .65; }
+button[aria-current=page] { background: #d9eaff; }
+:focus-visible { outline: 3px solid #075fbd; outline-offset: 3px; }
+label { display: block; margin-top: .75rem; }
+input, textarea { display: block; width: 100%; box-sizing: border-box; margin-top: .5rem; padding: .6rem; }
+textarea { resize: vertical; }
+.messages { max-height: 28rem; overflow: auto; padding-left: 1.5rem; overflow-wrap: anywhere; }
+.messages p { white-space: pre-wrap; }
+@media (max-width: 36rem) { main { padding: .5rem; padding-bottom: max(.5rem, env(safe-area-inset-bottom)); } }

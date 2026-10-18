@@ -2,6 +2,9 @@
 //! In-memory only. No persisted event journal, policies, approvals or real effects.
 //! A replay-safe state machine is the narrow first milestone, not an agent runtime.
 
+mod validation;
+pub use validation::{message, project, request_key, ValidationError};
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -427,3 +430,5 @@ mod tests {
         );
     }
 }
+
+// Intake validation coexists with the internal offline journal contract.

@@ -1,3 +1,4 @@
+import { prepareAgentReport } from "../../../../../packages/core/src/thread-report-policy.js";
 import fs from "node:fs/promises";
 import { getExecutorAdapter } from "../../../../../packages/core/src/executors.js";
 import path from "node:path";
@@ -762,6 +763,9 @@ export class ThreadsController {
     const principal = requestPrincipal(request);
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    const report = await prepareAgentReport(thread, body, principal);
+    if (report.suppressed) return { ok: true, orkestrThreadId: thread.id, message: report.message, queued: false, deliveryState: report.suppressionReason, reason: report.suppressionReason };
+    body = report.body;
     const parsedCommand = body.parseCommands === true || body.controlAllowed === true || body.originOwner === true
       ? parseThreadInputCommand(body)
       : { command: null, text: String(body.text || "") };

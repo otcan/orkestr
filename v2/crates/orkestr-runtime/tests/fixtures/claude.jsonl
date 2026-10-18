@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"fixture-session"}
+{"type":"assistant","session_id":"fixture-session","message":{"role":"assistant","content":[{"type":"text","text":"Synthetic fixture output"}]}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"fixture-session","result":"Synthetic fixture output"}
+{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"fixture-session"}
