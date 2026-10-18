@@ -87,7 +87,7 @@ added. No secret is copied out of the old instance.
 ## Lifecycle, doctor and logs
 
 ```sh
-# UNEXECUTED real launch; stays in foreground.
+# Stays in foreground; the example paths are unexecuted.
 "$fresh_package_directory/bin/orkestr-v2" start --home "$fresh_v2_home"
 # In another terminal, stop only this launcher's child:
 "$fresh_package_directory/bin/orkestr-v2" stop --home "$fresh_v2_home"
@@ -174,12 +174,18 @@ root/existing-home/tamper/symlink refusal, lifecycle ownership, environment
 exclusion, health identity and gated restore. No server, listener, Docker,
 provider, existing home or credentials are used. No heavy build was run.
 
-Pending/unexecuted: independent review, remote CI, real Linux/macOS server
-start/stop and schema upgrade, native/UI bundle acceptance, browser bootstrap
-handoff, canonical restore apply, Docker packaging/run, signed distribution,
-real providers and full workflow replacement. The launcher/package artifact is
-runnable with an admitted native binary; its synthetic test result does not
-satisfy those release gates. No production service, host privileges, cutover,
+The isolated Linux real-server checkpoint is recorded in
+[installation HTTP evidence](local-install-http-checkpoint.md). It exercises a
+historical mixed-revision binary/UI pair, not current candidate browser or
+execution acceptance. Same-binary version-label upgrade tests package selection,
+restart and history only; cross-version schema compatibility is unexecuted.
+
+Pending/unexecuted: remote CI, macOS, cross-version schema upgrade, browser
+bootstrap handoff/interaction, canonical restore apply, Docker packaging/run,
+signed distribution, real providers and full workflow replacement. Independent
+review of the preceding artifact passed; these subsequent changes require their
+own review. Mount/inode alias isolation remains unverified pending the separate
+path-identity helper and wiring. No production service, host privileges, cutover,
 legacy credential migration, Main WhatsApp or personal-account changes occur.
 
 Keep the trusted package entrypoint available, or invoke the copied package's

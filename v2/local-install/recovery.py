@@ -57,6 +57,7 @@ def backup(raw_home, raw_output):
 def validate_snapshot(raw):
     root = Path(raw).resolve()
     require(root.is_dir(), "snapshot directory required")
+    require(not (root / "manifest.json").is_symlink(), "snapshot manifest symlink refused")
     manifest = json.loads((root / "manifest.json").read_text())
     require(manifest.get("format") == SNAPSHOT_FORMAT, "not a supported local recovery snapshot")
     require(manifest.get("files") == files(root) and set(manifest["files"]) == {"core.sqlite3"},
