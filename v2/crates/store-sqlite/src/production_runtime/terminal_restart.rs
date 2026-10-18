@@ -1,4 +1,4 @@
-//! Expired clean supervisor restart, never recovery of an uncertain turn.
+//! Proven gracefully retired supervisor restart, never recovery of an uncertain turn.
 use super::*;
 use orkestr_v2_contracts::{ConversationId, RunId};
 
@@ -27,7 +27,7 @@ impl Store {
         .await
         .map_err(db)?
         .ok_or(RuntimeStoreError::Unauthorized)?;
-        let candidate = sqlx::query("SELECT r.id,s.incarnation_id FROM production_supervisors s JOIN production_runs r ON r.context_id=s.context_id AND r.incarnation_id=s.incarnation_id JOIN production_acceptances a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id WHERE s.owner_id=? AND s.provider_kind=? AND s.namespace=? AND s.supervisor_key=? AND r.conversation_id=? AND r.role='deep' AND r.state='succeeded' AND b.state='ready' AND b.generation=r.binding_generation+1 AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.context_id=s.context_id AND other.state NOT IN ('succeeded','cancelled')) AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation) AND NOT EXISTS(SELECT 1 FROM production_resume_metadata rm WHERE rm.prior_run_id=r.id)")
+        let candidate = sqlx::query("SELECT r.id,s.incarnation_id FROM production_supervisors s JOIN production_runs r ON r.context_id=s.context_id AND r.incarnation_id=s.incarnation_id JOIN production_acceptances a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id JOIN production_graceful_retirements g ON g.context_id=s.context_id AND g.incarnation_id=s.incarnation_id AND g.supervisor_generation=s.generation AND g.prior_run_id=r.id AND g.acceptance_event_id=a.event_id AND g.session_id=b.id AND g.binding_generation=b.generation WHERE s.lease_deadline_ms=0 AND s.owner_id=? AND s.provider_kind=? AND s.namespace=? AND s.supervisor_key=? AND r.conversation_id=? AND r.role='deep' AND r.state='succeeded' AND b.state='ready' AND b.generation=r.binding_generation+1 AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.context_id=s.context_id AND other.state NOT IN ('succeeded','cancelled')) AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation) AND NOT EXISTS(SELECT 1 FROM production_resume_metadata rm WHERE rm.prior_run_id=r.id)")
             .bind(owner).bind(provider_name(config.provider)?).bind(&config.namespace).bind(&config.supervisor_key).bind(conversation.to_string())
             .fetch_optional(&mut *tx).await.map_err(db)?;
         let result = candidate
@@ -82,6 +82,15 @@ impl Store {
             return Err(RuntimeStoreError::Busy);
         }
         let context_id: String = row.get("context_id");
+        // Natural expiry, revoked retirement and legacy deadline zero are not
+        // graceful evidence. Match the immutable original decision before CAS.
+        let graceful: i64 = sqlx::query_scalar("SELECT count(*) FROM production_graceful_retirements g JOIN production_runs r ON r.id=g.prior_run_id JOIN production_acceptances a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id WHERE g.context_id=? AND g.incarnation_id=? AND g.supervisor_generation=? AND g.prior_run_id=? AND g.acceptance_event_id=a.event_id AND g.session_id=r.session_id AND g.binding_generation=b.generation")
+            .bind(&context_id).bind(&incarnation_id).bind(row.get::<i64,_>("generation"))
+            .bind(prior_run.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
+        if row.get::<i64, _>("lease_deadline_ms") != 0 || graceful != 1 {
+            return Err(RuntimeStoreError::Fenced);
+        }
+
         // Clean means no unresolved run anywhere in this supervisor namespace,
         // including children. Do not convert unknown delivery into a new attempt.
         let unresolved: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs WHERE context_id=? AND state NOT IN ('succeeded','cancelled')")
