@@ -28,3 +28,11 @@ ordinary/raw executor exits and forced death refuse proof. The exact external
 broker archive's separate 62 Python tests cover the implemented EOF and abrupt
 broker-death protocol. Neither test set establishes Core continuation eligibility
 or an actual provider restart.
+
+For graceful Stop retirement, opt in with
+`pump.into_stopping(store, &receipt)?.retaining_terminal()` before driving Stop.
+Only a canonical durable Cancelled receipt retains the owned child; ACK-only,
+errors, and competing terminal evidence keep existing cleanup behavior. After
+Stopped, consume `retire_broker` before revoking/dropping the old Authority.
+Default callers still quarantine on durable Stopped. Retention is not reap
+proof or replacement authority, and dropping the retained handle still cleans up.
