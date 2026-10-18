@@ -124,7 +124,7 @@ test("turning on the feature migrates an already-open Agent Job store", async ()
     assert.equal(disabled.prepare("select count(*) as count from sqlite_master where type = 'table' and name like 'personal_agent_%'").get().count, 0);
     const enabled = await openAgentJobDb({ ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: "true" });
     assert.equal(enabled, disabled);
-    assert.equal(enabled.prepare("select count(*) as count from sqlite_master where type = 'table' and name like 'personal_agent_%'").get().count, 3);
+    assert.deepEqual(enabled.prepare("select name from sqlite_master where type = 'table' and name like 'personal_agent_%' order by name").all().map((row) => row.name), ["personal_agent_memories", "personal_agent_projects", "personal_agent_task_transitions", "personal_agent_tasks"]);
   } finally {
     await closeAgentJobDbs();
     await fs.rm(home, { recursive: true, force: true });

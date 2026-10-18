@@ -95,7 +95,7 @@ test("feature-off leaves memory absent; enabling an already-open store adds it",
   assert.equal(off.prepare("select count(*) as count from sqlite_master where type = 'table' and name like 'personal_agent_%'").get().count, 0);
   const on = await openAgentJobDb({ ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: "1" });
   assert.equal(on, off);
-  assert.equal(on.prepare("select count(*) as count from sqlite_master where type = 'table' and name like 'personal_agent_%'").get().count, 3);
+  assert.deepEqual(on.prepare("select name from sqlite_master where type = 'table' and name like 'personal_agent_%' order by name").all().map((row) => row.name), ["personal_agent_memories", "personal_agent_projects", "personal_agent_task_transitions", "personal_agent_tasks"]);
 });
 
 test("disabling the feature after migration preserves old Agent Job reads and memory data", async (t) => {
