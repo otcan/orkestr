@@ -1,0 +1,85 @@
+use super::*;
+
+impl Store {
+    /// Bounded owner history read. Revoked provider authority makes uncompleted
+    /// tasks Held; it does not prevent a current owner from inspecting evidence.
+    pub async fn worker_tasks_authenticated(
+        &self,
+        credential: &str,
+        conversation: &ConversationId,
+        parent: &RunId,
+    ) -> Result<WorkerTaskList> {
+        let context = self.context()?;
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        self.task_browser_in(&mut tx, credential, conversation)
+            .await?;
+        let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs WHERE id=? AND owner_id=? AND conversation_id=? AND role='deep'")
+            .bind(parent.to_string()).bind(context.owner.to_string()).bind(conversation.to_string())
+            .fetch_one(&mut *tx).await.map_err(db)?;
+        if exists != 1 {
+            return Err(RuntimeStoreError::NotFound);
+        }
+        let rows = sqlx::query("SELECT t.*,CASE WHEN length(CAST(p.title AS BLOB))<=160 THEN p.title END AS title,p.task_id AS payload_present,d.admitted_run_id,r.state AS run_state FROM worker_tasks t LEFT JOIN worker_task_payloads p ON p.task_id=t.id LEFT JOIN worker_provider_delegations d ON d.id=t.delegation_id LEFT JOIN production_runs r ON r.id=d.admitted_run_id WHERE t.owner_id=? AND t.conversation_id=? AND t.parent_run_id=? ORDER BY t.ordinal LIMIT 33")
+            .bind(context.owner.to_string()).bind(conversation.to_string()).bind(parent.to_string())
+            .fetch_all(&mut *tx).await.map_err(db)?;
+        if rows.len() > MAX_WORKER_TASKS_PER_PARENT {
+            return Err(RuntimeStoreError::Unavailable);
+        }
+        let mut tasks = Vec::with_capacity(rows.len());
+        for row in rows {
+            let task = receipt(&row)?;
+            let run_id = row
+                .get::<Option<String>, _>("admitted_run_id")
+                .map(|id| id.parse().map(RunId).map_err(db))
+                .transpose()?;
+            let available = row.get::<Option<String>, _>("payload_present").is_some();
+            let live = match self.task_parent_in(&mut tx, &row).await {
+                Ok(_) => true,
+                Err(
+                    RuntimeStoreError::Unauthorized
+                    | RuntimeStoreError::Fenced
+                    | RuntimeStoreError::StaleLease
+                    | RuntimeStoreError::Expired
+                    | RuntimeStoreError::NotFound,
+                ) => false,
+                Err(error) => return Err(error),
+            };
+            let phase = match row.get::<Option<&str>, _>("run_state") {
+                Some("succeeded") => WorkerTaskPhase::Completed,
+                Some("cancelled") => WorkerTaskPhase::Cancelled,
+                Some("cancel_requested") => WorkerTaskPhase::CancelRequested,
+                Some("awaiting_acceptance") => WorkerTaskPhase::AwaitingAcceptance,
+                Some("failed") => WorkerTaskPhase::Failed,
+                Some("blocked") => WorkerTaskPhase::Held,
+                Some("running") if live => WorkerTaskPhase::Running,
+                Some("starting") if live => WorkerTaskPhase::Preparing,
+                Some("running" | "starting") => WorkerTaskPhase::Held,
+                None => match (row.get::<&str, _>("state"), live && available) {
+                    ("queued", true) => WorkerTaskPhase::Queued,
+                    ("claimed" | "delegated", true) => WorkerTaskPhase::Claimed,
+                    ("queued" | "claimed" | "delegated" | "held", _) => WorkerTaskPhase::Held,
+                    _ => return Err(RuntimeStoreError::Unavailable),
+                },
+                _ => return Err(RuntimeStoreError::Unavailable),
+            };
+            tasks.push(WorkerTaskStatus {
+                task,
+                phase,
+                title: row.get("title"),
+                instructions_available: available,
+                run_id,
+            });
+        }
+        tx.commit().await.map_err(db)?;
+        let result = WorkerTaskList {
+            schema_version: 1,
+            conversation_id: conversation.clone(),
+            parent_run_id: parent.clone(),
+            tasks,
+        };
+        if !result.is_valid() {
+            return Err(RuntimeStoreError::Unavailable);
+        }
+        Ok(result)
+    }
+}
