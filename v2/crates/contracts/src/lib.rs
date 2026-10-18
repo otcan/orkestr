@@ -157,3 +157,6 @@ mod production_cancellation;
 pub use production_cancellation::*;
 mod production_stopped;
 pub use production_stopped::*;
+
+mod provider_payload;
+pub use provider_payload::*;
