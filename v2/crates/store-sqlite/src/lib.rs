@@ -14,6 +14,8 @@ pub use conversation_export::{
     ConversationExport, ConversationExportError, ConversationExportLimits,
     ConversationExportReceipt,
 };
+pub mod history_import;
+pub use history_import::{history_source_digest, HistoryError};
 mod intake;
 mod paths;
 mod preflight;
