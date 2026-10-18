@@ -103,6 +103,7 @@ test("Agent Job store creates and reopens the additive entity schema", async () 
 
     const reopened = await openAgentJobDb(env);
     assert.deepEqual(reopened.prepare("select name from sqlite_master where type = 'table' and name like 'personal_agent_%' order by name").all().map((row) => row.name), [
+      "personal_agent_memories",
       "personal_agent_projects",
       "personal_agent_tasks",
     ]);
