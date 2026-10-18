@@ -2,11 +2,11 @@
 
 The callable entry is `v2/provider-broker/claude_server.py` with fixed argv
 `open-owned-session --protocol orkestr-v2-provider-broker-v1` and required private
-Unix stream fd3. `claude-package.json` pins the exact five imported source files.
+Unix stream fd3. `claude-package.json` pins the exact six imported source files.
 This inventory is separate from the six-file Codex installation; do not silently
 add Claude to an existing Codex package verifier.
 
-The root installer must verify each listed SHA256, stage only those five files
+The root installer must verify each listed SHA256, stage only those six files
 plus a server-private `claude-private.json`, and pin the canonical native launcher
 and its complete trusted dependency chain. All executable/import/config ancestors
 must be root-owned and non-writable by service/untrusted users; retain a private
@@ -71,3 +71,5 @@ first integrate Runtime's separate Claude capability/parser adapter; Stop and
 multi-turn acceptance remain independent gates.
 
 Current Claude channel is first-turn-only. The synthetic replay regression refuses a second CommitExecution and a repeated terminal frame. Native engine source inspection by an independent reviewer places system/init before input consumption; no init deadlock is claimed. Existing selected-account readiness is launcher-private evidence, not inferred from system/init or client JSON. Runtime must receive a trusted selected-account attestation through its server-owned launcher configuration; this wire currently provides no subscription proof. Real activation remains held until that composition is reviewed.
+
+The private resume lifecycle implementation is specified in [claude-resume-boundary.md](claude-resume-boundary.md). Same-process continuation stays disabled; a future resumed turn uses a new owned broker/process and current Core-issued resume setup authority. No resume launch is registered by this checkpoint.

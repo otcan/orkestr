@@ -3,10 +3,11 @@
   "entry": "claude_server.py",
   "files": {
     "claude_server.py": "cba2f4cf53fa70dcdb62f89db2058ae3cdce376e99f003afff2250cb1b9aeae0",
-    "claude_connector.py": "fbffb0a62ceb630c791a51d2a954a86ba5f7b3627b90b5290ef6f83910de7327",
-    "claude_protocol.py": "f3680a20352f4c54e1c1d5d1ca46ec1a96475f40e5066d39fad48cb6a9c4106a",
+    "claude_connector.py": "3a2afb5d5be4abca7d0abc43706ce1d1aff233ecadd03e82caa5a9c46cf75a29",
+    "claude_protocol.py": "edcca49eab866db1ccfec89487509b1e2d7268e51f45fc434b8bba28f0a73061",
     "protocol.py": "527ce05315689a92ff1076d10f24ec4037f8aee5ee14d004b8bb9491391bc01a",
-    "transport.py": "7cfd3094381170a88e14d6ec2aab7f96da45d7721d67be89e67906d590a901b9"
+    "transport.py": "3a19bee01f149bac64d274bc684482db74a293dc59815786982bcf0e39d19432",
+    "claude_resume.py": "ecc014ec6578791adc2086b3d83dc161c61fbdffa043c957b0cc919c9a2d2850"
   },
   "activation": "held-installed-cli-and-runtime-composition-review"
 }

@@ -32,6 +32,8 @@ class Pump:
                                       cwd=self.config.workspace, stdin=subprocess.PIPE,
                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                       close_fds=True)
+        if hasattr(self.config, "owned_spawned"):
+            self.config.owned_spawned(self.child)
         for pipe in (self.child.stdin, self.child.stdout):
             os.set_blocking(pipe.fileno(), False)
         if self.handoff is None:

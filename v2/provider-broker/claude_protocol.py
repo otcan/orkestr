@@ -1,11 +1,16 @@
 """Separate Claude stream channel. Private pipe correlation is not Core proof."""
 import secrets
+import uuid
 from protocol import PROTOCOL, exact, identifier, require
 
 
 class ClaudeChannel:
     def __init__(self, session):
+        self.session = session
         self.native = str(session.native)
+        self.poisoned = False
+        self.terminal_uuid = None
+        self.input_uuid = None
         self.handle = None
         self.seen = set()
         self.messages = set()
@@ -14,6 +19,7 @@ class ClaudeChannel:
         self.terminal = False
 
     def client(self, request):
+        require(not self.poisoned)
         exact(request, ("id", "method", "params"))
         outer = request["id"]
         require(type(outer) is int and 0 < outer < 2**53 and outer not in self.seen)
@@ -40,23 +46,47 @@ class ClaudeChannel:
         message = params["message_id"]
         require(identifier(message) and message not in self.messages)
         frame = params["frame"]
-        exact(frame, ("type", "session_id", "parent_tool_use_id", "message"))
+        input_uuid = None
+        keys = ("type", "session_id", "parent_tool_use_id", "message")
+        if "uuid" in frame:
+            exact(frame, keys + ("uuid",))
+            value = frame["uuid"]
+            require(isinstance(value, str) and str(uuid.UUID(value)) == value)
+            input_uuid = value
+        else:
+            exact(frame, keys)
+        require(not getattr(self.session, "resumed", False) or input_uuid is not None)
         require(frame["type"] == "user" and frame["session_id"] == self.native
                 and frame["parent_tool_use_id"] is None)
         exact(frame["message"], ("role", "content"))
         content = frame["message"]["content"]
         require(frame["message"]["role"] == "user" and isinstance(content, str)
                 and 0 < len(content.encode()) <= 32768)
+        self.input_uuid = input_uuid
         self.messages.add(message)
         self.active, self.terminal = outer, False
         return frame, None
 
     def provider(self, frame):
+        require(not self.poisoned)
+        try:
+            return self._provider(frame)
+        except Exception:
+            self.poisoned = True
+            raise
+
+    def _provider(self, frame):
         require(isinstance(frame, dict) and self.handle is not None)
         require(frame.get("session_id") == self.native)
         require(not any(key in frame for key in ("sessionId", "parent_tool_use_id"))
                 or frame.get("parent_tool_use_id") is None and "sessionId" not in frame)
         kind = frame.get("type")
+        if kind in ("assistant", "result") and getattr(self.session, "resumed", False):
+            # No relabeling even for unseen historical frames on a fresh reader.
+            require(self.input_uuid is not None
+                    and frame.get("user_message_uuid") == self.input_uuid)
+            if "user_message_uuids" in frame:
+                require(frame["user_message_uuids"] == [self.input_uuid])
         if kind == "system":
             require(frame.get("subtype") == "init" and not self.initialized and self.active is None)
             self.initialized = True
@@ -81,9 +111,15 @@ class ClaudeChannel:
             require(identifier(frame.get("subtype")))
             require(isinstance(frame.get("result"), str) and len(frame["result"].encode()) <= 8192)
             require(frame["is_error"] or frame["subtype"] == "success")
+            self.terminal_uuid = frame.get("uuid")
             self.terminal = True
             clean = {key: frame[key] for key in ("type", "session_id", "subtype", "is_error", "result")}
         else:
             require(False)  # No tool requests, raw controls or unknown passthrough.
+        for key in ("uuid", "user_message_uuid"):
+            if key in frame and kind in ("assistant", "result"):
+                value = frame[key]
+                require(isinstance(value, str) and str(uuid.UUID(value)) == value)
+                clean[key] = value
         return {"method": "BrokerOutput", "params": {"owned_handle": self.handle,
                 "request_id": self.active, "frame": clean}}
