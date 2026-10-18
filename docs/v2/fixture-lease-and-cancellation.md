@@ -98,3 +98,32 @@ by this DTO change. The dedicated control outbox will remain separate from publi
 metadata and contain no replay-visible control authority. Stopped acknowledgement
 and its receipt-state extension will accompany the adapter slice under the exact
 issued control-purpose/new-fence rule; no binding reuse is granted.
+
+## Stopped acknowledgement compatibility checkpoint
+
+`FixtureProviderStoppedEnvelope` is a distinct schema-4 replay variant, SSE name
+`fixture_provider_stopped`, with fixture `v2/fixtures/fixture-provider-stopped.json`.
+Its metadata payload contains typed run/session IDs, positive contiguous provider
+run sequence and singleton `receipt_state: cancelled`. It carries the same public
+canonical scope/event/time and explicit source linkage as the other fixture
+variants. Schema-2 `FixtureObservationKind` remains unchanged and rejects Stopped;
+schema-3 remains cancellation-request metadata only. No native identity, token,
+lease/fence or locator is serialized. The run sequence belongs to the existing
+provider stream, not a second acknowledgement stream.
+
+The existing application `ProviderEvent::Stopped` input and
+`ProviderEventReceipt { state: RunState::Cancelled, ... }` already represent this
+operation; no port or receipt struct change is required. The future migration
+must add `cancel_requested`/`cancelled` run projections and `cancelled` persisted
+observation receipts, while preserving historical receipt values. Only an exact
+issued `CancellationAcknowledgement` admission with the new cancellation fence
+may append a new Stopped acknowledgement from CancelRequested. An execution token,
+a request receipt or interrupt return cannot acknowledge cancellation. Authenticated
+identical committed replay retains its original receipt before current authority
+checks; changed replay conflicts. Failed/Blocked/AwaitingAcceptance evidence is
+never rewritten as Stopped or successful cancellation. Sessions remain occupied.
+
+This commit publishes DTO/fixture compatibility only. Request cancellation,
+Stopped persistence, migration and control outbox remain unavailable pending
+matching UI consumer and independent source compatibility review. No existing
+schema/fixture bytes, shared port signatures or production gates are changed.

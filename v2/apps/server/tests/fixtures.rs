@@ -115,3 +115,45 @@ fn cancellation_replay_is_metadata_only_and_schema_distinct() {
         assert!(serde_json::from_value::<ConversationEvent>(value).is_err());
     }
 }
+
+#[test]
+fn stopped_metadata_requires_its_own_schema_and_cancelled_receipt() {
+    let body = include_str!("../../../fixtures/fixture-provider-stopped.json");
+    fixture::<ConversationEvent>(body);
+    let event: ConversationEvent = serde_json::from_str(body).unwrap();
+    assert_eq!(event.sse_name(), "fixture_provider_stopped");
+    for field in [
+        "schema_version",
+        "kind",
+        "receipt_state",
+        "run_sequence",
+        "dispatch_fence",
+        "native_session_id",
+    ] {
+        let mut value: serde_json::Value = serde_json::from_str(body).unwrap();
+        match field {
+            "schema_version" => value[field] = 2.into(),
+            "kind" => {
+                value["payload_ref_or_safe_payload"][field] = "fixture_provider_observed".into()
+            }
+            "receipt_state" => value["payload_ref_or_safe_payload"][field] = "succeeded".into(),
+            "run_sequence" => value["payload_ref_or_safe_payload"][field] = 0.into(),
+            _ => value["payload_ref_or_safe_payload"][field] = "forbidden".into(),
+        }
+        assert!(serde_json::from_value::<ConversationEvent>(value).is_err());
+    }
+    let mut legacy: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/fixture-provider-observed.json"
+    ))
+    .unwrap();
+    legacy["payload_ref_or_safe_payload"]["observation"] = serde_json::json!({"kind":"stopped"});
+    assert!(serde_json::from_value::<ConversationEvent>(legacy).is_err());
+    let receipt = orkestr_v2_application::runtime::ProviderEventReceipt {
+        event_id: EventId(uuid::Uuid::nil()),
+        scope_sequence: 1,
+        sequence: 3,
+        state: runtime::RunState::Cancelled,
+        duplicate: false,
+    };
+    assert_eq!(receipt.state, runtime::RunState::Cancelled);
+}
