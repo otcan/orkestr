@@ -37,7 +37,8 @@ pub fn Auth(onlogin: EventHandler<SessionResponse>) -> Element {
                 busy.set(false);
             });
         },
-            h2 { if setup() { "Create first administrator" } else { "Sign in" } }
+            h2 { if setup() { "Create first administrator" } else { "Experimental intake sign-in" } }
+            p { "Memory-only Bearer path pending contract amendment and security review. This does not establish browser session/CSRF acceptance. Reload requires sign-in; server revocation and device auth are unavailable." }
             label { r#for: "username", "Username" }
             input { id: "username", autocomplete: "username", required: true, value: "{username}", oninput: move |e| username.set(e.value()) }
             label { r#for: "password", "Password" }

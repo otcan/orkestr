@@ -27,6 +27,7 @@ fn App() -> Element {
         style { "{include_str!(\"style.css\")}" }
         main {
             header { h1 { "Orkestr" } p { "Local assistant · durable intake" } }
+            p { class: "notice", "Experimental memory-only Bearer sign-in. Browser session/CSRF acceptance is pending a reviewed contract amendment or secure cookie/CSRF implementation. No device auth or token revocation is available." }
             p { class: "notice", "Intake only: models, runs, Stop, approvals and memory are unavailable. Local Git is not provisioned; OXRM is unverified." }
             p { role: "status", "{notice}" }
             if token().is_empty() {
@@ -34,7 +35,7 @@ fn App() -> Element {
                     global.set(session.global_conversation_id.to_string());
                     current.set(session.global_conversation_id.to_string());
                     token.set(session.token);
-                    notice.set("Signed in. Token is held in memory; reload requires sign-in.".into());
+                    notice.set("Experimental intake sign-in. Token is held in memory; reload requires sign-in. Browser security acceptance remains pending.".into());
                 } }
             } else {
                 nav { "aria-label": "Main",
