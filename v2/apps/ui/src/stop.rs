@@ -3,7 +3,7 @@ use orkestr_v2_contracts::{
     ConversationId, ExecutionControlRequest, ExecutionStatus, ExecutionStopOutcome,
     ExecutionStopReceipt,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone)]
 pub struct PendingStop {
     pub conversation: ConversationId,
@@ -15,6 +15,7 @@ pub struct Stops {
     generation: u64,
     pending: BTreeMap<String, PendingStop>,
     receipts: BTreeMap<String, ExecutionStopReceipt>,
+    conflicts: BTreeSet<String>,
     errors: BTreeMap<String, &'static str>,
 }
 fn identity(conversation: &ConversationId, run: &orkestr_v2_contracts::RunId) -> String {
@@ -42,7 +43,43 @@ impl Stops {
             )
             .is_some_and(|r| Some(&r.run_id) == status.run_id.as_ref())
     }
+    pub fn needs_review(&self, status: &ExecutionStatus) -> bool {
+        status.run_id.as_ref().is_some_and(|run| {
+            self.conflicts
+                .contains(&identity(&status.conversation_id, run))
+        })
+    }
+    pub fn can_review(&self, status: &ExecutionStatus) -> bool {
+        status.is_valid()
+            && status.capabilities.stop
+            && self.needs_review(status)
+            && matches!(
+                status.phase,
+                orkestr_v2_contracts::ExecutionPhase::Queued
+                    | orkestr_v2_contracts::ExecutionPhase::Starting
+                    | orkestr_v2_contracts::ExecutionPhase::Running
+            )
+            && status
+                .run_id
+                .as_ref()
+                .and_then(|run| self.pending.get(&identity(&status.conversation_id, run)))
+                .is_some_and(|pending| status.revision > pending.request.expected_revision)
+    }
+    /// Explicit owner review after a definitive refusal; never used for uncertain failures.
+    pub fn review(&mut self, status: &ExecutionStatus) -> Result<(), &'static str> {
+        if !self.can_review(status) {
+            return Err("Refresh execution status before reviewing Stop.");
+        }
+        let id = identity(&status.conversation_id, status.run_id.as_ref().unwrap());
+        self.pending.remove(&id);
+        self.conflicts.remove(&id);
+        self.errors.remove(&id);
+        Ok(())
+    }
     pub fn retryable(&self, status: &ExecutionStatus) -> bool {
+        if self.needs_review(status) {
+            return false;
+        }
         self.pending
             .get(
                 &status
@@ -60,6 +97,9 @@ impl Stops {
     ) -> Result<PendingStop, &'static str> {
         if !status.is_valid() {
             return Err("Execution unavailable");
+        }
+        if self.needs_review(status) {
+            return Err("Review updated Stop before retrying.");
         }
         if self.accepted(status) {
             return Err("Stop already requested. Refresh execution status.");
@@ -132,12 +172,17 @@ impl Stops {
         }
         let id = identity(&pending.conversation, &pending.request.run_id);
         self.pending.remove(&id);
+        self.conflicts.remove(&id);
         self.errors.remove(&id);
         self.receipts.insert(id, receipt);
         Ok(())
     }
     pub fn failed(&mut self, pending: &PendingStop, status: u16) {
         if self.current(pending) {
+            if status == 409 {
+                self.conflicts
+                    .insert(identity(&pending.conversation, &pending.request.run_id));
+            }
             self.errors.insert(
                 identity(&pending.conversation, &pending.request.run_id),
                 match status {
