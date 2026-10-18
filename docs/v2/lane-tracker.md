@@ -1,4 +1,47 @@
-# First-wave execution ledger
+# V2 execution checkpoints
+
+## Current evidence checkpoint
+
+This section supersedes every admission, blocker and pending-status statement in
+the historical ledger below. Evidence remains scoped to its exact tested head.
+
+- Integration: `v2/s0-contract-integration`, [PR #80](https://github.com/otcan/orkestr/pull/80),
+  `60885e212aa51e7d21103624a763ece917d32326`. [Rust CI](https://github.com/otcan/orkestr/actions/runs/39143429620)
+  and [CI headless rendering](https://github.com/otcan/orkestr/actions/runs/39143429701)
+  passed. Rendering covers setup, cookie resume, durable intake, CSRF refusal,
+  logout and fresh password re-login. Independent source review found no blocker.
+  Legacy CI was queued at this checkpoint.
+- Core: `v2/s0-core`, [PR #78](https://github.com/otcan/orkestr/pull/78),
+  implementation checkpoint `851bd5b91ee4e41f611db9978155bb17074ea50f` independently
+  source-reviewed; author reports locked build, strict clippy and 67 Rust tests,
+  with nested HTTP and alias checks. Fixture-only supervisor bootstrap and durable
+  admission/reservation/consumption remain implementation work, not acceptance.
+- Runtime: `v2/s0-runtime`, [PR #76](https://github.com/otcan/orkestr/pull/76),
+  test-only dispatch harness `8e8a83c581af76d090dcf21739dac2f2eeeb6d63`
+  independently source-reviewed. Author reports 36 passing runtime tests. The
+  mutex oracle proves no SQLite crash/reopen guarantee; production starts remain blocked.
+- UI: `v2/s0-ui`, [PR #73](https://github.com/otcan/orkestr/pull/73),
+  `c18fa9d018ffdcf468a1203e1b8697d76f8f7830` independently source-reviewed.
+  Author reports locked WASM build, 7 Rust projection tests, 19 Node tests and
+  strict clippy passed. Managed desktop, physical iOS and live-provider gates remain pending.
+- Verification: `v2/s0-verification`, [PR #75](https://github.com/otcan/orkestr/pull/75),
+  `fcff7e9cd38e68ccfa3acac17b101ff27c9a35d8` merge independently reviewed.
+  Earlier independent probes passed 5/5 against exact
+  `6d3bd66e9131c17f0f34f69a148cdba7947ebca8`, including alias/live-WAL byte
+  preservation. The old reproduced alias failure is therefore a historical
+  finding, not a current unresolved blocker. This does not transfer execution
+  credit to every later head or pass the broader acceptance inventory.
+
+Current resource admission permits all four existing lanes to perform independent
+implementation and approved validation. The shared wrapper permits two independent
+builds with four compiler jobs each and reduces capacity under host pressure.
+Single-writer root manifest/lock integration and Core schema ownership remain.
+
+## Historical ledger — superseded status, retained evidence
+
+Everything below records earlier checkpoints. Words such as “current”, “pending”,
+“outstanding”, admission limits and blocker labels below apply only to those
+historical checkpoints and must not be used as present-day instructions or status.
 
 Snapshot: 2026-10-18. Plan baseline: `a7ba6d5999c570c21cc717d78c83cf53622c22c9`.
 The [workstreams backlog](workstreams.md) remains authoritative. The operator
