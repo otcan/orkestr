@@ -50,6 +50,7 @@ pub struct Execution {
     connected: bool,
     generation: u64,
     scope: Option<(String, String)>,
+    exact_run: Option<String>,
     received_ms: Option<u64>,
     authorized: bool,
     control_error: Option<String>,
@@ -68,6 +69,7 @@ impl Execution {
             .checked_add(1)
             .expect("selection generation exhausted");
         self.scope = Some((conversation.into(), run.into()));
+        self.exact_run = (!run.is_empty()).then(|| run.to_string());
         self.sample = None;
         self.received_ms = None;
         self.connected = false;
@@ -113,30 +115,48 @@ impl Execution {
     ) -> Result<(), &'static str> {
         use orkestr_v2_contracts::ExecutionPhase as Wire;
         let conversation = status.conversation_id.to_string();
-        if !status.is_valid()
+        let cache_key = self.cache_key(&conversation);
+        if self.exact_run.as_ref().is_some_and(|run| {
+            status
+                .run_id
+                .as_ref()
+                .is_none_or(|id| id.to_string() != *run)
+        }) || !status.is_valid()
             || generation != self.generation
             || self
                 .scope
                 .as_ref()
                 .is_none_or(|(id, _)| id != &conversation)
             || self.received_ms.is_some_and(|last| received_ms < last)
-            || self.canonical.get(&conversation).is_some_and(|old| {
+            || self.canonical.get(&cache_key).is_some_and(|old| {
                 status.revision < old.revision
-                    || (status.revision == old.revision && !status.same_revision_state(old))
+                    || (status.revision == old.revision && {
+                        // Registry availability is sampled after the durable read.
+                        // Normalize only that overlay; every durable field still matches.
+                        let mut durable = old.clone();
+                        durable.capabilities.stop = status.capabilities.stop;
+                        !status.same_revision_state(&durable)
+                    })
             })
         {
             return Err("Invalid or regressing execution status");
         }
         // Rehydrating a remounted selection must retain the original observation anchor.
-        if let Some(old) = self.canonical.get(&conversation) {
+        if let Some(old) = self.canonical.get(&cache_key) {
             if status.revision == old.revision && status.observed_at_ms <= old.observed_at_ms {
-                if self.sample.is_some() {
+                if status.observed_at_ms < old.observed_at_ms && self.sample.is_some() {
                     return Ok(());
                 }
+                let capabilities = if status.observed_at_ms == old.observed_at_ms {
+                    status.capabilities.clone()
+                } else {
+                    old.capabilities.clone()
+                };
                 status = old.clone();
+                status.capabilities = capabilities;
                 received_ms = *self
                     .canonical_received
-                    .get(&conversation)
+                    .get(&cache_key)
                     .expect("canonical receipt");
             }
         }
@@ -181,9 +201,9 @@ impl Execution {
         self.connected = true;
         self.authorized = true;
         self.canonical_received
-            .insert(conversation.clone(), received_ms);
+            .insert(cache_key.clone(), received_ms);
         self.acceptances.observe_status(&status);
-        self.canonical.insert(conversation, status);
+        self.canonical.insert(cache_key, status);
         Ok(())
     }
     /// An authenticated 204 removes displayed authority without erasing revision history.
@@ -213,6 +233,7 @@ impl Execution {
         self.canonical.clear();
         self.canonical_received.clear();
         self.scope = None;
+        self.exact_run = None;
         self.received_ms = None;
         self.connected = false;
         self.control_error = None;
@@ -238,6 +259,12 @@ impl Execution {
                     && matches!(s.phase, Phase::Queued | Phase::Starting | Phase::Running)
             })
     }
+    fn cache_key(&self, conversation: &str) -> String {
+        match &self.exact_run {
+            Some(run) => format!("{conversation}/{run}"),
+            None => conversation.to_string(),
+        }
+    }
     /// Selection/authentication-bound canonical identity, independent of telemetry age.
     pub fn control_status(&self) -> Option<orkestr_v2_contracts::ExecutionStatus> {
         if !self.authorized {
@@ -245,7 +272,7 @@ impl Execution {
         }
         let sample = self.sample.as_ref()?;
         self.canonical
-            .get(&sample.conversation)
+            .get(&self.cache_key(&sample.conversation))
             .filter(|status| {
                 status
                     .run_id
