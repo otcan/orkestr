@@ -1,6 +1,7 @@
 // Agent Job spec v0: strict validator and normalizer (no execution).
 // Spec: docs/spec/agent-job.md. Input is a plain object (parsed JSON or YAML);
 // see agent-job-spec-yaml.js for the YAML entry point.
+import { localBaseUrl } from "./agent-job-openai-compatible-health.js";
 
 export const AGENT_JOB_API_VERSION = "orkestr/v0";
 export const AGENT_JOB_KIND = "AgentJob";
@@ -240,6 +241,10 @@ function normalizeProviderRef(ctx, raw, path, { checked = false } = {}) {
   if (provider === "openai-compatible") {
     if (!out.model) ctx.fail(`${path}.model`, "required", "openai-compatible providers need a model");
     out.baseUrl = stringAt(ctx, ref.base_url, `${path}.base_url`, { pattern: /^https?:\/\/\S+$/, max: 512 });
+    if (out.baseUrl) {
+      try { out.baseUrl = localBaseUrl(out.baseUrl); }
+      catch { ctx.fail(`${path}.base_url`, "local_endpoint_required", "local inference requires a numeric loopback /v1 endpoint without credentials or redirects"); }
+    }
   } else if (ref.base_url !== undefined) {
     ctx.fail(`${path}.base_url`, "not_allowed", "base_url is only valid for openai-compatible");
   }
@@ -266,6 +271,9 @@ function normalizeAgent(ctx, value) {
         fallbacks.push(ref);
       });
     }
+  }
+  if ([primary, ...fallbacks].some(ref => ref?.provider === "openai-compatible") && fallbacks.length) {
+    ctx.fail("agent.fallback", "local_fallback_not_supported", "local inference cannot escalate until the explicit OP-10 policy is implemented");
   }
   return { ...primary, fallback: fallbacks };
 }

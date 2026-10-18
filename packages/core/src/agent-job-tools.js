@@ -119,6 +119,7 @@ function repoPath(args, ctx) {
 registerAgentJobTool({
   name: "repo.read",
   effect: false,
+  inputSchema: { type: "object", properties: { path: { type: "string" }, file: { type: "string" } }, additionalProperties: false },
   async perform(args, ctx) {
     const cwd = repoPath(args, ctx);
     const files = (await git(cwd, ["ls-files"])).split("\n").filter(Boolean);
