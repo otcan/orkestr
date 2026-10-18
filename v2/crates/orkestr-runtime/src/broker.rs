@@ -1,5 +1,7 @@
 //! Proposed owned-session broker metadata protocol, not an available broker.
 //! No inference frames, credentials, environment or executable selection here.
+#[allow(dead_code, reason = "owned transport composition is under review")]
+pub(crate) mod channel;
 use crate::ports::Blocker;
 use orkestr_v2_application::runtime::ProviderKind;
 use orkestr_v2_store_sqlite::BoundSessionMetadata;
@@ -12,6 +14,7 @@ pub const PROTOCOL: &str = "orkestr-v2-provider-broker-v1";
 /// No Debug/Clone or public handle accessor: this is never execution authority.
 pub struct BrokerOpen {
     identity: Value,
+    lineage: Option<std::sync::Arc<()>>,
     submitted: bool,
     finished: bool,
     poisoned: bool,
@@ -36,10 +39,19 @@ impl BrokerOpen {
     fn new(identity: Value) -> Self {
         Self {
             identity,
+            lineage: None,
             submitted: false,
             finished: false,
             poisoned: false,
         }
+    }
+    #[allow(dead_code, reason = "containment lineage registration is under review")]
+    pub(crate) fn bind_lineage(&mut self, token: std::sync::Arc<()>) -> Result<(), Blocker> {
+        if self.submitted || self.lineage.is_some() {
+            return Err(Blocker::Protocol);
+        }
+        self.lineage = Some(token);
+        Ok(())
     }
     /// Wire metadata only. The returned bytes are not admitted to containment's
     /// setup whitelist yet: that integration needs a separately reviewed hook.
@@ -104,6 +116,7 @@ impl BrokerOpen {
         }
         Ok(OwnedMetadataHandle {
             _handle: handle.into(),
+            lineage: self.lineage.clone(),
         })
     }
 }
@@ -111,6 +124,7 @@ impl BrokerOpen {
 /// Opaque metadata-only result. No serialization, cloning or inference methods.
 pub struct OwnedMetadataHandle {
     _handle: String,
+    lineage: Option<std::sync::Arc<()>>,
 }
 
 #[cfg(test)]
