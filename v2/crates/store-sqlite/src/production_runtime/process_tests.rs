@@ -138,14 +138,16 @@ async fn child() {
                 "reserve-after-commit" => ReserveAfterCommit,
                 "consume-before-commit" => ConsumeBeforeCommit,
                 "consume-after-commit" => ConsumeAfterCommit,
-                "observation-before-commit" => ObservationBeforeCommit,
-                "observation-after-commit" => ObservationAfterCommit,
+                "observation-before-commit" | "progress-before-commit" => ObservationBeforeCommit,
+                "observation-after-commit" | "progress-after-commit" => ObservationAfterCommit,
                 _ => panic!("unknown checkpoint"),
             };
-            f.handle
-                .production_arm_checkpoint(stage, root.join("marker"))
-                .await
-                .unwrap();
+            if !checkpoint.starts_with("progress-") {
+                f.handle
+                    .production_arm_checkpoint(stage, root.join("marker"))
+                    .await
+                    .unwrap();
+            }
         }
         if checkpoint.starts_with("admit-") {
             std::fs::write(
@@ -182,7 +184,36 @@ async fn child() {
             .unwrap();
         }
         let _ = f.handle.consume_execution(&reserved).await.unwrap();
-        if checkpoint.starts_with("observation-") {
+        if checkpoint.starts_with("progress-") {
+            f.handle
+                .append_provider_event(
+                    &f.owner,
+                    &fresh.provider,
+                    &ProviderEventInput {
+                        run_id: fresh.provider.run.run_id.clone(),
+                        session_id: fresh.provider.run.session_id.clone(),
+                        sequence: 1,
+                        lease_generation: fresh.provider.run.lease_generation,
+                        dispatch_fence: fresh.provider.run.dispatch_fence,
+                        event: ProviderEvent::Started,
+                    },
+                )
+                .await
+                .unwrap();
+            #[cfg(feature = "fixture-test-controls")]
+            f.handle
+                .production_arm_checkpoint(
+                    if checkpoint.ends_with("before-commit") {
+                        crate::ProductionCheckpoint::ObservationBeforeCommit
+                    } else {
+                        crate::ProductionCheckpoint::ObservationAfterCommit
+                    },
+                    root.join("marker"),
+                )
+                .await
+                .unwrap();
+        }
+        if checkpoint.starts_with("observation-") || checkpoint.starts_with("progress-") {
             std::fs::write(
                 root.join("before.json"),
                 serde_json::to_vec(&rows(&root).await).unwrap(),
@@ -191,10 +222,18 @@ async fn child() {
             let input = ProviderEventInput {
                 run_id: fresh.provider.run.run_id.clone(),
                 session_id: fresh.provider.run.session_id.clone(),
-                sequence: 1,
+                sequence: if checkpoint.starts_with("progress-") {
+                    2
+                } else {
+                    1
+                },
                 lease_generation: fresh.provider.run.lease_generation,
                 dispatch_fence: fresh.provider.run.dispatch_fence,
-                event: ProviderEvent::Started,
+                event: if checkpoint.starts_with("progress-") {
+                    ProviderEvent::Progress("owned child delta".into())
+                } else {
+                    ProviderEvent::Started
+                },
             };
             let _ = f
                 .handle
@@ -258,29 +297,30 @@ async fn child() {
         );
         assert!(result.candidate_key.is_none());
         assert_eq!(result.run_state, RunState::Blocked);
-        if root
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .starts_with("observation-")
-        {
+        let name = root.file_name().unwrap().to_string_lossy();
+        let progress = name.starts_with("progress-");
+        if name.starts_with("observation-") || progress {
             let input = ProviderEventInput {
                 run_id: result.provider.run.run_id.clone(),
                 session_id: result.provider.run.session_id.clone(),
-                sequence: 1,
+                sequence: if progress { 2 } else { 1 },
                 lease_generation: result.provider.run.lease_generation,
                 dispatch_fence: result.provider.run.dispatch_fence,
-                event: ProviderEvent::Started,
+                event: if progress {
+                    ProviderEvent::Progress("owned child delta".into())
+                } else {
+                    ProviderEvent::Started
+                },
             };
             let receipt = handle
                 .append_provider_event(&claim.owner_id, &result.provider, &input)
                 .await;
-            if root.ends_with("observation-after-commit") {
+            if name.ends_with("after-commit") {
                 let receipt = receipt.unwrap();
                 assert!(receipt.duplicate);
                 assert_eq!(receipt.state, RunState::Running);
                 let event: String =
-                    sqlx::query_scalar("SELECT event_id FROM production_observations")
+                    sqlx::query_scalar("SELECT event_id FROM production_observations ORDER BY run_sequence DESC LIMIT 1")
                         .fetch_one(&store.pool)
                         .await
                         .unwrap();
@@ -297,7 +337,7 @@ async fn child() {
                 assert!(matches!(receipt, Err(RuntimeStoreError::Fenced)));
             }
             let mut unseen = input;
-            unseen.sequence = 2;
+            unseen.sequence += 1;
             assert!(matches!(
                 handle
                     .append_provider_event(&claim.owner_id, &result.provider, &unseen)
@@ -340,6 +380,10 @@ async fn actual_process_crashes_preserve_atomic_ack_and_never_reissue_dispatch()
         "observation-before-commit",
         #[cfg(feature = "fixture-test-controls")]
         "observation-after-commit",
+        #[cfg(feature = "fixture-test-controls")]
+        "progress-before-commit",
+        #[cfg(feature = "fixture-test-controls")]
+        "progress-after-commit",
     ];
     let mut cases = Vec::new();
     for name in names {
@@ -357,7 +401,10 @@ async fn actual_process_crashes_preserve_atomic_ack_and_never_reissue_dispatch()
             assert!(start.elapsed() < Duration::from_secs(20));
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert_eq!(std::fs::read_to_string(path.join("marker")).unwrap(), *name);
+        assert_eq!(
+            std::fs::read_to_string(path.join("marker")).unwrap(),
+            name.replace("progress-", "observation-")
+        );
         child.0.kill().unwrap();
         let status = child.0.wait().unwrap();
         use std::os::unix::process::ExitStatusExt;
