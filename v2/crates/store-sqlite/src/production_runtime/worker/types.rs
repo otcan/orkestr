@@ -14,6 +14,12 @@ pub struct WorkerDelegation {
     pub(super) _id: Uuid,
     pub(super) _locator: String,
 }
+impl WorkerDelegation {
+    /// Metadata locator only; conveys no inference or effect authority.
+    pub(in crate::production_runtime) fn id(&self) -> Uuid {
+        self._id
+    }
+}
 pub enum WorkerDelegationResult {
     Fresh(WorkerDelegation),
     Existing(WorkerDelegationReceipt),

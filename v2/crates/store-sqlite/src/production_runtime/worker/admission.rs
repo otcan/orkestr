@@ -13,7 +13,7 @@ impl Store {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         c.validate(&mut tx).await?;
         let d=sqlx::query("SELECT * FROM worker_provider_delegations WHERE id=? AND owner_id=? AND context_id=? AND incarnation_id=?")
-            .bind(delegation._id.to_string()).bind(c.owner.to_string()).bind(&c.id).bind(&c.incarnation)
+            .bind(delegation.id().to_string()).bind(c.owner.to_string()).bind(&c.id).bind(&c.incarnation)
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::NotFound)?;
         if d.get::<&str, _>("state") != "delegated" {
             return Err(RuntimeStoreError::Fenced);
@@ -63,9 +63,9 @@ impl Store {
             .bind(id.to_string()).bind(&c.id).bind(&c.incarnation).bind(c.owner.to_string()).bind(d.get::<&str,_>("conversation_id"))
             .bind(d.get::<&str,_>("worker_session_id")).bind(native).bind(provider_name(c.provider)?).bind(d.get::<i64,_>("worker_binding_generation"))
             .bind(d.get::<&str,_>("source_message_id")).bind(d.get::<&str,_>("source_event_id")).bind(sequence)
-            .bind(format!("worker:{}",delegation._id)).bind(d.get::<&str,_>("input_digest"))
+            .bind(format!("worker:{}",delegation.id())).bind(d.get::<&str,_>("input_digest"))
             .bind(c.generation).bind(deadline).bind(hash("production-candidate-v1",&[&candidate]))
-            .bind(d.get::<&str,_>("parent_session_id")).bind(delegation._id.to_string())
+            .bind(d.get::<&str,_>("parent_session_id")).bind(delegation.id().to_string())
             .fetch_one(&mut *tx).await.map_err(db)?;
         sqlx::query("INSERT INTO production_run_leases(run_id,generation,lease_deadline_ms,dispatch_fence) VALUES(?,1,?,?)")
             .bind(id.to_string()).bind(deadline).bind(c.generation).execute(&mut *tx).await.map_err(db)?;
@@ -75,7 +75,7 @@ impl Store {
             .await
             .map_err(db)?;
         sqlx::query("UPDATE worker_provider_delegations SET state='admitted',grant_hash=NULL,admitted_run_id=? WHERE id=?")
-            .bind(id.to_string()).bind(delegation._id.to_string()).execute(&mut *tx).await.map_err(db)?;
+            .bind(id.to_string()).bind(delegation.id().to_string()).execute(&mut *tx).await.map_err(db)?;
         let result = RunAdmissionResult {
             provider: super::super::admission::envelope(&row)?,
             run_state: RunState::Starting,
