@@ -23,9 +23,18 @@ pub fn StopButton(
     let enabled = STOP_ACTIVATED
         && !busy()
         && status.as_ref().is_some_and(|s| {
-            !execution.read().stops.accepted(s)
+            !execution.read().stops.needs_review(s)
+                && !execution.read().stops.accepted(s)
                 && (execution.read().can_stop(0) || execution.read().stops.retryable(s))
         });
+    let review = status
+        .as_ref()
+        .is_some_and(|s| execution.read().stops.needs_review(s));
+    let can_review = STOP_ACTIVATED
+        && !busy()
+        && status
+            .as_ref()
+            .is_some_and(|s| execution.read().stops.can_review(s));
     let notice = status
         .as_ref()
         .and_then(|s| execution.read().stops.notice(s));
@@ -62,6 +71,13 @@ pub fn StopButton(
                 }
             });
         }, if !STOP_ACTIVATED { "Stop unavailable" } else if busy() { "Requesting stop…" } else { "Stop" } }
+        if review {
+            button { r#type:"button", disabled: !can_review, onclick: move |_| {
+                if !can_review { return; }
+                let status=execution.read().control_status();
+                if let Some(status)=status { let _=execution.write().stops.review(&status); }
+            }, "Review updated Stop" }
+        }
         if let Some(notice)=notice { p { role:"status", "{notice}" } }
     }
 }
