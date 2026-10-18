@@ -4,8 +4,8 @@ The pinned native's locally generated `v2/LoginAccountParams.json` marks the
 `chatgptAuthTokens` variant internal-only and says not to use it. That
 version-specific restriction governs this release despite newer public
 [app-server documentation](https://learn.chatgpt.com/docs/app-server) describing
-an experimental host-owned external-token flow. No external-token login,
-refresh callback, API-key fallback or new account route is enabled here.
+an experimental host-owned external-token flow. No external-token login, external-token refresh callback, API-key fallback or
+new account route is enabled here.
 Synthetic regression tests keep login/logout, forced metadata refresh and the
 server external-token refresh request outside the closed broker protocol.
 
@@ -33,8 +33,10 @@ serialization must refuse/quarantine with sanitized errors, never select another
 account or change subscription billing. No provider wait belongs inside SQLite.
 
 The missing integration primitive is a root-owned refresh owner shared with
-existing production executors, plus a supported pinned-native managed-refresh
-operation and account identity/generation receipt. A per-process Python lock or
+existing production executors, plus a reviewed account identity/generation receipt. The pinned
+`v2/GetAccountParams.json` explicitly supports `account/read` with
+`refreshToken:true` as proactive normal refresh-token flow in managed mode. This
+is distinct from the forbidden internal-only external-token route. A per-process Python lock or
 metadata boolean would not establish that ownership. Until those are reviewed,
 auth refresh remains unresolved; current successful startup/continuation probes
 are compatibility evidence only. Do not rotate live canonical auth merely to
@@ -66,9 +68,9 @@ writers, must participate in the same private owner service before activation.
 External filesystem writers cannot be fenced by this Python lock. Snapshot
 metadata must come from that service, not caller booleans or file timestamps.
 The optional supported-refresh callback is deliberately absent by default;
-unsupported refresh refuses without modifying auth. No supported pinned-native
-managed refresh operation or shared production owner has yet been established.
-Consequently real refresh remains an open release gate, and this adapter is not
+unsupported refresh refuses without modifying auth. The supported pinned managed refresh operation is established by schema; a
+shared production owner has not yet been established. Consequently real refresh
+remains an open release gate, and this adapter is not
 registered in the immutable authenticated launcher inventory.
 
 Synthetic tests use disposable fake account bytes: concurrent refresh
@@ -77,3 +79,34 @@ revocation/identity refusal, and failed-refresh quarantine. No credentials,
 provider operation, forced live rotation or ordinary server activation are used.
 Core dispatch/readiness and Runtime child-reap/actual-write fences remain
 independent prerequisites; a selected launch handle is never inference authority.
+
+
+## Supported managed refresh callback
+
+`isolation/managed_refresh.py` provides `ManagedAccountRefresh`, installable as
+`ManagedCodexOwner`'s trusted refresh callback. It requests only
+`account/read {refreshToken:true}` on a dedicated, already initialized managed
+native connection. The private transport must enforce the supplied 15-second
+wall deadline, 16384-byte response limit, fixed request correlation and owned
+cleanup. These bounds are transport obligations, not a claim that synchronous
+Python can preempt an arbitrary callback. No live transport is installed here.
+
+The pinned `GetAccountResponse` supports ChatGPT, API-key and Bedrock accounts;
+account and workspace routing may also be absent/null. This selected-subscription
+adapter deliberately refuses all but exact ChatGPT/OpenAI-auth responses with
+matching private email, plan, ChatGPT account ID, backend origin and routing
+policy. Missing identity evidence fails closed rather than inferring identity
+from successful refresh. The backend routing object is identity evidence only;
+it does not configure isolated provider egress. No account payload is returned.
+Only after validation does the private publisher advance the selected generation.
+Publication failure or any transport/refusal uncertainty quarantines the owner;
+canonical refresh may already have happened, so there is no automatic retry.
+
+The host owner must hold sole canonical writer authority throughout native
+refresh, canonical persistence, identity validation and generation publication,
+and must serialize existing executors too. The adapter does not read/copy auth,
+invoke login, rotate production tokens, grant canonical write access to isolated
+children, or change their `refreshToken:false` metadata whitelist. Fresh launches
+still use read-only selected binds. Runtime/Core readiness and actual inference
+fences remain independent. Production writer topology and live managed refresh
+qualification are explicitly pending root review.
