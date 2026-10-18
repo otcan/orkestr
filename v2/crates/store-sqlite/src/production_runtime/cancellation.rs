@@ -30,6 +30,18 @@ impl Store {
         run: &RunId,
         key: &str,
     ) -> Result<CancelReceipt> {
+        Ok(self
+            .production_cancel_guarded(owner, run, key, None)
+            .await?
+            .0)
+    }
+    pub(super) async fn production_cancel_guarded(
+        &self,
+        owner: &OwnerId,
+        run: &RunId,
+        key: &str,
+        guard: Option<(&orkestr_v2_contracts::ConversationId, i64)>,
+    ) -> Result<(CancelReceipt, i64)> {
         let context = self.context()?;
         if owner != &context.owner {
             return Err(RuntimeStoreError::Unauthorized);
@@ -49,6 +61,11 @@ impl Store {
                 .await
                 .map_err(db)?
                 .ok_or(RuntimeStoreError::NotFound)?;
+        if let Some((conversation, _)) = guard {
+            if row.get::<String, _>("conversation_id") != conversation.to_string() {
+                return Err(RuntimeStoreError::NotFound);
+            }
+        }
         if let Some(cancel) = sqlx::query("SELECT * FROM production_cancellations WHERE run_id=?")
             .bind(run.to_string())
             .fetch_optional(&mut *tx)
@@ -58,7 +75,29 @@ impl Store {
             if cancel.get::<&str, _>("request_key") != key {
                 return Err(RuntimeStoreError::Fenced);
             }
-            return receipt(&row, &cancel);
+            if let Some((_, expected)) = guard {
+                if cancel.get::<Option<i64>, _>("request_revision") != Some(expected) {
+                    return Err(RuntimeStoreError::Conflict);
+                }
+            }
+            return Ok((
+                receipt(&row, &cancel)?,
+                cancel
+                    .get::<Option<i64>, _>("receipt_revision")
+                    .unwrap_or(0),
+            ));
+        }
+        if let Some((conversation, expected)) = guard {
+            let actual: i64 = sqlx::query_scalar(
+                "SELECT revision FROM execution_revisions WHERE conversation_id=?",
+            )
+            .bind(conversation.to_string())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+            if expected < 0 || actual != expected {
+                return Err(RuntimeStoreError::Conflict);
+            }
         }
         context.validate(&mut tx).await?;
         if row.get::<String, _>("incarnation_id") != context.incarnation.clone()
@@ -137,12 +176,20 @@ impl Store {
                 .bind(provider.run.session_id.to_string()).bind(provider.binding.generation as i64)
                 .execute(&mut *tx).await.map_err(db)?;
         }
+        let revision: i64 =
+            sqlx::query_scalar("SELECT revision FROM execution_revisions WHERE conversation_id=?")
+                .bind(provider.run.conversation_id.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db)?;
+        sqlx::query("UPDATE production_cancellations SET request_revision=?,receipt_revision=? WHERE run_id=?")
+            .bind(guard.map(|(_, revision)| revision)).bind(revision).bind(run.to_string()).execute(&mut *tx).await.map_err(db)?;
         let result = receipt(&row, &cancel)?;
         #[cfg(feature = "fixture-test-controls")]
         self.production_checkpoint("cancel-before-commit").await?;
         tx.commit().await.map_err(db)?;
         #[cfg(feature = "fixture-test-controls")]
         self.production_checkpoint("cancel-after-commit").await?;
-        Ok(result)
+        Ok((result, revision))
     }
 }

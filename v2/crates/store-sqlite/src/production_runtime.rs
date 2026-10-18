@@ -26,6 +26,9 @@ mod recovery;
 #[cfg(test)]
 mod recovery_tests;
 mod status;
+mod stop;
+#[cfg(test)]
+mod stop_tests;
 #[cfg(feature = "fixture-test-controls")]
 pub(crate) mod test_controls;
 #[cfg(test)]
