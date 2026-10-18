@@ -21,7 +21,7 @@ fn key(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b))
 }
-async fn scope(
+pub(crate) async fn scope(
     conn: &mut SqliteConnection,
     owner: &OwnerId,
     conversation: &ConversationId,
@@ -39,7 +39,7 @@ async fn scope(
         Err(RuntimeStoreError::NotFound)
     }
 }
-fn binding(row: &SqliteRow) -> Result<Binding> {
+pub(crate) fn binding(row: &SqliteRow) -> Result<Binding> {
     Ok(Binding {
         owner_id: OwnerId(id(row.get("owner_id"))?),
         conversation_id: ConversationId(id(row.get("conversation_id"))?),
