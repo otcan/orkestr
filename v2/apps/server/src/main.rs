@@ -1,6 +1,7 @@
 use orkestr_v2_server::{router, AppState};
 use orkestr_v2_store_sqlite::Store;
-use std::{net::SocketAddr, path::PathBuf};
+use std::path::PathBuf;
+mod bind_config;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home =
@@ -16,18 +17,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err("v2 home overlaps legacy home".into());
         }
     }
-    let bind: SocketAddr = std::env::var("ORKESTR_V2_BIND")
-        .unwrap_or_else(|_| "127.0.0.1:19822".into())
-        .parse()?;
-    if !bind.ip().is_loopback() {
-        return Err("first slice requires loopback binding".into());
-    }
+    let config = bind_config::BindConfig::parse(
+        std::env::var("ORKESTR_V2_BIND").ok().as_deref(),
+        std::env::var("ORKESTR_V2_CONTAINER_BIND").ok().as_deref(),
+        std::env::var("ORKESTR_V2_ORIGIN").ok().as_deref(),
+    )?;
+    let bind = config.bind;
     let token = std::env::var("ORKESTR_V2_BOOTSTRAP_TOKEN")
         .map_err(|_| "ORKESTR_V2_BOOTSTRAP_TOKEN is required")?;
     let store = Store::open(&home.join("core.sqlite3"))
         .await
         .map_err(|_| "store startup failed")?;
-    let origin = std::env::var("ORKESTR_V2_ORIGIN").unwrap_or_else(|_| format!("http://{bind}"));
+    let origin = config.origin;
     let state = AppState::new(store, token, origin)?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     eprintln!(

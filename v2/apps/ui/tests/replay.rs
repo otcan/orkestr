@@ -223,3 +223,48 @@ fn production_cancellation_and_confirmed_stop_validate_without_control_authority
     assert_eq!(view.watermark, 1);
     assert_eq!(view.messages.len(), 1);
 }
+
+#[test]
+fn removable_progress_reference_is_schema8_only_and_never_inline_text() {
+    let wire: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/provider-observed-progress.json"
+    ))
+    .unwrap();
+    let event: ConversationEvent = serde_json::from_value(wire.clone()).unwrap();
+    let mut view = Projection::default();
+    view.page(snapshot()).unwrap();
+    assert_eq!(
+        replay_sequence(&view, "provider_observed", Some("1"), &event),
+        Ok(1)
+    );
+    assert_eq!(
+        orkestr_v2_ui::replay_notice(&event),
+        "Provider progress available."
+    );
+    for (key, value) in [
+        ("schema_version", serde_json::json!(5)),
+        ("aggregate_version", serde_json::json!(2)),
+    ] {
+        let mut bad = wire.clone();
+        bad[key] = value;
+        assert!(serde_json::from_value::<ConversationEvent>(bad).is_err());
+    }
+    for value in [
+        serde_json::json!({"kind":"progress_ref","payload_id":"00000000-0000-0000-0000-000000000000"}),
+        serde_json::json!({"kind":"progress_ref","payload_id":"bad"}),
+        serde_json::json!({"kind":"progress_ref","payload_id":"00000000-0000-0000-0000-000000000008","text":"untrusted"}),
+        serde_json::json!({"kind":"completed_proposal"}),
+    ] {
+        let mut bad = wire.clone();
+        bad["payload_ref_or_safe_payload"]["observation"] = value;
+        assert_eq!(
+            orkestr_v2_ui::decode_stream(
+                serde_json::json!({"status":200,"event":"provider_observed","id":"1","body":bad})
+            )
+            .event,
+            "resync_required"
+        );
+    }
+    assert_eq!(view.messages.len(), 1);
+    assert_eq!(view.watermark, 1);
+}

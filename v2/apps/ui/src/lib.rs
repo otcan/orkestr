@@ -188,6 +188,7 @@ pub fn replay_notice(event: &ConversationEvent) -> &'static str {
         ConversationEvent::ProviderStopped(_) => "Cancelled; provider stop confirmed.",
         ConversationEvent::ProviderObserved(e) => match e.payload_ref_or_safe_payload.observation {
             orkestr_v2_contracts::ProductionObservationKind::Started => "Provider started.",
+            orkestr_v2_contracts::ProductionObservationKind::ProgressRef { .. } => "Provider progress available.",
             orkestr_v2_contracts::ProductionObservationKind::ApprovalRequested => "Review requested.",
             orkestr_v2_contracts::ProductionObservationKind::CompletedProposal => "Provider finished; awaiting review.",
             orkestr_v2_contracts::ProductionObservationKind::Failed => "Provider reported a failure.",
