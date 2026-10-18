@@ -14,8 +14,14 @@ import sys
 import threading
 import time
 
-MAX_BYTES=4*1024*1024
-MAX_CONNECTIONS=4
+if __package__:
+    from .authenticated_budget import AUTHENTICATED
+else:
+    sys.path.insert(0,"/opt/provider")
+    from authenticated_budget import AUTHENTICATED
+
+MAX_BYTES=AUTHENTICATED.tunnel_bytes
+MAX_CONNECTIONS=AUTHENTICATED.connections
 
 
 def destination(header,hosts):
@@ -46,7 +52,7 @@ def relay(client,hosts,endpoint="/run/provider-egress.sock"):
         upstream=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
         upstream.settimeout(2);upstream.connect(endpoint);upstream.sendall(request)
         client.setblocking(False);upstream.setblocking(False)
-        deadline=time.monotonic()+30
+        deadline=time.monotonic()+AUTHENTICATED.tunnel_seconds
         count=0
         with selectors.DefaultSelector() as selector:
             selector.register(client,selectors.EVENT_READ,upstream)

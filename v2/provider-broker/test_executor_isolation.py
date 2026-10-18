@@ -48,7 +48,7 @@ for descriptor in os.listdir("/proc/self/fd"):
   target=os.readlink("/proc/self/fd/"+descriptor)
   assert "credential-sentinel" not in target,target
  except FileNotFoundError: pass
-for operation in (lambda:socket.socket(),lambda:os.fork()):
+for operation in (lambda:socket.socket(),lambda:socket.socketpair(),lambda:os.fork()):
  try: operation()
  except OSError: pass
  else: raise AssertionError("escape primitive allowed")

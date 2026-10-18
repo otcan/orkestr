@@ -90,3 +90,28 @@ proves unprovisioned private configuration refuses before spawn. DNS policy test
 use synthetic resolver answers only. Actual authenticated launch, real destination
 selection, root endpoint provisioning, ordinary HTTP integration, Stop/resume and
 persistent native compatibility remain unexecuted.
+
+The authenticated profile has a separate fixed resource budget: 600 CPU seconds,
+8 GiB address space, 256 descriptors, 256 MiB file size, four tunnels, and a
+15-minute/64 MiB bound per tunnel. Offline limits remain unchanged. These are
+bounded compatibility defaults, not evidence that every long Deep workflow fits.
+The authenticated seccomp policy permits anonymous AF_UNIX SOCK_STREAM socketpair
+with protocol zero (including CLOEXEC/NONBLOCK flags) for native Tokio signals.
+Named AF_UNIX socket creation, datagram/seqpacket pairs and offline socketpairs
+remain refused. The selected root egress endpoint remains supervisor-only.
+
+Private manifest v2 replaces `sessions` with `state_root`. This dedicated role
+root admits only sessions/archived_sessions, session_index.jsonl, state_5.sqlite,
+logs_2.sqlite and their WAL/SHM/journal companions. An empty auth.json mountpoint
+is overmounted read-only with the canonical selected auth; copied auth, config,
+symlinks and unrelated files refuse. Installed native strings identify these
+metadata filenames; their actual persistence/resume behavior remains a native
+compatibility gate. No full canonical home is mounted.
+
+The synthetic namespace regression checks stream-pair operation, denied Unix
+socket/datagram/seqpacket creation, private SQLite/index persistence, budgets,
+proxy exchange and owned cleanup. Protected root-staged actual native initialize
+against this revision is **unexecuted** by this lane; root owns the existing
+fake-auth/disconnected-endpoint probe and must repin the full seven-file inventory.
+No account read, inference or authenticated network access is authorized by this
+compatibility test.

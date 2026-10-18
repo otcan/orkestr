@@ -9,6 +9,7 @@ import selectors
 import socket
 import time
 from .supervisor import destination, MAX_BYTES
+from .authenticated_budget import AUTHENTICATED
 
 
 def public_addresses(host, resolver=socket.getaddrinfo):
@@ -43,7 +44,7 @@ def serve_connection(client, hosts):
         upstream.settimeout(2);upstream.connect(address)
         client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         client.setblocking(False);upstream.setblocking(False)
-        deadline=time.monotonic()+30;count=0
+        deadline=time.monotonic()+AUTHENTICATED.tunnel_seconds;count=0
         with selectors.DefaultSelector() as selector:
             selector.register(client,selectors.EVENT_READ,upstream)
             selector.register(upstream,selectors.EVENT_READ,client)

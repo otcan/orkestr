@@ -6,7 +6,9 @@ import socket
 import tempfile
 import threading
 import unittest
-from isolation.authenticated import SelectedCodexProfile
+from unittest.mock import patch
+from isolation.authenticated import SelectedCodexProfile, private_state
+from isolation.authenticated_budget import AUTHENTICATED
 from isolation.supervisor import destination
 from isolation.egress import public_addresses
 
@@ -38,6 +40,23 @@ class AuthenticatedIsolationTests(unittest.TestCase):
         self.assertEqual(public_addresses("subscription.example.invalid",
             lambda *a,**k:records("1.1.1.1"))[0][3],("1.1.1.1",443))
 
+    def test_role_state_refuses_auth_copy_config_and_symlink(self):
+        with tempfile.TemporaryDirectory(prefix="role-state-synthetic-") as tmp:
+            root=Path(tmp)
+            with patch("isolation.authenticated.private_path",return_value=str(root)):
+                for name in ("config.toml","auth.json"):
+                    item=root/name;item.write_text("synthetic-forbidden")
+                    with self.assertRaises(ValueError):private_state(root)
+                    item.unlink()
+                (root/"sessions").symlink_to("/tmp")
+                with self.assertRaises(ValueError):private_state(root)
+                (root/"sessions").unlink()
+                (root/"auth.json").touch()
+                (root/"state_5.sqlite").touch()
+                self.assertEqual(private_state(root),str(root))
+        self.assertEqual(AUTHENTICATED.tunnel_seconds,900)
+        self.assertEqual(AUTHENTICATED.tunnel_bytes,64*1024**2)
+
     def test_actual_private_namespace_proxy_and_selected_mounts(self):
         with tempfile.TemporaryDirectory(prefix="authenticated-profile-synthetic-") as tmp:
             root=Path(tmp);auth=root/"auth.json";auth.write_text('synthetic-selected-account')
@@ -61,16 +80,22 @@ class AuthenticatedIsolationTests(unittest.TestCase):
             profile.native="/usr/bin/python3";profile.supervisor=str(Path(__file__).parent.resolve()/"isolation/supervisor.py")
             workspace=root/"workspace";workspace.mkdir()
             profile.workspace=str(workspace)
-            profile.auth=str(auth);profile.sessions=str(sessions);profile.endpoint=str(endpoint)
+            profile.auth=str(auth);profile.state_root=str(sessions);profile.sessions=None;profile.endpoint=str(endpoint)
             profile.hosts=("subscription.example.invalid",)
             source="\n".join([
-                "import os,socket,urllib.parse,json,sys",
+                "import os,socket,urllib.parse,json,sys,resource,sqlite3",
+                "assert resource.getrlimit(resource.RLIMIT_CPU)==(600,600)",
+                "assert resource.getrlimit(resource.RLIMIT_AS)==(8*1024**3,8*1024**3)",
+                "assert resource.getrlimit(resource.RLIMIT_NOFILE)==(256,256)",
                 "assert sys.stdin.readline()=='synthetic-native-input\\n'",
                 "assert open('/account/auth.json').read()=='synthetic-selected-account'",
                 "assert not os.path.exists("+repr(str(unrelated))+")",
                 "assert not os.path.exists("+repr(str(auth))+")",
                 "try:\n open('/account/auth.json','w');raise AssertionError('auth writable')\nexcept OSError:pass",
                 "try:\n socket.socket(socket.AF_UNIX);raise AssertionError('unix allowed')\nexcept OSError:pass",
+                "a,b=socket.socketpair(socket.AF_UNIX,socket.SOCK_STREAM);a.sendall(b'x');assert b.recv(1)==b'x';a.close();b.close()",
+                "try:\n socket.socketpair(socket.AF_UNIX,socket.SOCK_DGRAM);raise AssertionError('datagram pair allowed')\nexcept OSError:pass",
+                "try:\n socket.socketpair(socket.AF_UNIX,socket.SOCK_SEQPACKET);raise AssertionError('seqpacket pair allowed')\nexcept OSError:pass",
                 "try:\n os.fork();raise AssertionError('fork allowed')\nexcept OSError:pass",
                 "try:\n socket.create_connection(('192.0.2.1',443),timeout=.1);raise AssertionError('host egress')\nexcept OSError:pass",
                 "proxy=urllib.parse.urlparse(os.environ['HTTPS_PROXY'])",
@@ -79,7 +104,10 @@ class AuthenticatedIsolationTests(unittest.TestCase):
                 "header=b''\nwhile not header.endswith(b'\\r\\n\\r\\n'):header+=s.recv(1)",
                 "assert header.startswith(b'HTTP/1.1 200')",
                 "s.sendall(b'synthetic TLS bytes');assert s.recv(128)==b'synthetic-egress-reply';s.close()",
+                "os.mkdir('/account/sessions')",
                 "with open('/account/sessions/native-session','w') as f:f.write('synthetic-session')",
+                "database=sqlite3.connect('/account/state_5.sqlite');database.execute('CREATE TABLE synthetic(value)');database.execute(\"INSERT INTO synthetic VALUES ('persistent')\");database.commit();database.close()",
+                "with open('/account/session_index.jsonl','w') as f:f.write('synthetic-index')",
                 "print(json.dumps({'uid':os.getuid(),'proxy':True,'selected':True}))",
             ])
             # One bounded line carries source to the synthetic supervisor only.
@@ -90,8 +118,14 @@ class AuthenticatedIsolationTests(unittest.TestCase):
                 self.assertEqual((code,err),(0,b""),out+err)
                 self.assertTrue(json.loads(out)["proxy"])
                 self.assertEqual(json.loads(out)["uid"],os.getuid())
-                self.assertEqual((sessions/"native-session").read_text(),"synthetic-session")
+                self.assertEqual((sessions/"sessions/native-session").read_text(),"synthetic-session")
                 self.assertEqual(auth.read_text(),"synthetic-selected-account")
+                import sqlite3
+                database=sqlite3.connect(sessions/"state_5.sqlite")
+                try:self.assertEqual(database.execute("SELECT value FROM synthetic").fetchone(),("persistent",))
+                finally:database.close()
+                self.assertEqual((sessions/"session_index.jsonl").read_text(),"synthetic-index")
+                self.assertEqual((sessions/"auth.json").stat().st_size,0)
                 worker.join(timeout=3);self.assertFalse(worker.is_alive());self.assertEqual(errors,[])
                 self.assertEqual(observed,[b"CONNECT subscription.example.invalid:443 HTTP/1.1\r\nHost: subscription.example.invalid:443\r\n\r\n",b"synthetic TLS bytes"])
             finally:

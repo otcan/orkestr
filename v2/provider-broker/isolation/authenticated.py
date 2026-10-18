@@ -11,6 +11,7 @@ import stat
 import subprocess
 from . import policy
 from .launch import OwnedProvider
+from .authenticated_budget import AUTHENTICATED
 
 
 def private_path(path, directory=False):
@@ -29,6 +30,30 @@ def private_path(path, directory=False):
     return str(path)
 
 
+def private_state(path):
+    """Dedicated role state, never canonical home or copied account/config."""
+    root=Path(private_path(path,True))
+    allowed={"sessions","archived_sessions","session_index.jsonl","auth.json"}
+    for name in ("state_5.sqlite","logs_2.sqlite"):
+        allowed.update((name,name+"-wal",name+"-shm",name+"-journal"))
+    for item in root.iterdir():
+        if item.name not in allowed or item.is_symlink():
+            raise ValueError("unexpected private native state")
+        if item.name=="auth.json" and (not item.is_file() or item.stat().st_size!=0):
+            raise ValueError("account copies forbidden in private state")
+    count=0
+    for directory,folders,files in os.walk(root,followlinks=False):
+        for name in folders+files:
+            count+=1
+            item=Path(directory)/name
+            info=item.lstat()
+            if count>10000 or stat.S_ISLNK(info.st_mode) or info.st_uid not in (0,os.geteuid()) or info.st_mode & 0o022:
+                raise ValueError("unsafe private native state")
+            if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+                raise ValueError("unsafe private native state")
+    return str(root)
+
+
 class SelectedCodexProfile:
     """Server-private immutable configuration, never deserialize request JSON here."""
     def __init__(self, configuration):
@@ -40,10 +65,14 @@ class SelectedCodexProfile:
             if info.st_uid!=0 or info.st_mode & 0o022:
                 raise ValueError("immutable profile required")
         value=json.loads(Path(path).read_text())
-        if not isinstance(value,dict) or set(value)!={"format","native","auth_file","sessions","egress_socket","supervisor","hosts","workspace"}:
+        fields={"format","native","auth_file","egress_socket","supervisor","hosts","workspace"}
+        if not isinstance(value,dict):
             raise ValueError("invalid selected profile")
-        if value["format"]!="orkestr-v2-codex-isolated-v1":
-            raise ValueError("unsupported selected profile")
+        modern=value.get("format")=="orkestr-v2-codex-isolated-v2"
+        fields.add("state_root" if modern else "sessions")
+        if set(value)!=fields or value["format"] not in (
+            "orkestr-v2-codex-isolated-v1","orkestr-v2-codex-isolated-v2"):
+            raise ValueError("invalid selected profile")
         policy.trusted("/etc/ssl/certs",True)
         certificate=Path("/etc/ssl/certs/ca-certificates.crt").stat()
         if certificate.st_uid!=0 or certificate.st_mode & 0o022:
@@ -53,10 +82,17 @@ class SelectedCodexProfile:
             if executable.read(4)!=b"\x7fELF":
                 raise ValueError("canonical native ELF required")
         self.supervisor=policy.trusted(value["supervisor"])
+        # Sibling budget module is part of the immutable installed inventory.
+        budget=Path(self.supervisor).with_name("authenticated_budget.py")
+        for item in (budget,*budget.parents):
+            info=item.stat()
+            if info.st_uid!=0 or info.st_mode & 0o022:
+                raise ValueError("untrusted authenticated budget")
         self.auth=private_path(value["auth_file"])
         if Path(self.auth).name!="auth.json":
             raise ValueError("selected canonical Codex auth file required")
-        self.sessions=private_path(value["sessions"],True)
+        self.state_root=private_state(value["state_root"]) if modern else None
+        self.sessions=None if modern else private_path(value["sessions"],True)
         self.workspace=private_path(value["workspace"],True)
         endpoint=Path(value["egress_socket"])
         if endpoint.resolve(strict=True)!=endpoint or not stat.S_ISSOCK(endpoint.stat().st_mode):
@@ -98,6 +134,12 @@ class SelectedCodexProfile:
 
     def _command(self, fd, mode):
         argv=policy.command(self.native,(),fd)
+        # Explicit authenticated budget, never relax the offline command builder.
+        replacements={"--cpu=3:3":f"--cpu={AUTHENTICATED.cpu_seconds}:{AUTHENTICATED.cpu_seconds}",
+            "--as=1073741824:1073741824":f"--as={AUTHENTICATED.address_bytes}:{AUTHENTICATED.address_bytes}",
+            "--fsize=8388608:8388608":f"--fsize={AUTHENTICATED.file_bytes}:{AUTHENTICATED.file_bytes}",
+            "--nofile=64:64":f"--nofile={AUTHENTICATED.descriptors}:{AUTHENTICATED.descriptors}"}
+        argv=[replacements.get(argument,argument) for argument in argv]
         # Supervisor needs process/socket primitives; strict filter is loaded
         # only by its exec-only native launcher, before provider exec.
         index=argv.index("--seccomp")
@@ -107,11 +149,16 @@ class SelectedCodexProfile:
             str(fd),",".join(self.hosts),mode]
         argv[argv.index("--chdir")+1]=self.workspace
         mounts=["--ro-bind",self.workspace,self.workspace,"--ro-bind",self.supervisor,"/opt/provider/supervisor.py",
-            "--ro-bind",self.auth,"/account/auth.json",
-            "--bind",self.sessions,"/account/sessions",
+            "--ro-bind",str(Path(self.supervisor).with_name("authenticated_budget.py")),
+            "/opt/provider/authenticated_budget.py",
             "--ro-bind",self.endpoint,"/run/provider-egress.sock",
             "--ro-bind","/etc/ssl/certs/ca-certificates.crt",
             "/etc/ssl/certs/ca-certificates.crt"]
+        if getattr(self,"state_root",None) is not None:
+            mounts += ["--bind",self.state_root,"/account"]
+        else:
+            mounts += ["--bind",self.sessions,"/account/sessions"]
+        mounts += ["--ro-bind",self.auth,"/account/auth.json"]
         mount_index=argv.index("--chdir")
         argv[mount_index:mount_index]=mounts
         return argv
