@@ -74,6 +74,7 @@ impl Spy {
         }
     }
 }
+#[async_trait::async_trait]
 impl RuntimeStore for Spy {
     async fn claim_next(
         &self,

@@ -1,14 +1,14 @@
 # Runtime migration review proposal
 
-Status: source proposal against frozen port version 2, core commit
-`93460326d0e73e021e6dbc54a262a8c9a6eb8f0a`. No runtime SQLite implementation or
+Status: source proposal against owner-selected port version 1, core commit
+`d4cf693435378ed232d97df60727ea6e54d9b90b`. No runtime SQLite implementation or
 migration exists. This document supersedes historical runtime store sketches;
 core owns all shared contracts, application ports, schema and durable authority.
 
-Runtime imports the ten native future-returning `RuntimeStore` methods and
+Runtime imports the canonical `async_trait` Send + Sync `RuntimeStore` methods and
 contracts-owned UUID IDs, admission, observation and lifecycle records. Both
-application port names denote the same trait. No async-trait dependency remains;
-crate-local application/contracts path dependencies await coordinator lock work.
+application port names denote the same trait. Application requires async-trait =0.1.89; runtime adds the same pinned test-only
+dependency for its spy implementation. Coordinator alone integrates the lock.
 No Tokio or executor dependency is needed by the ready-future test spies.
 
 The adapter proposal retains these invariants:
@@ -62,3 +62,23 @@ formatting, root/lock mutation or CI pass is claimed. Source was published in
 draft PR #76 at 2c9fd0fa72ea849d8beb39e73f2e0c485fef029d and independently
 reviewed with no blocking source finding for the bounded migration. This is
 source review only; root/lock and integration gates remain coordinator-owned.
+
+## Owner-selected async-trait handoff
+
+Migration parent: 4c5c81ff946d15f7ab083dbe78867852b2a3a350. The agreed
+contracts/application paths are imported exactly from core
+d4cf693435378ed232d97df60727ea6e54d9b90b, superseding the native-Future
+selection above. Exact agreement and both provider-observation fixtures were
+inspected read-only; fixture files match the current source. Types/signature
+arguments are unchanged from 93460326 except RUNTIME_PORT_VERSION =1 and the
+async_trait Send+Sync method convention. There is no duplicate port/store.
+Runtime's test spy uses the shared trait macro and explicit Unavailable methods.
+
+The 379d0b5e role/replay finding remains addressed: start compares store-returned
+scope, session, role and execution purpose before any provider command, then
+returns DispatchUnconfirmed for every admission. Neither matching role nor
+idempotent replay authorizes dispatch. Existing mismatch/replay no-start tests
+remain; transient/lost-ACK/stale-discard/Conflict cases remain unchanged.
+All 21 tests remain unexecuted here. No root/lock, schema, store, domain/demo,
+toolchain or CI edits; no cargo/downloads, formatting or build pass claimed.
+Independent source review must precede coordinator dependency-lock integration.
