@@ -10,6 +10,9 @@ import sqlite3
 
 TABLES = {
     "threads": ("orkestr_threads",),
+    # Source: packages/core/src/personal-agent-memory-migration.js::tableName.
+    # Count-only; never read content/provenance/consent or infer external memory.
+    "personal_memory": ("personal_agent_memories",),
     "jobs": ("job_specs", "jobs", "runs", "attempts", "checkpoints", "effects",
              "approvals", "notifications", "trigger_audit", "schedule_state",
              "personal_agent_projects", "personal_agent_tasks"),

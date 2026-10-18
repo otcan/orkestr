@@ -60,9 +60,11 @@ Executable SHA256:
 Workspace manifest, lockfile and store manifest were compared byte-for-byte with
 the exact Core commit and remained unchanged. No shared checkout was edited.
 
-Formatting/lint for this new bridge remain **unexecuted**. The Python suite
-previously passed 88/88, including three verifier tests. This checkpoint now
+The bridge was subsequently formatted with the admitted toolchain rustfmt;
+rustfmt --check and selected integration-test clippy with -D warnings passed
+against the same disposable registered candidate. Formatting changed no behavior.
+The Python suite now passes 99/99, including verifier, dormant adapter and memory
+count tests. This checkpoint now
 adds actual synthetic Rust-to-Python execution; it does not establish live reads,
 imports, providers, dormant apply, rollback or multi-authority consistency.
-This bridge does not own the separate untrusted-worker OS boundary. Push and CI
-remain unexecuted.
+This bridge does not own the separate untrusted-worker OS boundary. The worker branch is published; CI remains unexecuted.
