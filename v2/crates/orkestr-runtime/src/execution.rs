@@ -5,6 +5,8 @@ mod claude_pump;
 mod claude_session;
 mod fence;
 mod lease_refresh;
+mod offline_pump;
+mod offline_result;
 mod provider_write;
 mod pump;
 mod reuse;

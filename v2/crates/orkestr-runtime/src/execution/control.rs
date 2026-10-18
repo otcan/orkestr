@@ -74,6 +74,9 @@ impl CodexPump {
             let request = (1_u64 << 53) - 1;
             let frame = self.source.stream.claim_interrupt(request)?;
             let writing = PendingWrite::new(&frame)?;
+            // The issued cancellation retires a pending tool locally. Any
+            // unfinished result write is quarantined by channel correlation.
+            self.source.tool_write = None;
             let (lineage, bytes) = self
                 .source
                 .broker

@@ -15,6 +15,24 @@ pub(super) struct ToolResultWrite {
     proof: Option<PreparedRequest>,
 }
 impl ToolResultWrite {
+    pub(super) fn prepared(&self) -> bool {
+        self.proof.is_some()
+    }
+    pub(super) fn finished(&self) -> bool {
+        self.delivery.is_none()
+    }
+    pub(super) fn enqueue(
+        &self,
+        channel: &mut BrokerChannel,
+        child: &OwnedChild,
+        scope: &ExecutionScope,
+    ) -> Result<(), Blocker> {
+        let frame = serde_json::from_slice(&self.bytes).map_err(|_| Blocker::Protocol)?;
+        let (lineage, envelope) = channel.tool_result(frame)?;
+        child
+            .enqueue_tool_result(scope, &lineage, &envelope)
+            .map_err(|_| Blocker::Protocol)
+    }
     pub(super) fn new(
         pending: &PendingOfflinePythonCall,
         original: &ProviderAdmission,
@@ -22,6 +40,7 @@ impl ToolResultWrite {
     ) -> Result<Self, Blocker> {
         let call = delivery.native_call();
         if delivery.parent() != original
+            || !delivery.matches_source(pending.source())
             || delivery.written_bytes() != 0
             || &call.request_id != pending.request_id()
             || call.call_id != pending.call_id()
@@ -51,6 +70,7 @@ impl ToolResultWrite {
         Ok(())
     }
     /// One bounded actual suffix. No broker/provider wait occurs inside Core.
+    #[allow(clippy::too_many_arguments)] // Exact child, call and issuer identities remain explicit.
     pub(super) async fn poll(
         &mut self,
         store: &Store,
