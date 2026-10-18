@@ -896,6 +896,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "orkestr-runtime"
+version = "0.0.1"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "orkestr-v2-application"
 version = "0.0.1"
 dependencies = [
@@ -911,8 +918,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "orkestr-v2-demo"
+version = "0.0.1"
+dependencies = [
+ "orkestr-v2-domain",
+]
+
+[[package]]
 name = "orkestr-v2-domain"
 version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "orkestr-v2-server"

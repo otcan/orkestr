@@ -4,7 +4,7 @@ import tomllib
 
 root = Path(__file__).resolve().parents[1]
 allowed = {
-    "orkestr-domain": set(),
+    "orkestr-domain": {"serde"},
     "contracts": {"serde", "uuid"},
     "application": {"orkestr-v2-contracts"},
 }
