@@ -1,6 +1,7 @@
 //! Leaf router. Deep owns registration under existing auth/origin/CSRF guard.
 mod controller;
 pub mod dto;
+pub mod durable;
 use crate::{AppState, Error};
 use axum::{
     extract::{
