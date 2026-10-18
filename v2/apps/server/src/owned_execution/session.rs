@@ -7,6 +7,7 @@ use std::time::Instant;
 
 impl ConfiguredExecution {
     pub(super) async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<(), &'static str> {
+        let _availability = self.control.lifetime();
         self.current().await?;
         self.config.verify_launcher()?;
         let conversation = &self.config.conversation_id;
@@ -68,9 +69,11 @@ impl ConfiguredExecution {
         let (mut authority, mut pump) = ready
             .attach(self.store.clone(), capability)
             .map_err(|_| "execution attachment is uncertain; automatic replay refused")?;
+        let (mut control_sender, mut controls) = self.control.register(self.store.clone(), &run)?;
         let mut deadline = Instant::now() + Duration::from_secs(45);
         loop {
             self.maintain(&mut heartbeat).await?;
+            let schedule = self.control.serialize().await;
             let status = self
                 .store
                 .execution_status(&self.owner, conversation)
@@ -80,7 +83,18 @@ impl ConfiguredExecution {
             if status.run_id.as_ref() != Some(&run) {
                 return Err("execution scope changed; reconciliation required");
             }
+            self.control.set_available(
+                &run,
+                status.phase == ExecutionPhase::Running && pump.pending().is_none(),
+            );
+            if status.phase == ExecutionPhase::CancelRequested {
+                drop(schedule);
+                return self
+                    .stop_owned(&mut controls, authority, pump, &mut heartbeat)
+                    .await;
+            }
             if status.phase == ExecutionPhase::Completed {
+                drop(schedule);
                 // Only explicit committed owner acceptance releases the binding.
                 // Inputs received during an active turn remain ordered in Core;
                 // neither queued text nor browser JSON can mint a new capability.
@@ -96,10 +110,12 @@ impl ConfiguredExecution {
                 let _ = authority.revoke();
                 authority = next_authority;
                 pump = next_pump;
+                (control_sender, controls) = self.control.register(self.store.clone(), &run)?;
                 deadline = Instant::now() + Duration::from_secs(45);
                 continue;
             }
             if status.phase == ExecutionPhase::AwaitingAcceptance {
+                drop(schedule);
                 // Hold the same child while the owner decides. No old execution
                 // fence is spent and no subsequent inbox item is claimed early.
                 if *shutdown.borrow() {
@@ -113,10 +129,7 @@ impl ConfiguredExecution {
             }
             if matches!(
                 status.phase,
-                ExecutionPhase::Failed
-                    | ExecutionPhase::Blocked
-                    | ExecutionPhase::Cancelled
-                    | ExecutionPhase::CancelRequested
+                ExecutionPhase::Failed | ExecutionPhase::Blocked | ExecutionPhase::Cancelled
             ) {
                 // Drop only this owned child. CancelRequested remains unknown;
                 // killing a local helper is never reported as provider Stopped.
@@ -124,11 +137,19 @@ impl ConfiguredExecution {
             }
             if *shutdown.borrow() || Instant::now() >= deadline {
                 // Fence durably before local child cleanup; no success is inferred.
-                self.store
+                let receipt = self
+                    .store
                     .request_cancel(&self.owner, &run, "isolated-runtime-shutdown")
                     .await
                     .map_err(|_| "execution shutdown requires reconciliation")?;
-                break;
+                self.control.disable();
+                control_sender
+                    .publish(receipt)
+                    .map_err(|_| "execution shutdown handoff requires reconciliation")?;
+                drop(schedule);
+                return self
+                    .stop_owned(&mut controls, authority, pump, &mut heartbeat)
+                    .await;
             }
             if pump.pending().is_none() {
                 pump.flush().map_err(|_| "execution write fence refused")?;
@@ -140,6 +161,7 @@ impl ConfiguredExecution {
                 )) => {}
                 Err(_) => return Err("execution observation refused; reconciliation required"),
             }
+            drop(schedule);
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(10)) => {},
                 _ = shutdown.changed() => {},

@@ -304,8 +304,10 @@ def shutdown_with_open_events(case):
 
 def main():
     from owned_execution_followup import two_turn, in_flight_followup
+    from owned_execution_stop import stop
     for scenario in ["success", "revoked_after_start", "revoked_in_flight", "shutdown_with_open_events",
-                     "revoked_at_start", "queued_at_start", "two_turn", "in_flight_followup"]:
+                     "revoked_at_start", "queued_at_start", "two_turn", "in_flight_followup",
+                     "stop_terminal", "stop_ack_only"]:
         case = Case()
         try:
             case.setup()
@@ -321,6 +323,8 @@ def main():
                 two_turn(case, wait_for)
             elif scenario == "in_flight_followup":
                 in_flight_followup(case, wait_for)
+            elif scenario in ("stop_terminal", "stop_ack_only"):
+                stop(case, wait_for, scenario == "stop_terminal")
             else:
                 if scenario == "queued_at_start":
                     assert case.message()[0] == 202

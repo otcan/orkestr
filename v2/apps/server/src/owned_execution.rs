@@ -3,7 +3,9 @@ mod admission;
 mod config;
 #[cfg(all(test, unix))]
 mod config_tests;
+pub(crate) mod control;
 mod session;
+mod stopping;
 use config::Config;
 use orkestr_v2_application::runtime::{
     ProductionSupervisorConfig, ProductionTakeover, ProviderKind,
@@ -24,6 +26,7 @@ pub struct ConfiguredExecution {
     owner: OwnerId,
     token: String,
     directory: PathBuf,
+    control: control::ControlGate,
 }
 pub struct ExecutionTask {
     shutdown: watch::Sender<bool>,
@@ -72,13 +75,23 @@ impl ConfiguredExecution {
             )
             .await
             .map_err(|_| "execution supervisor authorization refused")?;
+        let control = control::ControlGate::new(owner.clone(), config.conversation_id.clone());
         Ok(Self {
             config,
             store: bound,
             owner,
             token,
             directory,
+            control,
         })
+    }
+
+    /// Install only this factory's bound Store and live transport availability.
+    /// Neither handle is constructible through HTTP configuration.
+    pub fn install_control(&self, mut state: crate::AppState) -> crate::AppState {
+        state.execution_store = Some(self.store.clone());
+        state.execution_control = Some(self.control.clone());
+        state
     }
 
     pub fn start(self) -> ExecutionTask {

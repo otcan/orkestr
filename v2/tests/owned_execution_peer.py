@@ -58,6 +58,26 @@ for line in sys.stdin:
             {"method": "item/agentMessage/delta", "params": {"threadId": "synthetic-http-native", "turnId": f"synthetic-turn-{turn}", "delta": "synthetic progress <untrusted>"}},
         ]:
             emit(output)
+        if Path("stop-mode").exists():
+            mode = Path("stop-mode").read_text()
+            assert mode in ("terminal", "ack-only")
+            interrupt = json.loads(sys.stdin.readline())
+            assert interrupt["method"] == "turn/interrupt"
+            assert interrupt["params"] == {"threadId": "synthetic-http-native", "turnId": f"synthetic-turn-{turn}"}
+            record("interrupt")
+            emit({"id": interrupt["id"], "result": {}})
+            record("interrupt-ack")
+            if mode == "ack-only":
+                # An ACK without terminal evidence must remain unresolved.
+                assert not sys.stdin.read()
+                break
+            deadline = time.monotonic() + 15
+            while not Path("release-stop").exists():
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            emit({"method": "turn/completed", "params": {"threadId": "synthetic-http-native",
+                "turn": {"id": f"synthetic-turn-{turn}", "status": "interrupted"}}})
+            continue
         # A test-owned barrier keeps the first turn in flight. It does not sleep
         # for an assumed scheduling interval or alter any product checkpoint.
         deadline = time.monotonic() + 15

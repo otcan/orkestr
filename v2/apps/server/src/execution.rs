@@ -1,4 +1,4 @@
-//! Read-only, authenticated execution projection. No dispatch/control authority.
+//! Authenticated execution projection and revision-guarded Stop handoff.
 use super::*;
 use axum::extract::Path;
 use orkestr_v2_application::runtime::RuntimeStoreError;
@@ -32,7 +32,14 @@ pub(crate) async fn status(
         })?;
     match status {
         None => Ok(StatusCode::NO_CONTENT.into_response()),
-        Some(status) if status.conversation_id == conversation && status.is_valid() => {
+        Some(mut status) if status.conversation_id == conversation && status.is_valid() => {
+            status.capabilities.stop = status.phase == ExecutionPhase::Running
+                && state.execution_control.as_ref().is_some_and(|control| {
+                    status
+                        .run_id
+                        .as_ref()
+                        .is_some_and(|run| control.available(&owner, &conversation, run))
+                });
             Ok(Json(status).into_response())
         }
         Some(_) => Err(Error(
@@ -53,7 +60,7 @@ pub(crate) async fn stop(
         axum::extract::rejection::JsonRejection,
     >,
 ) -> Result<Response, Error> {
-    browser::owner(&state, &headers).await?;
+    let owner = browser::owner(&state, &headers).await?;
     browser::guard(
         &state,
         &axum::http::Method::POST,
@@ -88,8 +95,20 @@ pub(crate) async fn stop(
         "Stop unavailable",
     ))?;
     let credential = browser::credential(&headers)?;
-    let receipt = store
-        .stop_execution_authenticated(&credential, &conversation, &input)
+    let _schedule = match &state.execution_control {
+        Some(control) => Some(control.serialize().await),
+        None => None,
+    };
+    let sender = match &state.execution_control {
+        Some(control) => Some(control.sender(&owner, &conversation, &input).ok_or(Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "control_unavailable",
+            "Stop unavailable",
+        ))?),
+        None => None,
+    };
+    let (receipt, issued_control) = store
+        .stop_execution_control_authenticated(&credential, &conversation, &input)
         .await
         .map_err(stop_error)?;
     if !receipt.is_valid()
@@ -103,6 +122,18 @@ pub(crate) async fn stop(
             "invalid_receipt",
             "Stop unavailable",
         ));
+    }
+    if let Some(control) = &state.execution_control {
+        control.committed(&input);
+    }
+    if let Some(sender) = sender {
+        sender.publish(issued_control).map_err(|_| {
+            Error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "control_unavailable",
+                "Stop delivery requires reconciliation",
+            )
+        })?;
     }
     Ok(Json(receipt).into_response())
 }

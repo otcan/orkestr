@@ -29,13 +29,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|_| "store startup failed")?;
     let origin = config.origin;
-    let state = AppState::new(store.clone(), token, origin)?;
+    let mut state = AppState::new(store.clone(), token, origin)?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let execution = match std::env::var_os("ORKESTR_V2_EXECUTION_CONFIG") {
         None => None,
         Some(file) => {
             let execution =
                 ConfiguredExecution::load(&store, &home, bind, &PathBuf::from(file)).await?;
+            state = execution.install_control(state);
             Some(execution)
         }
     };

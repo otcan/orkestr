@@ -20,16 +20,19 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 mod auth;
 mod browser;
+pub mod control_dispatch;
 mod execution;
 mod execution_accept;
 pub mod owned_execution;
 mod provider_payload;
 mod routes;
+pub mod stop_execution;
 
 #[derive(Clone)]
 pub struct AppState {
     pub store: Store,
     execution_store: Option<Store>,
+    execution_control: Option<owned_execution::control::ControlGate>,
     bootstrap_token: Arc<String>,
     origin: Arc<String>,
     authority: Arc<String>,
@@ -68,6 +71,7 @@ impl AppState {
         Ok(Self {
             store,
             execution_store: None,
+            execution_control: None,
             bootstrap_token: Arc::new(bootstrap_token),
             origin: Arc::new(origin),
             authority: Arc::new(authority),

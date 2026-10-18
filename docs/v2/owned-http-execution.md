@@ -6,9 +6,9 @@ required. Without `ORKESTR_V2_EXECUTION_CONFIG`, startup remains
 `execution=disabled`; creating a browser session never activates a provider.
 
 This checkpoint supplies the server factory, not production activation. Runtime's
-actual downstream provider-write fence is composed; sealed interruption remains
-a separate server gate. The current ordinary server keeps
-Stop unavailable (503, advertised capability false). The real broker and its
+actual downstream provider-write fence and sealed interruption are composed.
+Stop is available only for this factory's live registered running turn; absent
+or inactive configuration keeps it unavailable. The real broker and its
 actual native-stdin FD handoff are exercised with a fixed synthetic executable,
 without a real provider or credentials.
 
@@ -104,8 +104,33 @@ The server advertises `steer=false`; this is an ordered follow-up path. Native
 request IDs increase, prior native turn IDs are retired, and late old replies or
 notifications quarantine the channel. Broker correlation retains a bounded
 session history and refuses continuation at its limit; this checkpoint does not
-silently replace or reconnect that child. Actual Stop, OS/credential isolation,
-restart/recovery and real-provider multi-turn acceptance remain separate gates.
+silently replace or reconnect that child. OS/credential isolation,
+restart/recovery and real-provider multi-turn/Stop acceptance remain separate gates.
+
+## Browser Stop handoff
+
+The factory advertises Stop only for its current owned running turn, scoped to
+the configured owner and conversation. A lifetime guard removes availability on
+exit, revocation, panic or abort. The availability check grants no authority:
+cookie/Origin/CSRF and Core's current-session, exact revision and durable
+cancellation checks still run. Core returns public and private control receipts
+from one authenticated transaction. Only the public receipt is serialized.
+
+The private receipt crosses a one-value mailbox for the registered run. Identical
+receipt replay never delivers another native interrupt. A closed or lost handoff
+leaves durable cancellation unresolved; the factory never reconstructs control
+from status or creates another request key. The exact HTTP transaction and
+handoff serialize with one bounded provider observation step so cancellation
+cannot poison a normal pump write before its receipt arrives. This local lock
+is released before waiting for the provider, owner acceptance or more input.
+
+The shared Deep/Worker Stop adapter consumes the owned pump once. A native RPC
+acknowledgement leaves `cancel_requested`; only a correctly correlated terminal
+`interrupted` event committed by Core produces `cancelled`. Missing terminal
+evidence, stale fences, lost handoff or a bounded two-second control timeout
+require reconciliation. Cleanup never fabricates Stopped or starts a queued
+follow-up. The same authenticated HTTP request can replay its original public
+receipt after cleanup without another control write.
 
 Focused verification (only synthetic executables and temporary state):
 
@@ -137,3 +162,11 @@ authority after transfer, refuse next-run admission before acceptance, and cance
 the next durable run immediately before transfer to prove no new native bytes
 are delivered. Revocation initiates cleanup; the tests independently wait for the
 owned synthetic child to disappear instead of assuming synchronous reaping.
+
+Two Stop cases use the ordinary executable, browser cookie and fixed native peer.
+Wrong CSRF/Origin and stale revisions preserve the cancellation ledger and send
+no interrupt. One case holds terminal evidence after the RPC acknowledgement,
+then verifies exactly one durable Stopped event after releasing the barrier.
+The other supplies only an acknowledgement and verifies bounded cleanup with
+the original pending intent, no Stopped event and the queued follow-up retained.
+Both replay the exact public receipt without another native control frame.
