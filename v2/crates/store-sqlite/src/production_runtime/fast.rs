@@ -73,7 +73,7 @@ impl Store {
             return Ok(result);
         }
         let held: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM production_held_inputs WHERE event_id=?")
+            sqlx::query_scalar("SELECT count(*) FROM ordinary_input_holds WHERE event_id=?")
                 .bind(input.source_event_id.to_string())
                 .fetch_one(&mut *tx)
                 .await

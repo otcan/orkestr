@@ -41,51 +41,10 @@ impl IntakeStore for Store {
         conversation: &ConversationId,
         input: &MessageInput,
     ) -> Result<Admission> {
-        orkestr_v2_domain::message(&input.client_message_id, &input.text)
-            .map_err(|_| StoreError::Invalid)?;
-        // Acquire the write reservation before reading: concurrent replays cannot race a deferred upgrade.
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        let exists: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM conversations WHERE id=? AND owner_id=?")
-                .bind(conversation.to_string())
-                .bind(owner.to_string())
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(db)?;
-        if exists == 0 {
-            return Err(StoreError::NotFound);
-        }
-        let hash = digest(&input.text);
-        if let Some(r) = sqlx::query("SELECT m.id,m.payload_digest,m.sequence,e.id AS event_id FROM messages m JOIN events e ON e.message_id=m.id WHERE m.owner_id=? AND m.conversation_id=? AND m.request_key=?")
-            .bind(owner.to_string()).bind(conversation.to_string()).bind(&input.client_message_id).fetch_optional(&mut *tx).await.map_err(db)? {
-            if r.get::<String,_>("payload_digest") != hash { return Err(StoreError::Conflict); }
-            return Ok(Admission { duplicate: true, receipt: Receipt { message_id: MessageId(parse(r.get("id"))?), event_id: EventId(parse(r.get("event_id"))?), sequence: r.get("sequence"), status: AcceptanceStatus::Accepted } });
-        }
-        let sequence: i64 = sqlx::query_scalar("UPDATE conversations SET sequence=sequence+1 WHERE id=? AND owner_id=? RETURNING sequence")
-            .bind(conversation.to_string()).bind(owner.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
-        let message_id = MessageId(Uuid::new_v4());
-        let event_id = EventId(Uuid::new_v4());
-        sqlx::query("INSERT INTO messages(id,owner_id,conversation_id,request_key,payload_digest,text,actor_kind,sequence) VALUES (?,?,?,?,?,?,'owner',?)")
-            .bind(message_id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(&input.client_message_id).bind(hash).bind(&input.text).bind(sequence).execute(&mut *tx).await.map_err(db)?;
-        sqlx::query("INSERT INTO events(id,owner_id,conversation_id,message_id,sequence) VALUES (?,?,?,?,?)")
-            .bind(event_id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(message_id.to_string()).bind(sequence).execute(&mut *tx).await.map_err(db)?;
-        sqlx::query("INSERT INTO reasoning_inbox(conversation_id,sequence,message_id,event_id) VALUES (?,?,?,?)")
-            .bind(conversation.to_string()).bind(sequence).bind(message_id.to_string()).bind(event_id.to_string()).execute(&mut *tx).await.map_err(db)?;
-        sqlx::query("INSERT INTO outbox(event_id) VALUES (?)")
-            .bind(event_id.to_string())
-            .execute(&mut *tx)
-            .await
-            .map_err(db)?;
+        let admission = admit_in_transaction(&mut tx, owner, conversation, input).await?;
         tx.commit().await.map_err(db)?;
-        Ok(Admission {
-            duplicate: false,
-            receipt: Receipt {
-                message_id,
-                event_id,
-                sequence,
-                status: AcceptanceStatus::Accepted,
-            },
-        })
+        Ok(admission)
     }
     async fn create_project(
         &self,
@@ -202,4 +161,69 @@ impl IntakeStore for Store {
         }
         crate::replay::events(&self.pool, owner, conversation, scope, after, limit).await
     }
+}
+
+pub(crate) async fn admit_in_transaction(
+    tx: &mut sqlx::SqliteConnection,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    input: &MessageInput,
+) -> Result<Admission> {
+    orkestr_v2_domain::message(&input.client_message_id, &input.text)
+        .map_err(|_| StoreError::Invalid)?;
+    let exists: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM conversations WHERE id=? AND owner_id=?")
+            .bind(conversation.to_string())
+            .bind(owner.to_string())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+    if exists == 0 {
+        return Err(StoreError::NotFound);
+    }
+    let hash = digest(&input.text);
+    if let Some(r) = sqlx::query("SELECT m.id,m.payload_digest,m.sequence,e.id AS event_id FROM messages m JOIN events e ON e.message_id=m.id WHERE m.owner_id=? AND m.conversation_id=? AND m.request_key=?")
+            .bind(owner.to_string()).bind(conversation.to_string()).bind(&input.client_message_id).fetch_optional(&mut *tx).await.map_err(db)? {
+            if r.get::<String,_>("payload_digest") != hash { return Err(StoreError::Conflict); }
+            return Ok(Admission { duplicate: true, receipt: Receipt { message_id: MessageId(parse(r.get("id"))?), event_id: EventId(parse(r.get("event_id"))?), sequence: r.get("sequence"), status: AcceptanceStatus::Accepted } });
+        }
+    let sequence: i64 = sqlx::query_scalar(
+        "UPDATE conversations SET sequence=sequence+1 WHERE id=? AND owner_id=? RETURNING sequence",
+    )
+    .bind(conversation.to_string())
+    .bind(owner.to_string())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(db)?;
+    let message_id = MessageId(Uuid::new_v4());
+    let event_id = EventId(Uuid::new_v4());
+    sqlx::query("INSERT INTO messages(id,owner_id,conversation_id,request_key,payload_digest,text,actor_kind,sequence) VALUES (?,?,?,?,?,?,'owner',?)")
+            .bind(message_id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(&input.client_message_id).bind(hash).bind(&input.text).bind(sequence).execute(&mut *tx).await.map_err(db)?;
+    sqlx::query(
+        "INSERT INTO events(id,owner_id,conversation_id,message_id,sequence) VALUES (?,?,?,?,?)",
+    )
+    .bind(event_id.to_string())
+    .bind(owner.to_string())
+    .bind(conversation.to_string())
+    .bind(message_id.to_string())
+    .bind(sequence)
+    .execute(&mut *tx)
+    .await
+    .map_err(db)?;
+    sqlx::query("INSERT INTO reasoning_inbox(conversation_id,sequence,message_id,event_id) VALUES (?,?,?,?)")
+            .bind(conversation.to_string()).bind(sequence).bind(message_id.to_string()).bind(event_id.to_string()).execute(&mut *tx).await.map_err(db)?;
+    sqlx::query("INSERT INTO outbox(event_id) VALUES (?)")
+        .bind(event_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+    Ok(Admission {
+        duplicate: false,
+        receipt: Receipt {
+            message_id,
+            event_id,
+            sequence,
+            status: AcceptanceStatus::Accepted,
+        },
+    })
 }

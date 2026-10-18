@@ -471,3 +471,6 @@ async fn failed_claim_transaction_leaves_no_partial_occurrence() {
     );
     cleanup(store, directory).await;
 }
+
+#[path = "input_tests.rs"]
+mod input_tests;
