@@ -165,6 +165,8 @@ class CandidateTests(unittest.TestCase):
             self.assertEqual(kwargs['env']['PATH'].split(build_pair.os.pathsep)[0],str(cargo/'bin'))
             self.assertEqual(kwargs['env']['HOME'],str(out/'build-home'))
             self.assertNotIn('OPENAI_API_KEY',kwargs['env'])
+            self.assertNotIn('UI_EXECUTION_CONTROLS',kwargs['env'])
+            self.assertNotIn('UI_SERVER_CANDIDATE',kwargs['env'])
         with patch.object(receipt,'git',side_effect=['a'*40,'']), \
              patch.object(receipt,'seal',return_value=self.value), \
              patch.object(build_pair.subprocess,'run',side_effect=fake_run) as run, \
@@ -173,6 +175,42 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(run.call_count,2)
         self.assertEqual(run.call_args_list[0].args[0][1:],['build','--release','--offline','--locked','-p','orkestr-v2-server'])
         self.assertTrue(run.call_args_list[1].args[0][1].endswith('v2/apps/ui/scripts/bundle.sh'))
+
+    def test_controls_receipt_is_explicit_and_bound_to_server_source(self):
+        args=(self.root,self.binary,self.ui,'a'*40,'2.0.0-rc.1','release',[],'2.34')
+        with patch.object(receipt,'git',side_effect=['a'*40,'']*2), \
+             patch.object(receipt,'schema',return_value={'0001_fixture.sql':'b'*64}), \
+             patch.object(receipt.subprocess,'run',return_value=SimpleNamespace(stdout=b'toolchain')):
+            ordinary=receipt.seal(*args)
+            controls=receipt.seal(*args,execution_controls=True)
+        self.assertEqual(ordinary['web']['features'],['web'])
+        self.assertNotIn('server_candidate',ordinary['web'])
+        self.assertEqual(controls['web']['features'],['web','execution-controls'])
+        self.assertEqual(controls['web']['server_candidate'],'a'*40)
+        receipt.verify(controls,self.binary,self.ui)
+        controls['web']['server_candidate']='b'*40
+        with self.assertRaisesRegex(RuntimeError,'binding mismatch'):
+            receipt.verify(controls,self.binary,self.ui)
+
+    def test_controls_build_passes_exact_binding_and_seals_opt_in(self):
+        import build_pair
+        checkout=self.root/'checkout';checkout.mkdir()
+        cargo=self.root/'cargo';cargo.mkdir()
+        rustup=self.root/'rustup';rustup.mkdir()
+        wrapper=self.root/'wrapper';wrapper.write_text('not executed')
+        out=self.root/'output'
+        def fake_run(command,**kwargs):
+            self.assertEqual(kwargs['env']['UI_EXECUTION_CONTROLS'],'1')
+            self.assertEqual(kwargs['env']['UI_SERVER_CANDIDATE'],'a'*40)
+            if command[0]==str(wrapper):
+                target=out/'target/release';target.mkdir(parents=True)
+                (target/'orkestr-v2-server').write_bytes(self.binary.read_bytes())
+        with patch.object(receipt,'git',side_effect=['a'*40,'']), \
+             patch.object(receipt,'seal',return_value=self.value) as seal, \
+             patch.object(build_pair.subprocess,'run',side_effect=fake_run) as run:
+            build_pair.build(checkout,out,'a'*40,'2.0.0-rc.1',wrapper,cargo,rustup,'2.34',execution_controls=True)
+        self.assertEqual(run.call_count,2)
+        self.assertEqual(seal.call_args.kwargs,{'execution_controls':True})
 
     def test_archive_is_deterministic_for_verified_candidate(self):
         import archive

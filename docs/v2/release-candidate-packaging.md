@@ -31,6 +31,15 @@ python3 -B v2/packaging/candidate/build_pair.py \
   --required-glibc "$VERIFIED_REQUIRED_GLIBC"
 ```
 
+The producer defaults to the web-only bundle. To explicitly include execution
+controls, add `--execution-controls` to `build_pair.py`. This supplies
+`UI_EXECUTION_CONTROLS=1` and `UI_SERVER_CANDIDATE` equal to the exact source
+revision to the canonical bundle command. The receipt then declares web features
+`[web, execution-controls]` and `web.server_candidate` equal to that source;
+verification rejects a missing or different binding. The standalone receipt
+sealer accepts the same explicit flag as a producer declaration, not proof that
+controls were exercised. This flag does not activate providers or execution.
+
 Both build children receive a minimal environment, fresh HOME, explicit offline
 caches and unique target/output directories. The declared Cargo cache bin directory
 is prepended to PATH so the canonical bundle can find its pinned wasm-bindgen.
