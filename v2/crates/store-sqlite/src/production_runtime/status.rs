@@ -34,6 +34,8 @@ impl Store {
                 Some(RunId(row.get::<String, _>("id").parse().map_err(db)?)),
                 match row.get::<&str, _>("state") {
                     "starting" => ExecutionPhase::Starting,
+                    "cancel_requested" => ExecutionPhase::CancelRequested,
+                    "cancelled" => ExecutionPhase::Cancelled,
                     "blocked" => ExecutionPhase::Blocked,
                     "running" => ExecutionPhase::Running,
                     "awaiting_acceptance" => ExecutionPhase::AwaitingAcceptance,

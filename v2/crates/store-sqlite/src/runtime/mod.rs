@@ -149,8 +149,13 @@ impl RuntimeStore for Store {
     ) -> Result<ProviderEventReceipt> {
         self.production_observe(owner, provider, input).await
     }
-    async fn request_cancel(&self, _: &OwnerId, _: &RunId, _: &str) -> Result<CancelReceipt> {
-        Err(RuntimeStoreError::Unavailable)
+    async fn request_cancel(
+        &self,
+        owner: &OwnerId,
+        run: &RunId,
+        key: &str,
+    ) -> Result<CancelReceipt> {
+        self.production_cancel(owner, run, key).await
     }
     async fn acknowledge_inbox(&self, _: &InboxClaim, _: &RunAdmission) -> Result<()> {
         Err(RuntimeStoreError::Unavailable)

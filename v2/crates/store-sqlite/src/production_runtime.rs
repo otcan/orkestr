@@ -5,6 +5,9 @@ use orkestr_v2_contracts::OwnerId;
 use sqlx::{Row, SqliteConnection};
 use uuid::Uuid;
 mod admission;
+mod cancellation;
+#[cfg(test)]
+mod cancellation_tests;
 mod capability;
 pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};
 mod dispatch;
