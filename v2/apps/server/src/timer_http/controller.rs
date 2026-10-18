@@ -199,3 +199,7 @@ impl TimerController {
         Ok(delivered)
     }
 }
+
+#[cfg(test)]
+#[path = "grant_tests.rs"]
+mod grant_tests;
