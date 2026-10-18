@@ -112,6 +112,15 @@ impl Store {
         tx.commit().await.map_err(db)?;
         Ok(())
     }
+    /// Revoke one exact hashed session; browser and machine tokens use distinct inputs.
+    pub async fn revoke_session(&self, token: &str) -> Result<()> {
+        sqlx::query("DELETE FROM auth_sessions WHERE token_hash=?")
+            .bind(digest(token))
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
     pub async fn authenticate(&self, token: &str) -> Result<Option<OwnerId>> {
         let id: Option<String> = sqlx::query_scalar(
             "SELECT owner_id FROM auth_sessions WHERE token_hash=? AND expires_at>unixepoch()",
