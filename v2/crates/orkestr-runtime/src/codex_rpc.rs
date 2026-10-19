@@ -148,6 +148,9 @@ impl CodexRpc {
             .ok_or(Blocker::Protocol)?
             .remove("ephemeral");
         frame["params"]["threadId"] = json!(native);
+        // Setup needs identity and live state only. Core already owns history;
+        // hydrating native turns can exceed the bounded metadata channel.
+        frame["params"]["excludeTurns"] = json!(true);
         Ok(frame)
     }
 
@@ -275,7 +278,8 @@ mod resume_tests {
             .unwrap();
         assert_eq!(frame["method"], "thread/resume");
         assert_eq!(frame["params"]["threadId"], "synthetic-native");
-        assert_eq!(frame["params"].as_object().unwrap().len(), 5);
+        assert_eq!(frame["params"].as_object().unwrap().len(), 6);
+        assert_eq!(frame["params"]["excludeTurns"], true);
         assert!(frame["params"].get("ephemeral").is_none());
         rpc.receive(&response().to_string()).unwrap();
         assert_eq!(rpc.native_session(), Some("synthetic-native"));
