@@ -15,7 +15,13 @@ impl WorkerSchedule {
             return Ok((Phase::Closed(progress), progress));
         }
         if let Phase::Stopping(control) = phase {
-            return Ok(Self::stopping(control).await);
+            return Self::stopping(control).await;
+        }
+        if let Phase::Retiring(retiring) = phase {
+            return self.retire(*retiring);
+        }
+        if self.quiesced {
+            return self.terminal_only(phase).await;
         }
         let parent = self
             .store
@@ -40,10 +46,8 @@ impl WorkerSchedule {
             }
             // Core's parent terminal transition fences descendants atomically.
             // Owned local cleanup cannot fabricate a successful child Stop.
-            return Ok((
-                Phase::Closed(WorkerProgress::Unknown),
-                WorkerProgress::Unknown,
-            ));
+            self.quiesced = true;
+            return self.terminal_only(phase).await;
         }
         match phase {
             Phase::Pending => self.begin().await,
@@ -66,6 +70,7 @@ impl WorkerSchedule {
             }
             Phase::Running(running) => self.running(running).await,
             Phase::Stopping(_) => unreachable!(),
+            Phase::Retiring(_) => unreachable!(),
             Phase::Closed(_) => unreachable!(),
         }
     }
@@ -107,6 +112,9 @@ impl WorkerSchedule {
         } else {
             PreparingCodex::open_retained
         };
+        // Register before open: even a failed setup may have launched a child.
+        // A lost setup handle never becomes a successful cleanup witness.
+        self.launch = Some(self.configuration.reaps.launch(&grant, &self.parent)?);
         let setup = open(
             self.store.clone(),
             grant,
@@ -201,6 +209,10 @@ impl WorkerSchedule {
         {
             return Err("Worker consumed identity mismatch");
         }
+        self.launch
+            .as_mut()
+            .ok_or("Worker launch witness missing")?
+            .bind(&capability)?;
         let run = capability.provider().run.run_id.clone();
         let (liveness, budget) = match (
             self.configuration.policy.execution_budget(),

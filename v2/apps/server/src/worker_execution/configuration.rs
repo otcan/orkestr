@@ -16,6 +16,8 @@ pub struct WorkerConfiguration {
     pub directory: PathBuf,
     pub controls: crate::control_registry::ControlRegistry,
     pub children: crate::owned_children::ChildSet,
+    /// One factory-lifetime ledger, including all prior accepted parent turns.
+    pub reaps: super::WorkerReaps,
     pub tasks: crate::worker_tasks::WorkerTaskAccess,
     /// Fixed trusted server profile; no browser/provider-selected paths or tools.
     pub offline_python: Option<std::sync::Arc<crate::offline_python::OfflinePythonDispatcher>>,
