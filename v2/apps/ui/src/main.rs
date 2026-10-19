@@ -7,6 +7,8 @@ mod beta_bridge;
 mod beta_discovery;
 mod beta_settings;
 mod beta_window_view;
+mod composer;
+mod conversation_sidebar;
 mod execution_panel;
 mod execution_poll;
 mod fast_panel;
@@ -21,6 +23,7 @@ mod transport;
 mod views;
 mod worker_tasks_panel;
 mod worker_tasks_view;
+mod workspace;
 use dioxus::prelude::*;
 use orkestr_v2_ui::{session_scope::SessionScope, Draft};
 use serde_json::Value;
@@ -49,7 +52,6 @@ fn App() -> Element {
     let mut execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut host_resources = use_signal(orkestr_v2_ui::host_resources::HostResources::default);
     let mut held_inputs = use_signal(orkestr_v2_ui::held_inputs::HeldInputs::default);
-    let mut tab = use_signal(|| "Assistant".to_string());
     let mut notice = use_signal(|| "Sign in to your local server.".to_string());
     let mut refresh = use_signal(|| 0_u64);
     let mut resuming = use_signal(|| true);
@@ -106,10 +108,11 @@ fn App() -> Element {
     };
     rsx! {
         style { "{include_str!(\"style.css\")}" }
-        main {
-            header { h1 { "Orkestr" } p { "Codex Deep · beta" } }
-            p { class: "notice", "One conversation with Codex Deep. Review each proposed result before accepting it. Stop remains available only for the current connected run." }
-            p { role: "status", "{notice}" }
+        main { class: "app-shell",
+            header { class: "app-heading", h1 { "Orkestr" } span { "Rust workspace · beta" } }
+            if csrf().is_empty() || notice().contains("not confirmed") {
+                p { class: "app-notice", role: "status", "{notice}" }
+            }
             if resuming() {
                 p { role: "status", "Checking browser session…" }
             } else if logging_out() && csrf().is_empty() {
@@ -126,7 +129,6 @@ fn App() -> Element {
                     session_scope.write().activate(&session.global_conversation_id, &mut drafts.write());
                     task_drafts.write().activate(session_scope.read().generation());
                     refresh += 1;
-                    tab.set("Assistant".into());
                     global.set(String::new());
                     current.set(String::new());
                     csrf.set(session.csrf_token);
@@ -142,31 +144,10 @@ fn App() -> Element {
                     }
                 }
             } else {
-                nav { "aria-label": "Main",
-                    for name in ["Assistant", "History", "Host resources", "Settings"] {
-                        button { "aria-current": if tab() == name { "page" } else { "false" }, onclick: move |_| {
-                            tab.set(name.into());
-                            if name == "Assistant" { current.set(global()); }
-                        }, "{name}" }
-                    }
-                }
-                if tab() == "Assistant" {
-                    section { key: "{current()}-{refresh}",
-                    h2 { "Assistant" }
-                    button { onclick: move |_| refresh += 1, "Reconnect and reload history" }
-                    beta_window_view::WindowView { id: current(), csrf: csrf(), session_scope, onexpired: expired }
-                    views::Conversation { id: current(), csrf: csrf(), session_scope, execution, drafts, held_inputs, onexpired: expired }
-                    }
-                } else if tab() == "History" {
-                    history::History { key: "{current()}", id: current(), csrf: csrf(), session_scope, onexpired: expired }
-                } else if tab() == "Host resources" {
-                    host_resources_view::HostResourcesView { key: "{session_scope.read().generation()}", session_scope, resources: host_resources, onexpired: expired }
-                } else {
-                    beta_settings::BetaSettings {}
-                }
+                workspace::Workspace { key: "{session_scope.read().generation()}-{refresh}", current, csrf: csrf(), session_scope, execution, drafts, held_inputs, resources: host_resources, onexpired: expired }
             }
             if !csrf().is_empty() {
-                    button { disabled: logging_out(), onclick: move |_| {
+                    button { class: "sign-out", disabled: logging_out(), onclick: move |_| {
                         if logging_out() { return; }
                         logging_out.set(true);
                         let secret = csrf();
