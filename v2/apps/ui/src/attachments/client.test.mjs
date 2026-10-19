@@ -66,3 +66,7 @@ test('removal freezes original key and invalidates a pending verified download',
  await assert.rejects(f.client.remove(f.manifest,id(4)),/uncertain/);finishRaw();await assert.rejects(download,/scope|selection/);
  await f.client.commit();const deletes=f.calls.filter(c=>c.options.method==='DELETE');assert.equal(deletes[0].options.body,deletes[1].options.body);
 });
+test('open and export refuse a different same-owner collection',async()=>{
+ const f=await fixture();f.setHandler(path=>path.includes('?')?json(f.page()):path.endsWith('/export')?json({manifest:{...f.manifest,manifest_id:id(99)},contents:[]}):json({...f.manifest,manifest_id:id(99)}));
+ await f.client.list();await assert.rejects(f.client.open(id(5)),/identity/);await assert.rejects(f.client.exportCopy(f.manifest),/identity/);
+});

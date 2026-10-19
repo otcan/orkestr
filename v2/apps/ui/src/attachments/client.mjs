@@ -35,7 +35,7 @@ export function createAttachmentClient({owner,conversation,csrf,current,fetcher=
   if(page.next_after_id!==null&&(page.manifests.length!==16||page.next_after_id!==previous))throw new Error('File list cursor mismatch');
   return page;
  }
- async function open(id){const m=await request(`${root}/attachment-manifests/${identifier(id)}`);validate(m);return m;}
+ async function open(id){const m=await request(`${root}/attachment-manifests/${identifier(id)}`);validate(m);if(m.manifest_id!==id)throw new Error("File collection identity mismatch");return m;}
  function validate(m){
   if(!Array.isArray(m.references))throw new Error('File metadata invalid');
   // Validate empty manifests too, using the missing-reference result only after scope checks.
@@ -97,6 +97,6 @@ export function createAttachmentClient({owner,conversation,csrf,current,fetcher=
   // Removal leaves identity/digest unchanged: revalidate tombstone immediately before save.
   const final=await open(latest.manifest_id);if(referenceFor(final,scope(final),id).state!=='available'||version!==revision)throw new Error('File removed or selection changed');check();return result;
  }
- async function exportCopy(m){const bundle=await request(`${root}/attachment-manifests/${identifier(m.manifest_id)}/export`,{limit:68*1024*1024});validate(bundle.manifest);await validateBundle(bundle);return bundle;}
+ async function exportCopy(m){const bundle=await request(`${root}/attachment-manifests/${identifier(m.manifest_id)}/export`,{limit:68*1024*1024});validate(bundle.manifest);if(bundle.manifest.manifest_id!==m.manifest_id)throw new Error("File collection identity mismatch");await validateBundle(bundle);return bundle;}
  return {list,open,upload,prepareCopy,commit,remove,download,exportCopy,pending:()=>pending,close(){closed=true;revision++;for(const controller of active)controller.abort();active.clear();pending=null;}};
 }
