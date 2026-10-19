@@ -36,7 +36,12 @@ impl ChildDirectories {
 
     pub(super) fn configure(&self, command: &mut Command) {
         // No parent environment lookup and no generic environment override API.
-        command.env_clear().current_dir(&self.workspace);
+        command.current_dir(&self.workspace);
+        self.configure_without_cwd(command);
+    }
+
+    pub(super) fn configure_without_cwd(&self, command: &mut Command) {
+        command.env_clear();
         command.env("PATH", "/usr/bin:/bin");
         command.env("LANG", "C.UTF-8");
         command.env("LC_ALL", "C.UTF-8");

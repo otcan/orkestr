@@ -52,7 +52,7 @@ mod linux {
         // Duplicate BOTH sources above destinations before any dup2. This also
         // handles sources originally allocated as fd3/fd4 without clobbering.
         let duplicate = |source| {
-            let copied = unsafe { fcntl(source, 1030, 5) }; // F_DUPFD_CLOEXEC
+            let copied = unsafe { fcntl(source, 1030, 6) }; // F_DUPFD_CLOEXEC
             if copied < 0 {
                 return Err(Error::Io);
             }

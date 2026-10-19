@@ -512,3 +512,5 @@ mod tests;
 
 #[path = "metadata/claude.rs"]
 mod claude;
+
+mod workspace;

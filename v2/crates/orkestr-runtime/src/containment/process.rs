@@ -133,6 +133,31 @@ impl Process {
         provider_fd: bool,
         resume_native: Option<super::resume_bootstrap::ResumeBootstrap<'_>>,
     ) -> Result<Arc<Self>, Error> {
+        Self::spawn_config_workspace(
+            program,
+            args,
+            directories,
+            bounds,
+            active,
+            reaper,
+            provider_fd,
+            resume_native,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn spawn_config_workspace(
+        program: &std::path::Path,
+        args: &[std::ffi::OsString],
+        directories: &super::ChildDirectories,
+        bounds: super::TransportBounds,
+        active: &Arc<AtomicUsize>,
+        reaper: &Sender<Child>,
+        provider_fd: bool,
+        resume_native: Option<super::resume_bootstrap::ResumeBootstrap<'_>>,
+        workspace: Option<super::workspace_launch::WorkspaceDescriptor>,
+    ) -> Result<Arc<Self>, Error> {
         use std::os::fd::AsRawFd;
         let pair = if provider_fd {
             Some(super::provider_fd::Handoff::pair()?)
@@ -164,7 +189,11 @@ impl Process {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        directories.configure(&mut command);
+        if workspace.is_some() {
+            directories.configure_without_cwd(&mut command);
+        } else {
+            directories.configure(&mut command);
+        }
         sys::configure_command(&mut command);
         if let Some((_, socket)) = &pair {
             sys::inherit_handoff(
@@ -172,6 +201,9 @@ impl Process {
                 socket.as_raw_fd(),
                 bootstrap.as_ref().map(AsRawFd::as_raw_fd),
             )?;
+        }
+        if let Some(workspace) = workspace {
+            workspace.configure(&mut command).map_err(|_| Error::Io)?;
         }
         #[cfg(unix)]
         {

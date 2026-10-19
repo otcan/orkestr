@@ -38,3 +38,12 @@ The synthetic tests prove descriptor cwd and5 retain the original directory afte
 pathname replacement, and that foreign device/inode/owner or a regular file is
 refused. They do not qualify Core issuance, sandbox mounting, provider execution,
 reopen, or revocation fencing.
+
+The local Core composition uses exact `31ddc9039` (attributed `84dff64b3`).
+`MetadataExecutor::spawn_workspace(credential, &mut WorkspaceLaunch)` consumes
+only the previously committed launch through the combined Core fence. It skips
+string cwd, duplicates the borrowed workspace descriptor, and retains the exact
+spawned Process across outer failure before quarantining it. Existing FD3/FD4
+sources now duplicate above slot 5 before any destination mapping. This is a
+library port; no factory selects it yet. Python descriptor forwarding and the
+same-descriptor read-only mount remain separate qualification prerequisites.

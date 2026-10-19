@@ -16,6 +16,7 @@ pub use retirement::{ReapedBroker, RetiringBroker};
 mod reuse;
 mod scope;
 mod sys;
+mod workspace_launch;
 
 pub use environment::ChildDirectories;
 pub use framing::{Flush, Output, TransportBounds};
