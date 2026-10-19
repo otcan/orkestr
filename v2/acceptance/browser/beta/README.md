@@ -9,6 +9,15 @@ Public source contains no deployment addresses or account configuration.
 no command-line activation and requires reviewed pair/lease adapters and an
 already owned context. It closes that context and joins its work within the
 short session budget. The outer operator still owns connection/helper/lease cleanup.
+`attachmentRoundtrip` is a separate short session using the same ten-byte
+binary fixture and completion/read/delete proof as the prior qualified flow.
+Its `savedBytes` implementation is copied unchanged (SHA-256
+`0bcc4d6474f8efbc54f5886fd5acf497422966d0f157251913c58e7a464a09f6`).
+`captureControls` passively retains only bounded receipts for the selected
+conversation's five control routes; raw JSON remains in memory and must be
+discarded after assertions. `window-evidence` checks the published window DTO:
+exact admitted input binding, unchanged limits on joins, immutable retries and
+unchanged Stop-held input provenance. These are observation checks, not grants.
 
 The initial modules provide enabled-label readiness before a single action,
 ordinary owner login/reload, route-remount draft checks, visible host CPU/RAM,
