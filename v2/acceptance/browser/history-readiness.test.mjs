@@ -27,3 +27,20 @@ test('child post-bind marker permits owned health and joined shutdown', async ()
   candidate=new Candidate({server:{path:file},ui:{path:root}},root,port);await candidate.start();assert(candidate.child);await candidate.stop();assert.equal(candidate.child,null);
  } finally {await candidate?.stop();await fs.rm(root,{recursive:true,force:true});}
 });
+
+
+test('owned ready child cannot redirect health to a foreign responder', async () => {
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'candidate-redirect-'));let candidate,foreignRequests=0;
+ const foreign=http.createServer((_,res)=>{foreignRequests++;res.end(JSON.stringify({product:'orkestr-v2',fixture_mode:false}));});
+ const reserve=http.createServer();
+ try {
+  await new Promise(resolve=>foreign.listen(0,'127.0.0.1',resolve));
+  await new Promise(resolve=>reserve.listen(0,'127.0.0.1',resolve));const port=reserve.address().port;await new Promise(resolve=>reserve.close(resolve));
+  const file=path.join(root,'child');
+  await fs.writeFile(file,`#!/usr/bin/node
+const http=require('node:http');const s=http.createServer((_,r)=>{r.writeHead(302,{location:'http://127.0.0.1:${foreign.address().port}/health'});r.end();});s.listen(Number(process.env.ORKESTR_V2_BIND.split(':').pop()),'127.0.0.1',()=>{console.error(\`orkestr-v2-server schema=1 home=\${process.env.ORKESTR_V2_HOME} bind=\${process.env.ORKESTR_V2_BIND} execution=disabled connections=none\`);setTimeout(()=>process.exit(43),300);});
+`,{mode:0o700});
+  candidate=new Candidate({server:{path:file},ui:{path:root}},root,port);
+  await assert.rejects(candidate.start());assert.equal(foreignRequests,0);
+ } finally {await candidate?.stop();await new Promise(resolve=>foreign.close(resolve));await fs.rm(root,{recursive:true,force:true});}
+});

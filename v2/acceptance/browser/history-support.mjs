@@ -115,7 +115,7 @@ export class Candidate {
       assert(!launchError && !markerError && this.child.exitCode === null && this.child.signalCode === null, 'candidate_start_failed');
       if (!ready) { await delay(100); continue; }
       try {
-        const response = await fetch(`${this.origin}/api/v2/health`, { signal: AbortSignal.timeout(500) });
+        const response = await fetch(`${this.origin}/api/v2/health`, { redirect: 'error', signal: AbortSignal.timeout(500) });
         if (response.ok) {
           const health = await response.json();
           assert.equal(health.product, 'orkestr-v2', 'unexpected_candidate_product');
