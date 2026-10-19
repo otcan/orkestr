@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { discoveryMode } from './headless-beta.mjs';
 import { verifyIntake } from './headless-intake.mjs';
 import { installIntakeCapture } from './headless-receipt-capture.mjs';
 
@@ -59,15 +60,30 @@ try {
   await page.type('#password', 'synthetic-password-000000');
   await page.type('#bootstrap', bootstrap);
   await clickText('Continue');
-  await page.waitForSelector('#composer');
+  const checkSurface = async expected => {
+    const reply = await page.evaluate(async () => {
+      const response = await fetch('/api/v2/beta', { redirect: 'error', cache: 'no-store' });
+      return { status: response.status, body: await response.json() };
+    });
+    const mode = discoveryMode(reply.status, reply.body);
+    if (expected) assert.deepEqual(mode, expected, 'Discovery changed across authentication/reload');
+    if (mode.kind === 'configured') await page.waitForSelector('#composer');
+    else {
+      await page.waitForFunction(() => document.body.textContent.includes('Deep is unavailable. Reload to check the server again.'));
+      assert.equal(await page.$('#composer'), null, 'Unconfigured beta exposed composer');
+      assert.equal(await page.$('nav[aria-label="Main"]'), null, 'Unconfigured beta exposed scoped navigation');
+    }
+    return mode;
+  };
+  const mode = await checkSurface();
   const cookies = await browser.cookies();
   const session = cookies.find(cookie => cookie.name === 'orkestr_v2_session');
   assert.ok(session?.httpOnly);
   assert.equal(session.sameSite, 'Strict');
+  if (mode.kind === 'configured') {
   stage = 'durable-intake';
   const text = 'Synthetic CI rendering message';
-  const conversation = await page.evaluate(async () =>
-    (await (await fetch('/api/v2/browser/session')).json()).global_conversation_id);
+  const conversation = mode.conversation;
   const path = `/api/v2/conversations/${conversation}/messages`;
   // Capture a cloned page fetch body before Send; CDP may not retain it.
   await page.evaluate(installIntakeCapture, path);
@@ -93,17 +109,21 @@ try {
   verifyIntake({ input, receipt, snapshot, conversation, text });
   stage = 'reload-render';
   await page.reload({ waitUntil: 'networkidle2' });
-  await page.waitForSelector('#composer');
+  await checkSurface(mode);
   await page.waitForFunction(() => document.querySelector('.messages')?.textContent.includes('Synthetic CI rendering message'));
-  const rejected = await page.evaluate(async () => {
-    const session = await (await fetch('/api/v2/browser/session')).json();
-    const response = await fetch(`/api/v2/conversations/${session.global_conversation_id}/messages`, {
+  const rejected = await page.evaluate(async conversation => {
+    const response = await fetch(`/api/v2/conversations/${conversation}/messages`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ client_message_id: 'synthetic-csrf-rejected', text: 'must not persist' }),
     });
     return response.status;
-  });
+  }, conversation);
   assert.equal(rejected, 403);
+  } else {
+    stage = 'blocked-cookie-resume';
+    await page.reload({ waitUntil: 'networkidle2' });
+    await checkSurface(mode);
+  }
   await clickText('Sign out');
   await page.waitForSelector('#username');
   await page.reload({ waitUntil: 'networkidle2' });
@@ -112,13 +132,15 @@ try {
   await page.type('#username', 'synthetic-admin');
   await page.type('#password', 'synthetic-password-000000');
   await clickText('Continue');
-  await page.waitForSelector('#composer');
+  await checkSurface(mode);
   const replacement = (await browser.cookies()).find(cookie => cookie.name === 'orkestr_v2_session');
   assert.ok(replacement?.httpOnly);
   assert.notEqual(replacement.value, session.value, 'Login reused revoked session');
   assert.equal(bearerSeen, false, 'Browser sent machine authority');
   assert.deepEqual(errors, [], 'Browser rendering errors');
-  console.log('PASS: CI headless rendering, cookie resume, durable intake, CSRF rejection, logout and fresh password re-login');
+  console.log(mode.kind === 'configured'
+    ? 'PASS: configured beta rendering, exact-scope durable intake/history, cookie resume, CSRF rejection, logout and fresh login; no provider qualification'
+    : 'PASS: explicitly unconfigured beta blocked gate, cookie resume, visible logout and fresh login ONLY; durable intake/history/provider browser checks NOT EXERCISED');
 } catch (error) {
   // No headers, cookies, input values, raw response bodies or server logs.
   const dom = await page?.evaluate(() => ({

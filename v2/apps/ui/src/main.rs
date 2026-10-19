@@ -1,7 +1,7 @@
-mod accepted_results_bridge;
-mod accepted_results_view;
 mod about;
 mod acceptance_button;
+mod accepted_results_bridge;
+mod accepted_results_view;
 mod attachments_view;
 mod beta_bridge;
 mod beta_discovery;
@@ -149,6 +149,23 @@ fn App() -> Element {
                             if name == "Assistant" { current.set(global()); }
                         }, "{name}" }
                     }
+                }
+                if tab() == "Assistant" {
+                    section { key: "{current()}-{refresh}",
+                    h2 { "Assistant" }
+                    button { onclick: move |_| refresh += 1, "Reconnect and reload history" }
+                    beta_window_view::WindowView { id: current(), csrf: csrf(), session_scope, onexpired: expired }
+                    views::Conversation { id: current(), csrf: csrf(), session_scope, execution, drafts, held_inputs, onexpired: expired }
+                    }
+                } else if tab() == "History" {
+                    history::History { key: "{current()}", id: current(), csrf: csrf(), session_scope, onexpired: expired }
+                } else if tab() == "Host resources" {
+                    host_resources_view::HostResourcesView { key: "{session_scope.read().generation()}", session_scope, resources: host_resources, onexpired: expired }
+                } else {
+                    beta_settings::BetaSettings {}
+                }
+            }
+            if !csrf().is_empty() {
                     button { disabled: logging_out(), onclick: move |_| {
                         if logging_out() { return; }
                         logging_out.set(true);
@@ -176,21 +193,6 @@ fn App() -> Element {
                             logging_out.set(false);
                         });
                     }, if logging_out() { "Signing out…" } else { "Sign out" } }
-                }
-                if tab() == "Assistant" {
-                    section { key: "{current()}-{refresh}",
-                    h2 { "Assistant" }
-                    button { onclick: move |_| refresh += 1, "Reconnect and reload history" }
-                    beta_window_view::WindowView { id: current(), csrf: csrf(), session_scope, onexpired: expired }
-                    views::Conversation { id: current(), csrf: csrf(), session_scope, execution, drafts, held_inputs, onexpired: expired }
-                    }
-                } else if tab() == "History" {
-                    history::History { key: "{current()}", id: current(), csrf: csrf(), session_scope, onexpired: expired }
-                } else if tab() == "Host resources" {
-                    host_resources_view::HostResourcesView { key: "{session_scope.read().generation()}", session_scope, resources: host_resources, onexpired: expired }
-                } else {
-                    beta_settings::BetaSettings {}
-                }
             }
         }
     }
