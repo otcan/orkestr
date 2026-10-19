@@ -161,17 +161,34 @@ def unknown_shutdown():
     try:
         assert case.message()[0] == 202
         first = case.live(1)
-        assert case.message(2)[0] == 202
+        queued = case.message(2)
+        assert queued[0] == 202
         case.stop()
         assert case.peer_gone()
         assert case.rows("SELECT state FROM production_runs") == [("cancel_requested",)]
         assert case.rows("SELECT count(*) FROM production_observations WHERE kind='stopped'") == [(0,)]
-        held = case.rows("SELECT message_id,reason FROM production_held_inputs")
+        held_query = ("SELECT h.message_id,h.event_id,h.scope_sequence,h.reason,"
+                      "b.run_id,h.boundary_event_id,b.through_scope_sequence "
+                      "FROM production_held_inputs h JOIN production_stop_boundaries b "
+                      "ON b.event_id=h.boundary_event_id ORDER BY h.scope_sequence")
+        held = case.rows(held_query)
         assert len(held) == 1
+        assert held[0][:3] == tuple(queued[1][key] for key in ("message_id", "event_id", "sequence"))
+        assert held[0][3:5] == ("stop_boundary", first["run_id"])
         case.start()
         code, page, _ = case.request(case.path + "/held-inputs")
-        assert code == 503  # Unconfigured restart cannot fabricate a live supervisor.
-        assert case.request(case.path + "/execution")[1]["run_id"] == first["run_id"]
+        # Durable owner evidence survives restart without creating a supervisor.
+        assert code == 200 and page["schema_version"] == 1
+        assert page["conversation_id"] == case.conversation
+        keys = ("message_id", "source_event_id", "scope_sequence", "reason",
+                "boundary_run_id", "boundary_event_id", "through_scope_sequence")
+        assert page["held"] == [dict(zip(keys, held[0]))]
+        assert page["next_after_sequence"] is None and not page["eligible_input_available"]
+        status = case.request(case.path + "/execution")[1]
+        assert status["run_id"] == first["run_id"] and status["phase"] == "cancel_requested"
+        assert status["capabilities"] == {"stop": False, "steer": False}
+        assert status.get("acceptance_candidate") is None
+        assert case.request(case.path + "/execution?run_id=" + first["run_id"])[0] == 503
         case.stop()
         # Ordinary configured restart must refuse unresolved native truth before
         # another process/input; local reaping cannot manufacture Stopped.
@@ -183,7 +200,7 @@ def unknown_shutdown():
                                  stderr=subprocess.PIPE, timeout=6)
         assert refused.returncode != 0
         assert len([r for r in case.trace() if r["kind"] == "turn"]) == 1
-        assert case.rows("SELECT message_id,reason FROM production_held_inputs") == held
+        assert case.rows(held_query) == held
     finally:
         case.cleanup()
 
