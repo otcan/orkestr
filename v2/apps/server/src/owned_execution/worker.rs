@@ -12,18 +12,23 @@ impl ConfiguredExecution {
             .worker
             .as_ref()
             .map(|policy| {
+                let (launcher, launcher_sha256) = policy.broker_launcher().unwrap_or((
+                    self.config.launcher.as_path(),
+                    self.config.launcher_sha256.as_str(),
+                ));
                 WorkerSchedule::prepare(
                     self.store.clone(),
                     self.token.clone(),
                     WorkerConfiguration {
                         policy: policy.clone(),
-                        launcher: self.config.launcher.clone(),
-                        launcher_sha256: self.config.launcher_sha256.clone(),
+                        launcher: launcher.to_owned(),
+                        launcher_sha256: launcher_sha256.to_owned(),
                         workspace: self.config.workspace.clone(),
                         directory: self.directory.clone(),
                         controls: self.control.clone(),
                         children: self.children.clone(),
                         tasks: self.tasks.clone(),
+                        offline_python: self.offline_python.clone(),
                     },
                     parent,
                 )

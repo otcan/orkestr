@@ -26,6 +26,13 @@ machine_credential)`. It passes that object in
 arguments, native JSON, or browser responses. `WorkerPolicy::offline_python_enabled`
 and `WorkerPolicy::broker_launcher` expose configuration only, not authority.
 
+The ordinary single-conversation and configured-set loaders install this
+dispatcher once per enabled conversation. Each dispatcher retains that scope's
+bound Store and credential. An unavailable sandbox refuses startup; the configured
+set retains its documented per-slot reservation semantics. No HTTP field enables
+tools or chooses an executable. Worker-enabled parent replacement remains
+unavailable until its separate recovery policy is qualified.
+
 The Worker captures an opaque Core lineage handle before its execution capability
 is consumed by Runtime attachment. Only Runtime's owned pending call supplies
 source and exact native request/call/thread/turn correlation. A bounded owned job
@@ -53,6 +60,10 @@ tool refusal. Their execution receipts must identify the complete composed sourc
 and binary; the presence of these fixtures is not execution evidence. Real native
 provider qualification, project tools, multi-provider parity and release soak
 remain separate gates.
+
+`worker_tool_http` registers all five process scenarios in the ordinary Rust test
+suite on the supported Linux x86-64 sandbox target. The existing single-session,
+multi-conversation, restart and Worker task suites remain regression requirements.
 
 `v2/acceptance/broker_pending_tool_stop.py` runs the actual Channel from an exact
 Git commit and preserves pending-call cancellation guards. The independent
