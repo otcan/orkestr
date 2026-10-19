@@ -136,6 +136,11 @@ become closed. Every input identity, generation and budget field must still matc
 the initial admission; retiring is pending, and missing or uncertain state refuses.
 This read-only wait precedes held verification and fresh intake, stays within the
 original chat deadline, and supplies no independent native-reap proof.
+Held display proof selects the exact saved-message row and checks all six
+rendered intake/Stop provenance fields against the validated held DTO. Its
+preview follows `held_inputs::saved_preview`: 180 Unicode scalars, followed by
+an ellipsis only for longer input. The original fixed input and durable hold
+checks remain unchanged; another row's text cannot satisfy the display check.
 Unsupported Steer must be visible as unavailable, never reported as passed.
 Browser status and payload proofs are not independent process-tree evidence.
 The protected operator must additionally verify native cleanup and durable

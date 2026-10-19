@@ -3,19 +3,22 @@
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
 import {browserChat} from './chat.mjs';
+import {evaluateHeld, productHeldRow} from './held-preview-fixture.mjs';
 
 export const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const origin = 'https://example.invalid', conversation = id(1);
 export const limits = {duration_ms: 900000, attempts: 32, bytes: 67108864,
   cleanup_ms: 30000, cleanup_attempts: 4, cleanup_bytes: 1048576};
-const messages = ['synthetic first stream', 'synthetic held input',
+const defaultMessages = ['synthetic first stream', 'synthetic held input',
   'synthetic fresh post Stop', 'synthetic accepted continuation'];
 export const opening = {window_id: id(10), conversation_id: conversation, generation: 1,
   state: 'opening', input_message_id: id(100), input_event_id: id(200),
   predecessor_window_id: null, opened_at_ms: 1000, work_deadline_ms: 871000,
   expires_at_ms: 901000, limits};
 
-export function stoppedWindowFixture(samples = ['retiring', 'retiring', 'closed']) {
+export function stoppedWindowFixture(samples = ['retiring', 'retiring', 'closed'], options = {}) {
+  const messages = [...defaultMessages];
+  if (options.heldText !== undefined) messages[1] = options.heldText;
   const signal = new AbortController(), page = new EventEmitter(), events = [];
   let stopped = false, closed = false, sends = 0, admissions = 0, window = null;
   let currentRun = id(20), draft = '', steering, reads = 0, cookies = 0, cleanup = 0;
@@ -128,7 +131,13 @@ export function stoppedWindowFixture(samples = ['retiring', 'retiring', 'closed'
   Object.assign(page, {
     url: () => origin, goto: async () => ({url: () => origin}),
     reload: async () => ({url: () => origin}), waitForSelector: async () => {},
-    waitForFunction: async () => true,
+    waitForFunction: async (predicate, _options, ...args) => {
+      if (args[0] === messages[1] || Array.isArray(args[0]?.provenance)) {
+        events.push('held:preview');
+        const rows = options.heldRows ?? [productHeldRow(heldRow, messages[1])];
+        assert.equal(evaluateHeld(predicate, args, {origin, rows}), true, 'exact_held_preview_required');
+      }
+    },
     $eval: async (selector, _callback, value) => {
       if (selector === '#composer') { write('draft'); draft = value.value; }
     },
