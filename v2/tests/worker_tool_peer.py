@@ -11,6 +11,16 @@ import time
 import uuid
 
 
+
+def send_tool_request(record, emit, request_id, call_id, params, source):
+    fields = {"request_id": request_id, "call_id": call_id,
+              "source_digest": hashlib.sha256(source.encode()).hexdigest()}
+    # Intent survives immediate refusal/reaping; it does not prove emission.
+    record("tool-request-intent", **fields)
+    emit({"id": request_id, "method": "item/tool/call", "params": params})
+    record("tool-request", **fields)
+
+
 def main():
     assert sys.argv[1:] == ["app-server", "--listen", "stdio://"]
     assert set(os.environ) == {"PATH", "LANG", "LC_ALL", "HOME", "TMPDIR", "CODEX_HOME", "PWD"}
@@ -69,9 +79,7 @@ def main():
                       "tool": "orkestr_offline_python", "arguments": {"source": mode["source"]}}
             if mode.get("unsupported"):
                 params["tool"] = "arbitrary_shell_is_forbidden"
-            emit({"id": request_id, "method": "item/tool/call", "params": params})
-            record("tool-request", request_id=request_id, call_id=call_id,
-                   source_digest=hashlib.sha256(mode["source"].encode()).hexdigest())
+            send_tool_request(record, emit, request_id, call_id, params, mode["source"])
             requested = True
         if started and not completed and not progress_sent and (workspace / "progress-after-status").exists():
             emit({"method": "item/agentMessage/delta", "params": {

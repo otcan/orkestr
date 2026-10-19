@@ -49,8 +49,10 @@ def begin(case, source, **mode):
     status = tasks.task_running(case, task)
     case.trace()  # own native host identity before a refusal can reap it
     (case.workspace / "release-tool-request").touch()
-    ordinary.wait_for(lambda: any(row["kind"] == "tool-request" for row in case.trace()),
-                      "native Worker did not issue its tool call")
+    # Intent synchronizes unsupported refusal, and is not proof of emission.
+    marker = "tool-request-intent" if mode.get("unsupported") else "tool-request"
+    ordinary.wait_for(lambda: any(row["kind"] == marker for row in case.trace()),
+                      f"native Worker did not record {marker}")
     return task, status["run_id"]
 
 
