@@ -85,6 +85,29 @@ def relay(client,hosts,endpoint="/run/provider-egress.sock"):
         if upstream is not None:upstream.close()
 
 
+class RelayAdmission:
+    """Single accept-loop owner; no payload inspection or queued connections."""
+    def __init__(self):
+        self.workers=[]
+        self.reported=False
+
+    def admit(self,client,hosts):
+        self.workers=[worker for worker in self.workers if worker.is_alive()]
+        if len(self.workers)>=MAX_CONNECTIONS:
+            client.close()
+            # Fixed, bounded diagnostic only. No destination, account, address,
+            # native error, TLS bytes or caller-controlled text can enter it.
+            if not self.reported:
+                self.reported=True
+                try:os.write(2,b"provider-egress: inner-capacity-refused\n")
+                except OSError:pass
+            return False
+        worker=threading.Thread(target=relay,args=(client,hosts),daemon=True)
+        self.workers.append(worker)
+        worker.start()
+        return True
+
+
 def install_filter(fd):
     raw=os.read(fd,65536);os.close(fd)
     if not raw or len(raw)%8:raise ValueError("invalid sealed filter")
@@ -148,15 +171,12 @@ def main():
     else:command=["/usr/bin/python3","-I","-B",__file__,"native",str(fd)]
     child=subprocess.Popen(command,env=environment,close_fds=True,pass_fds=(fd,),stdin=sys.stdin,stdout=sys.stdout,stderr=sys.stderr)
     os.close(fd)
-    workers=[]
+    admission=RelayAdmission()
     try:
         while child.poll() is None:
-            workers=[thread for thread in workers if thread.is_alive()]
             try:client,_=listener.accept()
             except socket.timeout:continue
-            if len(workers)>=MAX_CONNECTIONS:client.close();continue
-            thread=threading.Thread(target=relay,args=(client,hosts),daemon=True)
-            workers.append(thread);thread.start()
+            admission.admit(client,hosts)
         return child.wait()
     finally:
         listener.close()
