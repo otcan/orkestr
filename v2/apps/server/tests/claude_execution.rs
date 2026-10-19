@@ -235,8 +235,32 @@ for line in sys.stdin:
         assert!(Instant::now() < deadline, "completion timeout");
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
-    pump.quarantine();
-    drop(pump);
+    if failure {
+        assert!(pump.retire_completed().is_err());
+    } else {
+        let mut retiring = pump.retire_completed().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let proof = loop {
+            if let Some(proof) = retiring.poll_reaped().unwrap() {
+                break proof;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "exact native-tree retirement timeout"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        assert_eq!(
+            proof.scope().run(),
+            admission.provider.run.run_id.to_string()
+        );
+        // Cleanup is negative authority only. Without owner acceptance even the
+        // exact cleanup witness cannot authorize another setup or user turn.
+        assert!(bound
+            .authorize_accepted_session_metadata(&token, &admission.provider.run.run_id, &binding)
+            .await
+            .is_err());
+    }
 
     drop(bound);
     drop(store);

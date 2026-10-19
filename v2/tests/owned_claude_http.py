@@ -120,7 +120,6 @@ def exercise(mode):
             assert case.rows("SELECT kind FROM production_observations WHERE kind='stopped'") == []
             return
 
-        assert case.message(2)[0] == 202
         (case.workspace / "release-result").touch()
         proposal = ordinary.wait_for(lambda: case.phase("awaiting_acceptance"), "explicit proposal")
         assert not case.peer_gone()
@@ -137,7 +136,7 @@ def exercise(mode):
         ordinary.wait_for(case.peer_gone, "accepted first turn must reap before factory exits")
         assert case.phase("completed") is not None
         assert case.rows("SELECT count(*) FROM production_runs") == [(1,)]
-        assert case.rows("SELECT count(*) FROM reasoning_inbox WHERE state!='consumed'") == [(1,)]
+        assert case.rows("SELECT count(*) FROM reasoning_inbox WHERE state!='consumed'") == [(0,)]
         assert len([row for row in case.trace() if row["kind"] == "turn"]) == 1
     finally:
         case.cleanup()

@@ -23,7 +23,7 @@ pub struct ReadyClaudeExecution {
 pub struct LiveClaudeExecution {
     store: Store,
     authority: Authority,
-    pump: ClaudePump,
+    pump: Option<ClaudePump>,
     quarantined: bool,
 }
 impl PreparingClaudeExecution {
@@ -64,7 +64,7 @@ impl ReadyClaudeExecution {
         Ok(LiveClaudeExecution {
             store: self.store,
             authority,
-            pump,
+            pump: Some(pump),
             quarantined: false,
         })
     }
@@ -78,13 +78,30 @@ impl LiveClaudeExecution {
                 orkestr_runtime::ports::Blocker::Protocol,
             ));
         }
-        if self.pump.flush().is_err() {
+        let pump = self.pump.as_mut().ok_or(supervisor::Error::Provider(
+            orkestr_runtime::ports::Blocker::Protocol,
+        ))?;
+        if pump.flush().is_err() {
             self.quarantine();
             return Err(supervisor::Error::Provider(
                 orkestr_runtime::ports::Blocker::Protocol,
             ));
         }
-        self.pump.step(&self.store).await
+        pump.step(&self.store).await
+    }
+    /// The exact pump must have committed its genuine completion proposal.
+    /// This only closes owned transport; Core separately requires acceptance.
+    pub fn retire_completed(
+        mut self,
+    ) -> Result<orkestr_runtime::containment::RetiringBroker, orkestr_runtime::containment::Error>
+    {
+        if self.quarantined {
+            return Err(orkestr_runtime::containment::Error::Revoked);
+        }
+        self.pump
+            .take()
+            .ok_or(orkestr_runtime::containment::Error::Revoked)?
+            .retire_completed()
     }
     /// Negative authority/owned cleanup only. Does not claim Stopped/Cancelled.
     pub fn quarantine(&mut self) {
