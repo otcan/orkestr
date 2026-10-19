@@ -5,11 +5,13 @@ use orkestr_v2_application::runtime::{ProviderAdmission, Role};
 use orkestr_v2_store_sqlite::Store;
 use std::sync::Arc;
 
-fn same_session(previous: &ProviderAdmission, next: &ProviderAdmission) -> bool {
+fn same_session(previous: &ProviderAdmission, next: &ProviderAdmission, role: Role) -> bool {
     let old = &previous.binding;
     let new = &next.binding;
-    old.role == Role::Deep
-        && new.role == Role::Deep
+    matches!(role, Role::Deep | Role::Fast)
+        && old.role == role
+        && previous.run.role == role
+        && new.role == role
         && old.provider_kind == ProviderKind::Codex
         && new.provider_kind == old.provider_kind
         && new.owner_id == old.owner_id
@@ -36,9 +38,28 @@ impl CodexPump {
     /// No reconnect, process spawn, metadata replay, or replacement grant exists
     /// here. Every failure consumes the supplied capability and quarantines.
     pub fn attach_next(
+        self,
+        store: Store,
+        capability: Box<ConsumedProviderDispatch>,
+    ) -> Result<(Authority, Self), SubmissionFailure> {
+        self.attach_next_role(store, capability, Role::Deep)
+    }
+
+    /// Fast-only continuation after owner acceptance and a fresh consumed Fast
+    /// admission. Never accepts a Deep or Worker capability or changes roles.
+    pub fn attach_next_fast(
+        self,
+        store: Store,
+        capability: Box<ConsumedProviderDispatch>,
+    ) -> Result<(Authority, Self), SubmissionFailure> {
+        self.attach_next_role(store, capability, Role::Fast)
+    }
+
+    fn attach_next_role(
         mut self,
         store: Store,
         capability: Box<ConsumedProviderDispatch>,
+        role: Role,
     ) -> Result<(Authority, Self), SubmissionFailure> {
         let provider = capability.provider().clone();
         if self.source.failed.is_some()
@@ -55,13 +76,13 @@ impl CodexPump {
                 self.source.stream.terminal(),
                 Some(ProviderEvent::CompletedProposal { .. })
             )
-            || !same_session(&self.admission, &provider)
+            || !same_session(&self.admission, &provider, role)
             || capability.namespace() != self.source.scope.namespace()
             || capability.incarnation_id() != self.source.scope.incarnation_id()
         {
             return Err(SubmissionFailure::Protocol(Blocker::Protocol));
         }
-        // Core's fresh consumed Deep run requires the previously occupied
+        // Core's fresh consumed same-role run requires the previously occupied
         // binding to have been released. A CompletedProposal cannot be cancelled
         // into Ready; only explicit owner acceptance releases this generation.
         let (native, request_id) = self
