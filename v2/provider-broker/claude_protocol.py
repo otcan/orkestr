@@ -5,6 +5,7 @@ from protocol import PROTOCOL, exact, identifier, require
 from claude_telemetry import validate_telemetry
 from claude_control import ClaudeControl, canonical
 from claude_failure import sanitize_failure
+from claude_system_telemetry import validate_system_telemetry
 
 
 class ClaudeChannel:
@@ -123,6 +124,17 @@ class ClaudeChannel:
         require(not any(key in frame for key in ("sessionId", "parent_tool_use_id"))
                 or frame.get("parent_tool_use_id") is None and "sessionId" not in frame)
         kind = frame.get("type")
+        if kind == "system" and frame.get("subtype") in ("thinking_tokens", "status"):
+            require(self.initialized and self.system_seen and self.active is not None
+                    and not self.output_uuid_overflow)
+            event = validate_system_telemetry(frame, self.native, self.input_uuid)
+            require(event != self.terminal_uuid and event not in self.telemetry_uuids
+                    and event not in self.output_uuids
+                    and (self.control is None or event not in self.control.notice_ids)
+                    and len(self.telemetry_uuids) < 128)
+            self.telemetry_uuids.add(event)
+            # No readiness, progress, result, control ACK or terminal is emitted.
+            return None
         if kind in ("command_lifecycle", "rate_limit_event"):
             validate_telemetry(frame, self.input_uuid)
             require(self.initialized and self.active is not None)
