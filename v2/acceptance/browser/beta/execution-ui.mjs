@@ -39,6 +39,15 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
     if (['failed', 'blocked'].includes(value.phase)) throw failure('not_completed');
     return allowed.includes(value.phase);
   }, timeoutMs);
+  // Retirement removes the live scope used by selected-run reads. The durable
+  // owner projection survives, but must still match this exact receipt's run;
+  // a later run, unavailable read or control acknowledgement is not completion.
+  const terminal = async (expected, run, timeoutMs = 20000) => wait(() => read('execution'), value => {
+    if (!value) return false;
+    executionStatus(value, conversation, run);
+    if (['failed', 'blocked'].includes(value.phase)) throw failure('not_completed');
+    return value.phase === expected;
+  }, timeoutMs);
 
   return {
     async send(text) {
@@ -126,14 +135,14 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
       await clickReady(page, 'Stop', origin, 'Execution and resources', action);
       const controlValue = await control('stop');
       assertStopRequested({conversation, before, ...controlValue});
-      const after = await phase(['cancelled'], run, 30000);
+      const after = await terminal('cancelled', controlValue.receipt.run_id, 30000);
       return {...controlValue, after, proof: assertStopped({conversation, receipt: controlValue.receipt, after})};
     },
     async accept(run) {
       await guard(); if (++accepts > 2) throw failure('request_budget');
       const proposal = await phase(['awaiting_acceptance'], run);
       await clickReady(page, 'Accept completion', origin, 'Execution and resources', action);
-      const controlValue = await control('accept'), after = await phase(['completed'], run);
+      const controlValue = await control('accept'), after = await terminal('completed', controlValue.receipt.run_id);
       return {...controlValue, after, proof: assertAccepted({conversation, proposal, ...controlValue, after})};
     },
     async completed(receipt) {
