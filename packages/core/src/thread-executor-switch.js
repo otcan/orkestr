@@ -257,9 +257,16 @@ async function performSwitch(thread, request, runtime, env) {
 async function waitForPendingApplied(threadId, env) {
   const deadline = Date.now() + positiveMs(env.ORKESTR_EXECUTOR_SWITCH_INTERRUPT_WAIT_MS, 10_000);
   for (;;) {
+    // Pending is cleared before asynchronous validation/handoff/start finishes.
+    // Sample both sides of the read so a finishing lock cannot expose an old
+    // executor snapshot as a completed switch. Never await the lock itself:
+    // a stalled holder must still respect the caller's interrupt wait budget.
+    const wasApplying = switchChains.has(threadId);
     const current = await getThread(threadId, env);
-    if (!current?.pendingExecutorSwitch || Date.now() >= deadline) return current;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    const applying = wasApplying || switchChains.has(threadId);
+    const remaining = deadline - Date.now();
+    if ((!current?.pendingExecutorSwitch && !applying) || remaining <= 0) return { thread: current, applying };
+    await new Promise((resolve) => setTimeout(resolve, Math.min(100, remaining)));
   }
 }
 
@@ -298,13 +305,16 @@ export async function switchThreadExecutor(threadId, target, options = {}, env =
     }
     const interrupt = from === EXECUTOR_CLAUDE ? runtime.interruptClaude : runtime.interruptCodex;
     const interrupted = await Promise.resolve(interrupt?.(deferred, env)).catch(() => ({ interrupted: false }));
-    const settled = interrupted?.interrupted ? await waitForPendingApplied(thread.id, env) : deferred;
-    if (!settled?.pendingExecutorSwitch) {
+    const waited = interrupted?.interrupted
+      ? await waitForPendingApplied(thread.id, env)
+      : { thread: deferred, applying: false };
+    const settled = waited.thread;
+    if (!waited.applying && !settled?.pendingExecutorSwitch) {
       const applied = activeThreadExecutor(settled || {}) === to;
       if (!applied) throw switchError("executor_switch_failed", 409);
       return { ok: true, changed: true, deferred: false, from, to, thread: settled, executor: threadExecutorSummary(settled) };
     }
-    if (turnActive(settled, runtime)) {
+    if (waited.applying || turnActive(settled, runtime)) {
       return { ok: true, changed: false, deferred: true, from, to, thread: settled, executor: threadExecutorSummary(settled) };
     }
     return applyPendingExecutorSwitch(thread.id, { runtime }, env);
