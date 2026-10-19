@@ -55,3 +55,17 @@ missing projections `schema_unavailable`; it never calls absent features unused.
 Reverse import into V1, old-binary downgrade, actual package executable behavior,
 Store-issued semantic receipt verification, multi-authority consistency, active
 recovery and live mutation are unexecuted and not claimed.
+
+Executed: the single populated proof passed in **5.301 seconds**; Python syntax
+compilation and `git diff --check` passed. Test source was
+`48f41f08543ab466f77c167f38f850828ae1daba`, then rebased to
+`d3ae8417fbc3dd23f4a3566d4fd37787cec9393b` to keep PR111's timer mount out of this
+four-file slice. Git verified byte-identical migration tools, Installation helper
+and package builder across that scope-only rebase. No Cargo build, download,
+server, provider, outbound worker or live state operation was run.
+
+Private synthetic evidence retains the completed SQLite cut, Installation
+manifest, reconciliation manifest, all 36 canonical SQL files and their hashes.
+No real account/session/credential rows were read. An earlier execution of the
+first checkpoint passed in 4.125 seconds before optional evidence retention was
+added; it is not counted as an additional scenario.
