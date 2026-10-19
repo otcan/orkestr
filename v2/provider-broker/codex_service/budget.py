@@ -33,7 +33,7 @@ class WindowBudget:
             boot, wall, mono = self.ledger.clock.sample()
             if (boot != self._row["boot"] or wall < self._row["created_wall_ns"] or
                     wall >= self._row["deadline_wall_ns"] or mono >= self._row["deadline_mono_ns"]):
-                self.ledger.tick(self.window, self.generation)
+                self.ledger.uncertain(self.window, self.generation, "clock_changed")
                 self.stop("window_clock")
                 raise Refused("window_clock")
             now = time.monotonic()
