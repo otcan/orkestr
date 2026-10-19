@@ -45,6 +45,9 @@ impl Store {
         if unresolved != 0 {
             return Err(RuntimeStoreError::Fenced);
         }
+        if !descendants_clear(&mut tx, &c.id).await? {
+            return Err(RuntimeStoreError::Fenced);
+        }
         // Immutable provenance is issued only after the canonical terminal checks
         // above. Other expiry/revocation paths must never create this evidence.
         let clock = now(&mut tx).await?;
@@ -95,3 +98,11 @@ mod tests;
 
 #[cfg(test)]
 mod stopped_tests;
+
+mod descendants;
+pub(super) use descendants::descendants_clear;
+#[cfg(test)]
+mod descendant_tests;
+
+#[cfg(test)]
+mod descendant_effect_tests;
