@@ -172,9 +172,11 @@ class Channel:
             require(self.stage == "subscription")
             require((kind == "thread/resume") == (self.expected_native is not None))
             if kind == "thread/resume":
-                require(isinstance(params, dict) and params.get("threadId") == self.expected_native)
+                require(isinstance(params, dict) and params.get("threadId") == self.expected_native
+                        and params.get("excludeTurns") is True)
                 params = dict(params)
                 del params["threadId"]
+                del params["excludeTurns"]
                 require("ephemeral" not in params)
                 params["ephemeral"] = False
             if self.offline_python:
@@ -264,6 +266,10 @@ class Channel:
         elif kind in ("thread/start", "thread/resume"):
             thread = result.get("thread")
             require(isinstance(thread, dict))
+            if kind == "thread/resume":
+                # Metadata-only setup must not hydrate historical turns. The
+                # transport frame limit remains unchanged if a peer ignores it.
+                require(thread.get("turns", []) == [])
             require(result.get("modelProvider") == thread.get("modelProvider") == "openai")
             require(identifier(thread.get("id")) and thread.get("ephemeral") is False)
             require(self.expected_native is None or thread["id"] == self.expected_native)
