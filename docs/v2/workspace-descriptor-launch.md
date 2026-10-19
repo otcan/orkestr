@@ -47,3 +47,13 @@ spawned Process across outer failure before quarantining it. Existing FD3/FD4
 sources now duplicate above slot 5 before any destination mapping. This is a
 library port; no factory selects it yet. Python descriptor forwarding and the
 same-descriptor read-only mount remain separate qualification prerequisites.
+
+Combined synthetic qualification imports Isolation `b04c57d73` and its separate
+mount regression `195c20bab` without selecting any account/profile. The Runtime
+unit case uses actual schema40 Store issuance, committed launch consumption,
+FD3/FD5 process setup, and the closed Python mount helper. A renamed/replaced
+path still mounts the retained original read-only with final FD5 closed. Its
+second branch injects a deferred SQLite foreign-key COMMIT failure after actual
+spawn and checks original child ownership, quarantine/reaping and no replay.
+This does not qualify selected-profile forwarding, factory activation, actual
+provider launch, workspace resume or hostile mount/filesystem changes.
