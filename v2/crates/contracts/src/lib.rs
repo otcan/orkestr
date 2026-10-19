@@ -175,3 +175,7 @@ pub use execution_acceptance::*;
 
 mod steering;
 pub use steering::*;
+
+// Exact Memory contract imported from Core 160e9cf1b; HTTP remains separately mounted.
+mod memory;
+pub use memory::*;
