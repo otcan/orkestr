@@ -1,6 +1,20 @@
 //! Sealed broker setup admission; never inference authority.
 use super::*;
 impl MetadataChild {
+    pub(crate) fn enable_offline_python(&self) -> Result<(), Error> {
+        let state = self.shared.state.lock().map_err(|_| Error::Revoked)?;
+        if self.shared.scope.binding.role != orkestr_v2_application::runtime::Role::Worker
+            || self.shared.scope.provider != ProviderKind::Codex
+            || state.phase != Phase::Setup
+            || state.broker_open_attempted
+            || !self.broker_launcher
+        {
+            return Err(Error::WrongScope);
+        }
+        self.process.offline_python.store(true, Ordering::Release);
+        Ok(())
+    }
+
     /// Accept only Runtime codec's sealed by-value setup operation. Its lineage
     /// is local process identity, never a reusable Core execution capability.
     pub(crate) fn enqueue_broker_metadata(
@@ -21,8 +35,11 @@ impl MetadataChild {
                 if frame.len() > self.process.max_frame {
                     return Err(Error::FrameTooLarge);
                 }
-                let canonical =
-                    super::super::broker_frames::metadata(&frame, &self.process.workspace)?;
+                let canonical = if self.process.offline_python.load(Ordering::Acquire) {
+                    super::super::broker_frames::offline::metadata(&frame, &self.process.workspace)?
+                } else {
+                    super::super::broker_frames::metadata(&frame, &self.process.workspace)?
+                };
                 let grant = state.grant.as_ref().ok_or(Error::Revoked)?;
                 self.shared
                     .store

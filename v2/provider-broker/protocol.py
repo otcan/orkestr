@@ -51,7 +51,13 @@ def encode(value):
 
 
 class Channel:
-    def __init__(self, workspace, *, expected_native=None):
+    def __init__(self, workspace, *, expected_native=None, offline_python=False):
+        require(type(offline_python) is bool)
+        self.offline_python = offline_python
+        self.offline_route = None
+        if offline_python:
+            from offline_route import OfflineRoute
+            self.offline_route = OfflineRoute()
         require(expected_native is None or identifier(expected_native))
         self.expected_native = expected_native
         self.workspace = str(workspace)
@@ -68,6 +74,7 @@ class Channel:
         self.terminal = False
         self.messages = set()
         self.cancelled = False
+        self.cancelled_tool = False
 
     def client(self, request):
         exact(request, ("id", "method", "params"))
@@ -89,15 +96,21 @@ class Channel:
             # Closed transport metadata only. Core must separately issue Worker
             # parent/task admission; role JSON cannot create that authority.
             require(identity["role"] in ("fast", "deep", "worker"))
+            require(not self.offline_python or identity["role"] == "worker")
             self.handle = secrets.token_hex(24)
             return None, {"id": outer, "result": {"protocol": PROTOCOL,
                     "identity": identity, "metadata_only": True, "owned_handle": self.handle}}
         exact(params, ("owned_handle", "frame"))
         require(params["owned_handle"] == self.handle)
-        require(method in ("BrokerMetadata", "CommitExecution", "CancelExecution"))
+        require(method in ("BrokerMetadata", "CommitExecution", "CancelExecution", "ToolResult"))
         frame = params["frame"]
         require(self.pending is None)
         require(isinstance(frame, dict))
+        if method == "ToolResult":
+            require(self.offline_python and self.committed and self.turn is not None
+                    and not self.terminal and not self.cancelled)
+            clean = self.offline_route.submit(request, self.handle)
+            return clean, {"id": outer, "result": {"owned_handle": self.handle, "frame": None}}
         if method == "BrokerMetadata":
             kind = self.metadata(frame)
             if kind == "initialized":
@@ -111,6 +124,8 @@ class Channel:
             require(type(frame["id"]) is int and frame["id"] > 0 and frame["method"] == "turn/interrupt")
             exact(frame["params"], ("threadId", "turnId"))
             require(frame["params"] == {"threadId": self.native, "turnId": self.turn})
+            if self.offline_route is not None:
+                self.cancelled_tool = self.offline_route.cancel()
             self.cancelled = True  # a lost acknowledgement never permits retry
             kind = "turn/interrupt"
         else:
@@ -118,6 +133,7 @@ class Channel:
             # after consuming the real Core capability under the durable fence.
             # This server cannot authenticate Core authority from JSON.
             require(self.stage == "ready" and (not self.committed or self.terminal))
+            require(self.offline_route is None or self.offline_route.pending is None)
             self.validate_turn(frame)
             require(frame["id"] > self.last_turn_inner)
             self.last_turn_inner = frame["id"]
@@ -127,6 +143,7 @@ class Channel:
             if self.turn is not None:
                 self.retired_turns.add(self.turn)
             self.turn, self.terminal, self.cancelled = None, False, False
+            self.cancelled_tool = False
             self.committed = True  # latch BEFORE a possible partial provider write
             kind = "turn/start"
         self.pending = (outer, frame["id"], kind)
@@ -146,8 +163,8 @@ class Channel:
             exact(params, ("clientInfo", "capabilities"))
             exact(params["clientInfo"], ("name", "title", "version"))
             require(all(identifier(v) for v in params["clientInfo"].values()))
-            require(params["capabilities"] == {"experimentalApi": False}
-                    and params["capabilities"]["experimentalApi"] is False)
+            require(params["capabilities"] == {"experimentalApi": self.offline_python}
+                    and params["capabilities"]["experimentalApi"] is self.offline_python)
         elif kind == "account/read":
             require(self.stage == "initialized" and params == {"refreshToken": False}
                     and params["refreshToken"] is False)
@@ -160,6 +177,11 @@ class Channel:
                 del params["threadId"]
                 require("ephemeral" not in params)
                 params["ephemeral"] = False
+            if self.offline_python:
+                from offline_tool import advertisement
+                require(isinstance(params, dict) and params.get("dynamicTools") == [advertisement()])
+                params = dict(params)
+                del params["dynamicTools"]
             require(params == {"cwd": self.workspace, "approvalPolicy": "never",
                                "sandbox": "read-only", "ephemeral": False, "modelProvider": "openai"}
                     and params["ephemeral"] is False)
@@ -180,6 +202,11 @@ class Channel:
 
     def provider(self, frame):
         require(isinstance(frame, dict))
+        if frame.get("method") == "item/tool/call":
+            require(self.offline_python and self.pending is None and self.committed
+                    and self.turn is not None and not self.terminal and not self.cancelled)
+            clean = self.offline_route.receive(frame, self.native, self.turn)
+            return {"method": "BrokerOutput", "params": {"owned_handle": self.handle, "frame": clean}}
         if "id" not in frame:
             # Never pass server tool/approval requests through as notifications.
             require(isinstance(frame.get("method"), str) and "params" in frame)
@@ -208,6 +235,9 @@ class Channel:
             else:
                 self.turn = turn_id
             if frame["method"] == "turn/completed":
+                require(self.offline_route is None or self.offline_route.pending is None)
+                if self.cancelled_tool:
+                    require(self.cancelled and clean["turn"]["status"] == "interrupted")
                 require(clean["turn"]["status"] in ("completed", "failed", "interrupted"))
                 self.terminal = True
             frame = {"method": frame["method"], "params": clean}

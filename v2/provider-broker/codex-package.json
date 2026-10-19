@@ -2,9 +2,9 @@
   "format": "orkestr-v2-codex-package-v1",
   "entry": "server.py",
   "files": {
-    "server.py": "eec117bbbfcd5a22c896f59a0f0e42e77cc3697c9766d5791e404130b21c23e0",
+    "server.py": "59959b39da32284feea310e4595870a2e5aa9f47dd09382c3accb2386e3e1abe",
     "configuration.py": "1fba545e87e0834d2b3ba36a2c1249ca825631dfa5d6b29cd1b7fa573a8d22ec",
-    "protocol.py": "97fbf47df6c55d2979e9551e81cf2c13d3db9e8100ae0597cbec309e34f30549",
+    "protocol.py": "d905c1da54d43cbe8401c4a072a73321f8a94219e04e335235e3d8b4149ba5df",
     "transport.py": "fe7821673c927f3a8a6226ca8f9e08e9c8a5ea4eb9526b62a2a44e3789e8264c",
     "codex_bootstrap.py": "04bf9751c1da6d5366380ce6589afb27cb5b1c8671425681dbb5a21778843276",
     "reaping.py": "4632be4e94cef92a0b8a2970bad0a55a1925d07d7926eb05a6af32ef512954d7"

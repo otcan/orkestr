@@ -1,9 +1,13 @@
 //! Correlated framing only. These bytes never confer dispatch authority.
 use super::*;
+mod offline;
+use offline::OfflineState;
 
 /// Private owned-pipe framing state; a handle is not an execution capability.
 pub(crate) struct BrokerChannel {
     handle: String,
+    offline: OfflineState,
+    native: Option<String>,
     lineage: Option<std::sync::Arc<()>>,
     next: u64,
     pending: Option<(u64, Option<u64>)>,
@@ -35,6 +39,8 @@ impl OwnedMetadataHandle {
     pub(crate) fn into_channel(self) -> BrokerChannel {
         BrokerChannel {
             handle: self._handle,
+            offline: OfflineState::default(),
+            native: None,
             lineage: self.lineage,
             next: 2,
             pending: None,
@@ -64,6 +70,7 @@ impl BrokerChannel {
         let lineage = self.lineage.clone().ok_or(Blocker::Protocol)?;
         let bytes = self.wrap("CancelExecution", frame)?;
         self.cancellation_pending = true;
+        self.offline.cancel();
         Ok((lineage, bytes))
     }
     /// Enable only for the actual-FD transport before submitting any setup.
@@ -168,6 +175,7 @@ impl BrokerChannel {
             || !self.execution_claimed
             || !self.terminal_observed
             || self.pending.is_some()
+            || self.offline.pending.is_some()
             || self.active_turn.is_none()
             || self.preparation.is_some_and(|p| p != Preparation::Written)
             || inner_id <= self.last_execution_inner
@@ -253,6 +261,7 @@ impl BrokerChannel {
             return Err(Blocker::Protocol);
         }
         let value: Value = serde_json::from_slice(bytes).map_err(|_| Blocker::Protocol)?;
+        crate::claude_rpc::unique_keys(std::str::from_utf8(bytes).map_err(|_| Blocker::Protocol)?)?;
         let object = value.as_object().ok_or(Blocker::Protocol)?;
         if object.len() != 2 {
             return Err(Blocker::Protocol);
@@ -276,7 +285,7 @@ impl BrokerChannel {
         // Notifications from the already-written active turn can precede the
         // broker's cancellation preparation (or arrive during suffix writes).
         // This exception never admits a correlated ACK or new-turn output.
-        let cancelling_output = self.cancellation_pending
+        let cancelling_output = (self.cancellation_pending || self.offline.result_pending)
             && self.active_turn.is_some()
             && value.get("method").and_then(Value::as_str) == Some("BrokerOutput");
         if self.pending.is_some()
@@ -300,9 +309,14 @@ impl BrokerChannel {
                 .get("frame")
                 .filter(|v| v.is_object())
                 .ok_or(Blocker::Protocol)?;
+            if frame.get("method").and_then(Value::as_str) == Some("item/tool/call") {
+                self.accept_offline_call(frame)?;
+                return Ok(None);
+            }
             if frame.get("id").is_some() {
                 return Err(Blocker::Protocol);
             }
+            self.validate_offline_terminal(frame)?;
             self.observe_turn(frame)?;
             return Ok(Some(frame.clone()));
         }
@@ -335,6 +349,10 @@ impl BrokerChannel {
         }
         self.pending = None;
         self.cancellation_pending = false;
+        if self.offline.result_pending {
+            self.offline.result_pending = false;
+            self.offline.pending = None;
+        }
         Ok((!frame.is_null()).then(|| frame.clone()))
     }
 }

@@ -2,6 +2,7 @@
 use super::process::{validate_metadata, Process};
 use super::Error;
 mod claude;
+pub(super) mod offline;
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;

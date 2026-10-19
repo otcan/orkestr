@@ -29,6 +29,7 @@ mod execution_accept;
 mod execution_registry;
 pub mod fast_execution;
 mod held_inputs;
+pub mod offline_python;
 pub mod owned_children;
 pub mod owned_execution;
 mod provider_payload;
