@@ -1,5 +1,6 @@
 //! Independent Store process-boundary oracle with ordinary browser auth handlers.
-//! Core 16e8d977; Runtime registers this test-only leaf. No listener/provider starts.
+//! Core f0d83adb (including 16e8d977); Runtime registers this test-only leaf.
+//! Issuance/reattach must revalidate recovered CLOSED lineage. No provider starts.
 use crate::{auth, browser, AppState};
 use axum::{
     body::to_bytes,
@@ -367,7 +368,7 @@ async fn replace(root: &Path, state: AppState, active: bool) {
                 config(ProductionTakeover::ExpiredPredecessor {
                     incarnation_id: recovered.predecessor_incarnation().into(),
                 }),
-                recovered.prior_run_id(),
+                recovered.prior_run(),
             )
             .await
             .unwrap();
