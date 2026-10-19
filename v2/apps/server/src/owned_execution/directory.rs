@@ -102,6 +102,24 @@ pub(super) fn existing_for(
     existing_directory(home, scoped_root(home)?.join(conversation.to_string()))
 }
 
+/// Fast keeps its own writable home and temporary directory, including when
+/// the ordinary Deep factory serves the same canonical conversation.
+pub(super) fn fast(
+    home: &Path,
+    conversation: &orkestr_v2_contracts::ConversationId,
+    existing: bool,
+) -> Result<PathBuf, &'static str> {
+    if conversation.0.is_nil() {
+        return Err("Fast scope requires a conversation");
+    }
+    let path = scoped_root(home)?.join(format!("fast-{conversation}"));
+    if existing {
+        existing_directory(home, path)
+    } else {
+        create_directory(path)
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

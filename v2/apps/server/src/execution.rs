@@ -15,6 +15,25 @@ pub(crate) async fn status(
     Path(id): Path<String>,
     query: Result<Query<StatusQuery>, QueryRejection>,
 ) -> Result<Response, Error> {
+    status_for(state, headers, id, query, false).await
+}
+
+pub(crate) async fn fast_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    query: Result<Query<StatusQuery>, QueryRejection>,
+) -> Result<Response, Error> {
+    status_for(state, headers, id, query, true).await
+}
+
+async fn status_for(
+    state: AppState,
+    headers: HeaderMap,
+    id: String,
+    query: Result<Query<StatusQuery>, QueryRejection>,
+    fast: bool,
+) -> Result<Response, Error> {
     let owner = owner(&state, &headers).await?;
     let Query(query) = query.map_err(|_| {
         Error(
@@ -37,7 +56,11 @@ pub(crate) async fn status(
             "Invalid conversation ID",
         )
     })?);
-    let scope = state.execution_scope(&owner, &conversation).await?;
+    let scope = if fast {
+        state.fast_execution_scope(&owner, &conversation).await?
+    } else {
+        state.execution_scope(&owner, &conversation).await?
+    };
     let status = if let Some(run) = &query.run_id {
         // A run locator selects a read, never provider authority. Core checks
         // the browser credential and exact scope in the projection snapshot.
@@ -51,11 +74,20 @@ pub(crate) async fn status(
             .store
             .execution_run_status_authenticated(&credential, &conversation, run)
             .await
+    } else if fast {
+        let credential = browser::credential(&headers)?;
+        let Some(scope) = scope else {
+            return Ok(StatusCode::NO_CONTENT.into_response());
+        };
+        scope
+            .store
+            .execution_fast_status_authenticated(&credential, &conversation)
+            .await
     } else {
         state.store.execution_status(&owner, &conversation).await
     }
     .map_err(|error| match error {
-        RuntimeStoreError::Unauthorized if query.run_id.is_some() => unauthorized(),
+        RuntimeStoreError::Unauthorized if query.run_id.is_some() || fast => unauthorized(),
         RuntimeStoreError::NotFound | RuntimeStoreError::Unauthorized => {
             Error(StatusCode::NOT_FOUND, "not_found", "Conversation not found")
         }
@@ -118,6 +150,25 @@ pub(crate) async fn stop(
         axum::extract::rejection::JsonRejection,
     >,
 ) -> Result<Response, Error> {
+    stop_for(state, headers, id, body, false).await
+}
+
+pub(crate) async fn fast_stop(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<ExecutionControlRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, Error> {
+    stop_for(state, headers, id, body, true).await
+}
+
+async fn stop_for(
+    state: AppState,
+    headers: HeaderMap,
+    id: String,
+    body: Result<Json<ExecutionControlRequest>, axum::extract::rejection::JsonRejection>,
+    fast: bool,
+) -> Result<Response, Error> {
     let owner = browser::owner(&state, &headers).await?;
     browser::guard(
         &state,
@@ -147,14 +198,16 @@ pub(crate) async fn stop(
             "Invalid Stop request",
         ));
     }
-    let scope = state
-        .execution_scope(&owner, &conversation)
-        .await?
-        .ok_or(Error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "control_unavailable",
-            "Stop unavailable",
-        ))?;
+    let scope = if fast {
+        state.fast_execution_scope(&owner, &conversation).await?
+    } else {
+        state.execution_scope(&owner, &conversation).await?
+    }
+    .ok_or(Error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "control_unavailable",
+        "Stop unavailable",
+    ))?;
     let credential = browser::credential(&headers)?;
     let requested = match &scope.control {
         Some(control) => Some(control.request(&owner, &conversation, &input).ok_or(Error(

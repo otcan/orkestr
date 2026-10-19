@@ -61,12 +61,35 @@ fn private_explicit_config_is_validated_without_launching_anything() {
     let config = fixture.load().unwrap();
     assert_eq!(config.token(&fixture.home).unwrap(), "ab".repeat(32));
     assert!(config.worker.is_none());
+    assert!(config.role == super::config::ExecutionRole::Deep);
     assert!(Config::load(
         &fixture.path,
         &fixture.home,
         "0.0.0.0:19822".parse().unwrap()
     )
     .is_err());
+}
+
+#[test]
+fn fast_is_explicit_and_refuses_worker_or_unsupported_provider_authority() {
+    let mut fixture = Fixture::new();
+    fixture.value["role"] = json!("fast");
+    fixture.write();
+    assert!(fixture.load().unwrap().role == super::config::ExecutionRole::Fast);
+    for (field, value) in [
+        ("role", json!("worker")),
+        ("provider", json!("claude")),
+        (
+            "worker",
+            json!({"mode":"parent-input-once-v1", "lifetime_ms":1000}),
+        ),
+    ] {
+        let original = fixture.value.clone();
+        fixture.value[field] = value;
+        fixture.write();
+        assert!(fixture.load().is_err(), "Fast accepted invalid {field}");
+        fixture.value = original;
+    }
 }
 
 #[test]

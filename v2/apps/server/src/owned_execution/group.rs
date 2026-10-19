@@ -49,7 +49,7 @@ impl ConfiguredExecutions {
         let mut configs = Vec::new();
         for path in manifest.configurations {
             let config = Config::load(&path, home, bind)?;
-            if !conversations.insert(config.conversation_id.clone())
+            if !conversations.insert((config.conversation_id.clone(), config.role))
                 || !identities.insert((config.namespace.clone(), config.supervisor_key.clone()))
             {
                 return Err("duplicate conversation or supervisor in execution set");
