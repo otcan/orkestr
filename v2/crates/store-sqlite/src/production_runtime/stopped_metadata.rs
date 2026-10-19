@@ -24,4 +24,6 @@ impl Store {
     }
 }
 #[cfg(test)]
+mod descendant_tests;
+#[cfg(test)]
 mod tests;
