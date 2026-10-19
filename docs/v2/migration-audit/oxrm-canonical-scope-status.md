@@ -133,3 +133,59 @@ scope, revoke/logout between checks and zero service calls. Coordinator then
 implements the native original-browser-session bridge against that pinned
 canonical source. Until that port exists, exact-scope live parity remains
 unresolved and all nine workflow requirements remain preserved.
+
+## Original-request verifier adapter checkpoint
+
+`v2/migration/oxrm_scope_status/fastify_scope_status.ts` stages
+`registerScopeStatus(app, dependencies, verifyCurrentCaller)`. It is not mounted.
+`CanonicalCallerVerifier` receives the original `FastifyRequest` on both checks,
+including the framework request identity; the pure handler's request projection
+is never used to reconstruct credential authority. Missing verifier fails at
+registration; null current principal refuses 401; verifier exceptions refuse
+503. A changed caller/scope refuses. Successful metadata remains explicitly
+not workflow readiness or activity proof. Delivery checks do not establish an
+atomic response/revocation boundary.
+
+Read-only canonical source review found scope enforcement in
+`packages/core/src/services.ts` (`assertLinkedInOutreachScope`,
+`assertReadScopeForLeadQuery`, `assertClaimScope`), but no caller credential
+verifier in the reviewed API/MCP/core TypeScript trees. MCP `loadConfig` supplies
+configured scope, not caller authentication. `packages/db/src/schema/index.ts`
+`integrationAccounts` stores connector status and credential references; it is
+not an authenticated human/machine caller or workspace-membership authority.
+The generic Compose source binds API/MCP ports to loopback; this is transport
+exposure configuration, not a caller principal. These findings do not rule out
+an external deployment authentication boundary; none was attested by this
+source review. No deployment secret, integration-account row or credential
+reference was read.
+
+The exact missing integration is a canonical-owner-supplied
+`verifyCurrentCaller(originalFastifyRequest) -> Promise<StatusPrincipal|null>`
+backed by its **current credential/session authority**, with explicit status-read
+permission and exact workspace/account authorization. It must validate the
+original credential on both invocations, without refresh or initialization.
+Configured scope, registry data, loopback, arbitrary identity headers and V2
+owner UUIDs cannot supply that authority. If authentication is external, the
+canonical owner must first identify and attest its authenticated transport and
+principal-binding contract; this adapter must remain unmounted until then.
+Smallest next ownership slice: canonical service/auth owner implements that
+verifier and its revocation/scope tests; coordinator registers this adapter only
+after review. No new authority database is proposed by Migration.
+
+Executed isolated qualification with existing Fastify 5.8.5, TypeScript 5.9.3
+and Node 22.23.1: strict NodeNext/ES2023 compilation with
+`noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` PASS; five actual
+Fastify injection tests PASS (original-request retention, claimed-header denial,
+foreign scope, post-check logout/revoke, changed caller/authority failure).
+Eight unchanged pure handler tests PASS. No package install or canonical-source
+edit. Initial harness execution stopped because a root-owned compiler output
+prevented copying the test file; copying into that disposable output with its
+owner corrected the harness, without source changes. This is synthetic adapter
+qualification, not proof of a real credential verifier or canonical deployment.
+Live endpoint calls and canonical registration remain **unexecuted**.
+
+To reproduce in a disposable package with those dependencies already available,
+compile both TypeScript leaf files with the flags above, copy the `.test.mjs`
+fixture beside the emitted files while changing its import suffix from `.ts`
+to `.js`, then run `node --test fastify_scope_status.test.mjs`. No manifest or
+lockfile changes are required in the product repository.
