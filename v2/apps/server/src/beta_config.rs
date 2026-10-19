@@ -1,4 +1,5 @@
 //! Closed operator configuration; never accepted from HTTP.
+pub(crate) mod loading;
 use orkestr_v2_contracts::{ConversationId, OwnerId};
 use serde::Deserialize;
 use std::path::PathBuf;
