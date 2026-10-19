@@ -54,6 +54,9 @@ mod worker_discovery;
 mod worker_tasks;
 pub use worker::*;
 pub use worker_tasks::WorkerTaskClaim;
+mod timer_issuer;
+mod timer_supervisor;
+pub use timer_issuer::TimerSchedulerIssuer;
 mod worker_tool;
 pub use worker_tool::*;
 #[cfg(test)]

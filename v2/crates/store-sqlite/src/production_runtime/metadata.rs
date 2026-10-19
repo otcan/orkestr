@@ -66,6 +66,7 @@ impl Store {
             return self.validate_resume_metadata(tx, grant).await;
         }
         let c = self.context()?;
+        c.require_provider_context()?;
         c.validate(tx).await?;
         if c.id != grant.context.id
             || c.incarnation != grant.context.incarnation

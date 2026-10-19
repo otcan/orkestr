@@ -2,17 +2,7 @@ use super::*;
 use orkestr_v2_store_sqlite::history_import::timers::{TimerImportRequest, TimerSchedule};
 use sha2::Digest;
 use std::io::{Read, Write};
-use std::sync::{
-    atomic::{AtomicI64, Ordering},
-    Arc,
-};
 const NOW: i64 = 1_767_225_600_000;
-struct FakeClock(AtomicI64);
-impl Clock for FakeClock {
-    fn now_ms(&self) -> Result<i64, HistoryError> {
-        Ok(self.0.load(Ordering::SeqCst))
-    }
-}
 async fn request(
     address: std::net::SocketAddr,
     method: &str,
@@ -86,8 +76,24 @@ async fn timer_loopback_enable_due_input_disable_held_and_refusals() {
         .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let clock = Arc::new(FakeClock(AtomicI64::new(NOW)));
-    let controller = TimerController::with_clock(store.clone(), clock.clone());
+
+    let controller = DurableOwnerController::new(store.clone());
+    controller
+        .ready
+        .store(true, std::sync::atomic::Ordering::Release);
+    let bound = store
+        .authorize_supervisor(
+            &token,
+            orkestr_v2_application::runtime::ProductionSupervisorConfig {
+                provider: orkestr_v2_application::runtime::ProviderKind::Codex,
+                namespace: "synthetic-http-scheduler".into(),
+                supervisor_key: "synthetic".into(),
+                takeover: orkestr_v2_application::runtime::ProductionTakeover::First,
+            },
+        )
+        .await
+        .unwrap();
+    let mut scheduler = durable::DurableTimerController::new(bound);
     let mut state =
         AppState::new(store.clone(), "b".repeat(32), format!("http://{address}")).unwrap();
     state.timers = controller.clone();
@@ -214,7 +220,7 @@ async fn timer_loopback_enable_due_input_disable_held_and_refusals() {
         .1,
         enabled
     );
-    let mut changed = enable;
+    let mut changed = enable.clone();
     changed["text"] = "Different fresh text".into();
     assert_eq!(
         request(address, "POST", &format!("{path}/enable"), &token, changed)
@@ -222,20 +228,45 @@ async fn timer_loopback_enable_due_input_disable_held_and_refusals() {
             .0,
         409
     );
-    assert_eq!(controller.tick().await.unwrap(), 0);
-    clock.0.store(NOW + 60_000, Ordering::SeqCst);
-    assert_eq!(controller.tick().await.unwrap(), 1);
-    assert_eq!(controller.tick().await.unwrap(), 0);
+    assert_eq!(scheduler.tick().await.unwrap().admitted, 0);
+    // Natural due admission is exercised separately; this long-due route stays inert.
+    assert_eq!(scheduler.tick().await.unwrap().admitted, 0);
     let control = serde_json::json!({"expected_revision":enabled["revision"],"request_key":"synthetic-disable","action":"disable"});
     let (status, disabled) =
         request(address, "POST", &format!("{path}/control"), &token, control).await;
     assert_eq!(status, 200);
     assert_eq!(disabled["controller_armed"], false);
+    // Historical successful Enable cannot rearm a disabled generation or change revision.
+    let (status, retry) = request(
+        address,
+        "POST",
+        &format!("{path}/enable"),
+        &token,
+        enable.clone(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(retry, disabled);
+    let mut changed_after_disable = enable;
+    changed_after_disable["text"] = "Different immutable owner instruction".into();
+    assert_eq!(
+        request(
+            address,
+            "POST",
+            &format!("{path}/enable"),
+            &token,
+            changed_after_disable
+        )
+        .await
+        .0,
+        409
+    );
+
     // Read-only synthetic DB oracle checks route-created native input is held.
-    let result=std::process::Command::new("python3").arg("-c").arg("import sqlite3,sys; c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); assert c.execute('select count(*) from dormant_timer_inputs').fetchone()==(1,); assert c.execute('select count(*) from ordinary_input_holds').fetchone()==(1,); assert c.execute('select count(*) from messages').fetchone()==(1,)").arg(&database).status().unwrap();
+    let result=std::process::Command::new("python3").arg("-c").arg("import sqlite3,sys; c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); assert c.execute('select count(*) from durable_timer_authorities').fetchone()==(1,); assert c.execute('select count(*) from messages').fetchone()==(0,)").arg(&database).status().unwrap();
     assert!(result.success());
-    clock.0.store(NOW + 120_000, Ordering::SeqCst);
-    assert_eq!(controller.tick().await.unwrap(), 0);
+
+    assert_eq!(scheduler.tick().await.unwrap().admitted, 0);
     store
         .revoke_session(&format!("browser:{browser_token}"))
         .await

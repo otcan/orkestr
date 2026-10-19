@@ -252,3 +252,67 @@ async fn separate_pools_have_one_admission_and_dispatch_winner_without_reissue()
     assert_eq!(ledger(&f.store).await, before);
     assert_eq!(inbox(&f.store).await, before_inbox);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retained_worker_tool_parent_survives_cap_move_but_not_stop_or_revocation() {
+    for revoke in [false, true] {
+        let f = setup().await;
+        let (parent, i) = running(&f).await;
+        let d = fresh(&f, &parent, &i).await;
+        let worker = f.handle.admit_worker(&f.token, d).await.unwrap();
+        let cap = consume(&f, &worker).await;
+        let retained = f
+            .handle
+            .authorize_offline_python_parent(&f.token, &cap)
+            .await
+            .unwrap();
+        drop(cap); // Models by-value inference attachment, not cap reconstruction.
+        let grant = f
+            .handle
+            .delegate_offline_python_from_parent(
+                &f.token,
+                &retained,
+                "native-call-1",
+                "print('synthetic')",
+                5000,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(grant, OfflinePythonAdmission::Fresh(_)));
+        assert!(matches!(
+            f.handle
+                .delegate_offline_python_from_parent(
+                    &f.token,
+                    &retained,
+                    "native-call-1",
+                    "print('synthetic')",
+                    5000,
+                )
+                .await,
+            Ok(OfflinePythonAdmission::Existing(_))
+        ));
+        if revoke {
+            f.store.revoke_session(&f.token).await.unwrap();
+        } else {
+            f.handle
+                .request_cancel(&f.owner, &parent.run.run_id, "stop-tool-parent")
+                .await
+                .unwrap();
+        }
+        let before = ledger(&f.store).await;
+        assert!(f
+            .handle
+            .delegate_offline_python_from_parent(
+                &f.token,
+                &retained,
+                "native-call-2",
+                "print('synthetic')",
+                5000,
+            )
+            .await
+            .is_err());
+        assert_eq!(ledger(&f.store).await, before);
+        f.store.close().await;
+        std::fs::remove_dir_all(f.root).unwrap();
+    }
+}
