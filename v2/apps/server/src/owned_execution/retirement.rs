@@ -32,9 +32,10 @@ impl ConfiguredExecution {
             return Err("execution retirement scope mismatch");
         }
         drop(retiring);
-        // ChildSet retains scratch/capacity through actual broker wait. It is a
-        // resource barrier, never a substitute for the native-tree witness above.
-        if !self.children.wait_empty(Duration::from_secs(2)).await {
+        // Workers retain their transports until the caller drains them after
+        // genuine parent Stop. Preserve this original parent witness meanwhile;
+        // final retirement checks the global resource barrier with all proofs.
+        if self.config.worker.is_none() && !self.children.wait_empty(Duration::from_secs(2)).await {
             return Err("execution retained child resources remain active");
         }
         Ok(proof)
@@ -54,6 +55,11 @@ impl ConfiguredExecution {
         // Freezing consumes the original parent witness and every retained
         // Worker witness. A missing or poisoned launch refuses replacement.
         let proofs = self.finish_worker_reaps(proof)?;
+        // Descendant drain has completed before final-context freeze. ChildSet
+        // is only a resource barrier; the bundle above supplies native proof.
+        if !self.children.wait_empty(Duration::from_secs(2)).await {
+            return Err("execution retained child resources remain active");
+        }
         self.current().await?;
         self.store
             .retire_terminal_supervisor(&self.token, run)
