@@ -1,7 +1,7 @@
 # Legacy lease history recovery proposal
 
-Status: design for independent review; no validator exception or live adoption
-implemented. Expiry does not establish writer quiescence or authorize migration.
+Status: offline preparer implemented for independent review; validator exception
+and live adoption remain separately owned and unqualified. Expiry does not establish writer quiescence or authorize migration.
 The existing offline restore helper intentionally refuses duplicate versions and
 requires an old embedded lock identity; it cannot recover pre-gate legacy state.
 
@@ -86,9 +86,11 @@ callable returning `(prepared_state_bytes, external_adoption_receipt_bytes)`.
 Neither callable selection nor receipt trust comes from the input state. It has
 no command-line activation path and no permissive cohort implementation.
 
-The public validator owner must supply the shared canonical cohort/receipt
-contract and sealer before an operator-facing legacy preparation command is
-wired. Current transport tests use an explicitly synthetic sealer; they do not
-qualify retired-cohort validation, revocation or live adoption. Source evidence
+The coordinated contract and operator-facing offline command are now implemented
+in desktop_legacy_prepare.py and desktop_legacy_canonical.py; see
+desktop-legacy-format.md. A shared golden fixture pins exact prepared bytes and
+canonical cohort digest. Transport-only tests still use a synthetic sealer; the
+separate preparer tests exercise actual revocation and sealing. Actual public
+store interoperability and live adoption remain unqualified. Source evidence
 with an embedded lock identity is refused rather than routed through this legacy
 path. The existing nonlegacy `desktop_restore.py` behavior remains unchanged.
