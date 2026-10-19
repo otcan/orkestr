@@ -56,3 +56,13 @@ and burns at envelope reservation rather than acknowledgement. Sampling neither
 reserves an ID nor resets the budget. Pending writes, observations, tools, steering,
 cancellation, terminal or failed channels prevent readiness. An exhausted child
 must not advertise a 129th request.
+
+`CodexPump::renew_lease_with_steering(store, &mut renewal, issuer)` consumes the
+pump and old issuer, returning `(Authority, CodexPump, CodexSteeringAuthority)`.
+It requires Core `7c6787d06`'s sealed `refresh_codex_steering` API. The ordinary
+quiescent renewal transfers the same child to its new fence first; only then does
+Core validate and consume the exact previous issuer against that transition.
+Failure quarantines the child. No native frame, spawn, observation sequence or
+steering ID is generated or reset. Call under the existing per-run scheduling
+lock; replace the server's authority and issuer together on success. The generic
+`renew_lease` remains available when steering is disabled.

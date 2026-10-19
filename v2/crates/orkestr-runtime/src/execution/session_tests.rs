@@ -204,8 +204,13 @@ for line in frames():"#,
     else {
         panic!("unique dispatch")
     };
-    let mut renewal = if (10..=11).contains(&stop_mode) {
+    let mut renewal = if (10..=13).contains(&stop_mode) {
         Some(bound.authorize_running_renewal(&cap).await.unwrap())
+    } else {
+        None
+    };
+    let mut steering_issuer = if stop_mode >= 12 {
+        Some(bound.authorize_codex_steering(&cap).await.unwrap())
     } else {
         None
     };
@@ -322,7 +327,7 @@ for line in frames():"#,
             .await
             .unwrap()
             .unwrap();
-        if (10..=11).contains(&stop_mode)
+        if (10..=13).contains(&stop_mode)
             && renewal.is_some()
             && status.phase == orkestr_v2_contracts::ExecutionPhase::Running
             && pump.renewal_quiescent()
@@ -333,15 +338,31 @@ for line in frames():"#,
             let before = std::fs::read(root.join("workspace/native-methods.log")).unwrap();
             tokio::time::sleep(Duration::from_millis(20)).await;
             bound.heartbeat_supervisor().await.unwrap();
-            if stop_mode == 11 {
+            if stop_mode >= 12 {
+                pump.bind_steering_turn(&bound, steering_issuer.as_ref().unwrap())
+                    .await
+                    .unwrap();
+            }
+            if stop_mode == 11 || stop_mode == 13 {
                 bound
                     .request_cancel(&owner, &old.run.run_id, "before-refresh")
                     .await
                     .unwrap();
-                assert!(pump
-                    .renew_lease(bound.clone(), renewal.as_mut().unwrap())
-                    .await
-                    .is_err());
+                if stop_mode == 13 {
+                    assert!(pump
+                        .renew_lease_with_steering(
+                            bound.clone(),
+                            renewal.as_mut().unwrap(),
+                            steering_issuer.take().unwrap()
+                        )
+                        .await
+                        .is_err());
+                } else {
+                    assert!(pump
+                        .renew_lease(bound.clone(), renewal.as_mut().unwrap())
+                        .await
+                        .is_err());
+                }
                 tokio::time::sleep(Duration::from_millis(30)).await;
                 assert_eq!(
                     std::fs::read(root.join("workspace/native-methods.log")).unwrap(),
@@ -354,10 +375,25 @@ for line in frames():"#,
                 std::fs::remove_dir_all(root).unwrap();
                 return;
             }
-            let (next, refreshed) = pump
-                .renew_lease(bound.clone(), renewal.as_mut().unwrap())
-                .await
-                .unwrap();
+            let (next, refreshed) = if stop_mode == 12 {
+                let capacity = pump.steering_readiness();
+                let (next, refreshed, issuer) = pump
+                    .renew_lease_with_steering(
+                        bound.clone(),
+                        renewal.as_mut().unwrap(),
+                        steering_issuer.take().unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(issuer.provider(), &refreshed.admission);
+                assert_eq!(refreshed.steering_readiness(), capacity);
+                refreshed.bind_steering_turn(&bound, &issuer).await.unwrap();
+                (next, refreshed)
+            } else {
+                pump.renew_lease(bound.clone(), renewal.as_mut().unwrap())
+                    .await
+                    .unwrap()
+            };
             authority.revoke().unwrap();
             authority = next;
             pump = refreshed;
@@ -615,4 +651,13 @@ async fn running_lease_refresh_preserves_same_child_sequence_and_retires_old_aut
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancellation_before_running_lease_refresh_quarantines_without_new_submission() {
     exercise(true, 11).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn steering_issuer_refresh_preserves_actual_child_and_native_turn() {
+    exercise(true, 12).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stopped_steering_issuer_refresh_quarantines_without_native_write() {
+    exercise(true, 13).await;
 }
