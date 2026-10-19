@@ -46,8 +46,22 @@ DB/WAL/SHM locking/copies, retained backups, isolated old-binary refusal and
 rollback with the untouched predecessor. Core's source/Store results do not
 substitute for original-package execution or populated native/timer/task coverage.
 
-Actual14/17/31/33-to36 package migration/refusal/rollback is **unexecuted** pending
-coordinator's immutable combined36 same-source server/UI pair.
+Actual14/17/31/33-to36 package migration/refusal/rollback passed using matching
+`1d9674b29ed547f4a0cf5530a261aba9450263a1` development server/UI artifacts.
+Each original binary created synthetic message history; the successor migrated
+an independent copy before the working home, preserved history/idempotency,
+reopened36, refused old-binary access on a separate disposable36 copy without
+DB inventory mutation, and recovered on the untouched predecessor rollback home.
+Same-package stopped dormant apply refused activation and rolled back empty;
+cross-package snapshot import refused. Backups/logs remain retained, all owned
+children stopped and the assigned loopback port is free. Exact hashes appear in
+[schema36-install-checkpoint.json](schema36-install-checkpoint.json).
+
+These actual package homes had no pending task/timer rows. Populated holds,
+paused timers and budget preservation remain separately attributed to exact SQL
+fixtures. Initial producer seal and final validation are retained separately;
+normalization does not attest a new build. No Docker image or browser/provider
+acceptance was performed.
 Original14/17 packages,31 development pair and actual33 acceptance receipts/raw
 logs/stopped backups remain retained. The old f322 binary is never substituted
 for36. Separate Worker or steering builds do not qualify combined36. No37+,
