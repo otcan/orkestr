@@ -3,6 +3,8 @@ mod accepted_results;
 pub use accepted_results::*;
 mod beta;
 pub use beta::*;
+mod intelligence;
+pub use intelligence::*;
 mod cancellation;
 mod held_inputs;
 pub use held_inputs::*;
