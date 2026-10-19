@@ -5,7 +5,9 @@ use orkestr_v2_contracts::OwnerId;
 use sqlx::{Row, SqliteConnection};
 use uuid::Uuid;
 mod execution_window;
-pub use execution_window::{ExecutionWindowCredential, ExecutionWindowRetirement};
+pub use execution_window::{
+    ExecutionWindowBootstrap, ExecutionWindowCredential, ExecutionWindowRetirement,
+};
 mod acceptance;
 #[cfg(all(test, unix))]
 mod acceptance_process_tests;
@@ -96,6 +98,7 @@ pub(crate) struct Context {
     incarnation: String,
     generation: i64,
     token_hash: String,
+    window_bootstrap_only: bool,
 }
 pub(super) fn db(_: impl std::fmt::Display) -> RuntimeStoreError {
     RuntimeStoreError::Unavailable
@@ -197,6 +200,7 @@ impl Store {
                 incarnation,
                 generation,
                 token_hash,
+                window_bootstrap_only: false,
             }),
         })
     }

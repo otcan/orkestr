@@ -73,6 +73,7 @@ impl Store {
                 incarnation,
                 generation,
                 token_hash,
+                window_bootstrap_only: false,
             }),
         })
     }

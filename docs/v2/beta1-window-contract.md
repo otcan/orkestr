@@ -43,3 +43,26 @@ First opening uses an existing trusted idle Codex Deep supervisor and its existi
 ## Always-on idle owner issuance
 
 `bound_retired_store.issue_idle_execution_window_credential_authenticated(current_browser, window, generation, boot, expires_at_ms, manager_ack_sha256) -> Result<ExecutionWindowCredential>` returns the same private nonserializable one-shot type. It authenticates the original current browser credential inside BEGIN IMMEDIATE, requires the same owner, exact current retired context/incarnation and immutable retirement provenance, no unresolved runs/descendants, and no previously issued nonclosed window or nonretired supervisor for this conversation. The old machine credential may be expired only in this already-proven idle case. Unresolved or unretired expiry refuses without issuance; no replacement token repairs old authority. This port follows exact new browser admission and manager ACK; it is not an HTTP token response.
+
+### Fresh-owner private bootstrap
+
+`Store::bootstrap_execution_window_authenticated(browser_credential, conversation,
+ProductionSupervisorConfig) -> Result<ExecutionWindowBootstrap>` is a trusted
+in-process composition port, called on the unbound Store **before the first
+window admission**. The config must select Codex and `ProductionTakeover::First`.
+Inside one immediate transaction it authenticates the current browser owner,
+checks the conversation scope, and refuses any existing owner supervisor, window,
+run, or binding history. It creates a separate twelve-hour private credential,
+a current idle supervisor and ordinary unconfigured Starting role bindings.
+It creates no native readiness, run, or dispatch.
+
+The non-Clone/non-Debug/non-serializable result exposes `store() -> &Store`,
+`credential() -> &str`, and `binding() -> &Binding`. Its credential is accepted
+only for the dedicated window issuance/binding handoff, not generic supervisor
+bootstrap; the retained context refuses input claims, metadata and effect fences
+until it has been replaced by the bound window credential. The caller then
+admits the browser input/window, obtains the authenticated manager ACK, issues
+and binds the window credential, performs metadata setup, and activates last.
+No secret is returned through HTTP, written to config, or reconstructed after
+process loss. A lost bootstrap reply/history refuses reissuance and requires
+reconciliation. This is separate from the safe-retired idle-owner issuance port.
