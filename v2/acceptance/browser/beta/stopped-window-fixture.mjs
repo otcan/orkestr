@@ -136,6 +136,10 @@ export function stoppedWindowFixture(samples = ['retiring', 'retiring', 'closed'
       if (rest.length) return click(value);
       if (value?.path) return {status: 200, raw: JSON.stringify(read(value.path))};
       if (value === origin) return {conversation};
+      if (value?.origin === origin && Object.keys(value).length === 1) {
+        return {conversation_id: conversation, run_id: currentRun,
+          payload_id: status().progress.payload_id, text: 'synthetic committed output'};
+      }
       if (value?.text) return true;
       assert.equal(value, undefined);
     },

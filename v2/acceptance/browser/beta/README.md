@@ -115,6 +115,17 @@ proceeds to admission.
 
 ## Boundaries and evidence
 
+Progress proof samples the validated provider-output `pre` and its exact
+`data-conversation-id`, `data-run-id` and `data-payload-id` attributes. These are
+locators, not authority: an ordinary authenticated owner payload read must match
+the captured scope and nonempty text exactly. The current execution must still
+be the same live run, and the rendered tuple is checked again before success.
+The latest progress pointer may advance while the UI displays an earlier
+immutable payload; the oracle never rewrites that current status or requires
+both independent polls to sample the same newest event. The unchanged twenty
+second waits report closed `phase_timeout` or `progress_timeout` diagnostics.
+Neither proof establishes Stop, acceptance or native cleanup authority.
+
 Synthetic cases and a separately authorized real-Codex case have distinct
 receipts. No fixture may silently select a provider or trigger account resolution.
 Keep one owner/conversation per real attempt and explicit intake/control budgets.
