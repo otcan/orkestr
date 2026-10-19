@@ -53,9 +53,6 @@ impl ConfiguredExecution {
             {
                 SessionExit::Shutdown => return Ok(()),
                 SessionExit::Stopped { run, proof } => {
-                    if self.config.worker.is_some() {
-                        return Err("execution Worker retirement requires reconciliation");
-                    }
                     if !self.wait_eligible(&mut shutdown, &mut heartbeat).await? {
                         self.retire_terminal(&run, proof).await?;
                         return Ok(());
@@ -110,7 +107,6 @@ impl ConfiguredExecution {
             // Parent Stop serializes against both its own pump and a bounded
             // Worker step. Lock order is always Deep then Worker.
             let schedule = run_control.serialize().await;
-            Self::poll_worker(&mut worker).await;
             let status = self
                 .store
                 .execution_status(&self.owner, conversation)
@@ -125,17 +121,18 @@ impl ConfiguredExecution {
             if status.phase == ExecutionPhase::CancelRequested {
                 run_control.disable();
                 drop(schedule);
-                drop(worker.take());
+                Self::quiesce_worker(&mut worker);
                 let proof = self
                     .stop_owned(&mut controls, authority, pump, &run, heartbeat)
                     .await?;
+                self.drain_worker(&mut worker, heartbeat).await?;
                 return Ok(SessionExit::Stopped { run, proof });
             }
             if status.phase == ExecutionPhase::Completed {
                 drop(schedule);
                 // The previous parent's scheduler cannot survive into a new
                 // Deep grant, including while the next inbox input is awaited.
-                drop(worker.take());
+                self.drain_worker(&mut worker, heartbeat).await?;
                 // Only explicit committed owner acceptance releases the binding.
                 // Inputs received during an active turn remain ordered in Core;
                 // neither queued text nor browser JSON can mint a new capability.
@@ -206,12 +203,14 @@ impl ConfiguredExecution {
                     .publish(receipt)
                     .map_err(|_| "execution shutdown handoff requires reconciliation")?;
                 drop(schedule);
-                drop(worker.take());
+                Self::quiesce_worker(&mut worker);
                 let proof = self
                     .stop_owned(&mut controls, authority, pump, &run, heartbeat)
                     .await?;
+                self.drain_worker(&mut worker, heartbeat).await?;
                 return Ok(SessionExit::Stopped { run, proof });
             }
+            Self::poll_worker(&mut worker).await;
             if pump.pending().is_none() {
                 pump.flush().map_err(|_| "execution write fence refused")?;
             }
@@ -270,6 +269,7 @@ impl ConfiguredExecution {
                 _ = shutdown.changed() => {},
             }
         }
+        self.drain_worker(&mut worker, heartbeat).await?;
         let _ = authority.revoke();
         drop(pump);
         Ok(SessionExit::Shutdown)

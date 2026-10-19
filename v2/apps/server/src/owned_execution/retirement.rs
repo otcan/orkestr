@@ -45,24 +45,22 @@ impl ConfiguredExecution {
         run: &RunId,
         proof: ReapedBroker,
     ) -> Result<(), &'static str> {
-        if self.config.worker.is_some() {
-            // Worker cleanup has its own lifetime. Its broker wait alone is not
-            // a sealed descendant witness; never use it to permit replacement.
-            return Err("execution Worker retirement requires reconciliation");
-        }
         if proof.scope().owner() != self.owner.to_string()
             || proof.scope().run() != run.to_string()
             || proof.scope().namespace() != self.config.namespace
         {
             return Err("execution retirement scope mismatch");
         }
+        // Freezing consumes the original parent witness and every retained
+        // Worker witness. A missing or poisoned launch refuses replacement.
+        let proofs = self.finish_worker_reaps(proof)?;
         self.current().await?;
         self.store
             .retire_terminal_supervisor(&self.token, run)
             .await
             .map_err(|_| "execution graceful supervisor retirement refused")?;
         // Retain the original native-tree witness through the durable decision.
-        drop(proof);
+        drop(proofs);
         Ok(())
     }
 }

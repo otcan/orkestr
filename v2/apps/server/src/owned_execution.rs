@@ -15,6 +15,7 @@ mod retirement;
 mod session;
 mod stopping;
 mod worker;
+mod worker_retirement;
 use config::Config;
 use orkestr_v2_application::runtime::{ProductionSupervisorConfig, ProductionTakeover};
 use orkestr_v2_contracts::OwnerId;
@@ -36,6 +37,7 @@ pub struct ConfiguredExecution {
     control: crate::control_registry::ControlRegistry,
     tasks: crate::worker_tasks::WorkerTaskAccess,
     children: crate::owned_children::ChildSet,
+    worker_reaps: crate::worker_execution::WorkerReaps,
     offline_python: Option<std::sync::Arc<crate::offline_python::OfflinePythonDispatcher>>,
     initial_grant: Option<BoundSessionMetadata>,
 }
@@ -85,8 +87,7 @@ impl ConfiguredExecution {
                 status.phase,
                 orkestr_v2_contracts::ExecutionPhase::Completed
                     | orkestr_v2_contracts::ExecutionPhase::Cancelled
-            ) || config.worker.is_some()
-            {
+            ) {
                 return Err(
                     "existing execution requires reconciliation; automatic startup refused",
                 );
@@ -142,6 +143,11 @@ impl ConfiguredExecution {
             owner.clone(),
             config.conversation_id.clone(),
         );
+        let worker_reaps = crate::worker_execution::WorkerReaps::new(
+            owner.clone(),
+            config.conversation_id.clone(),
+            config.namespace.clone(),
+        );
         Ok(Self {
             config,
             store: bound,
@@ -152,6 +158,7 @@ impl ConfiguredExecution {
             tasks,
             children: crate::owned_children::ChildSet::default(),
             offline_python,
+            worker_reaps,
             initial_grant,
         })
     }
