@@ -8,11 +8,18 @@ import re
 import subprocess
 
 FORMAT = 'orkestr-v2-paired-artifacts-v1'
+BETA_VERSION = '2.0.0-beta.1'
 
 
 def require(value, message):
     if not value:
         raise RuntimeError(message)
+
+
+def validate_version(version):
+    require(isinstance(version, str) and
+            (version == BETA_VERSION or re.fullmatch(r'2\.0\.0-rc\.[1-9][0-9]*', version)),
+            'explicit 2.0.0-rc.N or 2.0.0-beta.1 version required')
 
 
 def sha(path):
@@ -56,7 +63,7 @@ def schema(root, source):
 
 def seal(checkout, binary, ui, source, version, profile, features, required_glibc, execution_controls=False):
     require(re.fullmatch(r'[0-9a-f]{40}', source), 'exact full source required')
-    require(re.fullmatch(r'2\.0\.0-rc\.[1-9][0-9]*', version), 'explicit 2.0.0 release-candidate version required')
+    validate_version(version)
     require(profile in ('debug', 'release'), 'supported profile required')
     require(re.fullmatch(r'2\.[0-9]+', required_glibc), 'explicit glibc requirement required')
     require(git(checkout, 'rev-parse', 'HEAD') == source, 'producer checkout must match exact source')
@@ -88,6 +95,7 @@ def seal(checkout, binary, ui, source, version, profile, features, required_glib
 
 def verify(receipt, binary, ui):
     require(receipt['format'] == FORMAT and receipt['target'] == 'linux-x86_64', 'supported paired receipt required')
+    validate_version(receipt.get('version'))
     require(re.fullmatch(r'[0-9a-f]{40}', receipt['source_commit']), 'full paired source required')
     require(not binary.is_symlink() and sha(binary) == receipt['server']['sha256'] and
             binary.stat().st_size == receipt['server']['bytes'], 'server identity mismatch')
