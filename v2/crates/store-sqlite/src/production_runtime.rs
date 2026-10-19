@@ -5,6 +5,8 @@ use orkestr_v2_contracts::OwnerId;
 use sqlx::{Row, SqliteConnection};
 use uuid::Uuid;
 mod execution_window;
+#[cfg(test)]
+mod historical_guard_fixture;
 pub use execution_window::{
     ExecutionWindowBootstrap, ExecutionWindowCredential, ExecutionWindowRetirement,
     RetiredExecutionWindowContext,

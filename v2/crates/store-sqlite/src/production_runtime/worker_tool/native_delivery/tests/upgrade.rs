@@ -32,6 +32,11 @@ async fn populated_31_upgrade_preserves_legacy_output_without_inventing_native_c
         #[cfg(feature = "fixture-test-controls")]
         production_checkpoint: None,
     };
+    let historical_guard =
+        crate::production_runtime::historical_guard_fixture::HistoricalGuardFixture::install(
+            &store, 31,
+        )
+        .await;
     let conversation = store
         .setup("synthetic-owner", "synthetic-password-hash")
         .await
@@ -83,6 +88,7 @@ async fn populated_31_upgrade_preserves_legacy_output_without_inventing_native_c
         )
         .await
         .unwrap();
+    historical_guard.remove(&f.store).await;
     f.store.close().await;
     let upgraded = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
     let native: i64 = sqlx::query_scalar("SELECT count(*) FROM worker_tool_results")

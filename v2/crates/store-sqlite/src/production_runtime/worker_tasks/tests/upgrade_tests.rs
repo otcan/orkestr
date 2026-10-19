@@ -34,6 +34,11 @@ async fn actual_store_upgrade_holds_unverifiable_old_claims_and_preserves_histor
         #[cfg(feature = "fixture-test-controls")]
         production_checkpoint: None,
     };
+    let historical_guard =
+        crate::production_runtime::historical_guard_fixture::HistoricalGuardFixture::install(
+            &store, 30,
+        )
+        .await;
     let conversation = store
         .setup("synthetic-upgrade-owner", "synthetic-password-hash")
         .await
@@ -87,6 +92,7 @@ async fn actual_store_upgrade_holds_unverifiable_old_claims_and_preserves_histor
     }
     let before: Vec<(String, String, String, String)> = sqlx::query_as("SELECT t.id,t.request_digest,p.title,p.instructions FROM worker_tasks t JOIN worker_task_payloads p ON p.task_id=t.id ORDER BY t.ordinal")
         .fetch_all(&core.store.pool).await.unwrap();
+    historical_guard.remove(&core.store).await;
     core.store.close().await;
     let upgraded = Store::open(&core.root.join("core.sqlite3")).await.unwrap();
     let rows: Vec<(String, bool, bool)> = sqlx::query_as("SELECT state,claim_hash IS NOT NULL,issuer_token_hash IS NOT NULL FROM worker_tasks ORDER BY ordinal")
