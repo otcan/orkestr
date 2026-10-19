@@ -188,3 +188,6 @@ pub use attachment_transfer::*;
 
 mod browser_session;
 pub use browser_session::BrowserSessionProjection;
+
+mod automatic_reply;
+pub use automatic_reply::*;
