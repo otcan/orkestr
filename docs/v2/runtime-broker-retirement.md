@@ -36,3 +36,17 @@ errors, and competing terminal evidence keep existing cleanup behavior. After
 Stopped, consume `retire_broker` before revoking/dropping the old Authority.
 Default callers still quarantine on durable Stopped. Retention is not reap
 proof or replacement authority, and dropping the retained handle still cleans up.
+
+The ordinary Codex lifecycle also checks its retained broker while waiting for
+the first input, owner acceptance, or a subsequent input. A nonblocking WNOWAIT
+observation of exit quarantines that exact local handle and sends its original
+Child to the existing retained-resource reaper, even while HTTP remains live.
+The Ready phase fence cannot clean up a child already transferred to execution.
+This loss path produces no observation, acceptance, Stopped status, retirement
+proof, resume grant, or replacement process; unresolved durable state requires
+reconciliation. It never interprets a dead helper as a provider terminal event.
+
+The synthetic ordinary HTTP regression kills the exact owned broker in all three
+idle states and requires every recorded PID/start identity, including zombies,
+to disappear before server shutdown. Bindings and durable execution evidence
+must remain unchanged, and a later admitted input cannot start another run.

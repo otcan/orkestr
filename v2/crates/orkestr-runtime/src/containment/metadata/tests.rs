@@ -5,6 +5,8 @@
 //! Authorized wrapper commands (isolated target/home supplied externally):
 //! test --locked --offline -p orkestr-runtime --lib containment::metadata
 //! clippy --locked --offline -p orkestr-runtime --all-targets -- -D warnings
+#[path = "liveness_tests.rs"]
+mod liveness_tests;
 use super::*;
 use orkestr_v2_application::{runtime::*, IntakeStore};
 use orkestr_v2_contracts::MessageInput;

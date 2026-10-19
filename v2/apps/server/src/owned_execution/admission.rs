@@ -56,6 +56,18 @@ impl ConfiguredExecution {
         shutdown: &mut watch::Receiver<bool>,
         heartbeat: &mut Instant,
     ) -> Result<Option<Box<ConsumedProviderDispatch>>, &'static str> {
+        self.next_with_liveness(shutdown, heartbeat, || Ok(()))
+            .await
+    }
+
+    /// A retained child must remain live before claiming the next input. This
+    /// callback can only refuse admission; it supplies no provider authority.
+    pub(super) async fn next_with_liveness(
+        &self,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+        mut live: impl FnMut() -> Result<(), &'static str>,
+    ) -> Result<Option<Box<ConsumedProviderDispatch>>, &'static str> {
         let conversation = &self.config.conversation_id;
         let binding = self
             .store
@@ -71,6 +83,7 @@ impl ConfiguredExecution {
                 return Ok(None);
             }
             self.maintain(heartbeat).await?;
+            live()?;
             if let Some(claim) = self
                 .store
                 .claim_next(

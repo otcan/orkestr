@@ -233,4 +233,16 @@ impl CodexPump {
     pub fn pending(&self) -> Option<&orkestr_v2_application::runtime::ProviderEventInput> {
         self.cursor.pending()
     }
+
+    /// Idle proposal/accepted states still own the exact broker. Observing its
+    /// exit is local negative authority, not a provider terminal or reap proof.
+    pub fn check_broker_liveness(&self) -> Result<(), crate::containment::Error> {
+        match self.source.child.poll_exit(&self.source.scope) {
+            Ok(None) => Ok(()),
+            ended => {
+                self.source.child.quarantine();
+                Err(ended.err().unwrap_or(crate::containment::Error::PipeClosed))
+            }
+        }
+    }
 }
