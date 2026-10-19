@@ -6,15 +6,19 @@ import {executionUi} from './execution-ui.mjs';
 import {assertClosedPredecessor} from './window-evidence.mjs';
 import {loginOwner, reloadOwner} from './ui.mjs';
 import {failure, errorChain} from './diagnostics.mjs';
+import {postWindowPurpose, priorAccepted, nextWindowHandoff} from './post-window-handoff.mjs';
 
-// One separately budgeted input after a passive >=15-minute service observation.
+// One separately budgeted input after continuity, or a separately verified clean
+// service restart. The private operator owns any prior retirement/restart proof.
 // This does not reuse browserChat's fresh-window-null precondition or its budget.
 export async function browserPostWindow({page, context, origin, sourceSha, credentials,
-  expectedConversation, message, predecessor, verifyServedPair, verifyLease, closeContext, signal}) {
+  expectedConversation, message, predecessor, purpose = 'post_continuity',
+  verifyServedPair, verifyLease, closeContext, signal}) {
   assert(/^[a-f0-9]{40}$/.test(sourceSha));
   assert(typeof message === 'string' && message.trim() && Buffer.byteLength(message) <= 4096);
   const abort = new AbortController(), active = AbortSignal.any([signal, abort.signal]);
-  const report = {version: 1, source: sourceSha, scope: 'one_explicit_post_continuity_input',
+  const casePurpose = postWindowPurpose(purpose);
+  const report = {version: 1, source: sourceSha, scope: casePurpose.scope, purpose,
     status: 'failed', checks: [], cleanup: {}};
   const cleanup = new Cleanup(); cleanup.add('owned_context', closeContext);
   let phase = 'pair', capture, controls, settled = false;
@@ -24,15 +28,14 @@ export async function browserPostWindow({page, context, origin, sourceSha, crede
     phase = 'login';
     const login = await loginOwner({page, context, origin, credentials, expectedConversation, signal: active, verifyLease});
     const conversation = login.conversation, read = ownerReads(page, conversation, active, origin);
+    report.conversation_id = conversation;
     report.checks.push({name: 'login', ...login.evidence});
     phase = 'closed_predecessor';
     const current = await read('window'), held = await read('held');
     const preserved = assertClosedPredecessor({conversation, expected: predecessor, current, held});
     capture = captureControls(page, origin, conversation);
     controls = executionUi({page, origin, conversation, read, capture, signal: active, verifyLease});
-    assert(Array.isArray(predecessor.accepted) && predecessor.accepted.length === 2);
-    assert.equal(new Set(predecessor.accepted.map(row => row.acceptance_event_id)).size, 2);
-    for (const receipt of predecessor.accepted) await controls.completed(receipt);
+    for (const receipt of priorAccepted(predecessor, conversation, purpose)) await controls.completed(receipt);
     const previousRun = predecessor.accepted.at(-1).run_id;
     phase = 'explicit_new_window';
     const admission = await controls.send(message);
@@ -45,9 +48,14 @@ export async function browserPostWindow({page, context, origin, sourceSha, crede
     const accepted = await controls.accept(next.run_id);
     await reloadOwner({page, conversation, origin});
     const rendered = await controls.completed(accepted.receipt);
+    if (purpose === 'post_service_restart') {
+      for (const receipt of predecessor.accepted) await controls.completed(receipt);
+    }
     assertClosedPredecessor({conversation, expected: predecessor, current, held: await read('held')});
-    report.checks.push({name: 'fresh_window_after_continuity', ...preserved, ...admission.proof,
+    report.checks.push({name: casePurpose.check, ...preserved, ...admission.proof,
       ...accepted.proof, ...rendered, exact_closed_predecessor: true, fresh_run: true});
+    report.predecessor = nextWindowHandoff({predecessor, conversation, purpose,
+      window: admission.window.receipt.status, accepted: accepted.receipt});
     if (await verifyServedPair(active) !== true || await verifyLease(active) !== true) throw failure('identity_changed');
   })().finally(() => { settled = true; });
   work.catch(() => {});

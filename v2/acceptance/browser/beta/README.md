@@ -62,6 +62,17 @@ ordinary Send and Start work create a fresh window. It verifies the fresh run,
 third explicit acceptance and restored final reply. The earlier four-input chat
 runner is not reused and its fresh-owner precondition is not weakened.
 
+The successful one-input report also exports an observation-only handoff with
+its new window/generation, all three accepted-result references, and the unchanged
+held row. It does not assert retirement, process cleanup or a service restart.
+A separate reviewed operator may use the closed `post_service_restart` purpose
+only after independently proving clean retirement and new service identities.
+That purpose requires exactly those three prior results and a closed predecessor,
+performs one input/acceptance, and checks all prior replies again after reload.
+The original `post_continuity` purpose still requires exactly two prior results;
+neither accepts an arbitrary phase, prior count or budget. Service control and
+the prior-evidence review remain outside this browser library.
+
 Window generation observations follow Core `2b9227da1753629ae04d0a170c6c659842c656e3`:
 integers below 2^53, including a same-window join at the last safe generation;
 creating an overflowing successor fails. No window is opened automatically by
