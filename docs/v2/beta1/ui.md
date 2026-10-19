@@ -70,3 +70,23 @@ change invalidates all tickets. Two author-written deterministic route/navigatio
 plus the six prior author-focused cases pass. They are new regressions, not an
 unchanged independent oracle. Independent source review of the repair is pending;
 a reviewer may add independent tests. This is not mounted browser verification.
+
+Accepted reply history consumes the exact `a38f55d98` read-only contract. Conversation
+and History mount separate accepted-reply sections, with ascending 20-row pages,
+explicit refresh and continuation. These records retain run/completion/acceptance
+provenance; they are not fabricated assistant messages. Protected payload reads
+must match conversation, run and payload reference. Missing output and removed
+output are distinct. Visible payloads revalidate every five seconds; a confirmed
+tombstone cannot be replaced by delayed text. Internal IDs are optional details.
+Owner/session generation and component retirement fence callbacks and abort the
+owned request. Pagination cursors retain full i64 precision as decimal URL text.
+At most 20 payload readers are mounted per section, each with finite byte/read/time
+bounds. No historical result grants execution or acceptance authority.
+
+Author validation: three focused Rust accepted-result cases, nine Node transport
+cases, and wrapper locked/offline UI binary check pass. Initial checks found a
+wrong delay-helper argument and a test-only unavailable uuid import; both were
+corrected before these passing checks. No accepted-results Store query execution,
+HTTP integration, reload/browser rendering, paired build or provider acceptance
+is claimed by this consumer checkpoint. Runtime owns the read route and Core owns
+the query; matching integration and independent browser proof remain required.

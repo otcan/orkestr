@@ -17,10 +17,11 @@ pub fn History(
     let mut status = use_signal(String::new);
     let mut busy = use_signal(|| true);
     let mut reload = use_signal(|| 0_u64);
+    let history_id = id.clone();
     use_resource(move || {
         let cursor = after();
         let _generation = reload();
-        let id = id.clone();
+        let id = history_id.clone();
         let csrf = csrf.clone();
         async move {
             busy.set(true);
@@ -65,13 +66,14 @@ pub fn History(
     rsx! {
         section { "aria-label": "Accepted input history",
             h2 { "Conversation history" }
-            p { "Current conversation · accepted input only. Model results and run history are unavailable." }
+            p { "Saved input and explicitly accepted replies are shown separately." }
             p { role: "status", "{status}" }
             ol { class: "messages", "aria-live": "off",
                 for message in page.read().messages.values() {
                     li { key: "{message.message_id}", strong { "{message.actor_kind}" } p { "{message.text}" } }
                 }
             }
+            crate::accepted_results_view::AcceptedReplies { id: id.clone(), session_scope, onexpired }
             button { disabled: busy(), onclick: move |_| { after.set(0); reload += 1; }, "From beginning" }
             button { disabled: busy() || next().is_none(), onclick: move |_| {
                 if let Some(cursor) = next() { after.set(cursor); }
