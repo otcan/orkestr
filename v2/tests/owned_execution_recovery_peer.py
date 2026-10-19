@@ -46,7 +46,7 @@ for line in sys.stdin:
     elif method in ("thread/start", "thread/resume"):
         assert method == ("thread/start" if instance == 1 else "thread/resume")
         params = {"cwd": os.getcwd(), "approvalPolicy": "never", "sandbox": "read-only", "modelProvider": "openai"}
-        params.update({"ephemeral": False} if instance == 1 else {"threadId": native})
+        params.update({"ephemeral": False} if instance == 1 else {"threadId": native, "excludeTurns": True})
         assert frame["params"] == params
         emit({"id": frame["id"], "result": {"modelProvider": "openai", "cwd": os.getcwd(),
               "thread": {"id": native, "modelProvider": "openai", "ephemeral": False, "cwd": os.getcwd()},
