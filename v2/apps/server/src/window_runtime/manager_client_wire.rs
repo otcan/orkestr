@@ -2,8 +2,13 @@
 use super::{Result, INTEGER_LIMIT};
 use serde_json::Value;
 use std::io::Read;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::UnixStream;
 use uuid::Uuid;
+
+#[cfg(test)]
+#[path = "manager_bind_deadline_tests.rs"]
+mod bind_deadline_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagerError {
@@ -20,6 +25,26 @@ impl std::fmt::Display for ManagerError {
     }
 }
 impl std::error::Error for ManagerError {}
+
+pub(super) fn bind_deadline_ms(deadline: Instant) -> Result<u64> {
+    let wall_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| ManagerError::Deadline)?
+        .as_millis();
+    bind_deadline_at(deadline, Instant::now(), wall_ms)
+}
+
+pub(super) fn bind_deadline_at(deadline: Instant, now: Instant, wall_ms: u128) -> Result<u64> {
+    let remaining = deadline
+        .checked_duration_since(now)
+        .filter(|value| !value.is_zero() && *value <= Duration::from_secs(5))
+        .ok_or(ManagerError::Deadline)?;
+    let end = wall_ms
+        .checked_add(remaining.as_millis())
+        .filter(|end| *end > wall_ms && *end < u128::from(INTEGER_LIMIT))
+        .ok_or(ManagerError::Deadline)?;
+    u64::try_from(end).map_err(|_| ManagerError::Deadline)
+}
 pub(super) fn key(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 128

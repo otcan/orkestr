@@ -1,4 +1,5 @@
 """Original pidfds only. Empty process snapshots never create retirement proof."""
+import math
 import os
 from functools import wraps
 from pathlib import Path
@@ -7,7 +8,7 @@ import signal
 import time
 import threading
 from codex_bounded.trust import belongs, exists, process
-from .contract import require
+from .contract import MAX_BIND_MS, require
 
 MAX_CHILDREN = 256
 
@@ -66,6 +67,9 @@ class Children:
 
     @serialized
     def bind(self, pid, start, deadline):
+        require(type(deadline) in (int, float) and math.isfinite(deadline)
+                and 0 < deadline - time.monotonic() <= MAX_BIND_MS / 1000,
+                "broker_pause_deadline")
         identity = process(pid)
         require(identity is not None and identity["start"] == start and
                 identity["uid"] == self.package.uid and identity["ppid"] == self.server["pid"]
@@ -78,11 +82,11 @@ class Children:
         record = self.remember(identity)
         path = Path("/proc") / str(pid)
         while True:
+            require(time.monotonic() < deadline, "broker_pause_deadline")
             require(exists(identity) and belongs(pid, self.server), "broker_owner_changed")
             state = (path / "stat").read_text().rsplit(")", 1)[1].split()[0]
             if state == "T":
                 break
-            require(time.monotonic() < deadline, "broker_pause_deadline")
             time.sleep(0.005)
         # The initial executable may still be the source-pinned shell entry.
         # Only the final stopped interpreter/argv can establish launch authority.
@@ -95,6 +99,7 @@ class Children:
         require(arguments[:6] == expected and arguments[6:] in (fresh, resumed)
                 and (path / "exe").resolve() == executable, "broker_source")
         require(exists(identity) and belongs(pid, self.server), "broker_owner_changed")
+        require(time.monotonic() < deadline, "broker_pause_deadline")
         self.brokers.add(key)  # Retain original ownership BEFORE releasing launch.
         record.send(signal.SIGCONT)
         return True

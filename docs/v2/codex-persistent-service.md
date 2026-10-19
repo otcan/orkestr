@@ -61,7 +61,7 @@ package). Operations add these exact fields:
 | `status` | none; read-only, never opens/renews a window |
 | `admit` | `window_id`, `generation`, `expected_generation`, `input_message_id`, `input_event_id`, `input_request_key`, `predecessor_window_id`, `opened_at_ms`, `work_deadline_ms`, `expires_at_ms` |
 | `drain` | `window_id`, `generation` |
-| `bind_child` | `window_id`, `generation`, `broker_pid`, `broker_start`; locators only |
+| `bind_child` | `window_id`, `generation`, `broker_pid`, `broker_start`, `bind_deadline_ms`; locators and original caller time bound only |
 | `retire` | `window_id`, `generation`, `outcome` (`accepted` or `stopped`), `run_id`, `terminal_event_id` |
 | `uncertain` | `window_id`, `generation`, `reason` (`runtime_refused`, `auth_revoked`, `cleanup_unknown`, `server_lost`) |
 
@@ -105,6 +105,15 @@ exact child PID/start/UID, direct Rust parent, interpreter and closed no-site
 entry argv; captures its original pidfd; then alone sends pidfd SIGCONT. Exact
 bind replay cannot continue twice. A failed bind makes the window uncertain;
 the caller must reap its stopped child. No empty tree snapshot creates proof.
+
+`bind_deadline_ms` is a required positive UTC Unix millisecond integer below
+2^53, derived from Runtime's original absolute deadline of at most five seconds.
+The manager maps the remaining time once and caps it by connection acceptance
+plus five seconds and the exact window's work cutoff. Frame reception still has
+its original one-second bound. Pause, source/identity validation and reply share
+that deadline, with 100 ms reserved for the reply; a late pause or late final
+validation never releases the child. Lost replies remain ambiguous and are not
+retried. Old/new mixed control schemas refuse rather than invent a fresh budget.
 
 The fixed shell entry wrappers invoke the pinned interpreter with `-I -S -B`.
 `codex_service/entry.py` checks protected metadata and the complete initial import

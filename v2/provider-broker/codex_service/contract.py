@@ -14,6 +14,8 @@ DRAIN_ATTEMPTS = 4
 MAX_BYTES = 64 * 1024**2
 DRAIN_BYTES = 1024**2
 CREDIT_BYTES = 16 * 1024
+MAX_BIND_MS = 5000
+BIND_REPLY_SECONDS = 0.1
 
 
 class Refused(Exception):
@@ -71,7 +73,7 @@ def decode(raw):
                   "input_event_id", "input_request_key", "predecessor_window_id",
                   "opened_at_ms", "work_deadline_ms", "expires_at_ms"},
         "drain": {"window_id", "generation"},
-        "bind_child": {"window_id", "generation", "broker_pid", "broker_start"},
+        "bind_child": {"window_id", "generation", "broker_pid", "broker_start", "bind_deadline_ms"},
         "retire": {"window_id", "generation", "outcome", "run_id", "terminal_event_id"},
         "uncertain": {"window_id", "generation", "reason"},
     }
@@ -102,6 +104,8 @@ def decode(raw):
                 "broker_pid")
         require(type(value["broker_start"]) is int and 0 < value["broker_start"] < 2**53,
                 "broker_start")
+        require(type(value["bind_deadline_ms"]) is int and 0 < value["bind_deadline_ms"] < 2**53,
+                "bind_deadline")
     if operation == "uncertain":
         require(value["reason"] in ("runtime_refused", "auth_revoked", "cleanup_unknown", "server_lost"),
                 "uncertainty_reason")
