@@ -115,3 +115,60 @@ fn task_history_refuses_foreign_parent_and_retains_current_observed_availability
     assert_eq!(history.list().unwrap().parent_run_id, parent);
     assert!(!history.list().unwrap().can_create);
 }
+
+#[test]
+fn selected_budget_is_explicit_separate_from_lease_and_frozen_across_retry() {
+    for (choice, budget) in [
+        ("default", None),
+        ("60000", Some(60000)),
+        ("300000", Some(300000)),
+        ("900000", Some(900000)),
+    ] {
+        let (conversation, parent) = ids();
+        let mut draft = TaskDraft::default();
+        draft.edit("Task".into(), "Independent input".into());
+        draft.set_time_limit(choice).unwrap();
+        let pending = draft
+            .prepare(
+                conversation.clone(),
+                parent.clone(),
+                3,
+                true,
+                "original".into(),
+            )
+            .unwrap();
+        assert_eq!(pending.request.lifetime_ms, 30000);
+        assert_eq!(pending.request.execution_budget_ms, budget);
+        assert!(pending.request.is_valid());
+        let frozen = serde_json::to_value(&pending.request).unwrap();
+        if budget.is_none() {
+            assert!(frozen.get("execution_budget_ms").is_none());
+        }
+        draft.failed(&pending, 503);
+        draft.set_time_limit("900000").unwrap();
+        draft.edit("Next task".into(), "Next instructions".into());
+        let retry = draft
+            .prepare(conversation, parent, 99, false, "changed".into())
+            .unwrap();
+        assert_eq!(serde_json::to_value(&retry.request).unwrap(), frozen);
+        draft.receipt(&retry, receipt()).unwrap();
+        assert_eq!(draft.time_limit().budget_ms(), Some(900000));
+        assert_eq!(draft.title, "Next task");
+    }
+}
+#[test]
+fn unsupported_budget_never_changes_default_or_silently_widens_request() {
+    let mut draft = TaskDraft::default();
+    for value in ["0", "29999", "3600001", "3600000", "-1", "", "60000.0"] {
+        assert!(draft.set_time_limit(value).is_err());
+        assert!(draft.time_limit().budget_ms().is_none());
+    }
+    draft.edit("Task".into(), "Independent instructions".into());
+    draft.set_time_limit("300000").unwrap();
+    let (conversation, parent) = ids();
+    let pending = draft
+        .prepare(conversation, parent, 3, true, "original".into())
+        .unwrap();
+    draft.receipt(&pending, receipt()).unwrap();
+    assert!(draft.time_limit().budget_ms().is_none());
+}

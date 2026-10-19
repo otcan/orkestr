@@ -15,6 +15,7 @@ pub struct PendingTask {
 pub struct TaskDraft {
     pub title: String,
     pub instructions: String,
+    time_limit: crate::worker_time_limit::TimeLimit,
     revision: u64,
     pending: Option<PendingTask>,
     conflict: bool,
@@ -22,6 +23,25 @@ pub struct TaskDraft {
     notice: Option<&'static str>,
 }
 impl TaskDraft {
+    pub fn time_limit(&self) -> crate::worker_time_limit::TimeLimit {
+        self.time_limit
+    }
+    pub fn set_time_limit(&mut self, value: &str) -> Result<(), &'static str> {
+        let selected = crate::worker_time_limit::TimeLimit::parse(value)
+            .ok_or("Choose a listed time limit.")?;
+        if selected != self.time_limit {
+            self.time_limit = selected;
+            self.revision = self
+                .revision
+                .checked_add(1)
+                .expect("task draft revision exhausted");
+        }
+        Ok(())
+    }
+    pub fn pending_budget_ms(&self) -> Option<Option<u32>> {
+        self.pending.as_ref().map(|p| p.request.execution_budget_ms)
+    }
+
     pub fn edit(&mut self, title: String, instructions: String) {
         self.title = title;
         self.instructions = instructions;
@@ -60,7 +80,7 @@ impl TaskDraft {
             title: self.title.clone(),
             instructions: self.instructions.clone(),
             lifetime_ms: 30_000,
-            execution_budget_ms: None,
+            execution_budget_ms: self.time_limit.budget_ms(),
         };
         if !request.is_valid() {
             return Err(
@@ -98,6 +118,7 @@ impl TaskDraft {
         if !self.confirmed && self.revision == pending.draft_revision {
             self.title.clear();
             self.instructions.clear();
+            self.time_limit = Default::default();
         }
         self.confirmed = true;
         self.notice = Some("Task saved. Queued or claimed intent is not proof of running work.");

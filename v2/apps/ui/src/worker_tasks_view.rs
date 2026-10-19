@@ -50,7 +50,21 @@ pub fn WorkerTasksView(
             p { "Queued tasks are waiting. A claimed task may not have started yet. Review and accept a worker’s result before it is marked completed." }
             label { "Task title", input { value: "{draft.read().title}", oninput: move |event| { let instructions=draft.read().instructions.clone();draft.write().edit(event.value(),instructions); } } }
             label { "Independent task instructions", textarea { value: "{draft.read().instructions}", oninput: move |event| { let title=draft.read().title.clone();draft.write().edit(title,event.value()); } } }
-            p { "Title: up to 160 UTF-8 bytes. Instructions: up to 16384 bytes. Task claim lifetime: 30 seconds." }
+            label { "Time limit",
+                select { value:"{draft.read().time_limit().value()}", onchange:move |event| {
+                    if let Err(message)=draft.write().set_time_limit(&event.value()) {notice.set(message.into());}
+                },
+                    option {value:"default", "30 seconds (default)"}
+                    option {value:"60000", "1 minute"}
+                    option {value:"300000", "5 minutes"}
+                    option {value:"900000", "15 minutes"}
+                }
+            }
+            p { "This is your maximum requested time. The server may save a shorter deadline or stop work sooner." }
+            if let Some(budget)=draft.read().pending_budget_ms() {
+                p { role:"status", if let Some(ms)=budget {"Original request time limit: {ms / 60000} min. Retry keeps this limit; selection changes apply to the next task."} else {"Original request: default 30-second limit. Retry keeps this limit; selection changes apply to the next task."} }
+            }
+            p { "Title: up to 160 UTF-8 bytes. Instructions: up to 16384 bytes." }
             if !can_create { p { "New tasks are unavailable for this parent. Existing tasks remain visible; uncertain requests can be retried unchanged." } }
             button { disabled: busy() || !creating || draft.read().needs_review(), onclick: {
                 let conversation=conversation.clone();let parent=parent.clone();let csrf=csrf.clone();
@@ -97,6 +111,7 @@ pub fn WorkerTasksView(
                         li { key: "{row.task.task_id}",
                             h4 { "{row.title.as_deref().unwrap_or(\"Task payload removed\")}" }
                             p { "{phase_label(row.phase)}" }
+                            p { "Effective saved deadline is not provided here. View worker activity for current status." }
                             p { if row.instructions_available { "Instructions saved. This history shows the task title; instruction text is not included." } else { "Saved instructions removed." } }
                             if let Some(run) = &row.run_id {
                                 button { onclick: { let run=run.to_string(); move |_| selected_run.set(run.clone()) }, "View worker activity" }

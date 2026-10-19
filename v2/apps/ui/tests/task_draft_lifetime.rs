@@ -95,6 +95,7 @@ fn real_component_unmount_remount_retains_frozen_request_and_isolates_parent_and
         original
             .write()
             .edit("original task".into(), "independent instructions".into());
+        original.write().set_time_limit("300000").unwrap();
         original
             .write()
             .prepare(conversation(1), parent(10), 7, true, "frozen-key".into())
@@ -102,6 +103,7 @@ fn real_component_unmount_remount_retains_frozen_request_and_isolates_parent_and
         original
             .write()
             .edit("edited draft".into(), "next instructions".into());
+        original.write().set_time_limit("900000").unwrap();
     });
     let mut selection = driver.borrow().selection.unwrap();
     dom.in_runtime(|| selection.set(None));
@@ -119,6 +121,7 @@ fn real_component_unmount_remount_retains_frozen_request_and_isolates_parent_and
     let mut restored = driver.borrow().current.unwrap();
     dom.in_runtime(|| {
         assert_eq!(restored.read().title, "edited draft");
+        assert_eq!(restored.read().time_limit().budget_ms(), Some(900000));
         let retry = restored
             .write()
             .prepare(
@@ -129,6 +132,8 @@ fn real_component_unmount_remount_retains_frozen_request_and_isolates_parent_and
                 "must-not-replace".into(),
             )
             .unwrap();
+        assert_eq!(retry.request.execution_budget_ms, Some(300000));
+        assert_eq!(retry.request.lifetime_ms, 30000);
         assert_eq!(retry.request.request_key, "frozen-key");
         assert_eq!(retry.request.expected_control_revision, 7);
         assert_eq!(retry.request.title, "original task");
