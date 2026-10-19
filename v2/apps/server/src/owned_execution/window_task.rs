@@ -28,7 +28,9 @@ impl ConfiguredExecution {
         let token = self.token.clone();
         let task = tokio::spawn(async move {
             let result = self.run(receiver).await;
-            if result.is_err() {
+            if let Err(reason) = &result {
+                // Only static local diagnostics; never provider text, token or paths.
+                eprintln!("owned window execution paused: {reason}");
                 if let Some(context) = context {
                     context.uncertain(&store, &token).await;
                 }
