@@ -75,7 +75,7 @@ pub fn MemoryView(
                             if *forget {MemoryOperation::Forget{memory_id:record.memory_id,expected_revision:record.revision}}
                             else {let mut candidate=record.candidate.clone();candidate.content=MemoryContent::Fact{statement:text()};MemoryOperation::Correct{memory_id:record.memory_id,expected_revision:record.revision,candidate}}
                         } else {
-                            MemoryOperation::Create{candidate:MemoryCandidate{scope:project.clone().map(|project_id|MemoryScope::Project{project_id}).unwrap_or(MemoryScope::Owner),content:MemoryContent::Fact{statement:text()},source:MemorySource{kind:MemorySourceKind::Owner,actor_id:owner().ok_or("Refresh Memory settings first.")?.to_string(),origin:"owner_memory_editor".into(),captured_at_ms:0,task_id:None,event_id:None,cursor:None}}}
+                            MemoryOperation::Create{candidate:MemoryCandidate{scope:project.clone().map(|project_id|MemoryScope::Project{project_id}).unwrap_or(MemoryScope::Owner),content:MemoryContent::Fact{statement:text()},source:MemorySource{kind:MemorySourceKind::Owner,actor_id:owner().ok_or("Refresh Memory settings first.")?.to_string(),origin:"owner_memory_editor".into(),captured_at_ms:crate::memory_transport::capture_time().await?,task_id:None,event_id:None,cursor:None}}}
                         };
                         let key=crate::transport::key().await.map_err(|_|"Could not prepare Memory review.")?;
                         (MemoryRoute::Proposals,"POST",Some(memory_client::body(&json!({"request_key":key,"operation":operation}))?))

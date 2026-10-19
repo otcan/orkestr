@@ -75,3 +75,14 @@ pub async fn export_file(
         Err("File export requires the web client.".into())
     }
 }
+
+/// Browser wall time is provenance metadata, independent of exact u64 revisions.
+pub async fn capture_time() -> Result<i64, String> {
+    let source = include_str!("memory_capture.js").replace("export function", "function");
+    document::eval(&format!("{source}\nreturn memoryCaptureTime();"))
+        .join::<i64>()
+        .await
+        .map_err(|_| {
+            "Could not read capture time. Check your device clock and try again.".to_string()
+        })
+}
