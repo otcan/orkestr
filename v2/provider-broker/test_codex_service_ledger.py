@@ -111,7 +111,7 @@ class LedgerTests(unittest.TestCase):
         self.clock.advance(45)
         self.ledger.admit(request)
         self.clock.advance(855)
-        self.assertEqual(self.ledger.tick(request["window_id"], 1)["state"], "reconciliation")
+        self.assertEqual(self.ledger.tick(request["window_id"], 1)["state"], "expired")
 
     def test_changing_core_deadline_refused_for_active_window(self):
         request = self.admit()
@@ -148,11 +148,25 @@ class LedgerTests(unittest.TestCase):
         self.clock.advance(870)
         self.assertEqual(self.ledger.tick(request["window_id"], 1)["state"], "draining")
         self.clock.advance(30)
-        with self.assertRaisesRegex(contract.Refused, "window_clock"):
-            self.ledger.retire(self.retirement(request))
-        self.assertEqual(self.ledger.tick(request["window_id"], 1)["state"], "reconciliation")
+        self.assertEqual(self.ledger.tick(request["window_id"], 1)["state"], "expired")
+        with self.assertRaises(contract.Refused):
+            self.ledger.reserve(request["window_id"], 1, uid(), "attempt", 1)
         with self.assertRaises(contract.Refused):
             self.ledger.admit(self.request(2))
+        # Pure storage records only the manager's independently checked exact
+        # retained cleanup/Core proof. Expiry itself never calls this operation.
+        self.clock.advance(120)
+        self.assertEqual(self.ledger.retire(self.retirement(request))["state"], "retired")
+
+    def test_expired_reopen_loses_original_retained_proof(self):
+        request = self.admit()
+        self.clock.advance(900)
+        self.ledger.tick(request["window_id"], 1)
+        self.ledger.close()
+        self.ledger = Ledger(self.path, self.owner, self.conversation, clock=self.clock)
+        self.assertEqual(self.ledger.status()["state"], "reconciliation")
+        with self.assertRaises(contract.Refused):
+            self.ledger.retire(self.retirement(request))
 
     def test_clock_rollback_and_new_boot_refuse(self):
         request = self.admit()
@@ -260,10 +274,10 @@ os._exit(0)
             with self.assertRaises(contract.Refused):
                 contract.decode(raw)
 
-    def test_i64_generation_and_separate_js_safe_timestamps(self):
-        good = {**self.request(), "generation": 2**63 - 1, "expected_generation": 2**63 - 2}
+    def test_published_core_js_safe_generation_and_timestamps(self):
+        good = {**self.request(), "generation": 2**53 - 1, "expected_generation": 2**53 - 2}
         self.assertEqual(contract.decode(contract.canonical(good)), good)
-        for bad in ({**good, "generation": 2**63}, {**good, "generation": True},
+        for bad in ({**good, "generation": 2**53}, {**good, "generation": True},
                     {**good, "opened_at_ms": 2**53}):
             with self.assertRaises(contract.Refused):
                 contract.decode(contract.canonical(bad))

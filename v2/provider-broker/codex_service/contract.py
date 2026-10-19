@@ -36,7 +36,7 @@ def identifier(value):
 
 
 def generation(value):
-    require(type(value) is int and 0 <= value <= 2**63 - 1, "generation")
+    require(type(value) is int and 0 <= value < 2**53, "generation")
     return value
 
 
@@ -71,6 +71,7 @@ def decode(raw):
                   "input_event_id", "input_request_key", "predecessor_window_id",
                   "opened_at_ms", "work_deadline_ms", "expires_at_ms"},
         "drain": {"window_id", "generation"},
+        "bind_child": {"window_id", "generation", "broker_pid", "broker_start"},
         "retire": {"window_id", "generation", "outcome", "run_id", "terminal_event_id"},
         "uncertain": {"window_id", "generation", "reason"},
     }
@@ -96,6 +97,11 @@ def decode(raw):
                 "window_deadlines")
     if operation == "retire":
         require(value["outcome"] in ("accepted", "stopped"), "terminal_outcome")
+    if operation == "bind_child":
+        require(type(value["broker_pid"]) is int and 1 < value["broker_pid"] < 2**31,
+                "broker_pid")
+        require(type(value["broker_start"]) is int and 0 < value["broker_start"] < 2**53,
+                "broker_start")
     if operation == "uncertain":
         require(value["reason"] in ("runtime_refused", "auth_revoked", "cleanup_unknown", "server_lost"),
                 "uncertainty_reason")
