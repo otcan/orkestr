@@ -25,8 +25,14 @@ pub struct ExecutionWindowLimits {
 }
 impl Default for ExecutionWindowLimits {
     fn default() -> Self {
-        Self { duration_ms: 900_000, attempts: 32, bytes: 67_108_864,
-            cleanup_ms: 30_000, cleanup_attempts: 4, cleanup_bytes: 1_048_576 }
+        Self {
+            duration_ms: 900_000,
+            attempts: 32,
+            bytes: 67_108_864,
+            cleanup_ms: 30_000,
+            cleanup_attempts: 4,
+            cleanup_bytes: 1_048_576,
+        }
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,19 +50,23 @@ pub struct ExecutionWindowRequest {
 }
 impl ExecutionWindowRequest {
     pub fn is_valid(&self) -> bool {
-        key(&self.request_key) && !self.input_request_key.is_empty()
+        key(&self.request_key)
+            && !self.input_request_key.is_empty()
             && self.input_request_key.len() <= 128
             && !self.input_request_key.chars().any(char::is_control)
-            && !self.input_message_id.0.is_nil() && !self.input_event_id.0.is_nil()
-            && self.expected_generation <= i64::MAX as u64
+            && !self.input_message_id.0.is_nil()
+            && !self.input_event_id.0.is_nil()
+            && self.expected_generation < 9_007_199_254_740_991
             && self.window_id.is_none_or(|id| !id.is_nil())
             && self.predecessor_window_id.is_none_or(|id| !id.is_nil())
             && !(self.window_id.is_some() && self.predecessor_window_id.is_some())
     }
 }
 fn key(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 128
-        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b))
+    !s.is_empty()
+        && s.len() <= 128
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b))
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
