@@ -10,10 +10,17 @@ import sqlite3
 import stat
 import sys
 
+# -I removes the script directory; add only this sealed, operator-pinned helper tree.
+_HELPER = Path(__file__).resolve().parent
+sys.path[:0] = [str(_HELPER), str(_HELPER.parent)]
+
 from authority_preservation import database_inventory, unused_port
-from real_package import Client, invoke, launch, require, sha256, stop_owned
+from real_package import Client, require, sha256, stop_owned
+from isolated_runtime import invoke, launch, runtime_inventory, verify_runtime
 from install_state import locked, package
 from cross_revision import verify_schema
+sys.path.insert(0,str(_HELPER.parents[1]/'packaging/candidate'))
+import embedded_identity
 
 MEMORY = {'memory_settings', 'memory_records', 'memory_decisions'}
 NEW_OBJECTS = MEMORY | {'memory_records_owner', *('sqlite_autoindex_'+n+'_1' for n in MEMORY)}
@@ -85,8 +92,6 @@ def execute(plan_path, output):
     verify_originals(handoff)
     package_root,manifest=package(Path(plan['package']))
     require(manifest['source_commit']==plan['source_commit'] and manifest['version']=='2.0.0-dev', 'exact development package required')
-    sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'packaging/candidate'))
-    import embedded_identity
     embedded_identity.verify(package_root/'server/orkestr-v2-server',package_root/'ui',manifest['version'],plan['source_commit'])
     fingerprints=json.loads(Path(plan['fingerprints']).read_text())
     checksums={str(m['version']):m['sqlx_sha384'] for m in fingerprints['migrations']}
@@ -156,7 +161,20 @@ def execute(plan_path, output):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--plan',type=Path,required=True)
-    parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--plan',type=Path)
+    parser.add_argument('--imports-only',type=Path)
+    parser.add_argument('--runtime-closure',type=Path)
+    parser.add_argument('--reconcile-only',action='store_true')
+    parser.add_argument('--output',type=Path)
     args=parser.parse_args()
-    execute(args.plan,args.output)
+    if args.imports_only:
+        require(not args.imports_only.exists(),'fresh import inventory output required')
+        args.imports_only.write_text(json.dumps(runtime_inventory(),indent=2)+'\n')
+    elif args.reconcile_only:
+        require(args.runtime_closure,'runtime closure required')
+        verify_runtime(args.runtime_closure)
+        print('isolated import reconciliation PASS')
+    else:
+        require(args.plan and args.output and args.runtime_closure,'sealed plan/output/runtime closure required')
+        verify_runtime(args.runtime_closure)
+        execute(args.plan,args.output)

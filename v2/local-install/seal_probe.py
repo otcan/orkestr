@@ -19,7 +19,7 @@ def git(repo, *args):
                           capture_output=True).stdout
 
 
-def seal(repo, output, entry, arguments):
+def seal(repo, output, entry, arguments, isolated=False):
     repo, output = Path(repo).resolve(), Path(output).absolute()
     if output.exists() or output.is_symlink():
         raise RuntimeError('fresh output required')
@@ -43,11 +43,11 @@ def seal(repo, output, entry, arguments):
         target.write_bytes(data)
         target.chmod(0o400)
         inventory[name] = {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
-    command = [sys.executable, '-B', str(output / 'closure' / entry), *arguments]
+    command = [sys.executable, *(['-I', '-S', '-B'] if isolated else ['-B']), str(output / 'closure' / entry), *arguments]
     value = {'format': 'orkestr-install-probe-plan-v1', 'source_commit': source,
              'status': 'prepared_unexecuted', 'argv': command,
              'python': {'executable': sys.executable, 'version': sys.version},
-             'environment_contract': 'operator must separately retain exact allowlisted execution environment; no credentials',
+             'environment_contract': ({'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'} if isolated else 'operator must separately retain exact allowlisted execution environment; no credentials'),
              'inventory': inventory,
              'limits': ['Git-byte export, not dynamic import attestation',
                         'artifacts/config/fixture pins must be recorded by the probe before execution',
@@ -63,10 +63,11 @@ def main():
     parser.add_argument('--repo', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--entry', required=True)
+    parser.add_argument('--isolated', action='store_true')
     parser.add_argument('arguments', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     arguments = args.arguments[1:] if args.arguments[:1] == ['--'] else args.arguments
-    print(seal(args.repo, args.output, args.entry, arguments))
+    print(seal(args.repo, args.output, args.entry, arguments, isolated=args.isolated))
 
 
 if __name__ == '__main__':

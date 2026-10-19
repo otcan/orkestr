@@ -44,3 +44,8 @@ class SealProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'committed'):
             module.seal(self.repo, self.output, '../outside.py', [])
         self.assertFalse(self.output.exists())
+
+    def test_isolated_startup_and_concrete_environment(self):
+        plan=json.loads(module.seal(self.repo,self.output,self.entry,[],isolated=True).read_text())
+        self.assertEqual(plan['argv'][1:4],['-I','-S','-B'])
+        self.assertEqual(plan['environment_contract'],{'PATH':'/usr/bin:/bin','LANG':'C.UTF-8'})
