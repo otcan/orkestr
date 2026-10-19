@@ -54,6 +54,7 @@ def stop_fresh_worker_accept_and_final_configured_restart(case):
     no_resume(case)
     case.quiet()
     assert case.request(case.path + "/stop", "POST", body)[:2] == (200, receipt)
+    (case.workspace / "gate-successor-progress").touch()
     case.fresh_after_stop(3)
     assert case.held(old_input["message_id"]) == held
     resumed_identity = [row for row in case.trace() if row["kind"] == "turn" and row["role"] == "deep"][-1]
@@ -63,10 +64,28 @@ def stop_fresh_worker_accept_and_final_configured_restart(case):
     assert case.snapshot()["resume"] == [{"prior_run_id": prior["id"], "state": "confirmed"}]
     # Exact historical replay is receipt-only; altered/new intent cannot cancel
     # the successor or create another native process.
+    ordinary.wait_for(lambda: any(row["kind"] == "progress-held" for row in case.trace()),
+                      "successor progress gate missing")
+    case.checkpoint("successor-running-before-progress")
+    pending = case.snapshot()
+    pending_trace = case.trace()
+    (case.workspace / "release-successor-progress").touch()
+    ordinary.wait_for(lambda: any(row["run_id"] == case.parent["id"] and row["kind"] == "progress"
+                                  for row in case.snapshot()["observations"]), "successor Progress missing")
     before = case.snapshot()
     trace = case.trace()
+    # Running precedes the separate Progress commit. Prove exactly that change,
+    # then retain strict whole-state equality across the historical requests.
+    added = [row for row in before["observations"] if row not in pending["observations"]]
+    assert len(added) == 1 and added[0]["run_id"] == case.parent["id"] and added[0]["kind"] == "progress"
+    assert pending["observations"] == [row for row in before["observations"] if row not in added]
+    assert {key: value for key, value in before.items() if key != "observations"} == \
+           {key: value for key, value in pending.items() if key != "observations"}
+    assert trace == pending_trace
+    case.checkpoint("before-historical-stop-replay")
     assert case.request(case.path + "/stop", "POST", body)[:2] == (200, receipt)
     assert case.request(case.path + "/stop", "POST", dict(body, request_key="new-old-parent-intent"))[0] == 503
+    case.checkpoint("after-historical-stop-replay")
     assert case.snapshot() == before and case.trace() == trace
     stale = case.input("gamma")
     stale["expected_control_revision"] += 1

@@ -122,6 +122,12 @@ def main():
                 emit({"id": frame["id"], "result": {"turn": {"id": active, "status": "inProgress"}}})
                 emit({"method": "turn/started", "params": {"threadId": native,
                      "turn": {"id": active, "status": "inProgress"}}})
+                if target == "deep-3" and (workspace / "gate-successor-progress").exists():
+                    record("progress-held", turn=active)
+                    until = time.monotonic() + 5
+                    while not (workspace / "release-successor-progress").exists():
+                        assert time.monotonic() < until, "successor progress gate not released"
+                        time.sleep(0.005)
                 emit({"method": "item/agentMessage/delta", "params": {"threadId": native,
                      "turnId": active, "delta": "synthetic retirement progress"}})
                 continue
