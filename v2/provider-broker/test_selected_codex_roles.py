@@ -52,6 +52,11 @@ class RolePackageTests(unittest.TestCase):
         for role in ROLES:
             self.assertEqual(list(Path(package.profiles[role]["state_root"]).iterdir()), [])
 
+    def test_two_role_package_cannot_inherit_single_deep_workspace_descriptor(self):
+        package = self.package()
+        with self.assertRaisesRegex(Refused, "workspace_roles_not_supported"):
+            Package(package.root, workspace_descriptor=object())
+
     def test_fixed_role_is_required_without_argv_or_deep_fallback(self):
         package = self.package()
         for role in (None, "worker", "claude", "", "Deep"):

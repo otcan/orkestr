@@ -95,7 +95,8 @@ else:raise AssertionError('descriptor leaked')
                                   ('resume-owned-workspace-session',True)]:
             channel=Mock();pump=SimpleNamespace(run=Mock(),parent_eof=False)
             config=SimpleNamespace(workspace='/workspace',workspace_descriptor=object())
-            package=SimpleNamespace(uid=os.geteuid(),root=Path('/synthetic/package'))
+            package=SimpleNamespace(uid=os.geteuid(),root=Path('/synthetic/package'),
+                                    profile_path=Mock(return_value=Path('/synthetic/package/profile.json')))
             descriptor=object();connection=MagicMock()
             connection.__enter__.return_value=connection
             connection.family=broker.socket.AF_UNIX;connection.type=broker.socket.SOCK_STREAM
@@ -111,7 +112,7 @@ else:raise AssertionError('descriptor leaked')
                     patch.object(broker.signal,'signal'), \
                     patch.object(broker.socket,'socket',return_value=connection):
                 self.assertEqual(broker.main(package.root),0)
-                configuration.assert_called_once_with(package.root,workspace_descriptor=descriptor)
+                configuration.assert_called_once_with(package.root,None,workspace_descriptor=descriptor)
                 channel.assert_called_once_with('/workspace',expected_native='native-identity' if resumed else None)
                 self.assertEqual(receive.call_count,int(resumed))
                 pump.run.assert_called_once()
