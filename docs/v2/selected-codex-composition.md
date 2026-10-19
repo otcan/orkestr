@@ -30,10 +30,14 @@ This leaf adds the dependency-closed Codex isolation files from reviewed
 
 No Rust factory, Worker, Claude, installed service, default local installer,
 canonical login, native executable or existing profile is modified. Worker and
-Fast configurations are refused by this first selected-Codex package. The
+Fast configurations are refused by the original single-Deep package format. The
 server's ordinary Deep factory remains responsible for durable authority,
 revocation, Stop, completion proposals and owner acceptance; this wrapper
 cannot manufacture or accept a completion.
+
+The separately selected [two-role package](selected-codex-roles.md) uses those
+same public components and finite aggregate budget to configure distinct Fast
+and Deep native sessions. It does not reinterpret an existing single-role plan.
 
 ## Fixed policy
 

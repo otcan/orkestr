@@ -12,10 +12,15 @@ ISOLATION = ("__init__.py", "policy.py", "launch.py", "authenticated.py",
 BROKER = ("configuration.py", "protocol.py", "transport.py", "reaping.py", "codex_bootstrap.py")
 MODULES = ("__init__.py", "trust.py", "configuration.py", "profile.py", "broker.py",
            "peer.py", "egress.py", "controller.py", "server_child.py")
+ROLES = ("deep", "fast")
+ROLE_MODULES = (*MODULES, "roles.py")
 FILES = {"server", "native", "launcher.py", "controller.py", "runtime.json", "profile.json"}
 FILES |= {"broker/" + name for name in BROKER}
 FILES |= {"isolation/" + name for name in ISOLATION}
 FILES |= {"codex_bounded/" + name for name in MODULES}
+ROLE_FILES = (FILES - {"launcher.py", "profile.json"}) | {"codex_bounded/roles.py"}
+ROLE_FILES |= {f"{kind}-{role}.{suffix}" for role in ROLES
+               for kind, suffix in (("launcher", "py"), ("profile", "json"))}
 
 
 class Package:
@@ -26,16 +31,19 @@ class Package:
             require(digest(manifest_path) == expected, "manifest_pin")
         manifest = metadata(manifest_path)
         require(set(manifest) == {"format", "source_commit", "files", "dependencies"} and
-                manifest["format"] == "orkestr-v2-codex-bounded-package-v1" and
+                manifest["format"] in ("orkestr-v2-codex-bounded-package-v1",
+                                       "orkestr-v2-codex-bounded-roles-package-v1") and
                 re.fullmatch(r"[0-9a-f]{40}", manifest["source_commit"]), "package_format")
-        require(set(manifest["files"]) == FILES, "package_inventory")
+        self.two_roles = manifest["format"] == "orkestr-v2-codex-bounded-roles-package-v1"
+        files = ROLE_FILES if self.two_roles else FILES
+        require(set(manifest["files"]) == files, "package_inventory")
         actual = set()
         for path in self.root.rglob("*"):
             require(not path.is_symlink(), "package_alias")
             protected(path, path.is_dir())
             if path.is_file():
                 actual.add(str(path.relative_to(self.root)))
-        require(actual == FILES | {"manifest.json"}, "unexpected_package_file")
+        require(actual == files | {"manifest.json"}, "unexpected_package_file")
         for name, sha in manifest["files"].items():
             require(digest(protected(self.root / name)) == sha, "package_hash")
         dependencies = {str(Path(p).resolve(strict=True)) for p in (
@@ -46,8 +54,21 @@ class Package:
             require(digest(protected(name)) == sha, "dependency_hash")
         self.manifest = manifest
         self.runtime = metadata(self.root / "runtime.json")
-        self.profile = metadata(self.root / "profile.json")
-        self._bindings(workspace_descriptor)
+        if self.two_roles:
+            require(workspace_descriptor is None, "workspace_roles_not_supported")
+            from .roles import bind
+            bind(self)
+        else:
+            self.profile = metadata(self.root / "profile.json")
+            self._bindings(workspace_descriptor)
+
+    def profile_path(self, role=None):
+        if self.two_roles:
+            require(role in ROLES, "fixed_launcher_role_required")
+            return self.root / f"profile-{role}.json"
+        require(role is None, "single_deep_role_unchanged")
+        return self.root / "profile.json"
+
 
     def _bindings(self, workspace_descriptor=None):
         value = self.runtime
@@ -132,6 +153,8 @@ class Package:
                     stat.S_IMODE(info.st_mode) == 0o660, "endpoint_identity")
 
     def environment(self):
-        return {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(self.provider_home),
-                "ORKESTR_V2_HOME": str(self.data), "ORKESTR_V2_BIND": f"127.0.0.1:{self.runtime['port']}",
-                "ORKESTR_V2_EXECUTION_CONFIG": self.runtime["execution_config"]}
+        value = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(self.provider_home),
+                 "ORKESTR_V2_HOME": str(self.data), "ORKESTR_V2_BIND": f"127.0.0.1:{self.runtime['port']}"}
+        key = "ORKESTR_V2_EXECUTION_SET" if self.two_roles else "ORKESTR_V2_EXECUTION_CONFIG"
+        value[key] = self.runtime["execution_set" if self.two_roles else "execution_config"]
+        return value

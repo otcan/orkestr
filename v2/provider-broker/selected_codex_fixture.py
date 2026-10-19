@@ -8,7 +8,7 @@ import socket
 import subprocess
 import tempfile
 
-from codex_bounded.configuration import BROKER, ISOLATION, MODULES
+from codex_bounded.configuration import BROKER, ISOLATION, MODULES, ROLE_MODULES
 from codex_bounded.trust import digest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,13 +19,14 @@ UID = GID = 65534
 
 
 class Fixture:
-    def __init__(self, *, stubborn=False):
+    def __init__(self, *, stubborn=False, roles=False):
         self.root = Path(tempfile.mkdtemp(prefix="selected-codex-test-", dir="/opt"))
         self.root.chmod(0o755)
         self.repository = self.root / "repository"
         self.repository.mkdir()
         source = ROOT / "v2/provider-broker"
-        for directory, names in (("", BROKER), ("isolation", ISOLATION), ("codex_bounded", MODULES)):
+        for directory, names in (("", BROKER), ("isolation", ISOLATION),
+                                 ("codex_bounded", ROLE_MODULES if roles else MODULES)):
             for name in names:
                 relative = Path("v2/provider-broker") / directory / name
                 target = self.repository / relative
@@ -34,6 +35,9 @@ class Fixture:
         packaging = self.repository / "v2/packaging/selected_codex.py"
         packaging.parent.mkdir(parents=True)
         packaging.write_bytes((ROOT / "v2/packaging/selected_codex.py").read_bytes())
+        if roles:
+            packaging.with_name("selected_codex_roles.py").write_bytes(
+                (ROOT / "v2/packaging/selected_codex_roles.py").read_bytes())
         environment = {"PATH": "/usr/bin:/bin", "HOME": str(self.root), "GIT_CONFIG_NOSYSTEM": "1",
                        "GIT_CONFIG_GLOBAL": "/dev/null"}
         for arguments in (("init", "-q"), ("add", "."),
@@ -76,6 +80,16 @@ class Fixture:
             "conversation_id": "11111111-2222-4333-8444-555555555555", "namespace": "synthetic",
             "supervisor_key": "synthetic-owner", "port": port, "lifetime_seconds": 30}
         self.receipt = None
+        self.roles = roles
+        if roles:
+            self.plan["format"] = "orkestr-v2-codex-bounded-roles-plan-v1"
+            self.plan["roles"] = {
+                "deep": {name: self.plan.pop(name) for name in
+                         ("workspace", "state_root", "namespace", "supervisor_key")},
+                "fast": {"workspace": str(self.directory("fast-workspace")),
+                         "state_root": str(self.directory("fast-account")),
+                         "namespace": "synthetic-fast", "supervisor_key": "synthetic-fast-owner"},
+            }
 
     def directory(self, name):
         path = self.root / name
@@ -90,7 +104,14 @@ class Fixture:
         path.chmod(0o600)
 
     def prepare(self):
-        self.receipt = packager.prepare(self.plan)
+        if self.roles:
+            spec = importlib.util.spec_from_file_location("selected_codex_roles_packager",
+                ROOT / "v2/packaging/selected_codex_roles.py")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.receipt = module.prepare(self.plan)
+        else:
+            self.receipt = packager.prepare(self.plan)
         return self.receipt
 
     def alter(self, name, mutate):

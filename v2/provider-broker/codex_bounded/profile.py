@@ -7,11 +7,12 @@ from isolation import policy
 
 
 class Configuration:
-    def __init__(self, package, *, workspace_descriptor=None):
+    def __init__(self, package, role=None, *, workspace_descriptor=None):
         self.package = Package(package, workspace_descriptor=workspace_descriptor)
-        self.profile = SelectedCodexProfile(self.package.root / "profile.json", workspace_descriptor=workspace_descriptor)
+        self.profile = SelectedCodexProfile(self.package.profile_path(role), workspace_descriptor=workspace_descriptor)
         self.workspace_descriptor = workspace_descriptor
         self.workspace = self.profile.workspace if workspace_descriptor is None else "/workspace"
+
         self.issued = False
 
     def isolated_command(self):
