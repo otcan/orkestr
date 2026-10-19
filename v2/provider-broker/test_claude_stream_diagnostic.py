@@ -36,7 +36,8 @@ class ClaudeHeaderDiagnosticTests(unittest.TestCase):
         self.assertEqual(MESSAGE_REQUIRED_KEYS, ('id', 'role', 'content'))
         self.assertEqual(MESSAGE_OPTIONAL_KEYS, (
             'type', 'model', 'stop_reason', 'stop_sequence', 'usage', 'container',
-            'context_management', 'stop_details', 'diagnostics', 'resumable'))
+            'context_management', 'stop_details', 'diagnostics', 'resumable',
+            'input_transformations'))
         for i, key in enumerate(MESSAGE_OPTIONAL_KEYS):
             with self.subTest(key=key):
                 header = self.header(); header[key] = None
@@ -64,7 +65,7 @@ class ClaudeHeaderDiagnosticTests(unittest.TestCase):
             def __repr__(self): raise AssertionError('repr hook read')
         for value in (None, False, 3, 1.5, 'SYNTHETIC_CONTENT', [], Poison()):
             shape = message_header_shape(value)
-            self.assertEqual(shape, dict(version=1, kind='not_object', required_mask=0,
+            self.assertEqual(shape, dict(version=2, kind='not_object', required_mask=0,
                                          optional_mask=0, extra_count=0, extra_overflow=False))
             self.assertTrue(valid_header_shape(shape))
 
@@ -80,7 +81,7 @@ class ClaudeHeaderDiagnosticTests(unittest.TestCase):
         raw = json.dumps(shape, allow_nan=False)
         self.assertNotIn('SYNTHETIC', raw)
         self.assertEqual(shape['required_mask'], 7)
-        self.assertEqual(shape['optional_mask'], 1023)
+        self.assertEqual(shape['optional_mask'], 2047)
         self.assertEqual(shape['extra_count'], 1)
         self.assertTrue(valid_header_shape(json.loads(raw)))
         self.assertLess(len(raw.encode()), 160)
@@ -104,10 +105,10 @@ class ClaudeHeaderDiagnosticTests(unittest.TestCase):
             altered = dict(shape); del altered[key]
             self.assertFalse(valid_header_shape(altered))
         for key, values in (
-                ('version', (True, 0, 2, 1.0, '1')),
+                ('version', (True, 0, 1, 2.0, '2')),
                 ('kind', (None, 1, [], 'unknown', 'not_object', 'missing_required', 'extra_fields')),
                 ('required_mask', (-1, 8, True, 7.0, '7', None)),
-                ('optional_mask', (-1, 1024, True, 0.0, '0', None)),
+                ('optional_mask', (-1, 2048, True, 0.0, '0', None)),
                 ('extra_count', (-1, 65, True, 0.0, '0', None)),
                 ('extra_overflow', (None, 0, 1, 'false', True))):
             for value in values:

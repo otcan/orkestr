@@ -4,6 +4,7 @@ import uuid
 
 from claude_assistant_input import AssistantInput
 from claude_control import canonical, correlated
+from claude_input_transformations import validate_input_transformations
 from claude_stream_schema import (MAX_BLOCKS, MAX_DELTA, MAX_EVENTS, MAX_RAW, MAX_TEXT,
     MAX_THINKING, STOP_REASONS, assistant_envelope, block, echo, event_id, frame_size,
     message_header, number, stream_envelope, text, usage)
@@ -97,8 +98,10 @@ class ClaudeTextStream:
         elif kind == 'message_delta':
             require(self.state == 'message' and self.active is None)
             require({'type', 'delta', 'usage'} <= set(event)
-                    and set(event) <= {'type', 'delta', 'usage', 'context_management'})
+                    and set(event) <= {'type', 'delta', 'usage', 'context_management',
+                                      'input_transformations'})
             require(event.get('context_management') is None)
+            validate_input_transformations(event.get('input_transformations'))
             delta = event['delta']; require(isinstance(delta, dict)
                 and {'stop_reason'} <= set(delta)
                 and set(delta) <= {'stop_reason', 'stop_sequence', 'stop_details', 'container'})

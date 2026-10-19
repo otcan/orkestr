@@ -4,6 +4,7 @@ import math
 import uuid
 
 from claude_control import canonical, correlated
+from claude_input_transformations import validate_input_transformations
 from protocol import exact, require
 
 
@@ -38,7 +39,8 @@ def sanitize_assistant(frame, native, message):
     envelope = frame['message']
     require(isinstance(envelope, dict) and {'role', 'content'} <= set(envelope)
             and set(envelope) <= {'role', 'content', 'id', 'type', 'model', 'stop_reason',
-                'stop_sequence', 'usage', 'container', 'context_management', 'stop_details', 'diagnostics'})
+                'stop_sequence', 'usage', 'container', 'context_management', 'stop_details',
+                'diagnostics', 'input_transformations'})
     require(envelope['role'] == 'assistant')
     for key in ('id', 'model'):
         if key in envelope: bounded(envelope[key])
@@ -48,6 +50,7 @@ def sanitize_assistant(frame, native, message):
     if envelope.get('stop_sequence') is not None: bounded(envelope['stop_sequence'])
     for key in ('container', 'context_management', 'stop_details', 'diagnostics'):
         require(envelope.get(key) is None)
+    validate_input_transformations(envelope.get('input_transformations'))
     if 'usage' in envelope: require(isinstance(envelope['usage'], dict))
     blocks = envelope['content']
     require(isinstance(blocks, list) and 0 < len(blocks) <= 128)

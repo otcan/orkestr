@@ -8,6 +8,7 @@ MESSAGE_REQUIRED_KEYS = ('id', 'role', 'content')
 MESSAGE_OPTIONAL_KEYS = (
     'type', 'model', 'stop_reason', 'stop_sequence', 'usage', 'container',
     'context_management', 'stop_details', 'diagnostics', 'resumable',
+    'input_transformations',
 )
 EXTRA_LIMIT = 64
 _REQUIRED_ALL = (1 << len(MESSAGE_REQUIRED_KEYS)) - 1
@@ -18,7 +19,7 @@ _FIELDS = frozenset(('version', 'kind', 'required_mask', 'optional_mask',
 
 def message_header_shape(message):
     """Return fixed masks/counts only, never key names, values, or their hashes."""
-    result = dict(version=1, kind='not_object', required_mask=0, optional_mask=0,
+    result = dict(version=2, kind='not_object', required_mask=0, optional_mask=0,
                   extra_count=0, extra_overflow=False)
     # JSON produces exact dicts. Refuse subclasses without calling their hooks.
     if type(message) is not dict:
@@ -37,7 +38,7 @@ def valid_header_shape(value):
     """Validate the projection's closed schema, not the original message."""
     if type(value) is not dict or value.keys() != _FIELDS:
         return False
-    if type(value['version']) is not int or value['version'] != 1:
+    if type(value['version']) is not int or value['version'] != 2:
         return False
     for key, maximum in (('required_mask', _REQUIRED_ALL),
                          ('optional_mask', _OPTIONAL_ALL), ('extra_count', EXTRA_LIMIT)):

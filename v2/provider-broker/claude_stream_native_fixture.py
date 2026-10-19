@@ -22,6 +22,8 @@ def main():
     assert submitted['type'] == 'user' and submitted['session_id'] == native
     current = submitted['uuid']; api = 'synthetic-streamed-response'
     mode = submitted['message']['content']; assert mode in ('complete', 'cancel')
+    transformations = [{'type': 'thinking_dropped', 'path': 'messages.0.content.0',
+                        'reason': 'prefix_binding_mismatch'}]
 
     def event(value, first=False):
         frame = {'type': 'stream_event', 'session_id': native, 'uuid': str(uuid.uuid4()),
@@ -32,6 +34,7 @@ def main():
     emit({'type': 'system', 'subtype': 'init', 'session_id': native})
     event({'type': 'message_start', 'message': {'id': api, 'type': 'message', 'role': 'assistant',
           'content': [], 'model': 'synthetic-model', 'stop_reason': None,
+          'input_transformations': transformations,
           'usage': {'input_tokens': 1, 'output_tokens': 0}}}, first=True)
     event({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})
     piece = 'synthetic chunk ' * 400
@@ -55,10 +58,11 @@ def main():
         emit({'type': 'assistant', 'session_id': native, 'uuid': str(uuid.uuid4()),
               'parent_tool_use_id': None, 'user_message_uuid': current, 'user_message_uuids': [current],
               'request_id': 'synthetic-request', 'message': {'id': api, 'type': 'message',
+              'input_transformations': transformations,
               'role': 'assistant', 'model': 'synthetic-model', 'content': [{'type': 'text', 'text': piece * 4}]}})
         event({'type': 'content_block_stop', 'index': 0})
         event({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None},
-               'usage': {'output_tokens': 1}})
+               'usage': {'output_tokens': 1}, 'input_transformations': None})
         event({'type': 'message_stop'})
         emit({'type': 'result', 'session_id': native, 'uuid': str(uuid.uuid4()),
               'user_message_uuid': current, 'subtype': 'success', 'is_error': False, 'result': piece * 4})

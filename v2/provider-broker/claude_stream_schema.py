@@ -4,6 +4,7 @@ import math
 import uuid
 
 from claude_control import canonical
+from claude_input_transformations import validate_input_transformations
 from claude_stream_diagnostic import MESSAGE_OPTIONAL_KEYS, MESSAGE_REQUIRED_KEYS
 from protocol import exact, require
 
@@ -89,6 +90,7 @@ def message_header(message, empty=False):
     if message.get('stop_sequence') is not None: text(message['stop_sequence'])
     for key in ('container', 'context_management', 'stop_details', 'diagnostics', 'resumable'):
         require(message.get(key) is None)
+    validate_input_transformations(message.get('input_transformations'))
     if 'usage' in message: usage(message['usage'])
 
 
