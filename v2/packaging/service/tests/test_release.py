@@ -18,6 +18,18 @@ class ReleaseTests(unittest.TestCase):
         (self.package/'codex_service/entry.py').write_text('raise SystemExit("never executed")\n')
         (self.package/'manifest.json').write_text(json.dumps({'format':'orkestr-v2-codex-service-package-v1','source_commit':'a'*40}))
         self.digest=pin(self.package/'manifest.json')['sha256'];self.output=self.root/'release'
+        (self.package/'launcher.py').write_bytes(b'synthetic never executed')
+        beta={'schema_version':1,'owner_id':'11111111-1111-4111-8111-111111111111',
+              'conversation_id':'22222222-2222-4222-8222-222222222222',
+              'launcher':str(self.output/'package/launcher.py'),
+              'launcher_sha256':pin(self.package/'launcher.py')['sha256'],
+              'manager_socket':'/run/synthetic/manager.sock','workspace':'/var/lib/synthetic/workspace',
+              'namespace':'synthetic','supervisor_key':'synthetic'}
+        (self.package/'beta.json').write_text(json.dumps(beta))
+        (self.package/'profile.json').write_text(json.dumps({'native':str(self.output/'package/native'),
+            'supervisor':str(self.output/'package/isolation/supervisor.py'),'workspace':beta['workspace']}))
+        (self.package/'service.json').write_text(json.dumps({'owner_id':beta['owner_id'],
+            'conversation_id':beta['conversation_id']}))
 
     def test_outer_wrapper_pins_inner_without_inventory_cycle(self):
         path=prepare_release(self.package,self.digest,self.output)
@@ -51,3 +63,17 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("'/opt/synthetic release/package/codex_service/entry.py'",text)
         self.assertNotIn('$@',text)
         self.assertIn('[ "$#" -eq 0 ] || exit 2',text)
+
+    def test_staging_path_binding_refused_before_copy(self):
+        path=self.package/'beta.json';value=json.loads(path.read_text())
+        value['launcher']=str(self.package/'launcher.py');path.write_text(json.dumps(value))
+        with self.assertRaisesRegex(RuntimeError,'final launcher'):
+            prepare_release(self.package,self.digest,self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_scope_mismatch_refused_before_copy(self):
+        path=self.package/'service.json';value=json.loads(path.read_text())
+        value['conversation_id']='33333333-3333-4333-8333-333333333333';path.write_text(json.dumps(value))
+        with self.assertRaisesRegex(RuntimeError,'scope binding'):
+            prepare_release(self.package,self.digest,self.output)
+        self.assertFalse(self.output.exists())

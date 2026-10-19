@@ -163,3 +163,12 @@ refuse. Custody checks do not prove quiescence or freshness: root must retain th
 setup process custody/reap and home provenance evidence. Dedicated native state
 and workspace remain separately fresh; bootstrap does not grant provider authority.
 The manager-selected package's final home/data layout remains authoritative.
+
+Manager composition source now targets the `d137e7a7` → `89f68` → `0dbb4226`
+chain, subject to final independent review. Its authoritative `FILES` and
+`MODULES_SERVICE` remain owned by the manager; no inventory is inferred here.
+Outer preparation now rejects staging-location launcher/native/supervisor bindings
+and mismatched owner/conversation/workspace scope before making the release.
+These checks complement, and do not replace, the complete manager `Package`
+validator. The 30 nonroot and six explicitly privileged manager checks require
+separate CI registration by the workflow owner; prior CI is not their evidence.
