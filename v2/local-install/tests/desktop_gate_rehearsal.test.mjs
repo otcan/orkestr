@@ -104,3 +104,25 @@ test('legacy mkdir lock is not stolen or removed', async (t) => {
   assert.equal(await fs.readFile(file, 'utf8'), bytes);
   assert.ok((await fs.stat(`${file}.lock`)).isDirectory());
 });
+
+test('drained in-process handoff initializes exact gate without restarting client owner', async (t) => {
+  const { createDesktopWriterLifecycle } = await import('../desktop_writer_lifecycle.mjs');
+  const { file } = await fixture(t);
+  let legacyCalls = 0;
+  const lifecycle = createDesktopWriterLifecycle(() => ({ readState: async () => {
+    legacyCalls += 1;
+    return JSON.parse(await fs.readFile(file, 'utf8'));
+  } }));
+  const retainedPort = lifecycle.port({});
+  assert.equal((await retainedPort.readState()).lockIdentity, undefined);
+  const token = await lifecycle.pauseAndDrain();
+  await assert.rejects(retainedPort.readState(), /desktop_writer_paused/);
+  const newFactory = () => new DesktopLeaseStore(file);
+  await lifecycle.adopt(token, newFactory, async (factory) => { await factory().init(); });
+  const state = await retainedPort.readState();
+  assert.ok(state.lockIdentity);
+  const { lockIdentity, ...original } = state;
+  assert.deepEqual(original, legacy());
+  assert.equal(legacyCalls, 1);
+  assert.equal(await retainedPort.withCurrentLeaseAction(binding(state.desktopLeases[0]), () => 'local'), 'local');
+});
