@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import {clickReady, composerReady, draft, setDraft, timedNavigation} from './readiness.mjs';
+import {ownerReads} from './owner-reads.mjs';
+import {assertBetaDiscovery} from './window-evidence.mjs';
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const DRAFT = 'Synthetic beta draft retained across navigation and reconnect.';
@@ -25,7 +27,7 @@ async function session(page, origin) {
   }, origin);
 }
 
-export async function loginOwner({page, context, origin, credentials, bootstrap}) {
+export async function loginOwner({page, context, origin, credentials, bootstrap, expectedConversation}) {
   assert.equal(new URL(origin).origin, origin, 'exact_origin_required');
   assert(typeof credentials?.username === 'string' && credentials.username.length <= 128);
   assert(typeof credentials.password === 'string' && credentials.password.length <= 1024);
@@ -44,11 +46,14 @@ export async function loginOwner({page, context, origin, credentials, bootstrap}
   await composerReady(page);
   const projection = await session(page, origin);
   assert(UUID.test(projection.conversation), 'conversation_required');
+  if (expectedConversation !== undefined) assert.equal(projection.conversation, expectedConversation, 'configured_owner_conversation_required');
+  const discovery = await ownerReads(page, projection.conversation, AbortSignal.timeout(5000), origin)('beta');
+  const scope = assertBetaDiscovery(discovery, projection.conversation);
   const cookie = (await context.cookies()).find(item => item.name === 'orkestr_v2_session');
   assert(cookie?.httpOnly && cookie.sameSite === 'Strict' && cookie.path === '/api/v2', 'cookie_policy');
   // The identity is used only internally to bind later checks to this one owner
   // conversation. Public report fields contain timing/booleans, not credentials.
-  return {conversation: projection.conversation, evidence: {login: true, cookie_policy: true, ...timing}};
+  return {conversation: projection.conversation, evidence: {login: true, cookie_policy: true, ...scope, ...timing}};
 }
 
 export async function reloadOwner({page, conversation, origin}) {
@@ -58,14 +63,15 @@ export async function reloadOwner({page, conversation, origin}) {
   assert(response && new URL(response.url()).origin === origin && new URL(page.url()).origin === origin);
   await composerReady(page);
   assert.equal((await session(page, origin)).conversation, conversation, 'owner_changed_on_reload');
+  assertBetaDiscovery(await ownerReads(page, conversation, AbortSignal.timeout(5000), origin)('beta'), conversation);
   return {owner_preserved: true, render_ms: Math.round(performance.now() - started)};
 }
 
 export async function draftRemount({page, origin}) {
   const previous = await draft(page);
   await setDraft(page, DRAFT, origin);
-  await clickReady(page, 'Projects', origin);
-  await page.waitForSelector('#project-name', {visible: true, timeout: 10_000});
+  await clickReady(page, 'Settings', origin);
+  await page.waitForSelector('section[aria-label="Beta settings"]', {visible: true, timeout: 10_000});
   await clickReady(page, 'Assistant', origin);
   await composerReady(page);
   assert.equal(await draft(page), DRAFT, 'draft_lost_after_navigation');

@@ -12,7 +12,7 @@ import {errorChain, failure} from './diagnostics.mjs';
 // authorized synthetic or selected-Codex composition. These parameters are not
 // an authorization mechanism. Importing this module has no effects.
 export async function browserChat({page, context, origin, sourceSha, credentials,
-  bootstrap, fixture, verifyServedPair, verifyLease, closeContext, signal}) {
+  bootstrap, expectedConversation, fixture, verifyServedPair, verifyLease, closeContext, signal}) {
   assert(/^[a-f0-9]{40}$/.test(sourceSha));
   assert(['synthetic', 'selected_codex'].includes(fixture?.mode));
   assert(Array.isArray(fixture.messages) && fixture.messages.length === 4);
@@ -38,7 +38,7 @@ export async function browserChat({page, context, origin, sourceSha, credentials
     });
     let conversation;
     await step('login', async () => {
-      const login = await loginOwner({page, context, origin, credentials, bootstrap});
+      const login = await loginOwner({page, context, origin, credentials, bootstrap, expectedConversation});
       conversation = login.conversation; return login.evidence;
     });
     capture = captureControls(page, origin, conversation);

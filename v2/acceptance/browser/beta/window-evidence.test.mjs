@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {decodeExact, assertWindowAdmission, assertWindowReplay, assertHeldInput} from './window-evidence.mjs';
+import {decodeExact, assertWindowAdmission, assertWindowReplay, assertHeldInput, assertBetaDiscovery} from './window-evidence.mjs';
 const id = number => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 const limits = {duration_ms: 900000, attempts: 32, bytes: 67108864,
   cleanup_ms: 30000, cleanup_attempts: 4, cleanup_bytes: 1048576};
@@ -20,6 +20,15 @@ test('generation JSON is never rounded at the JavaScript boundary', () => {
   assert.equal(decodeExact('{"generation":9223372036854775807}').generation, 9223372036854775807n);
   assert.throws(() => decodeExact('{"generation":1.5}'));
   assert.throws(() => decodeExact('{"generation":1e12}'));
+});
+
+test('login cannot silently use a different configured beta conversation', () => {
+  const discovery = {schema_version: 1, conversation_id: id(1), provider: 'codex', role: 'deep',
+    controls: {stop: true, steer: true, accept: true}, limits, window: null};
+  assert.equal(assertBetaDiscovery(discovery, id(1)).configured_conversation_matches, true);
+  assert.throws(() => assertBetaDiscovery(discovery, id(2)));
+  assert.throws(() => assertBetaDiscovery({...discovery, controls: {...discovery.controls, stop: 'true'}}, id(1)));
+  assert.throws(() => assertBetaDiscovery({...discovery, limits: {...limits, attempts: 33}}, id(1)));
 });
 
 test('window generations enforce the frozen JavaScript-safe bound, even after exact decoding', () => {

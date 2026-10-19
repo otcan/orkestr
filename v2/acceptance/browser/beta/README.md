@@ -39,6 +39,11 @@ creating an overflowing successor fails. No window is opened automatically by
 this harness: the matching mounted UI must perform the separate admission after
 its ordinary message receipt. The exact service/pair must be reviewed before any
 actual invocation. Source tests alone do not qualify the composed UI/runtime.
+The focused shell uses Settings → Assistant for draft remounts. Login and reload
+also require `/api/v2/beta` to select the same configured conversation as the
+fresh owner's session. The driver clicks Start work or Add to current work only
+after observing that exact ordinary input receipt; a rejected intake never
+proceeds to admission.
 
 ## Required private composition
 

@@ -48,6 +48,10 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
       await clickReady(page, 'Send', origin, 'Conversation');
       const intake = await control('messages'); assert.equal(intake.request.text, text);
       assert.equal(intake.receipt.status, 'accepted');
+      // The focused beta deliberately requires a distinct owner action after
+      // saving input. The ordinary intake receipt must not start execution.
+      signal.throwIfAborted();
+      await clickReady(page, previous?.state === 'active' ? 'Add to current work' : 'Start work', origin, 'Work window');
       const window = await control('window');
       const proof = assertWindowAdmission({conversation, intakeRequest: intake.request,
         intakeReceipt: intake.receipt, request: window.request, receipt: window.receipt, previous});

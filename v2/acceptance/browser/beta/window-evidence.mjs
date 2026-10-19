@@ -34,6 +34,18 @@ function status(value, conversation) {
   assert.equal(integer(value.expires_at_ms) - integer(value.work_deadline_ms), LIMITS.cleanup_ms);
 }
 
+export function assertBetaDiscovery(value, conversation) {
+  uuid(conversation);
+  assert.equal(integer(value.schema_version), 1n);
+  assert.equal(value.conversation_id, conversation, 'configured_conversation_must_match_login');
+  assert.equal(value.provider, 'codex'); assert.equal(value.role, 'deep');
+  assert.deepEqual(Object.keys(value.controls).sort(), ['accept', 'steer', 'stop']);
+  assert(Object.values(value.controls).every(item => typeof item === 'boolean'));
+  assert.deepEqual(Object.fromEntries(Object.entries(value.limits).map(([key, item]) => [key, integer(item)])), LIMITS);
+  if (value.window !== null) status(value.window, conversation);
+  return {configured_conversation_matches: true, provider: 'codex', role: 'deep'};
+}
+
 export function assertWindowAdmission({conversation, intakeRequest, intakeReceipt,
   request, receipt, previous = null}) {
   uuid(conversation);

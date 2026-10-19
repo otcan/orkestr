@@ -9,6 +9,7 @@ const validId = value => typeof value === 'string' && UUID.test(value) &&
 export function observationPath(conversation, kind, selector) {
   assert(validId(conversation), 'exact_conversation_required');
   const base = `/api/v2/conversations/${conversation}`;
+  if (kind === 'beta') { assert.equal(selector, undefined); return '/api/v2/beta'; }
   if (kind === 'execution' && selector !== undefined) {
     assert(validId(selector)); return `${base}/execution?run_id=${selector}`;
   }

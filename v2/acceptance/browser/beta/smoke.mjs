@@ -7,7 +7,7 @@ import {cpuAndRam, draftRemount, loginOwner, reloadOwner} from './ui.mjs';
 // artifact adapter. This function neither provisions nor starts a service/provider.
 // Short functional sessions fit the existing 120-second download-helper lifetime.
 export async function browserSmoke({page, context, origin, sourceSha, credentials,
-  bootstrap, verifyServedPair, verifyLease, closeContext, signal}) {
+  bootstrap, expectedConversation, verifyServedPair, verifyLease, closeContext, signal}) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha) || typeof verifyServedPair !== 'function' ||
       typeof verifyLease !== 'function' || typeof closeContext !== 'function' || !signal) {
     throw failure('invalid_action');
@@ -32,7 +32,7 @@ export async function browserSmoke({page, context, origin, sourceSha, credential
     });
     let conversation;
     await step('login', async () => {
-      const result = await loginOwner({page, context, origin, credentials, bootstrap});
+      const result = await loginOwner({page, context, origin, credentials, bootstrap, expectedConversation});
       conversation = result.conversation; return result.evidence;
     });
     for (let sample = 1; sample <= 3; sample++) {

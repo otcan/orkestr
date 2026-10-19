@@ -1,16 +1,16 @@
 import {failure} from './diagnostics.mjs';
 
 const ACTIONS = new Set(['First-time setup', 'Continue', 'Send', 'Stop',
-  'Accept completion', 'Assistant', 'History', 'Projects', 'Host resources',
+  'Accept completion', 'Assistant', 'History', 'Settings', 'Host resources',
   'Reconnect', 'Reconnect and reload history', 'Sign out', 'Save file copy',
-  'Open saved copy: synthetic-copy.bin', 'Verify and download', 'Steer']);
+  'Open saved copy: synthetic-copy.bin', 'Verify and download', 'Steer', 'Start work', 'Add to current work']);
 
 // The enabled-label wait precedes the original one-shot action. It does not
 // retry submissions, authenticate a caller or grant a desktop capability.
 export async function clickReady(page, label, expectedOrigin, section) {
   if (!ACTIONS.has(label)) throw failure('invalid_action');
   if (expectedOrigin !== undefined && new URL(expectedOrigin).origin !== expectedOrigin) throw failure('invalid_action');
-  if (section !== undefined && !['Execution and resources', 'Steer running work', 'Conversation'].includes(section)) throw failure('invalid_action');
+  if (section !== undefined && !['Execution and resources', 'Steer running work', 'Conversation', 'Work window'].includes(section)) throw failure('invalid_action');
   await page.waitForFunction((expected, origin, section) => {
     if (origin !== undefined && location.origin !== origin) throw Error('unexpected_origin');
     const root = section === undefined ? document : document.querySelector(`section[aria-label="${section}"]`);
