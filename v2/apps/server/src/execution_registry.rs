@@ -92,9 +92,14 @@ impl AppState {
         &self,
         owner: &OwnerId,
         conversation: &ConversationId,
-    ) -> Result<Option<&ExecutionScope>, Error> {
+    ) -> Result<Option<ExecutionScope>, Error> {
+        if let Some(handles) = &self.window_handles {
+            if handles.matches(owner, conversation) {
+                return Ok(handles.snapshot(owner, conversation));
+            }
+        }
         if let Some(scope) = self.executions.get(owner, conversation) {
-            return Ok(Some(scope));
+            return Ok(Some(scope.clone()));
         }
         // Preserve unknown/foreign scope refusal without looking up any other
         // runtime handle. A known but unconfigured conversation stays unavailable.
@@ -131,9 +136,9 @@ impl AppState {
         &self,
         owner: &OwnerId,
         conversation: &ConversationId,
-    ) -> Result<Option<&ExecutionScope>, Error> {
+    ) -> Result<Option<ExecutionScope>, Error> {
         if let Some(scope) = self.fast_executions.get(owner, conversation) {
-            return Ok(Some(scope));
+            return Ok(Some(scope.clone()));
         }
         // Authenticate the canonical conversation without selecting a Deep
         // runtime as a fallback for an unconfigured Fast role.
