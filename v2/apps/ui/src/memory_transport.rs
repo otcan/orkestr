@@ -34,10 +34,15 @@ pub async fn request(
     ))
 }
 
-pub fn export_file(text: &str) -> Result<(), String> {
+pub async fn export_file(text: &str) -> Result<(), String> {
     let source = include_str!("memory_export.js").replace("export function", "function");
-    let script = format!("{source}\nconst text=await dioxus.recv();offerMemoryExport(text);");
+    let script =
+        format!("{source}\nconst text=await dioxus.recv();offerMemoryExport(text);return true;");
     let eval = document::eval(&script);
     eval.send(text)
-        .map_err(|_| "Export could not be offered for download.".into())
+        .map_err(|_| "Export could not be offered for download.".to_string())?;
+    eval.join::<bool>()
+        .await
+        .map_err(|_| "Export offer was not confirmed.".to_string())?;
+    Ok(())
 }
