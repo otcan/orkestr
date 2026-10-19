@@ -126,3 +126,28 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):validate(json.dumps(dict(value,token='forbidden')).encode())
         with self.assertRaisesRegex(RuntimeError,'duplicate'):validate(b'{"schema_version":1,"schema_version":1}')
         with self.assertRaisesRegex(RuntimeError,'bounded'):validate(b' '*8193)
+
+    def test_provisioned_home_preserves_existing_state(self):
+        home=self.root/'home';home.mkdir(mode=0o700)
+        original=b'synthetic existing database bytes, not an empty database'
+        (home/'existing.sqlite3').write_bytes(original)
+        self.pair.write_text(json.dumps(self.value))
+        dependencies={'readelf':{},'files':{str(self.binary):closure.pin(self.binary)}}
+        with patch.object(prepare,'elf_files',return_value=dependencies),patch.object(prepare,'python_files',return_value={}):
+            plan=prepare.prepare(self.pair,closure.pin(self.pair)['sha256'],self.binary,self.ui,self.out,
+                home,'https://beta.example.invalid',19822,os.getuid(),gid=os.getgid(),provisioned_home=True)
+        self.assertEqual((home/'existing.sqlite3').read_bytes(),original)
+        self.assertIn('operator-provisioned',json.loads(plan.read_text())['settings']['home_lifecycle'])
+
+    def test_existing_home_requires_explicit_opt_in(self):
+        (self.root/'home').mkdir(mode=0o700)
+        with self.assertRaisesRegex(RuntimeError,'fresh isolated home'):self.assemble()
+        self.assertFalse(self.out.exists())
+
+    def test_provisioned_home_alias_or_public_mode_refused(self):
+        home=self.root/'actual';home.mkdir(mode=0o755);home.chmod(0o755)
+        self.pair.write_text(json.dumps(self.value))
+        with self.assertRaisesRegex(RuntimeError,'private and service-owned'):
+            prepare.prepare(self.pair,closure.pin(self.pair)['sha256'],self.binary,self.ui,self.out,
+                home,'https://beta.example.invalid',19822,os.getuid(),gid=os.getgid(),provisioned_home=True)
+        self.assertFalse(self.out.exists())

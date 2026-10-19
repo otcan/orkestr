@@ -148,3 +148,18 @@ validation and independent source review remain mandatory. The final package
 must use the reviewed successor fixing stopped-child shell-to-Python validation;
 `d137e7a7` is a source interface checkpoint only. No actual manager/native/server
 startup or installed symlink publication is performed by this module.
+
+### Attended fresh-owner setup
+
+Root may run the exact sealed ordinary server provider-disabled on loopback to
+perform existing setup, privately retain generated credentials/owner/conversation
+IDs, and stop/reap that exact setup child before beta composition. Packaging does
+not implement this private operator sequence or write database rows.
+
+`prepare.py --provisioned-home` explicitly accepts the resulting existing isolated
+0700 UID/GID-owned directory without requiring an empty database, reading rows,
+changing bytes or copying credentials. Without that option existing homes still
+refuse. Custody checks do not prove quiescence or freshness: root must retain the
+setup process custody/reap and home provenance evidence. Dedicated native state
+and workspace remain separately fresh; bootstrap does not grant provider authority.
+The manager-selected package's final home/data layout remains authoritative.
