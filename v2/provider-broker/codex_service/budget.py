@@ -25,20 +25,29 @@ class WindowBudget:
         self.reason = None
         self._last_tick = 0.0
         self._row = row
+        self._last_clock = (row["created_wall_ns"],
+                            row["deadline_mono_ns"] - 900_000_000_000)
 
     def check(self):
         with self.lock:
             if self.stopped.is_set():
                 raise Refused(self.reason)
             boot, wall, mono = self.ledger.clock.sample()
-            if (boot != self._row["boot"] or wall < self._row["created_wall_ns"] or
-                    wall >= self._row["deadline_wall_ns"] or mono >= self._row["deadline_mono_ns"]):
+            skew = (wall - mono) - (self._row["deadline_wall_ns"] - self._row["deadline_mono_ns"])
+            if (boot != self._row["boot"] or wall < self._last_clock[0] or
+                    mono < self._last_clock[1] or abs(skew) > 1_000_000_000):
                 self.ledger.uncertain(self.window, self.generation, "clock_changed")
                 self.stop("window_clock")
                 raise Refused("window_clock")
+            self._last_clock = (wall, mono)
             now = time.monotonic()
-            if now - self._last_tick >= 0.1:
-                row = self.ledger.tick(self.window, self.generation)
+            if (now - self._last_tick >= 0.1 or wall >= self._row["deadline_wall_ns"]
+                    or mono >= self._row["deadline_mono_ns"]):
+                try:
+                    row = self.ledger.tick(self.window, self.generation)
+                except LedgerRefused:
+                    self.stop("window_clock")
+                    raise Refused("window_clock") from None
                 self._last_tick = now
                 if row["state"] not in ("active", "draining"):
                     self.stop("window_closed")
