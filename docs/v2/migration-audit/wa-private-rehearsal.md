@@ -15,8 +15,18 @@ All tracked Core export files were compared byte-for-byte with the pinned source
 only the new integration test was added. Commands, binary/source hashes and logs
 are retained in the private rehearsal receipt. This result is synthetic only.
 
-Actual private conversion and execution remain UNEXECUTED pending review of the
-source metadata SELECT column order. Retain original tuples rather than guessing.
+A separately reviewed fresh metadata cut was converted and rehearsed against
+the same exact Core and harness: one test PASS, zero failed/ignored. Its pre-query
+plan bound named columns, parameters, row limits, source/schema hashes and
+independent read-only transport/relay snapshots. The isolated target retained
+exact provenance/holds across reopen, refused revoked-auth replay and created no
+routes, permissions, sends or native work. Private exports, target and immutable
+hash-bound execution receipts remain outside this repository. This proves only
+metadata preservation, not transport integration or an active migration.
+
+The older historical tuple export remains unconverted: its producer SQL cannot
+be attested. The new cut does not reconstruct or supersede historical evidence.
+Retain original tuples rather than guessing.
 The canonical source/input revision hashes attest only exact selected metadata;
 the independent hold hash attests its selected hold decision, not source authority.
 No observed send row maps to no_record/count0, never proof of unsent. Unavailable
