@@ -45,12 +45,14 @@ class Ledger:
             self.db.execute("INSERT OR IGNORE INTO service_scope VALUES(1,1,?,?)", (owner, conversation))
             scope = self.db.execute("SELECT * FROM service_scope").fetchone()
             require(tuple(scope) == (1, 1, owner, conversation), "ledger_scope")
-            self.db.execute("CREATE TABLE IF NOT EXISTS windows (id TEXT PRIMARY KEY, generation INTEGER NOT NULL UNIQUE, request_id TEXT NOT NULL UNIQUE, input_id TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('active','draining','retired','reconciliation')), boot TEXT NOT NULL, created_wall_ns INTEGER NOT NULL, deadline_wall_ns INTEGER NOT NULL, deadline_mono_ns INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0, reason TEXT, outcome TEXT, run_id TEXT, terminal_event_id TEXT)")
+            self.db.execute("CREATE TABLE IF NOT EXISTS windows (id TEXT PRIMARY KEY, generation INTEGER NOT NULL UNIQUE, request_id TEXT NOT NULL UNIQUE, input_id TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('active','draining','expired','retired','reconciliation')), boot TEXT NOT NULL, created_wall_ns INTEGER NOT NULL, deadline_wall_ns INTEGER NOT NULL, deadline_mono_ns INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0, reason TEXT, outcome TEXT, run_id TEXT, terminal_event_id TEXT)")
             self.db.execute("CREATE TABLE IF NOT EXISTS reservations (id TEXT PRIMARY KEY, window_id TEXT NOT NULL REFERENCES windows(id), kind TEXT NOT NULL CHECK(kind IN ('attempt','bytes')), amount INTEGER NOT NULL CHECK(amount>0))")
             self.db.execute("CREATE TABLE IF NOT EXISTS admissions (request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, window_id TEXT NOT NULL REFERENCES windows(id), input_id TEXT NOT NULL UNIQUE, event_id TEXT NOT NULL UNIQUE)")
+            self.db.execute("CREATE TABLE IF NOT EXISTS endpoints (name TEXT PRIMARY KEY, device INTEGER NOT NULL, inode INTEGER NOT NULL)")
             # A durable reservation without an independently retained process owner
             # is spent/uncertain even when no forwarding happened before the crash.
-            self.db.execute("UPDATE windows SET state='reconciliation',reason='manager_restarted' WHERE state IN ('active','draining')")
+            self.db.execute("UPDATE windows SET state='reconciliation',reason='manager_restarted' WHERE state IN ('active','draining','expired')")
+        self.last_clocks = {}
 
     @contextmanager
     def transaction(self):
@@ -72,6 +74,22 @@ class Ledger:
     def close(self):
         with self.lock:
             self.db.close()
+
+    def endpoint(self, name):
+        require(name in ("control", "egress"), "endpoint_name")
+        with self.lock:
+            row = self.db.execute("SELECT device,inode FROM endpoints WHERE name=?", (name,)).fetchone()
+            return tuple(row) if row else None
+
+    def set_endpoint(self, name, identity):
+        self.endpoint(name)
+        with self.transaction():
+            self.db.execute("INSERT INTO endpoints VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET device=excluded.device,inode=excluded.inode", (name, *identity))
+
+    def clear_endpoint(self, name, identity):
+        self.endpoint(name)
+        with self.transaction():
+            self.db.execute("DELETE FROM endpoints WHERE name=? AND device=? AND inode=?", (name, *identity))
 
     def _latest(self):
         return self.db.execute("SELECT * FROM windows ORDER BY generation DESC LIMIT 1").fetchone()
@@ -111,12 +129,25 @@ class Ledger:
         with self.lock:
             return dict(self._exact(window, selected_generation))
 
-    def _live_clock(self, row):
+    def _clock(self, row):
         boot, wall, mono = self.clock.sample()
-        if not (boot == row["boot"] and wall >= row["created_wall_ns"] and
-                wall < row["deadline_wall_ns"] and
-                row["deadline_mono_ns"] - LIFETIME_SECONDS * 1_000_000_000 <= mono < row["deadline_mono_ns"]):
+        previous = self.last_clocks.get(row["id"], (row["created_wall_ns"],
+            row["deadline_mono_ns"] - LIFETIME_SECONDS * 1_000_000_000))
+        # Wall and monotonic clocks share a captured offset. Small scheduling/
+        # clock-slew differences never extend either hard deadline. Discontinuity
+        # or reversal loses authority permanently, including during late retire.
+        skew = (wall - mono) - (row["deadline_wall_ns"] - row["deadline_mono_ns"])
+        if not (boot == row["boot"] and wall >= previous[0] and mono >= previous[1]
+                and abs(skew) <= 1_000_000_000):
             self.db.execute("UPDATE windows SET state='reconciliation',reason='clock_changed' WHERE id=?", (row["id"],))
+            raise ClockPoison("window_clock")
+        self.last_clocks[row["id"]] = (wall, mono)
+        return boot, wall, mono
+
+    def _live_clock(self, row):
+        boot, wall, mono = self._clock(row)
+        if wall >= row["deadline_wall_ns"] or mono >= row["deadline_mono_ns"]:
+            self.db.execute("UPDATE windows SET state='expired',reason='hard_deadline' WHERE id=?", (row["id"],))
             raise ClockPoison("window_clock")
         return boot, wall, mono
 
@@ -174,17 +205,14 @@ class Ledger:
 
     def tick(self, window, selected_generation):
         with self.transaction():
-            boot, wall, mono = self.clock.sample()
             row = self._exact(window, selected_generation)
             if row["state"] in ("retired", "reconciliation"):
                 return self._receipt(row)
-            reason = None
-            if boot != row["boot"] or wall < row["created_wall_ns"]:
-                reason = "clock_changed"
-            elif wall >= row["deadline_wall_ns"] or mono >= row["deadline_mono_ns"]:
-                reason = "hard_deadline"
-            if reason:
-                self.db.execute("UPDATE windows SET state='reconciliation',reason=? WHERE id=?", (reason, window))
+            _boot, wall, mono = self._clock(row)
+            if row["state"] == "expired":
+                return self._receipt(row)
+            if wall >= row["deadline_wall_ns"] or mono >= row["deadline_mono_ns"]:
+                self.db.execute("UPDATE windows SET state='expired',reason='hard_deadline' WHERE id=?", (window,))
             elif (wall >= row["deadline_wall_ns"] - DRAIN_SECONDS * 1_000_000_000 or
                   mono >= row["deadline_mono_ns"] - DRAIN_SECONDS * 1_000_000_000 or
                   row["attempts"] >= MAX_ATTEMPTS - DRAIN_ATTEMPTS or
@@ -234,8 +262,8 @@ class Ledger:
                 require(tuple(row[key] for key in ("outcome", "run_id", "terminal_event_id")) == desired,
                         "retirement_conflict")
                 return self._receipt(row)
-            require(row["state"] in ("active", "draining"), "window_reconciliation_required")
-            self._live_clock(row)
+            require(row["state"] in ("active", "draining", "expired"), "window_reconciliation_required")
+            self._clock(row)
             # Manager calls this only after its own relay/child checks AND the
             # exact trusted Runtime's committed Core terminal+retirement proof.
             self.db.execute("UPDATE windows SET state='retired',outcome=?,run_id=?,terminal_event_id=? WHERE id=?",

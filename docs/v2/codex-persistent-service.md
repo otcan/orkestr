@@ -5,9 +5,9 @@ while its one configured owner's Deep conversation uses explicit bounded
 execution windows. The old `codex_bounded` v1 entrypoint and package are unchanged.
 The service is not activated by importing these modules or by preparing a package.
 
-The first component is the local protocol, durable budget ledger and relay-budget
-adapter. Process/package/channel composition is a separate implementation step;
-this checkpoint alone is not a runnable provider service or a qualified beta.
+The implementation includes the local protocol, durable budget ledger, relay
+adapter and persistent manager. It remains opt-in: a matching protected package,
+ordinary Runtime composition and independent acceptance are required for beta.
 
 ## Fixed limits and ownership
 
@@ -38,7 +38,7 @@ Opening a ledger after manager restart marks every unfinished window as requirin
 reconciliation, even if it died before the first provider write. Retired history
 is preserved. Both fixed Core wall deadlines and a same-boot monotonic deadline
 are checked; transport delay cannot restart the 900-second timer. Boot changes,
-clock rollback before opening, exhausted limits or missing ownership refuse
+clock rollback, a wall/monotonic offset change greater than one second, exhausted limits or missing ownership refuse
 further forwarding. A successful explicit new window may reset its own budget
 only after the exact predecessor is retired. Additional inputs in the same active
 window do not change generation, budgets, creation time or deadline.
@@ -61,6 +61,7 @@ package). Operations add these exact fields:
 | `status` | none; read-only, never opens/renews a window |
 | `admit` | `window_id`, `generation`, `expected_generation`, `input_message_id`, `input_event_id`, `input_request_key`, `predecessor_window_id`, `opened_at_ms`, `work_deadline_ms`, `expires_at_ms` |
 | `drain` | `window_id`, `generation` |
+| `bind_child` | `window_id`, `generation`, `broker_pid`, `broker_start`; locators only |
 | `retire` | `window_id`, `generation`, `outcome` (`accepted` or `stopped`), `run_id`, `terminal_event_id` |
 | `uncertain` | `window_id`, `generation`, `reason` (`runtime_refused`, `auth_revoked`, `cleanup_unknown`, `server_lost`) |
 
@@ -74,8 +75,10 @@ Historical identical admission replay returns evidence with `fresh_window:false`
 it must never recreate egress or a provider. Conflicting idempotency or a reused
 input/event refuses. Manager ACK binds owner/conversation/window/generation,
 boot id, original opened/work/hard deadlines and all six exact limit fields.
-Runtime binds the private execution credential, checks that ACK, then activates
-Core LAST. No provider is launched before that activation. A failure between
+Runtime binds the private execution credential and checks that ACK. Typed
+metadata-only initialization may occur while Core is Opening, under the existing
+one-use metadata grant. Core activates LAST after the exact native metadata bind;
+inference, turn-start and effects remain forbidden before Active. A failure between
 the two durable stores is reconciliation, not automatic retry or a new budget.
 
 `drain` immediately prevents further normal input admission. Runtime continues
@@ -84,8 +87,36 @@ the existing exact-run Stop/acceptance/cleanup paths within the original limits.
 its exact Core terminal+retirement transaction succeeded. The manager must also
 close/join the window's relay pool and verify its original native descendants
 gone before recording retirement. A boolean, PID, status label or browser DTO
-does not replace either proof. Retire after uncertainty or the hard deadline
-refuses. Existing ordinary run/control routes do not change.
+does not replace either proof. Normal aligned expiry fences all bytes/admission
+but retains the pending proposal and original cleanup observations. Later
+metadata-only retirement is allowed only after the still-authenticated Core
+accepted/stopped transaction and the manager's original clean proof. Clock/boot
+uncertainty, forced cleanup or restart cannot regain this authority. Existing
+ordinary run/control routes do not change.
+
+All protocol integers are less than 2^53; generation zero denotes idle and new
+windows start at one. UTF-8 is strict. Canonical bytes use sorted keys, no spaces,
+literal non-ASCII text and no non-finite numbers, matching the published Core ABI.
+
+The source-pinned service broker pauses itself with SIGSTOP before native launch
+or FD3 handoff. Runtime calls `bind_child` immediately after spawn, before waiting
+for the handoff or supplying the resumed FD4 metadata. The manager verifies the
+exact child PID/start/UID, direct Rust parent, interpreter and closed no-site
+entry argv; captures its original pidfd; then alone sends pidfd SIGCONT. Exact
+bind replay cannot continue twice. A failed bind makes the window uncertain;
+the caller must reap its stopped child. No empty tree snapshot creates proof.
+
+The fixed shell entry wrappers invoke the pinned interpreter with `-I -S -B`.
+`codex_service/entry.py` checks protected metadata and the complete initial import
+closure before importing the package validator, which validates every remaining
+module, server/native binary, UI file and fixed dependency before dispatch.
+The old bounded-v1 entry is unchanged. No site hooks or ambient Python paths run.
+
+The manager never exits merely because a window expired. An unexpected Rust
+child exit, including exit zero, durably marks unfinished work uncertain and
+returns a nonzero service status. Planned shutdown keeps the private channel
+responsive while Rust drains, then joins root-owned egress and children. The
+service's external process supervisor should use ordered manager-first shutdown.
 
 Replies are bounded metadata only: fixed success/refusal category, the window
 receipt and a `fresh_window` boolean for admission. Status includes generation,
@@ -103,7 +134,7 @@ account, browser, service or network destination:
 
 ```sh
 cd v2/provider-broker
-python3 -B -m unittest -v test_codex_service_ledger
+python3 -B -m unittest -v test_codex_service_ledger test_codex_service_clock test_codex_service_process
 ```
 
 Private package sealing, authenticated peer/framing tests, persistent child
