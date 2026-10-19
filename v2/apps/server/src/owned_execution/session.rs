@@ -68,6 +68,9 @@ impl ConfiguredExecution {
         run: &orkestr_v2_contracts::RunId,
         _proof: ReapedBroker,
     ) -> Result<BoundSessionMetadata, &'static str> {
+        if self.config.worker.is_some() {
+            return Err("execution Worker stopped continuation unavailable");
+        }
         self.current().await?;
         let binding = self
             .store
