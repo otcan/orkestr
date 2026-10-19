@@ -82,8 +82,10 @@ silently relabel those cases as successful output or stopped execution.
 `claude-package.json` includes the stream/schema/pump modules and their hashes.
 The generic connector opts in on both fresh and resumed launches. The separate
 selected isolation argv change is dependency
-`afac2532ff1060dfddcd4f1ee360406558e4725d`, applied with its full reviewed isolation
-module closure; this leaf does not add an incomplete isolation package.
+`b5b179a3917519858b459a03d620c3ec0001264e`: the reviewed backport of
+`afac2532ff1060dfddcd4f1ee360406558e4725d` onto the existing selected-account
+lineage. Apply its full reviewed twelve-module isolation closure; this leaf
+does not add an incomplete package or import unrelated authentication changes.
 
 Run from `v2/provider-broker`:
 
