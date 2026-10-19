@@ -55,3 +55,32 @@ Unexecuted: real multi-day/week elapsed runtime, production migration, real
 provider dispatch, installation qualification, browser-rendered UI acceptance,
 and external connector parity. Independent review and same-source package
 qualification remain required before release.
+
+## Mounted checkpoint
+
+Executable source: `fb5a31fa55e342a3189e8f03c8f5ffa82b49cb2d`.
+Default native server SHA-256:
+`8d0e27247c53029c55b6246b8c91d497df840aaf9308a0aa6dfab8159d0e8980`.
+`--version --json` reports that source and version `2.0.0-dev` with an empty
+runtime environment. The final evidence-only successor does not change executable
+source.
+
+Required-wrapper `--offline --locked` checks:
+
+- Server `--lib timer`: 9 passed, including startup renewal from a still-current
+  thirty-second session and exact-context graceful retirement.
+- Server `--test timer_lifecycle`: 1 passed in 70.04 seconds on the source-pinned
+  ordinary binary. The crash restart waited for real lease expiry.
+- Server and Store `--all-targets` strict Clippy, with Store
+  `fixture-test-controls`: passed. Process acceptance used default native features.
+- Workspace formatting and `git diff --check`: passed.
+- Earlier canonical Store suite: 229 passed, 3 ignored, before the additive Core
+  timer-supervisor lifecycle slice. This is separately attributed, not an
+  exact-head broad-suite rerun.
+
+The intermediate startup-renewal test initially failed compilation because the
+server has no direct SQLx dependency. The corrected synthetic oracle uses Python
+SQLite against its fresh test database; no manifest/lock edge was introduced.
+The earlier restart failure and this compile failure remain recorded rather than
+being counted as passes. Crash acceptance here kills after committed intake;
+process-kill injection inside every admission transaction window is unexecuted.
