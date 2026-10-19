@@ -17,9 +17,10 @@
     "claude_assistant_metadata.py": "779b44ab143314d87e5fafb41db53bd4f93b8fa477fec4a379ea628d79a0e651",
     "claude_assistant_input.py": "53f1840a683015813fc6a052f31e4f45d9e230eecde76183e6a7fe49a73812e4",
     "claude_stop_metadata.py": "6a1a7a812a0c1ecd1d5cea590f674fa2b5484aabb20c9aa5ee567db109457e02",
-    "claude_stream_schema.py": "3100e415a986b79079b9f0248da9c700afdacb1bcb72e71c18ff6cac0b4a2996",
+    "claude_stream_schema.py": "de45798b36f2027d40d32294dadd5b7360524cdf4a506c7a1effa6d68766c8df",
     "claude_stream.py": "940716f883688100ffe5f17684c56eafc7be565303fb52cd1bf96591d3cc8f8f",
-    "claude_pump.py": "7d820f09dea4d9c1d4a2d76f7de4dd17a69bce79f709b79ad888dc0756d9ff6a"
+    "claude_pump.py": "7d820f09dea4d9c1d4a2d76f7de4dd17a69bce79f709b79ad888dc0756d9ff6a",
+    "claude_stream_diagnostic.py": "8a081e7502db32f3f4cd9c96db5a32b2731492c9c0a04e92ded8754dd37bddfe"
   },
   "activation": "held-installed-cli-and-runtime-composition-review"
 }

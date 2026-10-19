@@ -4,6 +4,7 @@ import math
 import uuid
 
 from claude_control import canonical
+from claude_stream_diagnostic import MESSAGE_OPTIONAL_KEYS, MESSAGE_REQUIRED_KEYS
 from protocol import exact, require
 
 MAX_TEXT = 32768
@@ -74,9 +75,8 @@ def usage(value):
 
 
 def message_header(message, empty=False):
-    required = {'id', 'role', 'content'}
-    optional = {'type', 'model', 'stop_reason', 'stop_sequence', 'usage', 'container',
-                'context_management', 'stop_details', 'diagnostics', 'resumable'}
+    required = set(MESSAGE_REQUIRED_KEYS)
+    optional = set(MESSAGE_OPTIONAL_KEYS)
     require(isinstance(message, dict) and required <= set(message)
             and set(message) <= required | optional)
     text(message['id'], nonempty=True)
