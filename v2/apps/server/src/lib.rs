@@ -19,8 +19,8 @@ use std::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 mod attachment_transfer;
-mod automatic_reply_control;
 mod auth;
+mod automatic_reply_control;
 mod browser;
 pub mod build_identity;
 pub mod claude_execution;
