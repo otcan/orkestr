@@ -47,3 +47,11 @@ FD4 consumption; missing FD5 refuses. Existing protected package/lifecycle tests
 remain passing. No actual authenticated provider, ordinary workspace HTTP flow,
 Core spawn/commit-failure replay, or selected-profile resume inference is claimed
 by these tests. Those are independent composition gates.
+
+The immutable selected package admits the dedicated Deep Codex operator field
+`workspace_authority` with exactly `project_id`, `allowed_roots`, and
+`protected_roots`. The project UUID must be nonnil; root lists contain bounded
+absolute paths without parent traversal or control characters. Descriptor entries
+require this explicit opt-in. Parsing this policy does not issue a workspace
+grant: Core remains responsible for installation, retained identity and current
+transactional authority. Legacy packages without the field remain unchanged.

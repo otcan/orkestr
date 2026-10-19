@@ -119,7 +119,7 @@ else:raise AssertionError('descriptor leaked')
     @unittest.skipUnless(os.geteuid()==0,'explicit disposable root package test')
     def test_protected_package_descriptor_config_after_host_name_disappears(self):
         source='''
-import fcntl,os,socket,sys
+import fcntl,os,socket,sys,json
 sys.path.insert(0,MODULE)
 from selected_codex_fixture import Fixture,UID,GID
 from codex_bounded.configuration import Package
@@ -127,7 +127,15 @@ from codex_bounded.profile import Configuration
 from isolation.workspace_fd import InheritedWorkspace
 fixture=Fixture()
 try:
-    receipt=fixture.prepare();package=Package(receipt['package'])
+    receipt=fixture.prepare()
+    config_path=fixture.home/'selected-execution.json'
+    value=json.loads(config_path.read_text())
+    value['workspace_authority']={'project_id':'11111111-2222-4333-8444-555555555555',
+        'allowed_roots':[str(fixture.workspace)],'protected_roots':[str(fixture.home)]}
+    fixture.write_private(config_path,json.dumps(value).encode())
+    from codex_bounded.trust import digest
+    fixture.alter('runtime.json',lambda r:r.update(execution_config_sha256=digest(config_path)))
+    package=Package(receipt['package'])
     with socket.socket(socket.AF_UNIX) as endpoint:
         endpoint.bind(str(package.endpoint));os.chown(package.endpoint,0,GID);package.endpoint.chmod(0o660)
         raw=os.open(fixture.workspace,os.O_RDONLY|os.O_DIRECTORY)

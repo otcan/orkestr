@@ -2,6 +2,7 @@
 from pathlib import Path
 import re
 import stat
+import uuid
 from .trust import digest, metadata, private, protected, require
 
 HOSTS = ("chatgpt.com",)
@@ -68,11 +69,32 @@ class Package:
         execution = self.execution
         required = {"schema_version", "mode", "conversation_id", "machine_token_file", "launcher",
                     "launcher_sha256", "workspace", "namespace", "supervisor_key"}
-        require(required <= set(execution) <= required | {"provider", "role", "execution_budget"},
+        require(required <= set(execution) <= required | {"provider", "role", "execution_budget", "workspace_authority"},
                 "execution_fields")
         require(execution["schema_version"] == 1 and execution["mode"] == "isolated-acceptance-v1" and
                 execution.get("provider", "codex") == "codex" and execution.get("role", "deep") == "deep",
                 "selected_codex_deep_only")
+        # Operator configuration is not a descriptor/grant issuer. Core validates
+        # roots and current generation; only the closed descriptor entry uses FD5.
+        authority = execution.get("workspace_authority")
+        if authority is not None:
+            require(type(authority) is dict and set(authority) ==
+                    {"project_id", "allowed_roots", "protected_roots"}, "workspace_authority_fields")
+            try:
+                project = uuid.UUID(authority["project_id"])
+                require(project.int != 0, "workspace_project")
+            except (ValueError, TypeError, AttributeError):
+                require(False, "workspace_project")
+            for key in ("allowed_roots", "protected_roots"):
+                paths = authority[key]
+                require(type(paths) is list and len(paths) <= 128 and
+                        (key != "allowed_roots" or len(paths) > 0), "workspace_roots")
+                for path in paths:
+                    require(type(path) is str and len(path.encode("utf-8")) <= 4096 and
+                            Path(path).is_absolute() and not any(ord(c) < 32 for c in path) and
+                            ".." not in Path(path).parts, "workspace_root_path")
+        if workspace_descriptor is not None:
+            require(authority is not None, "workspace_opt_in_required")
         require(execution["launcher"] == str(self.root / "launcher.py") and
                 execution["launcher_sha256"] == digest(self.root / "launcher.py"), "launcher_binding")
         private(execution["machine_token_file"], self.uid)  # Metadata only; server authenticates it.
