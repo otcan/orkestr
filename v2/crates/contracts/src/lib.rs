@@ -179,3 +179,6 @@ pub use steering::*;
 
 mod attachments;
 pub use attachments::*;
+
+mod attachment_transfer;
+pub use attachment_transfer::*;
