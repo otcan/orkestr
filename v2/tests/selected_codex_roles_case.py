@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -50,6 +51,12 @@ class SelectedRolesCase(FastCase):
         assert os.geteuid() == 0, 'explicit root synthetic package test required'
         self.root = Path(tempfile.mkdtemp(prefix='selected-roles-http-', dir='/opt'))
         self.root.chmod(0o755)
+        # The protected input artifact may be readable only by the operator's
+        # group. Bootstrap uses identical root-owned bytes accessible to this
+        # disposable UID; the final packager still verifies/copies the input.
+        self.bootstrap_server = self.root / 'bootstrap-server'
+        shutil.copyfile(binary, self.bootstrap_server)
+        self.bootstrap_server.chmod(0o555)
         self.source = source
         self.state = self.directory('state')
         self.home = self.directory('state/data')
@@ -118,7 +125,7 @@ class SelectedRolesCase(FastCase):
             env = {'PATH':'/usr/bin:/bin', 'LANG':'C.UTF-8', 'HOME':str(self.state / 'provider-home'),
                    'ORKESTR_V2_HOME':str(self.home), 'ORKESTR_V2_BIND':f'127.0.0.1:{self.port}',
                    'ORKESTR_V2_BOOTSTRAP_TOKEN':self.bootstrap}
-            self.process = subprocess.Popen([str(binary)], env=env, user=UID, group=GID, extra_groups=[],
+            self.process = subprocess.Popen([str(self.bootstrap_server)], env=env, user=UID, group=GID, extra_groups=[],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         wait_for(self.owned_listener, 'exact owned ordinary listener')
         def healthy():
