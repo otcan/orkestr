@@ -44,3 +44,28 @@ operator-provisioned credential/hash environment for MCP, plus supported bcrypt
 packaging. Shared service operation and deployment remain canonical-owner work;
 this patch implements the loader/backend/mount rather than leaving those as
 unwritten adapter responsibilities.
+
+## Full canonical build successor evidence
+
+The previously unexecuted full canonical build was subsequently executed on exact
+`40ce5ebcc7b9197ab1604425bf20c144e9672370` in its isolated worktree:
+`COREPACK_ENABLE_NETWORK=0 PNPM_PACKAGE_MANAGER_STRICT=true pnpm run build`.
+Existing installed dependencies were linked into the isolated tree; workspace
+package links were rebased to isolated source. No dependency download was
+observed. pnpm 11.6.0 reported its already-up-to-date dependency synchronization;
+tracked manifests and lockfile stayed unchanged. Full recursive build PASS:
+shared, DB, core, API, MCP, CLI, backup, scheduler, worker and Angular web.
+No source errors or baseline build failures were encountered; no fix was needed.
+The isolated tree remained clean. Original dirty checkout's tracked/untracked
+path set was unchanged; build output was generated only in the isolated tree.
+Raw log and compiled-output hashes are retained in the private full-build receipt.
+No process using these new artifacts was launched.
+
+A separate bounded process-environment **key-name presence only** census checked
+approved scoped-status/admin/scope configuration names for Node/Caddy processes.
+No secret values were decoded, compared, hashed or persisted. No explicit status
+grant key was observed in that census. This is not proof of global absence or
+instance-specific effective configuration: process lifetime and enumeration are
+not coherent, and file/secret-store configuration was not read. No private grant
+was fabricated or service enabled. Canonical review and effective private grant
+configuration remain prerequisites to any deployment/live acceptance.
