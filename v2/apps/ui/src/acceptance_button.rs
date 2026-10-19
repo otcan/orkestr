@@ -9,6 +9,7 @@ const ACCEPTANCE_ACTIVATED: bool = cfg!(feature = "execution-controls");
 pub fn AcceptanceButton(
     mut execution: Signal<Execution>,
     session_scope: Signal<SessionScope>,
+    #[props(default)] fast_reply: bool,
     csrf: String,
     now_ms: u64,
     onexpired: EventHandler<()>,
@@ -37,7 +38,7 @@ pub fn AcceptanceButton(
             {
                 "Execution status is stale. Reconnect before accepting."
             } else {
-                "Review the provider output before accepting this completion."
+                if fast_reply { "Review this Fast reply before accepting it. This does not accept Deep work or a Worker task." } else { "Review the provider output before accepting this completion." }
             }
         });
     let mut notice = use_signal(|| None::<String>);
@@ -45,7 +46,7 @@ pub fn AcceptanceButton(
         .as_ref()
         .and_then(|s| execution.read().acceptances.notice(s));
     rsx! {
-        button { r#type: "button", disabled: !enabled, title: if ACCEPTANCE_ACTIVATED { "Accept this completion" } else { "Completion acceptance is not available on this server yet" }, onclick: move |_| {
+        button { r#type: "button", disabled: !enabled, title: if ACCEPTANCE_ACTIVATED { if fast_reply { "Accept this Fast reply" } else { "Accept this completion" } } else { "Completion acceptance is not available on this server yet" }, onclick: move |_| {
             if !enabled || busy() { return; }
             let csrf = csrf.clone();
             let owner = session_scope.read().generation();
@@ -79,7 +80,7 @@ pub fn AcceptanceButton(
                     busy.set(false);channel.set(None);
                 }
             });
-        }, if !ACCEPTANCE_ACTIVATED { "Accept completion unavailable" } else if busy() { "Accepting…" } else { "Accept completion" } }
+        }, if !ACCEPTANCE_ACTIVATED { "Accept completion unavailable" } else if busy() { "Accepting…" } else if fast_reply { "Accept Fast reply" } else { "Accept completion" } }
         if let Some(message)=review_hint { p { "{message}" } }
         if ACCEPTANCE_ACTIVATED && status.as_ref().is_some_and(|s| execution.read().acceptances.can_review_updated(s)) {
             button { r#type:"button", disabled:busy() || !execution.read().fresh(now_ms), onclick:move |_| {

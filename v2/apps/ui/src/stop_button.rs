@@ -9,6 +9,7 @@ const STOP_ACTIVATED: bool = cfg!(feature = "execution-controls");
 pub fn StopButton(
     mut execution: Signal<Execution>,
     session_scope: Signal<SessionScope>,
+    #[props(default)] fast: bool,
     csrf: String,
     onexpired: EventHandler<()>,
 ) -> Element {
@@ -52,7 +53,7 @@ pub fn StopButton(
                     let status = execution.read().control_status().ok_or_else(|| crate::transport::Failure::from("Execution unavailable".to_string()))?;
                     let pending = execution.write().stops.prepare(&status,key).map_err(|m|crate::transport::Failure::from(m.to_string()))?;
                     let eval = document::eval(include_str!("stop_request.js"));
-                    eval.send(json!({"path":format!("/api/v2/conversations/{}/stop",pending.conversation),"csrf":csrf,"body":pending.request})).map_err(|_|crate::transport::Failure::from("Stop not confirmed".to_string()))?;
+                    eval.send(json!({"path":format!("/api/v2/conversations/{}/{}stop",pending.conversation,if fast { "fast/" } else { "" }),"csrf":csrf,"body":pending.request})).map_err(|_|crate::transport::Failure::from("Stop not confirmed".to_string()))?;
                     channel.set(Some(eval));
                     let response = eval.join::<Value>().await;
                     if !session_scope.read().is_current(owner) || execution.read().selection_generation()!=selection { return Ok(()); }

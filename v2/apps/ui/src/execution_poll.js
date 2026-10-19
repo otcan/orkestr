@@ -2,7 +2,7 @@
 const {path} = await dioxus.recv();
 const uuid = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 const base = `/api/v2/conversations/${uuid}`;
-const executionPath = new RegExp(`^${base}/execution(?:\\?run_id=${uuid})?$`);
+const executionPath = new RegExp(`^${base}/(?:fast/)?execution(?:\\?run_id=${uuid})?$`);
 const workersPath = new RegExp(`^${base}/workers\\?${"(?:after=" + uuid + "&)?"}limit=25$`);
 const heldPath = new RegExp(`^${base}/held-inputs\\?after_sequence=(?:0|[1-9][0-9]{0,18})&limit=50$`);
 const tasksPath = new RegExp(`^${base}/worker-tasks\\?parent_run_id=${uuid}$`);

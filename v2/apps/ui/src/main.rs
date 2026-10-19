@@ -2,6 +2,7 @@ mod about;
 mod acceptance_button;
 mod execution_panel;
 mod execution_poll;
+mod fast_panel;
 mod held_inputs_poll;
 mod held_inputs_view;
 mod history;
@@ -41,6 +42,7 @@ fn App() -> Element {
     use_context_provider(move || task_drafts);
     // Owner-scoped high-water marks outlive keyed conversation and tab remounts.
     let mut execution = use_signal(orkestr_v2_ui::execution::Execution::default);
+    let mut fast_execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut host_resources = use_signal(orkestr_v2_ui::host_resources::HostResources::default);
     let mut held_inputs = use_signal(orkestr_v2_ui::held_inputs::HeldInputs::default);
     let mut workers = use_signal(orkestr_v2_ui::workers::Workers::default);
@@ -62,6 +64,7 @@ fn App() -> Element {
         {
             Ok(session) => {
                 execution.write().authorization_lost();
+                fast_execution.write().authorization_lost();
                 host_resources.write().clear_owner();
                 workers.write().clear_owner();
                 held_inputs.write().clear_owner();
@@ -90,6 +93,7 @@ fn App() -> Element {
     });
     let mut expired = move |_| {
         execution.write().authorization_lost();
+        fast_execution.write().authorization_lost();
         host_resources.write().clear_owner();
         workers.write().clear_owner();
         held_inputs.write().clear_owner();
@@ -118,6 +122,7 @@ fn App() -> Element {
                 views::Auth { onlogin: move |session: transport::BrowserSession| {
                     if logging_out() { return; }
                     execution.write().authorization_lost();
+                    fast_execution.write().authorization_lost();
                     host_resources.write().clear_owner();
                     workers.write().clear_owner();
                     held_inputs.write().clear_owner();
@@ -151,6 +156,7 @@ fn App() -> Element {
                             match result {
                                 Ok(_) => {
                                     execution.write().authorization_lost();
+                                    fast_execution.write().authorization_lost();
                                     host_resources.write().clear_owner();
                                     workers.write().clear_owner();
                                     held_inputs.write().clear_owner();
@@ -182,7 +188,7 @@ fn App() -> Element {
                         }
                     }
                     button { onclick: move |_| refresh += 1, "Reconnect and reload history" }
-                    views::Conversation { id: current(), csrf: csrf(), session_scope, execution, drafts, held_inputs, onexpired: expired }
+                    views::Conversation { id: current(), csrf: csrf(), session_scope, execution, fast_execution, drafts, held_inputs, onexpired: expired }
                     }
                 } else if tab() == "History" {
                     history::History { key: "{current()}", id: current(), csrf: csrf(), session_scope, onexpired: expired }
