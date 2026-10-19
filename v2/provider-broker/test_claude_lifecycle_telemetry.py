@@ -22,7 +22,7 @@ class ClaudeLifecycleTelemetryTests(unittest.TestCase):
             self.channel.provider({'type': 'system', 'subtype': 'init',
                                    'session_id': self.native})
             self.channel.provider({'type': 'result', 'subtype': 'success',
-                'is_error': False, 'session_id': self.native, 'result': 'synthetic',
+                'is_error': False, 'user_message_uuid':'33333333-3333-4333-8333-333333333333', 'session_id': self.native, 'result': 'synthetic',
                 'uuid': '55555555-5555-4555-8555-555555555555'})
 
     def authority(self):
