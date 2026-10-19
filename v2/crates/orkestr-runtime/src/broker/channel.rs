@@ -1,12 +1,15 @@
 //! Correlated framing only. These bytes never confer dispatch authority.
 use super::*;
 mod offline;
+mod steering;
 use offline::OfflineState;
 
 /// Private owned-pipe framing state; a handle is not an execution capability.
 pub(crate) struct BrokerChannel {
     handle: String,
     offline: OfflineState,
+    steering: Option<steering::Correlation>,
+    steering_ids: std::collections::HashSet<String>,
     native: Option<String>,
     lineage: Option<std::sync::Arc<()>>,
     next: u64,
@@ -40,6 +43,8 @@ impl OwnedMetadataHandle {
         BrokerChannel {
             handle: self._handle,
             offline: OfflineState::default(),
+            steering: None,
+            steering_ids: std::collections::HashSet::new(),
             native: None,
             lineage: self.lineage,
             next: 2,
@@ -285,9 +290,10 @@ impl BrokerChannel {
         // Notifications from the already-written active turn can precede the
         // broker's cancellation preparation (or arrive during suffix writes).
         // This exception never admits a correlated ACK or new-turn output.
-        let cancelling_output = (self.cancellation_pending || self.offline.result_pending)
-            && self.active_turn.is_some()
-            && value.get("method").and_then(Value::as_str) == Some("BrokerOutput");
+        let cancelling_output =
+            (self.cancellation_pending || self.offline.result_pending || self.steering.is_some())
+                && self.active_turn.is_some()
+                && value.get("method").and_then(Value::as_str) == Some("BrokerOutput");
         if self.pending.is_some()
             && self.preparation.is_some()
             && self.preparation != Some(Preparation::Written)
@@ -331,6 +337,11 @@ impl BrokerChannel {
             return Err(Blocker::Protocol);
         }
         let frame = result.get("frame").ok_or(Blocker::Protocol)?;
+        if self.steering.is_some() {
+            self.receive_steering(frame)?;
+            self.pending = None;
+            return Ok(None);
+        }
         match inner {
             None if frame.is_null() => {}
             Some(id)
