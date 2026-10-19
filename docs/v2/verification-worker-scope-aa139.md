@@ -1,0 +1,7 @@
+# Independent Worker scope source and receipt review
+
+Reviewed test-only `aa13945d1e2e3db0ab60b265056d45ff8dbc2364`: four new files, no production changes. No bounded source blocker found. The oracle exercises actual configured HTTP, synthetic native peers, scoped Stop and explicit owner acceptance. Cross-scope refusals compare selected durable columns and native traces; snapshots intentionally exclude authentication and lease timing and are not full database equality proofs. Each conversation snapshot is a separate read transaction.
+
+Independently verified all 684 private source inventory hashes against product `939904e1c1f2aeaf97222af5f0195f4ebfaf8dd6` plus the four byte-identical oracle overlays. Binary SHA256: `6a697c157aa6c1fc3aa9f896b102982540d5b026ebd3ffa1a0320ae85c3d1665`. Qualification receipt SHA256: `3b7c248eb48781a69c324e06ce2962169cce4f75f98f920b2479e3b4cd187ebc`. Raw stdout, empty stderr and JSON report hashes match the receipt.
+
+The author report records 45 tracked requests, 31 refusals, 10 selected snapshot cuts, four synthetic peers, normal server exit and removed temporary state/observed native identities. These counts exclude untracked polling requests. This review did not rerun HTTP or Cargo. Execution attribution remains the author against sealed 939904, not the newer test base or current browser candidate. No real-provider, browser, packaging or release qualification follows.
