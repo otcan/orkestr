@@ -1,6 +1,6 @@
 use crate::transport::{self, Failure};
 use dioxus::prelude::*;
-use orkestr_v2_contracts::{Credentials, Project, ProjectInput, Receipt};
+use orkestr_v2_contracts::{Credentials, Receipt};
 use orkestr_v2_ui::{session_scope::SessionScope, Draft, Projection};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -37,7 +37,7 @@ pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
                 busy.set(false);
             });
         },
-            h2 { if setup() { "Create first administrator" } else { "Sign in" } }
+            h2 { if setup() { "Create owner account" } else { "Sign in" } }
             p { "Sign in to your local assistant." }
             label { r#for: "username", "Username" }
             input { id: "username", autocomplete: "username", required: true, value: "{username}", oninput: move |e| username.set(e.value()) }
@@ -46,96 +46,11 @@ pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
             if setup() {
                 label { r#for: "bootstrap", "Local operator bootstrap token" }
                 input { id: "bootstrap", r#type: "password", autocomplete: "off", required: true, value: "{bootstrap}", oninput: move |e| bootstrap.set(e.value()) }
-                p { "Use the token configured for this isolated server. Never place it in a URL. Setup is one-time." }
+                p { "Use the setup token provided by your operator. Keep it private. Setup creates the first owner account once." }
             }
             button { r#type: "submit", disabled: busy(), if busy() { "Connecting…" } else { "Continue" } }
-            button { r#type: "button", disabled: busy(), onclick: move |_| setup.set(!setup()), if setup() { "Use existing administrator" } else { "First-time setup" } }
+            button { r#type: "button", disabled: busy(), onclick: move |_| setup.set(!setup()), if setup() { "Use existing owner account" } else { "First-time setup" } }
             p { role: "status", "{status}" }
-        }
-    }
-}
-
-#[component]
-pub fn Projects(
-    csrf: String,
-    session_scope: Signal<SessionScope>,
-    mut projects: Signal<Vec<Project>>,
-    mut pending: Signal<Option<ProjectInput>>,
-    onopen: EventHandler<String>,
-    onexpired: EventHandler<()>,
-) -> Element {
-    let mut name = use_signal(move || pending().map(|p| p.name).unwrap_or_default());
-    let mut status = use_signal(|| "Loading projects…".to_string());
-    let mut busy = use_signal(|| false);
-    let generation = session_scope.read().generation();
-    let load_csrf = csrf.clone();
-    use_future(move || {
-        let csrf = load_csrf.clone();
-        async move {
-            let result = transport::projects(&csrf).await;
-            if !session_scope.read().is_current(generation) {
-                return;
-            }
-            match result {
-                Ok(items) => {
-                    projects.set(items);
-                    status.set("Local projects".into());
-                }
-                Err(error) => {
-                    if error.status == 401 {
-                        onexpired.call(());
-                    }
-                    status.set(error.message);
-                }
-            }
-        }
-    });
-    rsx! {
-        section { h2 { "Projects" }
-            p { role: "status", "{status}" }
-            ul { for project in projects() {
-                li { key: "{project.project_id}",
-                    button { onclick: move |_| onopen.call(project.conversation_id.to_string()), "{project.name}" }
-                    span { "Git: {project.resources.local_git}; OXRM: {project.resources.local_oxrm}" }
-                }
-            } }
-            form { onsubmit: move |event| {
-                event.prevent_default();
-                if busy() || !session_scope.read().is_current(generation) { return; }
-                busy.set(true);
-                let csrf = csrf.clone();
-                spawn(async move {
-                    let result: Result<Project, Failure> = async {
-                        let input = if let Some(input) = pending() { input } else {
-                            let key = transport::key().await?;
-                            if !session_scope.read().is_current(generation) { return Err("Session changed".to_string().into()); }
-                            let input = ProjectInput { client_request_id: key, name: name() };
-                            if input.name.trim().is_empty() || input.name.len() > 200 { return Err("Project name must contain 1–200 UTF-8 bytes".to_string().into()); }
-                            pending.set(Some(input.clone()));
-                            input
-                        };
-                        transport::request("POST", "/api/v2/projects", json!(input), &csrf, "").await
-                    }.await;
-                    if !session_scope.read().is_current(generation) { return; }
-                    match result {
-                        Ok(project) => {
-                            pending.set(None);
-                            if !projects.read().iter().any(|p| p.project_id == project.project_id) { projects.write().push(project); }
-                            name.set(String::new()); status.set("Project created; resources are not yet provisioned.".into());
-                        }
-                        Err(error) => {
-                            if error.status == 401 { onexpired.call(()); }
-                            if matches!(error.status, 400 | 403 | 404 | 409 | 422) { pending.set(None); }
-                            status.set(error.message);
-                        }
-                    }
-                    busy.set(false);
-                });
-            },
-                label { r#for: "project-name", "New local project name" }
-                input { id: "project-name", required: true, value: "{name}", disabled: pending().is_some(), oninput: move |e| name.set(e.value()) }
-                button { disabled: busy(), if pending().is_some() { "Retry same project request" } else { "Create project" } }
-            }
         }
     }
 }
@@ -146,7 +61,6 @@ pub fn Conversation(
     csrf: String,
     session_scope: Signal<SessionScope>,
     execution: Signal<orkestr_v2_ui::execution::Execution>,
-    fast_execution: Signal<orkestr_v2_ui::execution::Execution>,
     mut drafts: Signal<BTreeMap<String, Draft>>,
     held_inputs: Signal<orkestr_v2_ui::held_inputs::HeldInputs>,
     onexpired: EventHandler<()>,
@@ -282,10 +196,8 @@ pub fn Conversation(
                 }
             }
             crate::attachments_view::ThreadFiles { key: "files-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, onexpired }
-            crate::automatic_replies_view::AutomaticReplies { key: "replies-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, onexpired }
             crate::held_inputs_poll::HeldInputsPanel { id: id.clone(), session_scope, model: held_inputs, projection, onexpired }
-            crate::execution_poll::ExecutionPoll { key: "{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, execution, onexpired }
-            crate::execution_poll::ExecutionPoll { key: "fast-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, execution: fast_execution, fast: true, onexpired }
+            crate::execution_poll::ExecutionPoll { key: "{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, execution, worker_tasks: false, onexpired }
             form { onsubmit: move |event| {
                 event.prevent_default();
                 if sending() || !session_scope.read().is_current(generation) { return; }

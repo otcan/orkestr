@@ -8,12 +8,13 @@ pub fn ExecutionPoll(
     id: String,
     #[props(default)] run: String,
     #[props(default)] fast: bool,
+    #[props(default = true)] worker_tasks: bool,
     csrf: String,
     session_scope: Signal<SessionScope>,
     mut execution: Signal<Execution>,
     onexpired: EventHandler<()>,
 ) -> Element {
-    let parent_tasks = run.is_empty() && !fast;
+    let parent_tasks = worker_tasks && run.is_empty() && !fast;
     let generation = session_scope.read().generation();
     let selected = id.clone();
     let selected_run = run.clone();
