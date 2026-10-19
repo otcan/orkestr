@@ -8,3 +8,6 @@ mod cold_process_tests;
 pub(crate) mod handles;
 pub(crate) mod initial;
 mod integers;
+
+#[cfg(test)]
+mod closed_idle_process_tests;
