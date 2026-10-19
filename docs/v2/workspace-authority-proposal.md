@@ -82,3 +82,35 @@ reopen with changed identity; concurrent replace versus actual launch; failed sp
 no grant reissue; HEAD-only change does not invent a generation; Worker parent Stop
 still refuses setup; workspace revoke blocks an already-owned child's later suffix.
 Installation inventory tests remain separate from these authority/process tests.
+
+## Runtime review: descriptor ABI prerequisite
+
+The current string-cwd launcher is insufficient; no storage or schema allocation
+follows from this proposal. Initial scope is Linux64 on a stable filesystem and
+mount namespace, not protection against hostile mounts or inode reuse.
+
+Proposed retained handle is a Core-validated directory `OwnedFd`, opened without
+symlink traversal and checked by `fstat` against its pinned identity. Runtime receives
+only a borrowed descriptor during the bounded launch callback; it must not reopen
+any configured path. A reviewed launcher transfers that exact descriptor through
+its closed FD allowlist and performs `fchdir` from it. The sandbox's read-only project
+mount must resolve the same retained descriptor, not a second pathname lookup.
+FD duplication preserves the open file description; serializing a descriptor number
+or passing a path does not preserve authority. Exact transfer FD/ownership and
+sandbox mount primitive remain to be agreed with Runtime/Isolation before coding.
+The current launcher preserves only descriptors3/4 and has no such project transfer.
+
+Metadata and workspace validation must execute in the **same existing immediate
+transaction** immediately around actual spawn. A transaction-local private validator
+must compose both checks; do not call `with_metadata_fence` inside a second workspace
+writer. The exact project generation must then be carried into setup confirmation,
+execution, renewal, steering, tool launch and result/output-write validation.
+Workspace revocation fences new effects but must not prevent exact issued cancellation,
+owned-child kill/reap or negative retirement cleanup. Cleanup cannot grant inference,
+reopen a project, or relabel unknown effects as confirmed cancellation.
+
+Selected-profile authority stays separately owned and separately checked. No profile
+path, account handle or descriptor grants project access; no project grant grants
+profile/account access. Runtime/root must agree the combined closed launcher argument
+and FD ownership contract with the selected-profile owner. Core will consume only
+that reviewed handoff, not introduce a second profile manager or raw profile field.
