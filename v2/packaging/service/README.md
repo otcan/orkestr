@@ -182,3 +182,48 @@ The explicit privileged synthetic suite probes the generated layout as UID995:
 GID986 before any test mutation, then demonstrates the original0700 refusal.
 It only reads a synthetic text file; it never executes the packaged entry/native.
 Run `test_release.py` explicitly as root; run `test_service.py` unprivileged.
+
+### Full selected persistent service preparation
+
+`selected.py` is the root-only preparation entry for the complete new persistent
+manager package. Run with an explicit private operator plan:
+
+```
+sudo /usr/bin/python3 -I -S -B v2/packaging/service/selected.py --plan /operator/private/plan.json
+```
+
+The closed plan has format `orkestr-v2-selected-service-plan-v1` and fields:
+`output`, `source_repository`, `pair`, `pair_sha256`, `server`, `ui`, `native`,
+`native_sha256`, `uid`, `gid`, `home`, `workspace`, `state_root`, `auth_file`,
+`bootstrap_file`, `ledger_directory`, `endpoint_directory`, `owner_id`,
+`conversation_id`, `namespace`, `supervisor_key`, `origin`, `port`.
+Paths and bindings are explicit; there are no deployment defaults. The existing
+home must contain private service-owned `data` and `provider-home` directories.
+Normal API provisioning may already have populated `data`; preparation leaves
+it untouched. Workspace/native state must be empty. Root-owned manager and
+endpoint directories may be absent or pre-reserved empty with configured group
+and modes 0700/0750 respectively. Existing nonempty state is refused.
+
+The exact clean paired Git source must descend from reviewed manager
+`0dbb4226a2fdd611bd75b22d4a17117c438a1484`. Source is exported from Git blobs;
+mutable checkout modules are never imported. Its authoritative `FILES` and
+`MODULES_SERVICE` define the closed inner package. Pair version must be
+`2.0.0-beta.1`, with matching embedded native/web identities and release profiles.
+Synthetic ELF fixtures only exercise packaging; they are never launched.
+
+Output is final-path-bound `start-service`, `release.json`, and `package/`.
+The wrapper pins the inner manifest; the outer receipt binds wrapper, inventory,
+custody, pair/native digests and shell/Python startup pins. Package dependencies
+are the manager's exact authoritative fixed dependency set. Manager/launcher
+entries use pinned Python `-I -S -B`; the inner protected entry validates its
+manifest before importing package modules. Canonical auth and bootstrap references
+are checked by metadata only, never read, hashed, or copied. The full authoritative
+Package validator runs before publishing the outer entry/receipt.
+
+Run preparation only in a stable trusted root-managed namespace. This is not an
+atomic service activation protocol: interruption may leave unpublished staging,
+and must be inspected explicitly before choosing another fresh release path.
+No source directory, state directory, existing release, or credential is repaired.
+No service, native binary, provider, setup API or account is invoked. Real paired
+artifact qualification and manager lifecycle acceptance remain separate gates;
+the old bounded-v1 installer is unchanged.
