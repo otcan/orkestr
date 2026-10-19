@@ -3,6 +3,7 @@ mod admission;
 mod bootstrap;
 mod budget;
 mod claude;
+mod claude_continuation;
 mod config;
 #[cfg(all(test, unix))]
 mod config_tests;
@@ -68,9 +69,6 @@ impl ConfiguredExecution {
             takeover: ProductionTakeover::First,
         };
         let (bound, initial_grant, directory) = if let Some(status) = status {
-            if config.provider == config::Provider::Claude {
-                return Err("existing Claude execution requires reviewed resume authority");
-            }
             if status.phase != orkestr_v2_contracts::ExecutionPhase::Completed
                 || config.worker.is_some()
             {

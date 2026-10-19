@@ -1,4 +1,4 @@
-//! Selected Claude first turn through the ordinary server. Setup ACK is only
+//! Selected Claude turn through the ordinary server. Setup ACK is only
 //! protocol readiness; Runtime/Core persist matching native init before Started.
 use super::*;
 use crate::claude_execution::{PreparingClaudeExecution, ReadyClaudeExecution};
@@ -8,33 +8,22 @@ use orkestr_v2_contracts::ExecutionPhase;
 use std::time::Instant;
 
 impl ConfiguredExecution {
-    pub(super) async fn run_claude(
-        self,
-        mut shutdown: watch::Receiver<bool>,
-    ) -> Result<(), &'static str> {
-        let mut heartbeat = Instant::now();
-        self.maintain(&mut heartbeat).await?;
-        let binding = self
-            .store
-            .ensure_role_bindings(&self.owner, &self.config.conversation_id)
-            .await
-            .map_err(|_| "Claude binding unavailable")?
-            .deep;
-        let grant = self
-            .store
-            .authorize_session_metadata(&binding)
-            .await
-            .map_err(|_| "Claude setup authority refused")?;
-        let Some(ready) = self
-            .prepare_claude(grant, &mut shutdown, &mut heartbeat)
-            .await?
-        else {
-            return Ok(());
-        };
+    pub(super) async fn drive_claude(
+        &self,
+        ready: ReadyClaudeExecution,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+    ) -> Result<
+        Option<(
+            orkestr_v2_contracts::RunId,
+            orkestr_runtime::containment::ReapedBroker,
+        )>,
+        &'static str,
+    > {
         // Uses the same current-owner claim/admit/reserve/one-use consumption
         // path as Codex. Provider/account selectors never come from HTTP input.
-        let Some(capability) = self.next(&mut shutdown, &mut heartbeat).await? else {
-            return Ok(());
+        let Some(capability) = self.next(shutdown, heartbeat).await? else {
+            return Ok(None);
         };
         let run = capability.provider().run.run_id.clone();
         let mut live = ready
@@ -42,7 +31,7 @@ impl ConfiguredExecution {
             .map_err(|_| "Claude attachment uncertain; automatic replay refused")?;
         let mut budget = self.config.execution_budget.start(Instant::now());
         loop {
-            self.maintain(&mut heartbeat).await?;
+            self.maintain(heartbeat).await?;
             let status = self
                 .store
                 .execution_status(&self.owner, &self.config.conversation_id)
@@ -54,15 +43,19 @@ impl ConfiguredExecution {
             }
             match status.phase {
                 ExecutionPhase::Completed => {
-                    // Explicit owner acceptance is required. No second run is
-                    // claimed until the separate typed continuation port exists.
-                    return Ok(());
+                    // Consume the exact completed pump before opening a new
+                    // child. Neither a projection nor local exit proves reap.
+                    let retiring = live
+                        .retire_completed()
+                        .map_err(|_| "Claude accepted-session retirement refused")?;
+                    let proof = self.reaped(retiring, &run, heartbeat).await?;
+                    return Ok(Some((run, proof)));
                 }
                 ExecutionPhase::AwaitingAcceptance => {
                     // Preserve the proposal and child while the owner decides;
                     // never read late provider frames or claim a queued input.
                     if *shutdown.borrow() {
-                        return Ok(());
+                        return Ok(None);
                     }
                 }
                 ExecutionPhase::Failed
@@ -108,7 +101,7 @@ impl ConfiguredExecution {
         // reaper. ChildSet remains retained until actual wait; no fake Stopped.
     }
 
-    async fn prepare_claude(
+    pub(super) async fn prepare_claude(
         &self,
         grant: BoundSessionMetadata,
         shutdown: &mut watch::Receiver<bool>,
