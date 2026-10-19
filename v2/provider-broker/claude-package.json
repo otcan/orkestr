@@ -17,7 +17,7 @@
     "claude_assistant_metadata.py": "d2bf04492072aa11348ffe342949998b304dbc6c1c5e331798a5d212277f97b8",
     "claude_assistant_input.py": "53f1840a683015813fc6a052f31e4f45d9e230eecde76183e6a7fe49a73812e4",
     "claude_stop_metadata.py": "6a1a7a812a0c1ecd1d5cea590f674fa2b5484aabb20c9aa5ee567db109457e02",
-    "claude_stream_schema.py": "353f14f4dec2bf7f0e99d37795ea989edeecbe1c0b78dc37956ada136278d948",
+    "claude_stream_schema.py": "e3f780916a20a151743fcddfc812d26ff6527d8a26718c76b1ee7c00aa53c56a",
     "claude_stream.py": "c9e851c7cf3d531ff2ab85a36bb3ea543182c733ccea2f755aa9ce2e43429558",
     "claude_pump.py": "7d820f09dea4d9c1d4a2d76f7de4dd17a69bce79f709b79ad888dc0756d9ff6a",
     "claude_stream_diagnostic.py": "c4296c32d165db70e92337808dc046defcad932f9291e25da38a993a485dfecc",

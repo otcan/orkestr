@@ -35,7 +35,8 @@ def main():
     event({'type': 'message_start', 'message': {'id': api, 'type': 'message', 'role': 'assistant',
           'content': [], 'model': 'synthetic-model', 'stop_reason': None,
           'input_transformations': transformations,
-          'usage': {'input_tokens': 1, 'output_tokens': 0}}}, first=True)
+          'usage': {'input_tokens': 1, 'output_tokens': 0, 'speed': 'standard',
+                    'output_tokens_details': {'thinking_tokens': 0}}}}, first=True)
     event({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})
     piece = 'synthetic chunk ' * 400
     event({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': piece}})
@@ -62,7 +63,9 @@ def main():
               'role': 'assistant', 'model': 'synthetic-model', 'content': [{'type': 'text', 'text': piece * 4}]}})
         event({'type': 'content_block_stop', 'index': 0})
         event({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None},
-               'usage': {'output_tokens': 1}, 'input_transformations': None})
+               'usage': {'output_tokens': 1, 'speed': 'standard',
+                         'output_tokens_details': {'thinking_tokens': 1}},
+               'input_transformations': None})
         event({'type': 'message_stop'})
         emit({'type': 'result', 'session_id': native, 'uuid': str(uuid.uuid4()),
               'user_message_uuid': current, 'subtype': 'success', 'is_error': False, 'result': piece * 4})

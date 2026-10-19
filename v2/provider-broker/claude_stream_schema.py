@@ -56,14 +56,14 @@ def echo(frame, message, required=False):
 def usage(value):
     numeric = {'input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'}
     optional = {'cache_creation', 'server_tool_use', 'service_tier', 'inference_geo',
-                'iterations', 'output_tokens_details', 'fallback_credit'}
+                'iterations', 'output_tokens_details', 'fallback_credit', 'speed'}
     require(isinstance(value, dict) and set(value) <= numeric | optional)
     for key in numeric & set(value):
         if value[key] is not None: number(value[key], integer=True)
     for key, fields in (
             ('cache_creation', {'ephemeral_5m_input_tokens', 'ephemeral_1h_input_tokens'}),
             ('server_tool_use', {'web_search_requests', 'web_fetch_requests'}),
-            ('output_tokens_details', {'reasoning_tokens'})):
+            ('output_tokens_details', {'reasoning_tokens', 'thinking_tokens'})):
         if value.get(key) is not None:
             item = value[key]
             require(isinstance(item, dict) and set(item) <= fields)
@@ -71,6 +71,7 @@ def usage(value):
             if key == 'server_tool_use': require(not any(item.values()))
     for key in ('service_tier', 'inference_geo'):
         if value.get(key) is not None: text(value[key], 128)
+    require(value.get('speed') in (None, 'standard', 'fast'))
     require(value.get('iterations') in (None, []))
     require(value.get('fallback_credit') is None)
 
