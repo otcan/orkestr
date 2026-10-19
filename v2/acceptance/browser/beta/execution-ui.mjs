@@ -107,7 +107,9 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
       signal.throwIfAborted(); await clickReady(page, 'Steer', origin, 'Steer running work', action);
       const delivery = await control('steer'); assert.equal(delivery.request.text, text);
       const status = await wait(() => read('steering', delivery.receipt.request_key), value => {
-        if (['delivery_unknown', 'rejected', 'queued'].includes(value.state)) throw failure('not_completed');
+        // Core records delivery_unknown before the native write. Keep observing
+        // this request within the existing wait; only its acknowledgement passes.
+        if (['rejected', 'queued'].includes(value.state)) throw failure('not_completed');
         return value.state === 'acknowledged';
       });
       return {advertised_at_sample: true, request_sent: true, ...assertSteered({conversation, run, ...delivery, status})};
