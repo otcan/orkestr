@@ -1,0 +1,9 @@
+# Independent steering readiness and renewal review
+
+Exact Runtime commits: `5f94247a005f0380af230dab14ce23794ef72e0c` and `50153d9c584d2b803219b2e90e80e6f80670084b`; required Core seam: `7c6787d06e2106f750b67e6a914546fb8e7b8821`.
+
+Bounded source review found no blocker. Readiness is explicitly local transport state, not durable authorization. It checks pending writes, observations, tool/steering/cancellation work, failed/terminal channels and the persistent child's 128-ID limit. Sampling does not reserve or reset IDs. The supplied capacity test exhausts 128 requests then checks accepted-turn continuation cannot obtain a 129th.
+
+Renewal consumes the pump and old steering issuer, checks full old admission equality, requires quiescence, commits the sealed Core lease transition and transfers the same actual child through the new durable fence. The transfer removes the child from the old authority and marks that authority revoked. Core refresh then consumes the old issuer, compares the full previous envelope, revalidates current authenticated context/Running consumed execution under BEGIN IMMEDIATE and requires the existing native turn row. It neither changes that row nor refreshes prior reservations or consumed steering. A refresh refusal quarantines the transferred child. The caller must serialize polling, cancellation and renewal under its existing per-run lock and replace authority/pump/issuer together.
+
+Supplied tests inspect same-child preservation, unchanged native byte log/capacity, old-authority revoke safety, Stop-before-renewal refusal and exact refreshed native binding; Core tests cover stale previous identity and revoked context. These are author evidence only: this review performed no Cargo/build/test execution, provider launch or server activation. An independently executed composed test gate and server integration remain separate.
