@@ -1,6 +1,6 @@
 # Pinned schema35/36 installation readiness
 
-Immutable inspected Core source is `7c6787d06e2106f750b67e6a914546fb8e7b8821`.
+Immutable inspected Core source is `006cca798e967fbd8deecd128933e46a2e0e94a8`.
 `v2/packaging/candidate/schema36-fingerprints.json` records contiguous1–36 SQL
 SHA256/SQLx SHA384 fingerprints. Prior1–34 match the retained schema34 inventory
 without rewriting SQL. Prefix35 inventory digest is
@@ -31,17 +31,23 @@ ORKESTR_V2_MIGRATIONS_DIR=/path/to/exact-core36-migrations \
   python3 -B -m unittest discover -s v2/local-install/tests -p test_schema36_contract.py -v
 ```
 
-Candidate inspection requires exact35/36 inventory and SQLx checksums, retained
-original packages and version/source/embedded-identity agreement. Until Core
-publishes its exact supported-edge decision, inspection returns
-`pending_core_edge_admission`; execution refuses before starting a child. This is
-a concrete contract dependency, not a user permission request. The existing
-copy-first preflight, stopped DB/WAL/SHM locks/copies, preserved backup, isolated
-old-binary refusal and untouched predecessor rollback are reused once admitted.
-No new generic runner or build is needed.
+Core's published `docs/v2/schema36-upgrade-and-claude-stop.md` admits exact
+known-checksum populated14/17/31/33→36 edges. All36 published SHA256/SQLx SHA384
+fingerprints were compared with the retained inventory and actual committed SQL;
+no prior SQL changed. Candidate preparation now admits precisely these36 edges,
+requiring exact source inventory, SQLx checksums, retained original packages and
+version/source/embedded-identity agreement. Schema35 remains inspection-only;
+unknown edges and backwards execution refuse.
+
+The actual runner requires exact SQLx checksums and audits task holds, delegated
+receipts, timer/result/steering authority and host/owner budgets on the independent
+preflight copy, writable working copy and ordinary reopen. It reuses stopped
+DB/WAL/SHM locking/copies, retained backups, isolated old-binary refusal and
+rollback with the untouched predecessor. Core's source/Store results do not
+substitute for original-package execution or populated native/timer/task coverage.
 
 Actual14/17/31/33-to36 package migration/refusal/rollback is **unexecuted** pending
-that decision and coordinator's immutable combined36 same-source server/UI pair.
+coordinator's immutable combined36 same-source server/UI pair.
 Original14/17 packages,31 development pair and actual33 acceptance receipts/raw
 logs/stopped backups remain retained. The old f322 binary is never substituted
 for36. Separate Worker or steering builds do not qualify combined36. No37+,

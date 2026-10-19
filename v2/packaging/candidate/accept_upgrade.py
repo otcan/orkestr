@@ -78,7 +78,7 @@ def prepare(old, new, old_source, new_source, old_sha, new_sha, successor=24, mi
                         'schema34 requires exact published Core63366 source inventory')
     if successor in (35,36):
         receipt.require(inventory_digest=={35:SCHEMA35_INVENTORY,36:SCHEMA36_INVENTORY}[successor],
-                        'schema35/36 requires exact published Core7c678 source inventory')
+                        'schema35/36 requires exact published Core006cca source inventory')
     admitted=True
     try:
         cross_revision.migration_edge(predecessor,successor)
