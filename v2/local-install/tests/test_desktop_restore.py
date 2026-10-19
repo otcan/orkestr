@@ -2,6 +2,8 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -117,6 +119,86 @@ class RestoreTests(unittest.TestCase):
         with self.assertRaisesRegex(module.RecoveryError, 'generation exhausted'):
             self.run_prepare()
         self.assertFalse(self.target.exists())
+        self.unchanged()
+
+    def test_all_active_revoked_and_history_unknown_fields_retained(self):
+        import copy
+        second = copy.deepcopy(self.state['desktopLeases'][0])
+        second.update(id='other', desktopSlug='other-desk', fencingVersion=8, fencingToken='other-token')
+        historical = copy.deepcopy(second)
+        historical.update(id='historical', fencingVersion=7, releasedAt='past', releaseReason='keep-reason')
+        historical['extension'] = {'keep': ['unknown']}
+        self.state['desktopLeases'].extend([second, historical])
+        self.raw = json.dumps(self.state).encode()
+        self.source.write_bytes(self.raw)
+        self.digest = hashlib.sha256(self.raw).hexdigest()
+        receipt = self.run_prepare()
+        output = json.loads((self.target / 'leases.json').read_bytes())
+        self.assertEqual(receipt['revoked'], 2)
+        self.assertEqual(output['fencingCounter'], 9)
+        self.assertTrue(all(item['releasedAt'] for item in output['desktopLeases']))
+        self.assertEqual(output['desktopLeases'][2], historical)
+        for before, after in zip(self.state['desktopLeases'][:2], output['desktopLeases'][:2]):
+            for field in before.keys() - {'releasedAt'}:
+                self.assertEqual(before[field], after[field])
+        self.unchanged()
+
+    def signal_subprocess(self, signal_name, boundary):
+        # Inject a real OS signal into the CLI with its actual handlers installed.
+        # Hooks exist only in this disposable subprocess, never in production CLI.
+        code = r"""
+import importlib.util, os, signal, sys
+spec = importlib.util.spec_from_file_location('recovery', sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+boundary, signame = sys.argv[2:4]
+sys.argv = ['desktop_restore.py', *sys.argv[4:]]
+if boundary == 'prepublication':
+    original = m.os.fsync
+    def injected(fd):
+        os.kill(os.getpid(), getattr(signal, signame))
+        original(fd)
+    m.os.fsync = injected
+else:
+    original = m.rename_fresh
+    def injected(source, target):
+        original(source, target)
+        os.kill(os.getpid(), getattr(signal, signame))
+    m.rename_fresh = injected
+m.main()
+"""
+        return subprocess.run([sys.executable, '-B', '-c', code, str(Path(module.__file__)),
+                               boundary, signal_name, '--source', str(self.source), '--target', str(self.target),
+                               '--source-sha256', self.digest, '--old-lock-identity', '12:34',
+                               '--offline-source-confirmed'], capture_output=True, text=True, timeout=5)
+
+    def test_sigterm_before_publication_cleans(self):
+        result = self.signal_subprocess('SIGTERM', 'prepublication')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('KeyboardInterrupt', result.stderr)
+        self.assertFalse(self.target.exists())
+        self.assertFalse(list(self.root.glob('.desktop-recovery-*')))
+        self.unchanged()
+
+    def test_sighup_before_publication_cleans(self):
+        result = self.signal_subprocess('SIGHUP', 'prepublication')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('KeyboardInterrupt', result.stderr)
+        self.assertFalse(self.target.exists())
+        self.assertFalse(list(self.root.glob('.desktop-recovery-*')))
+        self.unchanged()
+
+    def test_sigterm_after_rename_retains_unknown_publication(self):
+        result = self.signal_subprocess('SIGTERM', 'postrename')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('PublicationUnknown', result.stderr)
+        self.assertEqual((self.target / 'original.json').read_bytes(), self.raw)
+        self.unchanged()
+
+    def test_sighup_after_rename_retains_unknown_publication(self):
+        result = self.signal_subprocess('SIGHUP', 'postrename')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('PublicationUnknown', result.stderr)
+        self.assertEqual((self.target / 'original.json').read_bytes(), self.raw)
         self.unchanged()
 
     def test_released_history_unchanged(self):

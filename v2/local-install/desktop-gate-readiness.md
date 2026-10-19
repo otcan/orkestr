@@ -152,3 +152,28 @@ reviewed detach/preserve path for server-owned clients before reloading old
 imports. A maintenance switch or module reload is not implemented by this leaf.
 Until that seam is proven, keep legacy writers running unchanged and adoption
 held. No stop/restart, browser action, installed adoption or restoration occurred.
+
+## Reproducible implementation handoff
+
+The operational leaf is implemented (not merely proposed): `desktop_restore.py`.
+It is held for independent source review before any use on installed evidence.
+
+```sh
+python3 -B -m unittest discover -s v2/local-install/tests -p test_desktop_restore.py -v
+DESKTOP_GATE_SOURCE=/absolute/private/export node --test v2/local-install/tests/desktop_gate_rehearsal.test.mjs
+```
+
+Current checks: 14 Python cases plus 4 exact-PR116 Node cases pass. Real subprocess
+SIGTERM and SIGHUP injections verify prepublication cleanup and postrename
+PublicationUnknown evidence retention. Multi-lease fixtures prove every active
+lease is released while historical records/unknown fields survive. The Node
+oracle runs the actual tool, initializes its revoked output in disposable state,
+rejects the original binding and requires generation 8 after retained generation 7.
+No installed restoration or service drain was executed.
+
+Separate schema39 receipt: exact development pair source
+`65e7730298afefae0812cd98455f7c9d9ec5973e`, producer receipt SHA256
+`498c6da8d0f2c40aed375d20e451786391bc2be237178545c45841dac4348eba`.
+The bounded 14-to39 native package rehearsal is recorded in
+`tests/schema14-to39-checkpoint.json`; it does not qualify desktop adoption,
+attachment/browser execution, remaining upgrade edges or cancelled Rust CI.
