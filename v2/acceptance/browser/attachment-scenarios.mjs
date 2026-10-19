@@ -6,7 +6,15 @@ import {randomUUID} from 'node:crypto';
 import {click,fill,text,waitFor,digest} from './history-support.mjs';
 const panel='section[aria-label="Thread files"]';
 const waitReady=page=>page.waitForFunction(selector=>{const b=[...document.querySelector(selector).querySelectorAll('button')].find(b=>b.textContent==='Refresh files');return b&&!b.disabled;},{},panel);
-async function fileInput(page,selector,file){const input=await page.$(selector);assert(input,'file_input_missing');await input.uploadFile(file);await input.dispose();}
+async function fileInput(page,selector,file){
+ // The registered browser runs in its own filesystem namespace. Supply the
+ // synthetic bytes through the ordinary File input instead of a host path.
+ const bytes=[...await fs.readFile(file)];
+ await page.$eval(selector,(input,{bytes,name})=>{
+  const transfer=new DataTransfer();transfer.items.add(new File([new Uint8Array(bytes)],name));
+  input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));
+ },{bytes,name:path.basename(file)});
+}
 const manifestOnPage=page=>page.evaluate(()=>window.__attachmentProbe.calls.filter(c=>c.method==='POST'&&c.status===200).at(-1)?.response.manifest);
 async function saveArchive(page,file){await page.$eval(panel+' details',e=>e.open=true);await fileInput(page,panel+' input[accept]',file);await click(page,'Import file copies');await text(page,'File copy saved.');await waitReady(page);}
 async function downloaded(folder,name){await waitFor(async()=>{try{return (await fs.stat(path.join(folder,name))).isFile();}catch{return false;}},'download_file_missing');return fs.readFile(path.join(folder,name));}
