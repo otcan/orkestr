@@ -1,0 +1,24 @@
+{
+  "format_version": 1,
+  "success": {
+    "format_version": 1,
+    "status": "transport_observed",
+    "transport": "canonical_mcp_health",
+    "health": "ok",
+    "binding": "explicit_owner_workspace_account",
+    "scope_coverage": "not_exposed_by_reviewed_transport",
+    "capability_coverage": "not_exposed_by_reviewed_transport",
+    "activity_proven": false,
+    "workflow_ready": false
+  },
+  "refusal_codes": [
+    "authentication_required",
+    "authority_unavailable",
+    "owner_scope_changed",
+    "binding_unavailable",
+    "upstream_access_denied",
+    "status_transport_unsupported",
+    "upstream_unavailable",
+    "response_invalid"
+  ]
+}
