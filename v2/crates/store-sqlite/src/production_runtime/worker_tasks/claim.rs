@@ -99,6 +99,20 @@ impl Store {
         else {
             return Err(RuntimeStoreError::Fenced);
         };
+        // The owner budget starts at task creation, not at later setup or
+        // delegation. Preserve the requested lifetime but clip issued authority.
+        if let Some(budget) = row.get::<Option<i64>, _>("execution_budget_ms") {
+            let deadline = row
+                .get::<i64, _>("created_at_ms")
+                .checked_add(budget)
+                .ok_or(RuntimeStoreError::InvalidInput)?;
+            if deadline <= now(&mut tx).await? {
+                return Err(RuntimeStoreError::Expired);
+            }
+            sqlx::query("UPDATE worker_provider_delegations SET expires_at_ms=min(expires_at_ms,?) WHERE id=?")
+                .bind(deadline).bind(delegation.id().to_string())
+                .execute(&mut *tx).await.map_err(db)?;
+        }
         sqlx::query(
             "UPDATE worker_tasks SET state='delegated',claim_hash=NULL,delegation_id=? WHERE id=?",
         )

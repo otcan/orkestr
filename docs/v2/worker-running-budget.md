@@ -60,3 +60,5 @@ tests cover owner-task restriction, immutable budget, legacy refusal, concurrent
 CAS, stale tools, fresh tools, natural expiry, machine revocation, Stop and parent
 terminal refusal. This is Store evidence; long-running native transport and HTTP
 qualification belong to their owners.
+
+Initial task delegation is clipped to the owner deadline anchored at task creation, including time queued or spent in setup. Every execution-purpose authorization also checks the durable owner/host budget before callbacks, tool operations, or result suffixes, even before the first renewal. Cancellation cleanup remains independently authorized; existing tool/result deadlines are never extended.

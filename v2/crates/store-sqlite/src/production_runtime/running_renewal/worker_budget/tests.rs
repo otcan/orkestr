@@ -9,6 +9,12 @@ async fn worker() -> (Case, Box<ConsumedProviderDispatch>) {
     worker_with_budget(Some(120_000)).await
 }
 async fn worker_with_budget(owner_budget: Option<u32>) -> (Case, Box<ConsumedProviderDispatch>) {
+    worker_after_delay(owner_budget, 0).await
+}
+async fn worker_after_delay(
+    owner_budget: Option<u32>,
+    delay_ms: i64,
+) -> (Case, Box<ConsumedProviderDispatch>) {
     let f = setup().await;
     let (parent, input) = running(&f).await;
     let revision: i64 =
@@ -31,6 +37,12 @@ async fn worker_with_budget(owner_budget: Option<u32>) -> (Case, Box<ConsumedPro
                 execution_budget_ms: owner_budget,
             },
         )
+        .await
+        .unwrap();
+    // Model time spent queued/setup without weakening any public clock API.
+    sqlx::query("UPDATE worker_tasks SET created_at_ms=created_at_ms-?")
+        .bind(delay_ms)
+        .execute(&f.store.pool)
         .await
         .unwrap();
     let task = f
@@ -339,4 +351,63 @@ async fn owner_opt_in_required_and_host_cap_clamped() {
             .await
             .unwrap();
     assert_eq!(deadline - anchor, 60_000);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn initial_delegation_is_clipped_before_any_renewal() {
+    let (f, cap) = worker_after_delay(Some(30_000), 28_000).await;
+    let deadline: i64 =
+        sqlx::query_scalar("SELECT created_at_ms+execution_budget_ms FROM worker_tasks")
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(cap.provider().run.lease_deadline_ms, deadline);
+    assert!(f
+        .handle
+        .with_execution_fence(cap.provider(), || Ok::<_, ()>(()))
+        .is_ok());
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM worker_running_budgets")
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_budget_fences_before_first_renewal_without_extending_tools() {
+    let (f, cap) = worker().await;
+    let tool = f
+        .handle
+        .authorize_offline_python_parent(&f.token, &cap)
+        .await
+        .unwrap();
+    let issuer = f
+        .handle
+        .authorize_worker_running_renewal(&cap, 1_000)
+        .await
+        .unwrap();
+    let hard = issuer.hard_deadline_ms().unwrap();
+    assert!(hard < cap.provider().run.lease_deadline_ms);
+    tokio::time::sleep(std::time::Duration::from_millis(1_050)).await;
+    let mut called = false;
+    assert!(f
+        .handle
+        .with_execution_fence(cap.provider(), || {
+            called = true;
+            Ok::<_, ()>(())
+        })
+        .is_err());
+    assert!(!called);
+    // Retained tool authority traverses the same durable budget check.
+    assert!(f
+        .handle
+        .delegate_offline_python_from_parent(
+            &f.token,
+            &tool,
+            "expired-budget-tool",
+            "print(1)",
+            1000
+        )
+        .await
+        .is_err());
 }
