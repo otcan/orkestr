@@ -54,7 +54,7 @@ pub fn ConversationSidebar(
         read_ticket.set(ticket);
         let read_ticket = read_ticket.clone();
         async move {
-            if let Some(old) = reading() {
+            if let Some(old) = reading.peek().as_ref() {
                 let _ = old.send(json!({"stop":true}));
             }
             let channel = start(json!({"method":"GET","after":cursor.to_string(),"body":null}));
