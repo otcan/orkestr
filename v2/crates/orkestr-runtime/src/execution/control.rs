@@ -76,6 +76,12 @@ impl CodexPump {
             let writing = PendingWrite::new(&frame)?;
             // The issued cancellation retires a pending tool locally. Any
             // unfinished result write is quarantined by channel correlation.
+            if self.source.steering.is_some() {
+                // An unresolved consumed steer cannot be retried or relabelled
+                // as an interrupt. Core already committed cancellation.
+                self.source.child.quarantine();
+                return Err(Blocker::Protocol);
+            }
             self.source.tool_write = None;
             let (lineage, bytes) = self
                 .source
