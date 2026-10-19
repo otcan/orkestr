@@ -1,5 +1,8 @@
 """One populated schema36 copy/cut/dormant-apply/rollback proof, no server starts."""
 import hashlib
+import json
+import os
+import shutil
 from pathlib import Path
 import sqlite3
 import sys
@@ -39,6 +42,8 @@ class Schema36Recovery(unittest.TestCase):
                      'steering_unknown', 'steering_acknowledged', 'worker_result_unknown', 'timer_grants'):
             self.assertGreater(expected['cut']['coverage'][name]['rows'], 0, name)
         self.assertEqual(expected['cut']['tables']['projects']['rows'], 1)
+        self.assertEqual(expected['cut']['tables']['auth_sessions']['rows'], 0)
+        self.assertEqual(expected['cut']['tables']['production_readiness']['rows'], 0)
         # A later native delta does not contaminate the already frozen cut.
         source.execute("INSERT INTO messages(id,owner_id,conversation_id,request_key,payload_digest,text,actor_kind,sequence) VALUES('later-message','owner-fake','conversation-fake','later-input',?,'Synthetic post-cut delta','owner',21)", ('b' * 64,))
         source.execute("UPDATE conversations SET sequence=21 WHERE id='conversation-fake'")
@@ -89,3 +94,17 @@ class Schema36Recovery(unittest.TestCase):
         self.assertEqual(from_snapshot(snapshot, migrations), expected)
         # Nothing invokes Store, a provider, a timer controller or an outbound worker.
         self.assertEqual(CORE, '006cca798e967fbd8deecd128933e46a2e0e94a8')
+        # Optional explicit private evidence, synthetic only. Never discover homes.
+        destination = os.environ.get('ORKESTR_V2_MIGRATION_EVIDENCE')
+        if destination:
+            evidence = Path(destination)
+            self.assertTrue(evidence.is_absolute() and not evidence.exists())
+            evidence.mkdir(mode=0o700)
+            shutil.copytree(snapshot, evidence / 'snapshot')
+            shutil.copytree(migrations, evidence / 'migrations')
+            (evidence / 'reconciliation.json').write_text(json.dumps(expected, sort_keys=True, indent=2) + '\n')
+            for folder in [evidence, evidence / 'snapshot', evidence / 'migrations']:
+                folder.chmod(0o700)
+                for file in folder.iterdir():
+                    if file.is_file():
+                        file.chmod(0o600)

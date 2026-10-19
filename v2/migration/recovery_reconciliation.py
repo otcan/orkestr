@@ -155,5 +155,7 @@ def from_snapshot(snapshot, migrations):
 def reconcile(expected, actual):
     """Exact private evidence comparison; changed state/payload/provenance refuses."""
     need(expected == actual, 'recovery reconciliation mismatch')
+    unsigned = {key: value for key, value in expected.items() if key != 'manifest_digest'}
+    need(expected.get('format') == FORMAT and expected.get('manifest_digest') == sha(canonical(unsigned)), 'invalid reconciliation manifest digest')
     return {'status': 'exact frozen-copy reconciliation', 'manifest_digest': expected['manifest_digest'],
             'activation': 'prohibited; dormant target only'}
