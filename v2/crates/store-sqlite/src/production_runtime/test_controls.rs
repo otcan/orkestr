@@ -3,6 +3,10 @@ use super::*;
 /// Exact transaction boundaries; no caller-supplied SQL or arbitrary callback.
 #[derive(Clone, Copy)]
 pub enum ProductionCheckpoint {
+    AutomaticReplyReserveBeforeCommit,
+    AutomaticReplyReserveAfterCommit,
+    AutomaticReplyConsumeBeforeCommit,
+    AutomaticReplyConsumeAfterCommit,
     AttachmentImportBeforeCommit,
     AttachmentImportAfterCommit,
     AttachmentRemoveBeforeCommit,
@@ -37,6 +41,10 @@ pub enum ProductionCheckpoint {
 impl ProductionCheckpoint {
     fn name(self) -> &'static str {
         match self {
+            Self::AutomaticReplyReserveBeforeCommit => "automatic-reply-reserve-before-commit",
+            Self::AutomaticReplyReserveAfterCommit => "automatic-reply-reserve-after-commit",
+            Self::AutomaticReplyConsumeBeforeCommit => "automatic-reply-consume-before-commit",
+            Self::AutomaticReplyConsumeAfterCommit => "automatic-reply-consume-after-commit",
             Self::AttachmentImportBeforeCommit => "attachment-import-before-commit",
             Self::AttachmentImportAfterCommit => "attachment-import-after-commit",
             Self::AttachmentRemoveBeforeCommit => "attachment-remove-before-commit",

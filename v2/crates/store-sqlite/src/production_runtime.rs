@@ -67,6 +67,11 @@ pub(crate) mod test_controls;
 mod tests;
 
 pub type ProductionSupervisorStore = Store;
+mod automatic_reply;
+pub use automatic_reply::{
+    AutomaticReplyConsumption, AutomaticReplyDelivery, AutomaticReplyProducer,
+    AutomaticReplyReservation, AutomaticReplyReservationResult,
+};
 #[derive(Clone)]
 pub(crate) struct Context {
     owner: OwnerId,
