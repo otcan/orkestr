@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { verifyIntake } from './headless-intake.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 const home = await mkdtemp(join(tmpdir(), 'orkestr-v2-browser-'));
@@ -18,6 +19,10 @@ const server = spawn(process.env.V2_SERVER, [], { env: {
 // Do not print server output, cookies, credentials or request headers.
 server.stderr.resume();
 let browser;
+let page;
+let stage = 'startup';
+const network = [];
+const errors = [];
 try {
   for (let attempt = 0; ; attempt++) {
     if (server.exitCode !== null) throw new Error('Synthetic server exited');
@@ -26,8 +31,15 @@ try {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-  const page = await browser.newPage();
-  const errors = [];
+  page = await browser.newPage();
+  page.on('response', response => {
+    const url = new URL(response.url());
+    if (url.origin === origin && url.pathname.startsWith('/api/v2/')) {
+      network.push({ route: url.pathname.replace(/[0-9a-f-]{36}/g, ':id'), status: response.status() });
+      if (network.length > 40) network.shift();
+    }
+  });
+  stage = 'login';
   let bearerSeen = false;
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (request.headers().authorization) bearerSeen = true; });
@@ -51,9 +63,26 @@ try {
   const session = cookies.find(cookie => cookie.name === 'orkestr_v2_session');
   assert.ok(session?.httpOnly);
   assert.equal(session.sameSite, 'Strict');
-  await page.type('#composer', 'Synthetic CI rendering message');
-  await clickText('Send');
-  await page.waitForFunction(() => document.body.textContent.includes('Input durably accepted'));
+  stage = 'durable-intake';
+  const text = 'Synthetic CI rendering message';
+  const conversation = await page.evaluate(async () =>
+    (await (await fetch('/api/v2/browser/session')).json()).global_conversation_id);
+  const path = `/api/v2/conversations/${conversation}/messages`;
+  // Register before Send; transient presentation text is not durable evidence.
+  const responsePending = page.waitForResponse(response =>
+    response.url() === `${origin}${path}` && response.request().method() === 'POST');
+  await page.type('#composer', text);
+  const [response] = await Promise.all([responsePending, clickText('Send')]);
+  assert.equal(response.status(), 202, 'Fresh input must be admitted');
+  const input = JSON.parse(response.request().postData());
+  const receipt = await response.json();
+  const snapshot = await page.evaluate(async conversation => {
+    const response = await fetch(`/api/v2/conversations/${conversation}?after=0&limit=100`);
+    if (response.status !== 200) throw new Error('Canonical history unavailable');
+    return response.json();
+  }, conversation);
+  verifyIntake({ input, receipt, snapshot, conversation, text });
+  stage = 'reload-render';
   await page.reload({ waitUntil: 'networkidle2' });
   await page.waitForSelector('#composer');
   await page.waitForFunction(() => document.querySelector('.messages')?.textContent.includes('Synthetic CI rendering message'));
@@ -81,6 +110,15 @@ try {
   assert.equal(bearerSeen, false, 'Browser sent machine authority');
   assert.deepEqual(errors, [], 'Browser rendering errors');
   console.log('PASS: CI headless rendering, cookie resume, durable intake, CSRF rejection, logout and fresh password re-login');
+} catch (error) {
+  // No headers, cookies, input values, raw response bodies or server logs.
+  const dom = await page?.evaluate(() => ({
+    composer: Boolean(document.querySelector('#composer')),
+    login: Boolean(document.querySelector('#username')),
+    renderedMessages: document.querySelectorAll('.messages li').length,
+  })).catch(() => null);
+  console.error(JSON.stringify({ stage, error: error.name, network, dom, pageErrorCount: errors.length }));
+  throw error;
 } finally {
   try {
     await browser?.close();
