@@ -44,11 +44,17 @@ class ServerTests(unittest.TestCase):
     def test_stop_after_prepared_before_actual_write_delivers_zero(self):
         self.owned_case(False, stop_before_write=True)
 
-    def owned_case(self, commit, stop_before_write=False):
+    def test_fixed_worker_entry_actual_owned_initialize(self):
+        self.owned_case(False, worker=True)
+
+    def owned_case(self, commit, stop_before_write=False, worker=False):
         with tempfile.TemporaryDirectory(prefix="provider-broker-synthetic-") as root:
             root = Path(root).resolve()
             for name in ["configuration.py", "protocol.py", "transport.py", "server.py", "reaping.py"]:
                 shutil.copy(Path(__file__).with_name(name), root / name)
+            if worker:
+                for name in ["worker_server.py", "offline_route.py", "offline_tool.py"]:
+                    shutil.copy(Path(__file__).with_name(name), root / name)
             for name in ["account", "workspace", "home", "tmp"]:
                 (root / name).mkdir()
             fake = root / "fake-codex"
@@ -56,11 +62,11 @@ class ServerTests(unittest.TestCase):
             fake.chmod(0o700)
             config = {"codex_executable": str(fake), "codex_home": str(root / "account"),
                       "workspace": str(root / "workspace"), "home": str(root / "home"), "temporary": str(root / "tmp")}
-            (root / "broker-private.json").write_text(json.dumps(config))
+            (root / ("worker-broker-private.json" if worker else "broker-private.json")).write_text(json.dumps(config))
             parent, inherited = socket.socketpair()
             bootstrap = "import os,sys; fd=int(sys.argv[1]); os.dup2(fd,3); os.close(fd) if fd != 3 else None; os.set_inheritable(3,True); os.execv(sys.executable,[sys.executable]+sys.argv[2:])"
-            child = subprocess.Popen(["/usr/bin/python3", "-c", bootstrap, str(inherited.fileno()), str(root / "server.py"),
-                "open-owned-session", "--protocol", PROTOCOL], stdin=subprocess.PIPE,
+            child = subprocess.Popen(["/usr/bin/python3", "-c", bootstrap, str(inherited.fileno()), str(root / ("worker_server.py" if worker else "server.py")),
+                "open-owned-worker-session" if worker else "open-owned-session", "--protocol", PROTOCOL], stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
                 pass_fds=(inherited.fileno(),))
             inherited.close()
@@ -80,7 +86,7 @@ class ServerTests(unittest.TestCase):
                 return json.loads(line)
             try:
                 child.stdin.write(encode({"id": 1, "method": "OpenOwnedSession", "params": {
-                    "protocol": PROTOCOL, "identity": IDENTITY}})); child.stdin.flush()
+                    "protocol": PROTOCOL, "identity": {**IDENTITY,"role":"worker"} if worker else IDENTITY}})); child.stdin.flush()
                 handle = receive()["result"]["owned_handle"]
                 parent.settimeout(5)
                 marker, ancillary, flags, _ = parent.recvmsg(64, socket.CMSG_SPACE(array.array("i").itemsize))
@@ -102,7 +108,7 @@ class ServerTests(unittest.TestCase):
                 child.stdin.write(encode({"id": 2, "method": "BrokerMetadata", "params": {"owned_handle": handle,
                     "frame": {"id": 1, "method": "initialize", "params": {
                     "clientInfo": {"name": "synthetic", "title": "Synthetic", "version": "1"},
-                    "capabilities": {"experimentalApi": False}}}}})); child.stdin.flush()
+                    "capabilities": {"experimentalApi": worker}}}}})); child.stdin.flush()
                 if stop_before_write:
                     self.assertEqual(receive()["method"], "BrokerPrepared")
                     child.terminate()
@@ -116,7 +122,7 @@ class ServerTests(unittest.TestCase):
                     return
                 prepared_write(2, {"id":1,"method":"initialize","params":{
                     "clientInfo":{"name":"synthetic","title":"Synthetic","version":"1"},
-                    "capabilities":{"experimentalApi":False}}})
+                    "capabilities":{"experimentalApi":worker}}})
                 response = receive()
                 self.assertEqual(response["result"]["frame"]["result"]["codexHome"], "broker-private")
                 self.assertNotIn(str(root / "account"), str(response))

@@ -14,6 +14,7 @@ impl WorkerSchedule {
             .take()
             .map_err(|_| "Worker control handoff unavailable")?
         {
+            let tool_cleanup = running.tools.take().and_then(tools::WorkerTools::cancel);
             let active = control
                 .dispatch(running.authority, running.pump)
                 .map_err(|_| "Worker native interruption requires reconciliation")?;
@@ -21,6 +22,7 @@ impl WorkerSchedule {
                 Phase::Stopping(Box::new(Stopping {
                     active,
                     _control: running.control,
+                    tool_cleanup,
                 })),
                 WorkerProgress::Running,
             ));
@@ -94,6 +96,9 @@ impl WorkerSchedule {
             // deadline commit/publication. No concurrent Worker pump can race it.
             return Ok((Phase::Running(running), WorkerProgress::Running));
         }
+        if let Some(tools) = &mut running.tools {
+            tools.poll(&mut running.pump).await?;
+        }
         if running.pump.pending().is_none() {
             running
                 .pump
@@ -133,6 +138,16 @@ impl WorkerSchedule {
 
     pub(super) async fn stopping(mut control: Box<Stopping>) -> (Phase, WorkerProgress) {
         use crate::control_dispatch::StopProgress;
+        // Do not persist native Stopped while an offline child still exists.
+        // Abort already requested its owned cleanup; HTTP Stop has committed.
+        if control
+            .tool_cleanup
+            .as_ref()
+            .is_some_and(|tool| !tool.is_reaped())
+        {
+            return (Phase::Stopping(control), WorkerProgress::Running);
+        }
+        control.tool_cleanup.take();
         match control.active.tick().await {
             StopProgress::Pending | StopProgress::InterruptAcknowledged => {
                 (Phase::Stopping(control), WorkerProgress::Running)

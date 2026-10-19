@@ -35,6 +35,7 @@ pub struct ConfiguredExecution {
     control: crate::control_registry::ControlRegistry,
     tasks: crate::worker_tasks::WorkerTaskAccess,
     children: crate::owned_children::ChildSet,
+    offline_python: Option<std::sync::Arc<crate::offline_python::OfflinePythonDispatcher>>,
     initial_grant: Option<BoundSessionMetadata>,
 }
 pub struct ExecutionTask {
@@ -122,6 +123,16 @@ impl ConfiguredExecution {
                 .map_err(|_| "execution supervisor authorization refused")?;
             (bound, None, directory)
         };
+        let offline_python = config
+            .worker
+            .as_ref()
+            .filter(|policy| policy.offline_python_enabled())
+            .map(|_| {
+                crate::offline_python::OfflinePythonDispatcher::opt_in(bound.clone(), token.clone())
+                    .map(std::sync::Arc::new)
+            })
+            .transpose()
+            .map_err(|_| "offline Worker sandbox is unavailable")?;
         let control = crate::control_registry::ControlRegistry::new(
             owner.clone(),
             config.conversation_id.clone(),
@@ -139,6 +150,7 @@ impl ConfiguredExecution {
             control,
             tasks,
             children: crate::owned_children::ChildSet::default(),
+            offline_python,
             initial_grant,
         })
     }

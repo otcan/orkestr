@@ -86,6 +86,7 @@ pub(super) struct Process {
     pub(super) workspace: std::path::PathBuf,
     pub(super) max_frame: usize,
     pub(super) broker_launcher: AtomicBool,
+    pub(super) offline_python: AtomicBool,
     pub(super) broker_lineage: Arc<()>,
 }
 
@@ -211,6 +212,7 @@ impl Process {
             workspace: directories.workspace().to_owned(),
             max_frame: bounds.max_frame_bytes,
             broker_launcher: AtomicBool::new(false),
+            offline_python: AtomicBool::new(false),
             broker_lineage: Arc::new(()),
         }))
     }

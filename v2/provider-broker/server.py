@@ -10,9 +10,12 @@ from transport import Pump
 from reaping import REAPED_EXIT
 
 
-def main(configuration_path=None):
-    resumed = sys.argv[1:] == ["resume-owned-session", "--protocol", PROTOCOL]
-    if not resumed and sys.argv[1:] != ["open-owned-session", "--protocol", PROTOCOL]:
+def main(configuration_path=None, *, offline_python=False):
+    if type(offline_python) is not bool:
+        return 2
+    resumed = not offline_python and sys.argv[1:] == ["resume-owned-session", "--protocol", PROTOCOL]
+    operation = "open-owned-worker-session" if offline_python else "open-owned-session"
+    if not resumed and sys.argv[1:] != [operation, "--protocol", PROTOCOL]:
         return 2
     # An installer may generate a tiny trusted wrapper invoking main(privatepath).
     # The public executable defaults to a sibling SERVER-PRIVATE configuration.
@@ -34,7 +37,7 @@ def main(configuration_path=None):
             if handoff.family != socket.AF_UNIX or handoff.type != socket.SOCK_STREAM:
                 raise Refused("invalid private handoff")
             handoff.getpeername()
-            pump = Pump(config, Channel(config.workspace, expected_native=expected_native), handoff=handoff)
+            pump = Pump(config, Channel(config.workspace, expected_native=expected_native, offline_python=offline_python), handoff=handoff)
             pump.run()
             if pump.parent_eof and pump.child is not None and pump.reaped:
                 return REAPED_EXIT
