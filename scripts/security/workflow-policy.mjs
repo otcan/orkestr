@@ -49,7 +49,10 @@ const publishDownloadInputs = new Set(["name", "path"]);
 const publishCommands = new Set(["docker", "echo", "set", "test", "[["]);
 const publishDockerCommands = new Set(["load", "login", "logout", "tag", "push"]);
 // GitHub-hosted runners only; the arm64 runner builds the Apple Silicon image.
-const githubHostedRunners = new Set(["ubuntu-latest", "ubuntu-24.04-arm"]);
+// macos-14 is admitted only as a static GitHub-hosted runner label for native
+// Apple-platform compilation. Workflows remain read-only and cannot access
+// signing credentials or self-hosted machines.
+const githubHostedRunners = new Set(["ubuntu-latest", "ubuntu-24.04-arm", "macos-14"]);
 const ownImageRef = /^"\$IMAGE:[A-Za-z0-9._{}:$-]+"$/;
 function imagetoolsArgsAllowed(args) {
   let sources = 0;

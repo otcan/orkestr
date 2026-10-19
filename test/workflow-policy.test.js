@@ -16,6 +16,10 @@ jobs:
       - run: echo fixture
 `;
 test("ordinary read-only immutable workflow passes", () => assert.deepEqual(validateWorkflow(fixture), { jobs: 1, actions: 1 }));
+test("static GitHub-hosted macOS runner is permitted for native build jobs", () => {
+  const macFixture = fixture.replace("runs-on: ubuntu-latest", "runs-on: macos-14");
+  assert.deepEqual(validateWorkflow(macFixture), { jobs: 1, actions: 1 });
+});
 for (const [name, before, after] of [
   ["mutable action", actionPins["actions/checkout"], "v6"],
   ["unreviewed immutable action", actionPins["actions/checkout"], "a".repeat(40)],
