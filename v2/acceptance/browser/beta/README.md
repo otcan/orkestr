@@ -39,6 +39,11 @@ acceptance event and canonical payload. The matching Accepted replies article
 must carry those identifiers and render the exact referenced text. A current
 Provider output panel, an unrelated result or an API completed phase alone
 cannot pass. This uses accepted-result provenance, not an invented chat message.
+The DOM contract is UI `5d26b99eb9b60e6b3dbc51a3cb45ed82bc912c13`:
+article `data-run-id`, `data-completion-event-id`, `data-acceptance-event-id`,
+`data-payload-id`, and a `pre[data-accepted-output="true"]`. Accepted history
+uses the owner-scoped canonical store after window retirement; it does not
+require a remaining live execution handle.
 
 `browserPostWindow` is a separate short one-input phase after the private
 operator's 915-second passive observer. It requires the exact closed predecessor,

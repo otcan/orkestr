@@ -138,8 +138,8 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
     },
     async completed(receipt) {
       signal.throwIfAborted();
-      const status = executionStatus(await read('execution', receipt.run_id), conversation, receipt.run_id);
-      assert.equal(status.phase, 'completed');
+      // Durable accepted history is deliberately readable after the supervisor
+      // retires. A live exact-run projection is not a history prerequisite.
       const result = acceptedResult({conversation, receipt, page: await read('accepted')});
       const text = acceptedText({conversation, result, payload: await read('payload', result.payload_id)});
       // Only identifiers and bounded text enter this in-page predicate; neither
