@@ -69,3 +69,23 @@ instance-specific effective configuration: process lifetime and enumeration are
 not coherent, and file/secret-store configuration was not read. No private grant
 was fabricated or service enabled. Canonical review and effective private grant
 configuration remain prerequisites to any deployment/live acceptance.
+
+## Independent-review subprocess blocker repair
+
+Canonical successor `491c8a8feaf954ae795380815d331fde96524ad0` repairs the
+reviewed aggregate-process and stdin-cleanup defect in predecessor 40ce. A new
+purpose-specific `bcrypt-worker.ts` owns a shared production pool of four children
+with zero queue. Saturation fails closed immediately. Failure/timeout kills the
+child; admission and pending result remain held until child `close`. Early stdin
+failure no longer clears the watchdog while leaving a live child unjoined.
+Synchronous spawn exceptions release admission because no child exists.
+
+Exact successor qualification: full canonical recursive build PASS and ten
+compiled tests PASS (five actual bcrypt/route regressions plus five injected
+worker-lifecycle cases). Injected cases cover saturation/reuse, stdin failure
+without premature settlement or admission release, timeout kill/join, process
+failure/oversize output, synchronous spawn failure and invalid bounds. Diff check
+PASS. No source errors required a subsequent fix. Original 40ce logs remain
+unchanged and do not confer successor credit. New raw logs, source/artifact
+hashes and commands have a separate private repair receipt. Canonical branch is
+local for independent review; no deployment, activation or credential access.
