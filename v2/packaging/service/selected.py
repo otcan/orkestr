@@ -10,6 +10,7 @@ import shutil
 import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
+from artifact_boundary import separate
 from beta_config import validate as validate_beta
 from closure import pin, require, trusted
 from manager_source import authority
@@ -70,6 +71,7 @@ def prepare(plan):
             'uid','gid','home','workspace','state_root','auth_file','bootstrap_file','ledger_directory',
             'endpoint_directory','owner_id','conversation_id','namespace','supervisor_key','origin','port'}
     require(set(plan)==fields and plan['format']=='orkestr-v2-selected-service-plan-v1','closed plan required')
+    separate(plan)  # Metadata only: MUST precede every artifact read/hash.
     pair=pair_bytes(plan);source=pair['source_commit'];gid=plan['gid'];uid=plan['uid']
     require(type(uid) is int and 0<uid<2**31 and type(gid) is int and 0<gid<2**31,'dropped identity required')
     output=Path(plan['output']);inner=output/'package'
