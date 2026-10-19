@@ -14,9 +14,19 @@ all other readiness/lease/Stop fences permit it. It does not release prior input
 Fresh Fast admission also refuses a held source; historical replay remains
 historical. No implicit resume/delete operation is implemented.
 
+The browser `GET /api/v2/conversations/{id}/held-inputs` uses the unbound
+`Store::held_owner_inputs_for_browser` projection. Its read transaction derives
+the owner from the current, unexpired browser session and checks conversation
+ownership. It remains readable after the original window/supervisor retires and
+after a fresh server process opens the same ledger. It creates no execution
+context, grant, window or hold-release authority. Cookie namespace and Host
+checks remain in the browser controller; Bearer credentials are refused there.
+
 `Store::held_owner_inputs_authenticated(credential, conversation, after_sequence,
-limit)` reads current browser auth, bound supervisor and owner scope in the same
-transaction as `HeldOwnerInputPage`. Limit is 1..100 and sequence is an exclusive
+limit)` remains the separate machine-context eligibility read. It requires both
+current session auth and the bound supervisor's existing generation/lease fences.
+Both paths share the immutable `HeldOwnerInputPage` projection.
+Limit is 1..100 and sequence is an exclusive
 inbox cursor, not a journal cursor. Rows identify exact message/source event,
 reason `stop_boundary`, boundary run/event and through-sequence. The page's
 `eligible_input_available` means unheld unconsumed input exists, not native
