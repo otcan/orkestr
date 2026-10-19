@@ -19,7 +19,7 @@ UID = GID = 65534
 
 
 class Fixture:
-    def __init__(self):
+    def __init__(self, *, stubborn=False):
         self.root = Path(tempfile.mkdtemp(prefix="selected-codex-test-", dir="/opt"))
         self.root.chmod(0o755)
         self.repository = self.root / "repository"
@@ -47,7 +47,8 @@ class Fixture:
         code = ('#include <signal.h>\n#include <unistd.h>\n'
                 'static volatile sig_atomic_t stopped; static void stop(int n){(void)n;stopped=1;}\n'
                 '__attribute__((used)) const char identity[]="ORKESTR_V2_BUILD_IDENTITY_V1|server|2.0.0-dev|' +
-                self.source + '|END";\nint main(void){signal(SIGINT,stop);signal(SIGTERM,stop);'
+                self.source + '|END";\nint main(void){signal(SIGINT,' +
+                ('SIG_IGN' if stubborn else 'stop') + ');signal(SIGTERM,stop);alarm(20);'
                 'while(!stopped)pause();return 0;}\n')
         subprocess.run(["cc", "-x", "c", "-", "-o", str(self.server)], input=code.encode(), check=True,
                        env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

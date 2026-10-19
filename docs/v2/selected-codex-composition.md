@@ -9,7 +9,8 @@ hashes, refreshes or substitutes the selected provider authentication file.
 ## Inventory and scope
 
 The integration base `02ae71dcb3585bced75eb1a5434e703fca1eefad` already contains
-the ordinary execution configuration, authenticated admission, acceptance,+control and recovery paths; the provider broker protocol; the sole native
+the ordinary execution configuration, authenticated admission, acceptance,
+control and recovery paths; the provider broker protocol; the sole native
 stdin writer handoff on FD3; and strict parent-only resume metadata on FD4.
 It does not contain the selected isolation profile or its trusted outer proxy.
 The ordinary unprivileged local installer intentionally does not inherit an
@@ -142,7 +143,9 @@ The trusted `Runtime.start()` / `stop_server()` API permits an explicitly
 controlled server replacement inside the same window, with the same Budget
 object, byte/attempt counts and original deadline. It never retries a failed
 run or releases held inputs. The CLI runs one server epoch and performs joined
-cleanup on termination. A retained root-owned `window.started` marker prevents
+cleanup on termination. Any forced, abnormal or incomplete cleanup permanently
+blocks another epoch, even if a later cleanup attempt succeeds. A retained
+root-owned `window.started` marker prevents
 another controller from silently resetting the aggregate. A new window is a
 new explicit operator action with fresh protected metadata; a crash leaves
 evidence for attended reconciliation, not automatic restart.
