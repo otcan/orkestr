@@ -4,6 +4,7 @@
 //! Coordinator owns canonical registration and browser guard mounting.
 mod authority;
 mod download;
+mod list;
 mod routes;
 pub(crate) use routes::router;
 #[cfg(test)]

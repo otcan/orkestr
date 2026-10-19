@@ -25,6 +25,11 @@ async fn call(
     .unwrap()
     .unwrap();
     let split = response.windows(4).position(|v| v == b"\r\n\r\n").unwrap();
+    let header_text = std::str::from_utf8(&response[..split])
+        .unwrap()
+        .to_ascii_lowercase();
+    assert!(header_text.contains("\r\ncache-control: no-store"));
+    assert!(header_text.contains("\r\nx-content-type-options: nosniff"));
     let status = std::str::from_utf8(&response[..split])
         .unwrap()
         .split_whitespace()
@@ -89,6 +94,35 @@ async fn http_persisted_bytes_replay_removal_and_revocation() {
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
     let app = crate::router(state.clone());
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let lists = format!("/conversations/{conversation}/attachment-manifests");
+    let (status, body) = call(&socket, &token, "GET", &lists, b"").await;
+    assert_eq!(status, 200);
+    let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        page["owner_id"],
+        serde_json::to_value(&request.target_manifest.owner_id).unwrap()
+    );
+    assert_eq!(
+        page["conversation_id"],
+        serde_json::to_value(&conversation).unwrap()
+    );
+    assert_eq!(page["manifests"], serde_json::json!([]));
+    assert!(page["next_after_id"].is_null());
+    for query in [
+        "limit=0",
+        "limit=17",
+        "limit=65536",
+        "after_id=invalid",
+        "after_id=00000000-0000-0000-0000-000000000000",
+        "unknown=value",
+    ] {
+        assert_eq!(
+            call(&socket, &token, "GET", &format!("{lists}?{query}"), b"")
+                .await
+                .0,
+            400
+        );
+    }
     let imports = format!("/conversations/{conversation}/attachment-imports");
     let mut corrupt = request.clone();
     corrupt.source.contents[0].bytes[0] ^= 1;
@@ -151,6 +185,30 @@ async fn http_persisted_bytes_replay_removal_and_revocation() {
         call(&socket, &token, "POST", &imports, &body).await,
         (200, receipt)
     );
+    let (status, body) = call(&socket, &token, "GET", &format!("{lists}?limit=1"), b"").await;
+    assert_eq!(status, 200);
+    let first: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(first["manifests"].as_array().unwrap().len(), 1);
+    let cursor = first["next_after_id"]
+        .as_str()
+        .expect("second manifest remains");
+    let (status, body) = call(
+        &socket,
+        &token,
+        "GET",
+        &format!("{lists}?limit=1&after_id={cursor}"),
+        b"",
+    )
+    .await;
+    assert_eq!(status, 200);
+    let second: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(second["manifests"].as_array().unwrap().len(), 1);
+    assert!(second["next_after_id"].is_null());
+    assert_ne!(
+        first["manifests"][0]["manifest_id"],
+        second["manifests"][0]["manifest_id"]
+    );
+    assert_eq!(second["after_id"], cursor);
     let manifest = request.target_manifest.manifest_id;
     let reference = request.target_manifest.references[0].reference_id;
     let download = format!("/conversations/{conversation}/attachments/{manifest}/{reference}");
@@ -204,6 +262,7 @@ async fn http_persisted_bytes_replay_removal_and_revocation() {
         .0,
         401
     );
+    assert_eq!(call(&socket, &token, "GET", &lists, b"").await.0, 401);
     server.abort();
     let _ = server.await;
     state.store.close().await;
