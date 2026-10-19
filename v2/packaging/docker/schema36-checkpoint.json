@@ -1,0 +1,221 @@
+{
+  "artifacts": {
+    "candidate": {
+      "compose_sha256": "f3292a2ca9a1682693488e768fea60feeabaab6cc1bfba79cd072d2c24cbadc0",
+      "image_id": "sha256:121cc62409c4e9ad7bf6bdf8e1002fecc4ef64701ae6a062d9a85d04501e83d6",
+      "manifest_sha256": "f75ddb7e69b5d30df11ac9195237c9ec75877b42991ad3e2926c1e791e035adc",
+      "project": "v2-install-1f0b726185f9",
+      "source": "1d9674b29ed547f4a0cf5530a261aba9450263a1"
+    },
+    "old-candidate": {
+      "compose_sha256": "0e083b334a27abd6a891763154620ee870219bc018efa1750790f248db4c0f71",
+      "image_id": "sha256:975bcbca945b24c5f4d7aea5c4e4c5e8d7415e63cdef3204c7493a594c55b4ae",
+      "manifest_sha256": "0d2d7d3a92de7b58aff0b86a7d7491b2860189dcf2e4ac7c1f291ee8e7212758",
+      "project": "v2-install-8cdb452cb990",
+      "source": "f322be29d98f1ea1afe92a32bdbb9f9ca406b5c5"
+    }
+  },
+  "base": {
+    "digest": "python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1",
+    "glibc": "2.41",
+    "image_id": "sha256:df18428df8a0f9189c84e7424d214b4c50092af1f9dca5842a00c41c39bda316",
+    "platform": "linux/amd64",
+    "required_glibc": "2.39"
+  },
+  "build": {
+    "corrected_rerun": "image assembly reused cached layers and exact same image IDs",
+    "flags": [
+      "--pull=false",
+      "--network=none"
+    ],
+    "old_image_role": "exact retained schema33 predecessor; never substituted for schema36",
+    "owned_images": 2,
+    "pull": "previously admitted immutable base only; local absence verified",
+    "rust_or_ui_rebuilt": false
+  },
+  "cleanup": {
+    "base_retained": true,
+    "ephemeral_loopback_port_free": true,
+    "owned_containers_networks_volumes_tags_remaining": 0,
+    "private_contexts_and_logs_retained": true
+  },
+  "compose": "2.40.3+ds1-0ubuntu1~24.04.1",
+  "docker_server": "29.1.3",
+  "format": "orkestr-v2-schema36-docker-checkpoint-v1",
+  "harness_commit": "ace7c05805c4307e6346302dcb4385deec3ee03d",
+  "initial_harness_failure": {
+    "cause": "Compose start does not support --wait on installed Compose; replaced with up --no-build --pull never --detach --wait",
+    "cleanup": "owned resources removed before corrected rerun",
+    "log_sha256": "1812186c39fc4fa10ef5524040de14f848fa995d94aabcb6386cb5fb043ec612"
+  },
+  "limitations": [
+    "Known Codex resume defect in1d remains separate failed release gate; successor qualification required.",
+    "No provider/executor activation, browser, production routing, soak, RC or deployment.",
+    "Upgrade fixture has message history only; no pending task/timer/native/budget authority rows populated.",
+    "Cross-version dormant import/owner rebinding, power-loss durability and untrusted executor OS/network containment unexecuted.",
+    "Trusted control-plane bridge allows outbound routing; host publication only127.0.0.1.",
+    "Only Linux x86_64/glibc2.41 tested; no macOS/Windows/ARM or other libc acceptance.",
+    "Temporary upgrade volumes including preserved original were removed only after verified rollback; original native acceptance backups remain retained."
+  ],
+  "private_result_sha256": "0ad1630fc41593254317d8c060e19050d57105f52f773b6551e82aa1775428a9",
+  "private_runner_sha256": "8e1c7db607ee7ed9b082cef88fbfdd816683810ba5f9dfb487743b989fccf8c5",
+  "qualification": "bounded Linux x86_64 development control-plane installation; not release",
+  "result": {
+    "candidate_acceptance": {
+      "all_ui_asset_hashes_verified": true,
+      "container_upgrade": {
+        "copy_first_original_unchanged": true,
+        "edge": "33->36",
+        "history_reopen": true,
+        "old_on_disposable36_refused_exit": 1,
+        "old_source": "f322be29d98f1ea1afe92a32bdbb9f9ca406b5c5",
+        "preflight_and_working_exact_sqlx_fk_integrity": true,
+        "preserved_original_database_inventory": {
+          "data/core.sqlite3": "ff504c92ec8e493b405c7067ed4676b59578220859a419c4dd64332be1002bef",
+          "data/core.sqlite3-shm": "93a89f5fa70831873e9600652de3123a7b3bb15da6821fbc3813fac052c45a01",
+          "data/core.sqlite3-wal": "e2914e04df7d51835c2fcd54883d5f102ac484ff1fae7da8c643a169a5ab5e44"
+        },
+        "refusal_database_inventory_unchanged": true,
+        "scope": "synthetic message history; no task/timer/provider authority populated",
+        "status": "passed",
+        "untouched33_rollback_history": true
+      },
+      "dormant_recovery": {
+        "activation": "activation refused",
+        "rollback": "empty target restored",
+        "scope": "same exact image offline recovery; no cross-version migration",
+        "snapshot_and_applied": {
+          "messages": 1,
+          "sha256": "61972b7ef63cbeef608dd4df477399ebe125e595e9ea6392218d83fedd996269"
+        },
+        "status": "passed"
+      },
+      "effective_restrictions": {
+        "bindings": {
+          "19822/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "39549"
+            }
+          ]
+        },
+        "cap_drop": [
+          "ALL"
+        ],
+        "mount_types": [
+          "volume"
+        ],
+        "read_only": true,
+        "security_opt": [
+          "no-new-privileges:true"
+        ],
+        "user": "10001:10001"
+      },
+      "health_latency": {
+        "coverage": {
+          "crash": "unexecuted",
+          "health": "observed",
+          "latency": "observed",
+          "restart": "unexecuted",
+          "revocation": "unexecuted"
+        },
+        "duration_ms": 428.753,
+        "health_recovery_transitions": 0,
+        "latency_ms": {
+          "max": 3.193,
+          "p50": 1.411,
+          "p95": 3.193
+        },
+        "latency_threshold_passed": null,
+        "longest_consecutive_failures": 0,
+        "max_latency_ms": null,
+        "samples": [
+          {
+            "elapsed_ms": 0.749,
+            "observed_at": "2026-10-19T01:28:52.032124+00:00",
+            "offset_ms": 19.148,
+            "ok": true,
+            "sample": 0
+          },
+          {
+            "elapsed_ms": 3.193,
+            "observed_at": "2026-10-19T01:28:52.133000+00:00",
+            "offset_ms": 120.003,
+            "ok": true,
+            "sample": 1
+          },
+          {
+            "elapsed_ms": 2.995,
+            "observed_at": "2026-10-19T01:28:52.236355+00:00",
+            "offset_ms": 223.36,
+            "ok": true,
+            "sample": 2
+          },
+          {
+            "elapsed_ms": 1.411,
+            "observed_at": "2026-10-19T01:28:52.339429+00:00",
+            "offset_ms": 326.447,
+            "ok": true,
+            "sample": 3
+          },
+          {
+            "elapsed_ms": 0.781,
+            "observed_at": "2026-10-19T01:28:52.440941+00:00",
+            "offset_ms": 427.964,
+            "ok": true,
+            "sample": 4
+          }
+        ],
+        "scope": "HTTP health latency only; no browser/provider/load or schema-compatibility claim",
+        "started_at": "2026-10-19T01:28:52.012971+00:00",
+        "successes": 5
+      },
+      "schema_versions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36
+      ],
+      "scope": "owned same-source trusted HTTP/control plane; no providers/executor activation",
+      "source_commit": "1d9674b29ed547f4a0cf5530a261aba9450263a1"
+    },
+    "image": "sha256:121cc62409c4e9ad7bf6bdf8e1002fecc4ef64701ae6a062d9a85d04501e83d6",
+    "scope": "owned container health/static HTTP only",
+    "status": "passed"
+  },
+  "server_sha256": "c998c4ca8197cbc2bdc4d84550d1a5df88f2bdd1e325ab278ccede5f5aa97a86",
+  "source_commit": "1d9674b29ed547f4a0cf5530a261aba9450263a1",
+  "web_inventory_sha256": "f34bdc77bef1461e93dabbafb1f62c83c014e310d1a69a325af85ccb9716a320"
+}

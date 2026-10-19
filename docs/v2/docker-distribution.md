@@ -18,7 +18,9 @@ three-test/clippy evidence and independent Verification review.
 The historical native checkpoint server at source `c8358b7f` predates this bind
 contract and **cannot** prove bridge publication works. A new admitted binary
 containing the Runtime change, with its exact source commit and SHA-256, is a
-required dependency before actual Docker acceptance.
+required dependency for that historical binary. Matching schema36 development
+artifacts have now passed the bounded Docker installation checkpoint below;
+the known Codex resume defect still prevents release qualification.
 
 ## Prepare without a Docker daemon
 
@@ -339,3 +341,39 @@ refused backup/apply/rollback while the server held its inherited lock, without
 creating the snapshot output. After stop, backup/apply/activation-refusal/rollback
 passed; all owned containers, networks, volumes, image and context were removed.
 Helper-to-helper contention and exec lifetime also passed real subprocess tests.
+
+### Matching schema36 installation checkpoint
+
+The matching `1d9674b29ed547f4a0cf5530a261aba9450263a1` development server/UI
+passed actual owned Docker startup, loopback HTTP health, every served UI asset
+hash, synthetic owner/message history and graceful SIGINT stop. Offline same-image
+backup/apply retained the exact database hash and message count; dormant
+activation refused and rollback returned an empty target.
+
+An exact retained `f322be29` schema33 image separately created synthetic history.
+With that server stopped, locked named-volume copies preserved the original
+DB/WAL/SHM inventory. The schema36 image migrated an independent preflight copy
+before a working copy; both passed exact canonical SQLx checksums, FK/integrity
+and history checks. Schema36 reopened with the same history. The old image
+refused a separate disposable schema36 copy with exit1 and unchanged database
+inventory. The untouched original schema33 volume then restarted under its own
+old image and recovered its history. These package-created homes had no pending
+tasks/timers/native/budget authorities; populated SQL fixture results remain
+separate evidence.
+
+Exact base/image/Compose/artifact/result hashes and effective privilege/mount/
+loopback binding inspection are recorded in
+[`schema36-checkpoint.json`](../../v2/packaging/docker/schema36-checkpoint.json).
+The daemon was Linux x86_64; the immutable Trixie Python base reported glibc2.41
+against required2.39. No Rust/UI rebuild or provider activation occurred. One
+initial harness invocation used unsupported `compose start --wait`; cleanup
+completed, the corrected supported `up --no-build --pull never --wait` invocation
+passed, and cached image assembly retained identical image IDs. All owned
+containers, networks, volumes and image tags were removed; the ephemeral
+loopback port was free. Private contexts/logs and the reusable admitted base were
+retained; no existing workload or daemon/firewall configuration changed.
+
+This closes the bounded matching Docker installation/runtime check only. The
+known Codex resume defect in this source remains a failed release gate awaiting
+a successor. It is not provider/browser/soak, RC, cross-version dormant-import,
+untrusted-executor containment or broader platform qualification.
