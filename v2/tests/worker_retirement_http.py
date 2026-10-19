@@ -124,6 +124,18 @@ def configured_without_launched_workers_needs_no_invented_proof(case):
     assert not [row for row in case.trace() if row["role"] == "worker"]
 
 
+
+def unaccepted_parent_shutdown_cannot_retire(case):
+    begin(case)
+    (case.workspace / "release-deep-1").touch()
+    ordinary.wait_for(lambda: case.phase("awaiting_acceptance"), "parent proposal missing")
+    case.clean_stop()
+    assert not case.snapshot()["accepted_retirements"]
+    assert not case.snapshot()["stopped_retirements"]
+    assert not any(row["kind"] == "stopped" for row in case.snapshot()["observations"])
+    refused(case)
+
+
 def setup_only_child_refuses_even_without_durable_worker_run(case):
     begin(case)
     (case.workspace / "hold-worker-setup").touch()
@@ -184,6 +196,7 @@ SCENARIOS = [accepted_and_stopped_workers_restart,
              parent_continuations_accumulate_original_proofs,
              stopped_parent_preserves_terminal_workers_and_held_input,
              configured_without_launched_workers_needs_no_invented_proof,
+             unaccepted_parent_shutdown_cannot_retire,
              setup_only_child_refuses_even_without_durable_worker_run,
              ack_only_worker_refuses_despite_physical_cleanup,
              lost_native_proof_refuses_after_worker_owner_acceptance,

@@ -207,6 +207,21 @@ impl ConfiguredExecution {
                 // Hold the same child while the owner decides. No old execution
                 // fence is spent and no subsequent inbox item is claimed early.
                 if *shutdown.borrow() {
+                    // Owner acceptance can commit after the phase sampled above
+                    // and before shutdown is observed. Keep the original pump
+                    // until a post-shutdown read decides whether it must retire.
+                    let current = self
+                        .store
+                        .execution_status(&self.owner, conversation)
+                        .await
+                        .map_err(|_| "execution shutdown status unavailable")?
+                        .ok_or("execution shutdown status missing")?;
+                    if current.run_id.as_ref() != Some(&run) {
+                        return Err("execution shutdown scope changed");
+                    }
+                    if current.phase == ExecutionPhase::Completed {
+                        continue;
+                    }
                     break;
                 }
                 tokio::select! {
