@@ -2,14 +2,14 @@
 
 This is the Installation build owner's invocation checklist, not build evidence.
 No build or service/provider start is performed by this document. Linux x86_64
-only; both artifacts use release profile and version `2.0.0-beta.1`.
+only; both artifacts use release profile and version `2.0.0-beta.2`.
 
 Before building, retain a private pre-execution receipt containing:
 
 - Coordinator's exact full clean source commit including final Runtime assembly,
   Core ports, UI source and reviewed selected-service/manager corrections. Record
   the Git tree, clean status, Cargo manifests/lock/toolchain hashes. Verify actual
-  workspace version is `2.0.0-beta.1`; do not relabel another version.
+  workspace version is `2.0.0-beta.2`; do not relabel another version.
 - Resolved Cargo wrapper, toolchain, Rust compiler, Cargo and wasm-bindgen paths,
   hashes and versions; installed wasm target. wasm-bindgen must be 0.2.129.
 - Exact commands below, literal resolved environment, cwd, target/output paths and
@@ -43,7 +43,7 @@ env -i PATH="$BUILD_PATH" HOME="$BUILD_HOME" \
   CARGO_HOME="$CARGO_HOME" RUSTUP_HOME="$RUSTUP_HOME" \
   CARGO_TARGET_DIR="$CARGO_TARGET_DIR" CARGO_BUILD_JOBS=4 \
   CARGO_NET_OFFLINE=true V2_CARGO="$V2_CARGO" \
-  ORKESTR_V2_BUILD_IDENTITY="ORKESTR_V2_BUILD_IDENTITY_V1|server|2.0.0-beta.1|$SOURCE|END" \
+  ORKESTR_V2_BUILD_IDENTITY="ORKESTR_V2_BUILD_IDENTITY_V1|server|2.0.0-beta.2|$SOURCE|END" \
   "$V2_CARGO" build --release --offline --locked -p orkestr-v2-server
 ```
 
@@ -55,7 +55,7 @@ env -i PATH="$BUILD_PATH" HOME="$BUILD_HOME" \
   CARGO_TARGET_DIR="$CARGO_TARGET_DIR" CARGO_BUILD_JOBS=4 \
   CARGO_NET_OFFLINE=true V2_CARGO="$V2_CARGO" \
   UI_BUNDLE_DIR="$PAIR_OUT/ui" UI_EXECUTION_CONTROLS=1 UI_SERVER_CANDIDATE="$SOURCE" \
-  ORKESTR_V2_BUILD_IDENTITY="ORKESTR_V2_BUILD_IDENTITY_V1|web|2.0.0-beta.1|$SOURCE|END" \
+  ORKESTR_V2_BUILD_IDENTITY="ORKESTR_V2_BUILD_IDENTITY_V1|web|2.0.0-beta.2|$SOURCE|END" \
   /bin/bash "$CHECKOUT/v2/apps/ui/scripts/bundle.sh"
 ```
 

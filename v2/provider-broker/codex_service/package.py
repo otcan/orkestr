@@ -6,10 +6,11 @@ import stat
 from codex_bounded.configuration import BROKER, ISOLATION, MODULES, HOSTS
 from codex_bounded.trust import digest, metadata, private, protected
 from .contract import identifier, require
+from .role_profiles import ROLE_FILES, bind as bind_roles
 
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",
                    "channel.py", "package.py", "ownership.py", "egress.py", "manager.py",
-                   "server_child.py", "broker.py", "profile.py", "entry.py")
+                   "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py")
 FILES = {"server", "native", "manager.py", "launcher.py", "service.json", "profile.json", "beta.json"}
 FILES |= {"broker/" + name for name in BROKER}
 FILES |= {"isolation/" + name for name in ISOLATION}
@@ -30,7 +31,7 @@ class Package:
                 and manifest["format"] == "orkestr-v2-codex-service-package-v1"
                 and type(manifest["source_commit"]) is str
                 and re.fullmatch(r"[0-9a-f]{40}", manifest["source_commit"]), "package_format")
-        require(type(manifest["files"]) is dict and set(manifest["files"]) == FILES,
+        require(type(manifest["files"]) is dict and set(manifest["files"]) in (FILES, FILES | ROLE_FILES),
                 "package_inventory")
         ui = manifest["ui"]
         require(type(ui) is dict and 0 < len(ui) <= 10000 and "index.html" in ui, "ui_inventory")
@@ -59,6 +60,7 @@ class Package:
         self.profile = metadata(self.root / "profile.json")
         self.beta = metadata(self.root / "beta.json")
         self._bind()
+        bind_roles(self)
 
     def _bind(self):
         value = self.runtime
@@ -85,7 +87,7 @@ class Package:
                 origin == f"http://127.0.0.1:{value['port']}") and len(origin) <= 512
                 and not any(ord(c) < 33 for c in origin) and not origin.endswith("/"), "trusted_origin")
         beta = self.beta
-        require(set(beta) == {"schema_version", "owner_id", "conversation_id", "manager_socket",
+        require(set(beta) - {"roles"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")

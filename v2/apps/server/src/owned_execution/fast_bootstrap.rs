@@ -56,14 +56,35 @@ impl ConfiguredExecution {
             &self.directory.join("tmp"),
         )
         .map_err(|_| "Fast child directories unavailable")?;
-        let mut setup = crate::fast_execution::PreparingFast::open_retained(
-            self.store.clone(),
-            grant,
-            &self.config.launcher,
-            &self.config.workspace,
-            directories,
-            self.children.retain(),
-        )
+        let mut setup = if let Some(context) = &self.window {
+            let store = self.store.clone();
+            let launcher = self.config.launcher.clone();
+            let workspace = self.config.workspace.clone();
+            let resources = self.children.retain();
+            let context = context.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::fast_execution::PreparingFast::open_window_retained(
+                    store,
+                    grant,
+                    &launcher,
+                    &workspace,
+                    directories,
+                    resources,
+                    move |child| context.bind(&child),
+                )
+            })
+            .await
+            .map_err(|_| "Fast window setup worker lost")?
+        } else {
+            crate::fast_execution::PreparingFast::open_retained(
+                self.store.clone(),
+                grant,
+                &self.config.launcher,
+                &self.config.workspace,
+                directories,
+                self.children.retain(),
+            )
+        }
         .map_err(|_| "Fast broker setup refused")?;
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {

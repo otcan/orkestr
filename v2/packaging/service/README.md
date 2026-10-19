@@ -9,7 +9,7 @@ is started by preparation. Linux x86_64 only; other targets are unqualified.
 
 Installation is the single native/WASM build owner after the coordinator freezes
 one clean integrated commit. The coordinator owns the workspace/lock version
-`2.0.0-beta.1`. Before building, record the full commit, clean tracked/untracked
+`2.0.0-beta.2`. Before building, record the full commit, clean tracked/untracked
 status, wrapper/toolchain/lock digests, complete explicit allowlisted build env,
 exact argv and isolated target paths. Do not relabel previous artifacts.
 
@@ -208,7 +208,7 @@ The exact clean paired Git source must descend from reviewed manager
 `0dbb4226a2fdd611bd75b22d4a17117c438a1484`. Source is exported from Git blobs;
 mutable checkout modules are never imported. Its authoritative `FILES` and
 `MODULES_SERVICE` define the closed inner package. Pair version must be
-`2.0.0-beta.1`, with matching embedded native/web identities and release profiles.
+`2.0.0-beta.1` or `2.0.0-beta.2`, with matching embedded native/web identities and release profiles.
 Synthetic ELF fixtures only exercise packaging; they are never launched.
 
 Output is final-path-bound `start-service`, `release.json`, and `package/`.
@@ -242,3 +242,25 @@ credential/artifact inode identities, and the complete UI tree without following
 symlinks. Credentials inside the UI tree are refused. This requires the same
 stable trusted namespace as preparation; subsequent hostile path replacement is
 not prevented by this preflight.
+
+### Beta.2 companion and Worker profiles
+
+An optional `roles` plan field enables the existing Fast companion and exactly
+four bounded Worker slots. Its shape is `{"fast":{"workspace":"/private/fast",
+"state_root":"/private/fast-state"},"workers":[...]}`, with four analogous
+Worker entries. Every path is operator supplied. Each generated launcher pins
+one literal role; HTTP inputs cannot select its executable, profile or account.
+All six native homes are disjoint; read-only workspaces may be shared. A native
+home can contain separately bound sessions from different conversations; this
+is role/slot separation, not per-conversation filesystem isolation. Worker
+launchers accept fresh sessions only, and slot reuse requires original cleanup.
+The one outer manager/window retains aggregate limits across these roles.
+
+An explicit `preserve_state: true` plan permits preparing a new immutable package
+against existing private application/native state and protected manager roots.
+Preparation leaves those contents untouched and does not stop the old service.
+The release operator must stop and join the old manager before activation and
+retain a rollback snapshot. The new manager's ordinary transactional ledger
+migration preserves historical windows, generations and consumed budgets;
+unfinished work remains subject to reconciliation. This flag supplies no proof
+of quiescence and grants no permission to replay an unfinished window.

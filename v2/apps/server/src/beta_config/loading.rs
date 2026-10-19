@@ -37,12 +37,33 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
     if format!("{:x}", Sha256::digest(launcher)) != config.launcher_sha256 {
         return Err(REFUSED);
     }
+    if let Some(roles) = &config.roles {
+        for role in roles.launches() {
+            let info = private_directory(&role.workspace, uid, gid)?;
+            if role.workspace.starts_with(home)
+                || home.starts_with(&role.workspace)
+                || (home_info.dev(), home_info.ino()) == (info.dev(), info.ino())
+            {
+                return Err(REFUSED);
+            }
+            let bytes = protected_bytes(&role.launcher, gid, true, 16 * 1024 * 1024)?;
+            if format!("{:x}", Sha256::digest(bytes)) != role.launcher_sha256 {
+                return Err(REFUSED);
+            }
+        }
+    }
     control_socket(&config.manager_socket, gid)?;
     // Recheck custody after the bounded reads; no stale pre-read path approval.
     private_directory(home, uid, gid)?;
     private_directory(&config.workspace, uid, gid)?;
     protected_chain(path, None)?;
     protected_chain(&config.launcher, None)?;
+    if let Some(roles) = &config.roles {
+        for role in roles.launches() {
+            private_directory(&role.workspace, uid, gid)?;
+            protected_chain(&role.launcher, None)?;
+        }
+    }
     Ok(config)
 }
 

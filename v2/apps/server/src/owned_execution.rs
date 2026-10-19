@@ -51,6 +51,7 @@ pub struct ConfiguredExecution {
     initial_grant: Option<BoundSessionMetadata>,
     workspace_grant: Option<orkestr_v2_store_sqlite::WorkspaceGrant>,
     window: Option<std::sync::Arc<crate::window_runtime::context::Context>>,
+    window_workers: Option<crate::worker_execution::WindowWorkers>,
 }
 pub struct ExecutionTask {
     shutdown: watch::Sender<bool>,
@@ -194,6 +195,7 @@ impl ConfiguredExecution {
             initial_grant,
             workspace_grant,
             window: None,
+            window_workers: None,
         })
     }
 

@@ -59,7 +59,9 @@ jobs:
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_native_state.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_exit_diagnostics.py -v
       - name: Protected synthetic manager package regressions
-        run: sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_package.py -v
+        run: |
+          sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_package.py -v
+          sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_roles.py -v
       - name: Mocked provider metadata probe safety
         env:
           PYTHONDONTWRITEBYTECODE: '1'

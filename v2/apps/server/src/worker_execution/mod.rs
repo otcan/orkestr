@@ -10,6 +10,7 @@ mod running;
 mod session;
 mod tasks;
 mod tools;
+mod window;
 pub use configuration::WorkerConfiguration;
 use orkestr_runtime::{
     containment::Authority,
@@ -19,6 +20,7 @@ use orkestr_v2_application::runtime::{Binding, RunAdmission, SessionRole};
 use orkestr_v2_contracts::{EventId, MessageId, RunId};
 use orkestr_v2_store_sqlite::{ConsumedProviderDispatch, Store, WorkerTaskClaim};
 pub use policy::WorkerPolicy;
+pub(crate) use window::WindowWorkers;
 // The standalone scheduler test imports this module without the factory that
 // retains this opaque proof bundle; the production factory consumes the export.
 #[cfg_attr(test, allow(unused_imports))]

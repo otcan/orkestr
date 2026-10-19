@@ -8,7 +8,7 @@ import re
 import subprocess
 
 FORMAT = 'orkestr-v2-paired-artifacts-v1'
-BETA_VERSION = '2.0.0-beta.1'
+BETA_VERSIONS = ('2.0.0-beta.1', '2.0.0-beta.2')
 
 
 def require(value, message):
@@ -18,8 +18,8 @@ def require(value, message):
 
 def validate_version(version):
     require(isinstance(version, str) and
-            (version == BETA_VERSION or re.fullmatch(r'2\.0\.0-rc\.[1-9][0-9]*', version)),
-            'explicit 2.0.0-rc.N or 2.0.0-beta.1 version required')
+            (version in BETA_VERSIONS or re.fullmatch(r'2\.0\.0-rc\.[1-9][0-9]*', version)),
+            'explicit 2.0.0-rc.N or explicit 2.0.0-beta.1/beta.2 version required')
 
 
 def sha(path):

@@ -58,6 +58,35 @@ class Selected(unittest.TestCase):
         self.assertFalse(receipt['credential_contents_read'])
         self.assertEqual((self.root/'release').stat().st_mode&0o777,0o750)
         self.assertIn('-I -S -B',(self.root/'release/package/launcher.py').read_text())
+    def test_beta2_embedded_version_must_match_pair(self):
+        r=self.root
+        for name in ('server','ui/app.wasm'):
+            p=r/name;p.write_bytes(p.read_bytes().replace(b'2.0.0-beta.1',b'2.0.0-beta.2'))
+        pair=json.loads((r/'pair').read_bytes());pair['version']='2.0.0-beta.2'
+        pair['server']['sha256']=sha(r/'server');pair['web']['files']=inventory(r/'ui')
+        (r/'pair').write_text(json.dumps(pair));self.plan['pair_sha256']=sha(r/'pair')
+        self.assertEqual(selected.pair_bytes(self.plan)['version'],'2.0.0-beta.2')
+        (r/'ui/app.wasm').write_bytes((r/'ui/app.wasm').read_bytes().replace(b'2.0.0-beta.2',b'2.0.0-beta.1'))
+        pair['web']['files']=inventory(r/'ui');(r/'pair').write_text(json.dumps(pair))
+        self.plan['pair_sha256']=sha(r/'pair')
+        with self.assertRaisesRegex(RuntimeError,'embedded identity mismatch'):
+            selected.pair_bytes(self.plan)
+    def test_existing_state_requires_opt_in_and_remains_untouched(self):
+        markers=[]
+        for name in ('workspace','state','ledger','ep'):
+            directory=self.root/name
+            if not directory.exists():
+                directory.mkdir();os.chown(directory,0,986)
+                directory.chmod(0o700 if name=='ledger' else 0o750)
+            marker=directory/'synthetic-existing-state';marker.write_bytes(b'preserve exact bytes')
+            markers.append(marker)
+        with self.assertRaisesRegex(RuntimeError,'fresh native state/workspace'):
+            selected.prepare(self.plan)
+        self.assertFalse((self.root/'release').exists())
+        self.plan['preserve_state']=True
+        selected.prepare(self.plan);self.validate()
+        self.assertTrue(json.loads((self.root/'release/release.json').read_bytes())['preserved_existing_state'])
+        for marker in markers:self.assertEqual(marker.read_bytes(),b'preserve exact bytes')
     def test_reserved_directories_retained(self):
         for name,mode in (('ledger',0o700),('ep',0o750)):
             p=self.root/name;p.mkdir();os.chown(p,0,986);p.chmod(mode)

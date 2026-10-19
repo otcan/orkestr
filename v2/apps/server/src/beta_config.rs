@@ -1,5 +1,6 @@
 //! Closed operator configuration; never accepted from HTTP.
 pub(crate) mod loading;
+pub(crate) mod roles;
 use orkestr_v2_contracts::{ConversationId, OwnerId};
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -16,6 +17,8 @@ pub(crate) struct BetaConfig {
     pub workspace: PathBuf,
     pub namespace: String,
     pub supervisor_key: String,
+    #[serde(default)]
+    pub roles: Option<roles::Roles>,
 }
 impl BetaConfig {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
@@ -40,6 +43,9 @@ impl BetaConfig {
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         {
             return Err("invalid beta configuration");
+        }
+        if let Some(roles) = &self.roles {
+            roles.validate(&self.launcher)?;
         }
         Ok(())
     }

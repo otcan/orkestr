@@ -37,6 +37,28 @@ impl std::fmt::Display for FastFailure {
     }
 }
 impl PreparingFast {
+    /// Same typed Fast grant, with the persistent manager's original-child gate.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_window_retained(
+        store: Store,
+        grant: BoundSessionMetadata,
+        launcher: &Path,
+        workspace: &Path,
+        directories: ChildDirectories,
+        resources: Box<dyn Send + 'static>,
+        bind: impl FnOnce(orkestr_runtime::containment::metadata::BrokerChildLocator) -> Result<(), ()>,
+    ) -> Result<Self, SetupFailure> {
+        let preparing = PreparingCodex::open_window_fast_retained(
+            store.clone(),
+            grant,
+            launcher,
+            workspace,
+            directories,
+            resources,
+            bind,
+        )?;
+        Ok(Self { store, preparing })
+    }
     /// Trusted configuration only. The opaque grant must name a distinct Fast
     /// binding; Deep and Worker grants are rejected before any process spawn.
     pub fn open_retained(
