@@ -9,7 +9,7 @@ import tempfile
 
 from closure import require
 
-MANAGER_BASE = '0dbb4226a2fdd611bd75b22d4a17117c438a1484'
+MANAGER_BASE = '4ae4982c320377b3f496a5d657d9f4b985ba2e9b'
 
 
 def git(repository, *arguments):
