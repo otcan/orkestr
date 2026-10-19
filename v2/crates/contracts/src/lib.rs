@@ -1,4 +1,6 @@
 //! Version 0 HTTP contracts. No storage or provider dependencies.
+mod beta;
+pub use beta::*;
 mod cancellation;
 mod held_inputs;
 pub use held_inputs::*;
