@@ -1,5 +1,7 @@
 """Closed no-tools interrupt observations; private JSON is not Core authority."""
+import datetime
 import json
+import re
 import uuid
 from protocol import exact, require
 from claude_stop_metadata import without_stop_metadata
@@ -18,6 +20,17 @@ def correlated(frame, native, message):
     require(frame.get('session_id') == native and frame.get('user_message_uuid') == message)
     if 'user_message_uuids' in frame:
         require(frame['user_message_uuids'] == [message])
+
+
+def notice_timestamp(value):
+    # The native interrupted-user marker carries Date.toISOString() display
+    # metadata. Its clock does not order events or grant lifecycle authority.
+    require(isinstance(value, str) and len(value) == 24 and re.fullmatch(
+        r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z', value))
+    try:
+        datetime.datetime.fromisoformat(value[:-1])
+    except ValueError:
+        require(False)
 
 
 class ClaudeControl:
@@ -104,8 +117,12 @@ class ClaudeControl:
             if key in frame:require(type(frame[key]) is bool)
         require(len(json.dumps(frame, allow_nan=False).encode()) <= 16384)
         if kind in ('user', 'assistant'):
+            optional = set()
+            if kind == 'user' and 'timestamp' in frame:
+                notice_timestamp(frame['timestamp'])
+                optional.add('timestamp')
             require(set(frame) <= {'type','session_id','uuid','user_message_uuid',
-                'user_message_uuids','parent_tool_use_id','message','isSynthetic','isReplay'})
+                'user_message_uuids','parent_tool_use_id','message','isSynthetic','isReplay'} | optional)
             require(frame.get('parent_tool_use_id') is None)
             canonical(frame.get('uuid'))
             message = frame.get('message')

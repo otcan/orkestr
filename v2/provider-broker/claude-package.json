@@ -11,7 +11,7 @@
     "claude_bootstrap.py": "5fda8c272078640696b7ec2069829454f348fc13db586b7ca6916d75df236244",
     "reaping.py": "4632be4e94cef92a0b8a2970bad0a55a1925d07d7926eb05a6af32ef512954d7",
     "claude_telemetry.py": "26899faad9c30de2e7da6dd4f71a1aa23b4cd6848980648d73af6f8f61be7e60",
-    "claude_control.py": "f4fa5182144692740c13e249f0b14c1bf7334f64c5bed8d677068ee012e3f963",
+    "claude_control.py": "870586046aefabab5eb211a9abe68f0b3e34cee80c96c7cd1398188d945cba6a",
     "claude_failure.py": "2bec86e9fe4373cfafbfe9e97e66c2932059f7fac1ead6c55cd8688825e2fe4d",
     "claude_system_telemetry.py": "b5ab49d155ef174a062362e002becc3255219ea9789dec1d55458f8820fde741",
     "claude_assistant_metadata.py": "d2bf04492072aa11348ffe342949998b304dbc6c1c5e331798a5d212277f97b8",
