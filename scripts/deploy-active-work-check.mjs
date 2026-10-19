@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isMainModule } from "./main-module.mjs";
 
 const activeStates = new Set(["working", "processing", "running", "waking"]);
 
@@ -132,10 +133,19 @@ function isActiveThread(thread = {}) {
 }
 
 function threadsFromPayload(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.threads)) return payload.threads;
-  if (Array.isArray(payload?.items)) return payload.items;
-  return [];
+  if (payload?.ok === false || payload?.error) {
+    throw new Error("invalid_threads_payload");
+  }
+  const threads = Array.isArray(payload) ? payload
+    : payload && Object.hasOwn(payload, "threads") ? payload.threads : payload?.items;
+  if (!Array.isArray(threads) || threads.some((thread) => {
+    if (!thread || typeof thread !== "object" || Array.isArray(thread)) return true;
+    const id = thread.id || thread.threadId;
+    return typeof id !== "string" || !id.trim();
+  })) {
+    throw new Error("invalid_threads_payload");
+  }
+  return threads;
 }
 
 export function summarizeActiveThreads(payload) {
@@ -269,7 +279,7 @@ async function main() {
   else console.log(JSON.stringify(report));
 }
 
-if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").href) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.stack || error.message : String(error));
     process.exitCode = 1;
