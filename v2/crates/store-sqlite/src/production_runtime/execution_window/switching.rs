@@ -3,6 +3,58 @@
 use super::*;
 
 impl Store {
+    /// Validate the current caller and intent before closing another thread.
+    /// A historical identical receipt is read evidence, never launch authority.
+    /// Admission still repeats all predicates under its write transaction.
+    pub async fn inspect_execution_window_request_authenticated(
+        &self,
+        credential: &str,
+        conversation: &ConversationId,
+        input: &ExecutionWindowRequest,
+    ) -> Result<Option<ExecutionWindowAdmission>> {
+        if !input.is_valid() {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        let owner = browser_owner(self, &mut tx, credential).await?;
+        crate::runtime::scope(&mut tx, &owner, conversation).await?;
+        let digest = crate::digest(&serde_json::to_string(input).map_err(db)?);
+        if let Some(row) = sqlx::query("SELECT semantic_digest,receipt_json FROM execution_window_inputs WHERE owner_id=? AND conversation_id=? AND request_key=?")
+            .bind(owner.to_string()).bind(conversation.to_string()).bind(&input.request_key)
+            .fetch_optional(&mut *tx).await.map_err(db)? {
+            if row.get::<String, _>("semantic_digest") != digest { return Err(RuntimeStoreError::Conflict); }
+            let mut receipt: ExecutionWindowAdmission = serde_json::from_str(row.get("receipt_json")).map_err(db)?;
+            receipt.duplicate = true;
+            tx.commit().await.map_err(db)?;
+            return Ok(Some(receipt));
+        }
+        admission::source_in(&mut tx, &owner, conversation, input).await?;
+        let latest = sqlx::query("SELECT * FROM execution_windows WHERE owner_id=? AND conversation_id=? ORDER BY generation DESC LIMIT 1")
+            .bind(owner.to_string()).bind(conversation.to_string())
+            .fetch_optional(&mut *tx).await.map_err(db)?;
+        let generation = latest
+            .as_ref()
+            .map(|row| row.get::<i64, _>("generation") as u64)
+            .unwrap_or(0);
+        if input.expected_generation != generation {
+            return Err(RuntimeStoreError::Conflict);
+        }
+        match (&latest, input.window_id) {
+            (None, None) if input.predecessor_window_id.is_none() => {}
+            (Some(row), None)
+                if row.get::<&str, _>("state") == "closed"
+                    && input.predecessor_window_id.map(|id| id.to_string())
+                        == Some(row.get("id")) => {}
+            (Some(row), Some(id))
+                if row.get::<&str, _>("state") == "active"
+                    && row.get::<String, _>("id") == id.to_string()
+                    && row.get::<i64, _>("work_deadline_ms") > now(&mut tx).await? => {}
+            _ => return Err(RuntimeStoreError::Fenced),
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(None)
+    }
+
     pub async fn execution_window_switch_ready_authenticated(
         &self,
         credential: &str,

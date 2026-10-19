@@ -93,16 +93,23 @@ impl ConfiguredExecution {
             .await
             .map_err(|_| "execution readiness commit refused")?;
         if let Some(context) = &self.window {
+            self.wait_companion_setup(shutdown, heartbeat, true).await?;
             context
-                .activate(
+                .activate_roles(
                     &self.store,
                     &self.token,
                     crate::execution_registry::ExecutionScope {
                         store: self.store.clone(),
                         control: Some(self.control.clone()),
-                        tasks: None,
+                        tasks: self.config.worker.as_ref().map(|_| self.tasks.clone()),
                     },
+                    self.companion.as_ref().map(|companion| companion.scope()),
                 )
+                .await?;
+            if let Some(companion) = &self.companion {
+                companion.activate();
+            }
+            self.wait_companion_setup(shutdown, heartbeat, false)
                 .await?;
         }
         Ok(Some(ready))

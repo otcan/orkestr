@@ -47,6 +47,15 @@ impl LiveFast {
         &self.provider.run.run_id
     }
 
+    pub(crate) fn check_broker_liveness(&self) -> Result<(), &'static str> {
+        self.owned
+            .as_ref()
+            .ok_or("Fast transport is missing")?
+            .pump
+            .check_broker_liveness()
+            .map_err(|_| "Fast broker exited")
+    }
+
     pub fn pending(&self) -> Option<&ProviderEventInput> {
         self.owned.as_ref().and_then(|owned| owned.pump.pending())
     }
@@ -195,6 +204,36 @@ impl LiveFast {
         credential: &str,
     ) -> Result<RetiringBroker, FastFailure> {
         self.accepted(credential).await?;
+        let owned = self
+            .owned
+            .take()
+            .ok_or(FastFailure::Store(RuntimeStoreError::Fenced))?;
+        let retiring = owned.pump.retire_broker().map_err(FastFailure::Transport)?;
+        drop(owned.authority);
+        Ok(retiring)
+    }
+
+    /// Window expiry removes transport authority while a genuine proposal stays
+    /// pending. This supplies only original-child cleanup, never acceptance.
+    pub(crate) async fn retire_for_owner_decision(
+        mut self,
+        credential: &str,
+    ) -> Result<RetiringBroker, FastFailure> {
+        let run = &self.provider.run;
+        let current = self
+            .store
+            .execution_run_status(credential, &run.owner_id, &run.conversation_id, &run.run_id)
+            .await
+            .map_err(FastFailure::Store)?
+            .ok_or(FastFailure::Store(RuntimeStoreError::Fenced))?;
+        if current.run_id.as_ref() != Some(&run.run_id)
+            || !matches!(
+                current.phase,
+                ExecutionPhase::AwaitingAcceptance | ExecutionPhase::Completed
+            )
+        {
+            return Err(FastFailure::Store(RuntimeStoreError::Fenced));
+        }
         let owned = self
             .owned
             .take()

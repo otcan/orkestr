@@ -35,10 +35,17 @@ impl ConfiguredExecution {
                 .await
                 .map_err(|_| "Fast bindings unavailable")?
                 .fast;
-            self.store
-                .authorize_session_metadata(&binding)
-                .await
-                .map_err(|_| "Fast setup authority refused")?
+            if self.window.is_some() {
+                self.store
+                    .authorize_window_fast_metadata(&self.token, &binding)
+                    .await
+                    .map_err(|_| "Fast window setup authority refused")?
+            } else {
+                self.store
+                    .authorize_session_metadata(&binding)
+                    .await
+                    .map_err(|_| "Fast setup authority refused")?
+            }
         };
         loop {
             let Some(ready) = self
@@ -47,6 +54,11 @@ impl ConfiguredExecution {
             else {
                 return Ok(());
             };
+            if let Some(companion) = &self.companion {
+                companion.ready();
+            }
+            self.wait_window_active(&mut shutdown, &mut heartbeat)
+                .await?;
             let Some(input) = self.fast_input(&mut shutdown, &mut heartbeat).await? else {
                 return Ok(());
             };
@@ -56,6 +68,9 @@ impl ConfiguredExecution {
                     .await
                     .map_err(|_| "Fast dispatch refused; reconciliation required")?,
             )?;
+            if let Some(companion) = &self.companion {
+                companion.started();
+            }
             match self.drive_fast(live, &mut shutdown, &mut heartbeat).await? {
                 FastExit::Shutdown => return Ok(()),
                 FastExit::Stopped { run, proof } => {
@@ -99,6 +114,10 @@ impl ConfiguredExecution {
         {
             return Err("Fast stopped retirement scope mismatch");
         }
+        if let Some(companion) = &self.companion {
+            companion.retire();
+            return companion.retain(proof);
+        }
         if !self.children.wait_empty(Duration::from_secs(2)).await {
             return Err("Fast stopped retirement still owns child resources");
         }
@@ -120,11 +139,22 @@ impl ConfiguredExecution {
         shutdown: &mut watch::Receiver<bool>,
         heartbeat: &mut Instant,
     ) -> Result<Option<FastSource>, &'static str> {
+        self.fast_source_checked(shutdown, heartbeat, || Ok(()))
+            .await
+    }
+
+    async fn fast_source_checked(
+        &self,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+        mut check: impl FnMut() -> Result<(), &'static str>,
+    ) -> Result<Option<FastSource>, &'static str> {
         loop {
-            if *shutdown.borrow() {
+            if *shutdown.borrow() || self.fast_window_due() {
                 return Ok(None);
             }
             self.maintain(heartbeat).await?;
+            check()?;
             // Zero is intentional: the durable Fast run ledger deduplicates
             // every admitted source, including unknown/failed attempts. A
             // volatile cursor must never skip a held input after release.
@@ -148,7 +178,17 @@ impl ConfiguredExecution {
         shutdown: &mut watch::Receiver<bool>,
         heartbeat: &mut Instant,
     ) -> Result<Option<FastAdmissionInput>, &'static str> {
-        let Some(source) = self.fast_source(shutdown, heartbeat).await? else {
+        self.fast_input_checked(shutdown, heartbeat, || Ok(()))
+            .await
+    }
+
+    pub(super) async fn fast_input_checked(
+        &self,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+        check: impl FnMut() -> Result<(), &'static str>,
+    ) -> Result<Option<FastAdmissionInput>, &'static str> {
+        let Some(source) = self.fast_source_checked(shutdown, heartbeat, check).await? else {
             return Ok(None);
         };
         let binding = self

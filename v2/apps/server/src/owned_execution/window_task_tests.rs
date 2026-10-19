@@ -9,6 +9,7 @@ fn task(
         task: Some(tokio::spawn(future)),
         children: crate::owned_children::ChildSet::default(),
         context: None,
+        companion: None,
     }
 }
 

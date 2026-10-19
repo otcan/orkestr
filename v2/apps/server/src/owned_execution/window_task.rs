@@ -8,6 +8,7 @@ pub(crate) struct WindowTask {
     task: Option<JoinHandle<Result<(), &'static str>>>,
     children: crate::owned_children::ChildSet,
     context: Option<std::sync::Arc<crate::window_runtime::context::Context>>,
+    companion: Option<std::sync::Arc<window_roles::Companion>>,
 }
 
 impl ConfiguredExecution {
@@ -16,9 +17,8 @@ impl ConfiguredExecution {
     pub(crate) fn start_window(self) -> Result<WindowTask, &'static str> {
         if self.config.provider != config::Provider::Codex
             || self.config.role != config::ExecutionRole::Deep
-            || self.config.worker.is_some()
         {
-            return Err("window execution requires configured Codex Deep only");
+            return Err("window execution requires configured Codex Deep primary");
         }
         let (shutdown, receiver) = watch::channel(false);
         let children = self.children.clone();
@@ -26,9 +26,14 @@ impl ConfiguredExecution {
         let context = retained_context.clone();
         let store = self.store.clone();
         let token = self.token.clone();
+        let companion = self.companion.clone();
+        let retained_companion = companion.clone();
         let task = tokio::spawn(async move {
-            let result = self.run(receiver).await;
+            let result = self.run_window_roles(receiver).await;
             if let Err(reason) = &result {
+                if let Some(companion) = &companion {
+                    companion.fail();
+                }
                 // Only static local diagnostics; never provider text, token or paths.
                 eprintln!("owned window execution paused: {reason}");
                 if let Some(context) = context {
@@ -42,11 +47,19 @@ impl ConfiguredExecution {
             task: Some(task),
             children,
             context: retained_context,
+            companion: retained_companion,
         })
     }
 }
 
 impl WindowTask {
+    /// Startup observation only; durable canonical terminal checks and original
+    /// tree proofs are independently required before switching conversations.
+    pub(crate) fn roles_ready_to_close(&self) -> bool {
+        self.companion
+            .as_ref()
+            .is_none_or(|companion| companion.ready_to_close())
+    }
     pub(crate) fn cleanup_deadline(&self) -> tokio::time::Instant {
         self.context
             .as_ref()

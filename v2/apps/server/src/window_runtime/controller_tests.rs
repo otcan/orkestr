@@ -109,3 +109,106 @@ async fn revoked_or_foreign_selection_cannot_replace_the_current_controller() {
     drop(store);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn historical_admission_replay_never_selects_or_closes_another_conversation() {
+    use orkestr_v2_application::IntakeStore;
+    use orkestr_v2_contracts::{ConversationInput, MessageInput};
+    let root = std::env::temp_dir().join(format!("controller-replay-{}", Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let store = Store::open(&root.join("core.sqlite3")).await.unwrap();
+    let original = store.setup("owner", "synthetic-hash").await.unwrap();
+    let owner = store.credentials("owner").await.unwrap().unwrap().0;
+    store
+        .save_session("synthetic-browser", &owner)
+        .await
+        .unwrap();
+    let (selected, _) = store
+        .create_conversation_authenticated(
+            "synthetic-browser",
+            &ConversationInput {
+                client_request_id: "other".into(),
+                name: "Another native thread".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let intake = store
+        .admit(
+            &owner,
+            &original,
+            &MessageInput {
+                client_message_id: "original-input".into(),
+                text: "synthetic message".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .receipt;
+    let input = ExecutionWindowRequest {
+        request_key: "original-window".into(),
+        input_message_id: intake.message_id,
+        input_event_id: intake.event_id,
+        input_request_key: "original-input".into(),
+        expected_generation: 0,
+        window_id: None,
+        predecessor_window_id: None,
+    };
+    let original_receipt = store
+        .admit_execution_window_authenticated("synthetic-browser", &original, &input)
+        .await
+        .unwrap();
+    let mut config = config();
+    config.owner_id = owner.clone();
+    config.conversation_id = selected.conversation_id.clone();
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+    let parent = stat
+        .rsplit_once(')')
+        .unwrap()
+        .1
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap();
+    let manager = ManagerClient::new(
+        config.manager_socket.clone(),
+        owner.clone(),
+        selected.conversation_id.clone(),
+        parent,
+    )
+    .unwrap();
+    let controller = Controller::new(
+        config.clone(),
+        root.clone(),
+        store.clone(),
+        Arc::new(InitialAuthority::new(&config).unwrap()),
+        Handles::new(owner.clone(), selected.conversation_id.clone()).unwrap(),
+        manager,
+    );
+    let replay = controller
+        .process("synthetic-browser", &owner, &original, &input)
+        .await
+        .unwrap();
+    assert!(replay.duplicate);
+    assert_eq!(replay.status.window_id, original_receipt.status.window_id);
+    assert_eq!(
+        controller.current().unwrap().configured_scope().1,
+        &selected.conversation_id
+    );
+    let mut conflict = input.clone();
+    conflict.input_request_key = "different-source".into();
+    assert!(controller
+        .process("synthetic-browser", &owner, &original, &conflict)
+        .await
+        .is_err());
+    assert_eq!(
+        controller.current().unwrap().configured_scope().1,
+        &selected.conversation_id
+    );
+    assert!(controller.snapshot(&owner, &original).is_none());
+    controller.shutdown().await.unwrap();
+    drop(controller);
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -222,6 +222,7 @@ impl ConfiguredExecution {
                 Self::poll_worker(&mut worker).await;
                 drop(schedule);
                 if self.window.as_ref().is_some_and(|window| window.work_due()) {
+                    self.drain_worker(&mut worker, heartbeat).await?;
                     let retiring = pump
                         .retire_broker()
                         .map_err(|_| "window proposal cleanup refused")?;

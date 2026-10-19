@@ -19,6 +19,7 @@ mod retirement;
 mod session;
 mod steering;
 mod stopping;
+mod window_roles;
 mod window_task;
 mod worker;
 mod worker_continuation;
@@ -52,6 +53,8 @@ pub struct ConfiguredExecution {
     workspace_grant: Option<orkestr_v2_store_sqlite::WorkspaceGrant>,
     window: Option<std::sync::Arc<crate::window_runtime::context::Context>>,
     window_workers: Option<crate::worker_execution::WindowWorkers>,
+    companion: Option<std::sync::Arc<window_roles::Companion>>,
+    fast_factory: Option<Box<ConfiguredExecution>>,
 }
 pub struct ExecutionTask {
     shutdown: watch::Sender<bool>,
@@ -196,6 +199,8 @@ impl ConfiguredExecution {
             workspace_grant,
             window: None,
             window_workers: None,
+            companion: None,
+            fast_factory: None,
         })
     }
 
