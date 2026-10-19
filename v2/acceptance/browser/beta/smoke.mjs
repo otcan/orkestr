@@ -32,14 +32,14 @@ export async function browserSmoke({page, context, origin, sourceSha, credential
     });
     let conversation;
     await step('login', async () => {
-      const result = await loginOwner({page, context, origin, credentials, bootstrap, expectedConversation});
+      const result = await loginOwner({page, context, origin, credentials, bootstrap, expectedConversation, signal: active, verifyLease});
       conversation = result.conversation; return result.evidence;
     });
     for (let sample = 1; sample <= 3; sample++) {
       await step('ordinary_reload', async () => ({sample, ...await reloadOwner({page, conversation, origin})}));
     }
-    await step('drafts', () => draftRemount({page, origin}));
-    await step('cpu_ram', () => cpuAndRam({page, origin}));
+    await step('drafts', () => draftRemount({page, origin, signal: active, verifyLease}));
+    await step('cpu_ram', () => cpuAndRam({page, origin, signal: active, verifyLease}));
     report.network = monitor.snapshot();
   })().finally(() => { settled = true; });
   work.catch(() => {});

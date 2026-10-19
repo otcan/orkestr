@@ -7,7 +7,14 @@ const ACTIONS = new Set(['First-time setup', 'Continue', 'Send', 'Stop',
 
 // The enabled-label wait precedes the original one-shot action. It does not
 // retry submissions, authenticate a caller or grant a desktop capability.
-export async function clickReady(page, label, expectedOrigin, section) {
+export async function actionBoundary(action) {
+  action?.signal?.throwIfAborted();
+  if (action?.verify && await action.verify() !== true) throw failure('revoked');
+  action?.signal?.throwIfAborted();
+}
+
+export async function clickReady(page, label, expectedOrigin, section, action) {
+  action?.signal?.throwIfAborted();
   if (!ACTIONS.has(label)) throw failure('invalid_action');
   if (expectedOrigin !== undefined && new URL(expectedOrigin).origin !== expectedOrigin) throw failure('invalid_action');
   if (section !== undefined && !['Execution and resources', 'Steer running work', 'Conversation', 'Work window'].includes(section)) throw failure('invalid_action');
@@ -17,6 +24,7 @@ export async function clickReady(page, label, expectedOrigin, section) {
     return [...(root?.querySelectorAll('button') ?? [])]
       .some(button => button.textContent.trim() === expected && !button.disabled);
   }, {timeout: 10_000}, label, expectedOrigin, section);
+  await actionBoundary(action);
   await page.evaluate((expected, origin, section) => {
     if (origin !== undefined && location.origin !== origin) throw Error('unexpected_origin');
     const root = section === undefined ? document : document.querySelector(`section[aria-label="${section}"]`);
@@ -33,11 +41,12 @@ export async function composerReady(page) {
     requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
-export async function setDraft(page, text, expectedOrigin) {
+export async function setDraft(page, text, expectedOrigin, action) {
   if (typeof text !== 'string' || new TextEncoder().encode(text).length > 4096) {
     throw failure('invalid_action');
   }
   await composerReady(page);
+  await actionBoundary(action);
   await page.$eval('#composer', (node, {value, origin}) => {
     if (origin !== undefined && location.origin !== origin) throw Error('unexpected_origin');
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(node, value);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {setTimeout as delay} from 'node:timers/promises';
-import {clickReady, setDraft} from './readiness.mjs';
+import {actionBoundary, clickReady, setDraft} from './readiness.mjs';
 import {decodeExact, assertWindowAdmission} from './window-evidence.mjs';
 import {executionStatus, assertProgress, assertStopRequested, assertStopped,
   assertAccepted, assertSteered} from './execution-evidence.mjs';
@@ -11,6 +11,7 @@ import {failure} from './diagnostics.mjs';
 export function executionUi({page, origin, conversation, read, capture, signal, verifyLease}) {
   assert.equal(new URL(origin).origin, origin);
   let sends = 0, stops = 0, accepts = 0, steers = 0, steerChecks = 0;
+  const action = {signal, verify: () => verifyLease(signal)};
   const guard = async () => {
     signal.throwIfAborted();
     if (await verifyLease(signal) !== true) throw failure('revoked');
@@ -44,14 +45,14 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
       assert(typeof text === 'string' && text.trim() && Buffer.byteLength(text) <= 4096);
       const previous = await read('window');
       assert(!previous || ['active', 'closed'].includes(previous.state), 'window_not_ready_for_input');
-      await setDraft(page, text, origin); signal.throwIfAborted();
-      await clickReady(page, 'Send', origin, 'Conversation');
+      await setDraft(page, text, origin, action); signal.throwIfAborted();
+      await clickReady(page, 'Send', origin, 'Conversation', action);
       const intake = await control('messages'); assert.equal(intake.request.text, text);
       assert.equal(intake.receipt.status, 'accepted');
       // The focused beta deliberately requires a distinct owner action after
       // saving input. The ordinary intake receipt must not start execution.
       signal.throwIfAborted();
-      await clickReady(page, previous?.state === 'active' ? 'Add to current work' : 'Start work', origin, 'Work window');
+      await clickReady(page, previous?.state === 'active' ? 'Add to current work' : 'Start work', origin, 'Work window', action);
       const window = await control('window');
       const proof = assertWindowAdmission({conversation, intakeRequest: intake.request,
         intakeReceipt: intake.receipt, request: window.request, receipt: window.receipt, previous});
@@ -100,12 +101,13 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
       assert.equal(before.phase, 'running');
       steers++;
       assert(typeof text === 'string' && text.trim() && Buffer.byteLength(text) <= 1024);
+      await actionBoundary(action);
       await page.$eval('section[aria-label="Steer running work"] textarea', (node, {text, origin}) => {
         if (location.origin !== origin) throw Error('unexpected_origin');
         Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(node, text);
         node.dispatchEvent(new Event('input', {bubbles: true}));
       }, {text, origin});
-      signal.throwIfAborted(); await clickReady(page, 'Steer', origin, 'Steer running work');
+      signal.throwIfAborted(); await clickReady(page, 'Steer', origin, 'Steer running work', action);
       const delivery = await control('steer'); assert.equal(delivery.request.text, text);
       const status = await wait(() => read('steering', delivery.receipt.request_key), value => {
         if (['delivery_unknown', 'rejected', 'queued'].includes(value.state)) throw failure('not_completed');
@@ -120,7 +122,7 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
         if (value.phase !== 'running') throw failure('not_completed');
         return value.capabilities.stop;
       });
-      await clickReady(page, 'Stop', origin, 'Execution and resources');
+      await clickReady(page, 'Stop', origin, 'Execution and resources', action);
       const controlValue = await control('stop');
       assertStopRequested({conversation, before, ...controlValue});
       const after = await phase(['cancelled'], run, 30000);
@@ -129,7 +131,7 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
     async accept(run) {
       await guard(); if (++accepts > 2) throw failure('request_budget');
       const proposal = await phase(['awaiting_acceptance'], run);
-      await clickReady(page, 'Accept completion', origin, 'Execution and resources');
+      await clickReady(page, 'Accept completion', origin, 'Execution and resources', action);
       const controlValue = await control('accept'), after = await phase(['completed'], run);
       return {...controlValue, after, proof: assertAccepted({conversation, proposal, ...controlValue, after})};
     },

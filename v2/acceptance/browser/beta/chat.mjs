@@ -38,7 +38,7 @@ export async function browserChat({page, context, origin, sourceSha, credentials
     });
     let conversation;
     await step('login', async () => {
-      const login = await loginOwner({page, context, origin, credentials, bootstrap, expectedConversation});
+      const login = await loginOwner({page, context, origin, credentials, bootstrap, expectedConversation, signal: active, verifyLease});
       conversation = login.conversation; return login.evidence;
     });
     capture = captureControls(page, origin, conversation);

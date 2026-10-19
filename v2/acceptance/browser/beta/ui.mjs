@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
-import {clickReady, composerReady, draft, setDraft, timedNavigation} from './readiness.mjs';
+import {actionBoundary, clickReady, composerReady, draft, setDraft, timedNavigation} from './readiness.mjs';
 import {ownerReads} from './owner-reads.mjs';
 import {assertBetaDiscovery} from './window-evidence.mjs';
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const DRAFT = 'Synthetic beta draft retained across navigation and reconnect.';
 
-async function fill(page, selector, value, origin) {
+async function fill(page, selector, value, origin, action) {
   await page.waitForSelector(selector, {visible: true, timeout: 10_000});
+  await actionBoundary(action);
   await page.$eval(selector, (node, {text, origin}) => {
     if (location.origin !== origin) throw Error('unexpected_origin');
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(node, text);
@@ -27,7 +28,8 @@ async function session(page, origin) {
   }, origin);
 }
 
-export async function loginOwner({page, context, origin, credentials, bootstrap, expectedConversation}) {
+export async function loginOwner({page, context, origin, credentials, bootstrap, expectedConversation, signal, verifyLease}) {
+  const action = {signal, verify: verifyLease};
   assert.equal(new URL(origin).origin, origin, 'exact_origin_required');
   assert(typeof credentials?.username === 'string' && credentials.username.length <= 128);
   assert(typeof credentials.password === 'string' && credentials.password.length <= 1024);
@@ -37,12 +39,12 @@ export async function loginOwner({page, context, origin, credentials, bootstrap,
   });
   if (bootstrap !== undefined) {
     assert(typeof bootstrap === 'string' && bootstrap.length <= 1024);
-    await clickReady(page, 'First-time setup', origin);
-    await fill(page, '#bootstrap', bootstrap, origin);
+    await clickReady(page, 'First-time setup', origin, undefined, action);
+    await fill(page, '#bootstrap', bootstrap, origin, action);
   }
-  await fill(page, '#username', credentials.username, origin);
-  await fill(page, '#password', credentials.password, origin);
-  await clickReady(page, 'Continue', origin);
+  await fill(page, '#username', credentials.username, origin, action);
+  await fill(page, '#password', credentials.password, origin, action);
+  await clickReady(page, 'Continue', origin, undefined, action);
   await composerReady(page);
   const projection = await session(page, origin);
   assert(UUID.test(projection.conversation), 'conversation_required');
@@ -67,27 +69,29 @@ export async function reloadOwner({page, conversation, origin}) {
   return {owner_preserved: true, render_ms: Math.round(performance.now() - started)};
 }
 
-export async function draftRemount({page, origin}) {
+export async function draftRemount({page, origin, signal, verifyLease}) {
+  const action = {signal, verify: verifyLease};
   const previous = await draft(page);
-  await setDraft(page, DRAFT, origin);
-  await clickReady(page, 'Settings', origin);
+  await setDraft(page, DRAFT, origin, action);
+  await clickReady(page, 'Settings', origin, undefined, action);
   await page.waitForSelector('section[aria-label="Beta settings"]', {visible: true, timeout: 10_000});
-  await clickReady(page, 'Assistant', origin);
+  await clickReady(page, 'Assistant', origin, undefined, action);
   await composerReady(page);
   assert.equal(await draft(page), DRAFT, 'draft_lost_after_navigation');
   const old = await page.$('#composer');
   try {
-    await clickReady(page, 'Reconnect and reload history', origin);
+    await clickReady(page, 'Reconnect and reload history', origin, undefined, action);
     await page.waitForFunction(node => !node.isConnected, {timeout: 10_000}, old);
   } finally { await old.dispose(); }
   await composerReady(page);
   assert.equal(await draft(page), DRAFT, 'draft_lost_after_reconnect');
-  await setDraft(page, previous, origin);
+  await setDraft(page, previous, origin, action);
   return {navigation_preserved: true, reconnect_preserved: true, no_submission: true};
 }
 
-export async function cpuAndRam({page, origin}) {
-  await clickReady(page, 'Host resources', origin);
+export async function cpuAndRam({page, origin, signal, verifyLease}) {
+  const action = {signal, verify: verifyLease};
+  await clickReady(page, 'Host resources', origin, undefined, action);
   await page.waitForFunction(() => {
     const panel = document.querySelector('section[aria-label="Host resources"]');
     const values = [...(panel?.querySelectorAll('dd') ?? [])].map(node => node.textContent);
@@ -126,7 +130,7 @@ export async function cpuAndRam({page, origin}) {
   assert(memory && [memory.total_bytes, memory.available_bytes, memory.used_bytes].every(Number.isSafeInteger));
   assert(memory.total_bytes > 0 && memory.available_bytes >= 0 && memory.available_bytes <= memory.total_bytes);
   assert.equal(memory.used_bytes, memory.total_bytes - memory.available_bytes);
-  await clickReady(page, 'Assistant', origin);
+  await clickReady(page, 'Assistant', origin, undefined, action);
   await composerReady(page);
   return {actual_cpu_visible: true, actual_ram_visible: true, native_sample_ready: true, scope: 'host_aggregate'};
 }
