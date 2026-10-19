@@ -66,10 +66,10 @@ impl ConfiguredExecution {
     async fn stopped_grant(
         &self,
         run: &orkestr_v2_contracts::RunId,
-        _proof: ReapedBroker,
+        proof: ReapedBroker,
     ) -> Result<BoundSessionMetadata, &'static str> {
         if self.config.worker.is_some() {
-            return Err("execution Worker stopped continuation unavailable");
+            return self.worker_stopped_grant(run, proof).await;
         }
         self.current().await?;
         let binding = self
