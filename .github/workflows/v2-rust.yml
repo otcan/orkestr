@@ -79,12 +79,14 @@ jobs:
         run: cargo +1.99.1 test --locked --workspace
       - name: Offline domain demo smoke check
         run: cargo +1.99.1 run --locked -p orkestr-v2-demo
-      - name: Retain synthetic worker retirement evidence
+      - name: Retain synthetic worker lifecycle evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: v2-worker-retirement-${{ github.run_id }}-${{ github.run_attempt }}
+          name: v2-worker-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}
           # Explicit report files only: never upload the candidate home or databases.
-          path: ${{ runner.temp }}/orkestr-v2-intake/worker-retirement-*.json
+          path: |
+            ${{ runner.temp }}/orkestr-v2-intake/worker-retirement-*.json
+            ${{ runner.temp }}/orkestr-v2-intake/worker-continuation-*.json
           if-no-files-found: ignore
           retention-days: 7
