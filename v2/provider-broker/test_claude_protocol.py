@@ -18,7 +18,7 @@ class ClaudeProtocolTests(unittest.TestCase):
     def request(self, outer, message="message:1"):
         return {"id":outer,"method":"CommitExecution","params":{
             "owned_handle":self.handle,"message_id":message,"frame":{
-                "type":"user","session_id":self.native,"parent_tool_use_id":None,
+                "type":"user","uuid":"33333333-3333-4333-8333-333333333333","session_id":self.native,"parent_tool_use_id":None,
                 "message":{"role":"user","content":"synthetic durable input"}}}}
 
     def init(self):
@@ -33,7 +33,7 @@ class ClaudeProtocolTests(unittest.TestCase):
         self.channel.client(self.request(2))
         prior = {"type":"result","subtype":"success","is_error":False,
             "uuid":"22222222-2222-4222-8222-222222222222",
-            "session_id":self.native,"result":"synthetic output"}
+            "user_message_uuid":"33333333-3333-4333-8333-333333333333","session_id":self.native,"result":"synthetic output"}
         self.channel.provider(prior)
         with self.assertRaises(Refused):
             self.channel.client(self.request(3, "message:2"))
@@ -82,6 +82,6 @@ class ClaudeProtocolTests(unittest.TestCase):
             self.channel.client(request)
         self.channel.client(self.request(3))
         self.channel.provider({"type":"result","subtype":"success","is_error":False,
-            "session_id":self.native,"result":"output"})
+            "user_message_uuid":"33333333-3333-4333-8333-333333333333","uuid":"55555555-5555-4555-8555-555555555555","session_id":self.native,"result":"output"})
         with self.assertRaises(Refused):
             self.channel.client(self.request(4))

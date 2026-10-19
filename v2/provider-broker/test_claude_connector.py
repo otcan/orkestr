@@ -60,7 +60,7 @@ print(json.dumps({"type":"control_response","response":{"subtype":"success","req
 for line in sys.stdin:
  value=json.loads(line)
  assert value["session_id"]==session
- print(json.dumps({"type":"result","subtype":"success","is_error":False,"session_id":session,"result":"synthetic"}),flush=True)
+ print(json.dumps({"type":"result","subtype":"success","is_error":False,"uuid":"55555555-5555-4555-8555-555555555555","user_message_uuid":value["uuid"],"session_id":session,"result":"synthetic"}),flush=True)
 ''')
             executable.chmod(0o700)
             session = ClaudeConfiguration(executable, root, root, root, root).new_session()
@@ -87,7 +87,7 @@ for line in sys.stdin:
                 os.write(writer,encode(setup))
                 observation()
                 for outer in (2,):
-                    frame = {"type":"user","session_id":str(session.native),
+                    frame = {"type":"user","uuid":"33333333-3333-4333-8333-333333333333","session_id":str(session.native),
                              "parent_tool_use_id":None,"message":{"role":"user","content":"synthetic"}}
                     channel.client({"id":outer,"method":"CommitExecution","params":{
                         "owned_handle":channel.handle,"message_id":f"message:{outer}","frame":frame}})

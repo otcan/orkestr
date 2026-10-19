@@ -3,6 +3,7 @@ import secrets
 import uuid
 from protocol import PROTOCOL, exact, identifier, require
 from claude_telemetry import validate_telemetry
+from claude_control import ClaudeControl, canonical
 
 
 class ClaudeChannel:
@@ -21,6 +22,7 @@ class ClaudeChannel:
         self.active = None
         self.terminal = False
         self.telemetry_uuids = set()
+        self.control = None
 
     def client(self, request):
         require(not self.poisoned)
@@ -51,6 +53,15 @@ class ClaudeChannel:
             require(frame["request"] == {"subtype": "initialize", "hooks": None})
             self.setup = (outer, frame["request_id"])
             return frame, None
+        if request["method"] == "CancelExecution":
+            params = request["params"]
+            exact(params, ("owned_handle", "frame"))
+            require(params["owned_handle"] == self.handle and self.initialized
+                    and self.system_seen and self.active is not None and not self.terminal
+                    and self.control is None)
+            self.control = ClaudeControl(outer, params["frame"], self.native,
+                                         self.input_uuid, self.setup[1])
+            return params["frame"], None
         require(request["method"] == "CommitExecution")
         params = request["params"]
         exact(params, ("owned_handle", "message_id", "frame"))
@@ -61,16 +72,8 @@ class ClaudeChannel:
         message = params["message_id"]
         require(identifier(message) and message not in self.messages)
         frame = params["frame"]
-        input_uuid = None
-        keys = ("type", "session_id", "parent_tool_use_id", "message")
-        if "uuid" in frame:
-            exact(frame, keys + ("uuid",))
-            value = frame["uuid"]
-            require(isinstance(value, str) and str(uuid.UUID(value)) == value)
-            input_uuid = value
-        else:
-            exact(frame, keys)
-        require(not getattr(self.session, "resumed", False) or input_uuid is not None)
+        exact(frame, ("type", "session_id", "parent_tool_use_id", "message", "uuid"))
+        input_uuid = canonical(frame["uuid"])
         require(frame["type"] == "user" and frame["session_id"] == self.native
                 and frame["parent_tool_use_id"] is None)
         exact(frame["message"], ("role", "content"))
@@ -92,6 +95,10 @@ class ClaudeChannel:
 
     def _provider(self, frame):
         require(isinstance(frame, dict) and self.handle is not None)
+        if frame.get("type") == "control_response" and self.control is not None:
+            clean = self.control.response(frame)
+            return {"method":"BrokerOutput", "params":{"owned_handle":self.handle,
+                    "request_id":self.control.outer, "frame":clean}}
         if frame.get("type") == "control_response":
             require(self.setup is not None and not self.initialized and self.active is None)
             exact(frame, ("type", "response"))
@@ -118,11 +125,22 @@ class ClaudeChannel:
             require(self.initialized and self.active is not None)
             value = frame["uuid"]
             require(isinstance(value, str) and str(uuid.UUID(value)) == value)
-            require(value not in self.telemetry_uuids and len(self.telemetry_uuids) < 128)
+            require(value not in (self.native,self.input_uuid,self.terminal_uuid)
+                    and (self.control is None or value not in self.control.notice_ids)
+                    and value not in self.telemetry_uuids and len(self.telemetry_uuids) < 128)
             self.telemetry_uuids.add(value)
             # Even post-terminal telemetry cannot advance readiness or execution state.
             return None
-        if kind in ("assistant", "result") and getattr(self.session, "resumed", False):
+        if self.control is not None and kind in ("user", "assistant", "stream_event"):
+            self.control.notice(frame, self.telemetry_uuids)
+            return None
+        if self.control is not None and kind == "result":
+            clean = self.control.result(frame, self.telemetry_uuids)
+            self.terminal_uuid = clean["uuid"]
+            self.terminal = True
+            return {"method":"BrokerOutput", "params":{"owned_handle":self.handle,
+                    "request_id":self.active, "frame":clean}}
+        if kind in ("assistant", "result"):
             # No relabeling even for unseen historical frames on a fresh reader.
             require(self.input_uuid is not None
                     and frame.get("user_message_uuid") == self.input_uuid)
@@ -152,7 +170,9 @@ class ClaudeChannel:
             require(identifier(frame.get("subtype")))
             require(isinstance(frame.get("result"), str) and len(frame["result"].encode()) <= 8192)
             require(frame["is_error"] or frame["subtype"] == "success")
-            self.terminal_uuid = frame.get("uuid")
+            value = canonical(frame.get("uuid"))
+            require(value not in (self.native,self.input_uuid) and value not in self.telemetry_uuids)
+            self.terminal_uuid = value
             self.terminal = True
             clean = {key: frame[key] for key in ("type", "session_id", "subtype", "is_error", "result")}
         else:
