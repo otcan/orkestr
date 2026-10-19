@@ -12,6 +12,7 @@ pub use group::{ConfiguredExecutions, ExecutionTasks};
 mod liveness;
 mod retirement;
 mod session;
+mod steering;
 mod stopping;
 mod worker;
 use config::Config;

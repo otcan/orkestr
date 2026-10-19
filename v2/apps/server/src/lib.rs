@@ -35,6 +35,8 @@ pub mod owned_execution;
 mod provider_payload;
 mod resource_health;
 mod routes;
+mod steering_http;
+mod steering_registry;
 pub mod stop_execution;
 pub mod timer_bootstrap;
 pub mod timer_http;
@@ -236,6 +238,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/conversations/{id}/worker-tasks/{task}/hold",post(worker_tasks::hold))
         .route("/api/v2/conversations/{id}/worker-tasks/{task}/payload",delete(worker_tasks::remove))
         .route("/api/v2/conversations/{id}/stop",post(execution::stop))
+        .route("/api/v2/conversations/{id}/steer",post(steering_http::submit))
+        .route("/api/v2/conversations/{id}/steering/{key}",get(steering_http::status))
         .route("/api/v2/conversations/{id}/accept",post(execution_accept::accept))
         .route("/api/v2/conversations/{id}/payloads/{payload}",get(provider_payload::read).delete(provider_payload::remove))
         .route("/api/v2/conversations/{id}/held-inputs",get(held_inputs::read))

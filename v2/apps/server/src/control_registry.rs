@@ -42,6 +42,7 @@ struct State {
     available: bool,
     replay: Option<ExecutionControlRequest>,
     sender: ControlSender,
+    steering: Option<Arc<crate::steering_registry::Slot>>,
 }
 
 /// Non-Clone lifetime owned by one actual child. Dropping it denies new intent
@@ -102,6 +103,7 @@ impl ControlRegistry {
                 available: false,
                 replay: None,
                 sender,
+                steering: None,
             }),
             scheduling: Arc::new(tokio::sync::Mutex::new(())),
         });
@@ -138,6 +140,37 @@ impl ControlRegistry {
         })
     }
 
+    pub(crate) fn steering_available(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        run: &RunId,
+    ) -> bool {
+        self.entry(owner, conversation, run).is_some_and(|entry| {
+            entry.state.lock().is_ok_and(|state| {
+                state.fresh_available()
+                    && state.steering.as_ref().is_some_and(|slot| slot.available())
+            })
+        })
+    }
+
+    pub(crate) fn select_steering(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        run: &RunId,
+    ) -> Option<crate::steering_registry::SelectedSteering> {
+        let entry = self.entry(owner, conversation, run)?;
+        let state = entry.state.lock().ok()?;
+        if !state.active {
+            return None;
+        }
+        Some(crate::steering_registry::SelectedSteering {
+            slot: state.steering.as_ref()?.clone(),
+            scheduling: entry.scheduling.clone(),
+        })
+    }
+
     pub fn request(
         &self,
         owner: &OwnerId,
@@ -171,6 +204,29 @@ impl State {
 }
 
 impl RunControl {
+    pub(crate) fn register_steering(
+        &self,
+        authority: orkestr_v2_store_sqlite::CodexSteeringAuthority,
+    ) -> Result<crate::steering_registry::RunSteering, &'static str> {
+        let run = &authority.provider().run;
+        if run.run_id != self.run
+            || run.owner_id != self.registry.owner
+            || run.conversation_id != self.registry.conversation
+        {
+            return Err("steering issuer scope mismatch");
+        }
+        let mut state = self
+            .entry
+            .state
+            .lock()
+            .map_err(|_| "steering registration unavailable")?;
+        if !state.active || state.steering.is_some() {
+            return Err("steering registration closed");
+        }
+        let slot = crate::steering_registry::Slot::new(authority);
+        state.steering = Some(slot.clone());
+        Ok(crate::steering_registry::RunSteering(slot))
+    }
     /// Serialize one bounded pump step against HTTP commit plus receipt handoff.
     /// Parent composition acquires Deep then Worker, never the reverse order.
     pub async fn serialize(&self) -> tokio::sync::OwnedMutexGuard<()> {
@@ -245,6 +301,9 @@ impl Drop for RunControl {
         if let Ok(mut state) = self.entry.state.lock() {
             state.active = false;
             state.available = false;
+            if let Some(slot) = &state.steering {
+                slot.close();
+            }
         }
         if let Ok(mut entries) = self.registry.entries.lock() {
             if entries

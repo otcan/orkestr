@@ -13,7 +13,6 @@ def stop(case, wait_for, terminal):
         status = case.phase("running")
         return status if status and status["capabilities"]["stop"] else None
     running = wait_for(available, "owned running turn must expose live Stop capability")
-    assert not running["capabilities"]["steer"]
     body = {"run_id": running["run_id"], "expected_revision": running["revision"],
             "request_key": "synthetic-http-stop"}
     # All rejection checks occur before any cancellation intent or provider I/O.
@@ -45,7 +44,7 @@ def stop(case, wait_for, terminal):
     wait_for(lambda: any(row["kind"] == "interrupt-ack" for row in case.trace()),
              "actual native interrupt acknowledgement")
     pending = case.phase("cancel_requested")
-    assert pending and not pending["capabilities"]["stop"]
+    assert pending and pending["capabilities"] == {"stop": False, "steer": False}
     with sqlite3.connect(case.home / "core.sqlite3") as db:
         assert db.execute("SELECT count(*) FROM production_observations WHERE kind='stopped'").fetchone()[0] == 0
     if terminal:

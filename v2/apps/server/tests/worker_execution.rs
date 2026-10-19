@@ -13,6 +13,9 @@ mod offline_python;
 #[path = "../src/owned_children.rs"]
 #[allow(dead_code)]
 mod owned_children;
+#[path = "../src/steering_registry.rs"]
+#[allow(dead_code)]
+mod steering_registry;
 #[path = "../src/stop_execution/mod.rs"]
 #[allow(dead_code)]
 mod stop_execution;

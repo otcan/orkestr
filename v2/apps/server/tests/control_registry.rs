@@ -6,6 +6,9 @@ mod control_dispatch;
 #[path = "../src/control_registry.rs"]
 #[allow(dead_code)]
 mod control_registry;
+#[path = "../src/steering_registry.rs"]
+#[allow(dead_code)]
+mod steering_registry;
 #[path = "../src/stop_execution/mod.rs"]
 #[allow(dead_code)]
 mod stop_execution;
