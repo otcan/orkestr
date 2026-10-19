@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +13,11 @@ const config = fileURLToPath(new URL("../scripts/security/gitleaks.toml", import
 const lifetimeDigest = "4632be4e94cef92a0b8a2970bad0a55a1925d07d7926eb05a6af32ef512954d7";
 const manifests = ["codex", "claude", "worker"].map(kind => `v2/provider-broker/${kind}-package.json`);
 const entry = value => `  "reaping.py": "${value}"`;
+// Each hex symbol occurs four times (entropy 4), above the pinned rule's 3.5.
+// This permutation also avoids its hex stopwords; random hex can contain them.
+// Constructed test values have no account authority.
+const syntheticHex = (offset = 0) => Array.from({ length: 64 }, (_, index) =>
+  ((index * 5 + 3 + offset) % 16).toString(16)).join("");
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-digest-scan-"));
@@ -76,9 +80,8 @@ test("pinned scanner exempts only the reviewed digest in the three exact invento
 
 test("credentials and the same digest outside the exact entry remain detectable", { skip: !binary }, async t => {
   const peer = await fixture(t);
-  // These random test values have credential syntax but no account authority.
-  const syntheticValue = randomBytes(32).toString("hex");
-  const providerValue = ["gh", "p_", randomBytes(18).toString("hex")].join("");
+  const syntheticValue = syntheticHex();
+  const providerValue = ["gh", "p_", syntheticHex(1).slice(0, 36)].join("");
   const files = Object.fromEntries(manifests.map(name => [name,
     `{\n${entry(lifetimeDigest)},\n  "api_key": "${syntheticValue}",\n  "token": "${providerValue}"\n}`]));
   files["outside.json"] = `{\n${entry(lifetimeDigest)},\n  "api_key": "${syntheticValue}"\n}`;
@@ -98,14 +101,14 @@ test("credentials and the same digest outside the exact entry remain detectable"
 
 test("arbitrary hashes and altered entry contexts are never exempt", { skip: !binary }, async t => {
   const peer = await fixture(t);
-  await peer.write({ [manifests[0]]: `{\n${entry(randomBytes(32).toString("hex"))}\n}`,
+  await peer.write({ [manifests[0]]: `{\n${entry(syntheticHex(2))}\n}`,
     [manifests[1]]: `{\n  "api_key": "${lifetimeDigest}"\n}`,
-    [manifests[2]]: `{\n${entry(randomBytes(32).toString("hex"))}\n}` });
+    [manifests[2]]: `{\n${entry(syntheticHex(3))}\n}` });
   const found = await peer.scan();
   assert.deepEqual(found.map(row => row.path).sort(), [...manifests].sort());
   assert.ok(found.every(row => row.rule === "generic-api-key"));
-  await peer.write(Object.fromEntries(manifests.map(name => [name,
-    `{ ${entry(lifetimeDigest)}, "api_key": "${randomBytes(32).toString("hex")}" }`])));
+  await peer.write(Object.fromEntries(manifests.map((name, index) => [name,
+    `{ ${entry(lifetimeDigest)}, "api_key": "${syntheticHex(index + 4)}" }`])));
   const later = await peer.scan();
   for (const name of manifests)
     assert.ok(later.some(row => row.path === name && row.line === 1 && row.rule === "generic-api-key"));
