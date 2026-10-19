@@ -236,3 +236,5 @@ pub mod memory_client;
 pub mod memory_state;
 
 pub mod beta_window;
+
+pub mod beta_inputs;

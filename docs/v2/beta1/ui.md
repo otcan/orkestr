@@ -33,3 +33,24 @@ bridge. Scope generation and component disposal fence late responses. Unknown
 schema, nil conversation, unexpected limits or foreign window scope refuse
 mounting. This does not activate window admission; sampled controls grant no
 authority. Core `c8beddef8` generation validation is consumed unchanged.
+
+Explicit admission is now mounted separately from Send. The page retains at most
+128 durable intake receipts across tab/reconnect remounts; it refuses further
+Send actions at capacity without dropping older entries. Owner/session changes
+clear this private page state. Reload recovery of a lost page's unadmitted
+receipts is not provided by this slice; durable server history remains intact.
+
+Start work uses a new window request; Add to current work binds the active
+window without changing its generation or budget. Uncertain replies retain the
+entire original tuple. Definitive refusals require review; a verified admission
+receipt removes only its matching saved input and triggers current-status reads.
+No historical receipt sets active state. Opening, retiring and reconciliation
+block fresh admission. The consumer expects GET window 204 for absence, 200 for
+a canonical status and POST 200/201 for canonical admission; Runtime composition
+must confirm these response statuses before matching candidate acceptance.
+
+Focused wrapper-locked/offline checks pass: six Rust state/receipt cases and UI
+binary check; six Node transport cases pass. These are source/model checks, not
+mounted browser, Store composition, provider or cleanup acceptance. A first
+binary check exposed a temporary borrow error; the request clone now releases
+the immutable borrow before preparing intent, and the subsequent check passes.

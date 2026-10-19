@@ -1,8 +1,10 @@
 mod about;
 mod acceptance_button;
 mod attachments_view;
+mod beta_bridge;
 mod beta_discovery;
 mod beta_settings;
+mod beta_window_view;
 mod execution_panel;
 mod execution_poll;
 mod fast_panel;
@@ -33,6 +35,10 @@ fn App() -> Element {
     let mut current = use_signal(String::new);
     let mut drafts = use_signal(BTreeMap::<String, Draft>::new);
     let mut session_scope = use_signal(SessionScope::default);
+    let mut saved_inputs = use_signal(orkestr_v2_ui::beta_inputs::SavedInputs::default);
+    use_context_provider(move || saved_inputs);
+    let mut window_intent = use_signal(orkestr_v2_ui::beta_window::WindowIntent::default);
+    use_context_provider(move || window_intent);
     let mut task_drafts = use_signal(|| {
         orkestr_v2_ui::task_draft_lifetime::TaskDrafts::new(dioxus::dioxus_core::current_scope_id())
     });
@@ -58,6 +64,8 @@ fn App() -> Element {
         {
             Ok(session) => {
                 execution.write().authorization_lost();
+                saved_inputs.write().clear_owner();
+                window_intent.write().clear_scope();
                 host_resources.write().clear_owner();
                 held_inputs.write().clear_owner();
                 task_drafts.write().clear_owner();
@@ -82,6 +90,8 @@ fn App() -> Element {
     });
     let mut expired = move |_| {
         execution.write().authorization_lost();
+        saved_inputs.write().clear_owner();
+        window_intent.write().clear_scope();
         host_resources.write().clear_owner();
         held_inputs.write().clear_owner();
         task_drafts.write().clear_owner();
@@ -106,6 +116,8 @@ fn App() -> Element {
                 views::Auth { onlogin: move |session: transport::BrowserSession| {
                     if logging_out() { return; }
                     execution.write().authorization_lost();
+                    saved_inputs.write().clear_owner();
+                    window_intent.write().clear_scope();
                     host_resources.write().clear_owner();
                     held_inputs.write().clear_owner();
                     task_drafts.write().clear_owner();
@@ -146,6 +158,8 @@ fn App() -> Element {
                             match result {
                                 Ok(_) => {
                                     execution.write().authorization_lost();
+                                    saved_inputs.write().clear_owner();
+                                    window_intent.write().clear_scope();
                                     host_resources.write().clear_owner();
                                     held_inputs.write().clear_owner();
                                     task_drafts.write().clear_owner();
@@ -165,6 +179,7 @@ fn App() -> Element {
                     section { key: "{current()}-{refresh}",
                     h2 { "Assistant" }
                     button { onclick: move |_| refresh += 1, "Reconnect and reload history" }
+                    beta_window_view::WindowView { id: current(), csrf: csrf(), session_scope, onexpired: expired }
                     views::Conversation { id: current(), csrf: csrf(), session_scope, execution, drafts, held_inputs, onexpired: expired }
                     }
                 } else if tab() == "History" {
