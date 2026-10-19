@@ -109,3 +109,40 @@ pub struct AutomaticReplySendReceipt {
     pub state: AutomaticReplySendState,
     pub written_bytes: u32,
 }
+
+/// A sampled policy projection, never execution/readiness or producer authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomaticReplyPermissionStatus {
+    pub route_id: Uuid,
+    pub route_generation: i64,
+    pub permission_revision: i64,
+    pub enabled: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomaticReplyPermissionPage {
+    pub conversation_id: ConversationId,
+    pub observed_at_ms: i64,
+    pub routes: Vec<AutomaticReplyPermissionStatus>,
+    pub next_after: Option<Uuid>,
+}
+impl AutomaticReplyPermissionPage {
+    /// Structural/order validation only. The client must bind the requested
+    /// conversation/cursor and reject obsolete request/session generations.
+    pub fn is_valid(&self) -> bool {
+        !self.conversation_id.0.is_nil()
+            && self.observed_at_ms >= 0
+            && self.routes.len() <= 32
+            && self.routes.iter().all(|r| {
+                !r.route_id.is_nil() && r.route_generation > 0 && r.permission_revision >= 0
+            })
+            && self
+                .routes
+                .windows(2)
+                .all(|r| r[0].route_id < r[1].route_id)
+            && self
+                .next_after
+                .is_none_or(|id| self.routes.last().is_some_and(|r| r.route_id == id))
+    }
+}

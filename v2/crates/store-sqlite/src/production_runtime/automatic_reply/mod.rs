@@ -9,6 +9,9 @@ mod inputs;
 #[cfg(all(test, feature = "fixture-test-controls", unix))]
 mod process_tests;
 mod reserve;
+mod status;
+#[cfg(test)]
+mod status_tests;
 #[cfg(test)]
 mod tests;
 
