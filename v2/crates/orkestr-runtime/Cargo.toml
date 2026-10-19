@@ -1,0 +1,18 @@
+[package]
+name = "orkestr-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Offline integration tests only. Never enabled by server or default builds.
+fixture-test-controls = ["orkestr-v2-store-sqlite/fixture-test-controls"]
+
+[dependencies]
+orkestr-v2-store-sqlite = { path = "../store-sqlite" }
+serde_json.workspace = true
+orkestr-v2-application = { path = "../application" }
+orkestr-v2-contracts = { path = "../contracts" }
+
+[dev-dependencies]
+tokio.workspace = true

@@ -1,0 +1,309 @@
+//! Codex 0.163 stdio protocol state, separate from process and durable authority.
+//! This module never starts a process or grants permission to dispatch a turn.
+use crate::ports::Blocker;
+use serde_json::{json, Value};
+mod turn;
+pub use turn::TurnStream;
+
+const MAX_FRAME: usize = 64 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Readiness {
+    Uninitialized,
+    Initialized,
+    Subscription,
+}
+
+/// One connection has one outstanding metadata request. Reconnect starts over.
+/// Native identifiers and account contents are deliberately absent from Debug.
+pub struct CodexRpc {
+    next_id: u64,
+    pending: Option<(u64, Request)>,
+    readiness: Readiness,
+    native_session: Option<String>,
+    turn_submitted: bool,
+}
+enum Request {
+    Initialize,
+    Account,
+    Thread {
+        cwd: String,
+        expected_native: Option<String>,
+    },
+}
+impl Default for CodexRpc {
+    fn default() -> Self {
+        Self {
+            next_id: 1,
+            pending: None,
+            readiness: Readiness::Uninitialized,
+            native_session: None,
+            turn_submitted: false,
+        }
+    }
+}
+impl CodexRpc {
+    // One consumed turn per connection in this slice. Any enqueue/transport
+    // failure leaves it latched; reconnect never restores the consumed grant.
+    pub(crate) fn claim_turn_request(&mut self, native: &str) -> Result<u64, Blocker> {
+        if self.readiness != Readiness::Subscription
+            || self.native_session() != Some(native)
+            || self.pending.is_some()
+            || self.turn_submitted
+        {
+            return Err(Blocker::Protocol);
+        }
+        let id = self.next_id;
+        self.next_id = id.checked_add(1).ok_or(Blocker::Protocol)?;
+        self.turn_submitted = true;
+        Ok(id)
+    }
+    pub fn readiness(&self) -> Readiness {
+        self.readiness
+    }
+
+    pub fn initialize(&mut self) -> Result<Value, Blocker> {
+        if self.readiness != Readiness::Uninitialized {
+            return Err(Blocker::Protocol);
+        }
+        self.request(
+            Request::Initialize,
+            "initialize",
+            json!({
+                "clientInfo":{"name":"orkestr_v2","title":"Orkestr","version":"0.1.0"},
+                "capabilities":{"experimentalApi":false}
+            }),
+        )
+    }
+
+    /// Read-only status: never refresh credentials or initiate login.
+    pub fn account_read(&mut self) -> Result<Value, Blocker> {
+        if self.readiness != Readiness::Initialized {
+            return Err(Blocker::Protocol);
+        }
+        self.request(
+            Request::Account,
+            "account/read",
+            json!({"refreshToken":false}),
+        )
+    }
+
+    /// Creates a distinct persistent native session without starting inference.
+    /// Cwd must come from trusted containment configuration, never a web field.
+    pub fn create_session(&mut self, cwd: &std::path::Path) -> Result<Value, Blocker> {
+        if self.readiness != Readiness::Subscription || self.native_session.is_some() {
+            return Err(Blocker::Protocol);
+        }
+        if !cwd.is_absolute() {
+            return Err(Blocker::Protocol);
+        }
+        let normalized: std::path::PathBuf = cwd.components().collect();
+        if normalized.as_os_str() != cwd.as_os_str()
+            || cwd.components().any(|part| {
+                matches!(
+                    part,
+                    std::path::Component::ParentDir | std::path::Component::CurDir
+                )
+            })
+        {
+            return Err(Blocker::Protocol);
+        }
+        let cwd = cwd.to_str().ok_or(Blocker::Protocol)?;
+        self.request(
+            Request::Thread {
+                cwd: cwd.to_owned(),
+                expected_native: None,
+            },
+            "thread/start",
+            json!({
+                "cwd":cwd,"approvalPolicy":"never","sandbox":"read-only",
+                "ephemeral":false,"modelProvider":"openai"
+            }),
+        )
+    }
+
+    /// Resume only the durable identity selected by trusted setup. A refusal
+    /// leaves the request pending for quarantine; never fall back to creation.
+    pub(crate) fn resume_session(
+        &mut self,
+        cwd: &std::path::Path,
+        native: &str,
+    ) -> Result<Value, Blocker> {
+        if native.is_empty() || native.len() > 512 || native.chars().any(char::is_control) {
+            return Err(Blocker::Protocol);
+        }
+        // Reuse the exact trusted workspace/readiness checks without issuing a
+        // start request: this temporary value cannot reach the transport.
+        let mut frame = self.create_session(cwd)?;
+        let (_, request) = self.pending.as_mut().ok_or(Blocker::Protocol)?;
+        if let Request::Thread {
+            expected_native, ..
+        } = request
+        {
+            *expected_native = Some(native.to_owned());
+        }
+        frame["method"] = json!("thread/resume");
+        frame["params"]
+            .as_object_mut()
+            .ok_or(Blocker::Protocol)?
+            .remove("ephemeral");
+        frame["params"]["threadId"] = json!(native);
+        Ok(frame)
+    }
+
+    /// Server-only locator for Core native readiness confirmation. Not dispatch
+    /// permission and never a web DTO. Each role requires its own connection.
+    pub fn native_session(&self) -> Option<&str> {
+        self.native_session.as_deref()
+    }
+
+    fn request(&mut self, kind: Request, method: &str, params: Value) -> Result<Value, Blocker> {
+        if self.pending.is_some() {
+            return Err(Blocker::Busy);
+        }
+        let id = self.next_id;
+        self.next_id = id.checked_add(1).ok_or(Blocker::Protocol)?;
+        self.pending = Some((id, kind));
+        Ok(json!({"id":id,"method":method,"params":params}))
+    }
+
+    /// Returns the initialized notification only after a matching successful reply.
+    /// Unrelated notifications do not consume the pending request. Invalid replies
+    /// retain it for explicit connection quarantine; no automatic request replay.
+    pub fn receive(&mut self, line: &str) -> Result<Option<Value>, Blocker> {
+        if line.len() > MAX_FRAME {
+            return Err(Blocker::Protocol);
+        }
+        let value: Value = serde_json::from_str(line).map_err(|_| Blocker::Protocol)?;
+        if value.get("id").is_none() {
+            return if value.get("method").and_then(Value::as_str).is_some() {
+                Ok(None)
+            } else {
+                Err(Blocker::Protocol)
+            };
+        }
+        let (id, kind) = self.pending.as_ref().ok_or(Blocker::Protocol)?;
+        if value.get("id").and_then(Value::as_u64) != Some(*id) || value.get("error").is_some() {
+            return Err(Blocker::Protocol);
+        }
+        let result = value.get("result").ok_or(Blocker::Protocol)?;
+        let notification = match kind {
+            Request::Initialize => {
+                for key in ["userAgent", "platformFamily", "platformOs", "codexHome"] {
+                    if !result
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.is_empty())
+                    {
+                        return Err(Blocker::Protocol);
+                    }
+                }
+                self.readiness = Readiness::Initialized;
+                Some(json!({"method":"initialized"}))
+            }
+            Request::Thread {
+                cwd,
+                expected_native,
+            } => {
+                let native = result
+                    .pointer("/thread/id")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty() && s.len() <= 512)
+                    .ok_or(Blocker::Protocol)?;
+                if expected_native
+                    .as_deref()
+                    .is_some_and(|expected| native != expected)
+                    || result.get("modelProvider").and_then(Value::as_str) != Some("openai")
+                    || result
+                        .pointer("/thread/modelProvider")
+                        .and_then(Value::as_str)
+                        != Some("openai")
+                    || result.pointer("/thread/ephemeral").and_then(Value::as_bool) != Some(false)
+                    || result.get("cwd").and_then(Value::as_str) != Some(cwd.as_str())
+                    || result.pointer("/thread/cwd").and_then(Value::as_str) != Some(cwd.as_str())
+                    || result.get("approvalPolicy").and_then(Value::as_str) != Some("never")
+                    || result.pointer("/sandbox/type").and_then(Value::as_str) != Some("readOnly")
+                    || !matches!(
+                        result.pointer("/sandbox/networkAccess"),
+                        None | Some(Value::Bool(false))
+                    )
+                {
+                    return Err(Blocker::Protocol);
+                }
+                self.native_session = Some(native.to_owned());
+                None
+            }
+            Request::Account => {
+                // API-key/Bedrock/unknown accounts cannot silently purchase compute.
+                if result.get("requiresOpenaiAuth").and_then(Value::as_bool) != Some(true)
+                    || result.pointer("/account/type").and_then(Value::as_str) != Some("chatgpt")
+                {
+                    return Err(Blocker::Unsupported);
+                }
+                self.readiness = Readiness::Subscription;
+                None
+            }
+        };
+        self.pending = None;
+        Ok(notification)
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    fn ready() -> CodexRpc {
+        let mut rpc = CodexRpc::default();
+        rpc.initialize().unwrap();
+        rpc.receive(&json!({"id":1,"result":{"userAgent":"synthetic","platformFamily":"unix","platformOs":"linux","codexHome":"/synthetic"}}).to_string()).unwrap();
+        rpc.account_read().unwrap();
+        rpc.receive(
+            &json!({"id":2,"result":{"requiresOpenaiAuth":true,"account":{"type":"chatgpt"}}})
+                .to_string(),
+        )
+        .unwrap();
+        rpc
+    }
+    fn response() -> Value {
+        json!({"id":3,"result":{"thread":{"id":"synthetic-native","cwd":"/synthetic","ephemeral":false,"modelProvider":"openai"},"cwd":"/synthetic","modelProvider":"openai","approvalPolicy":"never","sandbox":{"type":"readOnly","networkAccess":false}}})
+    }
+    #[test]
+    fn exact_resume_and_no_creation_fallback() {
+        let mut rpc = ready();
+        let frame = rpc
+            .resume_session(std::path::Path::new("/synthetic"), "synthetic-native")
+            .unwrap();
+        assert_eq!(frame["method"], "thread/resume");
+        assert_eq!(frame["params"]["threadId"], "synthetic-native");
+        assert_eq!(frame["params"].as_object().unwrap().len(), 5);
+        assert!(frame["params"].get("ephemeral").is_none());
+        rpc.receive(&response().to_string()).unwrap();
+        assert_eq!(rpc.native_session(), Some("synthetic-native"));
+    }
+    #[test]
+    fn changed_or_missing_resume_evidence_stays_quarantined() {
+        for pointer in [
+            "/result/thread/id",
+            "/result/thread/cwd",
+            "/result/cwd",
+            "/result/thread/modelProvider",
+            "/result/modelProvider",
+            "/result/thread/ephemeral",
+            "/result/approvalPolicy",
+            "/result/sandbox/type",
+            "/result/sandbox/networkAccess",
+        ] {
+            let mut rpc = ready();
+            rpc.resume_session(std::path::Path::new("/synthetic"), "synthetic-native")
+                .unwrap();
+            let mut reply = response();
+            *reply.pointer_mut(pointer).unwrap() = Value::Null;
+            assert_eq!(rpc.receive(&reply.to_string()), Err(Blocker::Protocol));
+            assert_eq!(rpc.native_session(), None);
+            assert_eq!(
+                rpc.create_session(std::path::Path::new("/synthetic")),
+                Err(Blocker::Busy)
+            );
+        }
+    }
+}
