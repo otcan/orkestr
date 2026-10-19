@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import {setTimeout as delay} from 'node:timers/promises';
 import {actionBoundary, clickReady, setDraft} from './readiness.mjs';
-import {decodeExact, assertWindowAdmission} from './window-evidence.mjs';
+import {assertWindowAdmission} from './window-evidence.mjs';
+import {freshControlResponse} from './execution-response.mjs';
 import {executionStatus, assertProgress, assertStopRequested, assertStopped,
   assertAccepted, assertSteered} from './execution-evidence.mjs';
 import {failure} from './diagnostics.mjs';
@@ -30,8 +31,7 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
   };
   const control = async operation => {
     const observed = await wait(() => capture.take(operation), Boolean);
-    assert([200, 201].includes(observed.status), 'control_response_not_successful');
-    return {request: decodeExact(observed.request), receipt: decodeExact(observed.response)};
+    return freshControlResponse(operation, observed);
   };
   const phase = async (allowed, run, timeoutMs = 20000) => wait(() => read('execution', run), value => {
     if (!value) return false;

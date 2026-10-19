@@ -1,0 +1,36 @@
+{
+  "source_commit": "0756e57cc0ef7189ce0696409d95296c29d11224",
+  "scope": "Fresh one-shot UI mutations; replay statuses are recorded but are not fresh admission evidence.",
+  "operations": {
+    "messages": {
+      "fresh_status": 202,
+      "replay_status": 200,
+      "source_file": "v2/apps/server/src/routes.rs",
+      "source_sha256": "94ec865bf44dbb72b1b04781e6ac9a550bbda3d722a63bde1c5a6a8f0f7de9f6"
+    },
+    "window": {
+      "fresh_status": 201,
+      "replay_status": 200,
+      "source_file": "v2/apps/server/src/window_http.rs",
+      "source_sha256": "33388e513b2d2243daf053823c08349ab512c0d7c71a04aea969d5baa3a19e26"
+    },
+    "stop": {
+      "fresh_status": 200,
+      "replay_status": 200,
+      "source_file": "v2/apps/server/src/execution.rs",
+      "source_sha256": "4962f467c18c915cc638ede06ab0ed3dd8140f769f6ef061666673d8549f3f1c"
+    },
+    "steer": {
+      "fresh_status": 200,
+      "replay_status": 200,
+      "source_file": "v2/apps/server/src/steering_http.rs",
+      "source_sha256": "c4bf5af833f2296ef0c5c21d5f8b341fc8bca597b42a68c36f435a30a366986c"
+    },
+    "accept": {
+      "fresh_status": 200,
+      "replay_status": 200,
+      "source_file": "v2/apps/server/src/execution_accept.rs",
+      "source_sha256": "1524d889c159dd1ed3ee610da0575f7a53ee63383db749cb1404d4fd802855a3"
+    }
+  }
+}

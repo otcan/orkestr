@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {executionUi} from './execution-ui.mjs';
 import {decodeExact} from './window-evidence.mjs';
+import contract from './fixtures/control-http-0756.json' with {type: 'json'};
 
 const id = number => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 const origin = 'https://example.invalid', conversation = id(1);
 const limits = {duration_ms: 900000, attempts: 32, bytes: 67108864,
   cleanup_ms: 30000, cleanup_attempts: 4, cleanup_bytes: 1048576};
 
-function fixture(join = false, status = 201) {
+function fixture(join = false, status = contract.operations.messages.fresh_status, windowStatus = contract.operations.window.fresh_status) {
   const events = [], text = 'Fixed synthetic input', client = 'input-2';
   const opening = {window_id: id(4), conversation_id: conversation, generation: 1,
     state: join ? 'active' : 'opening', input_message_id: join ? id(8) : id(2),
@@ -18,7 +19,7 @@ function fixture(join = false, status = 201) {
   const previous = join ? decodeExact(JSON.stringify(opening)) : null;
   const intake = {request: JSON.stringify({text, client_message_id: client}), status,
     response: JSON.stringify({status: 'accepted', message_id: id(2), event_id: id(3), sequence: 2})};
-  const window = {status: 200,
+  const window = {status: windowStatus,
     request: JSON.stringify({request_key: 'window-2', input_message_id: id(2), input_event_id: id(3),
       input_request_key: client, expected_generation: join ? 1 : 0,
       window_id: join ? id(4) : null, predecessor_window_id: null}),
@@ -65,7 +66,17 @@ test('first and joined work each need a distinct owner admission after the ordin
 });
 
 test('an unsuccessful intake never proceeds to window admission', async () => {
-  const {ui, text, events} = fixture(false, 409);
-  await assert.rejects(ui.send(text), /control_response_not_successful/);
-  assert.deepEqual(events, ['draft', 'Send', 'intake_receipt']);
+  for (const status of [200, 201, 204, 302, 400, 401, 403, 409, 500, 503]) {
+    const {ui, text, events} = fixture(false, status);
+    await assert.rejects(ui.send(text), /control_response_not_successful/);
+    assert.deepEqual(events, ['draft', 'Send', 'intake_receipt']);
+  }
+});
+
+test('window replay or unexpected status cannot count as a fresh admission', async () => {
+  for (const status of [200, 202, 204, 409, 503]) {
+    const {ui, text, events} = fixture(false, 202, status);
+    await assert.rejects(ui.send(text), /control_response_not_successful/);
+    assert.deepEqual(events, ['draft', 'Send', 'intake_receipt', 'Start work', 'admission_receipt']);
+  }
 });
