@@ -38,3 +38,19 @@ read/hash scope changes, zero-byte and one-byte chunk flood refusal, and
 copying from reused mutable chunks. Node syntax and diff checks pass. No browser, real
 attachment, download, WASM build, backend roundtrip or mounted acceptance is
 claimed. Core persistence and Migration's independent oracle remain separate.
+
+## Persisted ABI compatibility
+
+Core `9cd9268234f52581de260681bf926be9d77968ef` adds `inert` saved
+references. The client accepts their separately bounded legacy metadata, excludes
+their length from the active aggregate, and preserves their text without path
+interpretation. Inert bytes are always refused; absent bytes yield only an inert
+descriptor. The presentation says `Saved reference only — file unavailable` and
+offers no download/promotion action. Available/removed validation remains unchanged.
+
+JavaScript cannot losslessly represent the full Rust u64 range. The pure client
+explicitly refuses lengths above Number.MAX_SAFE_INTEGER rather than rounding a
+legacy descriptor. A future mounted wire adapter needs a reviewed lossless number
+representation if such descriptors must be displayed. No transfer/import DTO or
+live download route is consumed here. Eighteen synthetic Node cases pass; no
+persistence, HTTP, mounted UI or roundtrip credit is claimed.

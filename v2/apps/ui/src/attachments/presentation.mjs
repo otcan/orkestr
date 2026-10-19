@@ -4,7 +4,8 @@ export function attachmentLabel(reference) {
   return Object.freeze({
     name: reference.filename,
     size: `${reference.byte_length.toLocaleString('en-US')} bytes`,
-    status: reference.state === 'removed' ? 'File removed' : 'Not downloaded',
+    status: reference.state === 'inert' ? 'Saved reference only — file unavailable' :
+      reference.state === 'removed' ? 'File removed' : 'Not downloaded',
     canSave: false,
   });
 }
