@@ -251,7 +251,7 @@ class Ledger:
         with self.transaction():
             row = self._exact(window, selected_generation)
             require(row["state"] != "retired", "window_retired")
-            self.db.execute("UPDATE windows SET state='reconciliation',reason=coalesce(reason,?) WHERE id=?", (reason, window))
+            self.db.execute("UPDATE windows SET reason=CASE WHEN state='reconciliation' THEN coalesce(reason,?) ELSE ? END,state='reconciliation' WHERE id=?", (reason, reason, window))
             return self._receipt(self._latest())
 
     def retire(self, request):
