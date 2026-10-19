@@ -7,9 +7,9 @@ from isolation import policy
 
 
 class Configuration:
-    def __init__(self, package):
+    def __init__(self, package, role=None):
         self.package = Package(package)
-        self.profile = SelectedCodexProfile(self.package.root / "profile.json")
+        self.profile = SelectedCodexProfile(self.package.profile_path(role))
         self.workspace = self.profile.workspace
         self.issued = False
 
