@@ -60,6 +60,7 @@ impl TaskDraft {
             title: self.title.clone(),
             instructions: self.instructions.clone(),
             lifetime_ms: 30_000,
+            execution_budget_ms: None,
         };
         if !request.is_valid() {
             return Err(

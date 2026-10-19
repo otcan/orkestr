@@ -25,6 +25,10 @@ fn uncertain_create_retains_independent_instructions_key_and_parent_despite_edit
             "key-one".into(),
         )
         .unwrap();
+    assert!(pending.request.execution_budget_ms.is_none());
+    let wire = serde_json::to_value(&pending.request).unwrap();
+    assert!(wire.get("execution_budget_ms").is_none());
+    assert_eq!(wire["lifetime_ms"], 30_000);
     draft.failed(&pending, 0);
     draft.edit("New draft".into(), "New independent instructions".into());
     let retry = draft
