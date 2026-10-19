@@ -24,6 +24,7 @@ mod auth;
 mod automatic_reply_control;
 mod beta_config;
 mod beta_discovery_http;
+mod intelligence_http;
 mod browser;
 pub mod build_identity;
 pub mod claude_execution;
@@ -321,6 +322,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/conversations",get(conversations_http::list).post(conversations_http::create))
         .route("/api/v2/conversations/{id}/accepted-results",get(accepted_results_http::read))
         .route("/api/v2/beta",get(beta_discovery_http::read))
+        .route("/api/v2/conversations/{id}/intelligence",get(intelligence_http::read))
         .route("/api/v2/conversations/{id}/window",get(window_http::status).post(window_http::admit))
         .route("/api/v2/conversations/{id}/execution",get(execution::status))
         .route("/api/v2/conversations/{id}/fast/execution",get(execution::fast_status))
