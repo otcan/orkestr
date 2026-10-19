@@ -111,7 +111,6 @@ pub fn WorkerTasksView(
                         li { key: "{row.task.task_id}",
                             h4 { "{row.title.as_deref().unwrap_or(\"Task payload removed\")}" }
                             p { "{phase_label(row.phase)}" }
-                            p { "Effective saved deadline is not provided here. View worker activity for current status." }
                             p { if row.instructions_available { "Instructions saved. This history shows the task title; instruction text is not included." } else { "Saved instructions removed." } }
                             if let Some(run) = &row.run_id {
                                 button { onclick: { let run=run.to_string(); move |_| selected_run.set(run.clone()) }, "View worker activity" }
