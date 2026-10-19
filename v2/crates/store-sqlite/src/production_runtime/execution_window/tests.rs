@@ -4,7 +4,7 @@ use orkestr_v2_application::IntakeStore;
 use orkestr_v2_contracts::MessageInput;
 use std::time::Duration;
 
-async fn input(f: &Case, key: &str) -> ExecutionWindowRequest {
+pub(super) async fn input(f: &Case, key: &str) -> ExecutionWindowRequest {
     let receipt = f
         .store
         .admit(
@@ -28,7 +28,7 @@ async fn input(f: &Case, key: &str) -> ExecutionWindowRequest {
         predecessor_window_id: None,
     }
 }
-async fn browser(f: &Case) -> String {
+pub(super) async fn browser(f: &Case) -> String {
     let token = "synthetic-browser-window".to_string();
     f.store.save_session(&token, &f.owner).await.unwrap();
     token
