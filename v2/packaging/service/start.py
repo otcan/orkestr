@@ -24,6 +24,7 @@ def startup(plan, digest, secret_fd):
     require(actual==value['files'],'package inventory changed')
     settings=value['settings'];home=Path(settings['home'])
     require(os.geteuid()==settings['uid'] and os.geteuid()!=0,'root manager must drop uid before service startup')
+    require(os.getegid()==settings['gid'],'root manager must drop gid before service startup')
     s=home.lstat();require(home.is_dir() and not home.is_symlink() and s.st_uid==os.geteuid() and stat.S_IMODE(s.st_mode)==0o700,'private service-owned isolated home required')
     if 'beta_config' in settings:verify([settings['beta_config']])
     deps=value['dependencies'];verify(deps['server']['files'].values());verify([deps['server']['readelf']])

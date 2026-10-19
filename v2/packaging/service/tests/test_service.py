@@ -77,6 +77,7 @@ class ServiceTests(unittest.TestCase):
         manifest=self.assemble();value=json.loads(manifest.read_text())
         home=self.root/'home';home.mkdir(mode=0o700)
         value['settings']['uid']=os.getuid()+(1 if wrong_uid else 0)
+        value['settings']['gid']=os.getgid()
         value['dependencies']['server']['readelf']=closure.pin(self.binary)
         value['dependencies']['python']={'files':{},'native':{},'executable':str(Path(sys.executable).resolve())}
         manifest.chmod(0o600);manifest.write_text(json.dumps(value))
@@ -103,3 +104,9 @@ class ServiceTests(unittest.TestCase):
         result=self.startup_child(wrong_uid=True)
         self.assertNotEqual(result.returncode,0)
         self.assertIn('drop uid',result.stderr)
+
+    def test_distinct_service_group_is_explicit(self):
+        value=prepare.settings(self.root/'home','https://beta.example.invalid',19822,995,self.out,986)
+        self.assertEqual((value['uid'],value['gid']),(995,986))
+        with self.assertRaisesRegex(RuntimeError,'gid'):
+            prepare.settings(self.root/'home','https://beta.example.invalid',19822,995,self.out,0)

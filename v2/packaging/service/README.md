@@ -93,3 +93,18 @@ Tests use fake identities/artifacts and private disposable state. The subprocess
 startup test verifies the pipe/env/identity path without executing its synthetic
 server. Root package ownership application, actual ELF/runtime closure and actual
 persistent Rust/manager startup remain unexecuted. No installed services changed.
+
+The persistent manager integration must supply the package-inventoried executable
+`start-service` at the package root for a root-managed service unit. It must enter
+`codex_service`, never the finite bounded controller. This leaf intentionally
+cannot produce that deployable entrypoint until the manager's committed startup
+ABI and dependency inventory are supplied. `tools/start.py` is the dropped HTTP
+child, not a root service entrypoint; do not point a root unit directly at it.
+
+Use explicit `--uid 995 --gid 986` for installations with distinct service user
+and group. The root preparer assigns package group and private config readability
+to the configured GID; the child checks both effective IDs before startup.
+Root manager ownership of restart reconciliation and the durable unfinished-window
+ledger remains mandatory: restarting the HTTP child must never reset a budget.
+Private service units, origin, socket locations and host configuration are supplied
+by the operator outside this repository. No unit or proxy installation is performed.
