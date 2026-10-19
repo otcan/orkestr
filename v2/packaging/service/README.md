@@ -235,3 +235,10 @@ It does **not** qualify the complete transitive interpreter/stdlib/cache/native
 ELF closure. An external complete startup-closure receipt must be captured and
 reverified before actual execution. `transitive_startup_closure_qualified` remains
 false in this preparation receipt.
+
+Before any pair/server/native/UI read or hash, a metadata-only boundary verifies
+canonical regular inputs, single-link credential and artifact files, disjoint
+credential/artifact inode identities, and the complete UI tree without following
+symlinks. Credentials inside the UI tree are refused. This requires the same
+stable trusted namespace as preparation; subsequent hostile path replacement is
+not prevented by this preflight.
