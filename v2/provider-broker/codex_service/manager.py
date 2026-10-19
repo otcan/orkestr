@@ -11,8 +11,8 @@ import time
 
 from codex_bounded.trust import exists, process
 from .budget import WindowBudget
-from .channel import ServerPeer, receive, respond
-from .contract import Refused, require
+from .channel import ServerPeer, bind_deadline, receive, respond
+from .contract import BIND_REPLY_SECONDS, DRAIN_SECONDS, Refused, require
 from .custody import OwnedSocket, StateLock
 from .egress import Endpoint
 from .ledger import Ledger
@@ -80,7 +80,13 @@ class Manager:
             self._uncertain("cleanup_unknown")
         return not errors
 
-    def dispatch(self, request):
+    def _bind_deadline(self, request, accepted):
+        self.ledger._scope(request)
+        row = self.ledger.details(request["window_id"], request["generation"])
+        return bind_deadline(request["bind_deadline_ms"], accepted,
+                             row["deadline_mono_ns"] / 1e9 - DRAIN_SECONDS)
+
+    def dispatch(self, request, deadline=None):
         self.ledger._scope(request)
         operation = request["operation"]
         if operation == "status":
@@ -109,8 +115,10 @@ class Manager:
             require(status["state"] == "active" and self.children is not None
                     and self.egress is not None, "window_not_accepting_children")
             try:
+                if deadline is None:
+                    deadline = self._bind_deadline(request, time.monotonic())
                 fresh = self.children.bind(request["broker_pid"], request["broker_start"],
-                                           time.monotonic() + 0.8)
+                                           deadline - BIND_REPLY_SECONDS)
             except Exception:
                 self._uncertain("cleanup_unknown")
                 self._terminate_window()
@@ -161,10 +169,13 @@ class Manager:
             # A foreign same-UID process receives no parser or status oracle.
             if not self.peer.accepts(connection):
                 return
-            deadline = time.monotonic() + 1
+            accepted = time.monotonic()
+            deadline = accepted + 1
             try:
                 request = receive(connection, deadline)
-                answer = self.dispatch(request)
+                if request["operation"] == "bind_child":
+                    deadline = self._bind_deadline(request, accepted)
+                answer = self.dispatch(request, deadline)
             except Refused:
                 answer = {"ok": False, "code": "control_refused", "receipt": self.ledger.status()}
             except (OSError, ValueError):

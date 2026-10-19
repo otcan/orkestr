@@ -6,7 +6,20 @@ import struct
 import time
 
 from codex_bounded.trust import exists, process
-from .contract import HEADER, MAX_FRAME, decode, encode, require
+from .contract import HEADER, MAX_FRAME, MAX_BIND_MS, decode, encode, require
+
+
+def bind_deadline(wall_deadline_ms, accepted, work_deadline):
+    """Translate the caller's original bound once; no per-stage renewal."""
+    require(type(wall_deadline_ms) is int and 0 < wall_deadline_ms < 2**53,
+            "bind_deadline")
+    now = time.monotonic()
+    remaining_ms = wall_deadline_ms - time.time_ns() // 1_000_000
+    require(0 < remaining_ms <= MAX_BIND_MS, "bind_deadline")
+    deadline = min(accepted + MAX_BIND_MS / 1000,
+                   now + remaining_ms / 1000, work_deadline)
+    require(now < deadline, "bind_deadline")
+    return deadline
 
 
 class ServerPeer:

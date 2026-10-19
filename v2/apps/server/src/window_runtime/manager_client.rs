@@ -279,7 +279,8 @@ impl ManagerClient {
         child: &BrokerChildLocator,
         deadline: Instant,
     ) -> Result<BindAck> {
-        let request = self.binding(request_id, window, child.pid(), child.start())?;
+        let mut request = self.binding(request_id, window, child.pid(), child.start())?;
+        request["bind_deadline_ms"] = json!(bind_deadline_ms(deadline)?);
         tokio::runtime::Builder::new_current_thread()
             .enable_io()
             .enable_time()
