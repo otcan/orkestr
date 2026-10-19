@@ -12,6 +12,7 @@ pub use filesystem::{
 mod boundary_tests;
 mod issuance;
 mod launch;
+mod restart;
 #[cfg(test)]
 mod tests;
 mod validation;
@@ -59,3 +60,6 @@ impl WorkspaceGrant {
         self.generation as u64
     }
 }
+
+#[cfg(test)]
+mod restart_tests;

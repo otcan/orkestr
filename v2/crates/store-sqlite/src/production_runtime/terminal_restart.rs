@@ -65,6 +65,47 @@ impl Store {
         config: ProductionSupervisorConfig,
         prior_run: &RunId,
     ) -> Result<(Store, BoundSessionMetadata)> {
+        self.reattach_terminal_supervisor_inner(
+            credential,
+            config,
+            prior_run,
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            None,
+        )
+        .await
+    }
+
+    /// Exact local installation reattachment, at unchanged durable generation.
+    /// The old association must match the proven predecessor before metadata is
+    /// reserved in this same transaction. No path or new project is authorized.
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    pub async fn reattach_terminal_supervisor_with_workspace(
+        &self,
+        credential: &str,
+        config: ProductionSupervisorConfig,
+        prior_run: &RunId,
+        project: Uuid,
+        installation: WorkspaceInstallation,
+    ) -> Result<(Store, BoundSessionMetadata)> {
+        self.reattach_terminal_supervisor_inner(
+            credential,
+            config,
+            prior_run,
+            Some((project, installation)),
+        )
+        .await
+    }
+
+    async fn reattach_terminal_supervisor_inner(
+        &self,
+        credential: &str,
+        config: ProductionSupervisorConfig,
+        prior_run: &RunId,
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))] workspace: Option<(
+            Uuid,
+            WorkspaceInstallation,
+        )>,
+    ) -> Result<(Store, BoundSessionMetadata)> {
         if credential.len() != 64 || !credential.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(RuntimeStoreError::Unauthorized);
         }
@@ -161,6 +202,18 @@ impl Store {
                 token_hash,
             }),
         };
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        if let Some((project, installation)) = workspace {
+            store
+                .rebind_terminal_workspace_in(
+                    &mut tx,
+                    &binding,
+                    &incarnation_id,
+                    project,
+                    installation,
+                )
+                .await?;
+        }
         let grant = store
             .reserve_terminal_metadata(tx, prior_run, &binding, terminal.get("event_id"))
             .await?;

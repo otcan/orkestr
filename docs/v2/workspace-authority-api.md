@@ -73,3 +73,24 @@ production workspace validation has no missing-schema exemption.
 
 Core does not claim actual descriptor spawn/mount, native process cleanup,
 factory activation, hostile mount protection, or a live installation change.
+
+## Configured terminal restart with a workspace
+
+`Store::reattach_terminal_supervisor_with_workspace(credential, config,
+prior_run, project: Uuid, installation: WorkspaceInstallation)` returns the
+existing `(Store, BoundSessionMetadata)` pair. Linux64 only. The original
+operator allowlist supplies the installation; browser paths and project IDs
+alone grant nothing. The exact retired predecessor association, owner,
+conversation, retained filesystem identities, active project and unchanged
+project generation are checked inside the existing restart write transaction.
+The association is transferred to the new incarnation and the local descriptor
+registry installed before terminal metadata reservation. No nested writer,
+new generation, native identity reset or historical dispatch is issued.
+
+After return, `register_workspace` with the same installation/project obtains
+its existing generation for ordinary launch reservation. The legacy restart
+method still refuses a workspace binding without this handoff. A failed outer
+transaction may leave a local retained descriptor entry, but every metadata and
+effect fence rechecks the durable association and incarnation; that entry grants
+no authority. Replacement, revocation and stale predecessor attempts refuse.
+Server-owned original child reap evidence remains a separate prerequisite.
