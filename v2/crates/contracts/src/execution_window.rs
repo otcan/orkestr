@@ -56,7 +56,7 @@ impl ExecutionWindowRequest {
             && !self.input_request_key.chars().any(char::is_control)
             && !self.input_message_id.0.is_nil()
             && !self.input_event_id.0.is_nil()
-            && self.expected_generation < 9_007_199_254_740_991
+            && self.expected_generation < 9_007_199_254_740_992
             && self.window_id.is_none_or(|id| !id.is_nil())
             && self.predecessor_window_id.is_none_or(|id| !id.is_nil())
             && !(self.window_id.is_some() && self.predecessor_window_id.is_some())
@@ -93,4 +93,26 @@ pub struct ExecutionWindowAdmission {
     pub input_request_key: String,
     pub request_key: String,
     pub duplicate: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn generation_exact_integer_edges() {
+        let mut request = ExecutionWindowRequest {
+            request_key: "synthetic".into(),
+            input_message_id: MessageId(Uuid::from_u128(1)),
+            input_event_id: EventId(Uuid::from_u128(2)),
+            input_request_key: "source".into(),
+            expected_generation: 0,
+            window_id: None,
+            predecessor_window_id: None,
+        };
+        assert!(request.is_valid());
+        request.expected_generation = 9_007_199_254_740_991;
+        assert!(request.is_valid());
+        request.expected_generation = 9_007_199_254_740_992;
+        assert!(!request.is_valid());
+    }
 }
