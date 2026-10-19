@@ -116,3 +116,35 @@ fields are required; account/token/role/limits additions refuse. The file remain
 externally root-managed and byte-pinned. Shape validation alone authenticates no
 launcher, workspace or manager peer; manager process composition and those
 qualification gates remain pending the manager-owned implementation.
+
+### Outer release composition
+
+The agreed layout separates the immutable selected package from its unit entry:
+
+```text
+release/
+  start-service
+  release.json
+  package/
+    manifest.json
+    codex_service/entry.py
+    ... exact codex_service.package.FILES and UI inventory ...
+```
+
+`release.prepare_release` copies a prepared inner package without modifying its
+closed inventory, emits a fixed shell wrapper invoking the canonical trusted
+Python with `-I -S -B`, and embeds the inner manifest hash in that wrapper.
+`release.json` inventories wrapper and inner bytes and pins shell/interpreter.
+Its own digest must be retained externally by the root release operator. There
+is no circular hash and no relaxation of unexpected-inner-file rejection.
+This outer layout supersedes the earlier request to place `start-service` in
+`Package.FILES`. The existing dropped-child prototype is not the manager entry.
+
+This is a composition primitive, not complete private package preparation:
+inner configuration must already bind the final absolute `release/package`
+location, selected account reference and operator paths. Copying a package with
+configuration bound to another location cannot qualify startup. Manager `Package`
+validation and independent source review remain mandatory. The final package
+must use the reviewed successor fixing stopped-child shell-to-Python validation;
+`d137e7a7` is a source interface checkpoint only. No actual manager/native/server
+startup or installed symlink publication is performed by this module.
