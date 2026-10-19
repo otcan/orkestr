@@ -43,8 +43,15 @@ database), and distinct explicit legacy bindings. They cover cookie scope,
 Bearer/duplicate refusal, Host/Origin, missing descriptors/files, foreign source
 owners, duplicate JSON, oversize and symlinks. Test-only barriers revoke/logout
 before read and before delivery. No unsupported second-owner SQL insertion or
-authentication stub is used. Native compilation/execution is pending bounded
-build admission; these tests currently carry no execution credit.
+authentication stub is used. Native tests passed 4/4 on the exact `65e7730298afefae0812cd98455f7c9d9ec5973e`
+composition with leaf `5e41617fdfa570a87b3ed269216adaea6d9b8acf` and temporary
+public module declaration only. Strict server all-targets Clippy with
+`orkestr-v2-store-sqlite/fixture-test-controls` and `-D warnings` passed using
+locked/offline mandatory-wrapper execution. The first temporary declaration was
+placed before the crate doc comment and failed E0753; correcting its placement
+required no leaf change. Initial failure and final raw logs are retained privately.
+The final selected test rerun passed 4/4 in 1.70 seconds. This qualifies synthetic
+native composition, not canonical registration, live bindings or provider readiness.
 
 A disposable integration build needs this subtree, the committed status-v1
 fixture and a temporary module declaration only, on a coordinator-pinned current
