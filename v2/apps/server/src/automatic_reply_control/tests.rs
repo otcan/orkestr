@@ -1,6 +1,4 @@
 //! Actual HTTP against the leaf inside the canonical guard; synthetic Store only.
-use super::*;
-use axum::{middleware, Router};
 use orkestr_v2_application::runtime::{
     ProductionSupervisorConfig, ProductionTakeover, ProviderKind,
 };
@@ -73,10 +71,7 @@ async fn current_browser_policy_read_decision_replay_conflict_and_revoke() {
         .unwrap();
     let state =
         crate::AppState::new(store.clone(), "ef".repeat(32), "http://localhost".into()).unwrap();
-    let app = Router::new()
-        .nest("/api/v2", router())
-        .layer(middleware::from_fn_with_state(state.clone(), crate::guard))
-        .with_state(state);
+    let app = crate::router(state);
     let socket = home.join("http.sock");
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
