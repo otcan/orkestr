@@ -2,6 +2,7 @@
 import json
 import uuid
 from protocol import exact, require
+from claude_stop_metadata import without_stop_metadata
 
 
 def canonical(value):
@@ -54,6 +55,7 @@ class ClaudeControl:
 
     def result(self, frame, telemetry):
         require(self.terminal is None)
+        frame = without_stop_metadata(frame)
         correlated(frame, self.native, self.message)
         value = canonical(frame.get('uuid'))
         require(value not in (self.native, self.message) and value not in telemetry
