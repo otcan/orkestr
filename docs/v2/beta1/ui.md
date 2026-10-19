@@ -55,12 +55,18 @@ mounted browser, Store composition, provider or cleanup acceptance. A first
 binary check exposed a temporary borrow error; the request clone now releases
 the immutable borrow before preparing intent, and the subsequent check passes.
 
-A review found the initial mounted admission intent was not conversation-keyed.
+Independent source review found the initial mounted admission intent was not
+conversation-keyed: the App retained one intent, so a pending request from A
+could be sent to current route B and success could remove the rendered row.
+This finding was source-derived; no independent failing executable oracle was
+retained or run.
 The successor retains independent bounded per-conversation intents. Every write
 captures a route/owner-epoch/intent-generation ticket; cross-route or superseded
 callbacks cannot review or complete an intent. Successful receipt handling removes
 only the saved input matching the pending message/event/client-key tuple, never
 the currently rendered first row. Selection preserves other conversations'
 uncertain requests. Explicit review advances that intent's generation; owner
-change invalidates all tickets. Two added deterministic route/navigation cases
-plus the six prior focused cases pass; this is not mounted browser verification.
+change invalidates all tickets. Two author-written deterministic route/navigation cases
+plus the six prior author-focused cases pass. They are new regressions, not an
+unchanged independent oracle. Independent source review of the repair is pending;
+a reviewer may add independent tests. This is not mounted browser verification.
