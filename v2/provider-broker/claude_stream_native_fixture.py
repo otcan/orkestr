@@ -97,6 +97,17 @@ def main():
         emit({'type': 'result', 'session_id': native, 'uuid': str(uuid.uuid4()),
               'user_message_uuid': current, 'subtype': 'success', 'is_error': False, 'result': piece * 4})
     else:
+        # The pinned native emits its truncated full text block on abort,
+        # after the earlier thinking frame used the one explicit input echo.
+        emit({'type': 'assistant', 'session_id': native, 'uuid': str(uuid.uuid4()),
+              'parent_tool_use_id': None, 'aborted': True,
+              'request_id': 'synthetic-request', 'message': {'id': api, 'type': 'message',
+              'role': 'assistant', 'model': 'synthetic-model', 'stop_reason': None,
+              'content': [{'type': 'text', 'text': piece + 'late text must be discarded'}]}})
+        deadline = time.monotonic() + 5
+        while not Path('release-synthetic-terminal').exists():
+            assert time.monotonic() < deadline
+            time.sleep(.01)
         emit({'type': 'result', 'session_id': native, 'uuid': str(uuid.uuid4()),
               'user_message_uuid': current, 'subtype': 'error_during_execution', 'is_error': True,
               'terminal_reason': 'aborted_streaming', 'errors': ['synthetic interruption']})

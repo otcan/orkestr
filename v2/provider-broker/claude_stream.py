@@ -132,14 +132,14 @@ class ClaudeTextStream:
         require(self.thinking_bytes + count <= MAX_THINKING)
         self.thinking_bytes += count  # Never retain thinking/signature/redacted bytes or hashes.
 
-    def observe_assistant(self, frame):
+    def observe_assistant(self, frame, *, cancelled=False):
         try:
             self._record(frame)
             # Native emits the complete assistant immediately before that
             # block's stop. A delayed full block cannot validate old output.
             require(self.state == 'message' and self.active == self.full
                     and self.full < len(self.blocks))
-            assistant_envelope(frame, self.native, self.message)
+            assistant_envelope(frame, self.native, self.message, cancelled=cancelled)
             require(frame['message']['id'] == self.api
                     and frame['message'].get('model') == self.model)
             _, prepared = self.assistants.prepare(frame)

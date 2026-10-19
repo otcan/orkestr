@@ -145,10 +145,11 @@ def block(value, start=False):
     return kind, len(text(value['data'], MAX_TEXT))
 
 
-def assistant_envelope(frame, native, message):
+def assistant_envelope(frame, native, message, *, cancelled=False):
     required = {'type', 'session_id', 'uuid', 'message'}
     optional = {'parent_tool_use_id', 'user_message_uuid', 'user_message_uuids', 'request_id',
-                'narration_block_indexes', 'narration_hint', 'thinking_duration_ms', 'timestamp'}
+                'narration_block_indexes', 'narration_hint', 'thinking_duration_ms', 'timestamp',
+                'aborted'}
     require(required <= set(frame) and set(frame) <= required | optional)
     require(frame['type'] == 'assistant' and frame['session_id'] == native
             and frame.get('parent_tool_use_id') is None)
@@ -160,3 +161,10 @@ def assistant_envelope(frame, native, message):
     if 'narration_block_indexes' in frame: require(frame['narration_block_indexes'] in ([], [0]))
     message_header(frame['message'])
     require(len(frame['message']['content']) == 1)
+    if 'aborted' in frame:
+        # Native marks the truncated full text block on interrupt. It remains
+        # a hash-checked, discard-only block; never an ACK or terminal receipt.
+        content = frame['message']['content'][0]
+        require(cancelled is True and frame['aborted'] is True
+                and frame['message'].get('stop_reason') is None
+                and isinstance(content, dict) and content.get('type') == 'text')

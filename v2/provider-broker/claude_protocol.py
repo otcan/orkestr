@@ -160,7 +160,7 @@ class ClaudeChannel:
             if self.stream.started:
                 require(self.initialized and self.system_seen and not self.terminal)
                 if kind == 'assistant':
-                    return self.stream.observe_assistant(frame)
+                    return self.stream.observe_assistant(frame, cancelled=self.control is not None)
                 frame = self.stream.finish(frame, cancelled=self.control is not None)
             else:
                 require(frame.get('uuid') not in self.stream.events)

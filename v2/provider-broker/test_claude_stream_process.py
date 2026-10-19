@@ -81,6 +81,17 @@ class ClaudeStreamProcessTests(unittest.TestCase):
                     self.assertTrue(channel.control.ack); self.assertFalse(channel.terminal)
                     self.assertIsNone(pump.child.poll())
                 (root / 'release-synthetic-stream').touch()
+                if mode == 'cancel':
+                    deadline = time.monotonic() + 5
+                    while channel.stream.full != 2:
+                        self.assertLess(time.monotonic(), deadline, 'synthetic aborted block timed out')
+                        ready, _, _ = select.select([pump.child.stdout], [], [], .05)
+                        if ready: pump.read(pump.child.stdout.fileno())
+                    self.assertFalse(pump.queues[101])
+                    self.assertFalse(channel.terminal)
+                    self.assertIsNone(channel.control.terminal)
+                    self.assertIsNone(pump.child.poll())
+                    (root / 'release-synthetic-terminal').touch()
                 pieces = [piece]
                 while not channel.terminal or pump.queues[101]:
                     frame = observe()['params']['frame']

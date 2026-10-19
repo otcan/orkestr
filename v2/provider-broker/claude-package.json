@@ -4,7 +4,7 @@
   "files": {
     "claude_server.py": "1d71a71b34f57fe6f1e07c1fa50a5f86c85b2890574b6d7dde59773bc933fc02",
     "claude_connector.py": "692ff382e60cc8e06af573cae061a2132670027d848e2eb6feb20be0a228be15",
-    "claude_protocol.py": "112fb8f46f551ecb967c3b39b5be2b45ef0ce81218878cf38cb4ec3dcf9f29a7",
+    "claude_protocol.py": "e0ba4b49b44545792b77febc0a4b75c29511ef05e8f9e3d1f8c597beeccc8f20",
     "protocol.py": "b80fd19455c79bb11d98674ac972b619b999e59142982fa112d6521039082203",
     "transport.py": "fe7821673c927f3a8a6226ca8f9e08e9c8a5ea4eb9526b62a2a44e3789e8264c",
     "claude_resume.py": "ecc014ec6578791adc2086b3d83dc161c61fbdffa043c957b0cc919c9a2d2850",
@@ -17,8 +17,8 @@
     "claude_assistant_metadata.py": "d2bf04492072aa11348ffe342949998b304dbc6c1c5e331798a5d212277f97b8",
     "claude_assistant_input.py": "53f1840a683015813fc6a052f31e4f45d9e230eecde76183e6a7fe49a73812e4",
     "claude_stop_metadata.py": "6a1a7a812a0c1ecd1d5cea590f674fa2b5484aabb20c9aa5ee567db109457e02",
-    "claude_stream_schema.py": "e3f780916a20a151743fcddfc812d26ff6527d8a26718c76b1ee7c00aa53c56a",
-    "claude_stream.py": "e7b29c2bedb61a5b7d31d3bd82856b960850526c4f052acf8d89784ab585e663",
+    "claude_stream_schema.py": "14a3bf0ec1bb1457605aad0f1c06afec6785d233a6b48ff34b7efcf4864342bb",
+    "claude_stream.py": "18a4a0c0aa7d0c75a19c241b918b15d1b4f9cfc4194d01f5e2e41c15fd1e566f",
     "claude_pump.py": "7d820f09dea4d9c1d4a2d76f7de4dd17a69bce79f709b79ad888dc0756d9ff6a",
     "claude_stream_diagnostic.py": "c4296c32d165db70e92337808dc046defcad932f9291e25da38a993a485dfecc",
     "claude_input_transformations.py": "ef4d7a235889b55b75a9c3001eeeef99ac08a9f6bb20b2755ca01440c980ecf4"
