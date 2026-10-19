@@ -7,6 +7,12 @@ pub(super) struct ResumeLink {
     prior_run: RunId,
     terminal_event: EventId,
 }
+impl ResumeLink {
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    pub(super) fn workspace_identity(&self) -> &str {
+        &self.id
+    }
+}
 impl Store {
     /// Reserve setup once for the exact owner-accepted predecessor. Reopening or
     /// losing the grant never reissues it; uncertain setup requires reconciliation.
@@ -71,6 +77,8 @@ impl Store {
     ) -> Result<()> {
         let c = self.context()?;
         c.validate(tx).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        self.validate_workspace_binding(tx, &grant.binding).await?;
         let link = grant.resume.as_ref().ok_or(RuntimeStoreError::Fenced)?;
         if c.id != grant.context.id
             || c.incarnation != grant.context.incarnation

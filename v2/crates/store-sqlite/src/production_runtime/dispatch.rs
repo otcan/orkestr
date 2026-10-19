@@ -21,6 +21,23 @@ impl Store {
         conn: &mut SqliteConnection,
         p: &ProviderAdmission,
     ) -> Result<SqliteRow> {
+        self.production_authorized_run_checked(conn, p, true).await
+    }
+    // Negative authority only: used solely by the existing cancellation writer.
+    // Workspace revocation must not prevent issuing owned cleanup control.
+    pub(super) async fn production_authorized_run_for_cancel(
+        &self,
+        conn: &mut SqliteConnection,
+        p: &ProviderAdmission,
+    ) -> Result<SqliteRow> {
+        self.production_authorized_run_checked(conn, p, false).await
+    }
+    async fn production_authorized_run_checked(
+        &self,
+        conn: &mut SqliteConnection,
+        p: &ProviderAdmission,
+        workspace_effect: bool,
+    ) -> Result<SqliteRow> {
         let c = self.context()?;
         c.validate(conn).await?;
         if p.run.owner_id != c.owner {
@@ -69,6 +86,12 @@ impl Store {
         // Timer disable/rollback fences even an already-admitted input. Keep
         // cancellation authority usable so an owned process can still be stopped.
         if p.run.purpose == AdmissionPurpose::Execution {
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            if workspace_effect {
+                self.validate_workspace_binding(conn, &p.binding).await?;
+            }
+            #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+            let _ = workspace_effect;
             let held: i64 =
                 sqlx::query_scalar("SELECT count(*) FROM ordinary_input_holds WHERE event_id=?")
                     .bind(row.get::<String, _>("event_id"))

@@ -29,6 +29,16 @@ mod leases;
 mod running_renewal;
 pub use running_renewal::{RunLeaseTransition, RunRenewalAuthority};
 mod metadata;
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+mod workspace;
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+pub(crate) use workspace::Registry as WorkspaceRegistry;
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+pub use workspace::{
+    WorkspaceDescriptors, WorkspaceDirectoryIdentity, WorkspaceGrant, WorkspaceInstallation,
+    WorkspaceLaunch, WorkspaceLaunchConsumption, WorkspaceLaunchReservation,
+    WorkspaceLaunchReservationResult, WorkspaceOperatorAllowlist,
+};
 #[cfg(test)]
 mod observation_tests;
 mod observations;
@@ -165,6 +175,8 @@ impl Store {
             #[cfg(feature = "fixture-test-controls")]
             production_checkpoint: None,
             pool: self.pool.clone(),
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            workspace_handles: self.workspace_handles.clone(),
             authority: Some(Context {
                 owner: OwnerId(Uuid::parse_str(&owner).map_err(db)?),
                 provider: config.provider,
@@ -185,6 +197,8 @@ impl Store {
             #[cfg(feature = "fixture-test-controls")]
             production_checkpoint: None,
             pool: store.pool.clone(),
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            workspace_handles: store.workspace_handles.clone(),
             authority: Some(self.context()?.clone()),
         };
         let mut tx = result.pool.begin().await.map_err(db)?;

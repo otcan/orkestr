@@ -42,10 +42,18 @@ pub use production_runtime::inspection::{
 #[cfg(feature = "fixture-test-controls")]
 pub use production_runtime::test_controls::ProductionCheckpoint;
 
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+pub use production_runtime::{
+    WorkspaceDescriptors, WorkspaceDirectoryIdentity, WorkspaceGrant, WorkspaceInstallation,
+    WorkspaceLaunch, WorkspaceLaunchConsumption, WorkspaceLaunchReservation,
+    WorkspaceLaunchReservationResult, WorkspaceOperatorAllowlist,
+};
 #[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,
     authority: Option<production_runtime::Context>,
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    workspace_handles: std::sync::Arc<production_runtime::WorkspaceRegistry>,
     #[cfg(feature = "fixture-test-controls")]
     production_checkpoint:
         Option<std::sync::Arc<production_runtime::test_controls::ArmedCheckpoint>>,
@@ -86,6 +94,8 @@ impl Store {
         Ok(Self {
             pool,
             authority: None,
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            workspace_handles: Default::default(),
             #[cfg(feature = "fixture-test-controls")]
             production_checkpoint: None,
         })
