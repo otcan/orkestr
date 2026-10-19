@@ -10,6 +10,8 @@ use orkestr_v2_application::runtime::{Binding, NativeSessionConfirmation};
 use orkestr_v2_store_sqlite::{BoundSessionMetadata, Store};
 use std::path::{Path, PathBuf};
 
+type BeforeOpen<'a> = &'a mut dyn FnMut(&MetadataChild) -> Result<(), SetupFailure>;
+
 #[derive(Debug)]
 pub enum SetupFailure {
     Protocol(Blocker),
@@ -202,7 +204,7 @@ impl PreparingCodex {
         offline_python: bool,
         resources: Box<dyn Send + 'static>,
         workspace_launch: Option<(&str, &mut orkestr_v2_store_sqlite::WorkspaceLaunch)>,
-        before_open: Option<&mut dyn FnMut(&MetadataChild) -> Result<(), SetupFailure>>,
+        before_open: Option<BeforeOpen<'_>>,
     ) -> Result<Self, SetupFailure> {
         if grant.provider() != ProviderKind::Codex
             || if workspace_launch.is_some() {
