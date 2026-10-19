@@ -1,3 +1,5 @@
+mod accepted_results;
+pub use accepted_results::*;
 //! Version 0 HTTP contracts. No storage or provider dependencies.
 mod beta;
 pub use beta::*;

@@ -1,0 +1,7 @@
+# Accepted result history
+
+Canonical read route for server composition: `GET /api/v2/conversations/{conversation}/accepted-results?after_sequence=0&limit=20`. Strict nonnegative exclusive `after_sequence`; limit 1..50, default 20. Original current browser credential is passed to `Store::accepted_results_authenticated(credential, conversation, after_sequence, limit)`. No owner selector or supervisor authority is accepted. Existing authenticated protected payload route remains the text reader.
+
+`AcceptedResults { conversation_id, results, next_after_sequence }` contains ascending acceptance event sequence rows. Each `AcceptedResult` has `run_id`, `completion_event_id`, `acceptance_event_id`, `acceptance_sequence`, nullable `payload_id`, and `payload_removed`. The reference is the last progress payload of the exact run strictly before its canonical completed proposal. No payload means no recorded output, not an empty assistant message. Removed payloads retain their exact reference with `payload_removed=true`; clients must not restore cached text. Protected payload reads remain authoritative if removal occurs after listing. These are accepted result records, never canonical assistant messages or new terminal events.
+
+`next_after_sequence` is the last returned sequence only when another row existed at the same read cut. Empty pages use null. Repeated reads do not certify current execution readiness. Scope/authentication failures refuse; no cross-owner output or credential is returned. No schema change, automatic acceptance, dispatch, or replay occurs.
