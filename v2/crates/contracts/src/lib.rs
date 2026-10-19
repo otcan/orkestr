@@ -176,3 +176,6 @@ pub use worker_tasks::*;
 
 mod steering;
 pub use steering::*;
+
+mod attachments;
+pub use attachments::*;
