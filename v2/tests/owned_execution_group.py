@@ -117,13 +117,27 @@ def independent_controls(case):
     unknown = f"/api/v2/conversations/{uuid.uuid4()}"
     assert case.request(unconfigured + "/execution")[0] == 204
     for path, expected in [(unconfigured, 503), (unknown, 404)]:
-        for suffix in ["/workers", "/held-inputs",
+        for suffix in ["/workers",
                        "/worker-tasks?parent_run_id=" + statuses[0]["run_id"],
                        "/execution?run_id=" + statuses[0]["run_id"]]:
             assert case.request(path + suffix)[0] == expected, (suffix, expected)
         assert case.request(path + "/stop", "POST", stop_request(statuses[0], "no-fallback"))[0] == expected
+    # Owner evidence is durable even where no execution factory is configured.
+    # Live authority routes above must still refuse; another scope stays unknown.
+    code, held, _ = case.request(unconfigured + "/held-inputs")
+    assert code == 200 and held["schema_version"] == 1
+    assert held["conversation_id"] == project["conversation_id"]
+    assert held["held"] == [] and held["next_after_sequence"] is None
+    assert not held["eligible_input_available"]
+    assert case.request(unknown + "/held-inputs")[0] == 404
     assert case.request(unconfigured + "/messages", "POST", {
         "client_message_id": "synthetic:unconfigured", "text": "synthetic durable owner input"})[0] == 202
+    code, after, _ = case.request(unconfigured + "/held-inputs")
+    assert code == 200 and after["conversation_id"] == project["conversation_id"]
+    assert after["held"] == [] and after["eligible_input_available"]
+    code, queued, _ = case.request(unconfigured + "/execution")
+    assert code == 200 and queued["phase"] == "queued" and queued["run_id"] is None
+    assert queued["capabilities"] == {"stop": False, "steer": False}
     for index in range(2):
         own, foreign = statuses[index], statuses[1-index]
         path = case.paths[index]
