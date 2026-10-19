@@ -41,7 +41,7 @@ class LifecycleCase(claude.ClaudeCase):
         self.release("init", number)
         def progressed():
             status = self.phase("running")
-            return status if status and status["progress"] is not None else None
+            return status if status and status["progress"] is not None and status["capabilities"]["stop"] else None
         # The peer waits at the result barrier after this one progress frame.
         # Freeze fixture output before asserting replay leaves a snapshot inert.
         return ordinary.wait_for(progressed, "matching init and one actual progress must commit")
@@ -112,10 +112,10 @@ def continuation(mode):
             return
         second = case.live(2)
         assert second["run_id"] != first["run_id"]
-        assert second["capabilities"] == {"stop": False, "steer": False}
+        assert second["capabilities"] == {"stop": True, "steer": False}
         stop = {"run_id": second["run_id"], "expected_revision": second["revision"],
-            "expected_control_revision": second["control_revision"], "request_key": "unsupported-resumed-stop"}
-        assert case.request(case.path + "/stop", "POST", stop)[0] == 503
+            "expected_control_revision": second["control_revision"] + 1, "request_key": "stale-resumed-stop"}
+        assert case.request(case.path + "/stop", "POST", stop)[0] == 409
         assert case.rows("SELECT count(*) FROM production_cancellations") == [(0,)]
         case.inert_replay(accepted)
         receipt2 = case.accept(case.propose(2), 2)
@@ -151,7 +151,7 @@ def restart():
         case.inert_replay(accepted)
         case.accept(case.propose(2), 2)
         ordinary.wait_for(case.peer_gone, "restarted accepted child is reaped")
-        assert second["capabilities"] == {"stop": False, "steer": False}
+        assert second["capabilities"] == {"stop": True, "steer": False}
     finally:
         case.cleanup()
 
