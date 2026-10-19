@@ -28,6 +28,9 @@ export { normalizeExecutorTarget, threadExecutorSummary } from "./thread-executo
 
 const claudeEfforts = ["low", "medium", "high", "max"];
 const switchChains = new Map();
+// Only retain tokens while a waiter is reading storage. A switch that starts
+// and settles entirely during that read must invalidate its snapshot too.
+const switchReads = new Map();
 
 function switchError(code, statusCode = 400, extra = {}) {
   return Object.assign(new Error(code), { code, statusCode, ...extra });
@@ -49,6 +52,7 @@ export function selfSwitchIntervalMs(env = process.env) {
 // Serialize switch application per thread so a completion hook and an
 // explicit request can never apply the same pending switch twice.
 function withSwitchLock(threadId, fn) {
+  for (const read of switchReads.get(threadId) || []) read.overlapped = true;
   const previous = switchChains.get(threadId) || Promise.resolve();
   const run = previous.catch(() => {}).then(fn);
   const settled = run.catch(() => {});
@@ -258,12 +262,22 @@ async function waitForPendingApplied(threadId, env) {
   const deadline = Date.now() + positiveMs(env.ORKESTR_EXECUTOR_SWITCH_INTERRUPT_WAIT_MS, 10_000);
   for (;;) {
     // Pending is cleared before asynchronous validation/handoff/start finishes.
-    // Sample both sides of the read so a finishing lock cannot expose an old
-    // executor snapshot as a completed switch. Never await the lock itself:
-    // a stalled holder must still respect the caller's interrupt wait budget.
+    // Track operations across the entire read, including those that start AND
+    // settle within it. Never await the lock itself: a stalled holder must
+    // still respect the caller's interrupt wait budget.
     const wasApplying = switchChains.has(threadId);
-    const current = await getThread(threadId, env);
-    const applying = wasApplying || switchChains.has(threadId);
+    const read = { overlapped: false };
+    const readers = switchReads.get(threadId) || new Set();
+    switchReads.set(threadId, readers);
+    readers.add(read);
+    let current;
+    try {
+      current = await getThread(threadId, env);
+    } finally {
+      readers.delete(read);
+      if (!readers.size) switchReads.delete(threadId);
+    }
+    const applying = wasApplying || read.overlapped || switchChains.has(threadId);
     const remaining = deadline - Date.now();
     if ((!current?.pendingExecutorSwitch && !applying) || remaining <= 0) return { thread: current, applying };
     await new Promise((resolve) => setTimeout(resolve, Math.min(100, remaining)));

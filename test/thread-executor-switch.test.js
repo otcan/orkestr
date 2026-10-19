@@ -1,3 +1,4 @@
+import { reviewReadOverlap } from "./fixtures/executor-switch-read-overlap-review.mjs";
 import { pendingSwitchRaceTests } from "./fixtures/thread-executor-switch-pending-race.mjs";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -457,3 +458,5 @@ test("a full-access Codex thread switched to Claude gets bypassPermissions only 
 });
 
 pendingSwitchRaceTests({ fixture, readyProfile, codexThread, fakeRuntime });
+
+reviewReadOverlap({ fixture, readyProfile, codexThread, fakeRuntime });
