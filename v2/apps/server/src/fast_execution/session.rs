@@ -1,9 +1,8 @@
 //! One distinct Fast child. Admission always uses the non-inbox Core issuer.
-use super::{consume_fast, FastDispatch};
+use super::{FastDispatch, LiveFast, consume_fast};
 use orkestr_runtime::{
-    containment::{Authority, ChildDirectories},
-    execution::{CodexPump, PreparingCodex, ReadyCodex, SetupFailure, SubmissionFailure},
-    supervisor,
+    containment::ChildDirectories,
+    execution::{PreparingCodex, ReadyCodex, SetupFailure, SubmissionFailure},
 };
 use orkestr_v2_application::runtime::{ProviderKind, Role, RuntimeStoreError};
 use orkestr_v2_store_sqlite::{BoundSessionMetadata, FastAdmissionInput, Store};
@@ -17,11 +16,6 @@ pub struct ReadyFast {
     store: Store,
     ready: ReadyCodex,
 }
-pub struct LiveFast {
-    store: Store,
-    authority: Authority,
-    pump: CodexPump,
-}
 pub enum FastStart {
     Live(Box<LiveFast>),
     Replay,
@@ -31,12 +25,14 @@ pub enum FastStart {
 pub enum FastFailure {
     Store(RuntimeStoreError),
     Submission(SubmissionFailure),
+    Transport(orkestr_runtime::containment::Error),
 }
 impl std::fmt::Display for FastFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Store(error) => write!(f, "Fast store refusal: {error:?}"),
             Self::Submission(error) => write!(f, "Fast submission refusal: {error:?}"),
+            Self::Transport(error) => write!(f, "Fast transport refusal: {error:?}"),
         }
     }
 }
@@ -89,36 +85,20 @@ impl ReadyFast {
             FastDispatch::Replay => Ok(FastStart::Replay),
             FastDispatch::ReconciliationRequired => Ok(FastStart::ReconciliationRequired),
             FastDispatch::Consumed(cap) => {
+                let provider = cap.provider().clone();
+                let renewal = self
+                    .store
+                    .authorize_running_renewal(&cap)
+                    .await
+                    .map_err(FastFailure::Store)?;
                 let (authority, pump) = self
                     .ready
                     .attach(self.store.clone(), cap)
                     .map_err(FastFailure::Submission)?;
-                Ok(FastStart::Live(Box::new(LiveFast {
-                    store: self.store,
-                    authority,
-                    pump,
-                })))
+                Ok(FastStart::Live(Box::new(LiveFast::new(
+                    self.store, provider, renewal, authority, pump,
+                ))))
             }
         }
-    }
-}
-impl LiveFast {
-    pub async fn tick(&mut self) -> Result<bool, supervisor::Error> {
-        if self.pump.flush().is_err() {
-            let _ = self.authority.revoke();
-            return Err(supervisor::Error::Provider(
-                orkestr_runtime::ports::Blocker::Protocol,
-            ));
-        }
-        self.pump.step(&self.store).await
-    }
-    /// Cleanup is negative authority, never terminal acceptance or cancellation.
-    pub fn quarantine(&mut self) {
-        let _ = self.authority.revoke();
-    }
-}
-impl Drop for LiveFast {
-    fn drop(&mut self) {
-        self.quarantine();
     }
 }
