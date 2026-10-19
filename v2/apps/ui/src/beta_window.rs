@@ -36,7 +36,17 @@ impl WindowIntent {
     pub fn receipt_matches(&self, generation: u64, receipt: &ExecutionWindowAdmission) -> bool {
         generation == self.generation
             && self.pending.as_ref().is_some_and(|request| {
-                request.request_key == receipt.request_key
+                (if request.window_id.is_some() {
+                    Some(request.expected_generation)
+                } else {
+                    request.expected_generation.checked_add(1)
+                }) == Some(receipt.status.generation)
+                    && request.predecessor_window_id
+                        == receipt
+                            .status
+                            .predecessor_window_id
+                            .filter(|_| request.window_id.is_none())
+                    && request.request_key == receipt.request_key
                     && request.input_message_id == receipt.input_message_id
                     && request.input_event_id == receipt.input_event_id
                     && request.input_request_key == receipt.input_request_key
