@@ -184,6 +184,9 @@ impl ConfiguredExecution {
             }
             if status.phase == ExecutionPhase::AwaitingAcceptance {
                 steering.retire();
+                // The proposal has fenced descendants. Keep driving their bounded
+                // terminal cleanup while owner acceptance remains pending.
+                Self::poll_worker(&mut worker).await;
                 drop(schedule);
                 // Hold the same child while the owner decides. No old execution
                 // fence is spent and no subsequent inbox item is claimed early.
