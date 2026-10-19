@@ -231,3 +231,32 @@ and rollback, measure backward refusal only on a disposable migrated copy, and
 reopen the untouched predecessor rollback home using its original executable.
 Preserve original backups and raw evidence. None of those schema39 package checks
 has been executed by this preparation.
+
+### Borrowed workspace FD test adapter boundary
+
+The fixture-only `tests/workspace_runtime_vectors.py` creates private disposable
+parent/worker worktrees and retains dirty sentinel artifacts. Replacement helpers
+rename rather than delete selected workspace or Git metadata. Four executed tests
+establish topology, dirty-file retention across Git reopening, retained descriptor
+identity versus replacement paths, and cleanup. They do not call Store, a native
+launcher, a provider, or the Runtime consumer.
+
+Core's frozen interface lends `WorkspaceDescriptors<'a>` only within
+`with_workspace_metadata_fence(credential, &mut launch, metadata, action)`.
+`workspace()`, `git_directory()` and `git_common_directory()` return borrowed
+handles; identity accessors return opaque `WorkspaceDirectoryIdentity` with
+read-only device/inode/uid access. Installation supplies setup topology only.
+No path, raw-FD constructor, HEAD value or serialized inventory grants authority.
+Core owns durable generation and `consume_workspace_launch`: launch-unknown is
+committed and one-use before callback; reconciliation is explicit. Runtime must
+duplicate all borrowed handles to descriptors >=6 before any dup2, retaining the
+same open description for FD5 cwd/read-only mount. No string-cwd/config fallback.
+Runtime retains any external child on callback/commit failure for reconciliation.
+
+Actual adapter vectors remain unexecuted until the implementing symbols and
+consumer arrive: same-uid foreign allowlist scope, foreign owner, closed handle,
+workspace/Git replacement fence, revoke, Store reopen with newly issued handles,
+and consumed-token callback failure. Foreign-scope is deliberately distinguished
+from foreign-owner: the ordinary disposable fixture never changes a UID or claims
+cross-owner refusal. Core owns Store authority tests; Runtime/Isolation own spawn,
+SAMEFD mount and native lifecycle tests. Installer activation remains held.
