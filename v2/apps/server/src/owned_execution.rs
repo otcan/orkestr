@@ -87,8 +87,11 @@ impl ConfiguredExecution {
         let (bound, initial_grant, directory) = if config.role == config::ExecutionRole::Fast {
             fast_bootstrap::bind(store, home, &config, &token, supervisor).await?
         } else if let Some(status) = status {
-            if status.phase != orkestr_v2_contracts::ExecutionPhase::Completed
-                || config.worker.is_some()
+            if !matches!(
+                status.phase,
+                orkestr_v2_contracts::ExecutionPhase::Completed
+                    | orkestr_v2_contracts::ExecutionPhase::Cancelled
+            ) || config.worker.is_some()
             {
                 return Err(
                     "existing execution requires reconciliation; automatic startup refused",

@@ -57,6 +57,7 @@ impl ConfiguredExecution {
                         return Err("execution Worker retirement requires reconciliation");
                     }
                     if !self.wait_eligible(&mut shutdown, &mut heartbeat).await? {
+                        self.retire_terminal(&run, proof).await?;
                         return Ok(());
                     }
                     grant = self.stopped_grant(&run, proof).await?;
@@ -154,7 +155,7 @@ impl ConfiguredExecution {
                         .map_err(|_| "execution accepted-session retirement refused")?;
                     drop(authority);
                     let proof = self.reaped(retiring, &run, heartbeat).await?;
-                    self.retire_accepted(&run, proof).await?;
+                    self.retire_terminal(&run, proof).await?;
                     return Ok(SessionExit::Shutdown);
                 };
                 run = capability.provider().run.run_id.clone();
