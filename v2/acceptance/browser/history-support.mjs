@@ -87,7 +87,21 @@ export class Candidate {
       env: { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', ORKESTR_V2_HOME: home,
         ORKESTR_V2_BIND: `127.0.0.1:${this.port}`, ORKESTR_V2_ORIGIN: this.origin,
         ORKESTR_V2_BOOTSTRAP_TOKEN: this.bootstrap, ORKESTR_V2_UI_DIST: this.artifact.ui.path },
-      stdio: ['ignore', 'ignore', 'ignore'],
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    // Only the spawned child's post-bind marker authorizes probing this port.
+    // A foreign listener's health response is never readiness evidence.
+    let ready = false, stderr = '', stderrBytes = 0, markerError = false;
+    const marker = `orkestr-v2-server schema=1 home=${home} bind=127.0.0.1:${this.port} `;
+    this.child.stderr.on('data', (chunk) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes > 65536) { markerError = true; return; }
+      stderr += chunk.toString('utf8');
+      let end;
+      while ((end = stderr.indexOf('\n')) !== -1) {
+        const line = stderr.slice(0, end); stderr = stderr.slice(end + 1);
+        if (line.startsWith(marker)) ready = true;
+      }
     });
     this.launches += 1;
     this.exit = new Promise((resolve) => {
@@ -98,7 +112,8 @@ export class Candidate {
     this.child.once('error', () => { launchError = true; });
     for (let attempt = 0; attempt < 100; attempt += 1) {
       this.signal?.throwIfAborted();
-      assert(!launchError && this.child.exitCode === null && this.child.signalCode === null, 'candidate_start_failed');
+      assert(!launchError && !markerError && this.child.exitCode === null && this.child.signalCode === null, 'candidate_start_failed');
+      if (!ready) { await delay(100); continue; }
       try {
         const response = await fetch(`${this.origin}/api/v2/health`, { signal: AbortSignal.timeout(500) });
         if (response.ok) {
