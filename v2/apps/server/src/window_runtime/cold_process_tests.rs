@@ -29,16 +29,12 @@ async fn cold_process_child() {
             .save_session("synthetic-browser", &owner)
             .await
             .unwrap();
-        store
-            .save_session(
-                "abababababababababababababababababababababababababababababababab",
-                &owner,
-            )
-            .await
-            .unwrap();
-        let bound = store
-            .authorize_supervisor(
-                "abababababababababababababababababababababababababababababababab",
+        // Deployed first-login path: browser session only, no machine token file
+        // or synthetic machine save_session. Native metadata follows private bind.
+        let initial = store
+            .bootstrap_execution_window_authenticated(
+                "synthetic-browser",
+                &conversation,
                 ProductionSupervisorConfig {
                     provider: ProviderKind::Codex,
                     namespace: "synthetic-window".into(),
@@ -48,23 +44,7 @@ async fn cold_process_child() {
             )
             .await
             .unwrap();
-        let binding = bound
-            .ensure_role_bindings(&owner, &conversation)
-            .await
-            .unwrap()
-            .deep;
-        // Synthetic Store setup only, not native readiness evidence. This oracle
-        // starts from ACTIVE; first-window metadata ordering is a separate gate.
-        bound
-            .confirm_native_session(NativeSessionConfirmation {
-                session_id: binding.session_id,
-                expected_generation: binding.generation,
-                native_session_id: "synthetic-native".into(),
-                protocol_version: "codex-rpc-1".into(),
-                source_event_key: "synthetic-ready".into(),
-            })
-            .await
-            .unwrap();
+        let binding = initial.binding().clone();
         let input = store
             .admit(
                 &owner,
@@ -90,9 +70,10 @@ async fn cold_process_child() {
             .admit_execution_window_authenticated("synthetic-browser", &conversation, &request)
             .await
             .unwrap();
-        let grant = bound
+        let grant = initial
+            .store()
             .issue_execution_window_credential(
-                "abababababababababababababababababababababababababababababababab",
+                initial.credential(),
                 admission.status.window_id,
                 1,
                 "synthetic-boot",
@@ -101,10 +82,22 @@ async fn cold_process_child() {
             )
             .await
             .unwrap();
-        let active = bound
-            .bind_execution_window(
-                "abababababababababababababababababababababababababababababababab",
-                &grant,
+        let active = initial
+            .store()
+            .bind_execution_window(initial.credential(), &grant)
+            .await
+            .unwrap();
+        let metadata = active.authorize_session_metadata(&binding).await.unwrap();
+        active
+            .confirm_metadata_session(
+                metadata,
+                NativeSessionConfirmation {
+                    session_id: binding.session_id,
+                    expected_generation: binding.generation,
+                    native_session_id: "synthetic-native".into(),
+                    protocol_version: "codex-rpc-1".into(),
+                    source_event_key: "synthetic-ready".into(),
+                },
             )
             .await
             .unwrap();
@@ -126,7 +119,7 @@ async fn cold_process_child() {
         loop {
             tokio::time::sleep(Duration::from_millis(20)).await;
             // Retain actual private objects until the OS kills this process.
-            std::hint::black_box((&store, &bound, &active, &grant));
+            std::hint::black_box((&store, &initial, &active, &grant));
         }
     }
     let previous: orkestr_v2_contracts::ExecutionWindowStatus =
@@ -160,7 +153,7 @@ async fn cold_process_child() {
         )
         .await
         .is_err());
-    // The configured original machine token was consumed; no fallback supervisor.
+    // An invented machine token cannot act as a configured fallback.
     assert!(store
         .authorize_supervisor(
             "abababababababababababababababababababababababababababababababab",
@@ -187,7 +180,10 @@ async fn cold_process_child() {
         .unwrap()
         .unwrap();
     assert!(execution.run_id.is_none());
-    assert_eq!(execution.phase, orkestr_v2_contracts::ExecutionPhase::Queued);
+    assert_eq!(
+        execution.phase,
+        orkestr_v2_contracts::ExecutionPhase::Queued
+    );
     std::fs::write(
         root.join("replacement.json"),
         serde_json::to_vec(&status).unwrap(),
