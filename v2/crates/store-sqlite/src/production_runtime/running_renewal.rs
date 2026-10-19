@@ -7,6 +7,8 @@ pub struct RunRenewalAuthority {
     provider: ProviderAdmission,
     namespace: String,
     incarnation: String,
+    worker_budget: Option<i64>,
+    renewed: bool,
 }
 
 /// One committed old -> new lease transition. No input text, reservation or
@@ -52,6 +54,8 @@ impl Store {
             provider: dispatch.provider().clone(),
             namespace: context.namespace.clone(),
             incarnation: context.incarnation.clone(),
+            worker_budget: None,
+            renewed: false,
         })
     }
 
@@ -70,12 +74,20 @@ impl Store {
         let previous = authority.provider.clone();
         let mut current = previous.clone();
         current.run = self
-            .renew_exact(&previous.run, previous.run.lease_generation, true)
+            .renew_exact_budget(
+                &previous.run,
+                previous.run.lease_generation,
+                true,
+                authority.worker_budget,
+            )
             .await?;
         authority.provider = current.clone();
+        authority.renewed = true;
         Ok(RunLeaseTransition { previous, current })
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+mod worker_budget;
