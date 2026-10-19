@@ -240,6 +240,16 @@ impl CodexPump {
         match self.source.child.poll_exit(&self.source.scope) {
             Ok(None) => Ok(()),
             ended => {
+                if let Ok(Some(exit)) = &ended {
+                    // Original WNOWAIT observation, before quarantine signals
+                    // the retained group. Numeric status is diagnostic only.
+                    eprintln!(
+                        "owned execution broker original exit: code={:?} signal={:?}",
+                        exit.code, exit.signal
+                    );
+                } else if let Err(error) = &ended {
+                    eprintln!("owned execution broker exit observation unavailable: {error:?}");
+                }
                 self.source.child.quarantine();
                 Err(ended.err().unwrap_or(crate::containment::Error::PipeClosed))
             }

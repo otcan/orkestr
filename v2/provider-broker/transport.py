@@ -6,13 +6,41 @@ import array
 import socket
 import selectors
 import subprocess
-from protocol import MAX_FRAME, Refused, decode, encode, require
+from protocol import MAX_FRAME, Failure, Refused, decode, encode, require
 
 MAX_PENDING = 8
 
 
+def failure_exit(error, child, fallback=None):
+    """Diagnostic-only exit80..217; never success or the exclusive reap exit73.
+
+    Sample the original direct child before finally signals/reaps its group.
+    WNOWAIT retains that original PID as cleanup authority. An unreadable status
+    is unknown, not absence. No exception/provider text enters the result.
+    """
+    failure = error.failure if isinstance(error, Refused) else fallback
+    if type(failure) is not Failure:
+        failure = Failure.TRANSPORT_IO if isinstance(error, OSError) else Failure.INTERNAL
+    state = 0  # no owned child was launched
+    if child is not None:
+        try:
+            observed = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            if observed is None:
+                state = 1  # original not observed exited at this instant
+            elif observed.si_code == os.CLD_EXITED:
+                state = 2 if observed.si_status == 0 else 3
+            elif observed.si_code in (os.CLD_KILLED, os.CLD_DUMPED):
+                state = 4
+            else:
+                state = 5
+        except (OSError, ValueError):
+            state = 5
+    return 80 + (int(failure) - 1) * 6 + state
+
+
 class Pump:
-    def __init__(self, config, channel, incoming=0, outgoing=1, handoff=None):
+    def __init__(self, config, channel, incoming=0, outgoing=1, handoff=None, diagnostics=False):
+        require(type(diagnostics) is bool)
         self.config, self.channel = config, channel
         self.incoming, self.outgoing = incoming, outgoing
         self.child = None
@@ -22,6 +50,11 @@ class Pump:
         self.buffers = {}
         self.queues = {outgoing: deque()}
         self.selector = selectors.DefaultSelector()
+        # Only the selected service launcher opts in; unrelated brokers retain
+        # their original failure exit and do not perform this extra observation.
+        self.diagnostics = diagnostics
+        self.failure_exit = 2
+        self.failure_fallback = None
 
     def queue(self, fd, value):
         queue = self.queues[fd]
@@ -63,11 +96,25 @@ class Pump:
             self.selector.register(fd, events)
 
     def line(self, fd, raw):
-        value = decode(raw)
+        try:
+            value = decode(raw)
+        except Refused as error:
+            if self.diagnostics and fd == self.incoming:
+                error.failure = Failure.PARENT_INPUT
+            raise
         if fd == self.incoming:
-            provider, response = self.channel.client(value)
+            try:
+                provider, response = self.channel.client(value)
+            except Refused as error:
+                if self.diagnostics:
+                    error.failure = Failure.PARENT_INPUT
+                raise
             if self.child is None:
-                self.launch()
+                try:
+                    self.launch()
+                except Exception:
+                    self.failure_fallback = Failure.LAUNCH
+                    raise
             if provider is not None:
                 if self.handoff is None:
                     self.queue(self.child.stdin.fileno(), provider)
@@ -90,9 +137,9 @@ class Pump:
         buffer = self.buffers.get(fd, b"")
         while b"\n" in buffer and self.capacity():
             raw, buffer = buffer.split(b"\n", 1)
-            require(bool(raw) and len(raw) <= MAX_FRAME)
+            require(bool(raw) and len(raw) <= MAX_FRAME, Failure.FRAME_BOUND)
             self.line(fd, raw)
-        require(len(buffer) <= MAX_FRAME)
+        require(len(buffer) <= MAX_FRAME, Failure.FRAME_BOUND)
         self.buffers[fd] = buffer
 
     def read(self, fd):
@@ -103,12 +150,16 @@ class Pump:
             chunk = os.read(fd, MAX_FRAME + 1 - len(self.buffers[fd]))
         except BlockingIOError:
             return True
+        except OSError:
+            if fd != self.incoming:
+                self.failure_fallback = Failure.PROVIDER_READ_IO
+            raise
         if not chunk:
-            require(not self.buffers.get(fd))
+            require(not self.buffers.get(fd), Failure.FRAME_TRUNCATED)
             if fd == self.incoming:
                 self.parent_eof = True
                 return False
-            raise Refused("provider EOF; delivery may be unknown")
+            raise Refused("provider EOF; delivery may be unknown", Failure.PROVIDER_EOF)
         self.buffers[fd] += chunk
         self.drain_buffer(fd)
         return True
@@ -151,6 +202,10 @@ class Pump:
                         return
                     if events & selectors.EVENT_WRITE:
                         self.write(key.fd)
+        except Exception as error:
+            if self.diagnostics:
+                self.failure_exit = failure_exit(error, self.child, self.failure_fallback)
+            raise
         finally:
             self.selector.close()
             if self.child is not None:
