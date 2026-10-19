@@ -30,3 +30,28 @@ admission, foreign scope, wrong identity/text and insufficient watermark refusal
 runner syntax and diff checks pass. No browser, lease, provider, compilation or
 hosted execution was performed for this checkpoint. Hosted qualification remains
 pending at the new exact head.
+
+## Response-body retention followup
+
+Hosted run 39211194395 reached a fresh message POST 202, then failed specifically
+at Puppeteer's `response.json()` with `Network.getResponseBody: No data found for
+resource with given identifier`. The original retained log is preserved (SHA-256
+`a1f4fcb54b49c1e911104a6ed2b5d1c9e04c3e57cd29e46366c9298ab4dc004c`).
+This proves failure of the CDP body-reading oracle, not durable history or UI
+rendering success. The underlying reason Chrome did not retain that body is not
+established by the log.
+
+The runner now installs a one-shot observer of the exact page fetch before Send.
+It clones the actual response immediately and reads at most 8 KiB/128 reads in
+page context. The original request and response pass unchanged to the UI. No
+request is replayed or synthesized, and no credentials are inspected. The runner
+still requires the network 202, captured accepted receipt and exact authenticated
+canonical history, followed by reload rendering, CSRF refusal and logout. Capture
+failure is explicit; there is no CDP fallback/retry-to-green. Diagnostics distinguish
+receipt capture and canonical-history stages and expose only capture state.
+
+Thirteen local Node cases pass across intake assertions and observer regressions:
+actual original body remains consumable, exactly one request, unrelated reads
+ignored, malformed/oversized receipts fail closed and network rejection remains
+rejection. Syntax/diff checks pass. No local browser, provider, build or hosted
+rerun was performed; matching exact-head CI remains required.

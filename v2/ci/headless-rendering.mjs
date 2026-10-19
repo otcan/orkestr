@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer';
 import { verifyIntake } from './headless-intake.mjs';
+import { installIntakeCapture } from './headless-receipt-capture.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 const home = await mkdtemp(join(tmpdir(), 'orkestr-v2-browser-'));
@@ -68,6 +69,8 @@ try {
   const conversation = await page.evaluate(async () =>
     (await (await fetch('/api/v2/browser/session')).json()).global_conversation_id);
   const path = `/api/v2/conversations/${conversation}/messages`;
+  // Capture a cloned page fetch body before Send; CDP may not retain it.
+  await page.evaluate(installIntakeCapture, path);
   // Register before Send; transient presentation text is not durable evidence.
   const responsePending = page.waitForResponse(response =>
     response.url() === `${origin}${path}` && response.request().method() === 'POST');
@@ -75,7 +78,13 @@ try {
   const [response] = await Promise.all([responsePending, clickText('Send')]);
   assert.equal(response.status(), 202, 'Fresh input must be admitted');
   const input = JSON.parse(response.request().postData());
-  const receipt = await response.json();
+  stage = 'receipt-capture';
+  await page.waitForFunction(() => ['complete','failed'].includes(globalThis.__orkestrCIReceipt?.state));
+  const captured = await page.evaluate(() => globalThis.__orkestrCIReceipt);
+  assert.equal(captured.state, 'complete', 'Actual Send receipt capture failed');
+  assert.equal(captured.status, 202);
+  const receipt = captured.body;
+  stage = 'canonical-history';
   const snapshot = await page.evaluate(async conversation => {
     const response = await fetch(`/api/v2/conversations/${conversation}?after=0&limit=100`);
     if (response.status !== 200) throw new Error('Canonical history unavailable');
@@ -116,6 +125,7 @@ try {
     composer: Boolean(document.querySelector('#composer')),
     login: Boolean(document.querySelector('#username')),
     renderedMessages: document.querySelectorAll('.messages li').length,
+    receiptCapture: globalThis.__orkestrCIReceipt?.state ?? 'not-installed',
   })).catch(() => null);
   console.error(JSON.stringify({ stage, error: error.name, network, dom, pageErrorCount: errors.length }));
   throw error;
