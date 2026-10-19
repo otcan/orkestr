@@ -1,0 +1,13 @@
+# Matching controls browser source and receipt review
+
+Reviewed six test/documentation files at `a75e70aeb853d46371f48040d27e6315b54c9484`. No bounded product-safety blocker found in the final harness. No independent browser execution or rebuild was performed.
+
+Independently rehashed sealed product `1d9674b29ed547f4a0cf5530a261aba9450263a1`: server `c998c4ca8197cbc2bdc4d84550d1a5df88f2bdd1e325ab278ccede5f5aa97a86`, ten web assets and canonical inventory `f34bdc77bef1461e93dabbafb1f62c83c014e310d1a69a325af85ccb9716a320`. Sixteen fixture/broker modules match the exact product Git source; seven retained final helpers match their source pins and run-03 hashes. Handoff SHA256 `ad9a73184b503088ddd671931e4f3298a883e6af9675891a36c7823911cf5169` and both accepted receipt hashes match.
+
+The author evidence comprises seven budget checks and three conflict checks from run 03, plus four steering checks from run 02, including three initial protected-cookie logins. Both full run-01 and run-02 failures remain preserved; run 02 as a whole failed and is not relabelled passing. Accepted cases report zero page errors/external requests and closed owned contexts/server/native trees with removed synthetic state. The lease-release hash matches its recorded inactive release. These are reviewed recorded cleanup results, not an independent historical process observation.
+
+Final source checks default owner-budget omission and explicit one/five/fifteen-minute values with unchanged initial lifetime; exact lost-response retry after remount despite edited next draft; private task/steering clearing on logout while retaining the documented same-owner conversation draft. Steering separately checks actual acknowledgement while still Running and a real completion-induced control revision conflict followed by explicit review. Request interception delays or drops actual responses; it does not manufacture successful API responses or product assets. Native peers remain synthetic.
+
+Provenance limitation: accepted run-02 steering records scenario hash `f08b7dd162505d48ff0deec85767f2311291b301e17cc0ca8c732a8376eb429b`; the retained final scenario and run-03 hash are `a5e8f4265444e33aa13e73e356394e328e112c608723fdb76f6b7fa004552b9f`. The earlier executed scenario bytes were not found in the supplied run directory during review; its original immutable blob was requested from the author. Run-02 execution is therefore receipt-attributed only, not independently byte-matched to final source. No reconstruction or browser rerun was requested.
+
+This does not resolve earlier aa8 count uncertainty or qualify real providers, production latency, release readiness or newer source.
