@@ -1,3 +1,4 @@
+import { checkScopedParticipant } from "../../../../../packages/connectors/src/whatsapp-scoped-participant-security.js";
 import { prepareAgentReport } from "../../../../../packages/core/src/thread-report-policy.js";
 import fs from "node:fs/promises";
 import { getExecutorAdapter } from "../../../../../packages/core/src/executors.js";
@@ -753,6 +754,13 @@ export class ThreadsController {
     return { thread };
   }
 
+  @Post(":threadId/whatsapp-participant-check")
+  @HttpCode(200)
+  async whatsappParticipantCheck(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const thread = await getThreadForPrincipal(threadId, requestPrincipal(request));
+    return checkScopedParticipant(thread, body);
+  }
+
   @Post(":threadId/input")
   @HttpCode(202)
   async input(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
@@ -763,6 +771,10 @@ export class ThreadsController {
     const principal = requestPrincipal(request);
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    if (body.scopedParticipant) {
+      await getThreadForPrincipal(thread.id, principal);
+      body = {...body, ...await checkScopedParticipant(thread, body)};
+    }
     const report = await prepareAgentReport(thread, body, principal);
     if (report.suppressed) return { ok: true, orkestrThreadId: thread.id, message: report.message, queued: false, deliveryState: report.suppressionReason, reason: report.suppressionReason };
     body = report.body;

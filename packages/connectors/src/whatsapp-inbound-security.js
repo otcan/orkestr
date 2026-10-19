@@ -98,6 +98,15 @@ function stateBlockedParticipantIds(state = {}, { binding = {}, chatId = "" } = 
     .filter(Boolean);
 }
 
+// Shared read-only block check for scoped transports. Keep legacy and global
+// blocks authoritative even when a separate identity resolver grants access.
+export function isWhatsAppParticipantBlocked({ binding = {}, state = {}, chatId = "", from = "", env = process.env } = {}) {
+  return senderMatches([
+    ...inboundSecurityPolicy(binding, env).blockedParticipantIds,
+    ...stateBlockedParticipantIds(state, { binding, chatId }),
+  ], from);
+}
+
 export function classifyWhatsAppInboundRequest(text = "") {
   const normalized = String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
   if (!normalized) return { malicious: false, reason: "" };
