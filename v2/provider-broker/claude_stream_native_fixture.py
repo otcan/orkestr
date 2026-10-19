@@ -37,16 +37,28 @@ def main():
           'input_transformations': transformations,
           'usage': {'input_tokens': 1, 'output_tokens': 0, 'speed': 'standard',
                     'output_tokens_details': {'thinking_tokens': 0}}}}, first=True)
-    event({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})
+    thought = 'SYNTHETIC_DISCARDED_THINKING'
+    event({'type': 'content_block_start', 'index': 0,
+           'content_block': {'type': 'thinking', 'thinking': '', 'signature': ''}})
+    event({'type': 'content_block_delta', 'index': 0,
+           'delta': {'type': 'thinking_delta', 'thinking': thought, 'estimated_tokens': None}})
+    emit({'type': 'assistant', 'session_id': native, 'uuid': str(uuid.uuid4()),
+          'parent_tool_use_id': None, 'user_message_uuid': current, 'user_message_uuids': [current],
+          'request_id': 'synthetic-request',
+          'message': {'id': api, 'type': 'message', 'role': 'assistant', 'model': 'synthetic-model',
+                      'content': [{'type': 'thinking', 'thinking': thought,
+                                   'signature': 'synthetic-signature'}]}})
+    event({'type': 'content_block_stop', 'index': 0})
+    event({'type': 'content_block_start', 'index': 1, 'content_block': {'type': 'text', 'text': ''}})
     piece = 'synthetic chunk ' * 400
-    event({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': piece}})
+    event({'type': 'content_block_delta', 'index': 1, 'delta': {'type': 'text_delta', 'text': piece}})
     if mode == 'cancel':
         control = json.loads(sys.stdin.readline())
         assert control['request'] == {'subtype': 'interrupt', 'cancel_queued': False,
                                       'for_user_message_uuids': [current]}
         emit({'type': 'control_response', 'response': {'subtype': 'success',
               'request_id': control['request_id'], 'response': {'turn': 'stopped'}}})
-        event({'type': 'content_block_delta', 'index': 0,
+        event({'type': 'content_block_delta', 'index': 1,
                'delta': {'type': 'text_delta', 'text': 'late text must be discarded'}})
     deadline = time.monotonic() + 5
     while not Path('release-synthetic-stream').exists():
@@ -54,14 +66,14 @@ def main():
         time.sleep(.01)
     if mode == 'complete':
         for _ in range(3):
-            event({'type': 'content_block_delta', 'index': 0,
+            event({'type': 'content_block_delta', 'index': 1,
                    'delta': {'type': 'text_delta', 'text': piece}})
         emit({'type': 'assistant', 'session_id': native, 'uuid': str(uuid.uuid4()),
               'parent_tool_use_id': None, 'user_message_uuid': current, 'user_message_uuids': [current],
               'request_id': 'synthetic-request', 'message': {'id': api, 'type': 'message',
               'input_transformations': transformations,
               'role': 'assistant', 'model': 'synthetic-model', 'content': [{'type': 'text', 'text': piece * 4}]}})
-        event({'type': 'content_block_stop', 'index': 0})
+        event({'type': 'content_block_stop', 'index': 1})
         event({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None},
                'usage': {'output_tokens': 1, 'speed': 'standard',
                          'output_tokens_details': {'thinking_tokens': 1}},

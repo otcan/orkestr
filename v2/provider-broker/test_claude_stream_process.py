@@ -61,7 +61,9 @@ class ClaudeStreamProcessTests(unittest.TestCase):
                 first = observe()['params']['frame']
                 piece = 'synthetic chunk ' * 400
                 self.assertEqual(first['message']['content'], [{'type': 'text', 'text': piece}])
-                self.assertEqual(channel.stream.full, 0)
+                self.assertEqual(channel.stream.full, 1)  # The discard-only thinking block.
+                self.assertFalse(channel.stream.blocks[1]['verified'])
+                self.assertNotIn('SYNTHETIC_DISCARDED_THINKING', repr(channel.stream.__dict__))
                 self.assertFalse(channel.terminal or (root / 'release-synthetic-stream').exists())
                 if mode == 'cancel':
                     interrupt = {'type': 'control_request', 'request_id': 'stop:synthetic',

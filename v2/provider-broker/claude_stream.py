@@ -87,7 +87,13 @@ class ClaudeTextStream:
                 if delta.get('type') == 'thinking_delta':
                     require({'type'} < set(delta) <= {'type', 'thinking', 'estimated_tokens'})
                     if 'thinking' in delta: self._discard(len(text(delta['thinking'], MAX_DELTA)))
-                    if 'estimated_tokens' in delta: number(delta['estimated_tokens'], integer=True)
+                    if 'estimated_tokens' in delta:
+                        if delta['estimated_tokens'] is None:
+                            # Native/API thinking deltas use null when no display
+                            # estimate is due. It supplies no execution evidence.
+                            require('thinking' in delta)
+                        else:
+                            number(delta['estimated_tokens'], integer=True)
                 else:
                     exact(delta, ('type', 'signature')); require(delta['type'] == 'signature_delta')
                     self._discard(len(text(delta['signature'], MAX_DELTA)))
