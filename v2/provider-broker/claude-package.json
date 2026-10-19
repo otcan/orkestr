@@ -17,11 +17,12 @@
     "claude_assistant_metadata.py": "d2bf04492072aa11348ffe342949998b304dbc6c1c5e331798a5d212277f97b8",
     "claude_assistant_input.py": "53f1840a683015813fc6a052f31e4f45d9e230eecde76183e6a7fe49a73812e4",
     "claude_stop_metadata.py": "6a1a7a812a0c1ecd1d5cea590f674fa2b5484aabb20c9aa5ee567db109457e02",
-    "claude_stream_schema.py": "14a3bf0ec1bb1457605aad0f1c06afec6785d233a6b48ff34b7efcf4864342bb",
-    "claude_stream.py": "ea6caa7183c7cf489a91530861d0d031ea397ed61bace0a0ee247f2a02d2c6f3",
+    "claude_stream_schema.py": "5c0cabd8b022707c5558acb0800195f4f4fcc3f41a7b53ab7f1a640e44b459e1",
+    "claude_stream.py": "a3fd7dbf9c81f4172d9dd907418e6507a8f84be4e9cbdca0873a05bf670bd291",
     "claude_pump.py": "7d820f09dea4d9c1d4a2d76f7de4dd17a69bce79f709b79ad888dc0756d9ff6a",
     "claude_stream_diagnostic.py": "c4296c32d165db70e92337808dc046defcad932f9291e25da38a993a485dfecc",
-    "claude_input_transformations.py": "ef4d7a235889b55b75a9c3001eeeef99ac08a9f6bb20b2755ca01440c980ecf4"
+    "claude_input_transformations.py": "ef4d7a235889b55b75a9c3001eeeef99ac08a9f6bb20b2755ca01440c980ecf4",
+    "claude_context_management.py": "6f0d195e924108e65b2c5ecde2305ce0fadd45b8dc215254269f5515283dd5d2"
   },
   "activation": "held-installed-cli-and-runtime-composition-review"
 }
