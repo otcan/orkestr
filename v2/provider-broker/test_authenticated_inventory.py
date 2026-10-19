@@ -29,6 +29,9 @@ from isolation.selected_subscription import SelectedSubscription
 from claude_resume import ResumeSpec, _SEAL
 import claude_bootstrap
 assert claude_bootstrap.ResumeSpec is ResumeSpec
+from isolation.bounded_proxy import Inner, outer
+from isolation.bounded_budget import LIMITS
+assert (LIMITS.active,LIMITS.pending,LIMITS.attempts)==(8,4,32)
 from pathlib import Path
 import re
 profile=object.__new__(SelectedClaudeProfile)

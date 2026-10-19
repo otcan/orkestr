@@ -13,6 +13,7 @@ class StaleSlotTests(unittest.TestCase):
     def test_exit_during_accept_reclaims_slot_without_raising_limit(self):
         done=threading.Event();ready=threading.Event();at_accept=threading.Event()
         release_accept=threading.Event();started=queue.Queue();relays=[];clients=[]
+        diagnostic_written=threading.Event()
         address=[];errors=[];original_accept=socket.socket.accept
         fd=os.open('/dev/null',os.O_RDONLY)
         class Child:
@@ -43,7 +44,7 @@ class StaleSlotTests(unittest.TestCase):
             with patch.object(supervisor.subprocess,'Popen',popen), \
                  patch.object(supervisor,'relay',relay), \
                  patch.object(socket.socket,'accept',accept), \
-                 patch.object(supervisor.os,'write') as diagnostic, \
+                 patch.object(supervisor.os,'write',side_effect=lambda *_:diagnostic_written.set()) as diagnostic, \
                  patch.object(sys,'argv',['supervisor.py',str(fd),'subscription.example.invalid','codex']):
                 controller.start();self.assertTrue(ready.wait(2))
                 for _ in range(4):connect();started.get(timeout=2)
@@ -58,6 +59,7 @@ class StaleSlotTests(unittest.TestCase):
                 diagnostic.assert_not_called()
                 refused=connect()
                 self.assertEqual(refused.recv(1),b'')
+                self.assertTrue(diagnostic_written.wait(2))
                 diagnostic.assert_called_once_with(2,b'provider-egress: inner-capacity-refused\n')
                 thread,release=relays[1];release.set();thread.join(1)
                 connect();started.get(timeout=2)

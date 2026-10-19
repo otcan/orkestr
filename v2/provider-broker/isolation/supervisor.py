@@ -134,11 +134,17 @@ def main():
             "--mcp-config",'{"mcpServers":{}}',"--setting-sources","",
             "--resume" if sys.argv[1]=="claude-resume-native" else "--session-id",native]
         os.execve("/opt/provider/native",command,dict(os.environ))
-    if len(sys.argv)==3 and sys.argv[1]=="native":
+    if len(sys.argv)==3 and sys.argv[1] in ("native","native-bounded"):
         install_filter(int(sys.argv[2]))
-        os.execve("/opt/provider/native",["native","app-server","--listen","stdio://"],dict(os.environ))
+        # This explicit isolated acceptance role has no plugin tools. Legacy
+        # Codex/Claude roles keep their existing configuration and budget.
+        options=["-c","features.plugins=false"] if sys.argv[1]=="native-bounded" else []
+        os.execve("/opt/provider/native",["native",*options,"app-server","--listen","stdio://"],dict(os.environ))
     claude=len(sys.argv)==6 and sys.argv[3] in ("claude","claude-resume","claude-synthetic")
-    if not claude and (len(sys.argv)!=4 or sys.argv[3] not in ("codex","synthetic")):return 2
+    if not claude and (len(sys.argv)!=4 or sys.argv[3] not in ("codex","codex-bounded","synthetic")):return 2
+    bounded=sys.argv[3]=="codex-bounded"
+    if bounded:
+        from bounded_proxy import Inner
     fd=int(sys.argv[1]);hosts=tuple(sys.argv[2].split(","))
     listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     listener.bind(("127.0.0.1",0));listener.listen(MAX_CONNECTIONS);listener.settimeout(.05)
@@ -170,19 +176,25 @@ def main():
             "install_filter(int(sys.argv[1]));exec(sys.argv[2])",str(fd),source.decode()]
     elif claude:command=["/usr/bin/python3","-I","-B",__file__,
         "claude-resume-native" if sys.argv[3]=="claude-resume" else "claude-native",str(fd),sys.argv[4]]
-    else:command=["/usr/bin/python3","-I","-B",__file__,"native",str(fd)]
+    else:command=["/usr/bin/python3","-I","-B",__file__,
+        "native-bounded" if sys.argv[3]=="codex-bounded" else "native",str(fd)]
     child=subprocess.Popen(command,env=environment,close_fds=True,pass_fds=(fd,),stdin=sys.stdin,stdout=sys.stdout,stderr=sys.stderr)
     os.close(fd)
-    admission=RelayAdmission()
+    if bounded:
+        admission=Inner(hosts)
+    else:admission=RelayAdmission()
     try:
         while child.poll() is None:
+            if bounded:admission.poll()
             try:client,_=listener.accept()
             except socket.timeout:continue
-            admission.admit(client,hosts)
+            if bounded:admission.admit(client,time.monotonic_ns())
+            else:admission.admit(client,hosts)
         return child.wait()
     finally:
         listener.close()
         if child.poll() is None:child.kill();child.wait(timeout=1)
+        if bounded:admission.close()
 
 
 if __name__=="__main__":

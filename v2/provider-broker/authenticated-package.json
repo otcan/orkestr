@@ -5,7 +5,7 @@
     "isolation/policy.py": "b1ba56669a7ee490b97eaf30c5500db541835764b6553300dbcb8301bf63b9bc",
     "isolation/launch.py": "b000fddacbc4d1d6ea76663298adf8f65f84d0e9a103667ce6942ee154eac468",
     "isolation/authenticated.py": "a15c10c579f2dde355981187eb4cd5617b73f3d5aba5fcb74542f6af32fed003",
-    "isolation/supervisor.py": "9f9fd877861f966cf675b809c40497d0c3bc3e67bbeeca11b9b2fc761c0390e9",
+    "isolation/supervisor.py": "aa19c9d1d436376133f291365609c3539c55b04515e086032f57770b4b4f200c",
     "isolation/egress.py": "9b3d9aa2560c3f62b342b529450895cc240232463fcfe4c22f27425f216b6246",
     "isolation/authenticated_budget.py": "7c3f33fa1fe821512538316f6fb722009243406908edf567d87772034c177e5f",
     "isolation/claude_selected.py": "40c4f24449901dd34f3672cb3d527c0a391d78a25c27fa77308257a0eb7da9b8",
@@ -13,7 +13,12 @@
     "claude_resume.py": "ecc014ec6578791adc2086b3d83dc161c61fbdffa043c957b0cc919c9a2d2850",
     "protocol.py": "08ed3149c5ef8c41b0a465292d2d9db70d58b0bf52aec05301039a743fbe486d",
     "claude_bootstrap.py": "5fda8c272078640696b7ec2069829454f348fc13db586b7ca6916d75df236244",
-    "isolation/selected_subscription.py": "8e428e7976d895670fa570e98d0f1c2e6859fad7ff808e500f28f7c1a86c474f"
+    "isolation/selected_subscription.py": "8e428e7976d895670fa570e98d0f1c2e6859fad7ff808e500f28f7c1a86c474f",
+    "isolation/bounded_budget.py": "e38c507e3d6470855afdb5a0391c9a2bf5c46f56a090bae17982a88d9f2b4af6",
+    "isolation/bounded_io.py": "d3dbe5e600b05df52c09dd59ca1eaf2bd3137c221a20c3152c323700fe03fef1",
+    "isolation/bounded_pool.py": "28d3da29dd7e24c8717457d781c0bb34dd15c54c8161d63b45758f2e4f0d2569",
+    "isolation/bounded_dns.py": "15dd34e510a4303acec6f60ecb6b89591e2b867c73d97fd9a216571d75659514",
+    "isolation/bounded_proxy.py": "44f6c3ac575a44374caeb8c6a66c703be1bafc0cc945bbb8f6b835746ec16578"
   },
   "activation": "held-root-provisioning-and-authenticated-compatibility-review"
 }
