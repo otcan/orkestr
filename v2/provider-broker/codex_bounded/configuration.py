@@ -155,6 +155,6 @@ class Package:
     def environment(self):
         value = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(self.provider_home),
                  "ORKESTR_V2_HOME": str(self.data), "ORKESTR_V2_BIND": f"127.0.0.1:{self.runtime['port']}"}
-        key = "ORKESTR_V2_EXECUTION_SET" if self.two_roles else "ORKESTR_V2_EXECUTION_CONFIG"
-        value[key] = self.runtime["execution_set" if self.two_roles else "execution_config"]
+        environment_name = "ORKESTR_V2_EXECUTION_SET" if self.two_roles else "ORKESTR_V2_EXECUTION_CONFIG"
+        value[environment_name] = self.runtime["execution_set" if self.two_roles else "execution_config"]
         return value
