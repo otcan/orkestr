@@ -117,7 +117,10 @@ def exercise(mode):
         assert case.request(case.path + "/stop", "POST", intent)[0] == 409
         assert case.rows("SELECT count(*) FROM production_cancellations") == [(0,)]
         if mode == "budget":
-            ordinary.wait_for(case.peer_gone, "budget must fence and clean the owned native")
+            # Budget expiry issues the native control too. This deliberately
+            # nonresponsive peer must exhaust the bounded ten-second observer
+            # and clean up without producing a successful Stop observation.
+            ordinary.wait_for(case.peer_gone, "budget must fence and clean the owned native", seconds=13)
             cancelled = ordinary.wait_for(lambda: case.phase("cancel_requested"), "budget remains truthful unknown")
             assert cancelled.get("acceptance_candidate") is None
             assert case.rows("SELECT kind FROM production_observations WHERE kind='stopped'") == []
