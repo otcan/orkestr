@@ -4,7 +4,9 @@ This optional transport extension uses an already paired WhatsApp Web account
 to route fresh messages authored by that account into existing Orkestr threads.
 Completed answers return to the original group. It does not create groups or
 pair accounts. It supports text and need-input questions; it does not transfer
-attachments or forward messages from other participants.
+attachments. Other participants are excluded by default; restoring an existing
+thread-scoped contact requires the explicit
+[participant admission policy](scoped-group-participant-routing.md).
 
 The thread registry remains authoritative: before input and each reply the relay
 checks the thread owner, group binding, enabled state and retirement state.
