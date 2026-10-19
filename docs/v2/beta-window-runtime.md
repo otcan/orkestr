@@ -87,3 +87,20 @@ It does not qualify manager authentication, process replacement, or native launc
 An actual cold-restart oracle must terminate the original Rust process and start
 an independent process against the same disposable home. Recreating a wrapper
 while retaining Store/credential objects is insufficient evidence.
+
+### First-login private consumer
+
+The Runtime first-login holder consumes Core's private
+`bootstrap_execution_window_authenticated` before the first durable admission.
+Only the configured owner/conversation and an initial generation-zero request
+may invoke it. The holder records an attempt before awaiting Core; a cancelled
+call or lost reply never retries issuance. Successful capability storage remains
+in process and moves once to the private controller after its manager ACK.
+Subsequent admissions still reauthenticate through Core and cannot issue another
+bootstrap. A fresh process encountering durable history receives refusal rather
+than recovering the capability.
+
+`AppState::with_beta_config` is a trusted startup constructor hook. The ordinary
+state defaults to no holder. This slice does not yet connect config custody
+loading, manager ACK, private issue/bind, native metadata, or activation. HTTP
+responses contain only the canonical public admission DTO.

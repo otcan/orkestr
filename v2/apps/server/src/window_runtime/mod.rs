@@ -4,4 +4,5 @@
 //! fences authorize effects. The root manager independently bounds egress.
 mod clock;
 pub(crate) mod handles;
+pub(crate) mod initial;
 mod integers;
