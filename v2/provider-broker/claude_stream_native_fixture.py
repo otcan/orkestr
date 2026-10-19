@@ -31,6 +31,19 @@ def main():
         if first: frame.update(user_message_uuid=current, user_message_uuids=[current])
         emit(frame)
 
+    def rate_metadata():
+        emit({'type': 'rate_limit_event', 'session_id': native, 'uuid': str(uuid.uuid4()),
+              'rate_limit_info': {'status': 'allowed_warning',
+                  'rateLimitType': 'seven_day_overage_included',
+                  'overageInUse': False, 'overageEnabled': False, 'rateLimitGraceActive': True,
+                  'surpassedThreshold': 1.25, 'limitScope': 'group_pool',
+                  'errorCode': 'credits_required', 'canUserPurchaseCredits': False,
+                  'hasChargeableSavedPaymentMethod': False,
+                  'unifiedWindows': {'seven_day_overage_included': {'utilization': 1.25, 'resetsAt': 123}},
+                  'overagePeriodMonthly': {'utilization': 0},
+                  'overagePeriodChannel': {'utilization': 0}}})
+
+    rate_metadata()
     emit({'type': 'system', 'subtype': 'init', 'session_id': native})
     event({'type': 'message_start', 'message': {'id': api, 'type': 'message', 'role': 'assistant',
           'content': [], 'model': 'synthetic-model', 'stop_reason': None,
@@ -64,6 +77,7 @@ def main():
     while not Path('release-synthetic-stream').exists():
         assert time.monotonic() < deadline
         time.sleep(.01)
+    rate_metadata()
     if mode == 'complete':
         for _ in range(3):
             event({'type': 'content_block_delta', 'index': 1,

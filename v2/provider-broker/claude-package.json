@@ -10,7 +10,7 @@
     "claude_resume.py": "ecc014ec6578791adc2086b3d83dc161c61fbdffa043c957b0cc919c9a2d2850",
     "claude_bootstrap.py": "5fda8c272078640696b7ec2069829454f348fc13db586b7ca6916d75df236244",
     "reaping.py": "4632be4e94cef92a0b8a2970bad0a55a1925d07d7926eb05a6af32ef512954d7",
-    "claude_telemetry.py": "5dca806f2457411a0d60e920467625660c52918d9ae6fc409f5c23a97422bf91",
+    "claude_telemetry.py": "26899faad9c30de2e7da6dd4f71a1aa23b4cd6848980648d73af6f8f61be7e60",
     "claude_control.py": "75c74eb0ece108dafab76842c1bd5e8930e5c65e2fa51f945f83a64734a4f07e",
     "claude_failure.py": "2bec86e9fe4373cfafbfe9e97e66c2932059f7fac1ead6c55cd8688825e2fe4d",
     "claude_system_telemetry.py": "b5ab49d155ef174a062362e002becc3255219ea9789dec1d55458f8820fde741",

@@ -58,6 +58,7 @@ class ClaudeStreamProcessTests(unittest.TestCase):
                     'owned_handle': channel.handle, 'message_id': 'synthetic-message', 'frame': submitted}})
                 os.write(writer, encode(submitted))
                 self.assertEqual(observe()['params']['frame']['subtype'], 'init')
+                self.assertEqual(len(channel.telemetry_uuids), 1)
                 first = observe()['params']['frame']
                 piece = 'synthetic chunk ' * 400
                 self.assertEqual(first['message']['content'], [{'type': 'text', 'text': piece}])
@@ -85,6 +86,7 @@ class ClaudeStreamProcessTests(unittest.TestCase):
                         else: self.assertEqual(frame['terminal_reason'], 'aborted_streaming')
                         break
                 self.assertEqual(pieces, [piece] * (4 if mode == 'complete' else 1))
+                self.assertEqual(len(channel.telemetry_uuids), 2)
                 self.assertGreater(channel.wire_bytes, channel.stream.text_bytes)
                 os.close(writer); writer = None
                 self.assertEqual(pump.child.wait(timeout=5), 0)

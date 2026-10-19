@@ -21,25 +21,41 @@ def validate_telemetry(frame, input_uuid):
     require(isinstance(info, dict) and 'status' in info)
     require(set(info) <= {'status', 'resetsAt', 'rateLimitType', 'utilization',
         'overageStatus', 'overageResetsAt', 'overageDisabledReason',
-        'isUsingOverage', 'unifiedWindows'})
+        'isUsingOverage', 'unifiedWindows', 'overageInUse', 'overageEnabled',
+        'surpassedThreshold', 'rateLimitGraceActive', 'overagePeriodMonthly',
+        'overagePeriodChannel', 'limitScope', 'errorCode', 'canUserPurchaseCredits',
+        'hasChargeableSavedPaymentMethod'})
     statuses = ('allowed', 'allowed_warning', 'rejected')
     require(info['status'] in statuses)
-    for key in ('resetsAt', 'overageResetsAt', 'utilization'):
+    for key in ('resetsAt', 'overageResetsAt', 'utilization', 'surpassedThreshold'):
         if key in info:
             require(number(info[key]))
     if 'rateLimitType' in info:
         require(info['rateLimitType'] in ('five_hour', 'seven_day', 'seven_day_opus',
-                                        'seven_day_sonnet', 'overage'))
+                                        'seven_day_sonnet', 'seven_day_overage_included', 'overage'))
     if 'overageStatus' in info:
         require(info['overageStatus'] in statuses)
     if 'overageDisabledReason' in info:
         require(isinstance(info['overageDisabledReason'], str)
                 and len(info['overageDisabledReason'].encode()) <= 256)
-    if 'isUsingOverage' in info:
-        require(type(info['isUsingOverage']) is bool)
+    # These native account/limit hints are discarded. They cannot enable billing,
+    # retry, change credentials, acknowledge control, or supply a run terminal.
+    for key in ('isUsingOverage', 'overageInUse', 'overageEnabled', 'rateLimitGraceActive',
+                'canUserPurchaseCredits', 'hasChargeableSavedPaymentMethod'):
+        if key in info:
+            require(type(info[key]) is bool)
+    if 'limitScope' in info:
+        require(info['limitScope'] in ('service', 'channel', 'group_pool'))
+    if 'errorCode' in info:
+        require(info['errorCode'] == 'credits_required')
+    for key in ('overagePeriodMonthly', 'overagePeriodChannel'):
+        if key in info:
+            exact(info[key], ('utilization',))
+            require(number(info[key]['utilization']))
     if 'unifiedWindows' in info:
         windows = info['unifiedWindows']
-        require(isinstance(windows, dict) and set(windows) <= {'five_hour', 'seven_day'})
+        require(isinstance(windows, dict)
+                and set(windows) <= {'five_hour', 'seven_day', 'seven_day_overage_included'})
         for window in windows.values():
             exact(window, ('utilization', 'resetsAt'))
             require(number(window['utilization']) and number(window['resetsAt']))
