@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import sys
 from urllib.parse import urlsplit
 
@@ -45,7 +46,7 @@ def settings(home, origin, port, uid, package, gid=None):
             'execution':'disabled; manager ABI integration pending explicit reviewed successor'}
 
 
-def prepare(pair, pair_sha, binary, ui, output, home, origin, port, uid, beta_config=None, gid=None):
+def prepare(pair, pair_sha, binary, ui, output, home, origin, port, uid, beta_config=None, gid=None, provisioned_home=False):
     require(pin(pair)['sha256']==pair_sha,'trusted pair receipt digest mismatch')
     value=json.loads(pair.read_text())
     require(value['version']=='2.0.0-beta.1' and re.fullmatch('[0-9a-f]{40}',value['source_commit']), 'exact beta1 source/version required')
@@ -62,7 +63,15 @@ def prepare(pair, pair_sha, binary, ui, output, home, origin, port, uid, beta_co
         blob=path.read_bytes();prefix=b'ORKESTR_V2_BUILD_IDENTITY_V1|'
         record=f"ORKESTR_V2_BUILD_IDENTITY_V1|{component}|{value['version']}|{value['source_commit']}|END".encode()
         require(blob.count(prefix)>0 and blob.count(prefix)==blob.count(record),'embedded source/version mismatch')
-    require(not Path(home).exists() and not Path(home).is_symlink(),'first service package requires fresh isolated home')
+    if provisioned_home:
+        st=Path(home).lstat()
+        require(stat.S_ISDIR(st.st_mode) and not Path(home).is_symlink() and
+                st.st_uid==uid and st.st_gid==config['gid'] and stat.S_IMODE(st.st_mode)==0o700,
+                'provisioned isolated home must be private and service-owned')
+        config['home_lifecycle']='operator-provisioned; exact setup child stopped/reaped externally; preserve existing state'
+    else:
+        require(not Path(home).exists() and not Path(home).is_symlink(),'first service package requires fresh isolated home')
+        config['home_lifecycle']='fresh; root manager creates private service-owned home'
     if beta_config is not None:
         require(not beta_config.is_symlink(),'beta config symlink refused')
         st=beta_config.stat()
@@ -107,4 +116,5 @@ if __name__=='__main__':
     for name in ('port','uid'):p.add_argument('--'+name,type=int,required=True)
     p.add_argument('--beta-config',type=Path)
     p.add_argument('--gid',type=int)
-    a=p.parse_args();print(prepare(a.pair,a.pair_sha256,a.binary,a.ui,a.output,a.home,a.origin,a.port,a.uid,a.beta_config,a.gid))
+    p.add_argument('--provisioned-home',action='store_true')
+    a=p.parse_args();print(prepare(a.pair,a.pair_sha256,a.binary,a.ui,a.output,a.home,a.origin,a.port,a.uid,a.beta_config,a.gid,a.provisioned_home))
