@@ -90,3 +90,17 @@ runtime regression 157 passed with two child-entry tests ignored and invoked by
 parents (including the actual-process crash parent); final feature-enabled Store
 all-target strict Clippy, formatting and diff checks passed. The last added Fast
 Stop-selection case was run in the final focused seven-test suite.
+
+Latest Fast status is available on the bound Store through
+`execution_fast_status(machine_credential, conversation)` and
+`execution_fast_status_authenticated(browser_credential, conversation)`.
+Both select only Fast runs in the exact current context/incarnation; neither
+projects Deep inbox queue age or invents a queued Fast run. Browser authentication
+and current bound machine authentication are checked in the read transaction.
+The result is the existing `ExecutionStatus`, with no authority issuance.
+
+`ensure_role_bindings` is owner/conversation/role scoped, **not context scoped**.
+Separate Deep and Fast contexts must select their respective distinct role
+bindings from that result. Two contexts asking for Fast receive the same Fast
+binding; existing readiness ownership checks prevent cross-context reuse. This
+port does not support multiple concurrent Fast supervisors for one conversation.
