@@ -7,6 +7,17 @@ pub struct RunRenewalAuthority {
     provider: ProviderAdmission,
     namespace: String,
     incarnation: String,
+    worker_budget: Option<i64>,
+    renewed: bool,
+}
+
+impl RunRenewalAuthority {
+    /// Immutable owner/host budget deadline, for trusted scheduling only.
+    /// None means no extended Worker budget was issued; ordinary lease and
+    /// current authority checks still apply on every operation.
+    pub fn hard_deadline_ms(&self) -> Option<i64> {
+        self.worker_budget
+    }
 }
 
 /// One committed old -> new lease transition. No input text, reservation or
@@ -52,6 +63,8 @@ impl Store {
             provider: dispatch.provider().clone(),
             namespace: context.namespace.clone(),
             incarnation: context.incarnation.clone(),
+            worker_budget: None,
+            renewed: false,
         })
     }
 
@@ -70,12 +83,20 @@ impl Store {
         let previous = authority.provider.clone();
         let mut current = previous.clone();
         current.run = self
-            .renew_exact(&previous.run, previous.run.lease_generation, true)
+            .renew_exact_budget(
+                &previous.run,
+                previous.run.lease_generation,
+                true,
+                authority.worker_budget,
+            )
             .await?;
         authority.provider = current.clone();
+        authority.renewed = true;
         Ok(RunLeaseTransition { previous, current })
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+mod worker_budget;

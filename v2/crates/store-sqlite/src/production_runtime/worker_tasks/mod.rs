@@ -22,6 +22,7 @@ pub struct WorkerTaskClaim {
     source_message: MessageId,
     source_event: EventId,
     lifetime_ms: u32,
+    execution_budget_ms: Option<u32>,
 }
 impl WorkerTaskClaim {
     pub fn task_id(&self) -> &TaskId {
@@ -38,13 +39,18 @@ impl WorkerTaskClaim {
     pub fn source_event_id(&self) -> &EventId {
         &self.source_event
     }
+    /// Captured immutable owner opt-in, for trusted scheduling selection only.
+    /// None preserves the legacy hard lifetime; this grants no renewal rights.
+    pub fn execution_budget_ms(&self) -> Option<u32> {
+        self.execution_budget_ms
+    }
     pub fn lifetime_ms(&self) -> u32 {
         self.lifetime_ms
     }
 }
 
 fn request_digest(request: &WorkerTaskCreateRequest) -> String {
-    hash(
+    let legacy = hash(
         "worker-task-input-v1",
         &[
             &request.parent_run_id.to_string(),
@@ -54,7 +60,14 @@ fn request_digest(request: &WorkerTaskCreateRequest) -> String {
             &request.instructions,
             &request.lifetime_ms.to_string(),
         ],
-    )
+    );
+    match request.execution_budget_ms {
+        None => legacy,
+        Some(budget) => hash(
+            "worker-task-owner-budget-v1",
+            &[&legacy, &budget.to_string()],
+        ),
+    }
 }
 fn delegation_key(id: &TaskId, digest: &str) -> String {
     format!("task:{id}:{digest}")

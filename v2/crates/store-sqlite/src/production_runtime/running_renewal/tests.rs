@@ -151,6 +151,8 @@ async fn parent_renewal_preserves_exact_delegation_lineage_without_extending_chi
         provider: p,
         namespace: c.namespace.clone(),
         incarnation: c.incarnation.clone(),
+        worker_budget: None,
+        renewed: false,
     };
     extend(&f).await;
     let renewed = f.handle.renew_running(&mut a).await.unwrap();

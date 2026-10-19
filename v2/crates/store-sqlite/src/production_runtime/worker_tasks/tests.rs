@@ -39,6 +39,7 @@ async fn fixture() -> Fixture {
         instructions:
             "Subtask one: summarize only synthetic section ONE.\nPreserve this exact text.".into(),
         lifetime_ms: 30_000,
+        execution_budget_ms: None,
     };
     Fixture {
         core,
@@ -301,3 +302,47 @@ mod durable_hold_tests;
 mod payload_tests;
 mod replay_tests;
 mod upgrade_tests;
+
+#[tokio::test]
+async fn owner_budget_digest_legacy_compatibility_and_changed_replay_conflict() {
+    let mut f = fixture().await;
+    let legacy = hash(
+        "worker-task-input-v1",
+        &[
+            &f.request.parent_run_id.to_string(),
+            &f.request.expected_control_revision.to_string(),
+            &f.request.request_key,
+            &f.request.title,
+            &f.request.instructions,
+            &f.request.lifetime_ms.to_string(),
+        ],
+    );
+    assert_eq!(request_digest(&f.request), legacy);
+    assert!(serde_json::to_value(&f.request)
+        .unwrap()
+        .get("execution_budget_ms")
+        .is_none());
+    let old = create(&f).await;
+    f.request.execution_budget_ms = Some(120_000);
+    assert_ne!(request_digest(&f.request), legacy);
+    assert!(matches!(
+        f.core
+            .handle
+            .create_worker_task_authenticated(&f.browser, &f.core.conversation, &f.request)
+            .await,
+        Err(RuntimeStoreError::Conflict)
+    ));
+    f.request.request_key = "owner-budget:explicit".into();
+    let new = create(&f).await;
+    assert_ne!(old.task_id, new.task_id);
+    assert_eq!(create(&f).await.task_id, new.task_id);
+    let value: Option<i64> =
+        sqlx::query_scalar("SELECT execution_budget_ms FROM worker_tasks WHERE id=?")
+            .bind(new.task_id.to_string())
+            .fetch_one(&f.core.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(value, Some(120_000));
+    let run = candidate(&f).await; // oldest legacy request still verifies its v1 digest
+    consume(&f, &run).await;
+}

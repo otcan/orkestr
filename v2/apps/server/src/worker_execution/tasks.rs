@@ -105,6 +105,7 @@ impl WorkerSchedule {
             key: format!("worker-task:{}", claim.task_id()),
             deadline: Instant::now() + Duration::from_secs(15),
             lifetime_ms: claim.lifetime_ms(),
+            owner_budget_ms: claim.execution_budget_ms(),
             task_claim: Some(claim),
             queue: None,
             slot: Some(slot),

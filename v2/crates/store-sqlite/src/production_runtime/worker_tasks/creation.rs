@@ -80,12 +80,12 @@ impl Store {
         }
         let id = Uuid::new_v4();
         let clock = now(&mut tx).await?;
-        let row = sqlx::query("INSERT INTO worker_tasks(id,owner_id,conversation_id,parent_run_id,context_id,incarnation_id,parent_control_revision,source_message_id,source_event_id,request_key,request_digest,lifetime_ms,created_at_ms,state,issuer_token_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?) RETURNING *")
+        let row = sqlx::query("INSERT INTO worker_tasks(id,owner_id,conversation_id,parent_run_id,context_id,incarnation_id,parent_control_revision,source_message_id,source_event_id,request_key,request_digest,lifetime_ms,created_at_ms,state,issuer_token_hash,execution_budget_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?) RETURNING *")
             .bind(id.to_string()).bind(context.owner.to_string()).bind(conversation.to_string())
             .bind(request.parent_run_id.to_string()).bind(&context.id).bind(&context.incarnation)
             .bind(revision).bind(parent.get::<&str,_>("message_id")).bind(parent.get::<&str,_>("event_id"))
             .bind(&request.request_key).bind(digest).bind(i64::from(request.lifetime_ms)).bind(clock)
-            .bind(&context.token_hash)
+            .bind(&context.token_hash).bind(request.execution_budget_ms.map(i64::from))
             .fetch_one(&mut *tx).await.map_err(db)?;
         sqlx::query("INSERT INTO worker_task_payloads(task_id,title,instructions) VALUES(?,?,?)")
             .bind(id.to_string())

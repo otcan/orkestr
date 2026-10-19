@@ -53,3 +53,29 @@ impl Store {
         .await
     }
 }
+
+impl Store {
+    /// A fresh delegation-only issuer after same-process lease refresh. Existing
+    /// tool grants and result capabilities retain their original lease/deadline.
+    pub async fn authorize_offline_python_renewed_parent(
+        &self,
+        credential: &str,
+        renewal: &super::super::RunRenewalAuthority,
+    ) -> Result<OfflinePythonParent> {
+        let provider = self.renewal_provider(renewal)?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        execution(self, &mut tx, credential, provider).await?;
+        let row = self.production_authorized_run(&mut tx, provider).await?;
+        if provider.run.role != Role::Worker || row.get::<&str, _>("state") != "running" {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        let c = self.context()?;
+        let result = OfflinePythonParent {
+            parent: Box::new(provider.clone()),
+            namespace: c.namespace.clone(),
+            incarnation: c.incarnation.clone(),
+        };
+        tx.commit().await.map_err(db)?;
+        Ok(result)
+    }
+}

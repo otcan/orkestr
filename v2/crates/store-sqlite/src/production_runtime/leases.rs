@@ -61,6 +61,17 @@ impl Store {
         expected_generation: u64,
         running_only: bool,
     ) -> Result<RunAdmission> {
+        self.renew_exact_budget(admission, expected_generation, running_only, None)
+            .await
+    }
+
+    pub(super) async fn renew_exact_budget(
+        &self,
+        admission: &RunAdmission,
+        expected_generation: u64,
+        running_only: bool,
+        worker_budget: Option<i64>,
+    ) -> Result<RunAdmission> {
         let context = self.context()?;
         if admission.owner_id != context.owner {
             return Err(RuntimeStoreError::Unauthorized);
@@ -116,10 +127,22 @@ impl Store {
         if provider.run.role == Role::Worker {
             let limit:i64=sqlx::query_scalar("SELECT expires_at_ms FROM worker_provider_delegations WHERE admitted_run_id=? AND state='admitted'")
                 .bind(admission.run_id.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
-            extended = extended.min(limit);
+            extended = if let Some(budget) = worker_budget {
+                self.worker_budget_deadline_in(&mut tx, &row, budget, supervisor_deadline)
+                    .await?
+            } else {
+                extended.min(limit)
+            };
         }
         if extended <= admission.lease_deadline_ms {
             return Err(RuntimeStoreError::Busy);
+        }
+        if worker_budget.is_some() {
+            if provider.run.role != Role::Worker {
+                return Err(RuntimeStoreError::Fenced);
+            }
+            sqlx::query("UPDATE worker_provider_delegations SET expires_at_ms=? WHERE admitted_run_id=? AND state='admitted'")
+                .bind(extended).bind(admission.run_id.to_string()).execute(&mut *tx).await.map_err(db)?;
         }
         let next = expected_generation
             .checked_add(1)

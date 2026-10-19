@@ -194,6 +194,28 @@ impl WorkerTools {
         Ok(())
     }
 
+    pub fn renewal_quiescent(&self) -> bool {
+        self.active.is_none()
+    }
+
+    /// Replace only future delegation lineage after Runtime has transferred its
+    /// exact same child. No existing tool/result grant or deadline is modified.
+    pub async fn refresh_parent(
+        &mut self,
+        authority: &orkestr_v2_store_sqlite::RunRenewalAuthority,
+    ) -> Result<(), &'static str> {
+        if !self.renewal_quiescent() {
+            return Err("Worker tool renewal requires an empty owned job slot");
+        }
+        let parent = self
+            .store
+            .authorize_offline_python_renewed_parent(&self.credential, authority)
+            .await
+            .map_err(|_| "Worker renewed tool lineage refused")?;
+        self.parent = Arc::new(parent);
+        Ok(())
+    }
+
     /// Drop of JoinSet aborts its owned future; the dispatcher's CancelOnDrop
     /// stops Python. The returned condition turns true only after actual wait.
     pub fn cancel(mut self) -> Option<ToolCleanup> {
