@@ -76,3 +76,7 @@ fn invalid() -> Error {
         "Invalid conversation",
     )
 }
+
+#[cfg(test)]
+#[path = "intelligence_http_tests.rs"]
+mod tests;

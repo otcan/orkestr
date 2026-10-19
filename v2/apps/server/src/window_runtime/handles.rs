@@ -49,6 +49,7 @@ impl Handles {
 
     /// Called only after exact Core activation. `scope` came from the trusted
     /// configured factory, never from a serialized manager or browser message.
+    #[cfg(test)]
     pub(crate) fn install(
         &self,
         generation: Generation,
