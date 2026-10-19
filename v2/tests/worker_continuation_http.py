@@ -94,6 +94,9 @@ def lost_worker_proof_survives_accepted_parent_history(case):
     ordinary.wait_for(lambda: case.task(task, "awaiting_acceptance"), "Worker proposal missing")
     ordinary.wait_for(lambda: all(process_start(pid) != start for pid, start in identities), "native fault did not occur")
     case.accept_run(run, "accept-before-continuation-refusal")
+    # Complete the failed Worker's cleanup while the parent is still running.
+    # This is fixture sequencing, never a substitute for its missing reap proof.
+    ordinary.wait_for(case.worker_gone, "unproven accepted Worker cleanup incomplete")
     case.release_parent(1)
     first = case.parent["id"]
     assert case.message(2)[0] == 202
