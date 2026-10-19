@@ -7,9 +7,9 @@ owner acceptance, Stop and capability-gated steering reuse the existing flows.
 Fast, Worker, Memory, timers, external reply controls and project provisioning
 are not mounted in this shell. Deferred source remains in the repository.
 
-The shell currently resumes the browser session's conversation. The authenticated
-beta capability response must supply the configured conversation before the
-window surface is activated. Core owns window DTOs and Runtime owns GET
+After native sign-in or session resume, the shell requires authenticated beta
+discovery before mounting chat or history. The browser session's global
+conversation is not used as a configured-conversation fallback. Core owns window DTOs and Runtime owns GET
 `/api/v2/beta` and GET/POST `/api/v2/conversations/:id/window`.
 
 Message intake and window admission are distinct. A durable message receipt does
@@ -27,3 +27,9 @@ request integers verbatim, bounds response bytes and read iterations, and aborts
 on caller cancellation. Its six Node transport tests do not validate the pending
 Core window DTO or prove server integration. Typed decoding and mounting await
 that exact source checkpoint; no admission is inferred from a transport result.
+
+Discovery consumes exact Runtime `1b2dc432b` types through the bounded raw-text
+bridge. Scope generation and component disposal fence late responses. Unknown
+schema, nil conversation, unexpected limits or foreign window scope refuse
+mounting. This does not activate window admission; sampled controls grant no
+authority. Core `c8beddef8` generation validation is consumed unchanged.

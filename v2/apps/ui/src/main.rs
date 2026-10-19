@@ -1,6 +1,7 @@
 mod about;
 mod acceptance_button;
 mod attachments_view;
+mod beta_discovery;
 mod beta_settings;
 mod execution_panel;
 mod execution_poll;
@@ -66,8 +67,8 @@ fn App() -> Element {
                 task_drafts
                     .write()
                     .activate(session_scope.read().generation());
-                global.set(session.global_conversation_id.clone());
-                current.set(session.global_conversation_id);
+                global.set(String::new());
+                current.set(String::new());
                 csrf.set(session.csrf_token);
                 notice.set("Signed in.".into());
             }
@@ -112,11 +113,20 @@ fn App() -> Element {
                     task_drafts.write().activate(session_scope.read().generation());
                     refresh += 1;
                     tab.set("Assistant".into());
-                    global.set(session.global_conversation_id.to_string());
-                    current.set(session.global_conversation_id.to_string());
+                    global.set(String::new());
+                    current.set(String::new());
                     csrf.set(session.csrf_token);
                     notice.set("Signed in.".into());
                 } }
+            } else if current().is_empty() {
+                beta_discovery::BetaDiscoveryGate {
+                    key: "{session_scope.read().generation()}", session_scope,
+                    onexpired: expired,
+                    onready: move |value: orkestr_v2_contracts::BetaDiscovery| {
+                        global.set(value.conversation_id.to_string());
+                        current.set(value.conversation_id.to_string());
+                    }
+                }
             } else {
                 nav { "aria-label": "Main",
                     for name in ["Assistant", "History", "Host resources", "Settings"] {
