@@ -68,6 +68,23 @@ impl ConfiguredExecution {
                 return Err("Claude scope changed; reconciliation required");
             }
             run_control.set_available(status.phase == ExecutionPhase::Running && live.can_stop());
+            if *shutdown.borrow()
+                && matches!(
+                    status.phase,
+                    ExecutionPhase::Starting
+                        | ExecutionPhase::Running
+                        | ExecutionPhase::CancelRequested
+                )
+            {
+                run_control.disable();
+                self.store
+                    .request_cancel(&self.owner, &run, "isolated-runtime-shutdown")
+                    .await
+                    .map_err(|_| "Claude shutdown fence requires reconciliation")?;
+                // Drop the owned live session into cleanup without asserting a
+                // native terminal or waiting for the user Stop observer.
+                return Ok(None);
+            }
             match status.phase {
                 ExecutionPhase::Completed => {
                     // Consume the exact completed pump before opening a new
@@ -92,18 +109,14 @@ impl ConfiguredExecution {
                     run_control.disable();
                     drop(schedule);
                     let proof = self
-                        .stop_claude(&run_control, &mut controls, live, &run, heartbeat)
+                        .stop_claude(&run_control, &mut controls, live, &run, heartbeat, shutdown)
                         .await?;
                     return Ok(Some(ClaudeExit::Stopped(run, proof)));
                 }
                 ExecutionPhase::Starting | ExecutionPhase::Running => {
-                    let cancellation = if *shutdown.borrow() {
-                        Some("isolated-runtime-shutdown")
-                    } else {
-                        budget.cancellation_key(Instant::now())
-                    };
+                    let cancellation = budget.cancellation_key(Instant::now());
                     if let Some(key) = cancellation {
-                        // Budget and shutdown use the same issued control as
+                        // Budget expiry uses the same issued control as
                         // owner Stop; no status-derived receipt is constructed.
                         let receipt = self
                             .store
@@ -116,7 +129,14 @@ impl ConfiguredExecution {
                             .map_err(|_| "Claude shutdown control handoff refused")?;
                         drop(schedule);
                         let proof = self
-                            .stop_claude(&run_control, &mut controls, live, &run, heartbeat)
+                            .stop_claude(
+                                &run_control,
+                                &mut controls,
+                                live,
+                                &run,
+                                heartbeat,
+                                shutdown,
+                            )
                             .await?;
                         return Ok(Some(ClaudeExit::Stopped(run, proof)));
                     }
@@ -162,9 +182,13 @@ impl ConfiguredExecution {
         live: LiveClaudeExecution,
         run: &orkestr_v2_contracts::RunId,
         heartbeat: &mut Instant,
+        shutdown: &watch::Receiver<bool>,
     ) -> Result<orkestr_runtime::containment::ReapedBroker, &'static str> {
         let deadline = Instant::now() + Duration::from_secs(2);
         let pending = loop {
+            if *shutdown.borrow() {
+                return Err("Claude shutdown cleanup remains unconfirmed");
+            }
             self.maintain(heartbeat).await?;
             if let Some(pending) = controls
                 .take()
@@ -181,6 +205,9 @@ impl ConfiguredExecution {
             .dispatch_claude(live)
             .map_err(|_| "Claude interruption requires reconciliation")?;
         loop {
+            if *shutdown.borrow() {
+                return Err("Claude shutdown cleanup remains unconfirmed");
+            }
             let schedule = control.serialize().await;
             self.maintain(heartbeat).await?;
             match stopping.tick().await {
