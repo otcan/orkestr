@@ -80,3 +80,6 @@ async fn window_in(
         .map_err(db)?
         .ok_or(RuntimeStoreError::NotFound)
 }
+
+#[cfg(test)]
+mod terminal_tests;
