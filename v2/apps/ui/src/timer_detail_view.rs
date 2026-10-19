@@ -88,8 +88,7 @@ pub fn TimerDetail(
                 p {"{schedule_label(&current.schedule)}"}
                 if let Some(due)=current.next_due_ms {p {"Next scheduled time: {utc_time(due)}"}} else {p {"No next scheduled time supplied."}}
                 if let Some(reason)=held_reason(current.dormant_reason.as_deref()){p {"{reason}"}}
-                p {"{controller_notice(current.state.as_str(),current.controller_armed)}"}
-                p {"Scheduling permission lasts at most one hour and is not kept across server restarts."}
+                p {"{controller_notice(current.state.as_str(),current.controller_armed,current.controller_hold.as_deref())}"}
                 label {r#for:"timer-owner-text","Fresh instructions for the selected conversation"}
                 textarea {id:"timer-owner-text",value:"{editor.read().text}",oninput:move |event|editor.write().edit(event.value())}
                 p {"Imported instructions are not copied. Changing this text does not change an uncertain request."}

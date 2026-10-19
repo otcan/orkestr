@@ -64,10 +64,14 @@ impl Detail {
                 .as_ref()
                 .is_none_or(|id| !id.0.is_nil())
             && self.next_due_ms.is_none_or(|due| due > 0)
-            && self
-                .controller_hold
-                .as_deref()
-                .is_none_or(|hold| hold == "explicit_owner_rearm_required")
+            && self.controller_hold.as_deref().is_none_or(|hold| {
+                matches!(
+                    hold,
+                    "explicit_owner_rearm_required"
+                        | "scheduler_unavailable"
+                        | "durable_owner_enable_required"
+                )
+            })
             && (!self.controller_armed
                 || (self.state == State::Enabled && self.controller_hold.is_none()))
             && match self.schedule {

@@ -25,13 +25,19 @@ pub fn state_label(state: &str) -> &'static str {
     }
 }
 
-pub fn controller_notice(state: &str, armed: bool) -> &'static str {
+pub fn controller_notice(state: &str, armed: bool, hold: Option<&str>) -> &'static str {
     if state != "enabled" {
         "This timer is not enabled to schedule new work. Already admitted work has its own status."
     } else if !armed {
-        "This timer is enabled but not armed. Disable it first, then enable with fresh instructions to allow scheduling after a restart or permission expiry. Retrying an earlier request cannot rearm it."
+        match hold {
+            Some("scheduler_unavailable") => "Your scheduling permission is saved, but the scheduler is unavailable. Work will not be scheduled until it is available.",
+            Some("durable_owner_enable_required") => "Scheduling needs your permission. Disable this timer, then enable it with fresh instructions. Retrying an earlier request cannot restore permission.",
+            Some("explicit_owner_rearm_required") =>
+        "This timer is enabled but not armed. Disable it first, then enable with fresh instructions to allow scheduling after a restart or permission expiry. Retrying an earlier request cannot rearm it.",
+            _ => "Scheduling is unavailable. Refresh to check its current status.",
+        }
     } else {
-        "Scheduling is armed. This does not confirm that work has started or completed."
+        "Scheduling is available. This does not confirm that work has started or completed."
     }
 }
 
