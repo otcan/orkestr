@@ -11,6 +11,20 @@ pub struct BoundSessionMetadata {
     pub(super) resume: Option<super::resume_metadata::ResumeLink>,
 }
 impl BoundSessionMetadata {
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    pub(super) fn workspace_identity(&self) -> String {
+        format!(
+            "{}:{}",
+            self.parent_run
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            self.resume
+                .as_ref()
+                .map(|r| r.workspace_identity())
+                .unwrap_or_default()
+        )
+    }
     pub fn binding(&self) -> &Binding {
         &self.binding
     }
@@ -62,6 +76,8 @@ impl Store {
         tx: &mut SqliteConnection,
         grant: &BoundSessionMetadata,
     ) -> Result<()> {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        self.validate_workspace_binding(tx, &grant.binding).await?;
         if grant.resume.is_some() {
             return self.validate_resume_metadata(tx, grant).await;
         }

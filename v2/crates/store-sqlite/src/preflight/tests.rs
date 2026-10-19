@@ -321,7 +321,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
     let dir = Directory::new();
     let mut conn = populated_payload_prefix(&dir).await;
     async fn rows(conn: &mut SqliteConnection) -> BTreeMap<String, Vec<String>> {
-        let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('production_acceptances','history_imports','history_messages','worker_tool_delegations','worker_provider_delegations','history_recovery_restores','history_recovery_children','production_resume_metadata','production_control_revisions','production_stop_boundaries','production_held_inputs','worker_tasks','worker_task_payloads','dormant_timers','dormant_timer_controls','dormant_timer_claims','production_graceful_retirements','attachment_manifests','attachment_objects','attachment_imports','attachment_removals','automatic_reply_routes','automatic_reply_permissions','automatic_reply_inputs','automatic_reply_sends','production_stopped_retirements','dormant_timer_input_guards','dormant_timer_inputs','production_requested_native','worker_tool_results','durable_timer_authorities','production_steering','production_steering_turns','worker_running_budgets') ORDER BY name")
+        let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('production_acceptances','history_imports','history_messages','worker_tool_delegations','worker_provider_delegations','history_recovery_restores','history_recovery_children','production_resume_metadata','production_control_revisions','production_stop_boundaries','production_held_inputs','worker_tasks','worker_task_payloads','dormant_timers','dormant_timer_controls','dormant_timer_claims','production_graceful_retirements','attachment_manifests','attachment_objects','attachment_imports','attachment_removals','automatic_reply_routes','automatic_reply_permissions','automatic_reply_inputs','automatic_reply_sends','production_stopped_retirements','dormant_timer_input_guards','dormant_timer_inputs','production_requested_native','worker_tool_results','durable_timer_authorities','production_steering','production_steering_turns','worker_running_budgets','workspace_projects','workspace_session_projects','workspace_launches') ORDER BY name")
             .fetch_all(&mut *conn).await.unwrap();
         let mut result = BTreeMap::new();
         for table in tables {
@@ -380,6 +380,9 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "attachment_objects",
         "attachment_imports",
         "attachment_removals",
+        "workspace_projects",
+        "workspace_session_projects",
+        "workspace_launches",
         "automatic_reply_routes",
         "automatic_reply_permissions",
         "automatic_reply_inputs",
@@ -420,7 +423,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        39
+        40
     );
     for table in [
         "history_imports",

@@ -29,6 +29,8 @@ async fn actual_store_upgrade_holds_unverifiable_old_claims_and_preserves_histor
             .await
             .unwrap(),
         authority: None,
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        workspace_handles: Default::default(),
         #[cfg(feature = "fixture-test-controls")]
         production_checkpoint: None,
     };

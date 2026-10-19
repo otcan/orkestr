@@ -139,7 +139,8 @@ impl Store {
             return Err(RuntimeStoreError::Fenced);
         }
         let provider = envelope(&row)?;
-        self.production_authorized_run(&mut tx, &provider).await?;
+        self.production_authorized_run_for_cancel(&mut tx, &provider)
+            .await?;
         let generation = provider.run.lease_generation;
         let deadline = provider.run.lease_deadline_ms;
         let clock = now(&mut tx).await?;
