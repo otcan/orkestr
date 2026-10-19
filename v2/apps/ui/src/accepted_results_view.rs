@@ -51,7 +51,7 @@ pub fn AcceptedReplies(
         let read_ticket = read_ticket.clone();
         let id = read_id.clone();
         async move {
-            if let Some(old) = channel() {
+            if let Some(old) = channel.peek().as_ref() {
                 let _ = old.send(json!({"stop":true}));
             }
             busy.set(true);
