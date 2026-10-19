@@ -14,7 +14,7 @@
     "claude_control.py": "fa11a147f2dbc2ecc289e7998fd0565998a31ea3ef189d08274321524d5f0867",
     "claude_failure.py": "2bec86e9fe4373cfafbfe9e97e66c2932059f7fac1ead6c55cd8688825e2fe4d",
     "claude_system_telemetry.py": "b5ab49d155ef174a062362e002becc3255219ea9789dec1d55458f8820fde741",
-    "claude_assistant_metadata.py": "f4bd0878b70afe2dd08428dc5a70af1c40e522fd46eb6a53b4f94db582e8f585"
+    "claude_assistant_metadata.py": "779b44ab143314d87e5fafb41db53bd4f93b8fa477fec4a379ea628d79a0e651"
   },
   "activation": "held-installed-cli-and-runtime-composition-review"
 }

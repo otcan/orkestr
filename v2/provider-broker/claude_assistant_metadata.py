@@ -21,7 +21,7 @@ def bounded(value, maximum=512):
 def sanitize_assistant(frame, native, message):
     required = {'type', 'session_id', 'user_message_uuid', 'uuid', 'message'}
     optional = {'parent_tool_use_id', 'user_message_uuids', 'request_id',
-                'narration_block_indexes', 'narration_hint', 'thinking_duration_ms'}
+                'narration_block_indexes', 'narration_hint', 'thinking_duration_ms', 'timestamp'}
     require(required <= set(frame) and set(frame) <= required | optional)
     require(frame['type'] == 'assistant' and frame.get('parent_tool_use_id') is None)
     correlated(frame, native, message)
@@ -30,6 +30,7 @@ def sanitize_assistant(frame, native, message):
     require(event not in (native, message))
     require(len(json.dumps(frame, allow_nan=False).encode()) <= 16384)
     if 'request_id' in frame: bounded(frame['request_id'])
+    if 'timestamp' in frame: bounded(frame['timestamp'], 128)
     if 'narration_hint' in frame: require(frame['narration_hint'] in ('hidden', 'faint'))
     if 'thinking_duration_ms' in frame:
         value = frame['thinking_duration_ms']

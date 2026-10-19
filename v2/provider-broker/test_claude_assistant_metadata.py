@@ -42,7 +42,7 @@ class AssistantMetadataTests(unittest.TestCase):
             stop_reason=None,usage={'input_tokens':1},diagnostics=None,container=None)
         frame['message']['content'] += [{'type':'text','text':'genuine synthetic text','citations':None},
                                        {'type':'redacted_thinking','data':'synthetic-private-data'}]
-        frame.update(narration_block_indexes=[0],narration_hint='faint',thinking_duration_ms=3)
+        frame.update(timestamp='2026-01-01T00:00:00.000Z',narration_block_indexes=[0],narration_hint='faint',thinking_duration_ms=3)
         result = self.channel.provider(frame)
         clean = result['params']['frame']
         self.assertEqual(clean['message']['content'],[{'type':'text','text':'genuine synthetic text'}])
