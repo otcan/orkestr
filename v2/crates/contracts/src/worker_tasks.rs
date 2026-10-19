@@ -14,7 +14,11 @@ pub struct WorkerTaskCreateRequest {
     pub request_key: String,
     pub title: String,
     pub instructions: String,
+    /// Without execution_budget_ms this remains the hard delegation lifetime.
     pub lifetime_ms: u32,
+    /// Explicit owner total execution budget; initial leases stay <=30 seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_budget_ms: Option<u32>,
 }
 impl WorkerTaskCreateRequest {
     pub fn is_valid(&self) -> bool {
@@ -33,6 +37,9 @@ impl WorkerTaskCreateRequest {
             && self.instructions.len() <= MAX_WORKER_TASK_INSTRUCTIONS
             && !self.instructions.contains('\0')
             && (1..=30_000).contains(&self.lifetime_ms)
+            && self
+                .execution_budget_ms
+                .is_none_or(|budget| (self.lifetime_ms..=3_600_000).contains(&budget))
     }
 }
 
@@ -142,8 +149,16 @@ mod tests {
             title: "Read synthetic input".into(),
             instructions: "Return a short independent summary.\nDo not execute effects.".into(),
             lifetime_ms: 30_000,
+            execution_budget_ms: None,
         };
         assert!(request.is_valid());
+        request.execution_budget_ms = Some(3_600_000);
+        assert!(request.is_valid());
+        request.execution_budget_ms = Some(3_600_001);
+        assert!(!request.is_valid());
+        request.execution_budget_ms = Some(29_999);
+        assert!(!request.is_valid());
+        request.execution_budget_ms = None;
         request.instructions = "x".repeat(MAX_WORKER_TASK_INSTRUCTIONS + 1);
         assert!(!request.is_valid());
         request.instructions = " ".into();
