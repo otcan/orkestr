@@ -47,6 +47,7 @@ pub mod timer_bootstrap;
 pub mod timer_http;
 mod timer_lifecycle;
 mod window_http;
+mod accepted_results_http;
 mod window_runtime;
 mod worker_discovery;
 pub mod worker_execution;
@@ -268,6 +269,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/projects",get(routes::projects).post(routes::create_project))
         .route("/api/v2/resources",get(resource_health::resources))
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
+        .route("/api/v2/conversations/{id}/accepted-results",get(accepted_results_http::read))
         .route("/api/v2/conversations/{id}/window",get(window_http::status).post(window_http::admit))
         .route("/api/v2/conversations/{id}/execution",get(execution::status))
         .route("/api/v2/conversations/{id}/fast/execution",get(execution::fast_status))
