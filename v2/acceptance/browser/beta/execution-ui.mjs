@@ -3,8 +3,9 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {actionBoundary, clickReady, setDraft} from './readiness.mjs';
 import {assertWindowAdmission} from './window-evidence.mjs';
 import {freshControlResponse} from './execution-response.mjs';
-import {executionStatus, assertProgress, assertStopRequested, assertStopped,
+import {executionStatus, assertStopRequested, assertStopped,
   assertAccepted, assertSteered} from './execution-evidence.mjs';
+import {renderedProgress} from './rendered-progress.mjs';
 import {failure} from './diagnostics.mjs';
 import {acceptedResult, acceptedText, acceptedResultRendered} from './accepted-results.mjs';
 
@@ -19,7 +20,7 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
     if (await verifyLease(signal) !== true) throw failure('revoked');
     if (new URL(page.url()).origin !== origin) throw failure('unexpected_origin');
   };
-  const wait = async (get, predicate, timeoutMs = 15000) => {
+  const wait = async (get, predicate, timeoutMs = 15000, timeoutCode = 'timeout') => {
     const start = performance.now();
     while (performance.now() - start < timeoutMs) {
       signal.throwIfAborted();
@@ -27,7 +28,7 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
       if (predicate(value)) return value;
       await delay(200, undefined, {signal});
     }
-    throw failure('timeout');
+    throw failure(timeoutCode);
   };
   const control = async operation => {
     const observed = await wait(() => capture.take(operation), Boolean);
@@ -38,7 +39,7 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
     executionStatus(value, conversation, run);
     if (['failed', 'blocked'].includes(value.phase)) throw failure('not_completed');
     return allowed.includes(value.phase);
-  }, timeoutMs);
+  }, timeoutMs, 'phase_timeout');
   // Retirement removes the live scope used by selected-run reads. The durable
   // owner projection survives, but must still match this exact receipt's run;
   // a later run, unavailable read or control acknowledgement is not completion.
@@ -77,22 +78,8 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
     },
     phase,
     async progress(run) {
-      return wait(async () => {
-        const status = await read('execution', run);
-        if (!status) return null;
-        executionStatus(status, conversation, run);
-        if (['failed', 'blocked', 'cancelled', 'completed'].includes(status.phase)) throw failure('not_completed');
-        if (!['running', 'awaiting_acceptance'].includes(status.phase) || !status.progress) return null;
-        const payload = await read('payload', status.progress.payload_id);
-        assert(typeof payload.text === 'string' && Buffer.byteLength(payload.text) <= 32768);
-        const visible = await page.evaluate(({text, origin}) => {
-          if (location.origin !== origin) throw Error('unexpected_origin');
-          return [...document.querySelectorAll('section[aria-label="Execution and resources"] section[aria-label="Provider output"] pre')]
-            .some(node => node.textContent === text);
-        }, {text: payload.text, origin});
-        if (!visible) return null;
-        return {status, proof: assertProgress({conversation, status, payload, visible})};
-      }, Boolean, 20000);
+      return wait(() => renderedProgress({page, origin, conversation, run, read, signal}),
+        Boolean, 20000, 'progress_timeout');
     },
     async steer(run, text, required) {
       await guard(); if (++steerChecks > 1) throw failure('request_budget');

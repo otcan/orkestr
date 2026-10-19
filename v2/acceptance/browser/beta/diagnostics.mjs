@@ -3,7 +3,7 @@
 const NAMES = new Set(['Error', 'AggregateError', 'AssertionError', 'TypeError',
   'RangeError', 'TimeoutError', 'ProtocolError', 'TargetCloseError', 'AbortError']);
 const CODES = new Set(['cleanup_unknown', 'invalid_timeout', 'revoked',
-  'identity_changed', 'not_completed', 'timeout', 'interrupted', 'invalid_sample',
+  'identity_changed', 'not_completed', 'timeout', 'phase_timeout', 'progress_timeout', 'interrupted', 'invalid_sample',
   'continuity_gap', 'continuity_identity_changed', 'continuity_unavailable',
   'readiness_unavailable', 'invalid_action', 'request_budget', 'unexpected_origin',
   'ERR_ASSERTION', 'ECONNRESET', 'EPIPE', 'ECONNREFUSED', 'ETIMEDOUT']);
