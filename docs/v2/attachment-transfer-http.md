@@ -5,8 +5,8 @@ adapter. Core owns DTOs, integrity validation, schema and persisted byte storage
 UI owns its client, Migration owns the independent archive oracle. Coordinator
 owns module/router registration and shared AppState/auth mounting.
 
-This source checkpoint contains credential carriage and download projection
-helpers only. No Store storage substitute, filesystem lookup, network fetch,
+The initial source checkpoint contained credential carriage and download
+projection helpers only. The published-storage successor is described below. No Store storage substitute, filesystem lookup, network fetch,
 shared router edit or active endpoint is introduced.
 
 `authority::credential` first calls the shared owner policy, then preserves the
@@ -24,7 +24,7 @@ The ASCII fallback filename is fixed; the UTF8 filename uses percent encoding,
 including quotes/apostrophes/percent. There is no redirect or content encoding.
 This helper does not authorize retrieval or turn a UUID into authority.
 
-## Exact dependency still required from Core
+## Initial dependency request (resolved by the successor below)
 
 Published integrity contract `9788ef14d` is a validator, explicitly not persisted
 storage or authenticated export/import/download. The following ABI is requested,
@@ -65,3 +65,54 @@ The earlier `af0b3b338` composition failed compilation because shared Worker
 configuration lacked `reaps`; that original failure remains distinct from the
 successful corrected-base check. No authenticated storage route, HTTP/process
 roundtrip or import/export execution has been tested. CI remains pending.
+
+## Published storage composition
+
+Core `9cd926823` supplies the actual schema38 storage ports and strict transfer
+DTOs. This successor composes them on coordinator base `d295da6f7`; the earlier
+storage dependency described above is now resolved. No storage implementation
+is duplicated here.
+
+Mount seam: register `mod attachment_transfer;`, then nest
+`attachment_transfer::router()` under `/api/v2` in the canonical router, inside
+the existing shared guard. No AppState field is added. The leaf uses relative
+`/conversations/{conversation}` routes: POST `attachment-imports`, GET
+`attachment-manifests/{manifest}`, GET its `/export`, and GET/DELETE
+`attachments/{manifest}/{reference}`. DELETE requires strict JSON
+`{"request_key":"synthetic-removal"}`. Import uses the exact Core DTO: raw octet
+arrays, not base64, and a route-local 68 MiB encoded body limit. Coordinator must
+preserve that route-local override when merging with the ordinary 40 KiB limit.
+
+Every handler carries the original shared-auth credential into Core. Store
+errors map Invalid=400, Unauthorized=401, NotFound=404, Removed=410,
+Inert/Conflict=409 and Unavailable=503, with a fixed generic refusal body.
+Strict JSON extraction can return 422 for malformed/unknown fields; body-limit
+rejection is 413. No untrusted filename is used as a filesystem path.
+
+The synthetic HTTP oracle uses disposable Unix sockets rather than a host TCP
+port. It imports, replays, exports and downloads exact binary bytes; checks
+corrupt bytes, strict JSON, inert legacy descriptors, foreign scope, removal
+without resurrection and revoked replay. A second oracle starts only the
+current test executable with a cleared environment and an exact helper filter,
+imports over HTTP, kills/reaps that owned child, reopens SQLite and checks exact
+persisted bytes and replay. Core's separate transaction-crash windows remain
+Core evidence, not claimed by this post-response process kill.
+
+Exact successor validation: eight focused test-harness cases passed (including
+the no-op helper entry used by the owned child), zero failed/ignored, against
+`d295da6f7` with this leaf privately registered. HTTP tests include the real
+shared guard. The command was `v2-cargo test --locked --offline -p
+orkestr-v2-server attachment_transfer --lib`. No live API/data/provider or
+canonical router activation was executed. Independent review and CI remain
+pending.
+Strict server library plus test-target Clippy (`--lib --tests -- -D warnings`),
+format check and diff check also passed. An initial Clippy warning in the older
+credential test was repaired with `expect_err`; no policy or storage behavior
+changed for that correction.
+All manifest and reference route parameters are nested under the conversation
+path and passed together to Core; no global manifest/reference lookup exists.
+The shared guard supplies no-store/nosniff on JSON successes, extraction failures
+and handler refusals. The raw download helper additionally supplies attachment
+disposition and exact raw Content-Length; no byte arrays appear in its body.
+Exports return complete bounded JSON octet arrays and metadata; imports/removals
+return only Core receipts. No partial export/stream or range response is exposed.

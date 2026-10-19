@@ -7,13 +7,13 @@ use axum::{
 use orkestr_v2_store_sqlite::Store;
 use std::path::PathBuf;
 
-struct Home(PathBuf);
+pub(super) struct Home(pub(super) PathBuf);
 impl Drop for Home {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
-async fn state() -> (Home, crate::AppState, String) {
+pub(super) async fn state() -> (Home, crate::AppState, String) {
     let home = Home(std::env::temp_dir().join(format!(
         "attachment-auth-synthetic-{}",
         uuid::Uuid::new_v4()
@@ -60,8 +60,7 @@ async fn exact_machine_credential_and_revocation_reopen() {
     state.store.revoke_session(&token).await.unwrap();
     let error = authority::credential(&state, &headers)
         .await
-        .err()
-        .expect("revoked refuses");
+        .expect_err("revoked refuses");
     assert_eq!(error.into_response().status(), StatusCode::UNAUTHORIZED);
 }
 #[tokio::test]
