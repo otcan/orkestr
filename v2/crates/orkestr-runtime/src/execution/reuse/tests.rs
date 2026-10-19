@@ -330,3 +330,57 @@ async fn accepted_new_capability_transfers_same_child_and_retires_old_authority(
 async fn cancellation_before_transfer_refuses_new_bytes_and_quarantines_owned_child() {
     exercise(true).await;
 }
+
+#[tokio::test]
+async fn continuation_predicate_keeps_fast_deep_and_worker_roles_separate() {
+    // Only the pure identity predicate uses mutated snapshots. These never
+    // become capabilities or reach a transport or a Store write.
+    let case = Case::new("role-predicate").await;
+    let binding = case
+        .bound
+        .ensure_role_bindings(&case.owner, &case.conversation)
+        .await
+        .unwrap()
+        .deep;
+    case.bound
+        .confirm_native_session(NativeSessionConfirmation {
+            session_id: binding.session_id,
+            expected_generation: binding.generation,
+            native_session_id: "synthetic-predicate".into(),
+            protocol_version: "codex-rpc-1".into(),
+            source_event_key: "predicate-ready".into(),
+        })
+        .await
+        .unwrap();
+    let (binding, claim) = case.claim(1).await;
+    let cap = case.consume(&binding, &claim, 1).await;
+    let mut old = cap.provider().clone();
+    let mut next = old.clone();
+    next.binding.generation += 1;
+    next.run.run_id =
+        serde_json::from_value(json!("22222222-2222-4222-8222-222222222222")).unwrap();
+    assert!(same_session(&old, &next, Role::Deep));
+    assert!(!same_session(&old, &next, Role::Fast));
+    old.binding.role = Role::Fast;
+    old.run.role = Role::Fast;
+    next.binding.role = Role::Fast;
+    next.run.role = Role::Fast;
+    assert!(same_session(&old, &next, Role::Fast));
+    assert!(!same_session(&old, &next, Role::Deep));
+    for role in [Role::Deep, Role::Worker] {
+        let mut substituted = next.clone();
+        substituted.binding.role = role;
+        substituted.run.role = role;
+        assert!(!same_session(&old, &substituted, Role::Fast));
+    }
+    let mut foreign = next.clone();
+    foreign.binding.native_session_id = Some("foreign".into());
+    assert!(!same_session(&old, &foreign, Role::Fast));
+    let mut stale = next.clone();
+    stale.binding.generation = old.binding.generation;
+    assert!(!same_session(&old, &stale, Role::Fast));
+    drop(cap);
+    drop(case.bound);
+    drop(case.store);
+    std::fs::remove_dir_all(case.root).unwrap();
+}
