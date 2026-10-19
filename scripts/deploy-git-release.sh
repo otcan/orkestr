@@ -453,7 +453,7 @@ resolve_backup_compressor() {
   esac
 }
 
-backup_state() {
+backup_state() (
   local stamp target backup_name pending_backup data_dir data_base data_parent exclude tar_args tar_status compressor_status
   local compressor gzip_level extension start_ts end_ts elapsed size
   local -a compressor_cmd statuses
@@ -497,6 +497,12 @@ backup_state() {
       ;;
   esac
   backup_name="$backup_dir/${stamp}-${target}-state.$extension"
+  # Scope traps to this backup, including calls made through command substitution.
+  # A stopped pipeline must not leave an unverified archive consuming the disk.
+  pending_backup=""
+  trap 'if [ -n "$pending_backup" ]; then rm -f -- "$pending_backup"; fi' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   pending_backup="$(mktemp "$backup_dir/.state-backup.XXXXXXXX.part")"
   data_parent="$(dirname "$data_dir")"
   data_base="$(basename "$data_dir")"
@@ -536,13 +542,14 @@ backup_state() {
     return 1
   fi
   mv -- "$pending_backup" "$backup_name"
+  pending_backup=""
   end_ts="$(date +%s)"
   elapsed="$((end_ts - start_ts))"
   size="$(du -h "$backup_name" 2>/dev/null | awk '{print $1}' || true)"
   echo "State backup completed in ${elapsed}s: $backup_name${size:+ ($size)}." >&2
   prune_state_backups "$backup_keep"
   echo "$backup_name"
-}
+)
 
 prune_state_backups() {
   local keep count removed file
