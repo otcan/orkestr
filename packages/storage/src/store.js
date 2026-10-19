@@ -49,6 +49,30 @@ export async function appendEvent(event, env = process.env) {
   return payload;
 }
 
+// A crash mid-append can leave an unterminated record. End it so the next
+// record starts on its own line; serialized with appends in this process.
+export async function terminateEventJournalTail(env = process.env) {
+  const paths = await ensureDataDirs(env);
+  return enqueueFileWrite(paths.events, async () => {
+    const handle = await fs.open(paths.events, "r").catch((error) => {
+      if (error?.code === "ENOENT") return null;
+      throw error;
+    });
+    if (!handle) return false;
+    try {
+      const { size } = await handle.stat();
+      if (!size) return false;
+      const last = Buffer.alloc(1);
+      await handle.read(last, 0, 1, size - 1);
+      if (last[0] === 0x0a) return false;
+    } finally {
+      await handle.close();
+    }
+    await fs.appendFile(paths.events, "\n");
+    return true;
+  });
+}
+
 export async function rotateEvents(env = process.env, options = {}) {
   const paths = await ensureDataDirs(env);
   return enqueueFileWrite(paths.events, () => rotateEventsQueued(paths.events, env, {
@@ -144,6 +168,11 @@ function eventMaxBytes(env = process.env) {
   return positiveBytes(env.ORKESTR_EVENTS_MAX_BYTES, 128 * 1024 * 1024);
 }
 
+// Largest record appendEvent keeps intact; larger ones become a truncation record.
+export function eventJournalMaxEventBytes(env = process.env) {
+  return eventMaxEventBytes(env);
+}
+
 function eventMaxEventBytes(env = process.env) {
   return positiveBytes(env.ORKESTR_EVENTS_MAX_EVENT_BYTES, 64 * 1024);
 }
@@ -208,7 +237,16 @@ async function rotateEventsQueued(eventsPath, env = process.env, options = {}) {
 
 async function gzipEventArchive(archivePath) {
   const compressedPath = `${archivePath}.gz`;
-  await pipeline(createReadStream(archivePath), createGzip(), createWriteStream(compressedPath, { mode: 0o600 }));
+  // Readers list archives by name; expose the .gz only once it is complete.
+  // The temporary name does not match eventArchivePattern.
+  const partialPath = `${compressedPath}.partial-${process.pid}-${Date.now()}`;
+  try {
+    await pipeline(createReadStream(archivePath), createGzip(), createWriteStream(partialPath, { mode: 0o600 }));
+    await fs.rename(partialPath, compressedPath);
+  } catch (error) {
+    await fs.unlink(partialPath).catch(() => undefined);
+    throw error;
+  }
   await fs.unlink(archivePath).catch(() => undefined);
   return compressedPath;
 }
