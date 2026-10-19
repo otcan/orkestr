@@ -13,7 +13,7 @@ async fn call(
     body: &[u8],
 ) -> (u16, Vec<u8>) {
     let mut stream = tokio::net::UnixStream::connect(socket).await.unwrap();
-    let head = format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+    let head = format!("{method} /api/v2{path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
     stream.write_all(head.as_bytes()).await.unwrap();
     stream.write_all(body).await.unwrap();
     let mut response = Vec::new();
@@ -35,7 +35,7 @@ async fn call(
     (status, response[split + 4..].to_vec())
 }
 fn request(owner: OwnerId, conversation: ConversationId) -> AttachmentImportRequest {
-    let bytes = b"\0\xffsynthetic\r\n".to_vec();
+    let bytes = [b"\0\xffsynthetic\r\n".as_slice(), &[42; 48 * 1024]].concat();
     let reference = AttachmentReference {
         reference_id: Uuid::new_v4(),
         message_id: None,
@@ -87,12 +87,7 @@ async fn http_persisted_bytes_replay_removal_and_revocation() {
     let request = request(owner, conversation.clone());
     let socket = home.0.join("http.sock");
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
-    let app = router()
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            crate::guard,
-        ))
-        .with_state(state.clone());
+    let app = crate::router(state.clone());
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let imports = format!("/conversations/{conversation}/attachment-imports");
     let mut corrupt = request.clone();
@@ -233,17 +228,7 @@ fn disposable_http_child() {
         )
         .unwrap();
         let listener = tokio::net::UnixListener::bind(home.join("child.sock")).unwrap();
-        axum::serve(
-            listener,
-            router()
-                .layer(axum::middleware::from_fn_with_state(
-                    state.clone(),
-                    crate::guard,
-                ))
-                .with_state(state),
-        )
-        .await
-        .unwrap();
+        axum::serve(listener, crate::router(state)).await.unwrap();
     });
 }
 struct Child(std::process::Child);

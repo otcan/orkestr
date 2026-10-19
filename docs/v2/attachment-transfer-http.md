@@ -1,4 +1,4 @@
-# Attachment HTTP transfer leaf (not mounted)
+# Attachment HTTP transfer
 
 The new `v2/apps/server/src/attachment_transfer/` subtree belongs to the HTTP
 adapter. Core owns DTOs, integrity validation, schema and persisted byte storage;
@@ -116,3 +116,12 @@ and handler refusals. The raw download helper additionally supplies attachment
 disposition and exact raw Content-Length; no byte arrays appear in its body.
 Exports return complete bounded JSON octet arrays and metadata; imports/removals
 return only Core receipts. No partial export/stream or range response is exposed.
+
+## Canonical mounting
+
+The coordinator mounts these routes under `/api/v2` inside the existing shared
+browser guard without additional AppState. The HTTP and owned-process tests now
+use the canonical router. Their binary fixture exceeds the ordinary 40 KiB body
+limit, verifying that the bounded attachment override survives canonical mounting.
+All eight focused cases and strict server library/test Clippy passed. This is
+synthetic HTTP/process evidence; no live data was imported.

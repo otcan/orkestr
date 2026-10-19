@@ -18,6 +18,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 use uuid::Uuid;
+mod attachment_transfer;
 mod auth;
 mod browser;
 pub mod build_identity;
@@ -250,6 +251,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/conversations/{id}/messages",post(routes::message))
         .route("/api/v2/conversations/{id}/events",get(routes::events))
         .merge(timer_http::routes(state.timers.clone()))
+        .nest("/api/v2",attachment_transfer::router())
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })
         .layer(DefaultBodyLimit::max(40 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(),guard))
