@@ -108,3 +108,11 @@ Root manager ownership of restart reconciliation and the durable unfinished-wind
 ledger remains mandatory: restarting the HTTP child must never reset a budget.
 Private service units, origin, socket locations and host configuration are supplied
 by the operator outside this repository. No unit or proxy installation is performed.
+
+Optional HTTP beta configuration now receives closed-field grammar validation
+against Runtime checkpoint `1b2dc432b` before packaging, with an 8192-byte operator
+file cap and duplicate-key refusal. This cap is a packaging restriction. All nine
+fields are required; account/token/role/limits additions refuse. The file remains
+externally root-managed and byte-pinned. Shape validation alone authenticates no
+launcher, workspace or manager peer; manager process composition and those
+qualification gates remain pending the manager-owned implementation.

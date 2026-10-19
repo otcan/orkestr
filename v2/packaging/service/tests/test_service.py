@@ -110,3 +110,19 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual((value['uid'],value['gid']),(995,986))
         with self.assertRaisesRegex(RuntimeError,'gid'):
             prepare.settings(self.root/'home','https://beta.example.invalid',19822,995,self.out,0)
+
+    def test_closed_beta_config_contract(self):
+        from beta_config import validate
+        value={'schema_version':1,'owner_id':'11111111-1111-4111-8111-111111111111',
+               'conversation_id':'22222222-2222-4222-8222-222222222222',
+               'manager_socket':'/run/example/manager.sock','launcher':'/opt/example/launcher',
+               'launcher_sha256':'a'*64,'workspace':'/var/lib/example/workspace',
+               'namespace':'synthetic','supervisor_key':'synthetic.deep'}
+        self.assertEqual(validate(json.dumps(value).encode()),value)
+        for key,bad in [('schema_version',True),('owner_id','00000000-0000-0000-0000-000000000000'),
+                        ('launcher','relative'),('launcher_sha256','A'*64),('namespace','bad key')]:
+            with self.subTest(key=key),self.assertRaises(RuntimeError):
+                validate(json.dumps(dict(value,**{key:bad})).encode())
+        with self.assertRaises(RuntimeError):validate(json.dumps(dict(value,token='forbidden')).encode())
+        with self.assertRaisesRegex(RuntimeError,'duplicate'):validate(b'{"schema_version":1,"schema_version":1}')
+        with self.assertRaisesRegex(RuntimeError,'bounded'):validate(b' '*8193)
