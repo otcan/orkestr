@@ -6,7 +6,7 @@ use orkestr_v2_application::runtime::{
 use orkestr_v2_contracts::{
     ConversationId, ExecutionWindowAdmission, ExecutionWindowRequest, OwnerId,
 };
-use orkestr_v2_store_sqlite::{ExecutionWindowBootstrap, Store};
+use orkestr_v2_store_sqlite::{ExecutionWindowBootstrap, RetiredExecutionWindowContext, Store};
 use tokio::sync::Mutex;
 
 pub(crate) struct InitialAuthority {
@@ -16,12 +16,19 @@ pub(crate) struct InitialAuthority {
     supervisor_key: String,
     state: Mutex<State>,
 }
+/// Private controller handoff: each variant retains its original typed context.
+/// Neither variant may be serialized or reconstructed from HTTP IDs.
+pub(crate) enum WindowAuthority {
+    Initial(ExecutionWindowBootstrap),
+    Retired(RetiredExecutionWindowContext),
+}
+
 enum State {
     Fresh,
     // Set before the async Core call. Cancellation or a lost commit reply must
     // never invoke the initial issuer again in this process.
     Attempted,
-    Ready(ExecutionWindowBootstrap),
+    Ready(WindowAuthority),
     Transferred,
 }
 impl InitialAuthority {
@@ -51,26 +58,38 @@ impl InitialAuthority {
         }
         let mut state = self.state.lock().await;
         if matches!(*state, State::Fresh) {
-            if input.expected_generation != 0
-                || input.window_id.is_some()
-                || input.predecessor_window_id.is_some()
+            if input.window_id.is_some()
+                || (input.expected_generation == 0) != input.predecessor_window_id.is_none()
             {
                 return Err(RuntimeStoreError::Fenced);
             }
             *state = State::Attempted;
-            let initial = store
-                .bootstrap_execution_window_authenticated(
-                    browser,
-                    conversation,
-                    ProductionSupervisorConfig {
-                        provider: ProviderKind::Codex,
-                        namespace: self.namespace.clone(),
-                        supervisor_key: self.supervisor_key.clone(),
-                        takeover: ProductionTakeover::First,
-                    },
+            let config = ProductionSupervisorConfig {
+                provider: ProviderKind::Codex,
+                namespace: self.namespace.clone(),
+                supervisor_key: self.supervisor_key.clone(),
+                takeover: ProductionTakeover::First,
+            };
+            // Request shape selects a distinct Core port. Never fall back from
+            // failed recovery to fresh bootstrap, or from bootstrap to recovery.
+            let authority = if input.expected_generation == 0 {
+                WindowAuthority::Initial(
+                    store
+                        .bootstrap_execution_window_authenticated(browser, conversation, config)
+                        .await?,
                 )
-                .await?;
-            *state = State::Ready(initial);
+            } else {
+                WindowAuthority::Retired(
+                    store
+                        .recover_retired_execution_window_authenticated(
+                            browser,
+                            conversation,
+                            config,
+                        )
+                        .await?,
+                )
+            };
+            *state = State::Ready(authority);
         }
         match &*state {
             State::Ready(_) | State::Transferred => {
@@ -84,7 +103,7 @@ impl InitialAuthority {
 
     /// Move the original capability to the private controller after its manager
     /// ACK. It cannot be cloned, reconstructed on reload, or returned to HTTP.
-    pub(crate) async fn take(&self) -> Result<ExecutionWindowBootstrap, RuntimeStoreError> {
+    pub(crate) async fn take(&self) -> Result<WindowAuthority, RuntimeStoreError> {
         let mut state = self.state.lock().await;
         match std::mem::replace(&mut *state, State::Attempted) {
             State::Ready(initial) => {
@@ -175,7 +194,9 @@ mod tests {
             .unwrap();
         assert!(replay.duplicate);
         assert_eq!(first.status.window_id, replay.status.window_id);
-        let private = initial.take().await.unwrap();
+        let WindowAuthority::Initial(private) = initial.take().await.unwrap() else {
+            panic!("fresh owner must use initial authority")
+        };
         assert_ne!(private.credential(), "synthetic-browser");
         assert!(initial.take().await.is_err());
         assert!(
