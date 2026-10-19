@@ -191,3 +191,6 @@ pub use browser_session::BrowserSessionProjection;
 
 mod automatic_reply;
 pub use automatic_reply::*;
+
+mod memory;
+pub use memory::*;
