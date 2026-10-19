@@ -1,6 +1,7 @@
 """Closed local control protocol. No provider content, paths or credentials."""
 import json
 import struct
+import unicodedata
 import uuid
 
 VERSION = 1
@@ -35,7 +36,7 @@ def identifier(value):
 
 
 def generation(value):
-    require(type(value) is int and 0 <= value < 2**53, "generation")
+    require(type(value) is int and 0 <= value <= 2**63 - 1, "generation")
     return value
 
 
@@ -56,8 +57,9 @@ def unique(items):
 def decode(raw):
     require(type(raw) is bytes and 0 < len(raw) <= MAX_FRAME, "frame_bound")
     try:
-        value = json.loads(raw, object_pairs_hook=unique,
+        value = json.loads(raw.decode("utf-8", "strict"), object_pairs_hook=unique,
                           parse_constant=lambda _value: (_ for _ in ()).throw(Refused("json_number")))
+        canonical(value)  # Reject unpaired escaped surrogates, not only raw UTF-8 errors.
     except (ValueError, UnicodeError, RecursionError):
         raise Refused("json") from None
     require(type(value) is dict, "object_required")
@@ -79,12 +81,14 @@ def decode(raw):
     for field in ("owner_id", "conversation_id", "window_id", "input_message_id", "input_event_id", "run_id", "terminal_event_id"):
         if field in value:
             identifier(value[field])
-    for field in ("generation", "expected_generation", "opened_at_ms", "work_deadline_ms", "expires_at_ms"):
+    for field in ("generation", "expected_generation"):
         if field in value:
             generation(value[field])
     if operation == "admit":
+        for field in ("opened_at_ms", "work_deadline_ms", "expires_at_ms"):
+            require(type(value[field]) is int and 0 <= value[field] < 2**53, "timestamp")
         require(type(value["input_request_key"]) is str and 0 < len(value["input_request_key"].encode()) <= 128
-                and not any(ord(c) < 32 or ord(c) == 127 for c in value["input_request_key"]), "input_request_key")
+                and not any(unicodedata.category(c) == "Cc" for c in value["input_request_key"]), "input_request_key")
         if value["predecessor_window_id"] is not None:
             identifier(value["predecessor_window_id"])
         require(value["expires_at_ms"] == value["opened_at_ms"] + LIFETIME_SECONDS * 1000 and
@@ -98,7 +102,15 @@ def decode(raw):
     return value
 
 
+def canonical(value):
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False, allow_nan=False).encode("utf-8", "strict")
+    except (ValueError, UnicodeError, RecursionError):
+        raise Refused("json") from None
+
+
 def encode(value):
-    raw = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    raw = canonical(value)
     require(len(raw) <= MAX_FRAME, "frame_bound")
     return HEADER.pack(len(raw)) + raw

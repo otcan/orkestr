@@ -14,7 +14,11 @@ import uuid
 
 from .contract import (CREDIT_BYTES, DRAIN_ATTEMPTS, DRAIN_BYTES, DRAIN_SECONDS,
                        LIFETIME_SECONDS, MAX_ATTEMPTS, MAX_BYTES, Refused,
-                       generation, identifier, require)
+                       canonical, generation, identifier, require)
+
+
+class ClockPoison(Refused):
+    """Commit the loss of authority, then propagate refusal; never a write grant."""
 
 
 class Clock:
@@ -54,6 +58,11 @@ class Ledger:
             self.db.execute("BEGIN IMMEDIATE")
             try:
                 yield
+            except ClockPoison:
+                # Clock rejection is irrevocable. Rolling this transition back
+                # would let a subsequent clock correction resurrect authority.
+                self.db.execute("COMMIT")
+                raise
             except BaseException:
                 self.db.execute("ROLLBACK")
                 raise
@@ -104,16 +113,20 @@ class Ledger:
 
     def _live_clock(self, row):
         boot, wall, mono = self.clock.sample()
-        require(boot == row["boot"] and wall >= row["created_wall_ns"] and
-                wall < row["deadline_wall_ns"] and mono < row["deadline_mono_ns"], "window_clock")
+        if not (boot == row["boot"] and wall >= row["created_wall_ns"] and
+                wall < row["deadline_wall_ns"] and
+                row["deadline_mono_ns"] - LIFETIME_SECONDS * 1_000_000_000 <= mono < row["deadline_mono_ns"]):
+            self.db.execute("UPDATE windows SET state='reconciliation',reason='clock_changed' WHERE id=?", (row["id"],))
+            raise ClockPoison("window_clock")
+        return boot, wall, mono
 
     def admit(self, request):
         self._scope(request)
         # Only the authenticated fixed server may reach this method. The input is
         # already linked to its durable Core admission; this creates no dispatch.
-        fingerprint = hashlib.sha256(json.dumps(request, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        boot, wall, mono = self.clock.sample()
+        fingerprint = hashlib.sha256(canonical(request)).hexdigest()
         with self.transaction():
+            boot, wall, mono = self.clock.sample()
             old = self.db.execute("SELECT a.fingerprint,w.* FROM admissions a JOIN windows w ON w.id=a.window_id WHERE a.request_id=?", (request["request_id"],)).fetchone()
             if old is not None:
                 require(old["fingerprint"] == fingerprint, "idempotency_conflict")
@@ -126,7 +139,7 @@ class Ledger:
                 (request["input_message_id"], request["input_event_id"])).fetchone() is None,
                 "input_reused")
             if latest is not None and latest["id"] == request["window_id"]:
-                self._live_clock(latest)
+                boot, wall, mono = self._live_clock(latest)
                 require(request["generation"] == previous and latest["state"] == "active" and
                         request["predecessor_window_id"] is None and
                         request["opened_at_ms"] * 1_000_000 == latest["created_wall_ns"] and
@@ -160,8 +173,8 @@ class Ledger:
             request["window_id"], request["input_message_id"], request["input_event_id"]))
 
     def tick(self, window, selected_generation):
-        boot, wall, mono = self.clock.sample()
         with self.transaction():
+            boot, wall, mono = self.clock.sample()
             row = self._exact(window, selected_generation)
             if row["state"] in ("retired", "reconciliation"):
                 return self._receipt(row)
@@ -205,7 +218,7 @@ class Ledger:
             return self._receipt(self._latest())
 
     def uncertain(self, window, selected_generation, reason):
-        require(reason in ("runtime_refused", "auth_revoked", "cleanup_unknown", "server_lost", "manager_stopped"), "reason")
+        require(reason in ("runtime_refused", "auth_revoked", "cleanup_unknown", "server_lost", "manager_stopped", "clock_changed"), "reason")
         with self.transaction():
             row = self._exact(window, selected_generation)
             require(row["state"] != "retired", "window_retired")

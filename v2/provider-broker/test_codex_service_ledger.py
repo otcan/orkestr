@@ -247,6 +247,27 @@ os._exit(0)
             with self.subTest(size=len(raw)), self.assertRaises(contract.Refused):
                 contract.decode(raw)
 
+    def test_strict_utf8_and_canonical_unicode_match_without_surrogates(self):
+        good = {**self.request(), "input_request_key": "synthetic-büro-你好"}
+        raw = contract.canonical(good)
+        self.assertIn("büro-你好".encode(), raw)
+        self.assertEqual(contract.decode(raw), good)
+        self.assertEqual(contract.canonical(contract.decode(json.dumps(good).encode())), raw)
+        for raw in (json.dumps(good).encode("utf-16"), json.dumps(good).encode("utf-32"),
+                    b"\xef\xbb\xbf" + contract.canonical(good),
+                    json.dumps({**good, "input_request_key": "\ud800"}).encode(),
+                    json.dumps({**good, "input_request_key": "text\u0085control"}).encode()):
+            with self.assertRaises(contract.Refused):
+                contract.decode(raw)
+
+    def test_i64_generation_and_separate_js_safe_timestamps(self):
+        good = {**self.request(), "generation": 2**63 - 1, "expected_generation": 2**63 - 2}
+        self.assertEqual(contract.decode(contract.canonical(good)), good)
+        for bad in ({**good, "generation": 2**63}, {**good, "generation": True},
+                    {**good, "opened_at_ms": 2**53}):
+            with self.assertRaises(contract.Refused):
+                contract.decode(contract.canonical(bad))
+
 
 if __name__ == "__main__":
     unittest.main()
