@@ -67,3 +67,23 @@ The manager owns privileged launch and egress budget. Installation owns the
 pinned service startup closure. The beta mode remains unavailable until these
 source contracts and their composition are qualified. This document does not
 claim an executed build, service or provider trial.
+
+## Pre-native child binding
+
+`PreparingCodex::open_window_retained` invokes its one-shot trusted bind callback
+with `BrokerChildLocator` immediately after retaining the spawned broker and
+before queuing `OpenOwnedSession` or waiting for the FD3 writer. The locator is
+not authority. The service-specific fixed launcher must stop itself before
+creating its Pump/native process. The authenticated manager independently checks
+that stopped child, captures its original ownership, continues it, and ACKs.
+The callback returns success only after that bounded ACK. Failure drops the
+original metadata authority and quarantines/reaps its retained child; callers
+must persist window uncertainty and never retry the consumed launch. Resume
+uses the same callback and preserves grant-only FD4. Legacy constructors do not
+invoke this gate and retain their existing behavior.
+
+A synthetic stopped-child test covers locator acquisition without an FD handoff.
+It does not qualify manager authentication, process replacement, or native launch.
+An actual cold-restart oracle must terminate the original Rust process and start
+an independent process against the same disposable home. Recreating a wrapper
+while retaining Store/credential objects is insufficient evidence.

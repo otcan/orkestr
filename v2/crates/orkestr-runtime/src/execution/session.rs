@@ -76,6 +76,7 @@ impl PreparingCodex {
             true,
             resources,
             None,
+            None,
         )
     }
 
@@ -107,6 +108,41 @@ impl PreparingCodex {
             false,
             resources,
             None,
+            None,
+        )
+    }
+    /// Window-only owned-child bind gate. The callback must synchronously obtain
+    /// the authenticated manager ACK before returning. No broker-open or native
+    /// initialization frame has been queued. Failure drops/quarantines this child.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_window_retained(
+        store: Store,
+        grant: BoundSessionMetadata,
+        launcher: &Path,
+        workspace: &Path,
+        directories: ChildDirectories,
+        resources: Box<dyn Send + 'static>,
+        bind: impl FnOnce(crate::containment::metadata::BrokerChildLocator) -> Result<(), ()>,
+    ) -> Result<Self, SetupFailure> {
+        if grant.binding().role != orkestr_v2_application::runtime::Role::Deep {
+            return Err(Blocker::Protocol.into());
+        }
+        let mut bind = Some(bind);
+        let mut gate = |child: &MetadataChild| {
+            let locator = child.broker_locator()?;
+            bind.take().ok_or(Blocker::Protocol)?(locator).map_err(|_| Blocker::Protocol.into())
+        };
+        Self::open_mode(
+            store,
+            grant,
+            launcher,
+            workspace,
+            directories,
+            true,
+            false,
+            resources,
+            None,
+            Some(&mut gate),
         )
     }
     /// Explicit trusted descriptor setup. The Core launch is already consumed;
@@ -131,6 +167,7 @@ impl PreparingCodex {
             false,
             resources,
             Some((credential, launch)),
+            None,
         )
     }
     #[cfg(test)]
@@ -151,6 +188,7 @@ impl PreparingCodex {
             false,
             Box::new(()),
             None,
+            None,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -164,6 +202,7 @@ impl PreparingCodex {
         offline_python: bool,
         resources: Box<dyn Send + 'static>,
         workspace_launch: Option<(&str, &mut orkestr_v2_store_sqlite::WorkspaceLaunch)>,
+        before_open: Option<&mut dyn FnMut(&MetadataChild) -> Result<(), SetupFailure>>,
     ) -> Result<Self, SetupFailure> {
         if grant.provider() != ProviderKind::Codex
             || if workspace_launch.is_some() {
@@ -207,6 +246,9 @@ impl PreparingCodex {
         };
         if offline_python {
             child.enable_offline_python()?;
+        }
+        if let Some(bind) = before_open {
+            bind(&child)?;
         }
         let open = child.open_broker_metadata()?;
         Ok(Self {
