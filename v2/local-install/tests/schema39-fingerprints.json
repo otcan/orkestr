@@ -1,7 +1,7 @@
 {
   "format": "orkestr-v2-install-migration-fingerprints-v1",
   "source_commit": "b97833d33532d6ba9e6698fa65b520bc48d67786",
-  "status": "source-inventory-only; supported-edge decision and matching package execution pending",
+  "status": "Core991bbc122 supports exact known-checksum 14/17/31/33/36/37/38 to39; actual matching package execution pending",
   "migrations": [
     {
       "file": "0001_intake.sql",
@@ -237,5 +237,6 @@
       "sha256": "afbdb3b02990e47409e5fb2a510a2fef5f1ea28ecb7f6ad79c4e4b4cceff5f76",
       "sqlx_sha384": "583cf2a07c69903b098ba15824eccf29eab1ed0155b60e0328cb8ad8afe505e389f009e35448442f0786d426526ac1c0"
     }
-  ]
+  ],
+  "supported_edge_contract": "991bbc122:docs/v2/schema39-supported-upgrades.md"
 }

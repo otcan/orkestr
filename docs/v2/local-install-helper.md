@@ -217,9 +217,11 @@ exact supplied SQL bytes and rehearses a stopped copy from populated schema38,
 retains attachment bytes/history, checks empty automatic-reply authority tables,
 reopens with integrity/FK checks, and injects transactional DDL failure on the copy.
 This is SQL-only preparation, not an approved historical package edge or actual
-server migration. The existing package runner deliberately continues to refuse
-schema39 pending Core's explicit supported-edge contract and the next immutable,
-matching server/web receipt. No old binary or mutable build is a substitute.
+server migration. Core `991bbc122` now explicitly supports known-checksum exact populated
+14/17/31/33/36/37/38 to39. The runner admits only those edges with the exact
+pinned inventory and SQLx checksums; actual execution awaits the next immutable,
+matching server/web receipt. Automatic-reply routes, permissions, inputs and sends
+are included in the authority-ledger preservation audit. No old binary or mutable build is a substitute.
 
 Remaining actual gate: verify the sealed pair's source/version/binary/UI inventory
 and all SQLx checksums; for each Core-supported original package, take a stopped

@@ -170,3 +170,19 @@ class UpgradePlanTests(unittest.TestCase):
                         self.assertTrue(plan['execution_edge_admitted'])
                         self.assertEqual(plan['status'],'prepared_only_unexecuted')
                         self.assertEqual(len(plan['sqlx_checksums']),36)
+
+    def test_published_schema39_edges_require_exact_inventory(self):
+        for predecessor in (14,17,31,33,36,37,38):
+            self.old['schema']['migrations']={f'{i:04d}_fixture.sql':'c'*64 for i in range(1,predecessor+1)}
+            self.new['schema']['migrations']=dict(self.old['schema']['migrations'])
+            self.new['schema']['migrations'].update({f'{i:04d}_fixture.sql':'d'*64 for i in range(predecessor+1,40)})
+            for digest in (accept_upgrade.SCHEMA39_INVENTORY,'0'*64):
+                with self.subTest(predecessor=predecessor,digest=digest), patch.object(accept_upgrade.package_candidate,'verify',side_effect=[self.old,self.new]), patch.object(accept_upgrade.receipt,'sha',side_effect=lambda p:('e'*64 if str(p).startswith('/old') else 'f'*64)), patch.object(accept_upgrade,'source_inventory',return_value=digest), patch.object(accept_upgrade,'sqlx_inventory',return_value={str(i):'a'*96 for i in range(1,40)}):
+                    if digest!=accept_upgrade.SCHEMA39_INVENTORY:
+                        with self.assertRaisesRegex(RuntimeError,'Core991-supported'):
+                            accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,39,Path('/core'))
+                    else:
+                        plan=accept_upgrade.prepare(Path('/old'),Path('/new'),'a'*40,'b'*40,'e'*64,'f'*64,39,Path('/core'))
+                        self.assertTrue(plan['execution_edge_admitted'])
+                        self.assertEqual(plan['status'],'prepared_only_unexecuted')
+                        self.assertEqual(len(plan['sqlx_checksums']),39)
