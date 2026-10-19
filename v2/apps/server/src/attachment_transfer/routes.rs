@@ -15,6 +15,10 @@ use uuid::Uuid;
 pub(crate) fn router() -> Router<crate::AppState> {
     Router::new()
         .route(
+            "/conversations/{conversation}/attachment-manifests",
+            get(super::list::get),
+        )
+        .route(
             "/conversations/{conversation}/attachment-imports",
             post(import),
         )
@@ -32,7 +36,7 @@ pub(crate) fn router() -> Router<crate::AppState> {
         )
         .layer(DefaultBodyLimit::max(ATTACHMENT_MAX_JSON_BYTES))
 }
-fn failure(error: AttachmentError) -> Response {
+pub(super) fn failure(error: AttachmentError) -> Response {
     use AttachmentError::*;
     let status = match error {
         Invalid => StatusCode::BAD_REQUEST,

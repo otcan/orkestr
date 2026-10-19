@@ -116,3 +116,27 @@ and handler refusals. The raw download helper additionally supplies attachment
 disposition and exact raw Content-Length; no byte arrays appear in its body.
 Exports return complete bounded JSON octet arrays and metadata; imports/removals
 return only Core receipts. No partial export/stream or range response is exposed.
+
+## Reload discovery successor
+
+Core `859b0747e` adds authenticated keyset discovery without a schema change.
+The leaf adds GET `/api/v2/conversations/{conversation}/attachment-manifests`
+with strict query fields `after_id` (optional nonnil UUID) and `limit` (default
+16, accepted range 1–16). Unknown/duplicate/malformed query fields refuse. The
+original credential and path conversation go to Core; no query owner is accepted.
+The returned canonical owner/conversation on an empty page lets the UI construct
+its first target manifest without treating a source archive owner as authority.
+
+Ordering is exclusive lexical UUID order, `next_after_id:null` means end, and
+pages are separate authenticated cuts, not one cross-page snapshot. Current
+removal tombstones remain visible. The shared guard applies no-store/nosniff.
+Core/coordinator own the separate browser-session owner projection; this leaf
+does not edit browser.rs or introduce another session/authentication mechanism.
+
+Discovery validation composed unchanged Core `859b0747e` list/DTO source onto the
+previous `d295da6f7` disposable composition. All eight focused cases passed with
+new empty-page, bounds/query, two-page and revocation assertions in the existing
+HTTP oracle. Every HTTP response in that oracle also checks no-store/nosniff.
+Strict server library/test Clippy, formatting and diff checks passed. Shared
+browser projection and canonical mounting remain coordinator-owned and were
+not changed or claimed executed by this leaf; independent review/CI pending.
