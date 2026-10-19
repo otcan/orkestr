@@ -10,6 +10,7 @@ mod bootstrap;
 pub use bootstrap::ExecutionWindowBootstrap;
 mod credential;
 mod guard;
+mod fast_metadata;
 mod lifecycle;
 pub use credential::{ExecutionWindowCredential, ExecutionWindowRetirement};
 #[cfg(test)]
