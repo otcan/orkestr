@@ -48,6 +48,14 @@ jobs:
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
       - name: Architecture boundaries
         run: python3 tests/check_boundaries.py
+      - name: Persistent manager ledger and owned-process regressions
+        run: |
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_ledger.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_clock.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_process.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_boundaries.py -v
+      - name: Protected synthetic manager package regressions
+        run: sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_package.py -v
       - name: Mocked provider metadata probe safety
         env:
           PYTHONDONTWRITEBYTECODE: '1'
