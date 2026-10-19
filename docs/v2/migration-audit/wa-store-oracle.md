@@ -20,6 +20,11 @@ source enums omit `value`; absent observed_at remains distinct from created_at.
 The seven records are synthetic, not a public copy of a private overlay.
 The prior Python check's 128-record batch cap never permits discarding evidence.
 
-Execution is UNEXECUTED pending bounded build admission. Formatting and diff
-checks alone do not establish compilation, Store acceptance or transport safety.
+The admitted exact-Core run passed one ordinary Store integration test (seven
+imports plus a fresh-ingress reservation control), zero failures/ignored, in
+0.34 seconds. The original oracle failed compilation due to imports from the
+application root; successor `d32c5d15591067b42e26e80c723ad59565b3c33a`
+corrects only those imports to the published runtime module. The initial failure
+log is retained privately. Manifests and lockfile remain byte-identical to Core.
+Selected strict lint results are recorded with the private execution receipt.
 No process crash, browser, live import, automatic sender or external effect claim.
