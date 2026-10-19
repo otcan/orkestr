@@ -35,7 +35,8 @@ def private_state(path):
     root=Path(private_path(path,True))
     disposable={"tmp","cache","skills","thread-writer-locks"}
     allowed={"sessions","archived_sessions","session_index.jsonl","auth.json",
-             "models_cache.json","installation_id",".sandbox_migration"}|disposable
+             "models_cache.json","installation_id",".sandbox_migration",
+             ".sqlite-maintenance.lock"}|disposable
     for name in ("state_5.sqlite","logs_2.sqlite","goals_1.sqlite","memories_1.sqlite",
                  "queue_1.sqlite","thread_history_1.sqlite"):
         allowed.update((name,name+"-wal",name+"-shm",name+"-journal"))
@@ -46,6 +47,8 @@ def private_state(path):
         expected_directory=item.name in ({"sessions","archived_sessions"}|disposable)
         if not (stat.S_ISDIR(info.st_mode) if expected_directory else stat.S_ISREG(info.st_mode)):
             raise ValueError("private native state type refused")
+        if item.name==".sqlite-maintenance.lock" and (info.st_size!=0 or stat.S_IMODE(info.st_mode)!=0o600):
+            raise ValueError("private native maintenance lock refused")
         if item.name in disposable and any(item.iterdir()):
             raise ValueError("disposable native state requires empty mountpoint")
         if item.name=="models_cache.json" and info.st_size>8*1024**2:
