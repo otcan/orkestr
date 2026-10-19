@@ -231,3 +231,6 @@ pub mod task_draft_lifetime;
 pub mod steering;
 
 pub mod worker_time_limit;
+
+pub mod memory_client;
+pub mod memory_state;

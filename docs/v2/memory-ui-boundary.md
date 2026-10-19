@@ -1,13 +1,14 @@
 # Proposed Memory UI boundary
 
 Contract reviewed for this proposal: `5d8f40104`,
-[Memory service API](memory-service-api.md). This is a consumer design, not a
-registered HTTP contract or implemented UI. Memory remains off by default.
+[Memory service API](memory-service-api.md). HTTP leaf: `895b43def`, [wire contract](memory-http.md). Client state and raw-JSON
+transport helpers are implemented and unmounted; the screen and shared server
+registration remain separate work. Memory remains off by default.
 
 UI ownership is limited to new `memory_state`, `memory_request` and
 `memory_view` modules and their focused tests. Core owns contracts, Store and
-consent validation. The server leaf and eventual shared registration need an
-explicit owner before transport implementation; this document selects no routes.
+consent validation. Isolation owns the server leaf; the coordinator owns shared registration. The
+client uses only the exact pinned wire routes.
 
 The screen starts with unknown server state, not a locally remembered opt-in.
 An authenticated current-owner settings read is needed to distinguish disabled,
@@ -38,8 +39,10 @@ corpus-wide count. Export is explicit and must refuse rather than silently
 truncate beyond the canonical limit. No provider-context injection, automatic
 capture, import, timer or send controls belong to this slice.
 
-Before wiring, agree the server leaf owner and exact settings-read, enable,
-proposal, decision, query and export responses/errors. In particular, do not
-infer enabled state from an empty result or invent a settings endpoint. Review
+Core `160e9cf1b` supplies authenticated settings. The frozen HTTP query/export
+response caps are 4 MiB/8 MiB including envelopes, with 422 instead of truncation.
+Revisions remain raw JSON text in JavaScript and typed u64 in Rust. No integer
+CAS value passes through JavaScript Number. Export download presentation is not
+yet implemented. Do not infer enabled state from an empty result. Review
 must cover normalized proposal confirmation, uncertain retry, stale correction,
 forget/retry nonresurrection, owner/logout and project-generation fencing.
