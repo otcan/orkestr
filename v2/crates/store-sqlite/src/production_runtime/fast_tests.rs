@@ -269,3 +269,6 @@ async fn fast_observation_cancel_and_historical_receipts_keep_role_and_inbox() {
     assert_eq!(after, harness::snapshot(&f.store).await);
     assert_eq!(before, inbox(&f).await);
 }
+
+#[path = "fast_tests/lifecycle.rs"]
+mod lifecycle;

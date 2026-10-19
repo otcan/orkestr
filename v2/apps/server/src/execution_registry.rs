@@ -113,4 +113,31 @@ impl AppState {
             })?;
         Ok(None)
     }
+
+    pub(crate) fn with_fast_execution_scope(
+        mut self,
+        owner: OwnerId,
+        conversation: ConversationId,
+        scope: ExecutionScope,
+    ) -> Result<Self, &'static str> {
+        if scope.tasks.is_some() {
+            return Err("Fast scope cannot own Worker task authority");
+        }
+        self.fast_executions.insert(owner, conversation, scope)?;
+        Ok(self)
+    }
+
+    pub(crate) async fn fast_execution_scope(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+    ) -> Result<Option<&ExecutionScope>, Error> {
+        if let Some(scope) = self.fast_executions.get(owner, conversation) {
+            return Ok(Some(scope));
+        }
+        // Authenticate the canonical conversation without selecting a Deep
+        // runtime as a fallback for an unconfigured Fast role.
+        self.execution_scope(owner, conversation).await?;
+        Ok(None)
+    }
 }

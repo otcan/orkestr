@@ -49,6 +49,7 @@ pub mod worker_tasks;
 pub struct AppState {
     pub store: Store,
     executions: execution_registry::ExecutionRegistry,
+    fast_executions: execution_registry::ExecutionRegistry,
     bootstrap_token: Arc<String>,
     origin: Arc<String>,
     authority: Arc<String>,
@@ -91,6 +92,7 @@ impl AppState {
             timers: timer_http::DurableOwnerController::new(store.clone()),
             store,
             executions: execution_registry::ExecutionRegistry::default(),
+            fast_executions: execution_registry::ExecutionRegistry::default(),
             bootstrap_token: Arc::new(bootstrap_token),
             origin: Arc::new(origin),
             authority: Arc::new(authority),
@@ -233,11 +235,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/resources",get(resource_health::resources))
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
         .route("/api/v2/conversations/{id}/execution",get(execution::status))
+        .route("/api/v2/conversations/{id}/fast/execution",get(execution::fast_status))
         .route("/api/v2/conversations/{id}/workers",get(worker_discovery::list))
         .route("/api/v2/conversations/{id}/worker-tasks",get(worker_tasks::list).post(worker_tasks::create))
         .route("/api/v2/conversations/{id}/worker-tasks/{task}/hold",post(worker_tasks::hold))
         .route("/api/v2/conversations/{id}/worker-tasks/{task}/payload",delete(worker_tasks::remove))
         .route("/api/v2/conversations/{id}/stop",post(execution::stop))
+        .route("/api/v2/conversations/{id}/fast/stop",post(execution::fast_stop))
         .route("/api/v2/conversations/{id}/steer",post(steering_http::submit))
         .route("/api/v2/conversations/{id}/steering/{key}",get(steering_http::status))
         .route("/api/v2/conversations/{id}/accept",post(execution_accept::accept))

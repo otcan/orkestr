@@ -1,7 +1,12 @@
 //! Actual ordinary Store + owned synthetic Fast process, no credential access.
 #[path = "../src/fast_execution/mod.rs"]
+#[allow(
+    dead_code,
+    reason = "persistent lifecycle is exercised by fast_persistent_execution"
+)]
 mod fast_execution;
 use fast_execution::{FastFailure, FastStart, LiveFast, PreparingFast, ReadyFast};
+use orkestr_v2_server::control_dispatch;
 const _: Option<FastFailure> = None;
 const _: Option<LiveFast> = None;
 const _: Option<ReadyFast> = None;

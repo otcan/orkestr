@@ -6,7 +6,7 @@ use orkestr_v2_contracts::RunId;
 impl Store {
     /// Called only by trusted server teardown AFTER every owned native child is
     /// reaped. This sealed handle can expire only its original live context,
-    /// after an exact owner-accepted Deep turn. It grants no dispatch or setup.
+    /// after an exact owner-accepted Deep or Fast turn. It grants no dispatch or setup.
     /// A configured restart still needs the exact predecessor CAS in
     /// `reattach_terminal_supervisor`. Unknown/ACK-only work refuses unchanged.
     pub async fn retire_terminal_supervisor(
@@ -32,7 +32,7 @@ impl Store {
         if current != 1 {
             return Err(RuntimeStoreError::Fenced);
         }
-        let exact: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN production_acceptances a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id JOIN production_readiness rd ON rd.session_id=b.id WHERE r.id=? AND r.owner_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role='deep' AND r.state='succeeded' AND b.state='ready' AND b.generation=r.binding_generation+1 AND rd.context_id=r.context_id AND rd.incarnation_id=r.incarnation_id AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation) AND NOT EXISTS(SELECT 1 FROM production_resume_metadata rm WHERE rm.prior_run_id=r.id)")
+        let exact: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN production_acceptances a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id JOIN production_readiness rd ON rd.session_id=b.id WHERE r.id=? AND r.owner_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role IN ('deep','fast') AND r.state='succeeded' AND b.state='ready' AND b.generation=r.binding_generation+1 AND rd.context_id=r.context_id AND rd.incarnation_id=r.incarnation_id AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation) AND NOT EXISTS(SELECT 1 FROM production_resume_metadata rm WHERE rm.prior_run_id=r.id)")
             .bind(prior_run.to_string()).bind(c.owner.to_string()).bind(&c.id).bind(&c.incarnation)
             .fetch_one(&mut *tx).await.map_err(db)?;
         if exact != 1 {

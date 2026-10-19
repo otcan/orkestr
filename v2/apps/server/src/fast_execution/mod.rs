@@ -1,7 +1,9 @@
 //! Trusted fixed-purpose presentation scheduling. No inbox claim, source text,
 //! role substitution, worker delegation or provider I/O is accepted here.
+mod live;
 mod session;
-pub use session::{FastFailure, FastStart, LiveFast, PreparingFast, ReadyFast};
+pub use live::LiveFast;
+pub use session::{FastFailure, FastStart, PreparingFast, ReadyFast};
 
 use orkestr_v2_application::runtime::{
     AdmissionDisposition, AdmissionPurpose, DispatchClaimResult, Role, RunAdmissionResult,
@@ -55,7 +57,7 @@ pub async fn consume_fast(
     match admitted.disposition {
         AdmissionDisposition::Replay => return Ok(FastDispatch::Replay),
         AdmissionDisposition::ReconciliationRequired => {
-            return Ok(FastDispatch::ReconciliationRequired)
+            return Ok(FastDispatch::ReconciliationRequired);
         }
         AdmissionDisposition::FreshCandidate => {}
     }

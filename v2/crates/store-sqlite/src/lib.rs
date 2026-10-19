@@ -25,7 +25,7 @@ mod runtime;
 pub use production_runtime::{
     BoundSessionMetadata, ClaudeProcessInitialization, CompletedToolDelivery,
     ConsumedOfflinePython, ConsumedProviderDispatch, ExecutionConsumption, FastAdmissionInput,
-    OfflinePythonAdmission, OfflinePythonConsumption, OfflinePythonDelegation,
+    FastSource, OfflinePythonAdmission, OfflinePythonConsumption, OfflinePythonDelegation,
     OfflinePythonNativeCall, OfflinePythonNativeRequestId, OfflinePythonOutcome,
     OfflinePythonOutput, OfflinePythonParent, OfflinePythonReceipt, OfflinePythonResultConsumption,
     OfflinePythonResultPreparation, OfflinePythonResultReservation, OfflinePythonState,

@@ -8,6 +8,9 @@ mod config;
 #[cfg(all(test, unix))]
 mod config_tests;
 mod directory;
+mod fast;
+mod fast_bootstrap;
+mod fast_session;
 mod group;
 pub use group::{ConfiguredExecutions, ExecutionTasks};
 mod liveness;
@@ -81,7 +84,9 @@ impl ConfiguredExecution {
             supervisor_key: config.supervisor_key.clone(),
             takeover: ProductionTakeover::First,
         };
-        let (bound, initial_grant, directory) = if let Some(status) = status {
+        let (bound, initial_grant, directory) = if config.role == config::ExecutionRole::Fast {
+            fast_bootstrap::bind(store, home, &config, &token, supervisor).await?
+        } else if let Some(status) = status {
             if status.phase != orkestr_v2_contracts::ExecutionPhase::Completed
                 || config.worker.is_some()
             {
@@ -157,6 +162,17 @@ impl ConfiguredExecution {
     /// Install only this factory's bound Store and live transport availability.
     /// Neither handle is constructible through HTTP configuration.
     pub fn install_control(&self, state: crate::AppState) -> Result<crate::AppState, &'static str> {
+        if self.config.role == config::ExecutionRole::Fast {
+            return state.with_fast_execution_scope(
+                self.owner.clone(),
+                self.config.conversation_id.clone(),
+                crate::execution_registry::ExecutionScope {
+                    store: self.store.clone(),
+                    control: Some(self.control.clone()),
+                    tasks: None,
+                },
+            );
+        }
         state.with_execution_scope(
             self.owner.clone(),
             self.config.conversation_id.clone(),
@@ -185,6 +201,9 @@ impl ConfiguredExecution {
     }
 
     async fn run(self, shutdown: watch::Receiver<bool>) -> Result<(), &'static str> {
+        if self.config.role == config::ExecutionRole::Fast {
+            return self.run_fast(shutdown).await;
+        }
         match self.config.provider {
             config::Provider::Codex => self.run_codex(shutdown).await,
             config::Provider::Claude => self.run_claude(shutdown).await,

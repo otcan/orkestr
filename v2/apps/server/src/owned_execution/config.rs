@@ -16,6 +16,15 @@ pub(super) enum Provider {
     Claude,
 }
 
+/// A private factory selection, never a role chosen by an HTTP request.
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ExecutionRole {
+    #[default]
+    Deep,
+    Fast,
+}
+
 impl Provider {
     pub(super) fn kind(self) -> orkestr_v2_application::runtime::ProviderKind {
         match self {
@@ -39,6 +48,8 @@ pub(super) struct Config {
     pub supervisor_key: String,
     #[serde(default)]
     pub provider: Provider,
+    #[serde(default)]
+    pub role: ExecutionRole,
     #[serde(default)]
     pub execution_budget: super::budget::ExecutionBudget,
     #[serde(default)]
@@ -124,6 +135,11 @@ impl Config {
             policy.validate()?;
         }
         config.execution_budget.validate()?;
+        if config.role == ExecutionRole::Fast
+            && (config.provider != Provider::Codex || config.worker.is_some())
+        {
+            return Err("Fast presentation requires its own Codex factory without Workers");
+        }
         if config.provider == Provider::Claude
             && (config.worker.is_some() || config.execution_budget.max_run_ms > 45_000)
         {
