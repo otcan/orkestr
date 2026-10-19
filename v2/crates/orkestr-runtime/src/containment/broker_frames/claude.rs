@@ -36,7 +36,27 @@ pub(super) fn validate(value: &Value) -> Result<(), Error> {
         .get("content")
         .and_then(Value::as_str)
         .ok_or(Error::InvalidFrame)?;
-    if frame.len() != 4
+    let correlated = if let Some(input) = frame.get("uuid") {
+        let input = input.as_str().ok_or(Error::InvalidFrame)?;
+        // The consumed wrapper's message ID is the only permitted native input
+        // UUID. This never authorizes caller-selected correlation or dispatch.
+        if input != message_id
+            || input.len() != 36
+            || !input.bytes().enumerate().all(|(i, b)| {
+                if [8, 13, 18, 23].contains(&i) {
+                    b == b'-'
+                } else {
+                    b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
+                }
+            })
+        {
+            return Err(Error::InvalidFrame);
+        }
+        true
+    } else {
+        false
+    };
+    if frame.len() != if correlated { 5 } else { 4 }
         || frame.get("type").and_then(Value::as_str) != Some("user")
         || frame.get("parent_tool_use_id") != Some(&Value::Null)
         || session.len() != 36
@@ -75,5 +95,25 @@ mod tests {
         let mut bad = value;
         bad["params"]["environment"] = json!({});
         assert_eq!(validate(&bad), Err(Error::InvalidFrame));
+    }
+    #[test]
+    fn resumed_input_uuid_is_exact_consumed_message_identity() {
+        let input = "11111111-1111-4111-8111-111111111111";
+        let value = json!({"params":{"owned_handle":"synthetic","message_id":input,
+            "frame":{"type":"user","session_id":"22222222-2222-4222-8222-222222222222",
+            "parent_tool_use_id":null,"uuid":input,"message":{"role":"user","content":"synthetic"}}}});
+        assert!(validate(&value).is_ok());
+        for changed in [
+            json!(null),
+            json!("message:1"),
+            json!("33333333-3333-4333-8333-333333333333"),
+        ] {
+            let mut denied = value.clone();
+            denied["params"]["frame"]["uuid"] = changed;
+            assert_eq!(validate(&denied), Err(Error::InvalidFrame));
+        }
+        let mut denied = value;
+        denied["params"]["frame"]["resume"] = json!(true);
+        assert_eq!(validate(&denied), Err(Error::InvalidFrame));
     }
 }
