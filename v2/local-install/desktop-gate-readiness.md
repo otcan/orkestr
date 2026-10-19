@@ -163,7 +163,7 @@ python3 -B -m unittest discover -s v2/local-install/tests -p test_desktop_restor
 DESKTOP_GATE_SOURCE=/absolute/private/export node --test v2/local-install/tests/desktop_gate_rehearsal.test.mjs
 ```
 
-Current checks: 14 Python cases plus 4 exact-PR116 Node cases pass. Real subprocess
+Current checks: 16 Python cases plus 4 exact-PR116 Node cases pass. Real subprocess
 SIGTERM and SIGHUP injections verify prepublication cleanup and postrename
 PublicationUnknown evidence retention. Multi-lease fixtures prove every active
 lease is released while historical records/unknown fields survive. The Node
@@ -177,3 +177,7 @@ Separate schema39 receipt: exact development pair source
 The bounded 14-to39 native package rehearsal is recorded in
 `tests/schema14-to39-checkpoint.json`; it does not qualify desktop adoption,
 attachment/browser execution, remaining upgrade edges or cancelled Rust CI.
+
+JSON float parsing rejects exponent overflow before staging; allow_nan=False also
+prevents nonfinite serialization. Nested positive/negative overflow refuses with
+source bytes unchanged and no output; finite nested unknown numbers survive.

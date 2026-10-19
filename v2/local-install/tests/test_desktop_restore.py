@@ -201,6 +201,30 @@ m.main()
         self.assertEqual((self.target / 'original.json').read_bytes(), self.raw)
         self.unchanged()
 
+    def test_nested_positive_and_negative_exponent_overflow_refused(self):
+        for number in ('1e999', '-1e999', '1e+999', '-1e+999'):
+            with self.subTest(number=number):
+                self.raw = ('{"lockIdentity":"12:34","fencingCounter":0,'
+                            '"desktopLeases":[],"extra":{"nested":[' + number + ']}}').encode()
+                self.source.write_bytes(self.raw)
+                self.digest = hashlib.sha256(self.raw).hexdigest()
+                with self.assertRaisesRegex(module.RecoveryError, 'nonfinite JSON number'):
+                    self.run_prepare()
+                self.assertFalse(self.target.exists())
+                self.assertFalse(list(self.root.glob('.desktop-recovery-*')))
+                self.unchanged()
+
+    def test_finite_nested_unknown_numbers_preserved(self):
+        self.state['extra'] = {'nested': [1.25, -2.5e100, 1e-200, 1.7976931348623157e308]}
+        self.raw = json.dumps(self.state, allow_nan=False).encode()
+        self.source.write_bytes(self.raw)
+        self.digest = hashlib.sha256(self.raw).hexdigest()
+        self.run_prepare()
+        output = json.loads((self.target / 'leases.json').read_bytes())
+        self.assertEqual(output['extra'], self.state['extra'])
+        self.assertEqual((self.target / 'original.json').read_bytes(), self.raw)
+        self.unchanged()
+
     def test_released_history_unchanged(self):
         self.state['desktopLeases'][0].update(releasedAt='already', releaseReason='original')
         self.raw = json.dumps(self.state).encode()

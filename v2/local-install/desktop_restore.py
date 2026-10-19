@@ -8,6 +8,7 @@ import argparse
 import ctypes
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -91,6 +92,13 @@ def validate(state, identity):
             active.add(key)
 
 
+def finite_float(value):
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise RecoveryError('nonfinite JSON number')
+    return parsed
+
+
 def no_duplicates(pairs):
     result = {}
     for key, value in pairs:
@@ -123,7 +131,7 @@ def prepare(source, target, digest, old_identity, *, offline_confirmed=False, ho
     raw = read_original(source)
     if hashlib.sha256(raw).hexdigest() != digest:
         raise RecoveryError('source digest mismatch')
-    state = json.loads(raw, object_pairs_hook=no_duplicates,
+    state = json.loads(raw, object_pairs_hook=no_duplicates, parse_float=finite_float,
                        parse_constant=lambda value: (_ for _ in ()).throw(RecoveryError('nonfinite JSON')))
     validate(state, old_identity)
     if state['fencingCounter'] == 2**53 - 1:
@@ -135,7 +143,7 @@ def prepare(source, target, digest, old_identity, *, offline_confirmed=False, ho
             lease.update(releasedAt=stamp, updatedAt=stamp, releaseReason='offline-restore-revoked')
             count += 1
     del state['lockIdentity']
-    output = (json.dumps(state, ensure_ascii=True, indent=2) + '\n').encode()
+    output = (json.dumps(state, ensure_ascii=True, indent=2, allow_nan=False) + '\n').encode()
     if len(output) > MAX_BYTES:
         raise RecoveryError('revoked output exceeds bound')
     receipt = dict(format='desktop-offline-revocation-v1', source_sha256=digest,
@@ -146,7 +154,7 @@ def prepare(source, target, digest, old_identity, *, offline_confirmed=False, ho
     publishing = False
     try:
         for name, data in [('original.json', raw), ('leases.json', output),
-                           ('receipt.json', (json.dumps(receipt, indent=2) + '\n').encode())]:
+                           ('receipt.json', (json.dumps(receipt, indent=2, allow_nan=False) + '\n').encode())]:
             with open(stage / name, 'xb') as file:
                 os.chmod(stage / name, 0o600)
                 file.write(data)
