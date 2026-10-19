@@ -107,6 +107,14 @@ impl Store {
         if valid != 1 {
             return Err(RuntimeStoreError::Fenced);
         }
+        // Stopped continuation must not reopen setup with unresolved descendant
+        // effects. This validator runs at issuance, each actual-byte metadata
+        // fence, and confirmation, including Claude process initialization.
+        let stopped: i64 = sqlx::query_scalar("SELECT count(*) FROM production_terminal_evidence WHERE run_id=? AND terminal_kind='stopped'")
+            .bind(link.prior_run.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
+        if stopped == 1 && !super::terminal_retirement::descendants_clear(tx, &c.id).await? {
+            return Err(RuntimeStoreError::Fenced);
+        }
         Ok(())
     }
     pub(super) async fn validate_resume_metadata(
