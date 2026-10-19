@@ -1,0 +1,94 @@
+# Timer owner HTTP leaf contract
+
+Source: `v2/apps/server/src/timer_http/dto.rs` and `mod.rs`; bounded controller
+in `controller.rs`. The ordinary server registers these routes behind its shared
+auth/CSRF guard and owns one controller task through startup and joined shutdown.
+Store baseline is Core e62129f92c282862ace1b04e322f5e1d44bb6ee1, schema 0029.
+UI consumes these typed fields, without constructing due claims. This remains
+an explicitly bounded checkpoint, with no unattended restart continuity claim.
+
+All routes are relative, owner authenticated, with no query parameters:
+
+| Method | Route | JSON request |
+|---|---|---|
+| GET | `/api/v2/timers/{namespace}` | none |
+| POST | `/api/v2/timers/{namespace}/enable` | `expected_revision` integer, `request_key` string, `conversation_id` UUID, `text` string |
+| POST | `/api/v2/timers/{namespace}/control` | `expected_revision` integer, `request_key` string, `action`: `disable`, `stop`, or `rollback` |
+
+Unknown/duplicate body fields refuse; no client clock, due, generation, claim,
+owner, credential, legacy prompt or dispatch capability fields exist. UUIDs must
+be nonnil. Existing 40 KiB body cap applies. Keys are nonempty, at most128 bytes,
+without controls; text is fresh target-owner work, nonblank and at most32768
+UTF-8 bytes. Enable derives a domain-separated SHA256 Core request key from the
+owner key and text; same key with changed text conflicts. Core also binds target
+conversation and expected revision. Requests cannot refresh authority across
+Deep Stop or revive stopped/rolled-back timers. Disable permits a fresh explicit
+enable with current revision and a new key. Dormant reasons refuse enable.
+
+Every success is HTTP200 JSON with exactly these metadata fields:
+
+- `namespace`, `source_digest`, `revision`, `generation`, `next_due_ms` (nullable).
+- `state`: `paused`, `enabled`, `disabled`, `stopped`, `rolled_back`, `exhausted`.
+- `dormant_reason` (nullable source-defined reason), `conversation_id` (nullable).
+- `schedule`: tagged `kind`: `once` with `due_ms`; `interval` with `every_ms`;
+  `utc_clock` with `weekly` and `minute_of_day`; or `dormant` without raw legacy
+  metadata. Clock support is explicit UTC; no host timezone fallback.
+- `controller_armed` boolean; `controller_hold` nullable, currently
+  `explicit_owner_rearm_required` when persisted state is enabled without a
+  current local grant. Armed means local grant presence, not proof of execution,
+  external delivery, or current session validity between controller checks.
+
+Responses are fresh current metadata, so next due/state may change between
+identical requests. Core's immutable occurrence provenance/native receipt dedupe
+remains authoritative. This HTTP route does not expose native admission tokens.
+
+Errors use existing ApiError: 400 `invalid_timer`, 401 `unauthorized`, 404
+`timer_not_found`, 409 `timer_conflict`, 503 `timer_unavailable`. Existing shared
+origin/Host/CSRF/body/deadline guard errors apply separately. Current credential
+is rechecked inside every Store transaction before replay; owner scoping avoids
+cross-owner reads. The private leaf adapter first awaits the shared `crate::owner`, then carries
+the exact existing browser `credential(headers)` or validated machine Bearer
+representation into transaction-time authentication. No parallel auth policy.
+
+Controller: at most32 process-local explicit grants, each at most one hour;
+fresh text and credential remain in memory only, never logged/persisted/exported.
+Every due delivery reauthenticates through Core. Trusted server clock only;
+stable claim key derives from generation and stored due time. One tick is at
+most32 deliveries and five seconds; cadence skips missed intervals per Core.
+Explicit lifecycle `run(shutdown_receiver)` polls once per second, with skipped
+missed ticks, and clears grants at shutdown. No HTTP tick/run endpoint exists.
+Server restart, expiry, refusal or absent fresh owner text leaves execution
+unarmed, even if persisted schedule says enabled; owner must disable with current revision, then explicitly enable with a fresh key.
+Exact historical enable retry never recreates a grant or extends its expiry.
+This bounded capability expires after one hour, so durable unattended timer
+execution beyond that remains a release gap rather than silently storing auth.
+
+`AppState` owns the shared controller. Its routes merge before the existing
+guards/state. The private leaf `owner_credential` adapter and browser credential
+helper retain their existing policies. Main starts the controller only after
+successful router/static configuration, then requests shutdown and joins it
+before returning. Controller cleanup failure cannot skip owned provider cleanup.
+The controller has no public tick/run endpoint or independent detached lifetime.
+
+The mounted router retains the leaf's synthetic auth and fake-clock regression
+coverage. An additional actual ordinary binary test uses Store-issued disposable
+timer records and natural time, proving one due delivery with execution disabled,
+joined shutdown, unarmed restart, inert old-enable replay and explicit fresh
+disable/enable. Results and immutable regression hashes are recorded separately.
+Coverage:
+actual ephemeral loopback route → explicit enable → fake-clock due → ordinary
+input → disable → SQL held oracle, exact replay/text conflict, client-time
+injection, revoked auth, and strict duplicate/claim field refusal. No production
+registry, live timer, provider, route or outbound channel is activated.
+
+
+Retry authority correction: Core `enable_timer_input_outcome` reports `duplicate`
+from the same transaction as the durable enable control lookup and writes.
+Only `duplicate=false` can create a process-local grant. Compatibility
+`enable_timer_input` still returns the unchanged receipt. Duplicate=true returns
+current metadata without replacing text, credential or expiry; expiry/restart
+requires a fresh canonical disable/enable transition. This avoids racing a
+separate preflight state read. Immutable regression source is commit
+`7445e04521552995f16af658d9c88b1239d4d2d2`; baseline two failures demonstrate
+renewal and expiry rearming, with a restart assertion and fresh-enable positive
+control retained unchanged for the corrected run.

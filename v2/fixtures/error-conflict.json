@@ -1,0 +1,6 @@
+{
+  "code": "idempotency_conflict",
+  "message": "Request key already used with different content",
+  "request_id": "00000000-0000-4000-8000-000000000099",
+  "retryable": false
+}

@@ -1,16 +1,19 @@
 [workspace]
 resolver = "2"
-members = ["crates/orkestr-domain", "crates/orkestr-demo"]
+members = ["crates/orkestr-domain", "crates/orkestr-demo", "crates/contracts", "crates/application", "crates/store-sqlite", "apps/server", "crates/orkestr-runtime", "apps/ui"]
 
 [workspace.package]
 edition = "2021"
 license = "MIT"
-version = "0.0.1"
+version = "2.0.0-dev"
 
 [workspace.dependencies]
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.145"
-tokio = { version = "=1.48.0", features = ["macros", "rt-multi-thread", "time", "sync"] }
+uuid = { version = "=1.18.1", features = ["serde"] }
+tokio = { version = "=1.48.0", features = ["macros", "rt-multi-thread", "net", "signal", "time", "sync"] }
 sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+sha2 = "=0.10.9"
+
 thiserror = "=2.0.17"
 tempfile = "=3.23.0"
