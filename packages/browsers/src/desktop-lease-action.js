@@ -34,6 +34,9 @@ export function synchronousResult(result) {
 }
 
 export function currentActionLease(state, binding, staleAfterMs, now = Date.now()) {
+  if (state.legacyRetiredCohort?.retiredIds.includes(binding.leaseId)) {
+    throw leaseStoreError("desktop_lease_action_revoked", 409);
+  }
   const lease = state.desktopLeases.find((item) => item.desktopSlug === binding.desktopSlug
     && item.ownerUserId === binding.ownerUserId && !item.releasedAt);
   if (!lease || lease.id !== binding.leaseId || lease.threadId !== binding.threadId

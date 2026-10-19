@@ -5,6 +5,8 @@ import { normalizeUserId } from "../../core/src/users.js";
 import { withDesktopLeaseLock, leaseStoreError } from "./desktop-lease-lock.js";
 import { readLeaseState, validateLeaseState, MAX_LEASE_STATE_BYTES } from "./desktop-lease-state.js";
 import { validateActionBinding, currentActionLease, synchronousCallback, synchronousResult } from "./desktop-lease-action.js";
+import { normalizeLegacyAdoption } from "./desktop-lease-legacy.js";
+import { legacyAdoptionFileConfig, readLegacyAdoptionFile } from "./desktop-lease-adoption-file.js";
 
 const VALID_MODES = new Set(["exclusive", "viewOnly", "sharedRead"]);
 
@@ -51,27 +53,41 @@ function normalizeLease(raw) {
 }
 
 export class DesktopLeaseStore {
-  constructor(filePath, { lockTimeoutMs = 5000, staleAfterMs = 15 * 60_000 } = {}) {
+  #adoption;
+  #adoptionFile;
+  #adoptionRead;
+
+  constructor(filePath, { lockTimeoutMs = 5000, staleAfterMs = 15 * 60_000,
+    legacyAdoption, legacyAdoptionPath, legacyAdoptionSha256 } = {}) {
     this.filePath = filePath;
     this.lockTimeoutMs = lockTimeoutMs;
     this.staleAfterMs = Number.isSafeInteger(staleAfterMs) && staleAfterMs > 0 ? staleAfterMs : 15 * 60_000;
     this.queue = Promise.resolve();
+    this.#adoptionFile = legacyAdoptionFileConfig(legacyAdoptionPath, legacyAdoptionSha256);
+    if (legacyAdoption !== undefined && this.#adoptionFile) throw leaseStoreError("desktop_lease_legacy_adoption_config_invalid");
+    this.#adoption = legacyAdoption === undefined ? null : normalizeLegacyAdoption(legacyAdoption);
   }
 
   #locked(operation) {
-    const run = this.queue.then(() => withDesktopLeaseLock(this.filePath, this.lockTimeoutMs, operation));
+    const run = this.queue.then(async () => {
+      // Resolve external configuration before taking the local mutation gate.
+      // A failed read stays failed for this instance; never fall back to a marker.
+      if (this.#adoptionFile) this.#adoptionRead ??= readLegacyAdoptionFile(this.#adoptionFile);
+      const adoption = this.#adoptionRead ? await this.#adoptionRead : this.#adoption;
+      return withDesktopLeaseLock(this.filePath, this.lockTimeoutMs, (gate) => operation(gate, adoption));
+    });
     this.queue = run.then(() => undefined, () => undefined);
     return run;
   }
 
   async init() {
-    return this.#locked(async (gate) => {
-      const state = await readLeaseState(gate);
+    return this.#locked(async (gate, adoption) => {
+      const state = await readLeaseState(gate, adoption);
       // Existing valid evidence is never normalized, renewed or reset by init.
       // First adoption adds only the lock identity; old mkdir writers must be
       // stopped before this source is activated.
       if (!state || state.lockIdentity === undefined) {
-        await this.#writeState(state || { fencingCounter: 0, desktopLeases: [] }, gate);
+        await this.#writeState(state || { fencingCounter: 0, desktopLeases: [] }, gate, adoption);
       } else if (!gate.initialized) {
         await gate.markInitialized();
       }
@@ -79,13 +95,13 @@ export class DesktopLeaseStore {
   }
 
   async readState() {
-    return this.#locked(async (gate) => await readLeaseState(gate) || { fencingCounter: 0, desktopLeases: [] });
+    return this.#locked(async (gate, adoption) => await readLeaseState(gate, adoption) || { fencingCounter: 0, desktopLeases: [] });
   }
 
-  async #writeState(state, gate) {
+  async #writeState(state, gate, adoption) {
     await gate.assertCurrent();
     const persisted = { ...state, lockIdentity: gate.identity };
-    validateLeaseState(persisted, gate.identity);
+    validateLeaseState(persisted, gate.identity, adoption);
     const serialized = `${JSON.stringify(persisted, null, 2)}\n`;
     if (Buffer.byteLength(serialized) > MAX_LEASE_STATE_BYTES) throw leaseStoreError("desktop_lease_state_too_large");
     const temporaryPath = `${gate.filePath}.${process.pid}.${randomUUID()}.tmp`;
@@ -101,12 +117,12 @@ export class DesktopLeaseStore {
 
   async mutateState(mutator) {
     synchronousCallback(mutator);
-    return this.#locked(async (gate) => {
-      const state = await readLeaseState(gate) || { fencingCounter: 0, desktopLeases: [] };
+    return this.#locked(async (gate, adoption) => {
+      const state = await readLeaseState(gate, adoption) || { fencingCounter: 0, desktopLeases: [] };
       const counter = state.fencingCounter;
       const result = synchronousResult(mutator(state));
       if (state.fencingCounter < counter) throw leaseStoreError("desktop_lease_generation_regressed");
-      await this.#writeState(state, gate);
+      await this.#writeState(state, gate, adoption);
       return result;
     });
   }
@@ -114,8 +130,8 @@ export class DesktopLeaseStore {
   async withCurrentLeaseAction(binding, action) {
     const expected = validateActionBinding(binding);
     synchronousCallback(action);
-    return this.#locked(async (gate) => {
-      const state = await readLeaseState(gate);
+    return this.#locked(async (gate, adoption) => {
+      const state = await readLeaseState(gate, adoption);
       if (!state || state.lockIdentity !== gate.identity || !gate.initialized) {
         throw leaseStoreError("desktop_lease_store_uninitialized");
       }
@@ -175,10 +191,12 @@ export class DesktopLeaseStore {
       if (active) Object.assign(active, { releasedAt: now, releaseReason, updatedAt: now });
       if (state.fencingCounter === Number.MAX_SAFE_INTEGER) throw leaseStoreError("desktop_lease_generation_exhausted", 409);
       state.fencingCounter += 1;
+      const retiredId = state.legacyRetiredCohort?.retiredIds.includes(normalized.id);
       state.desktopLeases.unshift({
         ...normalized,
-        acquiredAt: normalized.acquiredAt || now,
-        heartbeatAt: normalized.heartbeatAt || now,
+        ...(retiredId ? { id: randomUUID(), releasedAt: null, releaseReason: null } : {}),
+        acquiredAt: retiredId ? now : normalized.acquiredAt || now,
+        heartbeatAt: retiredId ? now : normalized.heartbeatAt || now,
         updatedAt: now,
         fencingToken: randomUUID(),
         fencingVersion: state.fencingCounter,
@@ -218,5 +236,9 @@ export class DesktopLeaseStore {
 }
 
 export function desktopLeaseStore(env = process.env) {
-  return new DesktopLeaseStore(dataPaths(env).desktopLeases, { staleAfterMs: Number(env.ORKESTR_DESKTOP_LEASE_STALE_MS) });
+  return new DesktopLeaseStore(dataPaths(env).desktopLeases, {
+    staleAfterMs: Number(env.ORKESTR_DESKTOP_LEASE_STALE_MS),
+    legacyAdoptionPath: env.ORKESTR_DESKTOP_LEASE_LEGACY_ADOPTION_PATH,
+    legacyAdoptionSha256: env.ORKESTR_DESKTOP_LEASE_LEGACY_ADOPTION_SHA256,
+  });
 }

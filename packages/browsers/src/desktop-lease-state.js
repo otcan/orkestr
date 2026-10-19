@@ -3,44 +3,32 @@
 import fs from "node:fs/promises";
 import { constants } from "node:fs";
 import { leaseStoreError } from "./desktop-lease-lock.js";
+import { validateLeaseStructure } from "./desktop-lease-structure.js";
+import { validateLegacyCohort, verifyPreparedLegacyBytes } from "./desktop-lease-legacy.js";
+import { parseLegacyJson } from "./desktop-lease-canonical.js";
 
 export const MAX_LEASE_STATE_BYTES = 8 * 1024 * 1024;
-const MODES = new Set(["exclusive", "viewOnly", "sharedRead"]);
-const text = (value) => typeof value === "string" && value.length > 0 && value.trim() === value;
-const canonical = (value) => text(value) && /^[a-z0-9_.-]+$/.test(value);
-
-export function validateLeaseState(state, lockIdentity) {
+export function validateLeaseState(state, lockIdentity, adoption = null) {
   const invalid = () => { throw leaseStoreError("desktop_lease_state_invalid"); };
-  if (!state || typeof state !== "object" || Array.isArray(state)
-      || !Number.isSafeInteger(state.fencingCounter) || state.fencingCounter < 0
-      || !Array.isArray(state.desktopLeases)) invalid();
+  validateLeaseStructure(state);
   if (state.lockIdentity !== undefined && state.lockIdentity !== lockIdentity) {
     throw leaseStoreError("desktop_lease_lock_identity_changed");
   }
-  const ids = new Set(), versions = new Set(), active = new Set();
+  const retired = validateLegacyCohort(state, adoption), versions = new Set();
   for (const lease of state.desktopLeases) {
-    if (!lease || typeof lease !== "object" || Array.isArray(lease)
-        || !text(lease.id) || !canonical(lease.desktopSlug) || !canonical(lease.ownerUserId)
-        || !text(lease.threadId) || !text(lease.fencingToken) || !MODES.has(lease.mode)
-        || !Number.isSafeInteger(lease.fencingVersion) || lease.fencingVersion < 1
-        || lease.fencingVersion > state.fencingCounter || !text(lease.acquiredAt)
-        || !text(lease.heartbeatAt) || !(lease.expiresAt === null || text(lease.expiresAt))
-        || !(lease.releasedAt === null || text(lease.releasedAt))) invalid();
-    const key = JSON.stringify([lease.ownerUserId, lease.desktopSlug]);
-    if (ids.has(lease.id) || versions.has(lease.fencingVersion) || (!lease.releasedAt && active.has(key))) invalid();
-    ids.add(lease.id);
+    if (retired.has(lease.id)) continue;
+    if (versions.has(lease.fencingVersion) || adoption && lease.fencingVersion <= adoption.cohort.generationFloor) invalid();
     versions.add(lease.fencingVersion);
-    if (!lease.releasedAt) active.add(key);
   }
   return state;
 }
 
-export async function readLeaseState(gate) {
+export async function readLeaseState(gate, adoption = null) {
   let file;
   try {
     file = await fs.open(gate.filePath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
-    if (error?.code === "ENOENT" && !gate.initialized) return null;
+    if (error?.code === "ENOENT" && !gate.initialized && !adoption) return null;
     throw leaseStoreError("desktop_lease_state_unavailable");
   }
   try {
@@ -62,12 +50,15 @@ export async function readLeaseState(gate) {
       throw leaseStoreError("desktop_lease_state_changed");
     }
     let state;
-    try { state = JSON.parse(bytes.toString("utf8", 0, length)); }
+    const raw = bytes.subarray(0, length);
+    try { state = adoption ? parseLegacyJson(raw) : JSON.parse(raw.toString("utf8")); }
     catch { throw leaseStoreError("desktop_lease_state_invalid"); }
     if (gate.initialized && state?.lockIdentity === undefined) {
       throw leaseStoreError("desktop_lease_lock_identity_missing");
     }
-    return validateLeaseState(state, gate.identity);
+    validateLeaseState(state, gate.identity, adoption);
+    verifyPreparedLegacyBytes(raw, state, adoption, gate.initialized);
+    return state;
   } finally {
     await file.close();
   }
