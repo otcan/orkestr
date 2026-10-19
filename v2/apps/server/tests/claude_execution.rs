@@ -1,13 +1,11 @@
 //! Actual ordinary Store + owned synthetic Claude process, no credential access.
-#[path = "../src/claude_execution/mod.rs"]
-mod claude_execution;
-use claude_execution::*;
 use orkestr_v2_application::runtime::ProviderKind;
 use orkestr_v2_application::{
     runtime::{DispatchClaimResult, ProductionSupervisorConfig, ProductionTakeover, RuntimeStore},
     IntakeStore,
 };
 use orkestr_v2_contracts::{ExecutionPhase, MessageInput};
+use orkestr_v2_server::claude_execution::*;
 use orkestr_v2_store_sqlite::{ExecutionConsumption, Store};
 use std::{
     os::unix::fs::PermissionsExt,
@@ -26,7 +24,7 @@ async fn exercise(failure: bool, scheduled: bool) {
     let root = root.canonicalize().unwrap();
     let native = root.join("native");
     let source = r#"#!/usr/bin/python3
-import sys,json
+import sys,json,uuid
 native=sys.argv[sys.argv.index('--session-id')+1]
 for line in sys.stdin:
  f=json.loads(line)
@@ -36,8 +34,9 @@ for line in sys.stdin:
   continue
  print(json.dumps({'type':'system','subtype':'init','session_id':native}),flush=True)
  assert f['session_id']==native and f['message']['content']=='synthetic isolated input'
- print(json.dumps({'type':'assistant','session_id':native,'message':{'role':'assistant','content':[{'type':'text','text':'synthetic output'}]}}),flush=True)
- print(json.dumps({'type':'result','session_id':native,'subtype':'success','is_error':False,'result':'synthetic output'}),flush=True)
+ assert str(uuid.UUID(f['uuid']))==f['uuid']
+ print(json.dumps({'type':'assistant','session_id':native,'uuid':str(uuid.uuid4()),'user_message_uuid':f['uuid'],'message':{'role':'assistant','content':[{'type':'text','text':'synthetic output'}]}}),flush=True)
+ print(json.dumps({'type':'result','session_id':native,'uuid':str(uuid.uuid4()),'user_message_uuid':f['uuid'],'subtype':'success','is_error':False,'result':'synthetic output'}),flush=True)
 "#;
     let source = if failure {
         source

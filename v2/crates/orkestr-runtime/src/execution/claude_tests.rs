@@ -23,7 +23,7 @@ async fn exercise(failure: bool, revoke_before_observation: bool, retry_observat
     let root = root.canonicalize().unwrap();
     let native = root.join("native");
     let source = r#"#!/usr/bin/python3
-import sys,json
+import sys,json,uuid
 native=sys.argv[sys.argv.index('--session-id')+1]
 for line in sys.stdin:
  f=json.loads(line)
@@ -33,8 +33,9 @@ for line in sys.stdin:
   continue
  print(json.dumps({'type':'system','subtype':'init','session_id':native}),flush=True)
  assert f['session_id']==native and f['message']['content']=='synthetic isolated input'
- print(json.dumps({'type':'assistant','session_id':native,'message':{'role':'assistant','content':[{'type':'text','text':'synthetic output'}]}}),flush=True)
- print(json.dumps({'type':'result','session_id':native,'subtype':'success','is_error':False,'result':'synthetic output'}),flush=True)
+ assert f['uuid']==str(uuid.UUID(f['uuid']))
+ print(json.dumps({'type':'assistant','session_id':native,'uuid':str(uuid.uuid4()),'user_message_uuid':f['uuid'],'message':{'role':'assistant','content':[{'type':'text','text':'synthetic output'}]}}),flush=True)
+ print(json.dumps({'type':'result','session_id':native,'uuid':str(uuid.uuid4()),'user_message_uuid':f['uuid'],'subtype':'success','is_error':False,'result':'synthetic output'}),flush=True)
 "#;
     let source = if failure {
         source

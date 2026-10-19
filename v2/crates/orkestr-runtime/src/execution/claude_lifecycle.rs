@@ -1,4 +1,4 @@
-//! Input correlation on a fresh reader for an accepted Claude native session.
+//! Exact consumed-input correlation on every fresh or resumed Claude reader.
 //! Identity is derived from the consumed message, never supplied by a browser.
 use crate::ports::Blocker;
 use orkestr_v2_store_sqlite::ConsumedProviderDispatch;
@@ -6,8 +6,12 @@ use serde_json::{json, Value};
 
 pub(super) struct ClaudeInputCorrelation(Option<String>);
 impl ClaudeInputCorrelation {
-    pub(super) fn for_dispatch(cap: &ConsumedProviderDispatch, resumed: bool) -> Self {
-        Self(resumed.then(|| cap.message_id().to_string()))
+    pub(super) fn for_dispatch(cap: &ConsumedProviderDispatch, _resumed: bool) -> Self {
+        Self(Some(cap.message_id().to_string()))
+    }
+
+    pub(super) fn input(&self) -> Option<&str> {
+        self.0.as_deref()
     }
 
     pub(super) fn frame(&self, cap: &ConsumedProviderDispatch) -> Value {

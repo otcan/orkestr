@@ -2,7 +2,9 @@
 //! The configured launcher owns canonical account selection. Browser JSON cannot
 //! provide a launcher, account, native identity, setup grant or inference grant.
 mod schedule;
+mod stop;
 pub use schedule::ClaudeSchedule;
+pub use stop::ClaudeStopExecution;
 
 use orkestr_runtime::{
     containment::{Authority, ChildDirectories},

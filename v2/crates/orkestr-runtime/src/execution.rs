@@ -13,7 +13,7 @@ mod pump;
 mod reuse;
 mod session;
 mod steering;
-pub use claude_pump::ClaudePump;
+pub use claude_pump::{ClaudePump, StoppingClaude};
 pub use claude_session::{PreparingClaude, ReadyClaude};
 pub use pump::{CodexPump, StopFailure, StoppingCodex};
 pub use session::{PreparingCodex, ReadyCodex, SetupFailure};

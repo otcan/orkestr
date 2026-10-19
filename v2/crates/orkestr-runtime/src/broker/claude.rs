@@ -1,4 +1,5 @@
 //! Single-turn Claude framing. Correlation never creates execution authority.
+pub(crate) mod control;
 use super::{Blocker, BrokerOpen, Value};
 use crate::claude_rpc::ClaudeRpc;
 use std::sync::Arc;

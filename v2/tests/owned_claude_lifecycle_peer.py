@@ -56,7 +56,7 @@ emit({"type": "control_response", "response": {"subtype": "success",
 record("initialized")
 frame = json.loads(sys.stdin.readline())
 input_uuid = frame.pop("uuid", None)
-assert not resumed or input_uuid == str(uuid.UUID(input_uuid))
+assert input_uuid == str(uuid.UUID(input_uuid))
 expected = "synthetic ordinary HTTP input" + (f" {number}" if number > 1 else "")
 assert frame == {"type": "user", "session_id": native, "parent_tool_use_id": None,
                  "message": {"role": "user", "content": expected}}
@@ -64,11 +64,11 @@ record("turn", input_uuid=input_uuid, prior_count=len(prior))
 barrier("release-init")
 emit({"type": "system", "subtype": "init", "session_id": native})
 record("init-emitted")
-correlation = ({"user_message_uuid": input_uuid} if resumed else {})
+correlation = {"user_message_uuid": input_uuid}
 if resumed and mode == "stale-output":
     correlation["user_message_uuid"] = str(uuid.uuid4())
 text = f"Synthetic Claude turn {number}, prior turns {len(prior)}"
-emit({"type": "assistant", "session_id": native, "message": {"role": "assistant",
+emit({"type": "assistant", "session_id": native, "uuid": str(uuid.uuid4()), "message": {"role": "assistant",
       "content": [{"type": "text", "text": text}]}, **correlation})
 barrier("release-result")
 transcript.write_text(json.dumps(prior + [{"native": native, "input": input_uuid, "text": expected}]))

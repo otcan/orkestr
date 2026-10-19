@@ -1,4 +1,5 @@
 //! First-turn Claude output, with actual native writes fenced on every suffix.
+mod control;
 use super::*;
 use crate::{
     broker::claude::ClaudeChannel,
@@ -7,6 +8,7 @@ use crate::{
     ports::{InterruptControl, Provider, ProviderEvent, RunAdmission},
     supervisor::{self, PendingObservation},
 };
+pub use control::StoppingClaude;
 use orkestr_v2_application::runtime::ProviderAdmission;
 use orkestr_v2_store_sqlite::Store;
 use std::collections::VecDeque;
