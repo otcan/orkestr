@@ -59,6 +59,8 @@ test('Steer reservation, ordered fallback and a foreign acknowledgement are not 
 
 test('owner read paths are closed and cannot fetch a foreign origin or control endpoint', () => {
   assert.equal(observationPath(conversation, 'execution', run), `/api/v2/conversations/${conversation}/execution?run_id=${run}`);
+  assert.equal(observationPath(conversation, 'accepted'), `/api/v2/conversations/${conversation}/accepted-results?after_sequence=0&limit=20`);
+  assert.throws(() => observationPath(conversation, 'accepted', run));
   for (const kind of ['stop', 'accept', 'https://example.invalid', '../session']) {
     assert.throws(() => observationPath(conversation, kind));
   }

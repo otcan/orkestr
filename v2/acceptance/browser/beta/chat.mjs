@@ -68,6 +68,7 @@ export async function browserChat({page, context, origin, sourceSha, credentials
       return {...proof, held_preview_visible: true};
     });
     let previousRun = first.run_id;
+    const acceptedHistory = [];
     for (let index = 2; index < 4; index++) {
       await step(index === 2 ? 'post_stop_input' : 'accepted_continuation', async () => {
         const sent = await controls.send(fixture.messages[index]);
@@ -78,12 +79,22 @@ export async function browserChat({page, context, origin, sourceSha, credentials
         const reloaded = await reloadOwner({page, conversation, origin});
         const after = executionStatus(await read('execution'), conversation, next.run_id);
         assert.equal(after.phase, 'completed');
+        const rendered = await controls.completed(accepted.receipt);
         const hold = assertHeldInput({conversation, stoppedRun: first.run_id, admitted: held.intake.receipt,
           before: heldBefore, after: await read('held')});
         previousRun = next.run_id;
-        return {...sent.proof, ...accepted.proof, ...hold, reload: reloaded, fresh_run_observed: true};
+        acceptedHistory.push(Object.fromEntries(['conversation_id', 'run_id', 'completion_event_id',
+          'acceptance_event_id', 'outcome'].map(key => [key, accepted.receipt[key]])));
+        return {...sent.proof, ...accepted.proof, ...hold, ...rendered, reload: reloaded, fresh_run_observed: true};
       });
     }
+    const window = await read('window');
+    const safe = value => { const number = Number(value); assert(Number.isSafeInteger(number)); return number; };
+    // Private operator handoff: identifiers are observations, never credentials
+    // or new execution authority. It binds the later fresh-window test.
+    report.predecessor = {window_id: window.window_id, generation: safe(window.generation), accepted: acceptedHistory,
+      held: heldBefore.held.map(row => ({...row, scope_sequence: safe(row.scope_sequence),
+        through_scope_sequence: safe(row.through_scope_sequence)}))};
     if (await verifyServedPair(active) !== true || await verifyLease(active) !== true) throw failure('identity_changed');
   })().finally(() => { settled = true; });
   work.catch(() => {});

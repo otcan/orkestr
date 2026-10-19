@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {decodeExact, assertWindowAdmission, assertWindowReplay, assertHeldInput, assertBetaDiscovery} from './window-evidence.mjs';
+import {decodeExact, assertWindowAdmission, assertWindowReplay, assertHeldInput, assertBetaDiscovery, assertClosedPredecessor} from './window-evidence.mjs';
 const id = number => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 const limits = {duration_ms: 900000, attempts: 32, bytes: 67108864,
   cleanup_ms: 30000, cleanup_attempts: 4, cleanup_bytes: 1048576};
@@ -113,4 +113,19 @@ test('a hold must have valid ordered boundaries and the exact original intake se
     assert.throws(() => assertHeldInput({conversation: id(1), stoppedRun: id(7),
       admitted: example().intakeReceipt, before: invalid, after: structuredClone(invalid)}));
   }
+});
+
+test('post-continuity work requires the exact closed predecessor and unchanged old hold', () => {
+  const held = {message_id: id(2), source_event_id: id(3), reason: 'stop_boundary',
+    boundary_run_id: id(7), boundary_event_id: id(8), scope_sequence: 1, through_scope_sequence: 4};
+  const page = {schema_version: 1, conversation_id: id(1), revision: 7, observed_at_ms: 1000,
+    eligible_input_available: false, next_after_sequence: null, held: [held]};
+  const current = {...example().receipt.status, state: 'closed'};
+  const expected = {window_id: current.window_id, generation: 1, held: [held]};
+  const data = {conversation: id(1), expected, current, held: decodeExact(JSON.stringify(page))};
+  assert.equal(assertClosedPredecessor(data).prior_input_still_held, true);
+  for (const patch of [{state: 'active'}, {state: 'reconciliation_required'}, {window_id: id(9)}, {generation: 2}]) {
+    assert.throws(() => assertClosedPredecessor({...data, current: {...current, ...patch}}));
+  }
+  assert.throws(() => assertClosedPredecessor({...data, held: {...page, held: []}}));
 });

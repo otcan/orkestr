@@ -5,6 +5,7 @@ import {decodeExact, assertWindowAdmission} from './window-evidence.mjs';
 import {executionStatus, assertProgress, assertStopRequested, assertStopped,
   assertAccepted, assertSteered} from './execution-evidence.mjs';
 import {failure} from './diagnostics.mjs';
+import {acceptedResult, acceptedText, acceptedResultRendered} from './accepted-results.mjs';
 
 // All mutations below are single ordinary UI actions. Polls are read-only and
 // bounded; conflicts/unknown receipts never become an automatic control retry.
@@ -134,6 +135,21 @@ export function executionUi({page, origin, conversation, read, capture, signal, 
       await clickReady(page, 'Accept completion', origin, 'Execution and resources', action);
       const controlValue = await control('accept'), after = await phase(['completed'], run);
       return {...controlValue, after, proof: assertAccepted({conversation, proposal, ...controlValue, after})};
+    },
+    async completed(receipt) {
+      signal.throwIfAborted();
+      const status = executionStatus(await read('execution', receipt.run_id), conversation, receipt.run_id);
+      assert.equal(status.phase, 'completed');
+      const result = acceptedResult({conversation, receipt, page: await read('accepted')});
+      const text = acceptedText({conversation, result, payload: await read('payload', result.payload_id)});
+      // Only identifiers and bounded text enter this in-page predicate; neither
+      // payload text nor credentials are copied into the acceptance receipt.
+      const keys = Object.fromEntries(['run_id', 'completion_event_id', 'acceptance_event_id', 'payload_id']
+        .map(key => [key, result[key]]));
+      await page.waitForFunction(acceptedResultRendered, {timeout: 10000}, {origin, result: keys, text});
+      signal.throwIfAborted();
+      return {accepted_result_restored: true, durable_completion_event_bound: true,
+        exact_accepted_payload_rendered: true};
     },
     counts() { return {messages: sends, stop: stops, acceptance: accepts, steering: steers}; },
   };

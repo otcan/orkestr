@@ -19,6 +19,7 @@ export function observationPath(conversation, kind, selector) {
     return `${base}/steering/${selector}`;
   }
   assert.equal(selector, undefined);
+  if (kind === 'accepted') return `${base}/accepted-results?after_sequence=0&limit=20`;
   if (kind === 'held') return `${base}/held-inputs?after_sequence=0&limit=100`;
   if (kind === 'execution' || kind === 'window') return `${base}/${kind}`;
   throw failure('invalid_action');

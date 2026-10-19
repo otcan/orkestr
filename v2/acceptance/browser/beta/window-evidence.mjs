@@ -92,6 +92,23 @@ export function assertWindowReplay(original, replay) {
   return {immutable_admission_replayed: true, new_budget: false};
 }
 
+export function assertClosedPredecessor({conversation, expected, current, held}) {
+  status(current, conversation); uuid(expected.window_id);
+  assert.equal(current.window_id, expected.window_id);
+  assert.equal(integer(current.generation), integer(expected.generation));
+  assert.equal(current.state, 'closed', 'closed_predecessor_required');
+  assert(Array.isArray(expected.held) && expected.held.length === 1);
+  const row = expected.held[0];
+  const before = {...held, held: expected.held.map(item => ({...item,
+    scope_sequence: integer(item.scope_sequence), through_scope_sequence: integer(item.through_scope_sequence)}))};
+  // The HTTP decoder preserves integers as BigInt; normalize the small trusted
+  // cross-process checkpoint before exact comparison to the current observation.
+  const after = {...held, held: held.held.map(item => ({...item,
+    scope_sequence: integer(item.scope_sequence), through_scope_sequence: integer(item.through_scope_sequence)}))};
+  return assertHeldInput({conversation, stoppedRun: row.boundary_run_id,
+    admitted: {message_id: row.message_id, event_id: row.source_event_id, sequence: row.scope_sequence}, before, after});
+}
+
 export function assertHeldInput({conversation, stoppedRun, admitted, before, after}) {
   uuid(conversation); uuid(stoppedRun); uuid(admitted.message_id); uuid(admitted.event_id);
   assert(integer(admitted.sequence) > 0n);

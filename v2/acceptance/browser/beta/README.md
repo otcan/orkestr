@@ -33,6 +33,20 @@ An advertised-false Steer sample is reported as currently unavailable; it does
 not prove that the provider lacks steering. A required Steer must reach an exact
 native acknowledgement, not a reservation or ordered queue fallback.
 
+After each acceptance and full reload, `accepted-results` reads the bounded
+owner-scoped result projection and binds the exact run, completion event,
+acceptance event and canonical payload. The matching Accepted replies article
+must carry those identifiers and render the exact referenced text. A current
+Provider output panel, an unrelated result or an API completed phase alone
+cannot pass. This uses accepted-result provenance, not an invented chat message.
+
+`browserPostWindow` is a separate short one-input phase after the private
+operator's 915-second passive observer. It requires the exact closed predecessor,
+the unchanged held row and both prior accepted replies; only then may its one
+ordinary Send and Start work create a fresh window. It verifies the fresh run,
+third explicit acceptance and restored final reply. The earlier four-input chat
+runner is not reused and its fresh-owner precondition is not weakened.
+
 Window generation observations follow Core `2b9227da1753629ae04d0a170c6c659842c656e3`:
 integers below 2^53, including a same-window join at the last safe generation;
 creating an overflowing successor fails. No window is opened automatically by
