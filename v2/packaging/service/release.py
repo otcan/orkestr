@@ -8,6 +8,7 @@ import shutil
 
 from closure import pin, require, trusted
 from prepare import inventory
+from beta_config import validate as validate_beta_config
 
 
 def wrapper(root, interpreter, manifest_sha):
@@ -17,6 +18,23 @@ def wrapper(root, interpreter, manifest_sha):
                str(root/'package/codex_service/entry.py'), 'manager', manifest_sha]
     return ('#!/bin/sh\nset -eu\n[ "$#" -eq 0 ] || exit 2\n'
             'unset ENV BASH_ENV CDPATH\nexec ' + shlex.join(command) + '\n').encode()
+
+
+
+def final_bindings(package, destination):
+    """Reject a staged inner package still bound to its staging paths."""
+    beta = validate_beta_config((package/'beta.json').read_bytes())
+    profile = json.loads((package/'profile.json').read_bytes())
+    runtime = json.loads((package/'service.json').read_bytes())
+    require(beta['launcher'] == str(destination/'launcher.py') and
+            beta['launcher_sha256'] == pin(package/'launcher.py')['sha256'],
+            'final launcher binding required')
+    require(profile['native'] == str(destination/'native') and
+            profile['supervisor'] == str(destination/'isolation/supervisor.py'),
+            'final provider binding required')
+    require(runtime['owner_id'] == beta['owner_id'] and
+            runtime['conversation_id'] == beta['conversation_id'] and
+            profile['workspace'] == beta['workspace'], 'inner scope binding required')
 
 
 def prepare_release(package, manifest_sha, output):
@@ -36,6 +54,7 @@ def prepare_release(package, manifest_sha, output):
     require(value['format'] == 'orkestr-v2-codex-service-package-v1' and
             re.fullmatch('[0-9a-f]{40}', value['source_commit']), 'selected service package required')
     require('codex_service/entry.py' in before, 'no-site entry required')
+    final_bindings(package, output/'package')
     # Fixed trusted host interpreters, not caller-selected executables.
     interpreter = Path('/usr/bin/python3').resolve(strict=True)
     shell = Path('/bin/sh').resolve(strict=True)
@@ -51,7 +70,7 @@ def prepare_release(package, manifest_sha, output):
                    'inner_manifest_sha256':manifest_sha, 'files':inventory(output),
                    'startup_dependencies':[pin(interpreter),pin(shell)],
                    'limits':['inner Package/peer/config acceptance remains separate',
-                             'requires reviewed manager stopped-child race successor',
+                             'manager source and complete Package validation independently required',
                              'no service installation or activation']}
         path = output/'release.json'
         path.write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n');path.chmod(0o440)
