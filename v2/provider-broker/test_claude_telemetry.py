@@ -52,7 +52,7 @@ class ClaudeTelemetryTests(unittest.TestCase):
         self.assertFalse(self.channel.system_seen)
         self.assertFalse(self.channel.terminal)
         self.channel.provider({"type":"result","subtype":"success","is_error":False,
-            "session_id":self.native,"result":"synthetic"})
+            "user_message_uuid":"33333333-3333-4333-8333-333333333333","uuid":"55555555-5555-4555-8555-555555555555","session_id":self.native,"result":"synthetic"})
         self.assertIsNone(self.channel.provider(self.telemetry()))
         self.assertTrue(self.channel.terminal)
         with self.assertRaises(Refused):
