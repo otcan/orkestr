@@ -142,6 +142,11 @@ impl AppState {
         owner: &OwnerId,
         conversation: &ConversationId,
     ) -> Result<Option<ExecutionScope>, Error> {
+        if let Some(controller) = &self.window_controller {
+            if let Some(scope) = controller.fast_snapshot(owner, conversation) {
+                return Ok(Some(scope));
+            }
+        }
         if let Some(scope) = self.fast_executions.get(owner, conversation) {
             return Ok(Some(scope.clone()));
         }

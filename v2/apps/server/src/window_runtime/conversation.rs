@@ -41,6 +41,13 @@ impl ConversationController {
     pub(super) fn handles(&self) -> &Handles {
         &self.handles
     }
+    pub(super) async fn roles_ready_to_close(&self) -> bool {
+        match &*self.state.lock().await {
+            State::Idle => true,
+            State::Running(task) => task.roles_ready_to_close(),
+            State::Starting | State::Uncertain => false,
+        }
+    }
     pub(crate) fn configured_scope(
         &self,
     ) -> (

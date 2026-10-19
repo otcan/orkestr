@@ -76,6 +76,17 @@ impl Controller {
         owner == &self.config.owner_id && !conversation.0.is_nil() && self.config.roles.is_some()
     }
 
+    pub(crate) fn fast_snapshot(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+    ) -> Option<ExecutionScope> {
+        self.current()
+            .ok()?
+            .handles()
+            .fast_snapshot(owner, conversation)
+    }
+
     pub(crate) async fn process(
         &self,
         browser: &str,
@@ -101,11 +112,12 @@ impl Controller {
         if current.configured_scope().1 != conversation {
             let previous = current.configured_scope().1.clone();
             current.refresh().await?;
-            if !self
-                .store
-                .execution_window_switch_ready_authenticated(browser, &previous)
-                .await
-                .map_err(|_| "previous conversation status unavailable")?
+            if !current.roles_ready_to_close().await
+                || !self
+                    .store
+                    .execution_window_switch_ready_authenticated(browser, &previous)
+                    .await
+                    .map_err(|_| "previous conversation status unavailable")?
             {
                 return Err("previous conversation has unfinished work");
             }
