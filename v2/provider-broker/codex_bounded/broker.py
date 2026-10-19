@@ -54,11 +54,12 @@ def pump_type(base, become_subreaper):
     return SelectedPump
 
 
-def main(root):
+def main(root, role=None):
     # No configuration, command, credential or protocol fallback selected by argv.
     try:
         package = Package(root)
         require(os.geteuid() == package.uid, "broker_executor_identity")
+        package.profile_path(role)  # Role is fixed by the protected launcher, never argv.
         Channel, protocol, Refused, become_subreaper, reaped_exit, Pump = modules(package.root)
         arguments = sys.argv[1:]
         resumed = arguments == ["resume-owned-session", "--protocol", protocol]
@@ -68,7 +69,7 @@ def main(root):
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
         from .profile import Configuration
-        config = Configuration(package.root)
+        config = Configuration(package.root, role)
         expected_native = None
         if resumed:
             from codex_bootstrap import receive
