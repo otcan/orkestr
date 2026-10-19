@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { submitLogin } from './headless-login.mjs';
 import { discoveryMode } from './headless-beta.mjs';
 import { verifyIntake } from './headless-intake.mjs';
 import { installIntakeCapture } from './headless-receipt-capture.mjs';
@@ -59,7 +60,7 @@ try {
   await page.type('#username', 'synthetic-admin');
   await page.type('#password', 'synthetic-password-000000');
   await page.type('#bootstrap', bootstrap);
-  await clickText('Continue');
+  await submitLogin(page, origin, clickText, true);
   const checkSurface = async expected => {
     const reply = await page.evaluate(async () => {
       const response = await fetch('/api/v2/beta', { redirect: 'error', cache: 'no-store' });
@@ -131,7 +132,7 @@ try {
   // Exercise a fresh password login after server-confirmed revocation, not just resume.
   await page.type('#username', 'synthetic-admin');
   await page.type('#password', 'synthetic-password-000000');
-  await clickText('Continue');
+  await submitLogin(page, origin, clickText);
   await checkSurface(mode);
   const replacement = (await browser.cookies()).find(cookie => cookie.name === 'orkestr_v2_session');
   assert.ok(replacement?.httpOnly);
