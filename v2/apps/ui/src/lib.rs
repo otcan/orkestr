@@ -234,3 +234,5 @@ pub mod worker_time_limit;
 
 pub mod memory_client;
 pub mod memory_state;
+
+pub mod beta_window;
