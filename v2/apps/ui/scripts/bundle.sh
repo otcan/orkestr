@@ -22,7 +22,7 @@ mkdir -- "$UI_BUNDLE_DIR"
 wasm-bindgen "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/orkestr-v2-ui.wasm" --target web --out-dir "$UI_BUNDLE_DIR" --out-name orkestr_v2_ui --no-typescript
 cat > "$UI_BUNDLE_DIR/index.html" <<'HTML'
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Orkestr</title></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"><title>Orkestr</title></head>
 <body><div id="main"></div><script type="module">import init from './orkestr_v2_ui.js'; await init();</script></body></html>
 HTML
 python3 - "$UI_BUNDLE_DIR" <<'PYTHON'

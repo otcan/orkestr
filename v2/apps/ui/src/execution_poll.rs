@@ -9,6 +9,8 @@ pub fn ExecutionPoll(
     #[props(default)] run: String,
     #[props(default)] fast: bool,
     #[props(default = true)] worker_tasks: bool,
+    #[props(default)] headless: bool,
+    #[props(default)] clock: Option<Signal<u64>>,
     csrf: String,
     session_scope: Signal<SessionScope>,
     mut execution: Signal<Execution>,
@@ -54,6 +56,9 @@ pub fn ExecutionPoll(
                 continue;
             };
             now.set(received);
+            if let Some(mut clock) = clock {
+                clock.set(received);
+            }
             match message["kind"].as_str() {
                 Some("tick") => {}
                 Some("response") => match message["status"].as_u64() {
@@ -88,7 +93,9 @@ pub fn ExecutionPoll(
             execution.write().disconnected();
         }
     });
-    if fast {
+    if headless {
+        rsx! {}
+    } else if fast {
         rsx! { crate::fast_panel::FastPanel { execution, now_ms: now(), csrf, session_scope, onexpired } }
     } else {
         rsx! { crate::execution_panel::ExecutionPanel { execution, now_ms: now(), csrf, session_scope, onexpired, parent_tasks } }

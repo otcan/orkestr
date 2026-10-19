@@ -84,20 +84,27 @@ pub fn WindowView(
                 ExecutionWindowState::Active | ExecutionWindowState::Closed
             )
         });
-    let label = status.read().as_ref().map(|s| match s.state {
-        ExecutionWindowState::Opening => "Opening work window; execution is not yet active.",
-        ExecutionWindowState::Active => "Work window active. Additional admitted messages share its remaining time and limits.",
-        ExecutionWindowState::Retiring => "Finishing cleanup. Saved messages remain queued.",
-        ExecutionWindowState::Closed => "Work window closed. Starting again requires a separate admission.",
-        ExecutionWindowState::ReconciliationRequired => "Work needs operator reconciliation. Starting again is unavailable.",
-    }).unwrap_or("No work window. Send a message, then explicitly start work.");
+    let label = status
+        .read()
+        .as_ref()
+        .map(|s| match s.state {
+            ExecutionWindowState::Opening => "Starting work window…",
+            ExecutionWindowState::Active => {
+                "Work window active. New work shares the remaining limits."
+            }
+            ExecutionWindowState::Retiring => "Finishing cleanup. Saved messages remain queued.",
+            ExecutionWindowState::Closed => "Work window closed. Send a message to start again.",
+            ExecutionWindowState::ReconciliationRequired => {
+                "Work needs operator reconciliation. Starting again is unavailable."
+            }
+        })
+        .unwrap_or("Send a message, then choose Start work.");
     let review_id = id.clone();
-    rsx! { section { "aria-label":"Work window",
-        h3 { "Work window" }
+    rsx! { section { class: "window-toolbar", "aria-label":"Work window",
         p { role:"status", if known() { "{label}" } else { "{notice}" } }
-        p { "Work lasts up to 14½ minutes, followed by up to 30 seconds of cleanup. Accepting a result later does not restart work." }
+        details { summary { "Work limits" } p { "Work lasts up to 14½ minutes, followed by up to 30 seconds of cleanup. Acceptance never extends a window." } }
         if let Some(input) = queued {
-            p { "A saved message is waiting for admission." }
+            span { "Saved message ready. " }
             button { disabled: busy() || (!can_admit && intent.read().pending(&id).is_none()) || conflict(), onclick: move |_| {
                 if busy() || conflict() || !session_scope.read().is_current(generation) { return; }
                 let input = input.clone(); let id = id.clone(); let csrf = csrf.clone();
@@ -143,7 +150,7 @@ pub fn WindowView(
             }, if intent.read().pending(&id).is_some() { "Retry admission" } else if status.read().as_ref().is_some_and(|s|s.state==ExecutionWindowState::Active) { "Add to current work" } else { "Start work" } }
             if conflict() { button { onclick: move |_| { let ticket=intent.read().ticket(&review_id); if let Some(ticket)=ticket { intent.write().review_refusal(&review_id,&ticket); } conflict.set(false); }, "Review current status" } }
         }
-        p { role:"status", "{notice}" }
+        if busy() || conflict() || notice().contains("not confirmed") || notice().contains("refused") { p { role:"status", "{notice}" } }
     }}
 }
 fn valid_status(value: &ExecutionWindowStatus, id: &str) -> bool {

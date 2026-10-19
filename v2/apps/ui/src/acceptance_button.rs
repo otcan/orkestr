@@ -13,6 +13,7 @@ pub fn AcceptanceButton(
     csrf: String,
     now_ms: u64,
     onexpired: EventHandler<()>,
+    #[props(default)] onaccepted: Option<EventHandler<i64>>,
 ) -> Element {
     let mut busy = use_signal(|| false);
     let mut channel = use_signal(|| None::<document::Eval>);
@@ -71,7 +72,16 @@ pub fn AcceptanceButton(
                     if code==401 || code==403 { execution.write().authorization_lost();onexpired.call(());return Ok(()); }
                     if code==200 {
                         let receipt=serde_json::from_value::<ExecutionAcceptanceReceipt>(response["body"].clone());
-                        if receipt.ok().is_none_or(|r|execution.write().acceptances.receipt(&pending,r).is_err()) { execution.write().acceptances.failed(&pending,0); }
+                        match receipt {
+                            Ok(receipt) => {
+                                let revision = receipt.revision;
+                                if execution.write().acceptances.receipt(&pending,receipt).is_ok() {
+                                    // Presentation refresh only after the original receipt guards pass.
+                                    if let Some(onaccepted) = onaccepted { onaccepted.call(revision); }
+                                } else { execution.write().acceptances.failed(&pending,0); }
+                            }
+                            Err(_) => execution.write().acceptances.failed(&pending,0),
+                        }
                     } else { execution.write().acceptances.failed(&pending,code); }
                     Ok::<(),crate::transport::Failure>(())
                 }.await;
