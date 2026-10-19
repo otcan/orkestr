@@ -46,6 +46,23 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "store startup failed")?;
     let origin = config.origin;
     let mut state = AppState::new(store.clone(), token, origin)?;
+    let beta = std::env::var_os("ORKESTR_V2_BETA_CONFIG");
+    if let Some(path) = &beta {
+        if [
+            "ORKESTR_V2_EXECUTION_CONFIG",
+            "ORKESTR_V2_EXECUTION_SET",
+            "ORKESTR_V2_TIMER_CONFIG",
+        ]
+        .iter()
+        .any(|key| std::env::var_os(key).is_some())
+        {
+            return Err(
+                "beta configuration cannot be combined with execution or timer configuration"
+                    .into(),
+            );
+        }
+        state = state.with_beta_config_file(&PathBuf::from(path), &home)?;
+    }
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let catalog = match std::env::var_os("ORKESTR_V2_GOOGLE_CATALOG") {
         Some(path) => {
@@ -89,6 +106,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             "disabled"
         }
     );
+    let beta_state = state.clone();
     let timer_state = state.clone();
     let mut app = router_with_google_catalog(state, catalog);
     if let Some(dist) = std::env::var_os("ORKESTR_V2_UI_DIST") {
@@ -112,6 +130,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     // An open SSE connection must not delay the owned execution fence/cleanup.
     // Stop accepting HTTP and stop the supervisor before waiting for HTTP drain.
     let _ = shutdown.send(true);
+    let beta_cleanup = beta_state.shutdown_beta_window().await;
     let timer_cleanup = match timers {
         Some(timers) => timers.shutdown().await,
         None => Ok(()),
@@ -131,6 +150,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    beta_cleanup?;
     timer_cleanup?;
     cleanup?;
     Ok(())

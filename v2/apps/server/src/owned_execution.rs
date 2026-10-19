@@ -1,5 +1,6 @@
 //! Explicit isolated acceptance composition. No HTTP configuration.
 mod admission;
+mod beta_window;
 mod bootstrap;
 mod budget;
 mod claude;
@@ -49,6 +50,7 @@ pub struct ConfiguredExecution {
     offline_python: Option<std::sync::Arc<crate::offline_python::OfflinePythonDispatcher>>,
     initial_grant: Option<BoundSessionMetadata>,
     workspace_grant: Option<orkestr_v2_store_sqlite::WorkspaceGrant>,
+    window: Option<std::sync::Arc<crate::window_runtime::context::Context>>,
 }
 pub struct ExecutionTask {
     shutdown: watch::Sender<bool>,
@@ -191,6 +193,7 @@ impl ConfiguredExecution {
             worker_reaps,
             initial_grant,
             workspace_grant,
+            window: None,
         })
     }
 

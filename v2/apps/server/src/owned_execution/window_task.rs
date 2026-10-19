@@ -7,6 +7,7 @@ pub(crate) struct WindowTask {
     shutdown: watch::Sender<bool>,
     task: Option<JoinHandle<Result<(), &'static str>>>,
     children: crate::owned_children::ChildSet,
+    context: Option<std::sync::Arc<crate::window_runtime::context::Context>>,
 }
 
 impl ConfiguredExecution {
@@ -21,16 +22,41 @@ impl ConfiguredExecution {
         }
         let (shutdown, receiver) = watch::channel(false);
         let children = self.children.clone();
-        let task = tokio::spawn(self.run(receiver));
+        let retained_context = self.window.clone();
+        let context = retained_context.clone();
+        let store = self.store.clone();
+        let token = self.token.clone();
+        let task = tokio::spawn(async move {
+            let result = self.run(receiver).await;
+            if result.is_err() {
+                if let Some(context) = context {
+                    context.uncertain(&store, &token).await;
+                }
+            }
+            result
+        });
         Ok(WindowTask {
             shutdown,
             task: Some(task),
             children,
+            context: retained_context,
         })
     }
 }
 
 impl WindowTask {
+    pub(crate) fn cleanup_deadline(&self) -> tokio::time::Instant {
+        self.context
+            .as_ref()
+            .map_or_else(tokio::time::Instant::now, |context| {
+                context.cleanup_deadline()
+            })
+    }
+    pub(crate) fn is_closed(&self) -> bool {
+        self.context
+            .as_ref()
+            .is_some_and(|context| context.is_closed())
+    }
     /// Request the existing issued-control shutdown path, never a new terminal.
     pub(crate) fn request_stop(&self) {
         let _ = self.shutdown.send(true);

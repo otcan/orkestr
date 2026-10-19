@@ -18,6 +18,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 use uuid::Uuid;
+mod accepted_results_http;
 mod attachment_transfer;
 mod auth;
 mod automatic_reply_control;
@@ -47,7 +48,6 @@ pub mod timer_bootstrap;
 pub mod timer_http;
 mod timer_lifecycle;
 mod window_http;
-mod accepted_results_http;
 mod window_runtime;
 mod worker_discovery;
 pub mod worker_execution;
@@ -60,6 +60,7 @@ pub struct AppState {
     fast_executions: execution_registry::ExecutionRegistry,
     window_handles: Option<window_runtime::handles::Handles>,
     initial_window: Option<Arc<window_runtime::initial::InitialAuthority>>,
+    window_controller: Option<Arc<window_runtime::Controller>>,
     bootstrap_token: Arc<String>,
     origin: Arc<String>,
     authority: Arc<String>,
@@ -68,10 +69,39 @@ pub struct AppState {
     timers: timer_http::DurableOwnerController,
 }
 impl AppState {
+    pub async fn shutdown_beta_window(&self) -> Result<(), &'static str> {
+        match &self.window_controller {
+            Some(controller) => controller.shutdown().await,
+            None => Ok(()),
+        }
+    }
+    /// Load only the operator-selected private beta configuration at startup.
+    pub fn with_beta_config_file(
+        self,
+        path: &std::path::Path,
+        home: &std::path::Path,
+    ) -> Result<Self, &'static str> {
+        let config = beta_config::loading::load(path, home)?;
+        let stat = std::fs::read_to_string("/proc/self/stat")
+            .map_err(|_| "beta manager parent unavailable")?;
+        let (_, fields) = stat
+            .rsplit_once(") ")
+            .ok_or("beta manager parent unavailable")?;
+        let parent = fields
+            .split_whitespace()
+            .nth(1)
+            .ok_or("beta manager parent unavailable")?
+            .parse::<u32>()
+            .map_err(|_| "beta manager parent unavailable")?;
+        self.with_beta_config(&config, home, parent)
+    }
+
     /// Trusted startup only. Configuration is never accepted from an HTTP body.
     pub(crate) fn with_beta_config(
         mut self,
         config: &beta_config::BetaConfig,
+        home: &std::path::Path,
+        manager_pid: u32,
     ) -> Result<Self, &'static str> {
         if self.initial_window.is_some() || self.window_handles.is_some() {
             return Err("beta configuration already installed");
@@ -81,7 +111,23 @@ impl AppState {
             config.owner_id.clone(),
             config.conversation_id.clone(),
         )?;
-        self.initial_window = Some(Arc::new(initial));
+        let initial = Arc::new(initial);
+        let manager = window_runtime::manager_client::ManagerClient::new(
+            config.manager_socket.clone(),
+            config.owner_id.clone(),
+            config.conversation_id.clone(),
+            manager_pid,
+        )
+        .map_err(|_| "beta manager identity refused")?;
+        self.window_controller = Some(Arc::new(window_runtime::Controller::new(
+            config.clone(),
+            home.to_owned(),
+            self.store.clone(),
+            initial.clone(),
+            handles.clone(),
+            manager,
+        )));
+        self.initial_window = Some(initial);
         self.window_handles = Some(handles);
         Ok(self)
     }
@@ -122,6 +168,7 @@ impl AppState {
             fast_executions: execution_registry::ExecutionRegistry::default(),
             window_handles: None,
             initial_window: None,
+            window_controller: None,
             bootstrap_token: Arc::new(bootstrap_token),
             origin: Arc::new(origin),
             authority: Arc::new(authority),

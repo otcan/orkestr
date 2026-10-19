@@ -61,11 +61,17 @@ impl ConfiguredExecution {
             return Err("execution retained child resources remain active");
         }
         self.current().await?;
+        if let Some(window) = &self.window {
+            window.begin_retirement(&self.store, &self.token).await?;
+        }
         self.store
             .retire_terminal_supervisor(&self.token, run)
             .await
             .map_err(|_| "execution graceful supervisor retirement refused")?;
-        // Retain the original native-tree witness through the durable decision.
+        if let Some(window) = &self.window {
+            window.close(&self.store, &self.token, run).await?;
+        }
+        // Retain the original native-tree witness through Core AND manager close.
         drop(proofs);
         Ok(())
     }

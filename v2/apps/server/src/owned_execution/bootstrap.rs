@@ -28,7 +28,26 @@ impl ConfiguredExecution {
         // The opaque grant selects fresh setup or exact native resume. Neither
         // caller text nor persisted status can supply a replacement identity.
         let mut launch = self.workspace_launch(&grant).await?;
-        let mut setup = if let Some(launch) = launch.as_mut() {
+        let mut setup = if let Some(context) = &self.window {
+            let store = self.store.clone();
+            let launcher = self.config.launcher.clone();
+            let workspace = self.config.workspace.clone();
+            let resources = self.children.retain();
+            let context = context.clone();
+            tokio::task::spawn_blocking(move || {
+                PreparingCodex::open_window_retained(
+                    store,
+                    grant,
+                    &launcher,
+                    &workspace,
+                    directories,
+                    resources,
+                    move |child| context.bind(&child),
+                )
+            })
+            .await
+            .map_err(|_| "window setup worker lost")?
+        } else if let Some(launch) = launch.as_mut() {
             PreparingCodex::open_workspace_retained(
                 self.store.clone(),
                 grant,
@@ -69,10 +88,23 @@ impl ConfiguredExecution {
                 _ = shutdown.changed() => return Ok(None),
             }
         }
-        setup
+        let ready = setup
             .confirm()
             .await
-            .map(Some)
-            .map_err(|_| "execution readiness commit refused")
+            .map_err(|_| "execution readiness commit refused")?;
+        if let Some(context) = &self.window {
+            context
+                .activate(
+                    &self.store,
+                    &self.token,
+                    crate::execution_registry::ExecutionScope {
+                        store: self.store.clone(),
+                        control: Some(self.control.clone()),
+                        tasks: None,
+                    },
+                )
+                .await?;
+        }
+        Ok(Some(ready))
     }
 }

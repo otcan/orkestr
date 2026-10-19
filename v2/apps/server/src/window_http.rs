@@ -11,12 +11,17 @@ pub(crate) async fn status(
     browser::owner(&state, &headers).await?;
     let credential = browser::credential(&headers)?;
     let conversation = conversation(&id)?;
-    match state
-        .store
-        .execution_window_status_authenticated(&credential, &conversation)
-        .await
-        .map_err(store_error)?
-    {
+    let status = match &state.window_controller {
+        Some(controller) => controller.status(&credential, &conversation).await,
+        None => {
+            state
+                .store
+                .execution_window_status_authenticated(&credential, &conversation)
+                .await
+        }
+    }
+    .map_err(store_error)?;
+    match status {
         Some(status) => Ok(Json(status).into_response()),
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }
@@ -42,20 +47,36 @@ pub(crate) async fn admit(
     if !input.is_valid() {
         return Err(invalid());
     }
-    let admission = match &state.initial_window {
-        Some(initial) => {
-            initial
-                .admit(&state.store, &credential, &owner, &conversation, &input)
+    // The task owns admission and startup across HTTP disconnect/cancellation.
+    // Dropping this join handle does not cancel its durable handoff.
+    let admission = tokio::spawn(async move {
+        if let Some(controller) = &state.window_controller {
+            controller
+                .process(&credential, &owner, &conversation, &input)
                 .await
-        }
-        None => {
+                .map_err(|_| {
+                    Error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "window_unavailable",
+                        "Window admission or transport requires reconciliation",
+                    )
+                })
+        } else {
             state
                 .store
                 .admit_execution_window_authenticated(&credential, &conversation, &input)
                 .await
+                .map_err(store_error)
         }
-    }
-    .map_err(store_error)?;
+    })
+    .await
+    .map_err(|_| {
+        Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "window_unavailable",
+            "Window task outcome is uncertain",
+        )
+    })??;
     Ok((
         if admission.duplicate {
             StatusCode::OK

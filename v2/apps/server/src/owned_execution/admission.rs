@@ -39,7 +39,7 @@ impl ConfiguredExecution {
 
     pub(super) async fn maintain(&self, heartbeat: &mut Instant) -> Result<(), &'static str> {
         self.current().await?;
-        if heartbeat.elapsed() >= Duration::from_secs(10) {
+        if heartbeat_due(*heartbeat, Instant::now()) {
             self.store
                 .heartbeat_supervisor()
                 .await
@@ -79,7 +79,7 @@ impl ConfiguredExecution {
             return Err("execution binding is not ready for another run");
         }
         let claim = loop {
-            if *shutdown.borrow() {
+            if *shutdown.borrow() || self.window.as_ref().is_some_and(|window| window.work_due()) {
                 return Ok(None);
             }
             self.maintain(heartbeat).await?;
@@ -137,5 +137,29 @@ impl ConfiguredExecution {
             return Err("execution delivery is uncertain; automatic replay refused");
         };
         Ok(Some(capability))
+    }
+}
+
+fn heartbeat_due(previous: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(previous) >= Duration::from_secs(10)
+}
+
+#[cfg(test)]
+mod metadata_heartbeat_tests {
+    use super::*;
+
+    #[test]
+    fn metadata_heartbeat_keeps_original_cadence_past_work_and_cleanup_deadlines() {
+        let start = Instant::now();
+        let mut heartbeat = start + Duration::from_secs(870);
+        // No work/cleanup deadline resets or disables the metadata lease cadence.
+        for seconds in 871..=1000 {
+            let now = start + Duration::from_secs(seconds);
+            let due = heartbeat_due(heartbeat, now);
+            assert_eq!(due, seconds % 10 == 0);
+            if due {
+                heartbeat = now;
+            }
+        }
     }
 }

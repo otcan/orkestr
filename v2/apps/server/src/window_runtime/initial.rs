@@ -15,6 +15,7 @@ pub(crate) struct InitialAuthority {
     namespace: String,
     supervisor_key: String,
     state: Mutex<State>,
+    last_request: Mutex<Option<String>>,
 }
 /// Private controller handoff: each variant retains its original typed context.
 /// Neither variant may be serialized or reconstructed from HTTP IDs.
@@ -40,6 +41,7 @@ impl InitialAuthority {
             namespace: config.namespace.clone(),
             supervisor_key: config.supervisor_key.clone(),
             state: Mutex::new(State::Fresh),
+            last_request: Mutex::new(None),
         })
     }
 
@@ -57,7 +59,11 @@ impl InitialAuthority {
             return Err(RuntimeStoreError::Fenced);
         }
         let mut state = self.state.lock().await;
-        if matches!(*state, State::Fresh) {
+        if matches!(*state, State::Fresh)
+            || (matches!(*state, State::Transferred)
+                && input.window_id.is_none()
+                && self.last_request.lock().await.as_deref() != Some(input.request_key.as_str()))
+        {
             if input.window_id.is_some()
                 || (input.expected_generation == 0) != input.predecessor_window_id.is_none()
             {
@@ -93,9 +99,13 @@ impl InitialAuthority {
         }
         match &*state {
             State::Ready(_) | State::Transferred => {
-                store
+                let admission = store
                     .admit_execution_window_authenticated(browser, conversation, input)
-                    .await
+                    .await?;
+                if !admission.duplicate && input.window_id.is_none() {
+                    *self.last_request.lock().await = Some(input.request_key.clone());
+                }
+                Ok(admission)
             }
             _ => Err(RuntimeStoreError::Fenced),
         }
