@@ -22,6 +22,8 @@ mod fast;
 mod fence;
 mod held_inputs;
 pub use fast::FastAdmissionInput;
+mod fast_source;
+pub use fast_source::FastSource;
 pub(crate) mod inspection;
 mod leases;
 mod running_renewal;
