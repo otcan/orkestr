@@ -158,6 +158,21 @@ class Conversations(unittest.TestCase):
             self.assertEqual(db.execute("SELECT version FROM service_scope").fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT count(*) FROM windows").fetchone()[0], 1)
 
+    def test_legacy_physical_order_does_not_change_latest_generation(self):
+        self.legacy()
+        with sqlite3.connect(self.path) as db:
+            first = list(db.execute("SELECT * FROM windows").fetchone())
+            second = first.copy()
+            second[0:4] = [uid(), 2, "later-generation", uid()]
+            db.execute("DELETE FROM windows")
+            # Deliberately opposite physical order to the v1 generation order.
+            db.executemany("INSERT INTO windows VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           [second, first])
+        ledger = self.open()
+        self.assertEqual(ledger.status()["window_id"], second[0])
+        self.assertEqual(ledger.status()["generation"], 2)
+        self.assertFalse(ledger.db.execute("PRAGMA foreign_key_check").fetchall())
+
 
 if __name__ == "__main__":
     unittest.main()

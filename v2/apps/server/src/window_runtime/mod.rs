@@ -7,6 +7,7 @@ mod clock;
 mod cold_process_tests;
 pub(crate) mod context;
 mod controller;
+mod conversation;
 pub(crate) mod handles;
 pub(crate) mod initial;
 mod integers;

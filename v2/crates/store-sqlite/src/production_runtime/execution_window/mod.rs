@@ -11,6 +11,7 @@ pub use bootstrap::ExecutionWindowBootstrap;
 mod credential;
 mod guard;
 mod lifecycle;
+mod switching;
 pub use credential::{ExecutionWindowCredential, ExecutionWindowRetirement};
 #[cfg(test)]
 mod tests;

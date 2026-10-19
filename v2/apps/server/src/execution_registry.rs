@@ -93,6 +93,11 @@ impl AppState {
         owner: &OwnerId,
         conversation: &ConversationId,
     ) -> Result<Option<ExecutionScope>, Error> {
+        if let Some(controller) = &self.window_controller {
+            if let Some(scope) = controller.snapshot(owner, conversation) {
+                return Ok(Some(scope));
+            }
+        }
         if let Some(handles) = &self.window_handles {
             if handles.matches(owner, conversation) {
                 return Ok(handles.snapshot(owner, conversation));

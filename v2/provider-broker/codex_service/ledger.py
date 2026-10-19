@@ -46,7 +46,7 @@ def schema(db, owner, conversation):
     db.execute("CREATE TABLE IF NOT EXISTS admissions (conversation TEXT NOT NULL, request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, window_id TEXT NOT NULL REFERENCES windows(id), input_id TEXT NOT NULL UNIQUE, event_id TEXT NOT NULL UNIQUE, PRIMARY KEY(conversation,request_id))")
     if legacy:
         columns = "id,generation,request_id,input_id,fingerprint,state,boot,created_wall_ns,deadline_wall_ns,deadline_mono_ns,attempts,reserved_bytes,reason,outcome,run_id,terminal_event_id"
-        db.execute(f"INSERT INTO windows(conversation,{columns}) SELECT ?,{columns} FROM legacy_windows_v1", (conversation,))
+        db.execute(f"INSERT INTO windows(conversation,{columns}) SELECT ?,{columns} FROM legacy_windows_v1 ORDER BY generation", (conversation,))
         db.execute("INSERT INTO reservations SELECT * FROM legacy_reservations_v1")
         db.execute("INSERT INTO admissions SELECT ?,request_id,fingerprint,window_id,input_id,event_id FROM legacy_admissions_v1", (conversation,))
         for name in ("reservations", "admissions", "windows"):

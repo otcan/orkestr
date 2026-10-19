@@ -110,6 +110,17 @@ pub struct ManagerClient {
     manager_start: u64,
 }
 impl ManagerClient {
+    /// Preserve the original root manager PID/start and endpoint. Only the
+    /// trusted authenticated controller may select another canonical scope.
+    pub(super) fn for_conversation(&self, conversation: ConversationId) -> Result<Self> {
+        if conversation.0.is_nil() {
+            return Err(ManagerError::InvalidRequest);
+        }
+        self.parent()?;
+        let mut selected = self.clone();
+        selected.conversation = conversation;
+        Ok(selected)
+    }
     pub fn new(
         socket: PathBuf,
         owner: OwnerId,
