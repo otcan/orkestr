@@ -46,7 +46,7 @@ impl ConfiguredExecution {
                             .await
                             .map_err(|_| "Fast accepted-session retirement refused")?;
                         let proof = self.reaped(retiring, &run, heartbeat).await?;
-                        self.retire_accepted(&run, proof).await?;
+                        self.retire_terminal(&run, proof).await?;
                         return Ok(fast::FastExit::Shutdown);
                     };
                     live =
