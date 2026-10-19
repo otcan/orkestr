@@ -20,7 +20,8 @@ concurrency:
 jobs:
   rust-v2:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Process-failure tests exercise real deadlines; allow the full suite to finish.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: v2
