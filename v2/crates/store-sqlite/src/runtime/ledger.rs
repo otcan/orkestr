@@ -79,6 +79,15 @@ pub(crate) async fn validate_claim(
     binding: &SessionId,
     clock: i64,
 ) -> Result<()> {
+    validate_window_claim(conn, claim, binding, clock, None).await
+}
+pub(crate) async fn validate_window_claim(
+    conn: &mut SqliteConnection,
+    claim: &InboxClaim,
+    binding: &SessionId,
+    clock: i64,
+    window: Option<&str>,
+) -> Result<()> {
     let inbox = sqlx::query("SELECT * FROM reasoning_inbox WHERE conversation_id=? AND sequence=?")
         .bind(claim.conversation_id.to_string())
         .bind(claim.scope_sequence)
@@ -109,9 +118,9 @@ pub(crate) async fn validate_claim(
         return Err(RuntimeStoreError::Expired);
     }
     let earliest: i64 = sqlx::query_scalar(
-        "SELECT min(sequence) FROM reasoning_inbox WHERE conversation_id=? AND state <> 'consumed' AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=reasoning_inbox.event_id)",
+        "SELECT min(sequence) FROM reasoning_inbox WHERE conversation_id=? AND state <> 'consumed' AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=reasoning_inbox.event_id) AND (? IS NULL OR EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.window_id=? AND wi.event_id=reasoning_inbox.event_id))",
     )
-    .bind(claim.conversation_id.to_string())
+    .bind(claim.conversation_id.to_string()).bind(window).bind(window)
     .fetch_one(&mut *conn)
     .await
     .map_err(db)?;

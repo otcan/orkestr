@@ -4,6 +4,8 @@ use orkestr_v2_application::runtime::*;
 use orkestr_v2_contracts::OwnerId;
 use sqlx::{Row, SqliteConnection};
 use uuid::Uuid;
+mod execution_window;
+pub use execution_window::{ExecutionWindowCredential, ExecutionWindowRetirement};
 mod acceptance;
 #[cfg(all(test, unix))]
 mod acceptance_process_tests;
@@ -133,6 +135,15 @@ impl Store {
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         let token_hash = crate::digest(token);
+        let window_token: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM execution_windows WHERE credential_hash=?")
+                .bind(&token_hash)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db)?;
+        if window_token != 0 {
+            return Err(RuntimeStoreError::Fenced);
+        }
         let owner: String = sqlx::query_scalar(
             "SELECT owner_id FROM auth_sessions WHERE token_hash=? AND expires_at>unixepoch()",
         )
@@ -215,10 +226,11 @@ impl Store {
 impl Context {
     async fn authenticate(&self, conn: &mut SqliteConnection) -> Result<()> {
         let present:i64=sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
-            .bind(&self.token_hash).bind(self.owner.to_string()).fetch_one(conn).await.map_err(db)?;
+            .bind(&self.token_hash).bind(self.owner.to_string()).fetch_one(&mut *conn).await.map_err(db)?;
         if present != 1 {
             return Err(RuntimeStoreError::Unauthorized);
         }
+        self.window_scope(conn).await?;
         Ok(())
     }
     async fn validate(&self, conn: &mut SqliteConnection) -> Result<()> {

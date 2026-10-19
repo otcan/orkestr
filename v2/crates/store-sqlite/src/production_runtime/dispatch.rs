@@ -52,6 +52,13 @@ impl Store {
                 .await
                 .map_err(db)?
                 .ok_or(RuntimeStoreError::NotFound)?;
+        self.window_effect_in(
+            conn,
+            p,
+            row.get("event_id"),
+            !workspace_effect || p.run.purpose != AdmissionPurpose::Execution,
+        )
+        .await?;
         if row.get::<String, _>("incarnation_id") != c.incarnation {
             return Err(RuntimeStoreError::Fenced);
         }

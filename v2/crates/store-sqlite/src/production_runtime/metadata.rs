@@ -76,6 +76,7 @@ impl Store {
         tx: &mut SqliteConnection,
         grant: &BoundSessionMetadata,
     ) -> Result<()> {
+        self.window_metadata_in(tx, &grant.binding).await?;
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         self.validate_workspace_binding(tx, &grant.binding).await?;
         if grant.resume.is_some() {

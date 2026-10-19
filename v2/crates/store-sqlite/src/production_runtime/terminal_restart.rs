@@ -217,6 +217,9 @@ impl Store {
                 token_hash,
             }),
         };
+        store
+            .rebind_execution_window_in(&mut tx, &incarnation_id)
+            .await?;
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         let workspace_grant = if let Some((project, installation)) = workspace {
             Some(
