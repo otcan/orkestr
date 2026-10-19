@@ -161,6 +161,18 @@ impl Store {
             return Err(RuntimeStoreError::Fenced);
         }
 
+        self.validate_window_retired_predecessor_in(
+            &mut tx,
+            &token_hash,
+            &OwnerId(owner.parse().map_err(db)?),
+            &config.namespace,
+            &config.supervisor_key,
+            &context_id,
+            &incarnation_id,
+            prior_run,
+        )
+        .await?;
+
         // Clean means no unresolved run anywhere in this supervisor namespace,
         // including children. Do not convert unknown delivery into a new attempt.
         let unresolved: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r WHERE context_id=? AND NOT EXISTS(SELECT 1 FROM production_terminal_evidence t WHERE t.run_id=r.id)")

@@ -138,6 +138,31 @@ impl Store {
             }
         }
         let row = window_in(&mut tx, c, window, generation).await?;
+        if idle_owner && c.token_hash.is_empty() {
+            let conversation = ConversationId(
+                row.get::<String, _>("conversation_id")
+                    .parse()
+                    .map_err(db)?,
+            );
+            let opening = window.to_string();
+            let retired = super::retired_context::retired_row_in(
+                &mut tx,
+                &c.owner,
+                &conversation,
+                &c.namespace,
+                &c.key,
+                Some(&opening),
+            )
+            .await?;
+            if retired.get::<String, _>("context_id") != c.id
+                || retired.get::<String, _>("incarnation_id") != c.incarnation
+                || retired.get::<i64, _>("generation") != c.generation
+                || row.get::<Option<String>, _>("predecessor_window_id")
+                    != Some(retired.get("closed_window"))
+            {
+                return Err(RuntimeStoreError::Fenced);
+            }
+        }
         if idle_owner {
             let busy: i64 = sqlx::query_scalar("SELECT count(*) FROM production_supervisors s WHERE s.owner_id=? AND EXISTS(SELECT 1 FROM production_readiness r JOIN session_bindings b ON b.id=r.session_id WHERE r.context_id=s.context_id AND b.conversation_id=?) AND (s.lease_deadline_ms!=0 OR NOT EXISTS(SELECT 1 FROM production_retirement_provenance p WHERE p.context_id=s.context_id AND p.incarnation_id=s.incarnation_id AND p.supervisor_generation=s.generation))")
                 .bind(c.owner.to_string()).bind(row.get::<String,_>("conversation_id")).fetch_one(&mut *tx).await.map_err(db)?;

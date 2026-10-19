@@ -102,3 +102,10 @@ this handle, admits fresh input, issues once and reattaches/activates. A separat
 ACTIVE-loss pair refuses recovery/bootstrap and only records reconciliation.
 Native cleanup in these tests is synthetic; they prove durable Core composition,
 not Runtime/manager/native reap behavior.
+
+The consumer spelling `prior_run()` is supported (`prior_run_id()` remains an
+alias). Recovered-context idle issuance re-runs the complete retired-history
+check, allowing only its one newly admitted Opening row, and checks that row's
+predecessor against the latest exact CLOSED window. Terminal reattachment repeats
+that same check before changing supervisor incarnation or reserving metadata.
+Neither a retained discovery handle nor manager ACK bypasses a changed history.

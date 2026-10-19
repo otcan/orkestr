@@ -4,7 +4,7 @@ use crate::production_runtime::{observation_tests::input as observation, tests a
 use orkestr_v2_contracts::ExecutionAcceptanceRequest;
 use std::time::Duration;
 
-async fn seed_closed(root: std::path::PathBuf, active_only: bool) {
+pub(super) async fn seed_closed(root: std::path::PathBuf, active_only: bool) {
     std::fs::create_dir_all(&root).unwrap();
     let store = Store::open(&root.join("core.sqlite3")).await.unwrap();
     let conversation = store
@@ -403,7 +403,7 @@ async fn closed_idle_child() {
         incarnation_id: recovered.predecessor_incarnation().into(),
     });
     let (bound, metadata) = store
-        .reattach_terminal_supervisor(issued.credential(), config, recovered.prior_run_id())
+        .reattach_terminal_supervisor(issued.credential(), config, recovered.prior_run())
         .await
         .unwrap();
     assert_eq!(

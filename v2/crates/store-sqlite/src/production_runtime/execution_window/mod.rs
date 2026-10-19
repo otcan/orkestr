@@ -94,3 +94,6 @@ pub use retired_context::RetiredExecutionWindowContext;
 
 #[cfg(test)]
 mod retired_process_tests;
+
+#[cfg(test)]
+mod retired_revalidation_tests;
