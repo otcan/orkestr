@@ -10,6 +10,10 @@ Schema 35 adds an initially empty `worker_running_budgets` ledger. Existing task
 lifetimes and generic renewal retain their previous hard bounds. No existing task
 receives a budget during upgrade.
 
+`WorkerTaskClaim::execution_budget_ms()` exposes the captured owner opt-in before
+claim consumption. Use it to select the scheduling path; never reinterpret a
+failed authority check as a legacy request. It grants no renewal authority.
+
 Trusted server setup may explicitly opt in before moving the genuine consumed
 Worker dispatch into Runtime:
 
