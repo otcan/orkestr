@@ -22,7 +22,15 @@ fn parent(reaps: &WorkerReaps) -> ExecutionScope {
     )
     .unwrap();
     state.incarnation = Some("incarnation".into());
-    state.parents.insert(scope.run().into(), scope.clone());
+    state.current_parent = Some(scope.run().into());
+    state.parents.insert(
+        scope.run().into(),
+        Parent {
+            scope: scope.clone(),
+            binding_generation: 1,
+            continuation_attempted: false,
+        },
+    );
     scope
 }
 
@@ -107,11 +115,12 @@ fn bounded_obligations_never_evict_older_unproven_children() {
     let reaps = ledger();
     let parent = parent(&reaps);
     let mut state = reaps.0.lock().unwrap();
-    for number in 0..MAX_WITNESSES {
+    for number in 0..MAX_WITNESSES - 1 {
         state.reserve(format!("session-{number}")).unwrap();
     }
     assert!(state.reserve("overflow".into()).is_err());
     assert!(state.launches.contains_key(&0));
     assert!(state.finish(&parent).is_err());
-    assert_eq!(state.launches.len(), MAX_WITNESSES);
+    assert_eq!(state.launches.len(), MAX_WITNESSES - 1);
+    assert_eq!(state.proof_count(), MAX_WITNESSES);
 }

@@ -16,10 +16,18 @@ struct Ledger {
     conversation: ConversationId,
     namespace: String,
     incarnation: Option<String>,
-    parents: BTreeMap<String, ExecutionScope>,
+    parents: BTreeMap<String, Parent>,
+    current_parent: Option<String>,
+    reaped_parents: BTreeMap<String, ReapedBroker>,
+    continuing: Option<String>,
     launches: BTreeMap<u64, Launch>,
     frozen: bool,
     poisoned: bool,
+}
+struct Parent {
+    scope: ExecutionScope,
+    binding_generation: u64,
+    continuation_attempted: bool,
 }
 struct Launch {
     session: String,
@@ -31,6 +39,7 @@ struct Launch {
 /// Keep this value alive across Core's final retirement transaction.
 pub struct WorkerReapProofs {
     _parent: ReapedBroker,
+    _prior_parents: Vec<ReapedBroker>,
     _workers: Vec<ReapedBroker>,
 }
 
@@ -49,6 +58,9 @@ impl WorkerReaps {
             namespace,
             incarnation: None,
             parents: BTreeMap::new(),
+            current_parent: None,
+            reaped_parents: BTreeMap::new(),
+            continuing: None,
             launches: BTreeMap::new(),
             frozen: false,
             poisoned: false,
@@ -62,6 +74,7 @@ impl WorkerReaps {
             .lock()
             .map_err(|_| "Worker reap ledger unavailable")?;
         if ledger.frozen
+            || ledger.continuing.is_some()
             || ledger.parents.len() >= MAX_WITNESSES
             || run.role != SessionRole::Deep
             || run.owner_id != ledger.owner
@@ -79,7 +92,15 @@ impl WorkerReaps {
             return Err("Worker reap parent already registered");
         }
         ledger.incarnation = Some(dispatch.incarnation_id().into());
-        ledger.parents.insert(scope.run().into(), scope);
+        ledger.current_parent = Some(scope.run().into());
+        ledger.parents.insert(
+            scope.run().into(),
+            Parent {
+                scope,
+                binding_generation: dispatch.provider().binding.generation,
+                continuation_attempted: false,
+            },
+        );
         Ok(())
     }
 
@@ -94,11 +115,16 @@ impl WorkerReaps {
             .map_err(|_| "Worker reap ledger unavailable")?;
         let binding = metadata.binding();
         if ledger.frozen
+            || ledger.continuing.is_some()
             || binding.role != SessionRole::Worker
             || binding.owner_id != ledger.owner
             || binding.conversation_id != ledger.conversation
             || binding.parent_session_id.as_ref() != Some(&parent.session_id)
             || !ledger.parents.contains_key(&parent.run_id.to_string())
+            || ledger.current_parent.as_deref() != Some(&parent.run_id.to_string())
+            || ledger
+                .reaped_parents
+                .contains_key(&parent.run_id.to_string())
             || metadata.namespace() != ledger.namespace
             || ledger.incarnation.as_deref() != Some(metadata.incarnation_id())
         {
@@ -119,17 +145,24 @@ impl WorkerReaps {
             .0
             .lock()
             .map_err(|_| "Worker reap ledger unavailable")?;
-        let workers = ledger.finish(parent.scope())?;
+        let (prior_parents, workers) = ledger.finish(parent.scope())?;
         Ok(WorkerReapProofs {
             _parent: parent,
+            _prior_parents: prior_parents,
             _workers: workers,
         })
     }
 }
 
 impl Ledger {
+    // Include the current parent, even before it is reaped. Historical accepted
+    // turns share that native child; stopped continuations add another proof.
+    fn proof_count(&self) -> usize {
+        1 + self.launches.len() + self.reaped_parents.len()
+    }
+
     fn reserve(&mut self, session: String) -> Result<u64, &'static str> {
-        if self.frozen || self.launches.len() >= MAX_WITNESSES {
+        if self.frozen || self.continuing.is_some() || self.proof_count() >= MAX_WITNESSES {
             return Err("Worker reap launch budget unavailable");
         }
         if self.launches.values().any(|entry| entry.session == session) {
@@ -147,20 +180,37 @@ impl Ledger {
         Ok(id)
     }
 
-    fn finish(&mut self, parent: &ExecutionScope) -> Result<Vec<ReapedBroker>, &'static str> {
+    fn finish(
+        &mut self,
+        parent: &ExecutionScope,
+    ) -> Result<(Vec<ReapedBroker>, Vec<ReapedBroker>), &'static str> {
         if std::mem::replace(&mut self.frozen, true)
             || self.poisoned
-            || self.parents.get(parent.run()) != Some(parent)
+            || self.continuing.is_some()
+            || self.current_parent.as_deref() != Some(parent.run())
+            || !self
+                .parents
+                .get(parent.run())
+                .is_some_and(|entry| entry.scope == *parent && !entry.continuation_attempted)
             || self.launches.values().any(|entry| entry.proof.is_none())
         {
             return Err("Worker original native reap evidence is incomplete");
         }
-        Ok(std::mem::take(&mut self.launches)
+        let workers = std::mem::take(&mut self.launches)
             .into_values()
             .filter_map(|entry| entry.proof)
-            .collect())
+            .collect();
+        Ok((
+            std::mem::take(&mut self.reaped_parents)
+                .into_values()
+                .collect(),
+            workers,
+        ))
     }
 }
+
+#[path = "retirement_continuation.rs"]
+mod continuation;
 
 impl LaunchWitness {
     pub(super) fn bind(&mut self, dispatch: &ConsumedProviderDispatch) -> Result<(), &'static str> {
