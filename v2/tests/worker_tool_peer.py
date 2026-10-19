@@ -53,7 +53,9 @@ def main():
     completed = False
     progress_sent = False
     buffer = b""
-    deadline = time.monotonic() + 40
+    # Fixed synthetic-only lifetime for actual elapsed lease-renewal tests.
+    # This fixture flag is never read by product admission or authority code.
+    deadline = time.monotonic() + (120 if mode.get("extended_fixture") else 40)
     while time.monotonic() < deadline:
         if active is not None and not started:
             emit({"method": "turn/started", "params": {"threadId": native,

@@ -69,7 +69,18 @@ impl WorkerSchedule {
         if status.phase == ExecutionPhase::AwaitingAcceptance {
             // Preserve a completed native turn while the owner decides, without
             // writing more execution bytes. Idle retention remains bounded.
-            if Instant::now() >= self.deadline {
+            let now = Instant::now();
+            let expired = match &running.liveness {
+                Some(lease) => {
+                    lease.must_stop(now)
+                        || running
+                            .budget
+                            .as_ref()
+                            .is_some_and(|budget| budget.expired(now))
+                }
+                None => now >= self.deadline,
+            };
+            if expired {
                 let _ = running.authority.revoke();
                 return Ok((
                     Phase::Closed(WorkerProgress::AwaitingAcceptance),
@@ -78,14 +89,26 @@ impl WorkerSchedule {
             }
             return Ok((Phase::Running(running), WorkerProgress::AwaitingAcceptance));
         }
-        if Instant::now() >= self.deadline {
+        let now = Instant::now();
+        let cancellation = running
+            .budget
+            .as_ref()
+            .and_then(|budget| budget.cancellation_key(now))
+            .or_else(|| {
+                running
+                    .liveness
+                    .as_ref()
+                    .filter(|lease| lease.must_stop(now))
+                    .map(|_| "worker-lease-deadline")
+            })
+            .or_else(|| {
+                (running.liveness.is_none() && now >= self.deadline)
+                    .then_some("worker-runtime-deadline")
+            });
+        if let Some(key) = cancellation {
             let receipt = self
                 .store
-                .request_cancel(
-                    &self.parent.owner_id,
-                    &running.run,
-                    "worker-runtime-deadline",
-                )
+                .request_cancel(&self.parent.owner_id, &running.run, key)
                 .await
                 .map_err(|_| "Worker deadline requires reconciliation")?;
             running
@@ -113,6 +136,9 @@ impl WorkerSchedule {
             Err(_) => return Err("Worker observation requires reconciliation"),
         };
         let phase = if committed {
+            if let Some(budget) = &mut running.budget {
+                budget.observed(Instant::now());
+            }
             self.store
                 .execution_run_status(
                     &self.credential,
@@ -128,12 +154,54 @@ impl WorkerSchedule {
         } else {
             status.phase
         };
+        if phase == ExecutionPhase::Running
+            && running
+                .liveness
+                .as_ref()
+                .is_some_and(|lease| lease.due(Instant::now()))
+            && running.pump.renewal_quiescent()
+            && running
+                .tools
+                .as_ref()
+                .is_none_or(tools::WorkerTools::renewal_quiescent)
+        {
+            running = self.refresh_running(running).await?;
+        }
         // A Busy persistence step can retain a new observation. Refresh before
         // releasing the shared guard so HTTP cannot cancel through that gap.
         running
             .control
             .set_available(phase == ExecutionPhase::Running && running.pump.pending().is_none());
         Ok((Phase::Running(running), WorkerProgress::Running))
+    }
+
+    async fn refresh_running(&self, running: Box<Running>) -> Result<Box<Running>, &'static str> {
+        let Running {
+            authority,
+            pump,
+            run,
+            control,
+            controls,
+            mut tools,
+            mut liveness,
+            budget,
+        } = *running;
+        let lease = liveness.as_mut().ok_or("Worker renewal issuer missing")?;
+        let (next_authority, next_pump) = lease.refresh(self.store.clone(), pump).await?;
+        let _ = authority.revoke();
+        if let Some(tools) = &mut tools {
+            tools.refresh_parent(lease.authority()).await?;
+        }
+        Ok(Box::new(Running {
+            authority: next_authority,
+            pump: next_pump,
+            run,
+            control,
+            controls,
+            tools,
+            liveness,
+            budget,
+        }))
     }
 
     pub(super) async fn stopping(mut control: Box<Stopping>) -> (Phase, WorkerProgress) {

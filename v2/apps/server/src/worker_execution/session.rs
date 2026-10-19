@@ -202,6 +202,20 @@ impl WorkerSchedule {
             return Err("Worker consumed identity mismatch");
         }
         let run = capability.provider().run.run_id.clone();
+        let (liveness, budget) = match (
+            self.configuration.policy.execution_budget(),
+            self.owner_budget_ms,
+        ) {
+            (Some(policy), Some(owner_max_run_ms)) => (
+                Some(
+                    liveness::WorkerLease::capture(&self.store, &capability, policy.max_run_ms)
+                        .await?,
+                ),
+                Some(policy.start(Instant::now(), owner_max_run_ms)),
+            ),
+            // Host policy cannot widen a legacy owner's requested lifetime.
+            _ => (None, None),
+        };
         let tools = match &self.configuration.offline_python {
             Some(dispatcher) => Some(
                 tools::WorkerTools::prepare(
@@ -236,6 +250,8 @@ impl WorkerSchedule {
                 control,
                 controls,
                 tools,
+                liveness,
+                budget,
             })),
             WorkerProgress::Running,
         ))

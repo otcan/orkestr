@@ -1,6 +1,8 @@
 //! Optional trusted Worker scheduling. Browser input cannot construct authority.
+mod budget;
 mod configuration;
 mod directory;
+mod liveness;
 mod policy;
 mod running;
 mod session;
@@ -51,6 +53,8 @@ struct Running {
     control: crate::control_registry::RunControl,
     controls: crate::control_dispatch::ControlReceiver,
     tools: Option<tools::WorkerTools>,
+    liveness: Option<liveness::WorkerLease>,
+    budget: Option<budget::RunBudget>,
 }
 struct Stopping {
     active: crate::control_dispatch::ActiveControl,
@@ -79,6 +83,7 @@ pub struct WorkerSchedule {
     queue: Option<tasks::TaskQueue>,
     slot: Option<OwnedSemaphorePermit>,
     lifetime_ms: u32,
+    owner_budget_ms: Option<u32>,
 }
 
 impl WorkerSchedule {
@@ -116,6 +121,7 @@ impl WorkerSchedule {
             queue,
             slot: None,
             lifetime_ms,
+            owner_budget_ms: None,
         })
     }
 

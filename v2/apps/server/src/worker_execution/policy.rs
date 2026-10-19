@@ -8,6 +8,8 @@ pub struct WorkerPolicy {
     mode: String,
     lifetime_ms: u32,
     #[serde(default)]
+    execution_budget: Option<super::budget::WorkerBudget>,
+    #[serde(default)]
     offline_python: bool,
     #[serde(default)]
     broker_launcher: Option<PathBuf>,
@@ -26,6 +28,12 @@ impl WorkerPolicy {
             || (self.owner_tasks() && self.lifetime_ms != 30_000)
         {
             return Err("unsupported bounded Worker scheduling policy");
+        }
+        if let Some(budget) = &self.execution_budget {
+            if !self.owner_tasks() {
+                return Err("extended Worker budgets require explicit owner tasks");
+            }
+            budget.validate()?;
         }
         match (
             self.offline_python,
@@ -59,6 +67,10 @@ impl WorkerPolicy {
 
     pub(super) fn lifetime_ms(&self) -> u32 {
         self.lifetime_ms
+    }
+
+    pub(super) fn execution_budget(&self) -> Option<&super::budget::WorkerBudget> {
+        self.execution_budget.as_ref()
     }
 }
 
