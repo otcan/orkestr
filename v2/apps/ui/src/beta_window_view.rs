@@ -4,7 +4,7 @@ use orkestr_v2_contracts::{
     ExecutionWindowAdmission, ExecutionWindowRequest, ExecutionWindowState, ExecutionWindowStatus,
 };
 use orkestr_v2_ui::{
-    beta_inputs::SavedInputs, beta_window::WindowIntent, session_scope::SessionScope,
+    beta_inputs::SavedInputs, beta_window::WindowIntents, session_scope::SessionScope,
 };
 
 #[component]
@@ -15,7 +15,7 @@ pub fn WindowView(
     onexpired: EventHandler<()>,
 ) -> Element {
     let mut saved = use_context::<Signal<SavedInputs>>();
-    let mut intent = use_context::<Signal<WindowIntent>>();
+    let mut intent = use_context::<Signal<WindowIntents>>();
     let generation = session_scope.read().generation();
     let mut status = use_signal(|| None::<ExecutionWindowStatus>);
     let mut known = use_signal(|| false);
@@ -91,24 +91,25 @@ pub fn WindowView(
         ExecutionWindowState::Closed => "Work window closed. Starting again requires a separate admission.",
         ExecutionWindowState::ReconciliationRequired => "Work needs operator reconciliation. Starting again is unavailable.",
     }).unwrap_or("No work window. Send a message, then explicitly start work.");
+    let review_id = id.clone();
     rsx! { section { "aria-label":"Work window",
         h3 { "Work window" }
         p { role:"status", if known() { "{label}" } else { "{notice}" } }
         p { "Work lasts up to 14½ minutes, followed by up to 30 seconds of cleanup. Accepting a result later does not restart work." }
         if let Some(input) = queued {
             p { "A saved message is waiting for admission." }
-            button { disabled: busy() || (!can_admit && intent.read().pending().is_none()) || conflict(), onclick: move |_| {
+            button { disabled: busy() || (!can_admit && intent.read().pending(&id).is_none()) || conflict(), onclick: move |_| {
                 if busy() || conflict() || !session_scope.read().is_current(generation) { return; }
                 let input = input.clone(); let id = id.clone(); let csrf = csrf.clone();
                 busy.set(true);
                 spawn(async move {
-                    let pending = intent.read().pending().cloned();
+                    let pending = intent.read().pending(&id).cloned();
                     let request = if let Some(request) = pending { Some(request) } else {
                         match transport::key().await {
                             Ok(key) if mounted() && session_scope.read().is_current(generation) && known() => {
                                 let current = status();
                                 if current.as_ref().is_some_and(|s| !matches!(s.state,ExecutionWindowState::Active|ExecutionWindowState::Closed)) { None } else {
-                                    intent.write().prepare(ExecutionWindowRequest {
+                                    intent.write().prepare(&id, ExecutionWindowRequest {
                                         request_key:key, input_message_id:input.receipt.message_id.clone(), input_event_id:input.receipt.event_id.clone(), input_request_key:input.input_request_key.clone(),
                                         expected_generation:current.as_ref().map_or(0,|s|s.generation),
                                         window_id:current.as_ref().filter(|s|s.state==ExecutionWindowState::Active).map(|s|s.window_id),
@@ -120,17 +121,16 @@ pub fn WindowView(
                     };
                     if !mounted() || !session_scope.read().is_current(generation) { return; }
                     let Some(request) = request else { notice.set("Admission unavailable. Message remains saved.".into()); busy.set(false); return; };
+                    let Some(ticket) = intent.read().ticket(&id) else { busy.set(false); return; };
                     let Ok(body) = serde_json::to_string(&request) else { busy.set(false); return; };
                     let mut channel = beta_bridge::start("POST", &id, &csrf, Some(body)); writing.set(Some(channel));
                     let reply = channel.recv::<beta_bridge::Reply>().await;
                     beta_bridge::stop(Some(channel)); writing.set(None);
-                    if !mounted() || !session_scope.read().is_current(generation) { return; }
+                    if !mounted() || !session_scope.read().is_current(generation) || !intent.read().current(&id,&ticket) { return; }
                     match reply {
                         Ok(reply) if reply.status==200 || reply.status==201 => {
                             let receipt = serde_json::from_str::<ExecutionWindowAdmission>(&reply.text);
-                            if receipt.as_ref().is_ok_and(|r| valid_status(&r.status,&id) && intent.read().receipt_matches(intent.read().generation(),r)) {
-                                saved.write().admitted(&input);
-                                let scope = intent.read().generation(); intent.write().review_refusal(scope);
+                            if receipt.as_ref().is_ok_and(|r| valid_status(&r.status,&id) && intent.write().complete(&id,&ticket,r,&mut saved.write())) {
                                 known.set(false); notice.set("Message admitted. Checking current work status…".into());
                             } else { notice.set("Admission reply could not be verified. Retry keeps the same request.".into()); }
                         },
@@ -140,8 +140,8 @@ pub fn WindowView(
                     }
                     busy.set(false);
                 });
-            }, if intent.read().pending().is_some() { "Retry admission" } else if status.read().as_ref().is_some_and(|s|s.state==ExecutionWindowState::Active) { "Add to current work" } else { "Start work" } }
-            if conflict() { button { onclick: move |_| { let scope=intent.read().generation(); intent.write().review_refusal(scope); conflict.set(false); }, "Review current status" } }
+            }, if intent.read().pending(&id).is_some() { "Retry admission" } else if status.read().as_ref().is_some_and(|s|s.state==ExecutionWindowState::Active) { "Add to current work" } else { "Start work" } }
+            if conflict() { button { onclick: move |_| { let ticket=intent.read().ticket(&review_id); if let Some(ticket)=ticket { intent.write().review_refusal(&review_id,&ticket); } conflict.set(false); }, "Review current status" } }
         }
         p { role:"status", "{notice}" }
     }}

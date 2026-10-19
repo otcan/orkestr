@@ -45,6 +45,18 @@ impl SavedInputs {
     pub fn admitted(&mut self, input: &SavedInput) {
         self.inputs.retain(|saved| saved != input);
     }
+    pub fn admitted_request(
+        &mut self,
+        conversation: &str,
+        request: &orkestr_v2_contracts::ExecutionWindowRequest,
+    ) {
+        self.inputs.retain(|saved| {
+            !(saved.conversation.to_string() == conversation
+                && saved.input_request_key == request.input_request_key
+                && saved.receipt.message_id == request.input_message_id
+                && saved.receipt.event_id == request.input_event_id)
+        });
+    }
     pub fn clear_owner(&mut self) {
         self.inputs.clear();
     }

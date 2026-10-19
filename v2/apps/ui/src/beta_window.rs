@@ -60,7 +60,90 @@ impl WindowIntent {
         if generation != self.generation {
             return false;
         }
-        self.pending = None;
+        self.clear_scope();
         true
+    }
+}
+
+/// Authenticated owner lifetime; selection never discards another route's uncertainty.
+#[derive(Default)]
+pub struct WindowIntents {
+    epoch: u64,
+    entries: std::collections::BTreeMap<String, WindowIntent>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IntentTicket {
+    route: String,
+    epoch: u64,
+    generation: u64,
+}
+impl WindowIntents {
+    pub fn clear_scope(&mut self) {
+        self.epoch = self
+            .epoch
+            .checked_add(1)
+            .expect("owner generation exhausted");
+        self.entries.clear();
+    }
+    pub fn pending(&self, route: &str) -> Option<&ExecutionWindowRequest> {
+        self.entries.get(route).and_then(WindowIntent::pending)
+    }
+    pub fn prepare(
+        &mut self,
+        route: &str,
+        request: ExecutionWindowRequest,
+    ) -> Option<ExecutionWindowRequest> {
+        let id = serde_json::from_value::<orkestr_v2_contracts::ConversationId>(
+            serde_json::Value::String(route.into()),
+        )
+        .ok()?;
+        if id.0.is_nil() || (!self.entries.contains_key(route) && self.entries.len() >= 128) {
+            return None;
+        }
+        self.entries
+            .entry(route.into())
+            .or_default()
+            .prepare(request)
+    }
+    pub fn ticket(&self, route: &str) -> Option<IntentTicket> {
+        let intent = self.entries.get(route)?;
+        intent.pending()?;
+        Some(IntentTicket {
+            route: route.into(),
+            epoch: self.epoch,
+            generation: intent.generation(),
+        })
+    }
+    pub fn current(&self, route: &str, ticket: &IntentTicket) -> bool {
+        self.ticket(route).as_ref() == Some(ticket)
+    }
+    pub fn review_refusal(&mut self, route: &str, ticket: &IntentTicket) -> bool {
+        if !self.current(route, ticket) {
+            return false;
+        }
+        self.entries
+            .get_mut(route)
+            .is_some_and(|intent| intent.review_refusal(ticket.generation))
+    }
+    pub fn complete(
+        &mut self,
+        route: &str,
+        ticket: &IntentTicket,
+        receipt: &ExecutionWindowAdmission,
+        saved: &mut crate::beta_inputs::SavedInputs,
+    ) -> bool {
+        if !self.current(route, ticket) || receipt.status.conversation_id.to_string() != route {
+            return false;
+        }
+        let intent = self.entries.get(route).expect("current ticket owns entry");
+        if !intent.receipt_matches(ticket.generation, receipt) {
+            return false;
+        }
+        let request = intent
+            .pending()
+            .expect("current ticket owns request")
+            .clone();
+        saved.admitted_request(route, &request);
+        self.review_refusal(route, ticket)
     }
 }
