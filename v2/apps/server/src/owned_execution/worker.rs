@@ -27,6 +27,7 @@ impl ConfiguredExecution {
                         directory: self.directory.clone(),
                         controls: self.control.clone(),
                         children: self.children.clone(),
+                        reaps: self.worker_reaps.clone(),
                         tasks: self.tasks.clone(),
                         offline_python: self.offline_python.clone(),
                     },
@@ -34,6 +35,12 @@ impl ConfiguredExecution {
                 )
             })
             .transpose()
+    }
+
+    pub(super) fn quiesce_worker(worker: &mut Option<WorkerSchedule>) {
+        if let Some(worker) = worker {
+            worker.quiesce();
+        }
     }
 
     pub(super) async fn poll_worker(worker: &mut Option<WorkerSchedule>) {
