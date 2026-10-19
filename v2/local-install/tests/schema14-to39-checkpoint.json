@@ -1,0 +1,37 @@
+{
+  "source_commit": "65e7730298afefae0812cd98455f7c9d9ec5973e",
+  "old_source_commit": "31d8d0395369b32306d14412843a9f9bf5eb2c01",
+  "status": "passed",
+  "schema_edge": [
+    14,
+    39
+  ],
+  "package_version": "2.0.0-dev",
+  "server_profile": "debug",
+  "scope": "bounded synthetic native development-package migration only",
+  "pair_sha256": "498c6da8d0f2c40aed375d20e451786391bc2be237178545c45841dac4348eba",
+  "result_sha256": "127f16cc6a772b9a01009587263188721079aa7c60ed93e2ebb7a55bf9d5296b",
+  "native_manifest_sha256": "64a19b9f3e109c618bdb10d36bf36683863d409b2d7b8a4e81bf5ba53378ac23",
+  "checks": [
+    "old executable created populated schema14; verified stopped backup and untouched rollback copy",
+    "successor copy-upgrade/FK/history preflight passed before writable original migration",
+    "new executable migrated populated14 to39; original session/history/idempotency retained",
+    "successor reopened migrated home with original history/idempotency and unchanged schema",
+    "successor stopped backup/dormant apply/refused activation/rollback; old-package snapshot refused",
+    "old executable refused disposable schema39 copy without database inventory mutation",
+    "old executable recovered original owner/history on untouched schema14 rollback home; backup preserved"
+  ],
+  "preserved_backup_sha256": "47470e59f0668ec98a924e6a79a11e8e9f3d128c1a9c898b1db2b66afeef4f86",
+  "preserved_backup_manifest_sha256": "5fb8614d16d6acbfb95f996a6651af22fa8b26d97c0fcc17156ebdf1c541307d",
+  "owned_supervisor_stopped": true,
+  "cleanup_port_check": "no listening socket; fresh loopback listen with SO_REUSEADDR passed (plain bind encountered post-connection TIME_WAIT)",
+  "authority_scope": "schema14 fixture contains no pending-task or later authority-ledger rows; zero authority checks do not qualify populated later ledgers",
+  "unexecuted": [
+    "schema17/31/33/36/37/38 package edges to39",
+    "attachment browser qualification",
+    "installed manager/adoption",
+    "providers",
+    "production",
+    "all-nine-workflows qualification; exact Rust run cancelled at handoff"
+  ]
+}
