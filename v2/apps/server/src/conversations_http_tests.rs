@@ -52,7 +52,7 @@ async fn current_browser_creates_lists_and_replays_native_thread_without_window(
     let (root, state, headers) = fixture().await;
     let response = create(State(state.clone()), headers.clone(), Ok(Json(request())))
         .await
-        .unwrap();
+        .unwrap_or_else(|error| panic!("valid create refused: {}", error.2));
     assert_eq!(response.status(), StatusCode::CREATED);
     let created: ConversationSummary =
         serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap();
@@ -61,7 +61,7 @@ async fn current_browser_creates_lists_and_replays_native_thread_without_window(
     assert_eq!(
         create(State(state.clone()), headers.clone(), Ok(Json(request())))
             .await
-            .unwrap()
+            .unwrap_or_else(|error| panic!("valid replay refused: {}", error.2))
             .status(),
         StatusCode::OK
     );
@@ -71,7 +71,7 @@ async fn current_browser_creates_lists_and_replays_native_thread_without_window(
         Ok(Query(Page::default())),
     )
     .await
-    .unwrap();
+    .unwrap_or_else(|error| panic!("valid list refused: {}", error.2));
     let page: ConversationPage =
         serde_json::from_slice(&to_bytes(response.into_body(), 16384).await.unwrap()).unwrap();
     assert_eq!(page.conversations.len(), 2);
@@ -82,7 +82,8 @@ async fn current_browser_creates_lists_and_replays_native_thread_without_window(
     assert!(state
         .store
         .execution_window_status_authenticated(
-            &browser::credential(&headers).unwrap(),
+            &browser::credential(&headers)
+                .unwrap_or_else(|error| panic!("valid browser credential refused: {}", error.2)),
             &created.conversation_id
         )
         .await
@@ -126,7 +127,10 @@ async fn conversation_creation_preserves_host_origin_csrf_and_browser_namespace(
     );
     state
         .store
-        .revoke_session(&browser::credential(&headers).unwrap())
+        .revoke_session(
+            &browser::credential(&headers)
+                .unwrap_or_else(|error| panic!("valid browser credential refused: {}", error.2)),
+        )
         .await
         .unwrap();
     assert_eq!(
