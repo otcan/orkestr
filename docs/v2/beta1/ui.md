@@ -20,3 +20,10 @@ account, native path or provisioning authority comes from this UI.
 
 This is a source checkpoint. No native/WASM build, browser run or paired-candidate
 acceptance is attributed to it. Installation owns the frozen matching build.
+
+The unmounted beta request helper uses only the selected relative capability and
+window routes, browser cookies and CSRF for writes. It preserves serialized
+request integers verbatim, bounds response bytes and read iterations, and aborts
+on caller cancellation. Its six Node transport tests do not validate the pending
+Core window DTO or prove server integration. Typed decoding and mounting await
+that exact source checkpoint; no admission is inferred from a transport result.
