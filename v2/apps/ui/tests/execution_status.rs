@@ -200,3 +200,35 @@ fn absent_then_identical_old_status_keeps_resources_stale() {
     assert!(state.fresh(60003));
     assert!(state.resources(60003).contains("unavailable"));
 }
+
+#[test]
+fn separate_fast_retention_does_not_replace_deep_or_inherit_its_high_water() {
+    let mut deep = Execution::default();
+    let mut fast = Execution::default();
+    let original = wire();
+    let conversation = original.conversation_id.to_string();
+    let deep_generation = deep.select(&conversation, "");
+    deep.apply_status(deep_generation, 100, original.clone())
+        .unwrap();
+    let mut fast_status = original.clone();
+    fast_status.run_id = Some(
+        serde_json::from_value(serde_json::json!("00000000-0000-4000-8000-000000000008")).unwrap(),
+    );
+    fast_status.revision = 2;
+    let fast_generation = fast.select(&conversation, "");
+    fast.apply_status(fast_generation, 101, fast_status.clone())
+        .unwrap();
+    assert_eq!(deep.control_status().unwrap().run_id, original.run_id);
+    assert_eq!(fast.control_status().unwrap().run_id, fast_status.run_id);
+    let remounted = fast.select(&conversation, "");
+    assert!(fast
+        .apply_status(fast_generation, 102, fast_status.clone())
+        .is_err());
+    fast.apply_status(remounted, 102, fast_status.clone())
+        .unwrap();
+    fast.authorization_lost();
+    deep.authorization_lost();
+    assert!(fast.control_status().is_none());
+    assert!(deep.control_status().is_none());
+    assert!(fast.apply_status(remounted, 103, fast_status).is_err());
+}

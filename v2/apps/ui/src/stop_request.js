@@ -1,6 +1,6 @@
 // Reviewed Stop route only. The caller fences owner/selection before applying receipts.
 const input = await dioxus.recv();
-if (!/^\/api\/v2\/conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/stop$/.test(input.path) || !input.csrf) throw new Error('Stop unavailable');
+if (!/^\/api\/v2\/conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/(?:fast\/)?stop$/.test(input.path) || !input.csrf) throw new Error('Stop unavailable');
 const controller = new AbortController();
 let finished = false;
 dioxus.recv().then(() => { if (!finished) controller.abort(); });

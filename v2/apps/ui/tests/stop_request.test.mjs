@@ -42,3 +42,16 @@ test('oversized or malformed Stop receipt fails closed and cancels response read
  assert.ok(cancelled);
  await assert.rejects(execute(bridge(),async()=>new Response('invalid-json'),timers.set,timers.clear),SyntaxError);
 });
+
+test('Fast Stop preserves exact control tuple on the distinct same-origin route',async()=>{
+ const value={...input,path:input.path.replace('/stop','/fast/stop'),body:{...input.body,expected_control_revision:7}};
+ for(let attempt=0;attempt<2;attempt++) {
+  const result=await execute(bridge(value),async(path,options)=>{
+   assert.equal(path,value.path);assert.equal(options.credentials,'same-origin');
+   assert.equal(options.headers['x-orkestr-csrf'],value.csrf);
+   assert.deepEqual(JSON.parse(options.body),value.body);
+   return new Response(null,{status:503});
+  },timers.set,timers.clear);
+  assert.deepEqual(result,{status:503,body:null});
+ }
+});

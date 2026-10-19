@@ -7,12 +7,13 @@ use serde_json::{json, Value};
 pub fn ExecutionPoll(
     id: String,
     #[props(default)] run: String,
+    #[props(default)] fast: bool,
     csrf: String,
     session_scope: Signal<SessionScope>,
     mut execution: Signal<Execution>,
     onexpired: EventHandler<()>,
 ) -> Element {
-    let parent_tasks = run.is_empty();
+    let parent_tasks = run.is_empty() && !fast;
     let generation = session_scope.read().generation();
     let selected = id.clone();
     let selected_run = run.clone();
@@ -20,7 +21,13 @@ pub fn ExecutionPoll(
     let mut now = use_signal(|| 0u64);
     let channel = use_hook(move || {
         let eval = document::eval(include_str!("execution_poll.js"));
-        let path = if run.is_empty() {
+        let path = if fast {
+            if run.is_empty() {
+                format!("/api/v2/conversations/{id}/fast/execution")
+            } else {
+                format!("/api/v2/conversations/{id}/fast/execution?run_id={run}")
+            }
+        } else if run.is_empty() {
             format!("/api/v2/conversations/{id}/execution")
         } else {
             format!("/api/v2/conversations/{id}/execution?run_id={run}")
@@ -80,5 +87,9 @@ pub fn ExecutionPoll(
             execution.write().disconnected();
         }
     });
-    rsx! { crate::execution_panel::ExecutionPanel { execution, now_ms: now(), csrf, session_scope, onexpired, parent_tasks } }
+    if fast {
+        rsx! { crate::fast_panel::FastPanel { execution, now_ms: now(), csrf, session_scope, onexpired } }
+    } else {
+        rsx! { crate::execution_panel::ExecutionPanel { execution, now_ms: now(), csrf, session_scope, onexpired, parent_tasks } }
+    }
 }
