@@ -75,16 +75,8 @@ class Children:
             # An exact IPC retry cannot continue/spawn anything a second time.
             return False
         require(not self.uncertain and not self.forced, "cleanup_uncertain")
-        executable = Path("/usr/bin/python3").resolve()
-        expected = [bytes(executable), b"-I", b"-S", b"-B",
-                    bytes(self.package.root / "codex_service/entry.py"), b"broker"]
-        fresh = [b"open-owned-session", b"--protocol", b"orkestr-v2-provider-broker-v1"]
-        resumed = [b"resume-owned-session", b"--protocol", b"orkestr-v2-provider-broker-v1"]
-        path = Path("/proc") / str(pid)
-        arguments = (path / "cmdline").read_bytes().split(b"\0")[:-1]
-        require(arguments[:6] == expected and arguments[6:] in (fresh, resumed)
-                and (path / "exe").resolve() == executable, "broker_source")
         record = self.remember(identity)
+        path = Path("/proc") / str(pid)
         while True:
             require(exists(identity) and belongs(pid, self.server), "broker_owner_changed")
             state = (path / "stat").read_text().rsplit(")", 1)[1].split()[0]
@@ -92,6 +84,17 @@ class Children:
                 break
             require(time.monotonic() < deadline, "broker_pause_deadline")
             time.sleep(0.005)
+        # The initial executable may still be the source-pinned shell entry.
+        # Only the final stopped interpreter/argv can establish launch authority.
+        executable = Path("/usr/bin/python3").resolve()
+        expected = [bytes(executable), b"-I", b"-S", b"-B",
+                    bytes(self.package.root / "codex_service/entry.py"), b"broker"]
+        fresh = [b"open-owned-session", b"--protocol", b"orkestr-v2-provider-broker-v1"]
+        resumed = [b"resume-owned-session", b"--protocol", b"orkestr-v2-provider-broker-v1"]
+        arguments = (path / "cmdline").read_bytes().split(b"\0")[:-1]
+        require(arguments[:6] == expected and arguments[6:] in (fresh, resumed)
+                and (path / "exe").resolve() == executable, "broker_source")
+        require(exists(identity) and belongs(pid, self.server), "broker_owner_changed")
         self.brokers.add(key)  # Retain original ownership BEFORE releasing launch.
         record.send(signal.SIGCONT)
         return True
