@@ -1,0 +1,22 @@
+[package]
+name = "orkestr-v2-ui-spike"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+publish = false
+
+# Deliberately isolated until coordinator integrates the real public contracts.
+[workspace]
+
+[features]
+default = []
+web = ["dep:dioxus", "dioxus/web", "dep:gloo-timers"]
+
+[dependencies]
+dioxus = { version = "=0.7.3", optional = true, default-features = false, features = ["macro", "html", "signals", "hooks", "launch"] }
+gloo-timers = { version = "=0.3.0", optional = true, features = ["futures"] }
+
+[[bin]]
+name = "ui-spike"
+path = "src/main.rs"
+required-features = ["web"]

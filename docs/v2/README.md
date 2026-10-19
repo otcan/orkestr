@@ -96,7 +96,7 @@ The first deliverable is a locally runnable Rust server and Rust UI, with durabl
 
 The first-wave contracts and tests are in [first-implementation.md](first-implementation.md); complete migration gates are in [migration.md](migration.md). NEW development threads implement this track. The owner tests the candidate locally before deciding to replace the old installation. Mainline merge, production deployment, channel takeover, credential reuse and destructive migration remain separate approval gates.
 
-At plan revision, the branch contains planning files only. Implementation reports must cite actual commits, tests and artifacts; do not claim a working demo from documentation alone.
+The plan baseline was unverified. The initial offline journal and fixture UI implementation now has concrete build/test evidence in [the implementation README](../../v2/README.md). This does not satisfy the integrated M1 server/UI, provider, iOS or migration gates. Implementation reports must continue to cite actual commits, tests and artifacts.
 
 ## Primary technical references
 

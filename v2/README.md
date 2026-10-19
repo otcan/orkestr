@@ -1,12 +1,24 @@
 # Orkestr 2.0 Rust implementation
 
-This directory is reserved for the isolated Rust application. The existing TypeScript/NestJS/Angular implementation remains unchanged outside the v2 track.
+This directory is reserved for the isolated Rust application. The existing 1.x implementation remains unchanged outside the v2 track.
 
-## Actual status at plan handoff, 2026-10-18
+## Verified initial implementation, 2026-10-18
 
-The branch contains architecture and execution documentation. It does not yet contain a verified Cargo workspace, in-memory demo, server, UI or passing Rust tests. Earlier README commands referring to `orkestr-v2-demo` were premature and have been removed.
+The Rust workspace now contains the pure domain, in-memory CLI demo and a durable SQLite journal with replayable graph/task projections. The independently reviewed store revision `ef759a48f9d6861b05165f726e2afe2837acaf6e` passed formatting, strict Clippy and 25 tests on Rust 1.99.1. Tests include real subprocess termination before/after commit, lost-acknowledgement retries, competing writers, cancellation and rollback after projection failure. Its durable demo reopened the same database and returned the original sequence with `duplicate=true`.
 
-The first implementation creates the real Cargo workspace, durable SQLite state, authenticated Axum API, separate session/runtime roles, Dioxus UI and independent acceptance tests. New development threads own that work. Update this file with exact build/test/run commands only after they have succeeded on a specified commit.
+From `v2/`, the verified commands are:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo run --locked -p orkestr-v2-demo
+cargo run --locked -p orkestr-v2-store-sqlite --example durable -- /tmp/orkestr-v2-demo.sqlite
+```
+
+Use a fresh, explicitly chosen demo database path. Repeating the last command checks idempotency; it does not execute external actions. Read the [store limitations](crates/orkestr-store-sqlite/README.md) before using the library. This is trusted offline metadata storage, not the authenticated M1 execution authority.
+
+The separate [Dioxus fixture spike](../docs/v2/dioxus-spike.md), revision `dcf099b1f2086ed59ed5764114c70201dcb323fa`, passed six fixture tests and the WASM web compilation check. Browser input/IME, accessibility and iOS gates remain unverified. There is no integrated UI/server or verified provider adapter yet. The authenticated Axum API, admission/evidence contracts and supervised runtime remain work for the managed v2 lanes.
 
 ## Plan
 

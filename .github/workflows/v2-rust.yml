@@ -23,7 +23,9 @@ jobs:
       run:
         working-directory: v2
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
       - name: Install pinned Rust with lint and formatter
         run: |
           rustup show active-toolchain
@@ -35,3 +37,17 @@ jobs:
         run: cargo test --locked --workspace
       - name: Smoke CLI
         run: cargo run --locked -p orkestr-v2-demo
+      - name: Durable CLI reopen
+        run: |
+          demo_dir=$(mktemp -d)
+          cargo run --locked -p orkestr-v2-store-sqlite --example durable -- "$demo_dir/demo.sqlite"
+          cargo run --locked -p orkestr-v2-store-sqlite --example durable -- "$demo_dir/demo.sqlite"
+      - name: Isolated UI fixture tests
+        run: |
+          cargo fmt --manifest-path spikes/dioxus-ui/Cargo.toml --all -- --check
+          cargo clippy --manifest-path spikes/dioxus-ui/Cargo.toml --locked --all-targets -- -D warnings
+          cargo test --manifest-path spikes/dioxus-ui/Cargo.toml --locked
+      - name: UI WASM compatibility
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo clippy --manifest-path spikes/dioxus-ui/Cargo.toml --locked --target wasm32-unknown-unknown --features web -- -D warnings
