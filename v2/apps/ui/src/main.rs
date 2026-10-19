@@ -105,9 +105,9 @@ fn App() -> Element {
                 views::Auth { onlogin: move |session: transport::BrowserSession| {
                     if logging_out() { return; }
                     execution.write().authorization_lost();
-                        host_resources.write().clear_owner();
-                        held_inputs.write().clear_owner();
-                        task_drafts.write().clear_owner();
+                    host_resources.write().clear_owner();
+                    held_inputs.write().clear_owner();
+                    task_drafts.write().clear_owner();
                     session_scope.write().activate(&session.global_conversation_id, &mut drafts.write());
                     task_drafts.write().activate(session_scope.read().generation());
                     refresh += 1;
@@ -136,9 +136,9 @@ fn App() -> Element {
                             match result {
                                 Ok(_) => {
                                     execution.write().authorization_lost();
-                                                        host_resources.write().clear_owner();
-                                                        held_inputs.write().clear_owner();
-                                                        task_drafts.write().clear_owner();
+                                    host_resources.write().clear_owner();
+                                    held_inputs.write().clear_owner();
+                                    task_drafts.write().clear_owner();
                                     session_scope.write().invalidate();
                                     global.set(String::new()); current.set(String::new()); refresh += 1;
                                     csrf.set(String::new());
