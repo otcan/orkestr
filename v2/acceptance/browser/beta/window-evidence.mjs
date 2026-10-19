@@ -50,7 +50,7 @@ export function assertWindowAdmission({conversation, intakeRequest, intakeReceip
   status(receipt.status, conversation);
   if (previous) status(previous, conversation);
   const generation = previous ? integer(previous.generation) : 0n;
-  assert(integer(request.expected_generation) >= 0n && integer(request.expected_generation) < MAX_SAFE_GENERATION);
+  assert(integer(request.expected_generation) >= 0n && integer(request.expected_generation) <= MAX_SAFE_GENERATION);
   assert.equal(integer(request.expected_generation), generation);
   if (request.window_id !== null) {
     assert(previous && previous.state === 'active', 'active_predecessor_required');

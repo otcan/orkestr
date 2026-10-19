@@ -36,10 +36,10 @@ export async function browserSmoke({page, context, origin, sourceSha, credential
       conversation = result.conversation; return result.evidence;
     });
     for (let sample = 1; sample <= 3; sample++) {
-      await step('ordinary_reload', async () => ({sample, ...await reloadOwner({page, conversation})}));
+      await step('ordinary_reload', async () => ({sample, ...await reloadOwner({page, conversation, origin})}));
     }
-    await step('drafts', () => draftRemount({page}));
-    await step('cpu_ram', () => cpuAndRam({page}));
+    await step('drafts', () => draftRemount({page, origin}));
+    await step('cpu_ram', () => cpuAndRam({page, origin}));
     report.network = monitor.snapshot();
   })().finally(() => { settled = true; });
   work.catch(() => {});

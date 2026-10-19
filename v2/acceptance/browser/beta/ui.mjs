@@ -13,15 +13,16 @@ async function fill(page, selector, value, origin) {
   }, {text: value, origin});
 }
 
-async function session(page) {
-  return page.evaluate(async () => {
+async function session(page, origin) {
+  return page.evaluate(async origin => {
+    if (location.origin !== origin) throw Error('unexpected_origin');
     const response = await fetch('/api/v2/browser/session', {credentials: 'same-origin',
       cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(5000)});
     if (response.status !== 200) throw Error('readiness_unavailable');
     const body = await response.json();
     // Never transport the CSRF token or cookie into an acceptance receipt.
     return {conversation: body.global_conversation_id};
-  });
+  }, origin);
 }
 
 export async function loginOwner({page, context, origin, credentials, bootstrap}) {
@@ -41,7 +42,7 @@ export async function loginOwner({page, context, origin, credentials, bootstrap}
   await fill(page, '#password', credentials.password, origin);
   await clickReady(page, 'Continue', origin);
   await composerReady(page);
-  const projection = await session(page);
+  const projection = await session(page, origin);
   assert(UUID.test(projection.conversation), 'conversation_required');
   const cookie = (await context.cookies()).find(item => item.name === 'orkestr_v2_session');
   assert(cookie?.httpOnly && cookie.sameSite === 'Strict' && cookie.path === '/api/v2', 'cookie_policy');
@@ -50,42 +51,45 @@ export async function loginOwner({page, context, origin, credentials, bootstrap}
   return {conversation: projection.conversation, evidence: {login: true, cookie_policy: true, ...timing}};
 }
 
-export async function reloadOwner({page, conversation}) {
+export async function reloadOwner({page, conversation, origin}) {
+  assert.equal(new URL(origin).origin, origin);
   const started = performance.now();
-  await page.reload({waitUntil: 'domcontentloaded', timeout: 15_000});
+  const response = await page.reload({waitUntil: 'domcontentloaded', timeout: 15_000});
+  assert(response && new URL(response.url()).origin === origin && new URL(page.url()).origin === origin);
   await composerReady(page);
-  assert.equal((await session(page)).conversation, conversation, 'owner_changed_on_reload');
+  assert.equal((await session(page, origin)).conversation, conversation, 'owner_changed_on_reload');
   return {owner_preserved: true, render_ms: Math.round(performance.now() - started)};
 }
 
-export async function draftRemount({page}) {
+export async function draftRemount({page, origin}) {
   const previous = await draft(page);
-  await setDraft(page, DRAFT);
-  await clickReady(page, 'Projects');
+  await setDraft(page, DRAFT, origin);
+  await clickReady(page, 'Projects', origin);
   await page.waitForSelector('#project-name', {visible: true, timeout: 10_000});
-  await clickReady(page, 'Assistant');
+  await clickReady(page, 'Assistant', origin);
   await composerReady(page);
   assert.equal(await draft(page), DRAFT, 'draft_lost_after_navigation');
   const old = await page.$('#composer');
   try {
-    await clickReady(page, 'Reconnect and reload history');
+    await clickReady(page, 'Reconnect and reload history', origin);
     await page.waitForFunction(node => !node.isConnected, {timeout: 10_000}, old);
   } finally { await old.dispose(); }
   await composerReady(page);
   assert.equal(await draft(page), DRAFT, 'draft_lost_after_reconnect');
-  await setDraft(page, previous);
+  await setDraft(page, previous, origin);
   return {navigation_preserved: true, reconnect_preserved: true, no_submission: true};
 }
 
-export async function cpuAndRam({page}) {
-  await clickReady(page, 'Host resources');
+export async function cpuAndRam({page, origin}) {
+  await clickReady(page, 'Host resources', origin);
   await page.waitForFunction(() => {
     const panel = document.querySelector('section[aria-label="Host resources"]');
     const values = [...(panel?.querySelectorAll('dd') ?? [])].map(node => node.textContent);
     return panel?.textContent.includes('Host resources current') && values.length === 2 &&
       /^\d+\.\d% busy$/.test(values[0]) && /^\d+ MiB used \/ \d+ MiB total/.test(values[1]);
   }, {timeout: 15_000});
-  const observed = await page.evaluate(async () => {
+  const observed = await page.evaluate(async origin => {
+    if (location.origin !== origin) throw Error('unexpected_origin');
     const response = await fetch('/api/v2/resources', {credentials: 'same-origin',
       cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(5000)});
     if (response.status !== 200) throw Error('readiness_unavailable');
@@ -105,7 +109,7 @@ export async function cpuAndRam({page}) {
     const sample = JSON.parse(new TextDecoder().decode(joined));
     return {schema: sample.schema_version, scope: sample.scope, availability: sample.availability,
       observed_at_ms: sample.observed_at_ms, cpu: sample.cpu, memory: sample.memory};
-  });
+  }, origin);
   assert.equal(observed.schema, 1);
   assert.equal(observed.scope, 'host');
   assert.equal(observed.availability, 'ready');
@@ -116,7 +120,7 @@ export async function cpuAndRam({page}) {
   assert(memory && [memory.total_bytes, memory.available_bytes, memory.used_bytes].every(Number.isSafeInteger));
   assert(memory.total_bytes > 0 && memory.available_bytes >= 0 && memory.available_bytes <= memory.total_bytes);
   assert.equal(memory.used_bytes, memory.total_bytes - memory.available_bytes);
-  await clickReady(page, 'Assistant');
+  await clickReady(page, 'Assistant', origin);
   await composerReady(page);
   return {actual_cpu_visible: true, actual_ram_visible: true, native_sample_ready: true, scope: 'host_aggregate'};
 }

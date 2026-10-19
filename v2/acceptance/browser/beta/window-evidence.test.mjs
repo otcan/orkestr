@@ -30,6 +30,15 @@ test('window generations enforce the frozen JavaScript-safe bound, even after ex
   assert.throws(() => assertWindowAdmission(data));
 });
 
+test('the last safe generation remains joinable without creating another budget', () => {
+  const data = example();
+  const previous = {...data.receipt.status, state: 'active', generation: 9007199254740991n};
+  data.previous = previous;
+  Object.assign(data.request, {expected_generation: 9007199254740991n, window_id: previous.window_id});
+  data.receipt.status = structuredClone(previous);
+  assert.equal(assertWindowAdmission(data).original_budget_preserved, true);
+});
+
 test('opening belongs to the exact already admitted input, not merely its conversation', () => {
   assert.equal(assertWindowAdmission(example()).fresh_budget, true);
   for (const field of ['input_message_id', 'input_event_id', 'input_request_key']) {

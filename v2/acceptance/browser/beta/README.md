@@ -24,7 +24,21 @@ ordinary owner login/reload, route-remount draft checks, visible host CPU/RAM,
 normal navigation/request timing, closed diagnostics, independent cleanup steps,
 and a separate natural-time continuity observer. They do not yet claim mounted
 beta acceptance. Chat/Progress/acceptance/Stop/held-input/post-Stop/Steer checks
-must use the concrete reviewed Core/Runtime contract when it is available.
+use the existing ordinary execution/control DTOs plus the published window DTO.
+`browserChat` performs four fixed ordinary input actions, at most one Steer,
+one Stop and two explicit acceptances through the UI. It requires real text in
+the selected Deep output panel, scopes same-labelled controls away from Fast,
+and retains held-input provenance through post-Stop work, acceptance and reload.
+An advertised-false Steer sample is reported as currently unavailable; it does
+not prove that the provider lacks steering. A required Steer must reach an exact
+native acknowledgement, not a reservation or ordered queue fallback.
+
+Window generation observations follow Core `2b9227da1753629ae04d0a170c6c659842c656e3`:
+integers below 2^53, including a same-window join at the last safe generation;
+creating an overflowing successor fails. No window is opened automatically by
+this harness: the matching mounted UI must perform the separate admission after
+its ordinary message receipt. The exact service/pair must be reviewed before any
+actual invocation. Source tests alone do not qualify the composed UI/runtime.
 
 ## Required private composition
 
@@ -62,6 +76,9 @@ Keep one owner/conversation per real attempt and explicit intake/control budgets
 An acceptance receipt is not model completion; an interrupt ACK is not Stopped.
 Stop must retain the earlier held input while only new post-Stop intent executes.
 Unsupported Steer must be visible as unavailable, never reported as passed.
+Browser status and payload proofs are not independent process-tree evidence.
+The protected operator must additionally verify native cleanup and durable
+input/run lineage; `browserChat` explicitly retains those postcheck requirements.
 
 `observeContinuity` uses monotonic real time, at least fifteen minutes, no missing
 observation interval over thirty seconds, and at most 96 samples. Its concrete

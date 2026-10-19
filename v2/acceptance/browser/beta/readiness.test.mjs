@@ -45,3 +45,19 @@ test('normal timing contains no URL, content or credentials and waits for render
   assert(Number.isSafeInteger(timing.render_ms));
   await assert.rejects(timedNavigation(page, 'https://private:secret@example.invalid/'), {code: 'invalid_action'});
 });
+
+test('Deep Stop never selects a Fast button with the same label', async () => {
+  let deepClicks = 0, fastClicks = 0;
+  const deep = {textContent: 'Stop', disabled: false, click() { deepClicks++; }};
+  const fast = {textContent: 'Stop', disabled: false, click() { fastClicks++; }};
+  const execute = (fn, expected, origin, section) => vm.runInNewContext(
+    `(${fn.toString()})(expected, origin, section)`, {expected, origin, section,
+      location: {origin}, document: {querySelectorAll: () => [fast, deep],
+        querySelector: selector => selector === 'section[aria-label="Execution and resources"]'
+          ? {querySelectorAll: () => [deep]} : null}});
+  const page = {waitForFunction: async (fn, _options, ...args) => assert.equal(execute(fn, ...args), true),
+    evaluate: execute};
+  await clickReady(page, 'Stop', 'https://example.invalid', 'Execution and resources');
+  assert.equal(deepClicks, 1); assert.equal(fastClicks, 0);
+  await assert.rejects(clickReady(page, 'Stop', undefined, 'arbitrary selector'), {code: 'invalid_action'});
+});
