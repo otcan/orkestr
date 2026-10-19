@@ -230,19 +230,47 @@ async fn stop_case(ack_only: bool) {
         );
     } else {
         assert_eq!(outcome, StopProgress::Stopped);
-        case.reaped(stopping.retire_broker().unwrap(), &run).await;
+        let proof = case.reaped(stopping.retire_broker().unwrap(), &run).await;
+        assert_eq!(proof.scope().run(), run.to_string());
+        case.bound
+            .retire_terminal_supervisor(&case.token, &run)
+            .await
+            .unwrap();
+        assert_eq!(case.query("SELECT count(*) FROM production_stopped_retirements g JOIN production_runs r ON r.id=g.prior_run_id JOIN production_observations o ON o.run_id=r.id AND o.event_id=g.stopped_event_id WHERE r.role='fast' AND r.state='cancelled' AND g.context_id=r.context_id AND g.incarnation_id=r.incarnation_id AND g.session_id=r.session_id AND g.binding_generation=r.binding_generation+1 AND o.kind='stopped'"), serde_json::json!([[1]]));
+        assert_eq!(
+            case.query("SELECT count(*) FROM production_graceful_retirements"),
+            serde_json::json!([[0]])
+        );
+        let (prior, _) = case
+            .store
+            .terminal_supervisor_candidate(
+                &case.token,
+                &Case::config(ProductionTakeover::First),
+                &case.conversation,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(prior, run);
+        drop(proof);
         assert_eq!(
             case.query("SELECT state FROM production_runs"),
             serde_json::json!([["cancelled"]])
         );
     }
-    assert!(
-        case.bound
-            .retire_terminal_supervisor(&case.token, &run)
-            .await
-            .is_err(),
-        "Stop is not owner acceptance"
-    );
+    if ack_only {
+        assert!(
+            case.bound
+                .retire_terminal_supervisor(&case.token, &run)
+                .await
+                .is_err(),
+            "interrupt acknowledgement is not canonical Stopped evidence"
+        );
+        assert_eq!(
+            case.query("SELECT count(*) FROM production_stopped_retirements"),
+            serde_json::json!([[0]])
+        );
+    }
     sender.publish(receipt).unwrap();
     assert!(receiver.take().unwrap().is_none());
     assert_eq!(
