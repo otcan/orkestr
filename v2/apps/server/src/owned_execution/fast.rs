@@ -60,12 +60,14 @@ impl ConfiguredExecution {
                 FastExit::Shutdown => return Ok(()),
                 FastExit::Stopped { run, proof } => {
                     // ReapedBroker is retained until the exact stopped metadata
-                    // issuer has checked the same Fast predecessor and binding.
+                    // issuer has checked the same Fast predecessor and binding,
+                    // or shutdown records its proven retirement without a new run.
                     if self
                         .fast_source(&mut shutdown, &mut heartbeat)
                         .await?
                         .is_none()
                     {
+                        self.retire_stopped_fast(&run, proof).await?;
                         return Ok(());
                     }
                     let binding = self
@@ -83,6 +85,34 @@ impl ConfiguredExecution {
                 }
             }
         }
+    }
+
+    async fn retire_stopped_fast(
+        &self,
+        run: &RunId,
+        proof: ReapedBroker,
+    ) -> Result<(), &'static str> {
+        if self.config.role != config::ExecutionRole::Fast
+            || proof.scope().owner() != self.owner.to_string()
+            || proof.scope().run() != run.to_string()
+            || proof.scope().namespace() != self.config.namespace
+        {
+            return Err("Fast stopped retirement scope mismatch");
+        }
+        if !self.children.wait_empty(Duration::from_secs(2)).await {
+            return Err("Fast stopped retirement still owns child resources");
+        }
+        self.current().await?;
+        let result = self
+            .store
+            .retire_terminal_supervisor(&self.token, run)
+            .await
+            .map_err(|_| "Fast stopped supervisor retirement refused");
+        // Keep the original non-Clone reap witness alive through Core's exact
+        // canonical Stopped/current-context transaction. Never reconstruct it
+        // from a status, exit code, caller PID, or an acknowledged interrupt.
+        drop(proof);
+        result
     }
 
     async fn fast_source(
