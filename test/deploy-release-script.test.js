@@ -94,7 +94,10 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /compressor_cmd=\(gzip "-\$gzip_level" -c\)/);
   assert.match(script, /State backup started: \$backup_name using \$compressor/);
   assert.match(script, /State backup completed in \$\{elapsed\}s/);
-  assert.match(script, /--exclude="\$data_base\/\$exclude"/);
+  // The literal home prefix is escaped separately; user exclusion globs remain globs.
+  // Real archive semantics (including wildcard-bearing home names) have integration coverage.
+  assert.match(script, /--exclude="\$pattern_base\/\$exclude"/);
+  assert.match(script, /tar_args\+=\(--anchored --no-wildcards\)/);
   assert.match(script, /--ignore-failed-read/);
   assert.match(script, /--warning=no-file-changed/);
   assert.match(script, /--warning=no-file-removed/);
