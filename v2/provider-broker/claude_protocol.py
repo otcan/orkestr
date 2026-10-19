@@ -4,6 +4,7 @@ import uuid
 from protocol import PROTOCOL, exact, identifier, require
 from claude_telemetry import validate_telemetry
 from claude_control import ClaudeControl, canonical
+from claude_failure import sanitize_failure
 
 
 class ClaudeChannel:
@@ -23,6 +24,8 @@ class ClaudeChannel:
         self.terminal = False
         self.telemetry_uuids = set()
         self.control = None
+        self.output_uuids = set()
+        self.output_uuid_overflow = False
 
     def client(self, request):
         require(not self.poisoned)
@@ -167,6 +170,13 @@ class ClaudeChannel:
         elif kind == "result":
             require(self.active is not None and not self.terminal)
             require(type(frame.get("is_error")) is bool)
+            if frame['is_error']:
+                require(not self.output_uuid_overflow)
+                clean = sanitize_failure(frame, self.native, self.input_uuid,
+                                         self.telemetry_uuids | self.output_uuids)
+                self.terminal_uuid, self.terminal = clean['uuid'], True
+                return {"method": "BrokerOutput", "params": {"owned_handle": self.handle,
+                        "request_id": self.active, "frame": clean}}
             require(identifier(frame.get("subtype")))
             require(isinstance(frame.get("result"), str) and len(frame["result"].encode()) <= 8192)
             require(frame["is_error"] or frame["subtype"] == "success")
@@ -182,5 +192,12 @@ class ClaudeChannel:
                 value = frame[key]
                 require(isinstance(value, str) and str(uuid.UUID(value)) == value)
                 clean[key] = value
+                if key == 'uuid' and kind == 'assistant':
+                    # Preserve normal output behavior. If this bounded history
+                    # fills, refuse only the new terminal-error acceptance path.
+                    if len(self.output_uuids) < 128 or value in self.output_uuids:
+                        self.output_uuids.add(value)
+                    else:
+                        self.output_uuid_overflow = True
         return {"method": "BrokerOutput", "params": {"owned_handle": self.handle,
                 "request_id": self.active, "frame": clean}}
