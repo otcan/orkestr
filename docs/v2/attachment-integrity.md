@@ -150,3 +150,29 @@ populated known-prefix 14/17/31/33/36/37 -> 38 copy-first preservation and untou
 rollback source. Strict feature all-target Store Clippy, workspace formatting and
 diff checks passed. These are synthetic Store/process results, not HTTP, browser,
 real-data migration or release acceptance.
+
+Reload discovery successor (no schema change):
+`attachment_manifests_authenticated(credential,owner,conversation,
+after_id:Option<Uuid>,limit:u16) -> AttachmentManifestPage`. The page contains
+`owner_id`, `conversation_id`, echoed `after_id`, `next_after_id` and `manifests`.
+Limit is 1..16; nonnil UUID cursor is exclusive in canonical UUID string order.
+A limit+1 query determines whether another page exists; null next cursor means
+end. Each page is one read cut with current tombstones and fresh post-cut auth;
+concurrent inserts can require refresh from the first page. Pages are not one
+historical snapshot. Empty pages still project authenticated owner/conversation.
+The selected server leaf route is GET
+`/api/v2/conversations/{id}/attachment-manifests?after_id=<uuid>&limit=16`
+(omit after_id for the first page). Same typed errors as other attachment reads.
+
+Canonical `BrowserSessionProjection` adds `owner_id` alongside existing
+`csrf_token` and `global_conversation_id`. Coordinator owns browser session body
+mounting: obtain owner from existing current Store authentication, never from
+request JSON, route IDs or a cached browser assertion. Isolation owns discovery
+route implementation. Core makes no shared server or UI edits. The projected
+owner is useful for target manifest construction but never grants import/read
+rights; the original credential is authenticated again inside every Store port.
+Discovery regression passed through the locked/offline wrapper: empty owner
+projection, exclusive pagination, tombstone reflection, invalid limit, foreign
+conversation and revoked current session. Strict feature all-target Store Clippy,
+workspace formatting and diff checks passed. HTTP mounting is separately owned
+and was not executed by this Core checkpoint.
