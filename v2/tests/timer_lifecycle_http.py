@@ -37,10 +37,26 @@ class TimerCase(ordinary.Case):
         ordinary.wait_for(ready, "exact timer child listener readiness")
 
 
+def migration_inventory(connection):
+    return connection.execute(
+        "SELECT version, lower(hex(checksum)), success FROM _sqlx_migrations ORDER BY version"
+    ).fetchall()
+
+
+def canonical_migrations():
+    migrations = Path(__file__).resolve().parents[1] / "crates/store-sqlite/migrations"
+    return sorted((int(path.name.split("_", 1)[0]),
+                   hashlib.sha384(path.read_bytes()).hexdigest(), 1)
+                  for path in migrations.glob("*.sql"))
+
+
 def main():
+    expected_migrations = canonical_migrations()
+    assert expected_migrations, "canonical migration source inventory is empty"
     case = TimerCase()
     seed, conversation, once, interval, disabled, revoked = sys.argv[2:]
     with sqlite3.connect(f"file:{Path(seed)}?mode=ro", uri=True) as source:
+        assert migration_inventory(source) == expected_migrations, "seed migration inventory/checksums differ from source"
         with sqlite3.connect(case.home / "core.sqlite3") as target:
             source.backup(target)
     case.conversation = conversation
@@ -146,10 +162,11 @@ def main():
         assert ledger() == committed
         assert_inert_provider()
         assert db_rows("SELECT count(*) FROM durable_timer_authorities") == [(4,)]
-        assert db_rows("SELECT max(version) FROM _sqlx_migrations WHERE success=1") == [(33,)]
+        actual_migrations = db_rows("SELECT version, lower(hex(checksum)), success FROM _sqlx_migrations ORDER BY version")
+        assert actual_migrations == expected_migrations, "final migration inventory/checksums differ from source"
         assert db_rows("PRAGMA foreign_key_check") == []
         print(json.dumps({"result": "PASS", "binary_sha256": hashlib.sha256(ordinary.binary.read_bytes()).hexdigest(),
-                          "schema": 33, "intakes": 1, "native_runs": 0,
+                          "schema": actual_migrations[-1][0], "migration_count": len(actual_migrations), "intakes": 1, "native_runs": 0,
                           "checks": ["cookie-origin-csrf", "natural-due", "creator-logout", "weekly-restart",
                                      "disable-before-due", "historical-retry-inert", "changed-retry-refused",
                                      "sigkill-new-exec-no-duplicate", "machine-revoke-fails-closed"]}))

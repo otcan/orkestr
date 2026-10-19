@@ -100,6 +100,8 @@ async fn ordinary_durable_timer_binary_logout_restart_crash_and_revocation() {
     .await
     .unwrap();
     std::fs::remove_dir_all(directory).unwrap();
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
     assert!(
         output.status.success(),
         "{}",
