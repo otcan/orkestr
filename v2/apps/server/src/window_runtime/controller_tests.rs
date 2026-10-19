@@ -1,0 +1,111 @@
+use super::*;
+use uuid::Uuid;
+
+fn config() -> BetaConfig {
+    serde_json::from_value(serde_json::json!({
+        "schema_version":1,"owner_id":Uuid::new_v4(),"conversation_id":Uuid::new_v4(),
+        "manager_socket":"/run/synthetic/control.sock","launcher":"/opt/synthetic/launcher",
+        "launcher_sha256":"a".repeat(64),"workspace":"/srv/synthetic/workspace",
+        "namespace":"synthetic-native","supervisor_key":"synthetic-supervisor"
+    }))
+    .unwrap()
+}
+
+#[test]
+fn default_context_is_preserved_and_selected_keys_are_stable_distinct_and_bounded() {
+    let base = config();
+    let home = selected_config(&base, &base.conversation_id).unwrap();
+    assert_eq!(home.namespace, base.namespace);
+    assert_eq!(home.supervisor_key, base.supervisor_key);
+    let a = ConversationId(Uuid::new_v4());
+    let b = ConversationId(Uuid::new_v4());
+    let first = selected_config(&base, &a).unwrap();
+    let same = selected_config(&base, &a).unwrap();
+    let other = selected_config(&base, &b).unwrap();
+    assert_eq!(first.namespace, same.namespace);
+    assert_eq!(first.supervisor_key, same.supervisor_key);
+    assert_ne!(first.namespace, other.namespace);
+    assert_ne!(first.supervisor_key, other.supervisor_key);
+    assert_eq!(first.conversation_id, a);
+    assert_eq!(first.owner_id, base.owner_id);
+    assert_eq!(first.manager_socket, base.manager_socket);
+    assert_eq!(first.launcher, base.launcher);
+    assert_eq!(first.launcher_sha256, base.launcher_sha256);
+    assert_eq!(first.workspace, base.workspace);
+    first.validate().unwrap();
+    assert!(selected_config(&base, &ConversationId(Uuid::nil())).is_err());
+    let mut long = base.clone();
+    long.namespace = "n".repeat(128);
+    long.supervisor_key = "s".repeat(128);
+    selected_config(&long, &a).unwrap().validate().unwrap();
+}
+
+#[tokio::test]
+async fn revoked_or_foreign_selection_cannot_replace_the_current_controller() {
+    let root = std::env::temp_dir().join(format!("controller-selection-{}", Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let store = Store::open(&root.join("core.sqlite3")).await.unwrap();
+    let conversation = store.setup("owner", "synthetic-hash").await.unwrap();
+    let owner = store.credentials("owner").await.unwrap().unwrap().0;
+    store
+        .save_session("synthetic-browser", &owner)
+        .await
+        .unwrap();
+    let mut config = config();
+    config.owner_id = owner.clone();
+    config.conversation_id = conversation.clone();
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+    let parent = stat
+        .rsplit_once(')')
+        .unwrap()
+        .1
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap();
+    let manager = ManagerClient::new(
+        config.manager_socket.clone(),
+        owner.clone(),
+        conversation.clone(),
+        parent,
+    )
+    .unwrap();
+    let controller = Controller::new(
+        config.clone(),
+        root.clone(),
+        store.clone(),
+        Arc::new(InitialAuthority::new(&config).unwrap()),
+        Handles::new(owner.clone(), conversation.clone()).unwrap(),
+        manager,
+    );
+    let input = ExecutionWindowRequest {
+        request_key: "one-intent".into(),
+        input_message_id: orkestr_v2_contracts::MessageId(Uuid::new_v4()),
+        input_event_id: orkestr_v2_contracts::EventId(Uuid::new_v4()),
+        input_request_key: "one-input".into(),
+        expected_generation: 0,
+        window_id: None,
+        predecessor_window_id: None,
+    };
+    let foreign = ConversationId(Uuid::new_v4());
+    for (token, selected) in [("synthetic-browser", &foreign), ("revoked", &conversation)] {
+        assert!(controller
+            .process(token, &owner, selected, &input)
+            .await
+            .is_err());
+        assert_eq!(
+            controller.current().unwrap().configured_scope().1,
+            &conversation
+        );
+        assert!(store
+            .execution_window_status_authenticated("synthetic-browser", &conversation)
+            .await
+            .unwrap()
+            .is_none());
+    }
+    controller.shutdown().await.unwrap();
+    drop(controller);
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}

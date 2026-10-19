@@ -54,7 +54,11 @@ pub(crate) async fn admit(
             controller
                 .process(&credential, &owner, &conversation, &input)
                 .await
-                .map_err(|_| {
+                .map_err(|reason| {
+                    if reason == "previous conversation has unfinished work" {
+                        return Error(StatusCode::CONFLICT, "window_busy",
+                            "Accept or stop unfinished work in the active conversation before starting another");
+                    }
                     Error(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "window_unavailable",

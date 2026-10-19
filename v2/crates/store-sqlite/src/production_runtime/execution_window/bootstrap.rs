@@ -53,12 +53,19 @@ impl Store {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         let owner = browser_owner(self, &mut tx, browser_credential).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
-        let history: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM production_supervisors WHERE owner_id=?) + (SELECT count(*) FROM execution_windows WHERE owner_id=?) + (SELECT count(*) FROM production_runs WHERE owner_id=?) + (SELECT count(*) FROM session_bindings WHERE owner_id=?)")
-            .bind(owner.to_string()).bind(owner.to_string()).bind(owner.to_string()).bind(owner.to_string())
+        let history: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM production_supervisors WHERE owner_id=? AND provider_kind='codex' AND namespace=? AND supervisor_key=?) + (SELECT count(*) FROM execution_windows WHERE owner_id=? AND conversation_id=?) + (SELECT count(*) FROM production_runs WHERE owner_id=? AND conversation_id=?) + (SELECT count(*) FROM session_bindings WHERE owner_id=? AND conversation_id=?)")
+            .bind(owner.to_string()).bind(&config.namespace).bind(&config.supervisor_key)
+            .bind(owner.to_string()).bind(conversation.to_string())
+            .bind(owner.to_string()).bind(conversation.to_string())
+            .bind(owner.to_string()).bind(conversation.to_string())
             .fetch_one(&mut *tx).await.map_err(db)?;
         if history != 0 {
             return Err(RuntimeStoreError::Fenced);
         }
+        // A new conversation is not a way around an unfinished or lost owner
+        // context. Every previous scope must have the same durable retirement
+        // provenance required when recovering an existing conversation.
+        retired_context::all_prior_retired(&mut tx, &owner, None).await?;
         let secret = format!("window-bootstrap:{}", crate::runtime::ledger::secret());
         let hash = crate::digest(&secret);
         let context = Context {

@@ -107,6 +107,11 @@ async fn expired_proposal_acceptance_closes_only_with_terminal_provenance_then_r
         status.phase,
         orkestr_v2_contracts::ExecutionPhase::AwaitingAcceptance
     );
+    assert!(!f
+        .store
+        .execution_window_switch_ready_authenticated(&browser, &f.conversation)
+        .await
+        .unwrap());
     let called = std::sync::atomic::AtomicBool::new(false);
     assert!(bound
         .with_execution_fence(p, || {
@@ -129,6 +134,11 @@ async fn expired_proposal_acceptance_closes_only_with_terminal_provenance_then_r
         .await
         .unwrap();
     // Trusted teardown call models the server boundary after original reap proof;
+    assert!(f
+        .store
+        .execution_window_switch_ready_authenticated(&browser, &f.conversation)
+        .await
+        .unwrap());
     // this Store test makes no native/process cleanup claim.
     bound
         .retire_terminal_supervisor(cap.credential(), &p.run.run_id)

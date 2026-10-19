@@ -63,6 +63,12 @@ impl Store {
             }
             r
         } else {
+            let other: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows WHERE owner_id=? AND conversation_id!=? AND state!='closed'")
+                .bind(owner.to_string()).bind(conversation.to_string())
+                .fetch_one(&mut *tx).await.map_err(db)?;
+            if other != 0 {
+                return Err(RuntimeStoreError::Busy);
+            }
             match latest.as_ref() {
                 None if input.predecessor_window_id.is_none() => {}
                 Some(r)
