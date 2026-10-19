@@ -1,5 +1,5 @@
 //! Accepted Claude turns resume only after the exact prior native tree is gone.
-use super::*;
+use super::{claude::ClaudeExit, *};
 use orkestr_v2_application::runtime::RuntimeStore;
 use std::time::Instant;
 
@@ -36,16 +36,22 @@ impl ConfiguredExecution {
             else {
                 return Ok(());
             };
-            let Some((run, proof)) = self
+            let Some(exit) = self
                 .drive_claude(ready, &mut shutdown, &mut heartbeat)
                 .await?
             else {
                 return Ok(());
             };
+            let (run, proof, stopped) = match exit {
+                ClaudeExit::Accepted(run, proof) => (run, proof, false),
+                ClaudeExit::Stopped(run, proof) => (run, proof, true),
+            };
             // Old queued input remains ordinary durable FIFO input. Held input
             // is never made eligible by acceptance, reap, or a process restart.
             if !self.wait_eligible(&mut shutdown, &mut heartbeat).await? {
-                self.retire_accepted(&run, proof).await?;
+                if !stopped {
+                    self.retire_accepted(&run, proof).await?;
+                }
                 return Ok(());
             }
             self.current().await?;
@@ -55,11 +61,17 @@ impl ConfiguredExecution {
                 .await
                 .map_err(|_| "Claude continuation binding unavailable")?
                 .deep;
-            grant = self
-                .store
-                .authorize_accepted_session_metadata(&self.token, &run, &binding)
-                .await
-                .map_err(|_| "Claude accepted-session continuation refused")?;
+            grant = if stopped {
+                self.store
+                    .authorize_stopped_session_metadata(&self.token, &run, &binding)
+                    .await
+                    .map_err(|_| "Claude stopped-session continuation refused")?
+            } else {
+                self.store
+                    .authorize_accepted_session_metadata(&self.token, &run, &binding)
+                    .await
+                    .map_err(|_| "Claude accepted-session continuation refused")?
+            };
             // The owned tree proof is consumed locally, never reconstructed from
             // a PID or serialized into browser/provider input.
             drop(proof);
