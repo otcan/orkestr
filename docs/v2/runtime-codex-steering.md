@@ -47,3 +47,12 @@ The validation composition uses full Core `63366a487` plus the exact
 The broader Runtime run is **147 passed, 2 failed**: the existing reuse tests'
 namespace-local PID cleanup assertions remain unresolved in this lane. This
 checkpoint does not claim a green complete union.
+
+Trusted scheduling may sample `CodexPump::steering_readiness()` before advertising
+Steer. Its `ready`, `used`, and `remaining` fields describe local transport only;
+current Core issuer authorization remains mandatory. The 128-ID budget belongs to
+the persistent broker child, survives accepted-turn transfer and lease refresh,
+and burns at envelope reservation rather than acknowledgement. Sampling neither
+reserves an ID nor resets the budget. Pending writes, observations, tools, steering,
+cancellation, terminal or failed channels prevent readiness. An exhausted child
+must not advertise a 129th request.
