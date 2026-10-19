@@ -2,6 +2,10 @@ use super::*;
 use crate::production_runtime::tests::{claim, ready, setup, Case};
 use orkestr_v2_contracts::ExecutionControlRequest;
 async fn running() -> (Case, CodexSteeringAuthority) {
+    let (f, a, _) = running_with_renewal().await;
+    (f, a)
+}
+async fn running_with_renewal() -> (Case, CodexSteeringAuthority, RunRenewalAuthority) {
     let f = setup().await;
     let b = ready(&f).await;
     let c = claim(&f, &b).await;
@@ -21,6 +25,7 @@ async fn running() -> (Case, CodexSteeringAuthority) {
     let ExecutionConsumption::Dispatch(cap) = f.handle.consume_execution(&r).await.unwrap() else {
         panic!()
     };
+    let renewal = f.handle.authorize_running_renewal(&cap).await.unwrap();
     let a = f.handle.authorize_codex_steering(&cap).await.unwrap();
     assert_eq!(a.provider(), cap.provider());
     f.handle
@@ -42,7 +47,7 @@ async fn running() -> (Case, CodexSteeringAuthority) {
         .bind_codex_steering_turn(&a, "native-turn:1")
         .await
         .unwrap();
-    (f, a)
+    (f, a, renewal)
 }
 async fn request(f: &Case, a: &CodexSteeringAuthority, key: &str) -> ExecutionSteeringRequest {
     let s = f
@@ -444,3 +449,5 @@ async fn explicit_native_rejection_is_not_completion_and_never_a_new_turn() {
         .unwrap()
         .is_none());
 }
+
+mod refresh_tests;
