@@ -6,6 +6,16 @@ All deadlines use one caller-supplied monotonic clock. There is no idle eviction
 """
 from collections import deque
 from dataclasses import dataclass
+from functools import wraps
+from threading import RLock
+
+
+def serialized(method):
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return locked
 
 
 @dataclass(frozen=True)
@@ -30,7 +40,7 @@ class Ticket:
 
 
 class Admission:
-    """Serialized controller state. A trusted controller creates it once.
+    """Locked controller state. A trusted controller creates it once.
 
     Counts and aggregate byte usage survive tunnel closure. Reusing a socket or
     changing a peer identity cannot reset the budget. Pending sockets consume
@@ -45,6 +55,7 @@ class Admission:
             limits.requests,
         )) or limits.pending < 0:
             raise ValueError("invalid experiment limits")
+        self._lock = RLock()
         self.limits = limits
         self.created_at = self.now = now
         self.requests = self.bytes_reserved = 0
@@ -53,6 +64,7 @@ class Admission:
         self.closed = False
         self.peak_active = self.peak_pending = 0
 
+    @serialized
     def advance(self, now):
         if now < self.now:
             raise ValueError("monotonic clock moved backwards")
@@ -75,6 +87,7 @@ class Admission:
         self.pending = retained
         self._drain()
 
+    @serialized
     def open(self, now):
         self.advance(now)
         if self.closed or self.requests >= self.limits.requests:
@@ -90,6 +103,7 @@ class Admission:
             ticket.state = "queue_full"
         return ticket
 
+    @serialized
     def finish(self, ticket, now, reason="finished"):
         # Cancellation precedes draining: a cancelled pending ticket never gains
         # a slot merely because this call also observes an available connection.
@@ -103,6 +117,7 @@ class Admission:
         ticket.state = reason
         self.advance(now)
 
+    @serialized
     def reserve(self, ticket, amount, now):
         self.advance(now)
         if type(amount) is not int or amount < 0:
@@ -119,6 +134,7 @@ class Admission:
         ticket.bytes_reserved += amount
         return True
 
+    @serialized
     def close(self, reason="cancelled"):
         self.closed = True
         for ticket in (*self.active.values(), *self.pending):

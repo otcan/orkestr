@@ -52,10 +52,24 @@ Codex `rust-v0.163.0` resolves to
   appropriate to evaluate for an isolated role that intentionally has no plugin
   tools. Do not impose it on roles that require plugins.
 
+This setting disables the plugin feature for the process, not just warmup:
+[plugin loading and skill snapshots](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core-plugins/src/manager.rs#L794),
+[plugin hooks](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core-plugins/src/manager.rs#L1003)
+and [plugin recommendations](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/features/src/lib.rs#L588)
+also become unavailable. The pinned executable accepts the override with an
+empty temporary home in `features list`; that check does not start app-server
+or qualify real startup. Existing user/account configuration need not be edited.
+
 No exposed HTTP pool count or idle-time setting was found in the inspected
 configuration and HTTP builder. `model_catalog_json` replaces catalog contents;
 using a fabricated catalog merely to avoid startup network requests is outside
 this proposal. Account/read and its routing/authentication checks stay intact.
+
+Plugin disabling alone has the smaller policy delta and avoids unnecessary
+work for the no-plugin role, but does not bound remaining HTTP concurrency or
+idle pools. It cannot establish that four connections suffice. Prefer proving
+the bounded capacity remedy synthetically before spending an actual-account
+attempt, then review the combined fixed-role setting and resource policy.
 
 ## Concrete candidate for review
 
@@ -88,6 +102,13 @@ acceptance controller already has a shorter overall deadline, preserve it.
 This proposal does not qualify these values for every long-running product role.
 
 Reserve each read chunk against the shared byte budget **before** forwarding.
+The 64 MiB allowance is the sum of client-to-upstream and upstream-to-client
+bytes, not 64 MiB for each direction. All relay readers share one locked counter;
+32 simultaneous reservation attempts are tested against one finite budget.
+Charge once on read, not a second time when writing that same chunk. The outer
+controller's authoritative count covers each crossing once; do not add inner
+and outer observations of the same traffic together. An independent inner cap
+is defense in depth, not additional aggregate allowance.
 On aggregate exhaustion or controller cancellation, close active and pending
 connections. A refused new request does not silently replace an active stream.
 Count requests without retaining an unbounded event history. Exhausting the
@@ -119,7 +140,7 @@ separate setup bound from the 900-second established-tunnel deadline. DNS and
 connect setup also need bounded controller cancellation; a per-socket timeout
 does not itself bound a blocking resolver call.
 
-The model is serialized and the local-stream oracle deliberately omits
+The model serializes mutations with one reentrant lock. The local-stream oracle omits
 destination parsing and real DNS/TLS. It conservatively retains an unread
 pending disconnected socket until explicit cancellation or deadline; it does
 not claim early FIN detection behind unread request bytes. Before adoption:

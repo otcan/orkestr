@@ -70,7 +70,19 @@ class SocketExperiments(unittest.TestCase):
             harness.wait(lambda: harness.policy.closed)
             self.assertEqual(second.peer.recv(1), b"")
             self.assertEqual(harness.forwarded, 12)
+            self.assertEqual(harness.policy.bytes_reserved, 12)
             self.assertIsNone(harness.request())
+
+    def test_bidirectional_bytes_are_charged_once_not_again_when_written(self):
+        with SocketHarness() as harness:
+            channel = harness.request()
+            channel.client.sendall(b"12345")
+            self.assertEqual(channel.peer.recv(5), b"12345")
+            channel.peer.sendall(b"abcdefg")
+            self.assertEqual(channel.client.recv(7), b"abcdefg")
+            self.assertEqual(harness.policy.bytes_reserved, 12)
+            self.assertEqual(channel.ticket.bytes_reserved, 12)
+            self.assertEqual(harness.forwarded, 12)
 
     def test_simultaneous_attempts_obey_caps_and_cleanup_all_sockets(self):
         baseline_fds = len(os.listdir("/proc/self/fd"))

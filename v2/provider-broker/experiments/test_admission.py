@@ -1,5 +1,6 @@
 """Deterministic policy experiments, without provider processes or accounts."""
 import unittest
+import threading
 from dataclasses import replace
 
 from admission import Admission, Limits
@@ -104,6 +105,29 @@ class AdmissionExperiments(unittest.TestCase):
         self.assertFalse(policy.reserve(first, 1, 0))
         self.assertEqual(first.state, "tunnel_bytes_exhausted")
         self.assertEqual(policy.bytes_reserved, 5)
+
+    def test_concurrent_reservations_cannot_overspend_shared_directional_budget(self):
+        policy = Admission(limits=replace(Limits(), aggregate_bytes=128))
+        streams = [policy.open(0) for _ in range(8)]
+        barrier = threading.Barrier(33)
+        reserved = []
+
+        def reserve(index):
+            barrier.wait(timeout=2)
+            # Independent relay readers, alternating the two traffic directions.
+            reserved.append(policy.reserve(streams[index % 8], 16, 0))
+
+        readers = [threading.Thread(target=reserve, args=(i,)) for i in range(32)]
+        for reader in readers:
+            reader.start()
+        barrier.wait(timeout=2)
+        for reader in readers:
+            reader.join(2)
+            self.assertFalse(reader.is_alive())
+        self.assertEqual(len(reserved), 32)
+        self.assertEqual(sum(reserved) * 16, 128)
+        self.assertEqual(policy.bytes_reserved, 128)
+        self.assertTrue(policy.closed)
 
     def test_attempt_budget_counts_refused_requests_without_unbounded_history(self):
         policy = Admission(limits=replace(Limits(), active=1, pending=0, requests=3))
