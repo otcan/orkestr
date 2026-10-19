@@ -88,3 +88,9 @@ mod terminal_tests;
 
 #[cfg(test)]
 mod bootstrap_tests;
+
+mod retired_context;
+pub use retired_context::RetiredExecutionWindowContext;
+
+#[cfg(test)]
+mod retired_process_tests;

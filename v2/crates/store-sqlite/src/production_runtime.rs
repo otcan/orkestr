@@ -7,6 +7,7 @@ use uuid::Uuid;
 mod execution_window;
 pub use execution_window::{
     ExecutionWindowBootstrap, ExecutionWindowCredential, ExecutionWindowRetirement,
+    RetiredExecutionWindowContext,
 };
 mod acceptance;
 #[cfg(all(test, unix))]

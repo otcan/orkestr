@@ -66,3 +66,39 @@ and binds the window credential, performs metadata setup, and activates last.
 No secret is returned through HTTP, written to config, or reconstructed after
 process loss. A lost bootstrap reply/history refuses reissuance and requires
 reconciliation. This is separate from the safe-retired idle-owner issuance port.
+
+### Cold restart after CLOSED graceful retirement
+
+`Store::recover_retired_execution_window_authenticated(browser, conversation,
+ProductionSupervisorConfig) -> RetiredExecutionWindowContext` is a private,
+read-only current-browser-authenticated port on an **unbound** Store. Config must
+be the trusted configured Codex/First namespace and supervisor key. The returned
+non-Clone/non-Debug/non-Serde handle exposes `store()`, `prior_run_id()`,
+`binding()` and `predecessor_incarnation()` only. It contains no recovered or
+newly generated credential. Its bound retired Store has no authenticatable
+machine credential; ordinary execution/metadata paths remain unavailable.
+
+Call before successor admission. Discovery joins the exact CLOSED, bound window
+and terminal run to current supervisor incarnation/generation, terminal event,
+graceful retirement, Ready Deep binding, native session and readiness provenance.
+Every owner window must be CLOSED, every supervisor gracefully retired and every
+run terminal; descendant/task/tool/result/control guards must be clear. A pending
+resume reservation refuses. Expiry, ACTIVE, Opening, reconciliation and a missing
+retirement marker never qualify. No old secret is read, persisted or recovered.
+
+Then admit a fresh owner input/window, obtain exact manager ACK, call the existing
+`handle.store().issue_idle_execution_window_credential_authenticated(...)`, and
+reattach with that newly issued credential plus exact prior run/incarnation.
+Workspace configurations still require the existing typed installation-bearing
+reattachment. Issuance and reattachment repeat their authoritative checks in their
+own immediate transactions. Lost issuance is not reissued: Opening history blocks
+cold rediscovery. This does not resume an old input or create a time/attempt budget
+without separate admission and manager ACK.
+
+The Store process oracle executes two sequential, joined OS child processes with
+cleared environments. The seed commits accepted terminal retirement and CLOSED;
+the replacement receives only database coordinates and browser login, recovers
+this handle, admits fresh input, issues once and reattaches/activates. A separate
+ACTIVE-loss pair refuses recovery/bootstrap and only records reconciliation.
+Native cleanup in these tests is synthetic; they prove durable Core composition,
+not Runtime/manager/native reap behavior.

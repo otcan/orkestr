@@ -32,9 +32,10 @@ pub use production_runtime::{
     OfflinePythonNativeCall, OfflinePythonNativeRequestId, OfflinePythonOutcome,
     OfflinePythonOutput, OfflinePythonParent, OfflinePythonReceipt, OfflinePythonResultConsumption,
     OfflinePythonResultPreparation, OfflinePythonResultReservation, OfflinePythonState,
-    ProductionSupervisorStore, ReadySessionTransition, RunLeaseTransition, RunRenewalAuthority,
-    TimerSchedulerIssuer, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
-    WorkerDelegationResult, WorkerDelegationState, WorkerTaskClaim,
+    ProductionSupervisorStore, ReadySessionTransition, RetiredExecutionWindowContext,
+    RunLeaseTransition, RunRenewalAuthority, TimerSchedulerIssuer, WorkerAdmissionInput,
+    WorkerDelegation, WorkerDelegationReceipt, WorkerDelegationResult, WorkerDelegationState,
+    WorkerTaskClaim,
 };
 
 pub use production_runtime::inspection::{
