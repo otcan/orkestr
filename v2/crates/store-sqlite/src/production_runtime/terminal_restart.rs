@@ -27,7 +27,7 @@ impl Store {
         .await
         .map_err(db)?
         .ok_or(RuntimeStoreError::Unauthorized)?;
-        let candidate = sqlx::query("SELECT r.id,s.incarnation_id FROM production_supervisors s JOIN production_runs r ON r.context_id=s.context_id AND r.incarnation_id=s.incarnation_id JOIN production_acceptances a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id JOIN production_graceful_retirements g ON g.context_id=s.context_id AND g.incarnation_id=s.incarnation_id AND g.supervisor_generation=s.generation AND g.prior_run_id=r.id AND g.acceptance_event_id=a.event_id AND g.session_id=b.id AND g.binding_generation=b.generation WHERE s.lease_deadline_ms=0 AND s.owner_id=? AND s.provider_kind=? AND s.namespace=? AND s.supervisor_key=? AND r.conversation_id=? AND r.role='deep' AND r.state='succeeded' AND b.state='ready' AND b.generation=r.binding_generation+1 AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.context_id=s.context_id AND other.state NOT IN ('succeeded','cancelled')) AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation) AND NOT EXISTS(SELECT 1 FROM production_resume_metadata rm WHERE rm.prior_run_id=r.id)")
+        let candidate = sqlx::query("SELECT r.id,s.incarnation_id FROM production_supervisors s JOIN production_runs r ON r.context_id=s.context_id AND r.incarnation_id=s.incarnation_id JOIN production_terminal_evidence a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id JOIN production_retirement_provenance g ON g.context_id=s.context_id AND g.incarnation_id=s.incarnation_id AND g.supervisor_generation=s.generation AND g.prior_run_id=r.id AND g.terminal_event_id=a.event_id AND g.session_id=b.id AND g.binding_generation=b.generation WHERE s.lease_deadline_ms=0 AND s.owner_id=? AND s.provider_kind=? AND s.namespace=? AND s.supervisor_key=? AND r.conversation_id=? AND r.role IN ('deep','fast') AND b.state='ready' AND b.role=r.role AND b.provider_kind=r.provider_kind AND b.native_session_id=r.native_session_id AND b.generation=r.binding_generation+1 AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.context_id=s.context_id AND NOT EXISTS(SELECT 1 FROM production_terminal_evidence t WHERE t.run_id=other.id)) AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation) AND NOT EXISTS(SELECT 1 FROM production_resume_metadata rm WHERE rm.prior_run_id=r.id)")
             .bind(owner).bind(provider_name(config.provider)?).bind(&config.namespace).bind(&config.supervisor_key).bind(conversation.to_string())
             .fetch_optional(&mut *tx).await.map_err(db)?;
         let result = candidate
@@ -41,7 +41,7 @@ impl Store {
         tx.commit().await.map_err(db)?;
         Ok(result)
     }
-    /// Trusted configured restart after an owner-accepted Deep turn. Requires
+    /// Trusted configured restart after an owner-accepted or canonically Stopped Deep or Fast turn. Requires
     /// exact expired predecessor CAS and returns a single setup reservation in
     /// the same transaction. The server must prove its old owned child reaped.
     /// No historical run or consumed dispatch is reissued; queued input remains.
@@ -84,7 +84,7 @@ impl Store {
         let context_id: String = row.get("context_id");
         // Natural expiry, revoked retirement and legacy deadline zero are not
         // graceful evidence. Match the immutable original decision before CAS.
-        let graceful: i64 = sqlx::query_scalar("SELECT count(*) FROM production_graceful_retirements g JOIN production_runs r ON r.id=g.prior_run_id JOIN production_acceptances a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id WHERE g.context_id=? AND g.incarnation_id=? AND g.supervisor_generation=? AND g.prior_run_id=? AND g.acceptance_event_id=a.event_id AND g.session_id=r.session_id AND g.binding_generation=b.generation")
+        let graceful: i64 = sqlx::query_scalar("SELECT count(*) FROM production_retirement_provenance g JOIN production_runs r ON r.id=g.prior_run_id JOIN production_terminal_evidence a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id WHERE g.context_id=? AND g.incarnation_id=? AND g.supervisor_generation=? AND g.prior_run_id=? AND g.terminal_event_id=a.event_id AND g.session_id=r.session_id AND g.binding_generation=b.generation")
             .bind(&context_id).bind(&incarnation_id).bind(row.get::<i64,_>("generation"))
             .bind(prior_run.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         if row.get::<i64, _>("lease_deadline_ms") != 0 || graceful != 1 {
@@ -93,12 +93,12 @@ impl Store {
 
         // Clean means no unresolved run anywhere in this supervisor namespace,
         // including children. Do not convert unknown delivery into a new attempt.
-        let unresolved: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs WHERE context_id=? AND state NOT IN ('succeeded','cancelled')")
+        let unresolved: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r WHERE context_id=? AND NOT EXISTS(SELECT 1 FROM production_terminal_evidence t WHERE t.run_id=r.id)")
             .bind(&context_id).fetch_one(&mut *tx).await.map_err(db)?;
         if unresolved != 0 {
             return Err(RuntimeStoreError::Fenced);
         }
-        let terminal = sqlx::query("SELECT r.session_id,a.event_id FROM production_runs r JOIN production_acceptances a ON a.run_id=r.id WHERE r.id=? AND r.owner_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role='deep' AND r.state='succeeded'")
+        let terminal = sqlx::query("SELECT r.session_id,a.event_id FROM production_runs r JOIN production_terminal_evidence a ON a.run_id=r.id WHERE r.id=? AND r.owner_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role IN ('deep','fast')")
             .bind(prior_run.to_string()).bind(&owner).bind(&context_id).bind(&incarnation_id)
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
         let session: String = terminal.get("session_id");
