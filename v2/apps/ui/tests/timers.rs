@@ -119,3 +119,22 @@ fn enabled_unarmed_requires_disable_then_fresh_enable_but_uncertain_retry_stays_
     assert_eq!(retry.body, enable.body);
     assert_eq!(retry.body["request_key"], "fresh-enable");
 }
+
+#[test]
+fn durable_hold_validation_preserves_armed_guard() {
+    for hold in [
+        "scheduler_unavailable",
+        "durable_owner_enable_required",
+        "explicit_owner_rearm_required",
+    ] {
+        let mut d = detail();
+        d.state = orkestr_v2_ui::timers::State::Enabled;
+        d.controller_hold = Some(hold.into());
+        assert!(d.valid_for(ID));
+        d.controller_armed = true;
+        assert!(!d.valid_for(ID));
+    }
+    let mut d = detail();
+    d.controller_hold = Some("invented_readiness".into());
+    assert!(!d.valid_for(ID));
+}

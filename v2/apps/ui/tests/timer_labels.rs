@@ -20,11 +20,23 @@ fn dormant_reasons_remain_explicit_and_unknown_reason_never_implies_ready() {
 
 #[test]
 fn enabled_schedule_is_not_armed_after_restart_and_never_claims_execution() {
-    assert!(controller_notice("enabled", false).contains("not armed"));
-    assert!(controller_notice("enabled", false).contains("after a restart"));
-    assert!(controller_notice("enabled", false).contains("Disable it first"));
-    assert!(controller_notice("enabled", false).contains("cannot rearm"));
-    assert!(controller_notice("enabled", true).contains("does not confirm"));
+    assert!(
+        controller_notice("enabled", false, Some("explicit_owner_rearm_required"))
+            .contains("not armed")
+    );
+    assert!(
+        controller_notice("enabled", false, Some("explicit_owner_rearm_required"))
+            .contains("after a restart")
+    );
+    assert!(
+        controller_notice("enabled", false, Some("explicit_owner_rearm_required"))
+            .contains("Disable it first")
+    );
+    assert!(
+        controller_notice("enabled", false, Some("explicit_owner_rearm_required"))
+            .contains("cannot rearm")
+    );
+    assert!(controller_notice("enabled", true, None).contains("does not confirm"));
     for state in [
         "paused",
         "disabled",
@@ -33,8 +45,8 @@ fn enabled_schedule_is_not_armed_after_restart_and_never_claims_execution() {
         "exhausted",
         "unknown",
     ] {
-        assert!(controller_notice(state, true).contains("not enabled"));
-        assert!(controller_notice(state, true).contains("Already admitted work"));
+        assert!(controller_notice(state, true, None).contains("not enabled"));
+        assert!(controller_notice(state, true, None).contains("Already admitted work"));
     }
 }
 
@@ -49,4 +61,16 @@ fn utc_schedule_labels_do_not_use_browser_local_time() {
         minute_of_day: 90
     })
     .contains("01:30 UTC"));
+}
+
+#[test]
+fn durable_hold_notices_do_not_invent_missing_permission() {
+    let saved = controller_notice("enabled", false, Some("scheduler_unavailable"));
+    assert!(saved.contains("permission is saved"));
+    assert!(!saved.contains("Disable"));
+    let missing = controller_notice("enabled", false, Some("durable_owner_enable_required"));
+    assert!(missing.contains("fresh instructions"));
+    assert!(!missing.contains("restart"));
+    assert!(!missing.contains("hour"));
+    assert!(controller_notice("enabled", false, None).contains("Refresh"));
 }
