@@ -39,6 +39,12 @@ acknowledgement is bounded to two seconds and causes owned-child cleanup while
 retaining uncertainty. The pre-existing Stop oracle now permits the new running
 steering capability and requires both controls disabled after cancellation intent.
 It still requires a genuine interrupted terminal before reporting cancellation.
+The broker reaps its native child before closing its own output pipe; Runtime
+then observes that EOF and updates the execution projection on a separate poll.
+The uncertainty cases measure controls becoming unavailable within one second
+of observed native cleanup, including the complete HTTP response time. Reports
+retain sampled phases and capabilities on success or failure. This convergence
+bound does not replace the separate Stop-admission performance gate.
 
 These tests do not qualify a real provider, a browser artifact, a release
 candidate, or a production cutover. Actual provider and matching UI acceptance

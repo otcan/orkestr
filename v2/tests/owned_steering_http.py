@@ -143,6 +143,23 @@ def uncertain(case, mode):
     receipt = submitted(case, request)
     wait_for(lambda: any(r["kind"] == "steer" for r in case.trace()), "actual native steer bytes missing")
     wait_for(case.peer_gone, "uncertain steering must clean the owned native")
+    # Broker cleanup reaps the native child before closing its own stdout.
+    # Physical reaping is not a barrier for Rust's next EOF/Lost observation.
+    # Measure the separate projection step, with a deadline rather than sleep.
+    reaped_at = time.monotonic()
+    observations = []
+    case.steering_observations = {"control_projection_deadline_ms": 1000,
+                                  "control_projection": observations}
+    while True:
+        code, status, _ = case.request(case.path + "/execution")
+        elapsed = time.monotonic() - reaped_at
+        assert code == 200, (code, status)
+        observations.append({"elapsed_ms": round(elapsed * 1000, 3),
+                             "phase": status["phase"], "capabilities": status["capabilities"]})
+        assert elapsed <= 1, ("controls remained stale after native cleanup", observations)
+        if status["capabilities"] == {"stop": False, "steer": False}:
+            break
+        time.sleep(0.005)
     value = delivery(case)
     assert value["state"] == "delivery_unknown" and value["written_bytes"] > 0
     assert case.request(case.path + "/steer", "POST", request)[:2] == (200, receipt)
@@ -252,12 +269,20 @@ def main():
     for name, operation in zip(names, cases):
         case = Case()
         started = time.monotonic()
+        result = {"name": name, "passed": False}
+        results.append(result)
         try:
             case.setup()
             operation(case)
-            results.append({"name": name, "passed": True, "seconds": round(time.monotonic()-started, 3)})
+            result["passed"] = True
             print("ordinary synthetic steering HTTP case passed:", name, flush=True)
+        except Exception as error:
+            result["failure"] = {"type": type(error).__name__, "detail": str(error)}
+            raise
         finally:
+            result["seconds"] = round(time.monotonic()-started, 3)
+            if hasattr(case, "steering_observations"):
+                result["observations"] = case.steering_observations
             case.cleanup()
             if args.report:
                 args.report.write_text(json.dumps({"cases": results, "synthetic_native": True}, indent=2) + "\n")
