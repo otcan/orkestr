@@ -1,7 +1,8 @@
 import {Cleanup} from './cleanup.mjs';
 import {errorChain, failure} from './diagnostics.mjs';
 import {networkTiming} from './network-timing.mjs';
-import {cpuAndRam, draftRemount, loginOwner, reloadOwner} from './ui.mjs';
+import {cpuAndRam, draftRemount, loginOwner} from './ui.mjs';
+import {sampleProtectedReadiness} from './page-timing.mjs';
 
 // The protected operator supplies the already leased owned context and verified
 // artifact adapter. This function neither provisions nor starts a service/provider.
@@ -35,9 +36,8 @@ export async function browserSmoke({page, context, origin, sourceSha, credential
       const result = await loginOwner({page, context, origin, credentials, bootstrap, expectedConversation, signal: active, verifyLease});
       conversation = result.conversation; return result.evidence;
     });
-    for (let sample = 1; sample <= 3; sample++) {
-      await step('ordinary_reload', async () => ({sample, ...await reloadOwner({page, conversation, origin})}));
-    }
+    await step('protected_page_timing', () => sampleProtectedReadiness({page, conversation, origin,
+      signal: active, verifyLease}));
     await step('drafts', () => draftRemount({page, origin, signal: active, verifyLease}));
     await step('cpu_ram', () => cpuAndRam({page, origin, signal: active, verifyLease}));
     report.network = monitor.snapshot();

@@ -9,6 +9,16 @@ Public source contains no deployment addresses or account configuration.
 no command-line activation and requires reviewed pair/lease adapters and an
 already owned context. It closes that context and joins its work within the
 short session budget. The outer operator still owns connection/helper/lease cleanup.
+Within that same smoke phase, `sampleProtectedReadiness` performs one reload with
+only the owned page's HTTP cache disabled, then ten ordinary warm reloads. It
+reports the two sample sets separately, including each `n`, all elapsed values,
+and nearest-rank warm p95 (with ten samples this is the maximum). The single
+cache-disabled sample has no reported percentile and is not a claim about cold
+DNS/TLS or server startup. Each sample ends only after composer rendering plus
+authenticated owner/configured-conversation checks. Lease and abort checks fence
+each navigation; failures restore the page cache and cannot start another sample.
+These protected-route timings are separate from provider/chat latency and the
+later loopback continuity observation. No shared browser cache is cleared.
 `attachmentRoundtrip` is a separate short session using the same ten-byte
 binary fixture and completion/read/delete proof as the prior qualified flow.
 Its `savedBytes` implementation is copied unchanged (SHA-256
