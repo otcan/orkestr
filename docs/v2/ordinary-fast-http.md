@@ -44,8 +44,10 @@ session for a fresh eligible input after the old tree is reaped.
 After explicit acceptance, graceful shutdown records retirement only after the
 original child is reaped. Restart reattaches the exact predecessor, preserving
 the role and native identity, and waits for fresh eligible input before launching.
-Idle setup, an unaccepted proposal, and a stopped-only shutdown do not yet have
-equivalent configured-restart evidence; unsafe replacements remain refused.
+Configured restart directly after a genuine Stop uses the original reap witness
+and separate stopped-retirement provenance, as described in
+[fast-stopped-restart.md](fast-stopped-restart.md). Idle setup and an unaccepted
+proposal still lack equivalent restart evidence; unsafe replacements remain refused.
 Fast steering and actual-provider qualification are separate remaining work.
 
 ## Validation boundary
@@ -61,4 +63,5 @@ uses verified host PID/start pairs; a namespace inode can be recycled after reap
 Read-only ledger snapshots use one transaction. The standalone driver accepts
 `--report` to retain case-level ledger, native trace and cleanup evidence. This
 bounded synthetic qualification does not establish real-provider, browser,
-performance, stopped-only restart or full-release readiness.
+performance or full-release readiness. The separate `owned_fast_stopped` suite
+covers stopped-only restart and its refusal cases.
