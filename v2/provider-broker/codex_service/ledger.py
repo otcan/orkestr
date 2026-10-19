@@ -170,6 +170,7 @@ class Ledger:
                 (request["input_message_id"], request["input_event_id"])).fetchone() is None,
                 "input_reused")
             if latest is not None and latest["id"] == request["window_id"]:
+                require(latest["state"] == "active", "window_not_accepting_inputs")
                 boot, wall, mono = self._live_clock(latest)
                 require(request["generation"] == previous and latest["state"] == "active" and
                         request["predecessor_window_id"] is None and
