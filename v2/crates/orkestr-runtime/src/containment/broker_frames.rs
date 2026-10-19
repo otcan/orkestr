@@ -59,7 +59,8 @@ pub(super) fn metadata(frame: &[u8], workspace: &Path) -> Result<Vec<u8>, Error>
             .get_mut("params")
             .and_then(Value::as_object_mut)
             .ok_or(Error::InvalidFrame)?;
-        if params.len() != 5
+        if params.len() != 6
+            || params.remove("excludeTurns") != Some(Value::Bool(true))
             || !params
                 .remove("threadId")
                 .and_then(|id| id.as_str().map(str::to_owned))
@@ -240,7 +241,7 @@ mod tests {
     }
     #[test]
     fn resume_is_broker_only_and_closed() {
-        let frame = json!({"id":3,"method":"thread/resume","params":{"threadId":"synthetic-native","cwd":"/synthetic/workspace","approvalPolicy":"never","sandbox":"read-only","modelProvider":"openai"}});
+        let frame = json!({"id":3,"method":"thread/resume","params":{"excludeTurns":true,"threadId":"synthetic-native","cwd":"/synthetic/workspace","approvalPolicy":"never","sandbox":"read-only","modelProvider":"openai"}});
         assert!(metadata(
             &envelope("BrokerMetadata", frame.clone()),
             Path::new("/synthetic/workspace")
@@ -251,7 +252,25 @@ mod tests {
             Path::new("/synthetic/workspace")
         )
         .is_err());
+        let mut missing = frame.clone();
+        missing["params"]
+            .as_object_mut()
+            .unwrap()
+            .remove("excludeTurns");
+        assert!(metadata(
+            &envelope("BrokerMetadata", missing),
+            Path::new("/synthetic/workspace")
+        )
+        .is_err());
+        let original = envelope("BrokerMetadata", frame.clone());
+        assert_eq!(
+            metadata(&original, Path::new("/synthetic/workspace")).unwrap(),
+            original
+        );
         for (key, value) in [
+            ("excludeTurns", json!(false)),
+            ("excludeTurns", json!(null)),
+            ("excludeTurns", json!("true")),
             ("threadId", json!("")),
             ("modelProvider", json!("external")),
             ("ephemeral", json!(false)),
