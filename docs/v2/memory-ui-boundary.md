@@ -46,3 +46,21 @@ CAS value passes through JavaScript Number. Export download presentation is not
 yet implemented. Do not infer enabled state from an empty result. Review
 must cover normalized proposal confirmation, uncertain retry, stale correction,
 forget/retry nonresurrection, owner/logout and project-generation fencing.
+
+## Mounted Memory screen successor
+
+The authenticated Memory tab now provides settings read/explicit enable-disable,
+owner or selected-project retrieval (50 records), owner-authored fact proposals,
+normalized per-record correction/forget review and explicit decisions. An
+uncertain decision retains its exact typed tuple; a definitive conflict requires
+fresh review. Navigation drops the view, cancels its owned request and clears
+consent. Session generation checks discard callbacks after logout/owner change.
+The selected project is part of the keyed view lifetime. Disabled observations
+advance the consent generation and retain the disabled setting.
+
+Export is a separate user action: the complete bounded response is typed and
+owner-checked in Rust, then its original JSON text is offered as
+`memory-export.json`. No JavaScript JSON-number conversion is used. Offering a
+file does not prove it was saved. Query/export bounds remain 4/8 MiB; transport
+also bounds read iterations, duration and cancellation. No browser acceptance
+is claimed while the desktop lease service hold remains in force.

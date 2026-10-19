@@ -9,6 +9,8 @@ mod held_inputs_poll;
 mod held_inputs_view;
 mod history;
 mod host_resources_view;
+mod memory_transport;
+mod memory_view;
 mod progress_view;
 mod steering_view;
 mod stop_button;
@@ -114,7 +116,7 @@ fn App() -> Element {
         style { "{include_str!(\"style.css\")}" }
         main {
             header { h1 { "Orkestr" } p { "Local assistant" } }
-            p { class: "notice", "Controls are available only when shown for a connected run. Approvals and memory are unavailable. Project resources are not connected." }
+            p { class: "notice", "Controls are available only when shown for a connected run. Approvals are unavailable. Project resources are not connected." }
             p { role: "status", "{notice}" }
             if resuming() {
                 p { role: "status", "Checking browser session…" }
@@ -141,7 +143,7 @@ fn App() -> Element {
                 } }
             } else {
                 nav { "aria-label": "Main",
-                    for name in ["Assistant", "Projects", "Attention", "History", "Timers", "Workers", "Host resources", "Settings"] {
+                    for name in ["Assistant", "Projects", "Attention", "History", "Timers", "Workers", "Host resources", "Memory", "Settings"] {
                         button { "aria-current": if tab() == name { "page" } else { "false" }, onclick: move |_| {
                             tab.set(name.into());
                             if name == "Assistant" { current.set(global()); }
@@ -200,11 +202,13 @@ fn App() -> Element {
                     workers_view::WorkersView { key: "{current()}-{session_scope.read().generation()}", id: current(), csrf: csrf(), session_scope, workers, execution: worker_execution, onexpired: expired }
                 } else if tab() == "Host resources" {
                     host_resources_view::HostResourcesView { key: "{session_scope.read().generation()}", session_scope, resources: host_resources, onexpired: expired }
+                } else if tab() == "Memory" {
+                    memory_view::MemoryView { key:"{current()}-{session_scope.read().generation()}",csrf:csrf(),project:projects().iter().find(|p|p.conversation_id.to_string()==current()).map(|p|p.project_id.clone()),session_scope,onexpired:expired }
                 } else if tab() == "Attention" {
                     p { "Approvals, blockers and task attention are unavailable. No pending-work count is inferred." }
                 } else {
                     about::About {}
-                    p { "Provider setup and memory controls are unavailable. External integrations are optional." }
+                    p { "Provider setup is unavailable. External integrations are optional." }
                 }
             }
         }

@@ -99,3 +99,59 @@ fn independent_disable_fences_inflight_old_enabled_settings_and_proposals() {
         "pre-disable proposal must be fenced"
     );
 }
+
+#[test]
+fn disabled_observation_requires_fresh_generation_before_new_review() {
+    let mut state = MemoryState::default();
+    state.settings(0, settings());
+    state.review(0, proposal());
+    state.confirm(MemoryConsentAction::Forget).unwrap();
+    let mut disabled = settings();
+    disabled.enabled = false;
+    assert!(state.settings(0, disabled));
+    assert_eq!(state.enabled(), Some(false));
+    assert!(!state.resolved(0));
+    assert!(state.confirm(MemoryConsentAction::Forget).is_err());
+    let next = state.generation();
+    assert!(state.settings(next, settings()));
+    assert!(state.confirm(MemoryConsentAction::Forget).is_err());
+    assert!(state.review(next, proposal()));
+    assert!(state.confirm(MemoryConsentAction::Forget).is_ok());
+}
+
+#[test]
+fn normalized_correction_is_explicit_and_retry_keeps_exact_revision_and_text() {
+    let mut state = MemoryState::default();
+    state.settings(0, settings());
+    let mut normalized = proposal();
+    normalized.operation = MemoryOperation::Correct {
+        memory_id: serde_json::from_str("\"00000000-0000-4000-8000-000000000002\"").unwrap(),
+        expected_revision: 9007199254740993,
+        candidate: MemoryCandidate {
+            scope: MemoryScope::Owner,
+            content: MemoryContent::Fact {
+                statement: "Normalized replacement".into(),
+            },
+            source: MemorySource {
+                kind: MemorySourceKind::Owner,
+                actor_id: settings().owner_id.to_string(),
+                origin: "synthetic".into(),
+                captured_at_ms: 0,
+                task_id: None,
+                event_id: None,
+                cursor: None,
+            },
+        },
+    };
+    assert!(state.review(0, normalized));
+    assert!(state.confirm(MemoryConsentAction::Remember).is_err());
+    let original =
+        memory_client::body(&state.confirm(MemoryConsentAction::Correct).unwrap()).unwrap();
+    assert!(original.contains("9007199254740993"));
+    assert!(original.contains("Normalized replacement"));
+    assert!(state.edit().is_err());
+    assert_eq!(
+        original,
+        memory_client::body(&state.confirm(MemoryConsentAction::Forget).unwrap()).unwrap()
+    );
+}
