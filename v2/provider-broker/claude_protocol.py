@@ -7,6 +7,7 @@ from claude_control import ClaudeControl, canonical
 from claude_failure import sanitize_failure
 from claude_system_telemetry import validate_system_telemetry
 from claude_assistant_metadata import contains_thinking, sanitize_assistant
+from claude_assistant_input import AssistantInput
 
 
 class ClaudeChannel:
@@ -28,6 +29,7 @@ class ClaudeChannel:
         self.control = None
         self.output_uuids = set()
         self.output_uuid_overflow = False
+        self.assistant_input = None
 
     def client(self, request):
         require(not self.poisoned)
@@ -86,6 +88,7 @@ class ClaudeChannel:
         require(frame["message"]["role"] == "user" and isinstance(content, str)
                 and 0 < len(content.encode()) <= 32768)
         self.input_uuid = input_uuid
+        self.assistant_input = AssistantInput(self.native, input_uuid)
         self.messages.add(message)
         self.active, self.terminal = outer, False
         return frame, None
@@ -147,7 +150,13 @@ class ClaudeChannel:
             self.telemetry_uuids.add(value)
             # Even post-terminal telemetry cannot advance readiness or execution state.
             return None
-        if kind == "assistant" and contains_thinking(frame):
+        thinking = kind == "assistant" and contains_thinking(frame)
+        prepared = None
+        if kind == "assistant" and (self.control is None or thinking
+                or isinstance(frame.get("message"), dict) and "id" in frame["message"]):
+            require(self.assistant_input is not None)
+            frame, prepared = self.assistant_input.prepare(frame)
+        if thinking or prepared is not None:
             require(self.initialized and self.system_seen and self.active is not None
                     and not self.terminal and not self.output_uuid_overflow)
             frame = sanitize_assistant(frame, self.native, self.input_uuid)
@@ -157,12 +166,17 @@ class ClaudeChannel:
             if self.control is not None:
                 # Existing cancellation fences discard even the genuine text.
                 self.control.notice(frame, self.telemetry_uuids)
-            self.telemetry_uuids.add(event)
+            if prepared is not None:
+                self.assistant_input.commit(prepared)
+            if thinking:
+                self.telemetry_uuids.add(event)
             if self.control is not None or not frame["message"]["content"]:
                 return None
         if self.control is not None and kind in ("user", "assistant", "stream_event"):
             self.control.notice(frame, self.telemetry_uuids)
             return None
+        if kind == "result" and self.assistant_input is not None:
+            require(frame.get("uuid") not in self.assistant_input.events)
         if self.control is not None and kind == "result":
             clean = self.control.result(frame, self.telemetry_uuids)
             self.terminal_uuid = clean["uuid"]
@@ -170,7 +184,8 @@ class ClaudeChannel:
             return {"method":"BrokerOutput", "params":{"owned_handle":self.handle,
                     "request_id":self.active, "frame":clean}}
         if kind in ("assistant", "result"):
-            # No relabeling even for unseen historical frames on a fresh reader.
+            # Results stay explicitly correlated. Assistant omissions reach
+            # here only after the owned input/response anchor validates them.
             require(self.input_uuid is not None
                     and frame.get("user_message_uuid") == self.input_uuid)
             if "user_message_uuids" in frame:

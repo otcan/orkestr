@@ -4,7 +4,7 @@
   "files": {
     "claude_server.py": "e66ed5ce8f13d9b4e589783c2bc3144973c6c2c8db634a8bb3a7d63130cf37f0",
     "claude_connector.py": "3a2afb5d5be4abca7d0abc43706ce1d1aff233ecadd03e82caa5a9c46cf75a29",
-    "claude_protocol.py": "b22a57afbc06ec27e67a929be2c378fc9bdf0807ef1d39c9dcf30a213115acc5",
+    "claude_protocol.py": "54b22064b7866248be5de3e7b1f0bbe30cea1f56b038ba5ae07b570b1b713fc2",
     "protocol.py": "b80fd19455c79bb11d98674ac972b619b999e59142982fa112d6521039082203",
     "transport.py": "fe7821673c927f3a8a6226ca8f9e08e9c8a5ea4eb9526b62a2a44e3789e8264c",
     "claude_resume.py": "ecc014ec6578791adc2086b3d83dc161c61fbdffa043c957b0cc919c9a2d2850",
@@ -14,7 +14,8 @@
     "claude_control.py": "fa11a147f2dbc2ecc289e7998fd0565998a31ea3ef189d08274321524d5f0867",
     "claude_failure.py": "2bec86e9fe4373cfafbfe9e97e66c2932059f7fac1ead6c55cd8688825e2fe4d",
     "claude_system_telemetry.py": "b5ab49d155ef174a062362e002becc3255219ea9789dec1d55458f8820fde741",
-    "claude_assistant_metadata.py": "779b44ab143314d87e5fafb41db53bd4f93b8fa477fec4a379ea628d79a0e651"
+    "claude_assistant_metadata.py": "779b44ab143314d87e5fafb41db53bd4f93b8fa477fec4a379ea628d79a0e651",
+    "claude_assistant_input.py": "53f1840a683015813fc6a052f31e4f45d9e230eecde76183e6a7fe49a73812e4"
   },
   "activation": "held-installed-cli-and-runtime-composition-review"
 }
