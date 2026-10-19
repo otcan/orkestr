@@ -28,7 +28,9 @@ schema_version1, configured conversation_id, provider codex, role deep, controls
 No owner credential, boot ID, native identity or path is returned. Controls are
 sampled current availability, not authority; false remains truthful during
 opening, uncertainty or unavailable live handles. UI must not infer provisioning.
-The route remains unmounted until current browser authentication is composed.
+Current browser authentication is checked before configuration discovery. An
+unconfigured ordinary server returns 404 with code `beta_unconfigured`; it does
+not invent a conversation or advertise execution controls.
 
 `GET /api/v2/conversations/:id/window` reads canonical current window status.
 POST accepts exactly Core's ExecutionWindowRequest and returns its immutable
