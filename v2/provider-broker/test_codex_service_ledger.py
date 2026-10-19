@@ -168,6 +168,15 @@ class LedgerTests(unittest.TestCase):
         with self.assertRaises(contract.Refused):
             self.ledger.retire(self.retirement(request))
 
+    def test_cleanup_uncertainty_replaces_normal_margin_reason_and_stays_sticky(self):
+        request = self.admit()
+        self.clock.advance(870)
+        self.ledger.tick(request["window_id"], 1)
+        self.assertEqual(self.ledger.status()["reason"], "shutdown_margin")
+        self.ledger.uncertain(request["window_id"], 1, "cleanup_unknown")
+        self.ledger.uncertain(request["window_id"], 1, "server_lost")
+        self.assertEqual(self.ledger.status()["reason"], "cleanup_unknown")
+
     def test_clock_rollback_and_new_boot_refuse(self):
         request = self.admit()
         self.clock.wall -= 1
