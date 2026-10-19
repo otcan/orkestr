@@ -177,7 +177,17 @@ fn AcceptedReply(
             }
         }
     });
-    rsx! { article { p {"{notice}"} if let Some(text)=output.read().text.as_ref(){pre {"{text}"}}
+    let payload_id = row
+        .payload_id
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    rsx! { article {
+        "data-run-id": "{row.run_id}",
+        "data-completion-event-id": "{row.completion_event_id}",
+        "data-acceptance-event-id": "{row.acceptance_event_id}",
+        "data-payload-id": "{payload_id}",
+        p {"{notice}"} if let Some(text)=output.read().text.as_ref(){pre { "data-accepted-output": "true", "{text}"}}
         details {summary {"Reply details"} p {"Run: {row.run_id}"} p {"Completion: {row.completion_event_id}"} p {"Acceptance: {row.acceptance_event_id}"}}
     } }
 }
