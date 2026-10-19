@@ -75,6 +75,7 @@ impl PreparingCodex {
             true,
             true,
             resources,
+            None,
         )
     }
 
@@ -105,6 +106,31 @@ impl PreparingCodex {
             true,
             false,
             resources,
+            None,
+        )
+    }
+    /// Explicit trusted descriptor setup. The Core launch is already consumed;
+    /// errors cannot authorize a second child or a fallback pathname launch.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_workspace_retained(
+        store: Store,
+        grant: BoundSessionMetadata,
+        credential: &str,
+        launch: &mut orkestr_v2_store_sqlite::WorkspaceLaunch,
+        launcher: &Path,
+        directories: ChildDirectories,
+        resources: Box<dyn Send + 'static>,
+    ) -> Result<Self, SetupFailure> {
+        Self::open_mode(
+            store,
+            grant,
+            launcher,
+            Path::new("/workspace"),
+            directories,
+            true,
+            false,
+            resources,
+            Some((credential, launch)),
         )
     }
     #[cfg(test)]
@@ -124,6 +150,7 @@ impl PreparingCodex {
             false,
             false,
             Box::new(()),
+            None,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -136,15 +163,30 @@ impl PreparingCodex {
         actual_fd: bool,
         offline_python: bool,
         resources: Box<dyn Send + 'static>,
+        workspace_launch: Option<(&str, &mut orkestr_v2_store_sqlite::WorkspaceLaunch)>,
     ) -> Result<Self, SetupFailure> {
         if grant.provider() != ProviderKind::Codex
-            || workspace.canonicalize().ok().as_deref() != Some(workspace)
+            || if workspace_launch.is_some() {
+                workspace != Path::new("/workspace")
+            } else {
+                workspace.canonicalize().ok().as_deref() != Some(workspace)
+            }
         {
             return Err(Blocker::Protocol.into());
         }
         let binding = grant.binding().clone();
         let launcher = TrustedLauncher::configured(launcher)?;
-        let (authority, child) = if offline_python {
+        let (authority, child) = if let Some((credential, launch)) = workspace_launch {
+            launcher.open_workspace_metadata_fd_retained(
+                store,
+                grant,
+                credential,
+                launch,
+                directories,
+                TransportBounds::default(),
+                resources,
+            )?
+        } else if offline_python {
             launcher.open_worker_metadata_fd_retained(
                 store,
                 grant,

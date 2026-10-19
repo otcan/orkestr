@@ -32,6 +32,8 @@ pub(crate) const PROTOCOL: &str = "orkestr-v2-provider-broker-v1";
 pub(crate) struct TrustedLauncher {
     executable: PathBuf,
 }
+mod workspace;
+
 impl TrustedLauncher {
     /// Trusted composition only. Never call with a path from web/worker input.
     /// Symlink aliases are refused, but replacement races require an immutable

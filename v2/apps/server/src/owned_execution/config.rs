@@ -44,6 +44,8 @@ pub(super) struct Config {
     pub launcher: PathBuf,
     pub launcher_sha256: String,
     pub workspace: PathBuf,
+    #[serde(default)]
+    pub workspace_authority: Option<super::workspace::WorkspacePolicy>,
     pub namespace: String,
     pub supervisor_key: String,
     #[serde(default)]
@@ -135,6 +137,13 @@ impl Config {
             policy.validate()?;
         }
         config.execution_budget.validate()?;
+        if config.workspace_authority.is_some()
+            && (config.provider != Provider::Codex
+                || config.role != ExecutionRole::Deep
+                || config.worker.is_some())
+        {
+            return Err("descriptor workspace currently requires a dedicated Deep Codex factory");
+        }
         if config.role == ExecutionRole::Fast
             && (config.provider != Provider::Codex || config.worker.is_some())
         {

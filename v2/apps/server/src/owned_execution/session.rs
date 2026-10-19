@@ -35,6 +35,7 @@ impl ConfiguredExecution {
                 .await
                 .map_err(|_| "execution bindings unavailable")?
                 .deep;
+            self.bind_workspace(&binding).await?;
             self.store
                 .authorize_session_metadata(&binding)
                 .await

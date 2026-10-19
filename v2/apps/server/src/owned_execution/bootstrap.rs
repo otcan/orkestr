@@ -27,14 +27,27 @@ impl ConfiguredExecution {
         .map_err(|_| "execution child directories unavailable")?;
         // The opaque grant selects fresh setup or exact native resume. Neither
         // caller text nor persisted status can supply a replacement identity.
-        let mut setup = PreparingCodex::open_retained(
-            self.store.clone(),
-            grant,
-            &self.config.launcher,
-            &self.config.workspace,
-            directories,
-            self.children.retain(),
-        )
+        let mut launch = self.workspace_launch(&grant).await?;
+        let mut setup = if let Some(launch) = launch.as_mut() {
+            PreparingCodex::open_workspace_retained(
+                self.store.clone(),
+                grant,
+                &self.token,
+                launch,
+                &self.config.launcher,
+                directories,
+                self.children.retain(),
+            )
+        } else {
+            PreparingCodex::open_retained(
+                self.store.clone(),
+                grant,
+                &self.config.launcher,
+                &self.config.workspace,
+                directories,
+                self.children.retain(),
+            )
+        }
         .map_err(|_| "execution broker setup refused")?;
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {

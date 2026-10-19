@@ -21,6 +21,7 @@ mod stopping;
 mod worker;
 mod worker_continuation;
 mod worker_retirement;
+mod workspace;
 use config::Config;
 use orkestr_v2_application::runtime::{ProductionSupervisorConfig, ProductionTakeover};
 use orkestr_v2_contracts::OwnerId;
@@ -45,6 +46,7 @@ pub struct ConfiguredExecution {
     worker_reaps: crate::worker_execution::WorkerReaps,
     offline_python: Option<std::sync::Arc<crate::offline_python::OfflinePythonDispatcher>>,
     initial_grant: Option<BoundSessionMetadata>,
+    workspace_grant: Option<orkestr_v2_store_sqlite::WorkspaceGrant>,
 }
 pub struct ExecutionTask {
     shutdown: watch::Sender<bool>,
@@ -71,6 +73,11 @@ impl ConfiguredExecution {
         config: Config,
         scoped_directory: bool,
     ) -> Result<Self, &'static str> {
+        let installation = config
+            .workspace_authority
+            .as_ref()
+            .map(|policy| policy.installation(&config.workspace, home))
+            .transpose()?;
         let token = config.token(home)?;
         let owner = store
             .authenticate(&token)
@@ -132,6 +139,20 @@ impl ConfiguredExecution {
                 .map_err(|_| "execution supervisor authorization refused")?;
             (bound, None, directory)
         };
+        let workspace_grant = match (&config.workspace_authority, installation) {
+            (Some(policy), Some(installation)) => Some(
+                policy
+                    .register(&bound, &token, &config.conversation_id, installation)
+                    .await?,
+            ),
+            _ => None,
+        };
+        if let (Some(workspace), Some(metadata)) = (&workspace_grant, &initial_grant) {
+            bound
+                .bind_workspace_session(&token, workspace, metadata.binding())
+                .await
+                .map_err(|_| "workspace restart binding refused")?;
+        }
         let offline_python = config
             .worker
             .as_ref()
@@ -167,6 +188,7 @@ impl ConfiguredExecution {
             offline_python,
             worker_reaps,
             initial_grant,
+            workspace_grant,
         })
     }
 

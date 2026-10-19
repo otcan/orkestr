@@ -159,6 +159,11 @@ impl Process {
         workspace: Option<super::workspace_launch::WorkspaceDescriptor>,
     ) -> Result<Arc<Self>, Error> {
         use std::os::fd::AsRawFd;
+        let logical_workspace = if workspace.is_some() {
+            std::path::PathBuf::from("/workspace")
+        } else {
+            directories.workspace().to_owned()
+        };
         let pair = if provider_fd {
             Some(super::provider_fd::Handoff::pair()?)
         } else {
@@ -237,7 +242,7 @@ impl Process {
                 provider_writer: None,
             }),
             reaper: reaper.clone(),
-            workspace: directories.workspace().to_owned(),
+            workspace: logical_workspace,
             max_frame: bounds.max_frame_bytes,
             broker_launcher: AtomicBool::new(false),
             offline_python: AtomicBool::new(false),
