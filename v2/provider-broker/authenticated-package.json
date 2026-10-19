@@ -5,7 +5,7 @@
     "isolation/policy.py": "b1ba56669a7ee490b97eaf30c5500db541835764b6553300dbcb8301bf63b9bc",
     "isolation/launch.py": "b000fddacbc4d1d6ea76663298adf8f65f84d0e9a103667ce6942ee154eac468",
     "isolation/authenticated.py": "a15c10c579f2dde355981187eb4cd5617b73f3d5aba5fcb74542f6af32fed003",
-    "isolation/supervisor.py": "457b3e9be87ef116b0f456e9d1bf703a8b1ff0b1fce5caa6ed5cfa8f16d3f3b7",
+    "isolation/supervisor.py": "9f9fd877861f966cf675b809c40497d0c3bc3e67bbeeca11b9b2fc761c0390e9",
     "isolation/egress.py": "9b3d9aa2560c3f62b342b529450895cc240232463fcfe4c22f27425f216b6246",
     "isolation/authenticated_budget.py": "7c3f33fa1fe821512538316f6fb722009243406908edf567d87772034c177e5f",
     "isolation/claude_selected.py": "40c4f24449901dd34f3672cb3d527c0a391d78a25c27fa77308257a0eb7da9b8",

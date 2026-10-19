@@ -92,6 +92,8 @@ class RelayAdmission:
         self.reported=False
 
     def admit(self,client,hosts):
+        # Sample after accept returns: a relay may exit while accept blocks.
+        # Only this loop starts workers, so pruning cannot over-admit.
         self.workers=[worker for worker in self.workers if worker.is_alive()]
         if len(self.workers)>=MAX_CONNECTIONS:
             client.close()

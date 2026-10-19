@@ -27,3 +27,20 @@ loopback TCP connections and synthetic relay workers. It proves four admissions,
 twelve pre-parse refusals, one bounded diagnostic, exact slot recovery after EOF,
 worker cleanup and fail-closed behavior with a broken diagnostic sink. It does
 not test live accounts, external networking or native error attribution.
+
+## Stale-slot accounting
+
+Worker liveness is sampled inside admission, after blocking accept returns. A
+relay that exits during accept therefore frees its slot for that connection.
+Sampling only before accept can refuse with three live workers and one dead
+entry. The single accept-loop owner is the only worker creator; after pruning,
+workers can finish but no competing creator can increase the live count.
+A worker finishing just after the sample can still cause a conservative refusal;
+this change does not promise fairness or queueing under genuine saturation.
+
+`python3 -m unittest test_proxy_stale_slot -v` forces the reported schedule in
+`supervisor.main`, using actual TCP accept and owned synthetic relay threads.
+It checks admission after an exit during accept, refusal with four live relays,
+subsequent drain/recovery and cleanup. Moving pruning back before accept makes
+this regression fail; the post-accept implementation passes. This is separate
+from any attribution of a real native discovery failure.
