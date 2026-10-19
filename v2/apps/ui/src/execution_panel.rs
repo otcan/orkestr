@@ -33,7 +33,9 @@ pub fn ExecutionPanel(
                     }
                 }
             }
-            button { r#type: "button", disabled: true, title: "Steering is unavailable. You can still send a message.", "Steer unavailable" }
+            if let Some(status) = model.control_status() {
+                crate::steering_view::SteeringView { key:"{status.conversation_id}/{status.run_id:?}/{session_scope.read().generation()}/{model.selection_generation()}", execution, session_scope, csrf:csrf.clone(), onexpired, now_ms }
+            }
             p { "Keep editing or send another message while work runs. A cancellation request is not a confirmed stop. Stale or disconnected status never implies completion." }
         }
     }

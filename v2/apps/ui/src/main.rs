@@ -7,6 +7,7 @@ mod held_inputs_view;
 mod history;
 mod host_resources_view;
 mod progress_view;
+mod steering_view;
 mod stop_button;
 mod timer_detail_view;
 mod timer_screen;
@@ -107,7 +108,7 @@ fn App() -> Element {
         style { "{include_str!(\"style.css\")}" }
         main {
             header { h1 { "Orkestr" } p { "Local assistant" } }
-            p { class: "notice", "Controls are available only when shown for a connected run. Steering, approvals and memory are unavailable. Project resources are not connected." }
+            p { class: "notice", "Controls are available only when shown for a connected run. Approvals and memory are unavailable. Project resources are not connected." }
             p { role: "status", "{notice}" }
             if resuming() {
                 p { role: "status", "Checking browser session…" }
