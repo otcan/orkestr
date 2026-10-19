@@ -22,9 +22,15 @@ safe to use as a compatibility promise.
 
 The oracle adapter will call the actual published implementation against fresh
 synthetic storage. It must not implement its own pretend importer/download
-service and then claim application acceptance. Invocation and adapter symbols
-will be pinned only after Core supplies the seam. Until then implementation and
-application roundtrip tests are explicitly unexecuted.
+service and then claim application acceptance. The published pure seam is Core `9788ef14d0d86ecdaa5dde14522761194064cfb4`,
+`attachment_integrity::{validate_attachment_bytes, validate_attachment_copy}`.
+The Python preparation command verifies exact committed source, independently
+checks four byte vectors and emits two Rust integration-test files for an
+admitted disposable build. Install both files together into the Store tests
+directory and select `--test attachment_integrity_oracle`. It never invokes
+Cargo or edits the checkout itself. Rust execution is explicitly unexecuted
+until an admitted build runs it. Persisted application roundtrip tests remain
+unimplemented pending the actual ports.
 
 ## Independent expected results
 

@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "manifest_id": "00000000-0000-0000-0000-000000000001",
+  "owner_id": "00000000-0000-0000-0000-000000000002",
+  "conversation_id": "00000000-0000-0000-0000-000000000003",
+  "references": [
+    {
+      "reference_id": "00000000-0000-0000-0000-00000000000a",
+      "message_id": "00000000-0000-0000-0000-000000000032",
+      "filename": "fixture-0.bin",
+      "media_type": "application/octet-stream",
+      "byte_length": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "state": "available"
+    },
+    {
+      "reference_id": "00000000-0000-0000-0000-00000000000b",
+      "message_id": "00000000-0000-0000-0000-000000000033",
+      "filename": "fixture-1.bin",
+      "media_type": "application/octet-stream",
+      "byte_length": 6,
+      "sha256": "0c1dc7f17be5daf6fb1efcb5e68dde6ddf1910251a057ccdbf97387229629f8c",
+      "state": "available"
+    },
+    {
+      "reference_id": "00000000-0000-0000-0000-00000000000c",
+      "message_id": "00000000-0000-0000-0000-000000000034",
+      "filename": "fixture-2.bin",
+      "media_type": "application/octet-stream",
+      "byte_length": 12,
+      "sha256": "377675d3405ab4b902a1d4171eb418a72350b9569e08c475d88d9375e9ab9c61",
+      "state": "available"
+    },
+    {
+      "reference_id": "00000000-0000-0000-0000-00000000000d",
+      "message_id": "00000000-0000-0000-0000-000000000035",
+      "filename": "fixture-3.bin",
+      "media_type": "application/octet-stream",
+      "byte_length": 12,
+      "sha256": "377675d3405ab4b902a1d4171eb418a72350b9569e08c475d88d9375e9ab9c61",
+      "state": "available"
+    }
+  ]
+}
