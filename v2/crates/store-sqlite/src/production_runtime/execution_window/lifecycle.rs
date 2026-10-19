@@ -115,6 +115,14 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
+        let terminal = sqlx::query("SELECT t.event_id,t.terminal_kind FROM production_terminal_evidence t JOIN production_retirement_provenance p ON p.prior_run_id=t.run_id AND p.terminal_event_id=t.event_id WHERE t.run_id=? AND p.context_id=? AND p.incarnation_id=? AND p.supervisor_generation=?")
+            .bind(prior_run.to_string()).bind(&c.id).bind(&c.incarnation).bind(c.generation)
+            .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
+        let terminal_event = EventId(terminal.get::<String, _>("event_id").parse().map_err(db)?);
+        let outcome: String = terminal.get("terminal_kind");
+        if !matches!(outcome.as_str(), "accepted" | "stopped") {
+            return Err(RuntimeStoreError::Fenced);
+        }
         sqlx::query("UPDATE execution_windows SET state='closed',terminal_run_id=? WHERE id=?")
             .bind(prior_run.to_string())
             .bind(window.to_string())
@@ -128,6 +136,9 @@ impl Store {
             self.clone(),
             ExecutionWindowRetirement {
                 secret: credential.into(),
+                run: prior_run.clone(),
+                terminal_event,
+                outcome,
             },
         ))
     }

@@ -121,7 +121,7 @@ async fn expired_proposal_acceptance_closes_only_with_terminal_provenance_then_r
             &f.conversation,
             &ExecutionAcceptanceRequest {
                 run_id: p.run.run_id.clone(),
-                completion_event_id: done.event_id,
+                completion_event_id: done.event_id.clone(),
                 expected_revision: status.revision,
                 request_key: "post-expiry-owner-accept".into(),
             },
@@ -145,6 +145,17 @@ async fn expired_proposal_acceptance_closes_only_with_terminal_provenance_then_r
         .await
         .unwrap();
     assert_eq!(handoff.credential(), cap.credential());
+    assert_eq!(handoff.run_id(), &p.run.run_id);
+    assert_eq!(handoff.outcome(), "accepted");
+    let canonical: String =
+        sqlx::query_scalar("SELECT event_id FROM production_acceptances WHERE run_id=?")
+            .bind(p.run.run_id.to_string())
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(handoff.terminal_event_id().to_string(), canonical);
+    assert_ne!(handoff.terminal_event_id(), &done.event_id);
+
     let mut next = input(&f, "second-window-source").await;
     next.expected_generation = 1;
     next.predecessor_window_id = Some(a.status.window_id);
