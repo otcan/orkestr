@@ -64,3 +64,12 @@ owner-checked in Rust, then its original JSON text is offered as
 file does not prove it was saved. Query/export bounds remain 4/8 MiB; transport
 also bounds read iterations, duration and cancellation. No browser acceptance
 is claimed while the desktop lease service hold remains in force.
+
+Memory export uses a tracked Eval and a synchronous WASM callback checking the
+mounted view, authenticated session generation, and consent/scope generation.
+The bridge announces readiness before Rust transfers bounded raw JSON; Rust
+rechecks authority at that transfer. The browser checks the same live callback
+before Blob allocation and immediately before the file offer. Retirement makes
+the callback refuse, and dropping the export future removes its registered guard.
+Synthetic delayed logout/drop and final-action refusal tests establish this
+local action boundary; they do not establish downloaded or saved filesystem bytes.
