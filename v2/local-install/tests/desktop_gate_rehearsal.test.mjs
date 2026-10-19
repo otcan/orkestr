@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 const source = process.env.DESKTOP_GATE_SOURCE;
 if (!source || !path.isAbsolute(source)) throw new Error('isolated DESKTOP_GATE_SOURCE required');
@@ -77,7 +79,13 @@ test('offline revoke proposal preserves backup, refuses old binding, requires fr
   assert.deepEqual(output.retained, state.retained);
   const restored = path.join(root, 'revoked', 'leases.json');
   await fs.mkdir(path.dirname(restored), { mode: 0o700 });
-  await fs.writeFile(restored, JSON.stringify(output), { flag: 'wx', mode: 0o600 });
+  // Exercise actual offline tool, not only the policy demonstrator.
+  const target = path.join(root, 'tool-output');
+  execFileSync('python3', ['-B', fileURLToPath(new URL('../desktop_restore.py', import.meta.url)),
+    '--source', file, '--target', target, '--source-sha256', createHash('sha256').update(backup).digest('hex'),
+    '--old-lock-identity', state.lockIdentity, '--offline-source-confirmed']);
+  await fs.copyFile(path.join(target, 'leases.json'), restored);
+  assert.deepEqual(await fs.readFile(path.join(target, 'original.json')), backup);
   const fresh = new DesktopLeaseStore(restored);
   await fresh.init();
   let called = false;

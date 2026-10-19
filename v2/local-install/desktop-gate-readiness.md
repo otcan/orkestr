@@ -25,8 +25,8 @@ The factory resolves `ORKESTR_DESKTOP_LEASE_FILE`, otherwise
 without printing environment secrets. Arbitrary operator imports are not covered
 by repository search. Service PID/working-directory metadata confirms HTTP and
 Codex executor units are distinct, but cannot prove all loaded modules or that
-HTTP shutdown preserves executor children. No process introspection, environment
-or installed lease contents were read for this rehearsal.
+HTTP shutdown preserves executor children. Read-only process metadata was subsequently collected as described below; no
+arguments, environment or installed lease contents were read.
 
 ## Proposed quiesce/adoption sequence (unexecuted)
 
@@ -90,3 +90,65 @@ proposed revoke-all restore with old-binding rejection and fresh generation,
 and legacy mkdir-lock refusal. Stores live only in temporary owned directories
 and are cleaned. This does not qualify live adoption, service drain, production
 restore, remote fencing or power-loss durability.
+
+## Implemented offline leaf (pending independent review)
+
+`desktop_restore.py` prepares a new private directory only. It requires an
+explicit operator-supplied SHA256, old lock dev:ino, and
+`--offline-source-confirmed`; that flag is an assertion, not a quiescence detector.
+It does not open the lock, call store init, edit the source, stop processes, or
+activate anything. Input is bounded to 8MiB, regular, single-link, nofollow,
+stable-stat JSON; duplicate keys/nonfinite JSON and malformed authority refuse.
+Parents must be caller-owned private canonical directories. Generation exhaustion
+refuses because a newer acquisition would be impossible.
+
+```sh
+python3 -B v2/local-install/desktop_restore.py \
+  --source /private/offline-evidence/leases.json \
+  --source-sha256 <trusted-original-sha256> \
+  --old-lock-identity <trusted-old-dev:ino> \
+  --target /private/recovery/fresh-output \
+  --offline-source-confirmed
+```
+
+Output contains byte-exact `original.json`, revoked `leases.json` and a digest
+receipt. Existing targets (including empty directories/symlinks) are never
+replaced: Linux renameat2 NOREPLACE publishes the prepared directory atomically.
+Files and staging directory are synced before rename; parent synced afterward.
+No new lock is created. The target is evidence, not a live store.
+
+Before publication, ordinary exceptions and handled SIGTERM/SIGHUP/interrupts
+remove owned staging. During/after the rename boundary, interruption or durability
+failure raises PublicationUnknown and retains evidence: inspect target/staging
+against receipt digests offline; do not retry, delete, adopt or claim success
+blindly. A racing target also remains untouched. SIGKILL/power loss can leave
+staging; recovery requires explicit offline inspection, never age-based deletion.
+Trusted stable directory/mount ownership is assumed, not hostile namespace safety.
+
+## Completed read-only process/shutdown inspection
+
+Safe metadata inspection used PID, parent PID, start ticks, comm, cwd, unit,
+cgroup and boot identity only. Privileged metadata reading was needed because
+unprivileged cwd access omitted the HTTP processes. At that instant both HTTP
+units each contained one Node process; the separate Codex executor unit contained
+retained Node/Codex/tmux descendants (and this inspection's transient helpers).
+This is point-in-time topology, not proof of absence of arbitrary writer imports.
+Private receipts retain exact metadata; no process arguments/environments were read.
+
+The HTTP unit uses KillMode=control-group; the public HTTP unit uses mixed;
+the executor unit uses control-group. **Do not use a generic restart as the
+quiesce mechanism.** Deployed `apps/server/src/server.ts` cleanup explicitly calls
+stopCodexAppServerClients and stopCodexJobClients, stops the local WhatsApp bridge,
+closes upgraded sockets and drains background work. The Codex client close method
+kills its owned child with SIGTERM and delayed SIGKILL, closes its WebSocket and
+rejects pending requests. External executor separation therefore does not prove
+session preservation: transport interruption and local owned-child termination
+remain possible. Its shutdown comments promise journaled job resume, not an
+uninterrupted executor session.
+
+Concrete remaining operational seam: pause only lease-mutating ingress/tool
+scheduling, drain direct-import lease lifecycles, then establish an independently
+reviewed detach/preserve path for server-owned clients before reloading old
+imports. A maintenance switch or module reload is not implemented by this leaf.
+Until that seam is proven, keep legacy writers running unchanged and adoption
+held. No stop/restart, browser action, installed adoption or restoration occurred.
