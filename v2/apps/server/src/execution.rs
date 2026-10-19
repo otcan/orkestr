@@ -89,6 +89,15 @@ pub(crate) async fn status(
                             .as_ref()
                             .is_some_and(|run| control.available(&owner, &conversation, run))
                     });
+            status.capabilities.steer = status.phase == ExecutionPhase::Running
+                && status.queue_age_ms.is_none()
+                && scope
+                    .and_then(|scope| scope.control.as_ref())
+                    .is_some_and(|control| {
+                        status.run_id.as_ref().is_some_and(|run| {
+                            control.steering_available(&owner, &conversation, run)
+                        })
+                    });
             Ok(Json(status).into_response())
         }
         Some(_) => Err(Error(

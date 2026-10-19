@@ -45,3 +45,13 @@ Authored Store tests cover exact replay/reopen, queued dispositions, projection
 and control refusal, atomic intake rollback, concurrent consume, browser revoke,
 Stop between suffixes, native rejection, and actual deferred SQLite COMMIT
 failure after callback bytes. No provider launch or HTTP activation is claimed.
+
+Same-child renewal uses `Store::refresh_codex_steering(old_authority,
+&RunLeaseTransition) -> Result<CodexSteeringAuthority>`. Runtime calls it only
+after quiescent same-process fence transfer. It consumes the old issuer, requires
+its full admission to equal the sealed transition's previous admission, and
+validates current machine/context, Running execution and the existing native
+turn binding under BEGIN IMMEDIATE. It never changes that binding or issues
+input/dispatch rights. Stop, revocation, stale transitions and mismatched previous
+identity refuse; Runtime quarantines the child on failure. Previously reserved
+or consumed steering is not refreshed or reissued by this operation.

@@ -12,10 +12,12 @@ mod provider_write;
 mod pump;
 mod reuse;
 mod session;
+mod steering;
 pub use claude_pump::ClaudePump;
 pub use claude_session::{PreparingClaude, ReadyClaude};
 pub use pump::{CodexPump, StopFailure, StoppingCodex};
 pub use session::{PreparingCodex, ReadyCodex, SetupFailure};
+pub use steering::{SteeringProgress, SteeringReadiness};
 #[cfg(test)]
 mod session_tests;
 #[cfg(test)]

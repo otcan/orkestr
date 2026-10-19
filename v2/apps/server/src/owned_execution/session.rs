@@ -95,6 +95,11 @@ impl ConfiguredExecution {
         };
         let mut run = capability.provider().run.run_id.clone();
         let mut liveness = liveness::RunningLease::capture(&self.store, &capability).await?;
+        let steering_authority = self
+            .store
+            .authorize_codex_steering(&capability)
+            .await
+            .map_err(|_| "execution steering issuer refused")?;
         let mut worker = self.prepare_worker(&capability)?;
         let (mut authority, mut pump) = ready
             .attach(self.store.clone(), capability)
@@ -103,6 +108,7 @@ impl ConfiguredExecution {
             .control
             .register(self.store.clone(), &run)
             .map_err(|_| "execution control registration refused")?;
+        let mut steering = steering::RunningSteering::register(&run_control, steering_authority)?;
         let mut budget = self.config.execution_budget.start(Instant::now());
         loop {
             self.maintain(heartbeat).await?;
@@ -122,6 +128,7 @@ impl ConfiguredExecution {
             run_control
                 .set_available(status.phase == ExecutionPhase::Running && pump.pending().is_none());
             if status.phase == ExecutionPhase::CancelRequested {
+                steering.retire();
                 run_control.disable();
                 drop(schedule);
                 drop(worker.take());
@@ -131,6 +138,7 @@ impl ConfiguredExecution {
                 return Ok(SessionExit::Stopped { run, proof });
             }
             if status.phase == ExecutionPhase::Completed {
+                steering.retire();
                 drop(schedule);
                 // The previous parent's scheduler cannot survive into a new
                 // Deep grant, including while the next inbox input is awaited.
@@ -151,6 +159,11 @@ impl ConfiguredExecution {
                 };
                 run = capability.provider().run.run_id.clone();
                 liveness = liveness::RunningLease::capture(&self.store, &capability).await?;
+                let steering_authority = self
+                    .store
+                    .authorize_codex_steering(&capability)
+                    .await
+                    .map_err(|_| "execution steering issuer refused")?;
                 worker = self.prepare_worker(&capability)?;
                 let (next_authority, next_pump) = pump
                     .attach_next(self.store.clone(), capability)
@@ -164,10 +177,12 @@ impl ConfiguredExecution {
                     .control
                     .register(self.store.clone(), &run)
                     .map_err(|_| "execution control registration refused")?;
+                steering = steering::RunningSteering::register(&run_control, steering_authority)?;
                 budget = self.config.execution_budget.start(Instant::now());
                 continue;
             }
             if status.phase == ExecutionPhase::AwaitingAcceptance {
+                steering.retire();
                 drop(schedule);
                 // Hold the same child while the owner decides. No old execution
                 // fence is spent and no subsequent inbox item is claimed early.
@@ -194,6 +209,7 @@ impl ConfiguredExecution {
                 budget.cancellation_key(Instant::now())
             };
             if let Some(key) = cancellation {
+                steering.retire();
                 // Fence durably before local child cleanup; no success is inferred.
                 let receipt = self
                     .store
@@ -239,6 +255,9 @@ impl ConfiguredExecution {
             } else {
                 status.phase
             };
+            steering
+                .tick(&self.store, &mut pump, phase == ExecutionPhase::Running)
+                .await?;
             if phase == ExecutionPhase::Running
                 && liveness.due(Instant::now())
                 && pump.renewal_quiescent()
@@ -248,14 +267,16 @@ impl ConfiguredExecution {
                 // transfer preserves this exact child, turn and event cursor.
                 // Keep selection available while HTTP waits on this lock;
                 // explicitly disable it before releasing a failed transfer.
-                let (next_authority, next_pump) =
-                    match liveness.refresh(self.store.clone(), pump).await {
-                        Ok(refreshed) => refreshed,
-                        Err(reason) => {
-                            run_control.disable();
-                            return Err(reason);
-                        }
-                    };
+                let (next_authority, next_pump) = match steering
+                    .renew(self.store.clone(), pump, &mut liveness)
+                    .await
+                {
+                    Ok(refreshed) => refreshed,
+                    Err(reason) => {
+                        run_control.disable();
+                        return Err(reason);
+                    }
+                };
                 let _ = authority.revoke();
                 authority = next_authority;
                 pump = next_pump;
