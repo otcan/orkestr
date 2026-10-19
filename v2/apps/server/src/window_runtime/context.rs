@@ -79,15 +79,6 @@ impl Context {
             })
             .map_err(|_| ())
     }
-    pub(crate) async fn activate(
-        &self,
-        store: &Store,
-        token: &str,
-        scope: ExecutionScope,
-    ) -> Result<(), &'static str> {
-        self.activate_roles(store, token, scope, None).await
-    }
-
     pub(crate) async fn activate_roles(
         &self,
         store: &Store,
