@@ -250,8 +250,12 @@ for line in sys.stdin:
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
     assert_eq!(retried, retry_observation);
+    if failure || revoke_before_observation {
+        assert!(pump.retire_completed().is_err());
+    } else {
+        drop(pump);
+    }
     authority.revoke().unwrap();
-    drop(pump);
     drop(authority);
     drop(bound);
     drop(store);

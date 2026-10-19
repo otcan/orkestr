@@ -1,5 +1,6 @@
-//! First-turn Claude setup on one owned broker child. Launcher selection is trusted
+//! Claude setup on one owned broker child. Launcher selection is trusted
 //! server configuration; init metadata does not attest subscription credentials.
+use super::claude_lifecycle::ClaudeInputCorrelation;
 use super::session::SetupFailure;
 use super::*;
 use crate::broker::{
@@ -99,6 +100,14 @@ impl PreparingClaude {
         };
         if let Some(open) = self.open.take() {
             let channel = ClaudeChannel::open(open, &bytes)?;
+            if self
+                .binding
+                .native_session_id
+                .as_deref()
+                .is_some_and(|native| native != channel.native())
+            {
+                return Err(Blocker::UnknownSession.into());
+            }
             self.rpc = Some(ClaudeRpc::new(channel.native(), "turn:3")?);
             let mut initializing = channel.initialize_protocol();
             child.enqueue_broker_metadata(initializing.request()?)?;
@@ -141,6 +150,7 @@ impl PreparingClaude {
             child,
             channel,
             rpc: self.rpc.take().ok_or(Blocker::Protocol)?,
+            resumed: self.binding.native_session_id.is_some(),
         })
     }
 }
@@ -150,14 +160,13 @@ pub struct ReadyClaude {
     child: ReadyMetadataChild,
     channel: ClaudeChannel,
     rpc: ClaudeRpc,
+    resumed: bool,
 }
 struct ClaudeTurn {
     cap: Box<ConsumedProviderDispatch>,
     scope: ExecutionScope,
     envelope: ClaudeExecutionEnvelope,
-}
-fn frame(cap: &ConsumedProviderDispatch) -> serde_json::Value {
-    json!({"type":"user","session_id":cap.provider().binding.native_session_id,"parent_tool_use_id":null,"message":{"role":"user","content":cap.text()}})
+    frame: serde_json::Value,
 }
 impl ConsumedTurn for ClaudeTurn {
     fn broker_lineage(&self) -> Option<std::sync::Arc<()>> {
@@ -166,7 +175,7 @@ impl ConsumedTurn for ClaudeTurn {
     fn into_submission(self) -> (ExecutionScope, Vec<u8>) {
         let value = self
             .envelope
-            .wrap(&self.cap.message_id().to_string(), frame(&self.cap));
+            .wrap(&self.cap.message_id().to_string(), self.frame);
         (self.scope, value.to_string().into_bytes())
     }
 }
@@ -197,7 +206,9 @@ impl ReadyClaude {
             return Err(SubmissionFailure::Protocol(Blocker::Protocol));
         }
         let scope = execution_scope(&cap).map_err(SubmissionFailure::Transport)?;
-        let mut bytes = frame(&cap).to_string().into_bytes();
+        let correlation = ClaudeInputCorrelation::for_dispatch(&cap, self.resumed);
+        let frame = correlation.frame(&cap);
+        let mut bytes = frame.to_string().into_bytes();
         bytes.push(b'\n');
         if bytes.len() > 65536 {
             return Err(SubmissionFailure::Protocol(Blocker::Protocol));
@@ -217,6 +228,7 @@ impl ReadyClaude {
                         cap,
                         scope,
                         envelope,
+                        frame,
                     },
                     fence as std::sync::Arc<dyn crate::containment::DispatchFence>,
                 ))
@@ -230,7 +242,7 @@ impl ReadyClaude {
                 provider,
                 self.channel,
                 self.rpc,
-                bytes,
+                (bytes, correlation),
             ),
         ))
     }

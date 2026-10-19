@@ -25,6 +25,8 @@ struct ClaudeOutput {
     eof: bool,
     failed: bool,
     events: VecDeque<ProviderEvent>,
+    correlation: super::claude_lifecycle::ClaudeInputCorrelation,
+    completed: bool,
 }
 impl ClaudeOutput {
     fn poll_inner(&mut self) -> Result<Option<ProviderEvent>, Blocker> {
@@ -74,6 +76,7 @@ impl ClaudeOutput {
             self.prepared = true;
             return Ok(None);
         };
+        self.correlation.verify(&frame)?;
         let observation = self.rpc.receive("turn:3", &frame.to_string())?;
         if observation == Some(ClaudeObservation::Initialized) {
             if self.started || self.pending_native {
@@ -105,9 +108,11 @@ impl ClaudeOutput {
                     }
                 }
             }
-            Some(ClaudeObservation::CompletedProposal) if self.rpc.terminal_result_seen() => self
-                .events
-                .push_back(ProviderEvent::CompletedProposal { synthetic: false }),
+            Some(ClaudeObservation::CompletedProposal) if self.rpc.terminal_result_seen() => {
+                self.completed = true;
+                self.events
+                    .push_back(ProviderEvent::CompletedProposal { synthetic: false });
+            }
             Some(ClaudeObservation::Failed) if self.rpc.terminal_result_seen() => {
                 self.events.push_back(ProviderEvent::Failed)
             }
@@ -156,8 +161,9 @@ impl ClaudePump {
         admission: ProviderAdmission,
         channel: ClaudeChannel,
         rpc: ClaudeRpc,
-        bytes: Vec<u8>,
+        input: (Vec<u8>, super::claude_lifecycle::ClaudeInputCorrelation),
     ) -> Self {
+        let (bytes, correlation) = input;
         Self {
             source: ClaudeOutput {
                 child,
@@ -173,6 +179,8 @@ impl ClaudePump {
                 eof: false,
                 failed: false,
                 events: VecDeque::new(),
+                correlation,
+                completed: false,
             },
             cursor: PendingObservation::default(),
             admission,
@@ -226,5 +234,25 @@ impl ClaudePump {
     }
     pub fn pending(&self) -> Option<&orkestr_v2_application::runtime::ProviderEventInput> {
         self.cursor.pending()
+    }
+    /// Consume the exact successful proposal transport. This grants only a
+    /// cleanup witness; caller must still obtain independent owner acceptance
+    /// and the one-use Core metadata grant before starting another child.
+    pub fn retire_completed(
+        mut self,
+    ) -> Result<crate::containment::RetiringBroker, crate::containment::Error> {
+        if self.source.failed
+            || !self.source.started
+            || !self.source.completed
+            || self.source.pending_native
+            || !self.source.events.is_empty()
+            || self.source.offset != self.source.bytes.len()
+            || self.cursor.pending().is_some()
+            || self.cursor.rejected().is_some()
+            || self.source.rpc.finish("turn:3").is_err()
+        {
+            return Err(crate::containment::Error::AuthorityProtocol);
+        }
+        self.source.child.retire_broker()
     }
 }
