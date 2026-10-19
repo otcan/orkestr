@@ -227,3 +227,11 @@ No source directory, state directory, existing release, or credential is repaire
 No service, native binary, provider, setup API or account is invoked. Real paired
 artifact qualification and manager lifecycle acceptance remain separate gates;
 the old bounded-v1 installer is unchanged.
+
+The runtime beta configuration is root:configured-service-group **0640**; other
+immutable JSON/module files remain 0440. The selected release receipt pins only
+the manager's fixed four dependencies plus the outer shell/Python startup files.
+It does **not** qualify the complete transitive interpreter/stdlib/cache/native
+ELF closure. An external complete startup-closure receipt must be captured and
+reverified before actual execution. `transitive_startup_closure_qualified` remains
+false in this preparation receipt.
