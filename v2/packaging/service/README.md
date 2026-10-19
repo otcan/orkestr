@@ -9,7 +9,7 @@ is started by preparation. Linux x86_64 only; other targets are unqualified.
 
 Installation is the single native/WASM build owner after the coordinator freezes
 one clean integrated commit. The coordinator owns the workspace/lock version
-`2.0.0-beta.1`. Before building, record the full commit, clean tracked/untracked
+`2.0.0-beta.2`. Before building, record the full commit, clean tracked/untracked
 status, wrapper/toolchain/lock digests, complete explicit allowlisted build env,
 exact argv and isolated target paths. Do not relabel previous artifacts.
 
@@ -208,7 +208,7 @@ The exact clean paired Git source must descend from reviewed manager
 `0dbb4226a2fdd611bd75b22d4a17117c438a1484`. Source is exported from Git blobs;
 mutable checkout modules are never imported. Its authoritative `FILES` and
 `MODULES_SERVICE` define the closed inner package. Pair version must be
-`2.0.0-beta.1`, with matching embedded native/web identities and release profiles.
+`2.0.0-beta.1` or `2.0.0-beta.2`, with matching embedded native/web identities and release profiles.
 Synthetic ELF fixtures only exercise packaging; they are never launched.
 
 Output is final-path-bound `start-service`, `release.json`, and `package/`.

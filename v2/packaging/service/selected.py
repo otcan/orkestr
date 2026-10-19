@@ -43,7 +43,7 @@ def entry(root, mode):
 def pair_bytes(plan):
     path=Path(plan['pair']);require(pin(path)['sha256']==plan['pair_sha256'],'pair receipt digest mismatch')
     pair=json.loads(path.read_bytes());source=pair['source_commit']
-    require(pair['version']=='2.0.0-beta.1' and re.fullmatch('[0-9a-f]{40}',source),'beta source/version required')
+    require(pair['version'] in ('2.0.0-beta.1','2.0.0-beta.2') and re.fullmatch('[0-9a-f]{40}',source),'beta source/version required')
     require(pair['server']['profile']=='release' and pair['server']['default_features'] is True and
             pair['server']['features']==[] and pair['web']['profile']=='release' and
             pair['web']['features']==['web','execution-controls'] and
@@ -56,7 +56,7 @@ def pair_bytes(plan):
     wasm=list(ui.rglob('*.wasm'));require(len(wasm)==1,'one web WASM required')
     for component,path in (('server',server),('web',wasm[0])):
         blob=path.read_bytes();prefix=b'ORKESTR_V2_BUILD_IDENTITY_V1|'
-        record=f'ORKESTR_V2_BUILD_IDENTITY_V1|{component}|2.0.0-beta.1|{source}|END'.encode()
+        record=f"ORKESTR_V2_BUILD_IDENTITY_V1|{component}|{pair['version']}|{source}|END".encode()
         require(blob.count(prefix)>0 and blob.count(prefix)==blob.count(record),'embedded identity mismatch')
     for path in (server,native):
         blob=path.read_bytes()[:20]
