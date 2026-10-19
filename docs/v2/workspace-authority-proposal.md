@@ -2,7 +2,7 @@
 
 Core owns the new contract, durable Store issuance and shared registration. Runtime
 owns consuming it at actual spawn/resume; Installation owns read-only inventory.
-No migration is allocated: schema39 remains latest pending coordinator collision check.
+Coordinator collision-checked integration8fcb through schema39 and reserved migration40 exclusively for this slice. The authoritative filename is `v2/crates/store-sqlite/migrations/0040_workspace_authority.sql`; no placeholder DDL is registered.
 No configuration, inventory entry, browser path or selected-profile handle grants access.
 
 ## Scope and opaque handoff
@@ -148,6 +148,5 @@ retain cleanup eligibility. Binding-to-project generation and descriptors must s
 same-child renewal without granting a fresh launch. Restart rehydrates local descriptors
 only through trusted allowlist validation; missing local handles fail closed.
 
-No implementation is claimed by these signatures. Slot40 collision confirmation,
-Runtime descriptor consumer agreement and ownership of its closed launcher changes
+No implementation is claimed by these signatures. Runtime descriptor consumer agreement and ownership of its closed launcher changes
 remain prerequisites for publishing the first storage/consumer checkpoint.
