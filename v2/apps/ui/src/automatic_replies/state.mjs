@@ -29,6 +29,7 @@ export class PermissionState {
    staged.set(route.route_id, Object.freeze({...route}));
   }
   if (page.next_after !== null && (!uuid(page.next_after) || page.routes.length === 0 || page.next_after !== previous)) throw new Error('Invalid permission cursor');
+  if (staged.size > 256) throw new Error('Permission history limit reached. Reopen this conversation to continue.');
   this.#history = staged; this.#applied = ticket.order;
   return true;
  }

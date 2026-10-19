@@ -282,6 +282,7 @@ pub fn Conversation(
                 }
             }
             crate::attachments_view::ThreadFiles { key: "files-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, onexpired }
+            crate::automatic_replies_view::AutomaticReplies { key: "replies-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, onexpired }
             crate::held_inputs_poll::HeldInputsPanel { id: id.clone(), session_scope, model: held_inputs, projection, onexpired }
             crate::execution_poll::ExecutionPoll { key: "{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, execution, onexpired }
             crate::execution_poll::ExecutionPoll { key: "fast-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, execution: fast_execution, fast: true, onexpired }
