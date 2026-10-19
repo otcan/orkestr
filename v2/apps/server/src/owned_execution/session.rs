@@ -24,7 +24,7 @@ impl ConfiguredExecution {
         let mut grant = if let Some(grant) = self.initial_grant.take() {
             // A restarted server accepts HTTP first; it does not immediately
             // launch a native process merely because accepted history exists.
-            if !self.wait_eligible(&mut shutdown, &mut heartbeat).await? {
+            if self.window.is_none() && !self.wait_eligible(&mut shutdown, &mut heartbeat).await? {
                 return Ok(());
             }
             grant
@@ -54,6 +54,10 @@ impl ConfiguredExecution {
             {
                 SessionExit::Shutdown => return Ok(()),
                 SessionExit::Stopped { run, proof } => {
+                    if self.window.is_some() {
+                        self.retire_terminal(&run, proof).await?;
+                        return Ok(());
+                    }
                     if !self.wait_eligible(&mut shutdown, &mut heartbeat).await? {
                         self.retire_terminal(&run, proof).await?;
                         return Ok(());
@@ -152,6 +156,15 @@ impl ConfiguredExecution {
                 // The previous parent's scheduler cannot survive into a new
                 // Deep grant, including while the next inbox input is awaited.
                 self.drain_worker(&mut worker, heartbeat).await?;
+                if self.window.as_ref().is_some_and(|window| window.work_due()) {
+                    let retiring = pump
+                        .retire_broker()
+                        .map_err(|_| "window accepted retirement refused")?;
+                    drop(authority);
+                    let proof = self.reaped(retiring, &run, heartbeat).await?;
+                    self.retire_terminal(&run, proof).await?;
+                    return Ok(SessionExit::Shutdown);
+                }
                 // Only explicit committed owner acceptance releases the binding.
                 // Inputs received during an active turn remain ordered in Core;
                 // neither queued text nor browser JSON can mint a new capability.
@@ -205,6 +218,16 @@ impl ConfiguredExecution {
                 // terminal cleanup while owner acceptance remains pending.
                 Self::poll_worker(&mut worker).await;
                 drop(schedule);
+                if self.window.as_ref().is_some_and(|window| window.work_due()) {
+                    let retiring = pump
+                        .retire_broker()
+                        .map_err(|_| "window proposal cleanup refused")?;
+                    drop(authority);
+                    let proof = self.reaped(retiring, &run, heartbeat).await?;
+                    self.wait_window_acceptance(&run, proof, heartbeat, shutdown)
+                        .await?;
+                    return Ok(SessionExit::Shutdown);
+                }
                 // Hold the same child while the owner decides. No old execution
                 // fence is spent and no subsequent inbox item is claimed early.
                 if *shutdown.borrow() {
@@ -239,7 +262,9 @@ impl ConfiguredExecution {
                 // killing a local helper is never reported as provider Stopped.
                 break;
             }
-            let cancellation = if *shutdown.borrow() {
+            let cancellation = if self.window.as_ref().is_some_and(|window| window.work_due()) {
+                Some("execution-window-work-deadline")
+            } else if *shutdown.borrow() {
                 Some("isolated-runtime-shutdown")
             } else {
                 budget.cancellation_key(Instant::now())

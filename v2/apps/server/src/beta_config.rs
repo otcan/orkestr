@@ -4,7 +4,7 @@ use orkestr_v2_contracts::{ConversationId, OwnerId};
 use serde::Deserialize;
 use std::path::PathBuf;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BetaConfig {
     pub schema_version: u32,
