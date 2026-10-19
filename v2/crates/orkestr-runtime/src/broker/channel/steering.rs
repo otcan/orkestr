@@ -6,6 +6,20 @@ pub(super) struct Correlation {
     ack: Option<bool>,
 }
 impl BrokerChannel {
+    pub(crate) fn steering_capacity(&self) -> (usize, bool) {
+        let used = self.steering_ids.len();
+        (
+            used,
+            used < 128
+                && self.steering_turn().is_ok()
+                && self.preparation == Some(Preparation::Written)
+                && self.pending.is_none()
+                && self.steering.is_none()
+                && self.offline.pending.is_none()
+                && !self.cancellation_pending
+                && self.next < (1_u64 << 53),
+        )
+    }
     pub(crate) fn steering_turn(&self) -> Result<&str, Blocker> {
         if self.poisoned || !self.execution_claimed || self.terminal_observed {
             return Err(Blocker::Protocol);
@@ -22,6 +36,7 @@ impl BrokerChannel {
             || self.preparation != Some(Preparation::Written)
             || self.steering.is_some()
             || self.offline.pending.is_some()
+            || self.cancellation_pending
             || self.steering_ids.len() >= 128
             || self.steering_ids.contains(&id)
         {
@@ -99,6 +114,40 @@ mod tests {
     }
     fn delta(turn: &str) -> Vec<u8> {
         json!({"method":"BrokerOutput","params":{"owned_handle":"synthetic_owned","frame":{"method":"item/agentMessage/delta","params":{"turnId":turn,"threadId":"native:1","delta":"bounded"}}}}).to_string().into_bytes()
+    }
+    #[test]
+    fn lifetime_capacity_survives_accepted_turn_continuation() {
+        let mut c = running();
+        for n in 0..128 {
+            assert_eq!(c.steering_capacity(), (n, true));
+            assert_eq!(c.steering_capacity(), (n, true));
+            let id = format!("00000000-0000-4000-8000-{n:012}");
+            c.steering(id.clone(), "turn:1", json!({"id":id})).unwrap();
+            assert_eq!(c.steering_capacity(), (n + 1, false));
+            let outer = c.pending.unwrap().0;
+            c.receive(json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":outer}}).to_string().as_bytes()).unwrap();
+            let proof = c.take_prepared().unwrap();
+            c.finish_provider_write(proof).unwrap();
+            c.receive(json!({"id":outer,"result":{"owned_handle":"synthetic_owned","frame":{"id":id,"result":{"turnId":"turn:1"}}}}).to_string().as_bytes()).unwrap();
+            assert_eq!(c.take_steering_ack(), Some(true));
+        }
+        assert_eq!(c.steering_capacity(), (128, false));
+        c.receive(json!({"method":"BrokerOutput","params":{"owned_handle":"synthetic_owned","frame":{"method":"turn/completed","params":{"turn":{"id":"turn:1","status":"completed"}}}}}).to_string().as_bytes()).unwrap();
+        c.reserve_continuation(8).unwrap();
+        let outer = c.pending.unwrap().0;
+        c.receive(json!({"method":"BrokerPrepared","params":{"owned_handle":"synthetic_owned","request_id":outer}}).to_string().as_bytes()).unwrap();
+        let proof = c.take_prepared().unwrap();
+        c.finish_provider_write(proof).unwrap();
+        c.receive(json!({"id":outer,"result":{"owned_handle":"synthetic_owned","frame":{"id":8,"result":{"turn":{"id":"turn:2","status":"inProgress"}}}}}).to_string().as_bytes()).unwrap();
+        assert_eq!(c.steering_turn().unwrap(), "turn:2");
+        assert_eq!(c.steering_capacity(), (128, false));
+        assert!(c
+            .steering(
+                "00000000-0000-4000-8000-999999999999".into(),
+                "turn:2",
+                json!({})
+            )
+            .is_err());
     }
     #[test]
     fn active_progress_during_preparation_does_not_authorize_ack_or_write() {

@@ -10,6 +10,14 @@ pub enum SteeringProgress {
     Pending,
     Acknowledged,
 }
+/// Local transport availability only; Core must separately authorize each request.
+/// Counts belong to the persistent child and survive accepted-turn transfer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SteeringReadiness {
+    pub ready: bool,
+    pub used: usize,
+    pub remaining: usize,
+}
 pub(super) struct SteerWrite {
     delivery: Option<Box<ConsumedSteering>>,
     bytes: Vec<u8>,
@@ -27,6 +35,28 @@ impl SteerWrite {
     }
 }
 impl CodexPump {
+    /// Sampling never reserves an ID or creates authority. An exhausted child
+    /// remains exhausted across accepted turns and successful lease renewal.
+    pub fn steering_readiness(&self) -> SteeringReadiness {
+        let (used, channel_ready) = self
+            .source
+            .broker
+            .as_ref()
+            .map_or((0, false), BrokerChannel::steering_capacity);
+        SteeringReadiness {
+            ready: channel_ready
+                && self.source.failed.is_none()
+                && !self.source.eof
+                && self.source.writing.is_none()
+                && self.source.steering.is_none()
+                && self.source.tool_write.is_none()
+                && self.pending_offline_python().is_none()
+                && self.cursor.pending().is_none(),
+            used,
+            remaining: 128_usize.saturating_sub(used),
+        }
+    }
+
     /// Capture the Core issuer before attachment; bind it only to the native
     /// turn actually observed on this owned channel. No caller turn ID exists.
     pub async fn bind_steering_turn(
