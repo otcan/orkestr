@@ -5,6 +5,7 @@ import {ownerReads} from './owner-reads.mjs';
 import {executionUi} from './execution-ui.mjs';
 import {executionStatus} from './execution-evidence.mjs';
 import {assertHeldInput} from './window-evidence.mjs';
+import {waitStoppedWindow} from './stopped-window.mjs';
 import {loginOwner, reloadOwner} from './ui.mjs';
 import {errorChain, failure} from './diagnostics.mjs';
 
@@ -45,8 +46,12 @@ export async function browserChat({page, context, origin, sourceSha, credentials
     const read = ownerReads(page, conversation, active, origin);
     controls = executionUi({page, origin, conversation, read, capture, signal: active, verifyLease});
     assert.equal(await read('window'), null, 'fresh_owner_window_required');
-    let first, held, stopped, heldBefore;
-    await step('initial_intake', async () => (await controls.send(fixture.messages[0])).proof);
+    let first, held, stopped, heldBefore, opening;
+    await step('initial_intake', async () => {
+      const sent = await controls.send(fixture.messages[0]);
+      opening = structuredClone(sent.window.receipt.status);
+      return sent.proof;
+    });
     await step('running_progress', async () => {
       first = await controls.phase(['running']);
       return (await controls.progress(first.run_id)).proof;
@@ -58,7 +63,11 @@ export async function browserChat({page, context, origin, sourceSha, credentials
       assert.equal(current.phase, 'running', 'original_run_must_still_be_running');
       return held.proof;
     });
-    await step('stop', async () => { stopped = await controls.stop(first.run_id); return stopped.proof; });
+    await step('stop', async () => {
+      stopped = await controls.stop(first.run_id);
+      await waitStoppedWindow({read, conversation, opening, signal: active});
+      return stopped.proof;
+    });
     await step('held_input', async () => {
       heldBefore = await read('held');
       const proof = assertHeldInput({conversation, stoppedRun: first.run_id, admitted: held.intake.receipt,

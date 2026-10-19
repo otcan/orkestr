@@ -120,6 +120,11 @@ receipts. No fixture may silently select a provider or trigger account resolutio
 Keep one owner/conversation per real attempt and explicit intake/control budgets.
 An acceptance receipt is not model completion; an interrupt ACK is not Stopped.
 Stop must retain the earlier held input while only new post-Stop intent executes.
+The existing Stop step also waits up to ten seconds for its original window to
+become closed. Every input identity, generation and budget field must still match
+the initial admission; retiring is pending, and missing or uncertain state refuses.
+This read-only wait precedes held verification and fresh intake, stays within the
+original chat deadline, and supplies no independent native-reap proof.
 Unsupported Steer must be visible as unavailable, never reported as passed.
 Browser status and payload proofs are not independent process-tree evidence.
 The protected operator must additionally verify native cleanup and durable
