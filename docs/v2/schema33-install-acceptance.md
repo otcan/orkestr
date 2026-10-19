@@ -1,6 +1,6 @@
 # Pinned schema33 installation gate
 
-This is source preparation, not executed package acceptance. Core explicitly
+This checkpoint includes bounded actual package acceptance. Core explicitly
 supports exact known-checksum, structurally valid populated prefixes14,17,31 to
 schema33 at `941c76ec8`. Full source identity, all 33 SQL SHA256 and SQLx SHA384
 fingerprints, and compact inventory digest are recorded in
@@ -44,8 +44,16 @@ ORKESTR_V2_MIGRATIONS_DIR=/path/to/exact-core33-migrations \
   python3 -B -m unittest discover -s v2/local-install/tests -p test_schema33_contract.py -v
 ```
 
-Actual matching schema33 binary/package upgrade, rollback and restore acceptance
-remain **unexecuted** pending coordinator's immutable same-source server/UI pair.
-Retained original14/17 packages and development31 pair are available as old inputs;
-no duplicate build is needed. Historical31 acceptance is separate. No Docker,
-provider/browser, RC, deployment, activation or production-soak claim is made.
+Actual matching development pair `f322be29d98f1ea1afe92a32bdbb9f9ca406b5c5`
+passed populated package14/17/31-to33 copy-first migration, reopen, backward
+refusal, dormant restore rollback and untouched predecessor rollback. Exact
+artifact/result/backup hashes and owned cleanup appear in
+[schema33-install-checkpoint.json](schema33-install-checkpoint.json).
+Those package-created homes contain message history but no task/timer rows;
+populated task/timer preservation remains separately attributed to SQL checks.
+The private producer snapshot and finalized receipt are retained separately;
+normalization to packaging receipt fields does not create a build attestation.
+
+No duplicate build was performed. Historical31 acceptance remains separate.
+No Docker runtime, provider/browser, RC, deployment, activation or production-soak
+qualification is claimed. Published schema34 readiness is a separate pinned gate.

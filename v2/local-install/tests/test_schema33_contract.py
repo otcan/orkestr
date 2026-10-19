@@ -16,7 +16,7 @@ PINS=Path(__file__).resolve().parents[2]/'packaging/candidate/schema33-fingerpri
 @unittest.skipUnless((SOURCES/'0033_durable_timer_authorities.sql').is_file(),'exact schema33 SQL not supplied')
 class Schema33ContractTests(unittest.TestCase):
     def sources(self):
-        pins=json.loads(PINS.read_text());paths=sorted(SOURCES.glob('*.sql'))
+        pins=json.loads(getattr(self,'pins',PINS).read_text());paths=sorted(SOURCES.glob('*.sql'))
         self.assertEqual([p.name for p in paths],[m['file'] for m in pins['migrations']])
         for path,pin in zip(paths,pins['migrations']):
             data=path.read_bytes()
@@ -29,7 +29,7 @@ class Schema33ContractTests(unittest.TestCase):
                          '4b7535910df4a0351e6984d26bc0b892a46fa318432e9d6c73ca114683cd180c')
         return paths
 
-    def test_populated14_and17_history_to33_reopen_without_authority(self):
+    def test_populated14_and17_history_to_target_reopen_without_authority(self):
         paths=self.sources()
         for predecessor in (14,17):
             with self.subTest(predecessor=predecessor),tempfile.TemporaryDirectory() as raw:

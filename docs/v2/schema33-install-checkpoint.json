@@ -1,0 +1,179 @@
+{
+  "cleanup": {
+    "loopback_port_free": true,
+    "owned_processes_remaining": 0,
+    "stopped_backups_and_logs_retained": true
+  },
+  "format": "orkestr-v2-schema33-install-checkpoint-v1",
+  "harness_commit": "2e845b9efe33d577a0b49360de2695d95fd86cf4",
+  "limitations": [
+    "Original14/17/31 generated synthetic message history; no pending tasks/timers existed in those package-created homes. Populated task/timer dormancy covered separately by exact SQL tests.",
+    "Historical14 probe and17 RC labels are integrity metadata only; successor and31 predecessor embedded identity are development2.0.0-dev.",
+    "No RC, provider/browser, Docker runtime, production routing/soak, cross-version dormant import, owner rebinding or power-loss qualification.",
+    "Docker context only generated with historical base metadata; no image build or run."
+  ],
+  "normalized_receipt_sha256": "43ce135bc6964f387bbc6ecef06a3616aa2a218ead1c5f84e811919b3ff7a5f2",
+  "producer_final_receipt_sha256": "df692cce7dca5c3b0394f381c9f185c10f48e5b21b98eb84a332776f233a02ed",
+  "producer_snapshot_sha256": "7281572f135f55671ae4bd4c23ee5633aea4f21c268544ee1e76d06b5b2fb60c",
+  "qualification": "bounded same-source development package upgrade; not RC/release",
+  "receipt_scope": "Private producer snapshot normalized to package v2 fields; byte-only embedded server/web identities, source SQL and all artifact hashes verified. Final producer receipt adds root-owned timer-process PASS; no artifact bytes changed. Ordinary server default-features declaration retained; absent feature list normalized to empty. No new build attestation.",
+  "results": {
+    "14": {
+      "backward_refusal": {
+        "database_inventory_unchanged": true,
+        "exit_code": 1
+      },
+      "checks": [
+        "old executable created populated schema14; verified stopped backup and untouched rollback copy",
+        "successor copy-upgrade/FK/history preflight passed before writable original migration",
+        "new executable migrated populated14 to33; original session/history/idempotency retained",
+        "successor reopened migrated home with original history/idempotency and unchanged schema",
+        "successor stopped backup/dormant apply/refused activation/rollback; old-package snapshot refused",
+        "old executable refused disposable schema33 copy without database inventory mutation",
+        "old executable recovered original owner/history on untouched schema14 rollback home; backup preserved"
+      ],
+      "copy_first_original_unchanged": true,
+      "foreign_keys_checked": true,
+      "migration_authority": {
+        "new_execution_authority": 0,
+        "pending_tasks_held": 0,
+        "scope": "stopped synthetic database rows; no provider activation proof",
+        "task_receipts_preserved": 0
+      },
+      "old_binary_sha256": "c6eca93f7119dbd9cbbfe6e42cf1cc894a62fc8e97123938fabfc82a47cd2f0e",
+      "old_source": "31d8d0395369b32306d14412843a9f9bf5eb2c01",
+      "owned_supervisor_stopped": true,
+      "preflight_authority": {
+        "new_execution_authority": 0,
+        "pending_tasks_held": 0,
+        "scope": "stopped synthetic database rows; no provider activation proof",
+        "task_receipts_preserved": 0
+      },
+      "preserved_backup_manifest_sha256": "dc8562f98fbc248f1520d2e70ec8538f17306dd89c27356ef0274f7bcf324c68",
+      "preserved_backup_sha256": "7a3fa559b0267c900b248b0f24cd43d336a88e9205aaab7da56c82c3ee73f696",
+      "private_result_sha256": "3647704af8a255cbb869711ce90e408a756f3c5f6d1ffde9e5d68a06b7f751f1",
+      "reopen_authority": {
+        "new_execution_authority": 0,
+        "pending_tasks_held": 0,
+        "scope": "stopped synthetic database rows; no provider activation proof",
+        "task_receipts_preserved": 0
+      },
+      "status": "passed",
+      "successor_dormant_restore": {
+        "cross_package_restore_refused": true,
+        "dormant_activation_refused": true,
+        "rollback_empty": true,
+        "scope": "stopped same-package dormant apply only; no activation or cross-version import",
+        "snapshot_sha256": "6cab54dbe1bff495b731c937975a8e452305dd2255e4431c314463b28c55ed31",
+        "target_configuration_preserved": true
+      }
+    },
+    "17": {
+      "backward_refusal": {
+        "database_inventory_unchanged": true,
+        "exit_code": 1
+      },
+      "checks": [
+        "old executable created populated schema17; verified stopped backup and untouched rollback copy",
+        "successor copy-upgrade/FK/history preflight passed before writable original migration",
+        "new executable migrated populated17 to33; original session/history/idempotency retained",
+        "successor reopened migrated home with original history/idempotency and unchanged schema",
+        "successor stopped backup/dormant apply/refused activation/rollback; old-package snapshot refused",
+        "old executable refused disposable schema33 copy without database inventory mutation",
+        "old executable recovered original owner/history on untouched schema17 rollback home; backup preserved"
+      ],
+      "copy_first_original_unchanged": true,
+      "foreign_keys_checked": true,
+      "migration_authority": {
+        "new_execution_authority": 0,
+        "pending_tasks_held": 0,
+        "scope": "stopped synthetic database rows; no provider activation proof",
+        "task_receipts_preserved": 0
+      },
+      "old_binary_sha256": "0f7e9235c01eb67ce5bf55c4f6f79d2d11d1b0b7ca17130cac561f8559ee1b37",
+      "old_source": "aa8e19a3d99e3fb83c3c421e8b61f5be4f5a8c2a",
+      "owned_supervisor_stopped": true,
+      "preflight_authority": {
+        "new_execution_authority": 0,
+        "pending_tasks_held": 0,
+        "scope": "stopped synthetic database rows; no provider activation proof",
+        "task_receipts_preserved": 0
+      },
+      "preserved_backup_manifest_sha256": "fa1b7d48fcb7ae4e57d3ec3cb9e4299ce382a33c2a63afff532f5faca8679e5f",
+      "preserved_backup_sha256": "3f6c33558a373f5ee7d1483f992b36d2a4312de2c6f4940718fbf400e8811c35",
+      "private_result_sha256": "1e95fdce9cfb5b3535245ee5b218dd3b46a8f33d89e2088880fa2593ce2e8b22",
+      "reopen_authority": {
+        "new_execution_authority": 0,
+        "pending_tasks_held": 0,
+        "scope": "stopped synthetic database rows; no provider activation proof",
+        "task_receipts_preserved": 0
+      },
+      "status": "passed",
+      "successor_dormant_restore": {
+        "cross_package_restore_refused": true,
+        "dormant_activation_refused": true,
+        "rollback_empty": true,
+        "scope": "stopped same-package dormant apply only; no activation or cross-version import",
+        "snapshot_sha256": "00a4f0dd0f2811f279b56d0baed239af30d38a261885bc5207db53b69e90947a",
+        "target_configuration_preserved": true
+      }
+    },
+    "31": {
+      "backward_refusal": {
+        "database_inventory_unchanged": true,
+        "exit_code": 1
+      },
+      "checks": [
+        "old executable created populated schema31; verified stopped backup and untouched rollback copy",
+        "successor copy-upgrade/FK/history preflight passed before writable original migration",
+        "new executable migrated populated31 to33; original session/history/idempotency retained",
+        "successor reopened migrated home with original history/idempotency and unchanged schema",
+        "successor stopped backup/dormant apply/refused activation/rollback; old-package snapshot refused",
+        "old executable refused disposable schema33 copy without database inventory mutation",
+        "old executable recovered original owner/history on untouched schema31 rollback home; backup preserved"
+      ],
+      "copy_first_original_unchanged": true,
+      "foreign_keys_checked": true,
+      "migration_authority": {
+        "new_execution_authority": 0,
+        "pending_tasks_held": 0,
+        "scope": "stopped synthetic database rows; no provider activation proof",
+        "task_receipts_preserved": 0
+      },
+      "old_binary_sha256": "5d7ffdbff1a98311bb54163067a5c517ee334c1e58faf7297cf1bb0168505edf",
+      "old_source": "25b3bbb463bd1e71f7c9f2f8eb72e43348b64b4d",
+      "owned_supervisor_stopped": true,
+      "preflight_authority": {
+        "new_execution_authority": 0,
+        "pending_tasks_held": 0,
+        "scope": "stopped synthetic database rows; no provider activation proof",
+        "task_receipts_preserved": 0
+      },
+      "preserved_backup_manifest_sha256": "b0a932e77eade90e269fffa6fc320b2a1defb88e4a6474ab9653fa1abb77b1b4",
+      "preserved_backup_sha256": "8949b0bf69c0d8c350608657709f87f221ffb0a58165edd64fef445580716e4f",
+      "private_result_sha256": "91d901d315d58d7ac1883b5c1382ae5e50500b210837719b0d79b3b969f5ec63",
+      "reopen_authority": {
+        "new_execution_authority": 0,
+        "pending_tasks_held": 0,
+        "scope": "stopped synthetic database rows; no provider activation proof",
+        "task_receipts_preserved": 0
+      },
+      "status": "passed",
+      "successor_dormant_restore": {
+        "cross_package_restore_refused": true,
+        "dormant_activation_refused": true,
+        "rollback_empty": true,
+        "scope": "stopped same-package dormant apply only; no activation or cross-version import",
+        "snapshot_sha256": "44fac7ee7e08e702e2cd9514ff491b4ead6588025e80938788bfaeb5a396082e",
+        "target_configuration_preserved": true
+      }
+    }
+  },
+  "schema": 33,
+  "schema_inventory_sha256": "24430c423063e077633458198512834c603758c005136f15ba6d21557e0a3faf",
+  "server_sha256": "ac6a0a12a7a6a079bf51ba977cd6b0037f8288c6a6b4cfd4196e4db34b3fc400",
+  "source_commit": "f322be29d98f1ea1afe92a32bdbb9f9ca406b5c5",
+  "target": "linux-x86_64",
+  "ui_inventory_sha256": "1dc891b94c065c5da1329dfb511031dee2aeacc96647981074fac85750f33a74",
+  "version": "2.0.0-dev"
+}

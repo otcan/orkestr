@@ -1,0 +1,212 @@
+{
+  "format": "orkestr-v2-install-migration-fingerprints-v1",
+  "inventory_sha256": "2c9fa817bc66fdf87d8c15253e7394b08a69ebbacaea3ae0733ae631709e24b4",
+  "migrations": [
+    {
+      "file": "0001_intake.sql",
+      "sha256": "da8e344d8fccee35f28e469bd896744571226209590eeb48eef3630957d7e473",
+      "sqlx_sha384": "669c81b57589bda0218335f94fc393acb496cb86d8219cea24d04e908f0bb1cb1a7e9bcdb15672fee9600d105752eaa1",
+      "version": 1
+    },
+    {
+      "file": "0002_runtime_bindings.sql",
+      "sha256": "1d3896aa14be9e6d7ed22b35532fb9158fe6f5fcbdc0a6bcab7b48f2b285cc7e",
+      "sqlx_sha384": "68bdb173c180a62803de27e40d80aa98a5f3851ea7067d6bd673a69804f38783dbc2d5efa5d478849c736d5e4543e7e1",
+      "version": 2
+    },
+    {
+      "file": "0003_fixture_supervisors.sql",
+      "sha256": "6439ad268be1be323f956dd5d6fbd51232414322c7d299bccbb092b39c7a737b",
+      "sqlx_sha384": "62703805593d4d88a5ba3fbf078d520dbfcc0ff27de32bc91e909ebfad8101379a32d8b283a5a2067637c6ec1bad7aec",
+      "version": 3
+    },
+    {
+      "file": "0004_fixture_dispatch.sql",
+      "sha256": "eca688a18076fcd33a4705dc68a0468033330b0da45995cc7c4af9a83aa1771e",
+      "sqlx_sha384": "765e42e2970b99ea9ef72f3721898a1c263c1fc24ea6876c9a1eb5a116c62e8bf39288b746e29c1f4966eb6c7623d22d",
+      "version": 4
+    },
+    {
+      "file": "0005_fixture_observations.sql",
+      "sha256": "fb4b19a20203f68abab794afa499bd594dcd6674e8932d0520a48fed4594a40c",
+      "sqlx_sha384": "de0cd7597bb2dd08d7b6c80d84678c53a19398c1aedf668580e1ba69135a902413ff68d8a15d89251b8b4b78e4a0ef75",
+      "version": 5
+    },
+    {
+      "file": "0006_fixture_lease_history.sql",
+      "sha256": "55bd1f8b13c4aa1fca8f108c8030ae484050835acee6142c7c702984e8e80136",
+      "sqlx_sha384": "2f77266148bfa3667188d74f0fd1cbaf4891fb157c057f53705f5813380b87fe05654df95e43507e5ad15dc3888ea8b8",
+      "version": 6
+    },
+    {
+      "file": "0007_fixture_cancellation.sql",
+      "sha256": "92aaab2e53c25b98f359031ce5cd5d4764fdb3eb59abe6bec29f542b86d532ad",
+      "sqlx_sha384": "4f1065b6810c6f5e0f13f880744f10a0780876300e5b0e44ad42f1ad1f0ccbc020624f843bdb586af4cdcab94aeaec7f",
+      "version": 7
+    },
+    {
+      "file": "0008_production_authority.sql",
+      "sha256": "d43b42324ec23c3c56c9191b94dfb0e03c11d6c2a297c2c2d364e950a18ef4cc",
+      "sqlx_sha384": "8ab8797fd03f48e6314658df1ee6aedf84924be055107cd09cbaff82cfb05e0f604b7704cbc7a9785ef1d665c82968f2",
+      "version": 8
+    },
+    {
+      "file": "0009_execution_revision.sql",
+      "sha256": "869c93f61a2886ab7f186c06b86187e04c1759e50c897f2f6593c2f22d818ae7",
+      "sqlx_sha384": "7508e1b54c20a041cfd9fcf52dbcf605bcf7efcb84ce6b69632f9db58f51e285345a7fe0fb2ab0067ce35b2fd49089ce",
+      "version": 9
+    },
+    {
+      "file": "0010_production_leases.sql",
+      "sha256": "dd24e03522c6faeeeee3955bffc8931b3a319f21d207411862e4b2f66bc21e45",
+      "sqlx_sha384": "e9fdc556962e28495d90f26d730d5e33f839297e62b0b7d24941f9264f2abc68df8606f178faa810f330df06b891afe5",
+      "version": 10
+    },
+    {
+      "file": "0011_production_observations.sql",
+      "sha256": "35b76d0312e5220455827565a2612f1c1f25d7a55703e1d665fdaeb094d1090a",
+      "sqlx_sha384": "84e519253031a417c51a89fc848ad73aa40bbef1aa661a529db343f2debaf3356d5daedba190f777e74e4f83cc57e4cd",
+      "version": 11
+    },
+    {
+      "file": "0012_production_cancellation.sql",
+      "sha256": "f4f050628d9277a6aad695ce7cf8343a80fa2e18107ab64c106c8c58b964035e",
+      "sqlx_sha384": "cec5aa5d93b980be9a30e9aea534b36c6d5242402112d1de1aa19e5af7d98ce3c513c7c6829facd1cb9e3c6a28c77e25",
+      "version": 12
+    },
+    {
+      "file": "0013_production_control_revision.sql",
+      "sha256": "52f2b0715c5d4e9a3c3cb5693729db0bea3c0e49e5525159221caaf1d140f47d",
+      "sqlx_sha384": "b23377f676efa4a3947c242ce120c97f7b3f2fd370a423bffb74b10e786694ef2582c2b5e422ac820ee7823d07292f27",
+      "version": 13
+    },
+    {
+      "file": "0014_production_payloads.sql",
+      "sha256": "1db67eb8f225261de0b469017d6edc4108b2a57f29501b0907283c06ea0faa97",
+      "sqlx_sha384": "00f33b72b2e9d1c02f5ebcd0e053df28eeaa812f45d26ac8504ae6252842acf5ebb4c90b377f5ccfa305aa356199baf6",
+      "version": 14
+    },
+    {
+      "file": "0015_production_acceptance.sql",
+      "sha256": "5c0638dd9df5992ec22ad1e440b0d5a198ed70f50d857d76aededcd82ed063c3",
+      "sqlx_sha384": "45603d5f24bf23e25968197636fe72538421120f886c902d7c055469d3b383893a81bf34ffdb606145b4aa6f682dbf32",
+      "version": 15
+    },
+    {
+      "file": "0016_dormant_history.sql",
+      "sha256": "c2d0bc72ee6ae482904319c6f962e7258c73da4dae604fa45fe7dd5caeeefd5f",
+      "sqlx_sha384": "58adbfbf9e98e3336f532c82c098dac77bbd1344e6ed2534cfa5edc5dc61c9a6093b08fb8729793e4ab30b38a9753a39",
+      "version": 16
+    },
+    {
+      "file": "0017_worker_tool_delegations.sql",
+      "sha256": "d6387248ac6ab229ce7a21a445bbfb50be4c3dcde3669684fde99eede7984bf4",
+      "sqlx_sha384": "141173425db119bf741ab2980e477df78e358c0c7610ec27a72c62c114fc4bc62c70cd0a82040f374023ca0f7e4b15f3",
+      "version": 17
+    },
+    {
+      "file": "0018_worker_provider_delegations.sql",
+      "sha256": "4a484c21d8724f38bb3893800e3d5a413670332dc955a63a4757ced306f01aa8",
+      "sqlx_sha384": "ef15783883a1816e6bcbcd44a872bc491a98622b6be1dab6bdb21a62f55849d827ab8b434de9ff25a9ec83851fd92888",
+      "version": 18
+    },
+    {
+      "file": "0019_worker_provider_runs.sql",
+      "sha256": "5f1a623163769f167fbcd96cd5a4737df8b6a0baa999e83163e665525c5dfa6a",
+      "sqlx_sha384": "3f9fb72a449bec237b852ef2c46202b4da9ff51cf6f37234db9442a1040fd080028dc91cbfa8bd932de443cc1086bbdc",
+      "version": 19
+    },
+    {
+      "file": "0020_history_recovery_restores.sql",
+      "sha256": "224d58ac6a180ca8622cc4213cab8369b64ab0c0a5ec392943ad430821550314",
+      "sqlx_sha384": "5a85f124ce2a03cb03e6a336dc6e8e1b0e44133027a2770da9e753772addd0f241244d3b234a7d08fe14641a70e2eb45",
+      "version": 20
+    },
+    {
+      "file": "0021_accepted_session_metadata.sql",
+      "sha256": "eaa18ad52e0ae0078d0d8f4545bae2ff50cd7bbcaff2150f4c48d9ccb85f4542",
+      "sqlx_sha384": "82168efe1c13856c078631280b541105c2d9583de646ed4574ad14b06fe13f76011417099de0a9e9070caa79d8722bf2",
+      "version": 21
+    },
+    {
+      "file": "0022_fast_provider_runs.sql",
+      "sha256": "12ed41eede187cf1c974fda433f7ecd64f7eabbf66b601bcd6f96354192cce5d",
+      "sqlx_sha384": "da08acbfa7ca614deb3e3471f87a5b48d950048c0a167702646679df2d0005f95f26d1b1cab2e15bb21a16804fdd40e8",
+      "version": 22
+    },
+    {
+      "file": "0023_terminal_session_metadata.sql",
+      "sha256": "4d073578243f48b87cd6ddc3fdc1473ec6d3895c31b4832a76762c98504b35a3",
+      "sqlx_sha384": "3958a445fed63faa1ee18fd3f22d5042dbbc1a1d2c7e89c9f7433318acf63670b9cad1ff6468a74aab4ae347d6b2f86c",
+      "version": 23
+    },
+    {
+      "file": "0024_run_control_revision.sql",
+      "sha256": "9e40873287dace6d681b3b53e90d55035e9fa31e453a62910a0f40c12582a340",
+      "sqlx_sha384": "bbdc4382d31e3d9e61993d02f87d166a5d83d710de1ecc6285dd3bd1862638950181317b1eb3ba500edfe5f1c7c1aa49",
+      "version": 24
+    },
+    {
+      "file": "0025_stop_held_inputs.sql",
+      "sha256": "52335a6057ffe1e929ddd62fccc87a43921cf8598cb7c8996f64af30ae20e65b",
+      "sqlx_sha384": "e88d40e4babd5413f46626730b5d11f4c38e9424ecf8da5ddb6684425d6ed28732a4f78940c42551a3bef918141b0358",
+      "version": 25
+    },
+    {
+      "file": "0026_worker_tasks.sql",
+      "sha256": "8780ba72219a5513e89fad3f9715c8d453f5c8978f8adc8c904f53623596695e",
+      "sqlx_sha384": "204479850a31c46f81c983de156602fe1ad2b3737f366b7b6e6007dfcdd8caab26f7926bec82f8b690641dc11ad4d6df",
+      "version": 26
+    },
+    {
+      "file": "0027_dormant_timers.sql",
+      "sha256": "c0a18ecf99c6ab40ca4354441ff9f652f1e1412b256b1e229128ca89cbcb558a",
+      "sqlx_sha384": "2099fc50e7b20dc23a32dfb1986ce4af488cc6c630cd403b884a47d95360bd5a0d01fa3b3176077bf85379ea3cf7843c",
+      "version": 27
+    },
+    {
+      "file": "0028_graceful_supervisor_retirement.sql",
+      "sha256": "8cf426b6793ff61a45e096973af2f26b83c5c4615f0f3035d07ea93d7f028d69",
+      "sqlx_sha384": "395e386fba07b32496f4acc9a60d5e4081848219a365c5732f8784830f0bf4fc5fba159b553273187ccca63ded8c1996",
+      "version": 28
+    },
+    {
+      "file": "0029_timer_inputs.sql",
+      "sha256": "212ce20acdcf6964ac9f106af07584c049d3f6b38922c1dc1ad359e6acdb9124",
+      "sqlx_sha384": "ad9fb04884b0c9e2c8ce09d903f4f7c7788914c562f30844959c328e3de2285cc90b22ccd276fa0678ab849b1ae538df",
+      "version": 29
+    },
+    {
+      "file": "0030_requested_native.sql",
+      "sha256": "3b9093fb07993c1baa4e15d5a0aff71f5140dbb87d1e71546db27030762031b0",
+      "sqlx_sha384": "efeae243a11021f332d8413dbb96d24feb1055998d462c936418115fea720b7bb6b7a341d645069b04b6e68070d3e8b5",
+      "version": 30
+    },
+    {
+      "file": "0031_worker_task_holds.sql",
+      "sha256": "c16853e32ee01d304bccc47dddeb3d53dbf2c7042378215f4d41b7e686816cec",
+      "sqlx_sha384": "5bb46c6e15cae4483a0beefa095f9d930cfc44241fc9868c60a49871f8bfa91e68d7c6e765ab1ace1b7eccaf27cc1110",
+      "version": 31
+    },
+    {
+      "file": "0032_worker_tool_results.sql",
+      "sha256": "ff4d7c0c26d224b2382a8aedac87df0b4bbfefbc37c22b84356b82f784ce3df8",
+      "sqlx_sha384": "e1600bd7f5b940f2ce7da87f45b48cc49c8e537670aad31c918619cdd23cd5e9e8519cc7ebc9e3ee21b04b6a9d2a6487",
+      "version": 32
+    },
+    {
+      "file": "0033_durable_timer_authorities.sql",
+      "sha256": "b7f5857277c7a9af78d53da67e15c75bb249b6723fd7f15d407ec842ccb6d44b",
+      "sqlx_sha384": "d89048ae6b73a201284ad8eb4d0461e5501c2871cab8cb82f243d9867d03c6edb88034942db2378b3cdf3c69b5f8ac77",
+      "version": 33
+    },
+    {
+      "file": "0034_production_steering.sql",
+      "sha256": "172fd0415f5ad1aadbd906a6347a5ddb3c3e81054fd095b82c8783a8084e62a7",
+      "sqlx_sha384": "ca79b581e762a52c5c0061d7cff21ba457fc1052c694eedf53869118a9d7bdb1ac2663c827bf0bdf5fe6d18ed87b11f4",
+      "version": 34
+    }
+  ],
+  "schema_version": 34,
+  "source_commit": "63366a48788b41998ec3fdcabf7de3dc20ca2d97"
+}
