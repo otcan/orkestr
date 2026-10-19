@@ -70,3 +70,26 @@ test('open and export refuse a different same-owner collection',async()=>{
  const f=await fixture();f.setHandler(path=>path.includes('?')?json(f.page()):path.endsWith('/export')?json({manifest:{...f.manifest,manifest_id:id(99)},contents:[]}):json({...f.manifest,manifest_id:id(99)}));
  await f.client.list();await assert.rejects(f.client.open(id(5)),/identity/);await assert.rejects(f.client.exportCopy(f.manifest),/identity/);
 });
+test('valid two-manifest inert page exceeding 1 MiB is readable without dropping refs',async()=>{
+ const f=await fixture();
+ const make=n=>({...f.manifest,manifest_id:id(n),references:Array.from({length:128},(_,i)=>({...f.ref,reference_id:id(1000+i),state:'inert',filename:'f'.repeat(4096),media_type:'m'.repeat(1024),sha256:'s'.repeat(128)}))});
+ const manifests=[make(10),make(11)];const page={...f.page(),manifests};assert(Buffer.byteLength(JSON.stringify(page))>1024*1024);
+ f.setHandler(()=>json(page));const actual=await f.client.list();assert.equal(actual.manifests.length,2);assert.equal(actual.manifests[1].references.length,128);
+});
+test('escape-heavy valid single manifest and import receipt exceed 1 MiB safely',async()=>{
+ const f=await fixture();const manifest={...f.manifest,references:Array.from({length:128},(_,i)=>({...f.ref,reference_id:id(1000+i),state:'inert',filename:'\u0001'.repeat(4096),media_type:'\u0002'.repeat(1024),sha256:'\u0003'.repeat(128)}))};
+ assert(Buffer.byteLength(JSON.stringify(manifest))>1024*1024);
+ f.setHandler((path,o)=>o.method==='POST'?json({import_id:id(90),source_manifest_id:JSON.parse(o.body).source.manifest.manifest_id,manifest:JSON.parse(o.body).target_manifest,mapping:JSON.parse(o.body).mapping}):path.includes('?')?json(f.page()):json(manifest));
+ await f.client.list();assert.equal((await f.client.open(id(5))).references.length,128);
+ await f.client.prepareCopy({manifest,contents:[]});assert.equal((await f.client.commit()).manifest.references.length,128);
+});
+test('route-specific metadata bounds reject oversized bodies and cancel readers',async()=>{
+ const {ATTACHMENT_MANIFEST_JSON_LIMIT:single,ATTACHMENT_PAGE_JSON_LIMIT:page}=await import('./client.mjs');
+ for(const [kind,limit] of [['open',single],['list',page]]){
+  const f=await fixture();let cancelled=false;
+  f.setHandler(()=>json(f.page()));await f.client.list();
+  f.setHandler(()=>new Response(new ReadableStream({start(c){c.enqueue(new Uint8Array(limit+1));},cancel(){cancelled=true;}})));
+  await assert.rejects(kind==='open'?f.client.open(id(5)):f.client.list(),/response too large/);
+  assert.equal(cancelled,true);
+ }
+});
