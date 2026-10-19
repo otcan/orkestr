@@ -111,8 +111,13 @@ class ClaudeTextStream:
             delta = event['delta']; require(isinstance(delta, dict)
                 and {'stop_reason'} <= set(delta)
                 and set(delta) <= {'stop_reason', 'stop_sequence', 'stop_details', 'container'})
-            require(delta['stop_reason'] in STOP_REASONS
-                    and delta.get('stop_details') is None and delta.get('container') is None)
+            require(delta.get('stop_details') is None and delta.get('container') is None)
+            if delta['stop_reason'] is None:
+                # Native closes an interrupted partial stream before its result.
+                # This is discard-only framing, never an ACK or terminal receipt.
+                require(cancelled is True and delta.get('stop_sequence') is None)
+            else:
+                require(delta['stop_reason'] in STOP_REASONS)
             if delta.get('stop_sequence') is not None: text(delta['stop_sequence'])
             usage(event['usage']); self.state = 'ending'
         else:
