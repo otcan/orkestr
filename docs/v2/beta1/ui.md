@@ -54,3 +54,13 @@ binary check; six Node transport cases pass. These are source/model checks, not
 mounted browser, Store composition, provider or cleanup acceptance. A first
 binary check exposed a temporary borrow error; the request clone now releases
 the immutable borrow before preparing intent, and the subsequent check passes.
+
+A review found the initial mounted admission intent was not conversation-keyed.
+The successor retains independent bounded per-conversation intents. Every write
+captures a route/owner-epoch/intent-generation ticket; cross-route or superseded
+callbacks cannot review or complete an intent. Successful receipt handling removes
+only the saved input matching the pending message/event/client-key tuple, never
+the currently rendered first row. Selection preserves other conversations'
+uncertain requests. Explicit review advances that intent's generation; owner
+change invalidates all tickets. Two added deterministic route/navigation cases
+plus the six prior focused cases pass; this is not mounted browser verification.

@@ -37,7 +37,7 @@ fn App() -> Element {
     let mut session_scope = use_signal(SessionScope::default);
     let mut saved_inputs = use_signal(orkestr_v2_ui::beta_inputs::SavedInputs::default);
     use_context_provider(move || saved_inputs);
-    let mut window_intent = use_signal(orkestr_v2_ui::beta_window::WindowIntent::default);
+    let mut window_intent = use_signal(orkestr_v2_ui::beta_window::WindowIntents::default);
     use_context_provider(move || window_intent);
     let mut task_drafts = use_signal(|| {
         orkestr_v2_ui::task_draft_lifetime::TaskDrafts::new(dioxus::dioxus_core::current_scope_id())
