@@ -8,6 +8,7 @@ use std::time::Duration;
 
 struct Window {
     f: fixtures::Case,
+    browser_credential: String,
     bound: Store,
     credential: ExecutionWindowCredential,
     status: ExecutionWindowStatus,
@@ -52,6 +53,7 @@ impl Window {
             .await
             .unwrap();
         Self {
+            browser_credential: browser,
             f,
             bound,
             credential,
@@ -358,3 +360,6 @@ async fn fast_cleanup_uses_remaining_margin_but_never_extends_hard_deadline() {
         .is_err());
     assert!(!called);
 }
+
+#[path = "role_resume_tests.rs"]
+mod resume;
