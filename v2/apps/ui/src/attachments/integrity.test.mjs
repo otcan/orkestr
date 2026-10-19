@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
-import {referenceFor,verifyBytes} from './integrity.mjs';
+import {referenceFor,verifyBytes,ATTACHMENT_MAX_READS} from './integrity.mjs';
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const hash = async bytes => Buffer.from(await webcrypto.subtle.digest('SHA-256',bytes)).toString('hex');
 async function fixture(bytes = new TextEncoder().encode('abc')) {
@@ -46,4 +46,26 @@ test('aggregate cap and reference count apply even to unselected entries',async(
 });
 test('16MiB available boundary remains supported',async()=>{
  const x=await fixture(new Uint8Array(16777216));assert.equal((await verifyBytes(x)).bytes.length,16777216);assert.equal(x.cancelled(),1);
+});
+
+test('empty chunk flood is refused within a fixed read budget even for zero declared bytes',async()=>{
+ for(const bytes of [new Uint8Array(),new Uint8Array([1])]){
+  const x=await fixture(bytes);let reads=0;
+  x.reader.read=async()=>{reads++;return {done:false,value:new Uint8Array()};};
+  x.digest=()=>assert.fail('flood must never reach hashing');
+  await assert.rejects(verifyBytes(x),/read budget exceeded/);
+  assert.equal(reads,ATTACHMENT_MAX_READS);assert.equal(x.cancelled(),1);
+ }
+});
+test('one-byte chunk flood is refused instead of retaining millions of chunk objects',async()=>{
+ const x=await fixture(new Uint8Array(16777216));let reads=0;
+ x.reader.read=async()=>{reads++;return {done:false,value:new Uint8Array([0])};};
+ x.digest=()=>assert.fail('flood must never reach hashing');
+ await assert.rejects(verifyBytes(x),/read budget exceeded/);
+ assert.equal(reads,ATTACHMENT_MAX_READS);assert.equal(x.cancelled(),1);
+});
+test('ordinary multi-chunk input copies bytes without retaining mutable chunk references',async()=>{
+ const x=await fixture(new Uint8Array([1,2,3]));let index=0;const chunk=new Uint8Array(1);
+ x.reader.read=async()=>{if(index===3)return {done:true};chunk[0]=++index;return {done:false,value:chunk};};
+ assert.deepEqual((await verifyBytes(x)).bytes,new Uint8Array([1,2,3]));assert.equal(x.cancelled(),1);
 });

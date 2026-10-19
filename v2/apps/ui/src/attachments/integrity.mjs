@@ -1,5 +1,7 @@
 // Wire compatibility: Core 9788ef14d attachments.rs. No transport or authority grant.
 const MAX = 16 * 1024 * 1024;
+// Bound hostile readers independently of byte length, including empty chunks.
+export const ATTACHMENT_MAX_READS = 65536;
 const encoder = new TextEncoder();
 const uuid = value => typeof value === 'string' &&
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) &&
@@ -51,20 +53,20 @@ export async function verifyBytes({manifest, scope, referenceId, reader, current
       return Object.freeze({state:'removed', filename:ref.filename, byte_length:ref.byte_length});
     }
     if (!reader) fail('bytes missing');
-    const chunks = []; let length = 0;
+    const bytes = new Uint8Array(ref.byte_length);
+    let length = 0; let reads = 0;
     while (true) {
       check();
+      if (++reads > ATTACHMENT_MAX_READS) fail('read budget exceeded');
       const {done,value} = await reader.read();
       check();
       if (done) break;
       if (!(value instanceof Uint8Array)) fail('bytes invalid');
       length += value.byteLength;
       if (length > ref.byte_length || length > MAX) fail('length mismatch');
-      chunks.push(value.slice());
+      bytes.set(value, length - value.byteLength);
     }
     if (length !== ref.byte_length) fail('length mismatch');
-    const bytes = new Uint8Array(length); let offset = 0;
-    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
     check();
     const hash = [...new Uint8Array(await digest(bytes))].map(b => b.toString(16).padStart(2,'0')).join('');
     check();
