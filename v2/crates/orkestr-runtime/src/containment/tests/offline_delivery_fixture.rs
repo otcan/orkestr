@@ -34,10 +34,12 @@ async fn started(store: &Store, owner: &OwnerId, p: &ProviderAdmission) {
 }
 
 pub(super) async fn issued(label: &str) -> Fixture {
-    let root =
-        PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").expect("isolated synthetic home")).join(
-            format!("runtime-source-oracle-{}-{label}", std::process::id()),
-        );
+    let home = PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").expect("isolated synthetic home"));
+    std::fs::create_dir_all(&home).unwrap();
+    let root = home.join(format!(
+        "runtime-source-oracle-{}-{label}",
+        std::process::id()
+    ));
     std::fs::create_dir(&root).unwrap();
     let store = Store::open(&root.join("core.sqlite3")).await.unwrap();
     let conversation = store
