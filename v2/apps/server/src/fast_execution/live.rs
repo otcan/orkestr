@@ -1,5 +1,5 @@
 //! One private Fast transport; every continuation consumes a fresh Core grant.
-use super::{FastDispatch, FastFailure, FastStart, consume_fast};
+use super::{consume_fast, FastDispatch, FastFailure, FastStart};
 use crate::control_dispatch::{ActiveControl, PendingControl};
 use orkestr_runtime::{
     containment::{Authority, RetiringBroker},

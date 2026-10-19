@@ -362,17 +362,15 @@ async fn fast_setup_refuses_a_deep_grant_before_any_native_spawn() {
         &case.root.join("tmp"),
     )
     .unwrap();
-    assert!(
-        PreparingFast::open_retained(
-            case.bound.clone(),
-            grant,
-            &case.root.join("launcher"),
-            &case.root.join("workspace"),
-            directories,
-            Box::new(())
-        )
-        .is_err()
-    );
+    assert!(PreparingFast::open_retained(
+        case.bound.clone(),
+        grant,
+        &case.root.join("launcher"),
+        &case.root.join("workspace"),
+        directories,
+        Box::new(())
+    )
+    .is_err());
     assert!(case.trace().is_empty());
     assert_eq!(
         case.query("SELECT count(*) FROM production_runs"),

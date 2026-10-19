@@ -1,5 +1,5 @@
 //! One distinct Fast child. Admission always uses the non-inbox Core issuer.
-use super::{FastDispatch, LiveFast, consume_fast};
+use super::{consume_fast, FastDispatch, LiveFast};
 use orkestr_runtime::{
     containment::ChildDirectories,
     execution::{PreparingCodex, ReadyCodex, SetupFailure, SubmissionFailure},
