@@ -182,3 +182,6 @@ pub use attachments::*;
 
 mod attachment_transfer;
 pub use attachment_transfer::*;
+
+mod browser_session;
+pub use browser_session::BrowserSessionProjection;

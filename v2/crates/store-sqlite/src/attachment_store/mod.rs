@@ -1,4 +1,5 @@
 //! Authenticated inert byte storage. Never creates native conversation input.
+mod list;
 mod read;
 #[cfg(test)]
 mod tests;

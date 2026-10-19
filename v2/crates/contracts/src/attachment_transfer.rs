@@ -44,3 +44,14 @@ pub struct AttachmentRemovalReceipt {
     pub reference_id: Uuid,
     pub removed: bool,
 }
+
+/// A sampled keyset page, not a cross-page snapshot or attachment authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AttachmentManifestPage {
+    pub owner_id: crate::OwnerId,
+    pub conversation_id: crate::ConversationId,
+    pub after_id: Option<Uuid>,
+    pub next_after_id: Option<Uuid>,
+    pub manifests: Vec<AttachmentManifest>,
+}
