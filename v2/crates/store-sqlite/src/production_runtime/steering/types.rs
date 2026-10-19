@@ -5,6 +5,13 @@ pub struct CodexSteeringAuthority {
     pub(super) context: String,
     pub(super) incarnation: String,
 }
+impl CodexSteeringAuthority {
+    /// Exact retained execution identity for same-pump pairing checks only.
+    /// This reference grants no dispatch, renewal or native-write authority.
+    pub fn provider(&self) -> &ProviderAdmission {
+        &self.provider
+    }
+}
 pub struct SteeringReservation {
     pub(super) id: Uuid,
     pub(super) authority: CodexSteeringAuthority,

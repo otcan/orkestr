@@ -22,6 +22,7 @@ async fn running() -> (Case, CodexSteeringAuthority) {
         panic!()
     };
     let a = f.handle.authorize_codex_steering(&cap).await.unwrap();
+    assert_eq!(a.provider(), cap.provider());
     f.handle
         .append_provider_event(
             &f.owner,
