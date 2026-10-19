@@ -118,6 +118,8 @@ impl Controller {
     }
     pub(crate) async fn shutdown(&self) -> Result<(), &'static str> {
         let _operation = self.operation.lock().await;
+        // Observe completed retirement before applying a live cleanup deadline.
+        self.refresh().await?;
         let mut state = self.state.lock().await;
         if let State::Running(task) = &mut *state {
             let deadline = task

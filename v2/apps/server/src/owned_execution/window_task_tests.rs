@@ -44,3 +44,25 @@ async fn task_return_does_not_substitute_for_outstanding_resource_cleanup() {
     );
     drop(retained);
 }
+
+#[tokio::test]
+async fn finished_task_is_observable_after_original_cleanup_deadline() {
+    let mut finished = task(async { Ok(()) });
+    while !finished.task.as_ref().unwrap().is_finished() {
+        tokio::task::yield_now().await;
+    }
+    let expired = tokio::time::Instant::now() - Duration::from_secs(15);
+    // This is the old Controller::shutdown path: a completed task is joined,
+    // but the expired cleanup barrier still reports an error with no children.
+    assert_eq!(
+        finished.stop_until(expired).await,
+        Err("window resources remain; reconciliation required")
+    );
+    let mut finished = task(async { Ok(()) });
+    while !finished.task.as_ref().unwrap().is_finished() {
+        tokio::task::yield_now().await;
+    }
+    // Refresh consumes the existing outcome without opening a cleanup budget.
+    assert_eq!(finished.poll().await, Some(Ok(())));
+    assert!(finished.poll().await.is_none());
+}
