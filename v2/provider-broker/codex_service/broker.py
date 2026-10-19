@@ -11,6 +11,7 @@ from .profile import Configuration
 
 
 def main(root):
+    pump = None
     try:
         package = Package(root)
         require(os.geteuid() == package.uid, "broker_executor_identity")
@@ -19,7 +20,8 @@ def main(root):
         resumed = ["resume-owned-session", "--protocol", protocol]
         require(sys.argv[1:] in (fresh, resumed), "broker_operation")
         def stop(_number, _frame):
-            raise Refused("owned selected Codex stopped")
+            from protocol import Failure
+            raise Refused("owned selected Codex stopped", Failure.SIGNAL)
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
         parent = os.getppid()
@@ -39,11 +41,13 @@ def main(root):
                 from codex_bootstrap import receive
                 expected_native = receive()  # Strict one-use FD4, after bind ACK.
             pump = pump_type(Pump, subreaper)(config,
-                Channel(config.workspace, expected_native=expected_native), handoff=handoff)
+                Channel(config.workspace, expected_native=expected_native), handoff=handoff,
+                diagnostics=True)
             pump.run()
             if pump.parent_eof and pump.child is not None and pump.reaped:
                 return reaped_exit
         return 0
     except Exception:
         sys.stderr.write("selected Codex service broker refused; reconcile uncertain delivery\n")
-        return 2
+        code = pump.failure_exit if pump is not None else 2
+        return code if type(code) is int and 80 <= code <= 217 else 2

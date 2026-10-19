@@ -3,18 +3,48 @@ import json
 import math
 import secrets
 import uuid
+from enum import IntEnum
 
 PROTOCOL = "orkestr-v2-provider-broker-v1"
 MAX_FRAME = 65536
 
 
+class Failure(IntEnum):
+    """Closed diagnostic identifiers; never constructed from provider strings."""
+    FRAME_DECODE = 1
+    FRAME_BOUND = 2
+    FRAME_TRUNCATED = 3
+    PROVIDER_EOF = 4
+    PROVIDER_READ_IO = 5
+    PARENT_INPUT = 6
+    TRANSPORT_IO = 7
+    PROTOCOL = 8
+    LATE_TURN_STARTED = 9
+    LATE_TURN_COMPLETED = 10
+    LATE_AGENT_DELTA = 11
+    BEFORE_COMMIT = 12
+    FOREIGN_THREAD = 13
+    RETIRED_TURN = 14
+    TURN_MISMATCH = 15
+    UNEXPECTED_RESPONSE = 16
+    RESPONSE_CORRELATION = 17
+    TURN_SCHEMA = 18
+    SIGNAL = 19
+    LAUNCH = 20
+    INTERNAL = 21
+    UNSUPPORTED_TOOL = 22
+    PROVIDER_OUTER = 23
+
+
 class Refused(Exception):
-    pass
+    def __init__(self, message="", failure=Failure.PROTOCOL):
+        super().__init__(message)
+        self.failure = failure if type(failure) is Failure else Failure.INTERNAL
 
 
-def require(condition):
+def require(condition, failure=Failure.PROTOCOL):
     if not condition:
-        raise Refused("broker protocol refused")
+        raise Refused("broker protocol refused", failure)
 
 
 def exact(value, fields):
@@ -26,7 +56,7 @@ def identifier(value):
 
 
 def decode(raw):
-    require(len(raw) <= MAX_FRAME)
+    require(len(raw) <= MAX_FRAME, Failure.FRAME_BOUND)
     def unique(pairs):
         result = {}
         for key, value in pairs:
@@ -41,13 +71,16 @@ def decode(raw):
         return json.loads(raw.decode("utf-8"), object_pairs_hook=unique,
                           parse_float=finite,
                           parse_constant=lambda _: require(False))
+    except Refused as error:
+        error.failure = Failure.FRAME_DECODE
+        raise
     except (ValueError, UnicodeError, RecursionError) as error:
-        raise Refused("invalid frame") from error
+        raise Refused("invalid frame", Failure.FRAME_DECODE) from error
 
 
 def encode(value):
     raw = json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode() + b"\n"
-    require(len(raw) <= MAX_FRAME + 1)
+    require(len(raw) <= MAX_FRAME + 1, Failure.FRAME_BOUND)
     return raw
 
 
@@ -231,37 +264,45 @@ class Channel:
         require(item["type"] == "text" and isinstance(item["text"], str) and item["text_elements"] == [])
 
     def provider(self, frame):
-        require(isinstance(frame, dict))
+        require(isinstance(frame, dict), Failure.PROVIDER_OUTER)
         if frame.get("method") == "item/tool/call":
             require(self.offline_python and self.pending is None and self.committed
-                    and self.turn is not None and not self.terminal and not self.cancelled)
+                    and self.turn is not None and not self.terminal and not self.cancelled,
+                    Failure.UNSUPPORTED_TOOL)
             clean = self.offline_route.receive(frame, self.native, self.turn)
             return {"method": "BrokerOutput", "params": {"owned_handle": self.handle, "frame": clean}}
         if "id" not in frame:
             # Never pass server tool/approval requests through as notifications.
-            require(isinstance(frame.get("method"), str) and "params" in frame)
+            require(isinstance(frame.get("method"), str) and "params" in frame,
+                    Failure.PROVIDER_OUTER)
             if frame["method"] not in ("turn/started", "turn/completed", "item/agentMessage/delta"):
                 return None
-            require(self.committed and not self.terminal)
+            require(self.committed, Failure.BEFORE_COMMIT)
+            require(not self.terminal, {
+                "turn/started": Failure.LATE_TURN_STARTED,
+                "turn/completed": Failure.LATE_TURN_COMPLETED,
+                "item/agentMessage/delta": Failure.LATE_AGENT_DELTA,
+            }[frame["method"]])
             params = frame["params"]
-            require(isinstance(params, dict) and params.get("threadId") == self.native)
+            require(isinstance(params, dict), Failure.TURN_SCHEMA)
+            require(params.get("threadId") == self.native, Failure.FOREIGN_THREAD)
             if "threadId" in params:
                 require(params["threadId"] == self.native)
             if frame["method"] == "item/agentMessage/delta":
                 require(identifier(params.get("turnId")) and isinstance(params.get("delta"), str)
-                        and len(params["delta"].encode()) <= 8192)
+                        and len(params["delta"].encode()) <= 8192, Failure.TURN_SCHEMA)
                 turn_id = params["turnId"]
                 clean = {k: params[k] for k in ("threadId", "turnId", "delta")}
             else:
                 turn = params.get("turn")
-                require(isinstance(turn, dict))
+                require(isinstance(turn, dict), Failure.TURN_SCHEMA)
                 turn_id = turn.get("id")
                 require(identifier(turn_id) and turn.get("status") in
-                        ("inProgress", "completed", "failed", "interrupted"))
+                        ("inProgress", "completed", "failed", "interrupted"), Failure.TURN_SCHEMA)
                 clean = {"threadId": self.native, "turn": {"id": turn_id, "status": turn["status"]}}
-            require(turn_id not in self.retired_turns)
+            require(turn_id not in self.retired_turns, Failure.RETIRED_TURN)
             if self.turn is not None:
-                require(turn_id == self.turn)
+                require(turn_id == self.turn, Failure.TURN_MISMATCH)
             else:
                 self.turn = turn_id
             if frame["method"] == "turn/completed":
@@ -272,10 +313,11 @@ class Channel:
                 self.terminal = True
             frame = {"method": frame["method"], "params": clean}
             return {"method": "BrokerOutput", "params": {"owned_handle": self.handle, "frame": frame}}
-        require(self.pending is not None)
+        require(self.pending is not None, Failure.UNEXPECTED_RESPONSE)
         outer, inner, kind = self.pending
         exact(frame, ("id", "result"))
-        require(type(frame["id"]) is type(inner) and frame["id"] == inner)
+        require(type(frame["id"]) is type(inner) and frame["id"] == inner,
+                Failure.RESPONSE_CORRELATION)
         result = frame["result"]
         require(isinstance(result, dict))
         if kind == "initialize":
