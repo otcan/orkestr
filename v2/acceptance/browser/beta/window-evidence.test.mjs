@@ -22,6 +22,14 @@ test('generation JSON is never rounded at the JavaScript boundary', () => {
   assert.throws(() => decodeExact('{"generation":1e12}'));
 });
 
+test('window generations enforce the frozen JavaScript-safe bound, even after exact decoding', () => {
+  const data = example();
+  data.previous = {...data.receipt.status, window_id: id(7), state: 'closed', generation: 9007199254740991n};
+  Object.assign(data.request, {expected_generation: 9007199254740991n, predecessor_window_id: id(7)});
+  Object.assign(data.receipt.status, {generation: 9007199254740992n, predecessor_window_id: id(7)});
+  assert.throws(() => assertWindowAdmission(data));
+});
+
 test('opening belongs to the exact already admitted input, not merely its conversation', () => {
   assert.equal(assertWindowAdmission(example()).fresh_budget, true);
   for (const field of ['input_message_id', 'input_event_id', 'input_request_key']) {
@@ -66,11 +74,25 @@ test('replay preserves the original immutable opening even if current state late
 test('new user intent cannot silently release or rewrite the prior Stop hold', () => {
   const held = {message_id: id(2), source_event_id: id(3), reason: 'stop_boundary',
     boundary_run_id: id(7), boundary_event_id: id(8), scope_sequence: 1, through_scope_sequence: 4};
-  const before = {schema_version: 1, conversation_id: id(1), held: [held]}, after = structuredClone(before);
+  const before = {schema_version: 1, conversation_id: id(1), revision: 7, observed_at_ms: 1000,
+    eligible_input_available: false, next_after_sequence: null, held: [held]}, after = structuredClone(before);
   const data = {conversation: id(1), stoppedRun: id(7), admitted: example().intakeReceipt, before, after};
   assert.equal(assertHeldInput(data).prior_input_still_held, true);
   after.held[0].boundary_event_id = id(9);
   assert.throws(() => assertHeldInput(data));
   after.held = [];
   assert.throws(() => assertHeldInput(data));
+});
+
+test('a hold must have valid ordered boundaries and the exact original intake sequence', () => {
+  const held = {message_id: id(2), source_event_id: id(3), reason: 'stop_boundary',
+    boundary_run_id: id(7), boundary_event_id: id(8), scope_sequence: 1, through_scope_sequence: 4};
+  const page = {schema_version: 1, conversation_id: id(1), revision: 7, observed_at_ms: 1000,
+    eligible_input_available: false, next_after_sequence: null, held: [held]};
+  for (const patch of [{scope_sequence: 99}, {scope_sequence: 0}, {scope_sequence: 2},
+    {through_scope_sequence: 0}, {boundary_event_id: '00000000-0000-0000-0000-000000000000'}]) {
+    const invalid = {...page, held: [{...held, ...patch}]};
+    assert.throws(() => assertHeldInput({conversation: id(1), stoppedRun: id(7),
+      admitted: example().intakeReceipt, before: invalid, after: structuredClone(invalid)}));
+  }
 });

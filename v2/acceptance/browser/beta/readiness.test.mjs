@@ -37,7 +37,8 @@ test('readiness is rechecked at the single action and never becomes a submit ret
 
 test('normal timing contains no URL, content or credentials and waits for rendering', async () => {
   const steps = [];
-  const page = {async goto(url, options) { steps.push('navigate'); assert.equal(options.waitUntil, 'domcontentloaded'); }};
+  const page = {url: () => 'https://example.invalid/', async goto(url, options) {
+    steps.push('navigate'); assert.equal(options.waitUntil, 'domcontentloaded'); return {url: () => url}; }};
   const timing = await timedNavigation(page, 'https://example.invalid/', async () => { steps.push('render'); });
   assert.deepEqual(steps, ['navigate', 'render']);
   assert.deepEqual(Object.keys(timing), ['render_ms']);

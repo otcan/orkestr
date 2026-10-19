@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+const MAX_SAFE_GENERATION = 9007199254740991n;
 const LIMITS = Object.freeze({duration_ms: 900000n, attempts: 32n, bytes: 67108864n,
   cleanup_ms: 30000n, cleanup_attempts: 4n, cleanup_bytes: 1048576n});
 
@@ -23,7 +24,7 @@ function integer(value) {
 function uuid(value) { assert(typeof value === 'string' && UUID.test(value) && !/^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(value)); }
 function status(value, conversation) {
   uuid(value.window_id); assert.equal(value.conversation_id, conversation);
-  assert(integer(value.generation) > 0n);
+  assert(integer(value.generation) > 0n && integer(value.generation) <= MAX_SAFE_GENERATION);
   assert(['opening', 'active', 'retiring', 'closed', 'reconciliation_required'].includes(value.state));
   uuid(value.input_message_id); uuid(value.input_event_id);
   const limits = Object.fromEntries(Object.entries(value.limits).map(([key, item]) => [key, integer(item)]));
@@ -47,7 +48,9 @@ export function assertWindowAdmission({conversation, intakeRequest, intakeReceip
   assert.equal(receipt.request_key, request.request_key);
   assert.equal(receipt.duplicate, false);
   status(receipt.status, conversation);
+  if (previous) status(previous, conversation);
   const generation = previous ? integer(previous.generation) : 0n;
+  assert(integer(request.expected_generation) >= 0n && integer(request.expected_generation) < MAX_SAFE_GENERATION);
   assert.equal(integer(request.expected_generation), generation);
   if (request.window_id !== null) {
     assert(previous && previous.state === 'active', 'active_predecessor_required');
@@ -78,15 +81,31 @@ export function assertWindowReplay(original, replay) {
 }
 
 export function assertHeldInput({conversation, stoppedRun, admitted, before, after}) {
+  uuid(conversation); uuid(stoppedRun); uuid(admitted.message_id); uuid(admitted.event_id);
+  assert(integer(admitted.sequence) > 0n);
   for (const page of [before, after]) {
     assert.equal(page.conversation_id, conversation);
     assert.equal(integer(page.schema_version), 1n);
+    assert(integer(page.revision) >= 0n && integer(page.observed_at_ms) > 0n);
+    assert.equal(typeof page.eligible_input_available, 'boolean');
     assert(Array.isArray(page.held) && page.held.length <= 100);
+    let previous = 0n;
+    for (const held of page.held) {
+      for (const key of ['message_id', 'source_event_id', 'boundary_run_id', 'boundary_event_id']) uuid(held[key]);
+      assert.equal(held.reason, 'stop_boundary');
+      const sequence = integer(held.scope_sequence);
+      assert(sequence > previous && integer(held.through_scope_sequence) >= sequence);
+      previous = sequence;
+    }
+    if (page.next_after_sequence !== null) {
+      assert(page.held.length > 0 && integer(page.next_after_sequence) === previous);
+    }
   }
   const select = page => page.held.filter(item => item.message_id === admitted.message_id);
   const original = select(before), current = select(after);
   assert.equal(original.length, 1); assert.equal(current.length, 1);
   assert.equal(original[0].source_event_id, admitted.event_id);
+  assert.equal(integer(original[0].scope_sequence), integer(admitted.sequence));
   assert.equal(original[0].reason, 'stop_boundary');
   assert.equal(original[0].boundary_run_id, stoppedRun);
   assert.deepEqual(current[0], original[0], 'new_input_must_not_release_old_hold');

@@ -7,17 +7,21 @@ const ACTIONS = new Set(['First-time setup', 'Continue', 'Send', 'Stop',
 
 // The enabled-label wait precedes the original one-shot action. It does not
 // retry submissions, authenticate a caller or grant a desktop capability.
-export async function clickReady(page, label) {
+export async function clickReady(page, label, expectedOrigin) {
   if (!ACTIONS.has(label)) throw failure('invalid_action');
-  await page.waitForFunction(expected => [...document.querySelectorAll('button')]
-    .some(button => button.textContent.trim() === expected && !button.disabled),
-  {timeout: 10_000}, label);
-  await page.evaluate(expected => {
+  if (expectedOrigin !== undefined && new URL(expectedOrigin).origin !== expectedOrigin) throw failure('invalid_action');
+  await page.waitForFunction((expected, origin) => {
+    if (origin !== undefined && location.origin !== origin) throw Error('unexpected_origin');
+    return [...document.querySelectorAll('button')]
+      .some(button => button.textContent.trim() === expected && !button.disabled);
+  }, {timeout: 10_000}, label, expectedOrigin);
+  await page.evaluate((expected, origin) => {
+    if (origin !== undefined && location.origin !== origin) throw Error('unexpected_origin');
     const button = [...document.querySelectorAll('button')]
       .find(item => item.textContent.trim() === expected);
     if (!button || button.disabled) throw Error('readiness_unavailable');
     button.click();
-  }, label);
+  }, label, expectedOrigin);
 }
 
 export async function composerReady(page) {
@@ -46,7 +50,10 @@ export async function timedNavigation(page, url, ready = composerReady) {
     throw failure('invalid_action');
   }
   const started = performance.now();
-  await page.goto(target.href, {waitUntil: 'domcontentloaded', timeout: 15_000});
+  const response = await page.goto(target.href, {waitUntil: 'domcontentloaded', timeout: 15_000});
+  if (!response || new URL(response.url()).origin !== target.origin ||
+      new URL(page.url()).origin !== target.origin) throw failure('unexpected_origin');
   await ready(page);
+  if (new URL(page.url()).origin !== target.origin) throw failure('unexpected_origin');
   return {render_ms: Math.round(performance.now() - started)};
 }

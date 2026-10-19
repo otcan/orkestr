@@ -4,12 +4,13 @@ import {clickReady, composerReady, draft, setDraft, timedNavigation} from './rea
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const DRAFT = 'Synthetic beta draft retained across navigation and reconnect.';
 
-async function fill(page, selector, value) {
+async function fill(page, selector, value, origin) {
   await page.waitForSelector(selector, {visible: true, timeout: 10_000});
-  await page.$eval(selector, (node, text) => {
+  await page.$eval(selector, (node, {text, origin}) => {
+    if (location.origin !== origin) throw Error('unexpected_origin');
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(node, text);
     node.dispatchEvent(new Event('input', {bubbles: true}));
-  }, value);
+  }, {text: value, origin});
 }
 
 async function session(page) {
@@ -24,6 +25,7 @@ async function session(page) {
 }
 
 export async function loginOwner({page, context, origin, credentials, bootstrap}) {
+  assert.equal(new URL(origin).origin, origin, 'exact_origin_required');
   assert(typeof credentials?.username === 'string' && credentials.username.length <= 128);
   assert(typeof credentials.password === 'string' && credentials.password.length <= 1024);
   assert.equal((await context.cookies()).length, 0, 'fresh_owned_context_required');
@@ -32,12 +34,12 @@ export async function loginOwner({page, context, origin, credentials, bootstrap}
   });
   if (bootstrap !== undefined) {
     assert(typeof bootstrap === 'string' && bootstrap.length <= 1024);
-    await clickReady(page, 'First-time setup');
-    await fill(page, '#bootstrap', bootstrap);
+    await clickReady(page, 'First-time setup', origin);
+    await fill(page, '#bootstrap', bootstrap, origin);
   }
-  await fill(page, '#username', credentials.username);
-  await fill(page, '#password', credentials.password);
-  await clickReady(page, 'Continue');
+  await fill(page, '#username', credentials.username, origin);
+  await fill(page, '#password', credentials.password, origin);
+  await clickReady(page, 'Continue', origin);
   await composerReady(page);
   const projection = await session(page);
   assert(UUID.test(projection.conversation), 'conversation_required');
