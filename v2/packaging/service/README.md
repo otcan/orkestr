@@ -172,3 +172,13 @@ and mismatched owner/conversation/workspace scope before making the release.
 These checks complement, and do not replace, the complete manager `Package`
 validator. The 30 nonroot and six explicitly privileged manager checks require
 separate CI registration by the workflow owner; prior CI is not their evidence.
+
+Outer release preparation now requires root and explicit `service_gid`, matching
+inner `service.json.gid`. It creates root:service-group mode0750 outer traversal,
+assigns the copied protected tree to that group without changing its bytes/modes,
+and records UID/GID/mode for every directory/file plus receipt custody. The wrapper
+is root:service-group0550 and receipt0440. No operator permission repair is needed.
+The explicit privileged synthetic suite probes the generated layout as UID995:
+GID986 before any test mutation, then demonstrates the original0700 refusal.
+It only reads a synthetic text file; it never executes the packaged entry/native.
+Run `test_release.py` explicitly as root; run `test_service.py` unprivileged.
