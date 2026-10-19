@@ -14,6 +14,9 @@ mod acceptance;
 mod acceptance_process_tests;
 #[cfg(test)]
 mod acceptance_tests;
+mod accepted_results;
+#[cfg(test)]
+mod accepted_results_tests;
 mod admission;
 mod cancellation;
 #[cfg(test)]

@@ -35,7 +35,14 @@ impl AcceptedResults {
                     && r.payload_id.as_ref().is_none_or(|p| !p.0.is_nil())
                     && (!r.payload_removed || r.payload_id.is_some())
             })
-            && self.results.windows(2).all(|w| w[0].acceptance_sequence < w[1].acceptance_sequence)
-            && self.next_after_sequence.is_none_or(|n| self.results.last().is_some_and(|r| r.acceptance_sequence == n))
+            && self
+                .results
+                .windows(2)
+                .all(|w| w[0].acceptance_sequence < w[1].acceptance_sequence)
+            && self.next_after_sequence.is_none_or(|n| {
+                self.results
+                    .last()
+                    .is_some_and(|r| r.acceptance_sequence == n)
+            })
     }
 }
