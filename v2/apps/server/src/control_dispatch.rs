@@ -144,6 +144,15 @@ pub struct PendingControl {
 }
 
 impl PendingControl {
+    /// Provider-specific adapters consume this private handoff without exposing
+    /// a receipt constructor or depending on another provider in this mailbox.
+    pub(crate) fn dispatch_provider<T>(
+        self,
+        dispatch: impl FnOnce(&CancelReceipt) -> Result<T, StopFailure>,
+    ) -> Result<T, StopFailure> {
+        dispatch(&self.receipt)
+    }
+
     /// One-way move of the exact already-owned child into native interruption.
     /// A wrong pump or stale control is quarantined, never returned for execution.
     pub fn dispatch(
