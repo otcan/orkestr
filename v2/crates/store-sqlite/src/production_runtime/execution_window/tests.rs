@@ -412,3 +412,104 @@ async fn cold_reopen_loses_private_authority_and_only_reconciles() {
         .await
         .is_err());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_window_issues_before_native_readiness_and_activates_last() {
+    let f = fixtures::setup().await;
+    let browser = browser(&f).await;
+    let binding = f
+        .handle
+        .ensure_role_bindings(&f.owner, &f.conversation)
+        .await
+        .unwrap()
+        .deep;
+    let readiness: i64 = sqlx::query_scalar("SELECT count(*) FROM production_readiness")
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(readiness, 0);
+    let request = input(&f, "first-window-ordering").await;
+    let a = f
+        .store
+        .admit_execution_window_authenticated(&browser, &f.conversation, &request)
+        .await
+        .unwrap();
+    let grant = f
+        .handle
+        .issue_execution_window_credential(
+            &f.token,
+            a.status.window_id,
+            1,
+            "first-boot",
+            a.status.expires_at_ms,
+            &"a".repeat(64),
+        )
+        .await
+        .unwrap();
+    assert!(f
+        .store
+        .authorize_supervisor(
+            grant.credential(),
+            fixtures::config(ProductionTakeover::First)
+        )
+        .await
+        .is_err());
+    let bound = f
+        .handle
+        .bind_execution_window(&f.token, &grant)
+        .await
+        .unwrap();
+    assert!(bound
+        .claim_next(
+            &f.owner,
+            &f.conversation,
+            &binding.session_id,
+            Duration::from_secs(30)
+        )
+        .await
+        .is_err());
+    let metadata = bound.authorize_session_metadata(&binding).await.unwrap();
+    assert_eq!(
+        bound
+            .with_metadata_fence(&metadata, || Ok::<_, ()>("setup-only"))
+            .unwrap(),
+        Ok("setup-only")
+    );
+    let transition = bound
+        .confirm_metadata_session(
+            metadata,
+            NativeSessionConfirmation {
+                session_id: binding.session_id.clone(),
+                expected_generation: binding.generation,
+                native_session_id: "synthetic-first-window-native".into(),
+                protocol_version: "codex-rpc-1".into(),
+                source_event_key: "first-window-ready".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(bound
+        .claim_next(
+            &f.owner,
+            &f.conversation,
+            &binding.session_id,
+            Duration::from_secs(30)
+        )
+        .await
+        .is_err());
+    bound
+        .activate_execution_window(grant.credential(), a.status.window_id, 1, "first-boot")
+        .await
+        .unwrap();
+    let claim = bound
+        .claim_next(
+            &f.owner,
+            &f.conversation,
+            &transition.binding().session_id,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.event_id, request.input_event_id);
+}
