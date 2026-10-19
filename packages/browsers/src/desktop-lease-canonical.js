@@ -67,7 +67,19 @@ export function canonicalLegacyBytes(value) {
 // rejects them (including escaped aliases) before parsing or digesting a value.
 export function parseLegacyJson(input) {
   let source;
-  try { source = typeof input === "string" ? input : new TextDecoder("utf-8", { fatal: true }).decode(input); }
+  try {
+    if (typeof input === "string") source = input;
+    else {
+      const bytes = ArrayBuffer.isView(input)
+        ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
+        : input instanceof ArrayBuffer ? new Uint8Array(input) : null;
+      // TextDecoder normally removes a leading BOM. Refuse original bytes
+      // explicitly so receipt hashes cannot authorize a forbidden encoding.
+      if (!bytes || bytes.byteLength > MAX_LEGACY_BYTES
+          || bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) invalid();
+      source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    }
+  }
   catch { invalid(); }
   if (Buffer.byteLength(source) > MAX_LEGACY_BYTES) invalid();
   let offset = 0, nodes = 0;

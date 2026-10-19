@@ -88,7 +88,10 @@ serializePreparedLegacy(state)                       // -> UTF-8 Buffer
 The caller must first read/pin the original bytes with its reviewed offline
 publisher and decode them with `parseLegacyJson` from
 `desktop-lease-canonical.js`. That parser rejects duplicate object keys, including
-escaped aliases. The pure preparer performs no I/O and cannot prove that the
+escaped aliases, and rejects a leading UTF-8 BOM before decoding byte input.
+The same no-BOM rule applies to the external receipt and prepared state, even
+when their exact byte hashes match. A U+FEFF character inside a JSON string is
+ordinary retained data. The pure preparer performs no I/O and cannot prove that the
 provided source digest or writer-fencing assertion is true.
 
 Preparation refuses an existing `lockIdentity` or cohort marker, validates every

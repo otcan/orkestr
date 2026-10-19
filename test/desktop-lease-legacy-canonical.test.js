@@ -38,3 +38,18 @@ test("escaped duplicate checks do not confuse JSON strings or prototype keys", (
   assert.equal(parsed.__proto__.x, 1);
   assert.deepEqual(parsed, JSON.parse(raw));
 });
+
+test("UTF-8 BOM input refuses without silently stripping original bytes", () => {
+  const raw = Buffer.from('{"fencingCounter":0,"desktopLeases":[]}');
+  const bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), raw]);
+  const surrounded = Buffer.concat([Buffer.from("prefix"), bom, Buffer.from("suffix")]);
+  const slice = surrounded.subarray(6, 6 + bom.length), original = Buffer.from(surrounded);
+  for (const input of [bom, slice, new Uint8Array(slice.buffer, slice.byteOffset, slice.byteLength),
+    new DataView(slice.buffer, slice.byteOffset, slice.byteLength),
+    slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength), `\uFEFF${raw}`]) {
+    assert.throws(() => parseLegacyJson(input), /legacy_encoding_invalid/);
+  }
+  assert.deepEqual(surrounded, original);
+  assert.deepEqual(parseLegacyJson(raw), JSON.parse(raw));
+  assert.deepEqual(parseLegacyJson(Buffer.from('{"text":"\uFEFF"}')), { text: "\uFEFF" });
+});

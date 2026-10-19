@@ -84,3 +84,25 @@ test("failed configuration stays failed for its store instance; state marker can
   assert.deepEqual(await fs.readFile(file), bytes);
   await desktopLeaseStore(env).init();
 });
+
+test("correctly pinned BOM receipt refuses before acquiring the state lock", async (t) => {
+  const { receipt, receiptBytes, env, file, bytes } = await setup(t);
+  const bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), receiptBytes]);
+  await fs.chmod(receipt, 0o600); await fs.writeFile(receipt, bom);
+  await assert.rejects(desktopLeaseStore({ ...env, ORKESTR_DESKTOP_LEASE_LEGACY_ADOPTION_SHA256: sha(bom) }).init(), /legacy_encoding_invalid/);
+  assert.deepEqual(await fs.readFile(file), bytes);
+  assert.deepEqual(await fs.readFile(receipt), bom);
+  await assert.rejects(fs.stat(`${file}.lock`), { code: "ENOENT" });
+});
+
+test("correctly pinned BOM prepared state refuses without adoption or rewriting", async (t) => {
+  const { receipt, env, file, bytes, adoption } = await setup(t);
+  const bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), bytes]);
+  const receiptBytes = Buffer.from(JSON.stringify({ ...adoption, preparedSha256: sha(bom) }));
+  await fs.writeFile(file, bom);
+  await fs.chmod(receipt, 0o600); await fs.writeFile(receipt, receiptBytes);
+  await assert.rejects(desktopLeaseStore({ ...env, ORKESTR_DESKTOP_LEASE_LEGACY_ADOPTION_SHA256: sha(receiptBytes) }).init(), /state_invalid/);
+  assert.deepEqual(await fs.readFile(file), bom);
+  assert.deepEqual(await fs.readFile(receipt), receiptBytes);
+  assert.equal((await fs.stat(`${file}.lock`)).size, 0);
+});
