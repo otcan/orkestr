@@ -10,9 +10,26 @@ import json
 from pathlib import Path
 import platform
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
+
+
+def binary_identity(binary, expected_source):
+    """Refuse unpinned/foreign binaries before creating fixture state."""
+    if (len(expected_source) != 40
+            or any(char not in "0123456789abcdef" for char in expected_source)):
+        raise ValueError("expected source must be a full lowercase commit")
+    result = subprocess.run([str(binary.resolve(strict=True)), "--version", "--json"],
+                            check=True, capture_output=True, text=True, timeout=5)
+    identity = json.loads(result.stdout)
+    if (not isinstance(identity, dict)
+            or identity.get("format") != "orkestr-v2-build-identity-v1"
+            or identity.get("component") != "server"
+            or identity.get("source_commit") != expected_source):
+        raise ValueError("server embedded source identity mismatch")
+    return identity
 
 
 def measure(actions):
@@ -39,8 +56,10 @@ def main():
     parser.add_argument("fixture_root", type=Path)
     parser.add_argument("evidence", type=Path)
     parser.add_argument("--binary-sha256", required=True)
+    parser.add_argument("--expected-source", required=True)
     args = parser.parse_args()
     assert hashlib.sha256(args.binary.read_bytes()).hexdigest() == args.binary_sha256
+    identity = binary_identity(args.binary, args.expected_source)
     args.evidence.mkdir(mode=0o700, parents=True, exist_ok=False)
     sys.path.insert(0, str(args.fixture_root / "v2/tests"))
     sys.path.insert(0, str(args.fixture_root / "v2/acceptance"))
@@ -93,7 +112,7 @@ def main():
                 "mode": "isolated-acceptance-set-v1", "configurations": configs})
 
     case, samples = TenCase(), []
-    report = {"binary_sha256": args.binary_sha256, "source": "65e7730298afefae0812cd98455f7c9d9ec5973e",
+    report = {"binary_sha256": args.binary_sha256, "source": identity["source_commit"], "embedded_identity": identity,
               "platform": platform.platform(), "debug_candidate": True, "full_release_qualified": False}
     try:
         case.setup()

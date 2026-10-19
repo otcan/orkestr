@@ -9,3 +9,10 @@ Run with immutable server, exact source export containing v2/tests, v2/provider-
 First schema39 debug checkpoint: source 65e7730298afefae0812cd98455f7c9d9ec5973e, server SHA256 e2675229ec03ae0fe2bd176c141f562e12413a1c1d3e852f7544703e78476f8c. Paired web files were hash-verified, not executed. Intake 300/300 HTTP202: p95 62.264518 ms. Stop 10/10 HTTP200: p95 140.938879 ms. Both pass the exclusive 250 ms local threshold. Every Stop child was reaped and state removed. Existing intake unit tests 10/10 and new probe unit tests 2/2 passed.
 
 Private qualification evidence retains raw request samples, traces/receipts, pair and fixture/probe hashes, environment and cleanup results. Environment includes CPU count, platform, Python, filesystem, memory and post-run load. Workloads ran sequentially. No failed measurement was discarded/repeated to improve p95. This does not qualify release, real-provider, schema40 workspace, installed-manager or public-path performance.
+
+The probe successor requires `--expected-source` with a full lowercase commit,
+reads the server's `--version --json` identity before fixture/evidence creation,
+and checks server component/identity format/exact source. Reports retain that
+actual embedded identity. Five focused unit tests pass, including foreign source
+and component refusal. The original schema39 measurement and private receipt
+remain unchanged; this successor validation is not another performance run.
