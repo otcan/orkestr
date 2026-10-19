@@ -98,7 +98,7 @@ fn failed_exec_releases_creator_resources_without_capacity_credit() {
 fn abandoned_spawn_reply_kills_and_waits_same_child_before_release() {
     unsafe extern "C" {
         fn getpid() -> i32;
-        fn write(fd: i32, data: *const u8, count: usize) -> isize;
+        fn write(fd: i32, data: *const std::ffi::c_void, count: usize) -> isize;
     }
     let (released, observed) = mpsc::channel();
     let active = Arc::new(AtomicUsize::new(0));
@@ -117,7 +117,8 @@ fn abandoned_spawn_reply_kills_and_waits_same_child_before_release() {
     unsafe {
         command.pre_exec(move || {
             let pid = getpid().to_ne_bytes();
-            if write(child_report.as_raw_fd(), pid.as_ptr(), pid.len()) != pid.len() as isize {
+            if write(child_report.as_raw_fd(), pid.as_ptr().cast(), pid.len()) != pid.len() as isize
+            {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())

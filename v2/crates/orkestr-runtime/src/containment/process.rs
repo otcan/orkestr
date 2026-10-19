@@ -6,7 +6,7 @@ use super::{
 use serde_json::Value;
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize},
     Arc, Mutex,
 };
 
