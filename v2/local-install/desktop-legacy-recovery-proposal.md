@@ -76,3 +76,19 @@ inventory but does not prove which module is loaded, absence of future direct
 writers, or executor preservation. Until those gaps are explicitly resolved,
 keep the failing lease API visible and browser activation held. Browser process
 health does not establish lease authority.
+
+## Offline publication checkpoint
+
+`desktop_legacy_io.py::prepare_bundle` provides the bounded nofollow source read,
+exact original evidence, fresh-target atomic publication and interruption/unknown
+publication handling. It requires a trusted reviewed `seal(raw, source_digest)`
+callable returning `(prepared_state_bytes, external_adoption_receipt_bytes)`.
+Neither callable selection nor receipt trust comes from the input state. It has
+no command-line activation path and no permissive cohort implementation.
+
+The public validator owner must supply the shared canonical cohort/receipt
+contract and sealer before an operator-facing legacy preparation command is
+wired. Current transport tests use an explicitly synthetic sealer; they do not
+qualify retired-cohort validation, revocation or live adoption. Source evidence
+with an embedded lock identity is refused rather than routed through this legacy
+path. The existing nonlegacy `desktop_restore.py` behavior remains unchanged.
