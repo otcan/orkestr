@@ -114,3 +114,40 @@ path, account handle or descriptor grants project access; no project grant grant
 profile/account access. Runtime/root must agree the combined closed launcher argument
 and FD ownership contract with the selected-profile owner. Core will consume only
 that reviewed handoff, not introduce a second profile manager or raw profile field.
+
+## Concrete launch handoff offered for ABI review
+
+```
+authorize_workspace_metadata(...) -> WorkspaceLaunchReservation
+consume_workspace_launch(credential, reservation)
+    -> Launch(WorkspaceLaunch) | ReconciliationRequired
+with_workspace_metadata_fence(
+    credential, &mut WorkspaceLaunch, &BoundSessionMetadata,
+    action: FnOnce(WorkspaceDescriptors<'_>) -> Result<T, E>
+) -> Result<Result<T, E>>
+```
+
+`WorkspaceDescriptors` offers only borrowed workspace/Git/common-directory FDs.
+Runtime duplicates the workspace descriptor into its closed transfer mechanism;
+no raw path override. All three identities stay independently pinned and checked.
+Runtime/Isolation must still freeze the exact launcher primitive and FD ownership.
+
+Consumption must **commit delivery_unknown before spawn**, in a separate short
+transaction. A subsequent fence revalidates exact metadata, workspace generation,
+current machine/supervisor and descriptor identity together before the callback.
+The callback can execute only once locally, even when it returns an error or COMMIT
+fails afterward. Historical consume replay/reopen cannot return another launch cap.
+Uncertain creation remains reconciliation-required rather than a fresh process retry.
+The existing consumed inference grant is still independently required afterward.
+
+Shared source integration points are `validate_metadata` (including its resume path)
+and `production_authorized_run` for execution-purpose effects. The latter already
+serves inference, steering and subordinate tool/result authorization. Review must
+verify all result paths actually reach it; cancellation-purpose checks deliberately
+retain cleanup eligibility. Binding-to-project generation and descriptors must survive
+same-child renewal without granting a fresh launch. Restart rehydrates local descriptors
+only through trusted allowlist validation; missing local handles fail closed.
+
+No implementation is claimed by these signatures. Slot40 collision confirmation,
+Runtime descriptor consumer agreement and ownership of its closed launcher changes
+remain prerequisites for publishing the first storage/consumer checkpoint.
