@@ -33,7 +33,7 @@ pub fn validate_attachment_bytes(
         .iter()
         .find(|r| r.reference_id == reference)
         .ok_or(Missing)?;
-    if r.state == AttachmentState::Removed {
+    if matches!(r.state, AttachmentState::Removed | AttachmentState::Inert) {
         return if bytes.is_none() {
             Ok(())
         } else {

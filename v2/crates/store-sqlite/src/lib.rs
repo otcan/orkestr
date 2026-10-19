@@ -174,3 +174,5 @@ pub use production_runtime::{
 };
 
 pub mod attachment_integrity;
+
+pub mod attachment_store;

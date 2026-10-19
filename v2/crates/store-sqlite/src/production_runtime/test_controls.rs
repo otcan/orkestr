@@ -3,6 +3,10 @@ use super::*;
 /// Exact transaction boundaries; no caller-supplied SQL or arbitrary callback.
 #[derive(Clone, Copy)]
 pub enum ProductionCheckpoint {
+    AttachmentImportBeforeCommit,
+    AttachmentImportAfterCommit,
+    AttachmentRemoveBeforeCommit,
+    AttachmentRemoveAfterCommit,
     RecoveryRestoreBeforeCommit,
     RecoveryRestoreAfterCommit,
     RecoveryRollbackBeforeCommit,
@@ -33,6 +37,10 @@ pub enum ProductionCheckpoint {
 impl ProductionCheckpoint {
     fn name(self) -> &'static str {
         match self {
+            Self::AttachmentImportBeforeCommit => "attachment-import-before-commit",
+            Self::AttachmentImportAfterCommit => "attachment-import-after-commit",
+            Self::AttachmentRemoveBeforeCommit => "attachment-remove-before-commit",
+            Self::AttachmentRemoveAfterCommit => "attachment-remove-after-commit",
             Self::RecoveryRestoreBeforeCommit => "recovery-restore-before-commit",
             Self::RecoveryRestoreAfterCommit => "recovery-restore-after-commit",
             Self::RecoveryRollbackBeforeCommit => "recovery-rollback-before-commit",
@@ -132,7 +140,11 @@ impl Store {
         if self.authority.is_some()
             || !matches!(
                 stage,
-                ProductionCheckpoint::RecoveryRestoreBeforeCommit
+                ProductionCheckpoint::AttachmentImportBeforeCommit
+                    | ProductionCheckpoint::AttachmentImportAfterCommit
+                    | ProductionCheckpoint::AttachmentRemoveBeforeCommit
+                    | ProductionCheckpoint::AttachmentRemoveAfterCommit
+                    | ProductionCheckpoint::RecoveryRestoreBeforeCommit
                     | ProductionCheckpoint::RecoveryRestoreAfterCommit
                     | ProductionCheckpoint::RecoveryRollbackBeforeCommit
                     | ProductionCheckpoint::RecoveryRollbackAfterCommit

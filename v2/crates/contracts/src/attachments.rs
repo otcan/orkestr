@@ -11,6 +11,8 @@ pub const ATTACHMENT_MAX_REFERENCES: usize = 128;
 pub enum AttachmentState {
     Available,
     Removed,
+    /// Preserved legacy metadata only. Never a downloadable object.
+    Inert,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +28,17 @@ pub struct AttachmentReference {
 }
 impl AttachmentReference {
     pub fn is_valid(&self) -> bool {
+        if self.state == AttachmentState::Inert {
+            return !self.reference_id.is_nil()
+                && self.message_id.as_ref().is_none_or(|id| !id.0.is_nil())
+                && !self.filename.is_empty()
+                && self.filename.len() <= 4096
+                && self.media_type.len() <= 1024
+                && self.sha256.len() <= 128
+                && !self.filename.contains('\0')
+                && !self.media_type.contains('\0')
+                && !self.sha256.contains('\0');
+        }
         let token = |s: &str| {
             !s.is_empty()
                 && s.bytes()
@@ -71,7 +84,9 @@ impl AttachmentManifest {
             && !self.conversation_id.0.is_nil()
             && self.references.len() <= ATTACHMENT_MAX_REFERENCES
             && self.references.iter().all(|r| {
-                total = total.saturating_add(r.byte_length);
+                if r.state != AttachmentState::Inert {
+                    total = total.saturating_add(r.byte_length);
+                }
                 r.is_valid() && ids.insert(r.reference_id) && total <= ATTACHMENT_MAX_BYTES
             })
     }

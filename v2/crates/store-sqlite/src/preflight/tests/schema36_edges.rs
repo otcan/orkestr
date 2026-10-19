@@ -28,7 +28,7 @@ async fn selected(
         .collect::<Vec<_>>()
         .join(" || '|' || ");
     let filter = if table == "_sqlx_migrations" {
-        format!(" WHERE version<={}", prefix.unwrap_or(37))
+        format!(" WHERE version<={}", prefix.unwrap_or(38))
     } else {
         String::new()
     };
@@ -41,8 +41,8 @@ async fn selected(
 }
 
 #[tokio::test]
-async fn populated_14_17_31_33_36_copy_first_edges_to_37_preserve_rows_and_rollback_source() {
-    for prefix in [14, 17, 31, 33, 36] {
+async fn populated_14_17_31_33_36_37_copy_first_edges_to_38_preserve_rows_and_rollback_source() {
+    for prefix in [14, 17, 31, 33, 36, 37] {
         let dir = Directory::new();
         let mut conn = populated_payload_prefix(&dir).await;
         for migration in sqlx::migrate!("./migrations")
@@ -69,6 +69,10 @@ async fn populated_14_17_31_33_36_copy_first_edges_to_37_preserve_rows_and_rollb
         }
         for table in [
             "production_stopped_retirements",
+            "attachment_manifests",
+            "attachment_objects",
+            "attachment_imports",
+            "attachment_removals",
             "worker_tool_results",
             "durable_timer_authorities",
             "production_steering",
@@ -86,7 +90,7 @@ async fn populated_14_17_31_33_36_copy_first_edges_to_37_preserve_rows_and_rollb
                 .fetch_one(&mut upgraded)
                 .await
                 .unwrap(),
-            37
+            38
         );
         assert!(sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&mut upgraded)
