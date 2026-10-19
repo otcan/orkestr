@@ -58,6 +58,7 @@ pub struct AppState {
     executions: execution_registry::ExecutionRegistry,
     fast_executions: execution_registry::ExecutionRegistry,
     window_handles: Option<window_runtime::handles::Handles>,
+    initial_window: Option<Arc<window_runtime::initial::InitialAuthority>>,
     bootstrap_token: Arc<String>,
     origin: Arc<String>,
     authority: Arc<String>,
@@ -66,6 +67,23 @@ pub struct AppState {
     timers: timer_http::DurableOwnerController,
 }
 impl AppState {
+    /// Trusted startup only. Configuration is never accepted from an HTTP body.
+    pub(crate) fn with_beta_config(
+        mut self,
+        config: &beta_config::BetaConfig,
+    ) -> Result<Self, &'static str> {
+        if self.initial_window.is_some() || self.window_handles.is_some() {
+            return Err("beta configuration already installed");
+        }
+        let initial = window_runtime::initial::InitialAuthority::new(config)?;
+        let handles = window_runtime::handles::Handles::new(
+            config.owner_id.clone(),
+            config.conversation_id.clone(),
+        )?;
+        self.initial_window = Some(Arc::new(initial));
+        self.window_handles = Some(handles);
+        Ok(self)
+    }
     /// The ordinary server owns the bounded controller task and its shutdown.
     pub fn start_timers(&self, supervisor: Store) -> timer_lifecycle::TimerTask {
         timer_lifecycle::TimerTask::start(
@@ -102,6 +120,7 @@ impl AppState {
             executions: execution_registry::ExecutionRegistry::default(),
             fast_executions: execution_registry::ExecutionRegistry::default(),
             window_handles: None,
+            initial_window: None,
             bootstrap_token: Arc::new(bootstrap_token),
             origin: Arc::new(origin),
             authority: Arc::new(authority),

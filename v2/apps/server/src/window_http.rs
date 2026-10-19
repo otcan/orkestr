@@ -28,7 +28,7 @@ pub(crate) async fn admit(
     Path(id): Path<String>,
     body: Result<Json<ExecutionWindowRequest>, JsonRejection>,
 ) -> Result<Response, Error> {
-    browser::owner(&state, &headers).await?;
+    let owner = browser::owner(&state, &headers).await?;
     browser::guard(
         &state,
         &axum::http::Method::POST,
@@ -42,11 +42,20 @@ pub(crate) async fn admit(
     if !input.is_valid() {
         return Err(invalid());
     }
-    let admission = state
-        .store
-        .admit_execution_window_authenticated(&credential, &conversation, &input)
-        .await
-        .map_err(store_error)?;
+    let admission = match &state.initial_window {
+        Some(initial) => {
+            initial
+                .admit(&state.store, &credential, &owner, &conversation, &input)
+                .await
+        }
+        None => {
+            state
+                .store
+                .admit_execution_window_authenticated(&credential, &conversation, &input)
+                .await
+        }
+    }
+    .map_err(store_error)?;
     Ok((
         if admission.duplicate {
             StatusCode::OK
