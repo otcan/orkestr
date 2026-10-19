@@ -121,12 +121,12 @@ let x=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(crypto.createHa
         fixture = json.loads((Path(__file__).parent/'desktop_legacy_golden.json').read_text())
         raw = fixture['sourceUtf8'].encode()
         output, adoption = module.seal(raw, hashlib.sha256(raw).hexdigest(), revoked_at=fixture['revokedAt'])
-        self.assertEqual(output.decode(), fixture['preparedUtf8'])
-        self.assertEqual(json.loads(adoption), fixture['adoption'])
+        self.assertEqual(output.decode(), fixture['pythonReferencePreparedUtf8'])
+        self.assertEqual(json.loads(adoption), fixture['pythonReferenceAdoption'])
         state = json.loads(output)
         document = dict(format=canonical.COHORT_FORMAT,
             sourceSha256=hashlib.sha256(raw).hexdigest(), generationFloor=10,
-            retiredRecords=sorted(state['desktopLeases'],key=lambda r:r['id'].encode()))
+            records=sorted(state['desktopLeases'],key=lambda r:r['id'].encode()))
         self.assertEqual(canonical.canonical(document).hex(),fixture['retiredCanonicalHex'])
 
     def test_actual_sigterm_sighup_cleanup_and_unknown_publication(self):
@@ -139,6 +139,11 @@ let x=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(crypto.createHa
 sys.path.insert(0,sys.argv[1])
 import desktop_legacy_prepare as module
 original=module.prepare_bundle
+class Oracle:
+ provenance={'syntheticOracle':True}
+ def __init__(self,*_): pass
+ def __call__(self,*args): return module.seal(*args)
+module.PinnedNodePreparer=Oracle
 signal_name,signal_phase=sys.argv[2:4]
 def wrapped(*args,**kwargs):
  def hook(phase):
@@ -151,7 +156,8 @@ module.main()
                     result = subprocess.run([sys.executable, '-B', '-c', script,
                         str(Path(module.__file__).parent), name, phase, '--source', str(source),
                         '--target', str(target), '--source-sha256', hashlib.sha256(raw).hexdigest(),
-                        '--offline-source-confirmed'], capture_output=True)
+                        '--offline-source-confirmed','--validator-repository','synthetic',
+                        '--validator-commit','0'*40], capture_output=True)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(source.read_bytes(), raw)
                     self.assertFalse(list(root.glob('.desktop-legacy-*')))
@@ -162,13 +168,24 @@ module.main()
                         self.assertEqual((target/'original.json').read_bytes(), raw)
                         self.assertTrue((target/'adoption.json').exists())
 
-    def test_actual_cli_fresh_bundle_original_and_external_receipt(self):
+    def test_cli_transport_injected_oracle_fresh_bundle_and_receipt(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);source=root/'source.json';target=root/'fresh'
             raw=json.dumps(self.state()).encode();source.write_bytes(raw)
-            command=[sys.executable,'-B',str(Path(module.__file__)), '--source',str(source),
+            script='''import sys
+sys.path.insert(0,sys.argv.pop(1))
+import desktop_legacy_prepare as module
+class Oracle:
+ provenance={'syntheticOracle':True}
+ def __init__(self,*_): pass
+ def __call__(self,*args): return module.seal(*args)
+module.PinnedNodePreparer=Oracle
+module.main()
+'''
+            command=[sys.executable,'-B','-c',script,str(Path(module.__file__).parent), '--source',str(source),
                      '--target',str(target),'--source-sha256',hashlib.sha256(raw).hexdigest(),
-                     '--offline-source-confirmed']
+                     '--offline-source-confirmed','--validator-repository','synthetic',
+                     '--validator-commit','0'*40]
             result=subprocess.run(command,capture_output=True,check=True)
             self.assertEqual(source.read_bytes(),raw)
             self.assertEqual((target/'original.json').read_bytes(),raw)

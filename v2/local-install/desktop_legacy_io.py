@@ -27,7 +27,7 @@ def strict_json(raw):
 
 
 def prepare_bundle(source, target, digest, seal, *, offline_confirmed=False,
-                   hook=lambda phase: None):
+                   hook=lambda phase: None, provenance=None):
     """Publish only a fresh evidence directory after trusted cohort sealing.
 
     ``seal`` is trusted reviewed code, not a module selected by source state.
@@ -63,7 +63,12 @@ def prepare_bundle(source, target, digest, seal, *, offline_confirmed=False,
                      output_sha256=hashlib.sha256(output).hexdigest(),
                      adoption_sha256=hashlib.sha256(adoption).hexdigest(),
                      activation='not-performed; external-trusted-adoption-required')
+    if provenance is not None:
+        transport['preparationSource'] = provenance
     metadata = (json.dumps(transport, indent=2, allow_nan=False) + '\n').encode()
+    if len(metadata) > MAX_BYTES:
+        raise RecoveryError('transport metadata exceeds bound')
+    strict_json(metadata)
     stage = Path(tempfile.mkdtemp(prefix='.desktop-legacy-', dir=target.parent))
     publishing = False
     try:

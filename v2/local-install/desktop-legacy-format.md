@@ -10,6 +10,8 @@ python3 -B v2/local-install/desktop_legacy_prepare.py \
   --source /private/offline/original.json \
   --source-sha256 <exact-lowercase-sha256> \
   --target /private/offline/fresh-evidence \
+  --validator-repository /reviewed/source-checkout \
+  --validator-commit <full-reviewed-commit> \
   --offline-source-confirmed
 ```
 
@@ -21,7 +23,7 @@ identity; the separate initialized-state recovery protocol remains unchanged.
 
 Every original record and unknown field is retained. Repeated historical
 versions are not renumbered. Every unreleased record is released with explicit
-`offline-legacy-adoption-revoked` reason. Already released records are unchanged.
+`legacy_history_retired` reason. Already released records are unchanged.
 The new counter and cohort floor equal `max(old counter, old versions) + 1`;
 headroom for a strictly newer next acquisition is required. Other legacy
 structural errors remain refusals. No expiry-based inference is used.
@@ -45,8 +47,8 @@ Proposed contract coordinated with the public validator owner:
 - Prepared state has the identical cohort as `legacyRetiredCohort`.
 - `preparedSha256` hashes the exact emitted leases.json bytes, including newline.
 - `retiredSha256` hashes canonical encoding of exactly the object
-  `{format, sourceSha256, generationFloor, retiredRecords}`. The complete prepared
-  records are sorted by their UTF8 ID bytes in `retiredRecords`; unknown fields
+  `{format, sourceSha256, generationFloor, records}`. The complete prepared
+  records are sorted by their UTF8 ID bytes in `records`; unknown fields
   are included. The state's original record order is retained.
 
 Canonical encoding is binary concatenation without whitespace or separators:
@@ -61,9 +63,10 @@ nonfinite numbers, negative zero, magnitude above MAX_SAFE_INTEGER, depth above
 64, node count above 100000 or canonical output above 8 MiB refuse. Root depth is
 zero; each value and each object key counts as a node. JSON numbers have IEEE754
 semantics; safe integral lexical integers are retained exactly. Original lexical
-bytes always remain in original.json. The implementation uses Python's
-big-endian double packing and UTF8 bytes; a separate Node encoder test checks
-cross-language compatibility, including astral/BMP ordering and subnormals.
+bytes always remain in original.json. The operator-facing command uses the pinned public Node parser, preparer and
+serializer. Python big-endian double packing and UTF8 encoding remain only a
+compatibility oracle, with an independent Node encoder test for astral/BMP key
+ordering and subnormals.
 
 The validator owner must test actual store adoption, reopen, every old binding's
 refusal, strict fresh uniqueness and generation, and receipt/cohort tamper refusal.
@@ -79,3 +82,23 @@ without dumping environments. External websocket executor identity is separate
 from UI transport identity. An empty job table and no current UI stdio child are
 observations, not a substitute for a controlled writer fence. Root owns concrete
 rollout and session-preservation evidence; this tool performs no process actions.
+
+## Pinned Node source boundary
+
+The CLI requires a full independently reviewed source commit and repository.
+It reads only Git objects for desktop-lease-legacy.js, canonical.js, structure.js
+and lock.js (all under packages/browsers/src), with replacement objects disabled.
+The mutable checkout is never imported. A private disposable source export runs
+the pure `parseLegacyJson`, `prepareLegacyCohort` and `serializePreparedLegacy`
+exports; no DesktopLeaseStore is constructed. The dependency file hashes and
+source commit are retained in bundle.json without machine paths. Operator trust
+in the selected commit is explicit, not inferred from presence in Git. Any
+future source dependency change requires review and transport closure update.
+
+The exact prepared bytes are Node JSON.stringify(state,null,2) plus newline.
+The external adoption receipt is compact JSON plus newline, capped at 1 MiB; this
+avoids the pretty-print overhead exceeding the receipt loader's byte bound.
+Only canonical retired-record encoding is language-independent. The checked-in
+golden fixture labels Python's serialized bytes as reference-only; their SHA is
+not used as a substitute for the Node receipt. Initial source inspection is not
+committed-source execution or actual store interoperability qualification.

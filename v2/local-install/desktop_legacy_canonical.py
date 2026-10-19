@@ -91,5 +91,5 @@ def parse(raw):
 def retired_digest(source_digest, floor, records):
     ordered = sorted(records, key=lambda lease: lease['id'].encode('utf-8'))
     payload = dict(format=COHORT_FORMAT, sourceSha256=source_digest,
-                   generationFloor=floor, retiredRecords=ordered)
+                   generationFloor=floor, records=ordered)
     return hashlib.sha256(canonical(payload)).hexdigest()

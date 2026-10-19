@@ -88,8 +88,9 @@ no command-line activation path and no permissive cohort implementation.
 
 The coordinated contract and operator-facing offline command are now implemented
 in desktop_legacy_prepare.py and desktop_legacy_canonical.py; see
-desktop-legacy-format.md. A shared golden fixture pins exact prepared bytes and
-canonical cohort digest. Transport-only tests still use a synthetic sealer; the
+desktop-legacy-format.md. A shared golden fixture pins the canonical cohort digest and labels Python
+serialized bytes as reference-only. The CLI uses a reviewed exact Git-object
+Node closure for the real prepared-byte pin. Transport-only tests still use a synthetic sealer; the
 separate preparer tests exercise actual revocation and sealing. Actual public
 store interoperability and live adoption remain unqualified. Source evidence
 with an embedded lock identity is refused rather than routed through this legacy

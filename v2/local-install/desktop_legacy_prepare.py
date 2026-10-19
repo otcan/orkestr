@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Prepare fresh offline retired legacy evidence; never activate a live store."""
+"""Prepare fresh offline legacy evidence using a reviewed pinned Node source.
+
+The Python seal function below is a compatibility oracle, never the CLI sealer.
+"""
 import argparse
 import copy
 from datetime import datetime, timezone
@@ -11,6 +14,7 @@ import signal
 from desktop_legacy_canonical import (ADOPTION_FORMAT, COHORT_FORMAT, MAX_SAFE,
                                       canonical, parse, retired_digest)
 from desktop_legacy_io import prepare_bundle
+from desktop_legacy_node import PinnedNodePreparer
 from desktop_restore import MAX_BYTES, RecoveryError
 
 
@@ -62,7 +66,7 @@ def seal(raw, source_digest, *, revoked_at=None):
     for record in state['desktopLeases']:
         if not record['releasedAt']:
             record.update(releasedAt=stamp, updatedAt=stamp,
-                          releaseReason='offline-legacy-adoption-revoked')
+                          releaseReason='legacy_history_retired')
     records = state['desktopLeases']
     cohort = dict(format=COHORT_FORMAT, sourceSha256=source_digest, generationFloor=floor,
                   retiredIds=sorted((row['id'] for row in records), key=lambda value: value.encode('utf-8')),
@@ -84,13 +88,18 @@ def main():
     parser.add_argument('--target', required=True)
     parser.add_argument('--source-sha256', required=True)
     parser.add_argument('--offline-source-confirmed', action='store_true')
+    parser.add_argument('--validator-repository', required=True)
+    parser.add_argument('--validator-commit', required=True)
     args = parser.parse_args()
     def interrupt(signum, frame):
         raise KeyboardInterrupt(f'interrupted by signal {signum}')
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, interrupt)
-    result = prepare_bundle(args.source, args.target, args.source_sha256, seal,
-                            offline_confirmed=args.offline_source_confirmed)
+    if not args.offline_source_confirmed:
+        raise RecoveryError('explicit offline source confirmation required; age is not quiescence')
+    preparer = PinnedNodePreparer(args.validator_repository, args.validator_commit)
+    result = prepare_bundle(args.source, args.target, args.source_sha256, preparer,
+                            offline_confirmed=True, provenance=preparer.provenance)
     print(json.dumps(result, sort_keys=True))
 
 
