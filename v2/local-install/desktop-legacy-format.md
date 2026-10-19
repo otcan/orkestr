@@ -117,3 +117,11 @@ fresh evidence publication and refusal without staging. They skip when the
 explicit repository and commit are absent. This is disposable offline preparation
 coverage; it does not initialize a desktop store or qualify live writer draining,
 external receipt installation, lease adoption or session preservation.
+
+The offline transport retains a nofollow source descriptor and compares its
+identity with the source pathname before sealing, after sealing and immediately
+before publication (after the prepared hook). Missing/replaced paths, changed
+file metadata and extra hard links refuse publication and remove owned staging.
+This assumes a stable trusted offline namespace; it cannot prevent a hostile
+namespace change after the final check. The Node adapter also rejects a UTF-8
+BOM before invoking the pinned parser, independently of decoder BOM behavior.

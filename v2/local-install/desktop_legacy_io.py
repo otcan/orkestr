@@ -12,6 +12,8 @@ import re
 import shutil
 import tempfile
 
+from desktop_legacy_source import retained_source
+
 from desktop_restore import (MAX_BYTES, PublicationUnknown, RecoveryError,
                              finite_float, no_duplicates, private_parent,
                              read_original, rename_fresh)
@@ -44,7 +46,13 @@ def prepare_bundle(source, target, digest, seal, *, offline_confirmed=False,
     private_parent(target.parent)
     if source.name in ('', '.', '..') or target.name in ('', '.', '..') or os.path.lexists(target):
         raise RecoveryError('fresh target required')
+    with retained_source(source) as verify_source:
+        return _prepare_retained(source, target, digest, seal, hook, provenance, verify_source)
+
+
+def _prepare_retained(source, target, digest, seal, hook, provenance, verify_source):
     raw = read_original(source)
+    verify_source()
     if hashlib.sha256(raw).hexdigest() != digest:
         raise RecoveryError('source digest mismatch')
     state = strict_json(raw)
@@ -52,6 +60,7 @@ def prepare_bundle(source, target, digest, seal, *, offline_confirmed=False,
         raise RecoveryError('legacy source without embedded lock identity required')
     # No staging or publication before the shared validator contract succeeds.
     output, adoption = seal(raw, digest)
+    verify_source()
     for data in (output, adoption):
         if not isinstance(data, bytes) or not data or len(data) > MAX_BYTES:
             raise RecoveryError('bounded sealed JSON bytes required')
@@ -85,6 +94,7 @@ def prepare_bundle(source, target, digest, seal, *, offline_confirmed=False,
         finally:
             os.close(directory)
         hook('prepared')
+        verify_source()
         publishing = True
         rename_fresh(stage, target)
         hook('published')

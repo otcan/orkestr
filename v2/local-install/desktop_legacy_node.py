@@ -27,6 +27,7 @@ const root=process.argv[1], expected=process.argv[2];
 const {prepareLegacyCohort,serializePreparedLegacy}=await import(pathToFileURL(root+'/desktop-lease-legacy.js'));
 const {parseLegacyJson}=await import(pathToFileURL(root+'/desktop-lease-canonical.js'));
 const raw=fs.readFileSync(0);
+if(raw.subarray(0,3).equals(Buffer.from([0xef,0xbb,0xbf])))throw Error('source_bom_refused');
 if(raw.length>8*1024*1024||createHash('sha256').update(raw).digest('hex')!==expected)throw Error('source_pin_mismatch');
 const revokedAt=process.argv[3]||new Date().toISOString();
 const {state,adoption}=prepareLegacyCohort(parseLegacyJson(raw),{sourceSha256:expected,revokedAt});

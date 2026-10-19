@@ -73,7 +73,7 @@ class PinnedPublicPreparationTests(unittest.TestCase):
 
     def test_public_refusals_leave_no_target_or_staging(self):
         original = json.loads(self.raw)
-        cases = [self.raw.replace(b'1.25', b'1e999'),
+        cases = [b'\xef\xbb\xbf'+self.raw, self.raw.replace(b'1.25', b'1e999'),
                  b'{"fencingCounter":9,"fencingCounter":9,"desktopLeases":[]}',
                  json.dumps(dict(original, lockIdentity='12:34')).encode(),
                  json.dumps(dict(original, legacyRetiredCohort={})).encode()]

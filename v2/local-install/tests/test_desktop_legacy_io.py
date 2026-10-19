@@ -79,6 +79,35 @@ class LegacyIOTests(unittest.TestCase):
         self.assertEqual(len(list(self.root.glob('.desktop-legacy-*'))), 1)
         self.unchanged()
 
+    def test_source_replacement_refused_after_seal_and_before_publication(self):
+        for phase in ('seal', 'prepared'):
+            for replacement in ('regular', 'same-bytes', 'symlink', 'missing', 'hardlink', 'changed'):
+                with self.subTest(phase=phase, replacement=replacement), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    source, target, original = root/'source', root/'target', root/'retained-original'
+                    source.write_bytes(self.raw)
+                    def replace():
+                        if replacement == 'changed':
+                            source.write_bytes(b'changed')
+                            return
+                        source.rename(original)
+                        if replacement in ('regular', 'same-bytes'):
+                            source.write_bytes(self.raw if replacement == 'same-bytes' else b'replacement')
+                        elif replacement == 'symlink': source.symlink_to(original)
+                        elif replacement == 'hardlink': os.link(original, source)
+                    def seal(raw, digest):
+                        result = self.seal(raw, digest)
+                        if phase == 'seal': replace()
+                        return result
+                    def hook(value):
+                        if phase == 'prepared': replace()
+                    with self.assertRaises(module.RecoveryError):
+                        module.prepare_bundle(source, target, self.digest, seal,
+                                              offline_confirmed=True, hook=hook)
+                    self.assertFalse(target.exists())
+                    self.assertFalse(list(root.glob('.desktop-legacy-*')))
+                    if replacement != 'changed': self.assertEqual(original.read_bytes(), self.raw)
+
     def test_special_sources_refused(self):
         for kind in ('symlink', 'fifo', 'hardlink'):
             candidate = self.root / kind
