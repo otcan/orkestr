@@ -1,17 +1,18 @@
 //! Native isolated leaf. Coordinator owns shared registration and trusted bindings.
+pub mod catalog_config;
 mod reader;
 mod strict_json;
 use crate::AppState;
 use axum::{
-    Extension, Json, Router,
     body::Bytes,
     extract::{DefaultBodyLimit, RawQuery, State},
-    http::{HeaderMap, Method, StatusCode, header},
+    http::{header, HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::any,
+    Extension, Json, Router,
 };
 use orkestr_v2_contracts::OwnerId;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     path::{Component, PathBuf},
@@ -33,6 +34,13 @@ pub struct RegistryCatalog {
     pause: Option<Arc<tests::Pause>>,
 }
 impl RegistryCatalog {
+    pub fn empty() -> Self {
+        Self {
+            bindings: Arc::new(HashMap::new()),
+            #[cfg(all(test, target_os = "linux"))]
+            pause: None,
+        }
+    }
     /// Explicit one-to-one binding, including when legacy/V2 identities differ.
     /// No filesystem lookup, canonicalization, initialization or global fallback.
     pub fn new(bindings: Vec<RegistryBinding>) -> Result<Self, &'static str> {

@@ -1,7 +1,7 @@
 use orkestr_v2_server::{
     build_identity,
     owned_execution::{ConfiguredExecution, ConfiguredExecutions},
-    router, AppState,
+    router_with_google_catalog, AppState,
 };
 use orkestr_v2_store_sqlite::Store;
 use std::path::PathBuf;
@@ -47,6 +47,14 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let origin = config.origin;
     let mut state = AppState::new(store.clone(), token, origin)?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
+    let catalog = match std::env::var_os("ORKESTR_V2_GOOGLE_CATALOG") {
+        Some(path) => {
+            orkestr_v2_server::google_registry_metadata::catalog_config::load_private_catalog(
+                &PathBuf::from(path),
+            )?
+        }
+        None => orkestr_v2_server::google_registry_metadata::RegistryCatalog::empty(),
+    };
     let execution = match (
         std::env::var_os("ORKESTR_V2_EXECUTION_CONFIG"),
         std::env::var_os("ORKESTR_V2_EXECUTION_SET"),
@@ -82,7 +90,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         }
     );
     let timer_state = state.clone();
-    let mut app = router(state);
+    let mut app = router_with_google_catalog(state, catalog);
     if let Some(dist) = std::env::var_os("ORKESTR_V2_UI_DIST") {
         app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
     }

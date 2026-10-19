@@ -30,6 +30,7 @@ mod execution;
 mod execution_accept;
 mod execution_registry;
 pub mod fast_execution;
+pub mod google_registry_metadata;
 mod held_inputs;
 mod memory_service;
 pub mod offline_python;
@@ -228,6 +229,12 @@ async fn guard(
     response
 }
 pub fn router(state: AppState) -> Router {
+    router_with_google_catalog(state, google_registry_metadata::RegistryCatalog::empty())
+}
+pub fn router_with_google_catalog(
+    state: AppState,
+    catalog: google_registry_metadata::RegistryCatalog,
+) -> Router {
     Router::new()
         .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"build":build_identity::identity()})) }))
         .route("/api/v2/setup",post(auth::setup))
@@ -256,6 +263,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/v2",attachment_transfer::router())
         .nest("/api/v2",automatic_reply_control::router())
         .merge(memory_service::router(state.clone()))
+        .merge(google_registry_metadata::router(catalog))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })
         .layer(DefaultBodyLimit::max(40 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(),guard))

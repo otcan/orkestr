@@ -111,16 +111,7 @@ impl Fixture {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let state = AppState::new(store, "b".repeat(64), format!("http://{address}")).unwrap();
-        let app = router(catalog)
-            .route(
-                "/api/v2/browser/session",
-                axum::routing::delete(crate::browser::logout),
-            )
-            .layer(axum::middleware::from_fn_with_state(
-                state.clone(),
-                crate::guard,
-            ))
-            .with_state(state);
+        let app = crate::router_with_google_catalog(state, catalog);
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         (address, server)
     }
@@ -319,14 +310,12 @@ async fn native_no_global_fallback_no_initialization_and_foreign_source_owner() 
     )
     .unwrap();
     assert_eq!(request(address, "GET", ROUTE, cookie(&token)).await.0, 503);
-    assert!(
-        !binding
-            .path
-            .parent()
-            .unwrap()
-            .join("never-open-token.json")
-            .exists()
-    );
+    assert!(!binding
+        .path
+        .parent()
+        .unwrap()
+        .join("never-open-token.json")
+        .exists());
     server.abort();
     let _ = server.await;
     fixture.cleanup().await;

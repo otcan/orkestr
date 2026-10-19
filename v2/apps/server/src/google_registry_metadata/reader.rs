@@ -1,6 +1,6 @@
 //! Linux-only bounded read; no legacy connector helpers, initialization or writes.
 use super::strict_json;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{collections::HashSet, path::Path};
 pub(super) const MAX_BYTES: u64 = 1024 * 1024;
 const CAPS: [&str; 6] = [
