@@ -1,0 +1,9 @@
+# Ordinary Claude lifecycle independent verification
+
+Exact source `23b334f8a20d5e5908c9ff0328dd94b91ea4afde`: no blocking source finding for the bounded synthetic lifecycle. Accepted continuation consumes the completed pump, requires exact owned-tree reaping, then obtains Core's accepted-session metadata grant. Configured restart retains predecessor authorization and waits for eligible ordinary input before opening another native child. Resumed input identity derives from the consumed message; assistant/result correlation rejects a different input. Initialization remains separate from persisted native observation. Unknown shutdown records cancellation uncertainty and held input rather than fabricating Stopped or restart authority.
+
+Independently rehashed and copied the supplied binary: SHA256 `bd56ac93f5ed634eaf1899d69d4f4f262c85a190aa173c6bf03671ce5353ffff`. Producer receipt hash independently matches `eac93cca18f68b7f8fa38ed1c2d423759afc23f58b5cc63b0cc87eda7156de08`. Exported exact source using git archive; no mutable worktree fixture was executed and no build was performed.
+
+The unchanged Python lifecycle suite independently passed all four cases: continuation, configured restart, stale-output refusal, and unknown-shutdown refusal. Its exact consumed-message/native-session checks, fresh-child and prior-host-identity disappearance checks, historical acceptance replay snapshots, unsupported Stop checks, and finally cleanup all passed. Raw output and a private receipt are retained in the Verification Claude lifecycle artifact directory; receipt SHA256 `9a98c8832a694845f9ca7d78637ef5e591e5a45f13fd649efce1b1da8e6487a8`.
+
+This is synthetic ordinary HTTP and owned-process evidence only. It does not qualify real-account resume, native Stop/steer, extended leases, Worker execution or release readiness.
