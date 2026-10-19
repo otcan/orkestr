@@ -77,6 +77,7 @@ impl Store {
     ) -> Result<()> {
         let c = self.context()?;
         c.validate(tx).await?;
+        self.window_metadata_in(tx, &grant.binding).await?;
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         self.validate_workspace_binding(tx, &grant.binding).await?;
         let link = grant.resume.as_ref().ok_or(RuntimeStoreError::Fenced)?;

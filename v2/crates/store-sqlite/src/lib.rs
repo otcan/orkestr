@@ -26,14 +26,15 @@ pub use production_runtime::{
     AutomaticReplyConsumption, AutomaticReplyDelivery, AutomaticReplyProducer,
     AutomaticReplyReservation, AutomaticReplyReservationResult, BoundSessionMetadata,
     ClaudeProcessInitialization, CompletedToolDelivery, ConsumedOfflinePython,
-    ConsumedProviderDispatch, ExecutionConsumption, FastAdmissionInput, FastSource,
-    OfflinePythonAdmission, OfflinePythonConsumption, OfflinePythonDelegation,
-    OfflinePythonNativeCall, OfflinePythonNativeRequestId, OfflinePythonOutcome,
-    OfflinePythonOutput, OfflinePythonParent, OfflinePythonReceipt, OfflinePythonResultConsumption,
-    OfflinePythonResultPreparation, OfflinePythonResultReservation, OfflinePythonState,
-    ProductionSupervisorStore, ReadySessionTransition, RunLeaseTransition, RunRenewalAuthority,
-    TimerSchedulerIssuer, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
-    WorkerDelegationResult, WorkerDelegationState, WorkerTaskClaim,
+    ConsumedProviderDispatch, ExecutionConsumption, ExecutionWindowCredential,
+    ExecutionWindowRetirement, FastAdmissionInput, FastSource, OfflinePythonAdmission,
+    OfflinePythonConsumption, OfflinePythonDelegation, OfflinePythonNativeCall,
+    OfflinePythonNativeRequestId, OfflinePythonOutcome, OfflinePythonOutput, OfflinePythonParent,
+    OfflinePythonReceipt, OfflinePythonResultConsumption, OfflinePythonResultPreparation,
+    OfflinePythonResultReservation, OfflinePythonState, ProductionSupervisorStore,
+    ReadySessionTransition, RunLeaseTransition, RunRenewalAuthority, TimerSchedulerIssuer,
+    WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt, WorkerDelegationResult,
+    WorkerDelegationState, WorkerTaskClaim,
 };
 
 pub use production_runtime::inspection::{

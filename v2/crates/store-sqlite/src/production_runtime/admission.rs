@@ -112,6 +112,9 @@ impl Store {
             return Ok(result);
         }
         c.validate(&mut tx).await?;
+        let window = self
+            .execution_window_input_in(&mut tx, &claim.conversation_id, Some(&claim.event_id))
+            .await?;
         let occupied: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM production_runs WHERE session_id=? AND state NOT IN ('cancelled','succeeded')",
         )
@@ -123,7 +126,14 @@ impl Store {
             return Err(RuntimeStoreError::Busy);
         }
         let clock = now(&mut tx).await?;
-        crate::runtime::ledger::validate_claim(&mut tx, claim, binding_id, clock).await?;
+        crate::runtime::ledger::validate_window_claim(
+            &mut tx,
+            claim,
+            binding_id,
+            clock,
+            window.as_deref(),
+        )
+        .await?;
         let row = sqlx::query("SELECT b.* FROM session_bindings b JOIN production_readiness r ON r.session_id=b.id WHERE b.id=? AND b.owner_id=? AND b.conversation_id=? AND r.context_id=? AND r.incarnation_id=? AND b.provider_kind=? AND b.provider_namespace=?")
             .bind(binding_id.to_string()).bind(c.owner.to_string()).bind(claim.conversation_id.to_string())
             .bind(&c.id).bind(&c.incarnation).bind(provider_name(c.provider)?).bind(&c.namespace)
