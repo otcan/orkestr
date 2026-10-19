@@ -40,10 +40,10 @@ impl ConfiguredExecution {
     pub(super) async fn maintain(&self, heartbeat: &mut Instant) -> Result<(), &'static str> {
         self.current().await?;
         if heartbeat_due(*heartbeat, Instant::now()) {
-            self.store
-                .heartbeat_supervisor()
-                .await
-                .map_err(|_| "execution supervisor heartbeat refused")?;
+            self.store.heartbeat_supervisor().await.map_err(|error| {
+                eprintln!("owned execution heartbeat refused: {error:?}");
+                "execution supervisor heartbeat refused"
+            })?;
             *heartbeat = Instant::now();
         }
         Ok(())
@@ -93,7 +93,10 @@ impl ConfiguredExecution {
                     Duration::from_secs(60),
                 )
                 .await
-                .map_err(|_| "execution inbox claim refused")?
+                .map_err(|error| {
+                    eprintln!("owned execution inbox claim refused: {error:?}");
+                    "execution inbox claim refused"
+                })?
             {
                 break claim;
             }

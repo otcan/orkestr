@@ -42,9 +42,10 @@ class Manager:
         package = self.package
         command = [str(Path("/usr/bin/python3").resolve()), "-I", "-S", "-B",
                    str(package.root / "codex_service/entry.py"), "server", str(os.getpid())]
+        # Retain trusted server diagnostics; contained provider stderr remains closed.
         self.child = subprocess.Popen(command, env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
             cwd="/", user=package.uid, group=package.gid, extra_groups=[], close_fds=True,
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=None,
             process_group=0)
         self.identity = process(self.child.pid)
         require(self.identity is not None and self.identity["ppid"] == os.getpid()
