@@ -2,6 +2,13 @@
 use super::*;
 use orkestr_v2_contracts::{ConversationId, RunId};
 
+struct TerminalReattachment {
+    store: Store,
+    metadata: BoundSessionMetadata,
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    workspace: Option<WorkspaceGrant>,
+}
+
 impl Store {
     /// Trusted server discovery only. Returned IDs are locators, not authority;
     /// reattach revalidates every predicate and exact predecessor under write lock.
@@ -65,14 +72,16 @@ impl Store {
         config: ProductionSupervisorConfig,
         prior_run: &RunId,
     ) -> Result<(Store, BoundSessionMetadata)> {
-        self.reattach_terminal_supervisor_inner(
-            credential,
-            config,
-            prior_run,
-            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-            None,
-        )
-        .await
+        let result = self
+            .reattach_terminal_supervisor_inner(
+                credential,
+                config,
+                prior_run,
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                None,
+            )
+            .await?;
+        Ok((result.store, result.metadata))
     }
 
     /// Exact local installation reattachment, at unchanged durable generation.
@@ -86,14 +95,20 @@ impl Store {
         prior_run: &RunId,
         project: Uuid,
         installation: WorkspaceInstallation,
-    ) -> Result<(Store, BoundSessionMetadata)> {
-        self.reattach_terminal_supervisor_inner(
-            credential,
-            config,
-            prior_run,
-            Some((project, installation)),
-        )
-        .await
+    ) -> Result<(Store, BoundSessionMetadata, WorkspaceGrant)> {
+        let result = self
+            .reattach_terminal_supervisor_inner(
+                credential,
+                config,
+                prior_run,
+                Some((project, installation)),
+            )
+            .await?;
+        Ok((
+            result.store,
+            result.metadata,
+            result.workspace.ok_or(RuntimeStoreError::Fenced)?,
+        ))
     }
 
     async fn reattach_terminal_supervisor_inner(
@@ -105,7 +120,7 @@ impl Store {
             Uuid,
             WorkspaceInstallation,
         )>,
-    ) -> Result<(Store, BoundSessionMetadata)> {
+    ) -> Result<TerminalReattachment> {
         if credential.len() != 64 || !credential.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(RuntimeStoreError::Unauthorized);
         }
@@ -203,21 +218,30 @@ impl Store {
             }),
         };
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-        if let Some((project, installation)) = workspace {
-            store
-                .rebind_terminal_workspace_in(
-                    &mut tx,
-                    &binding,
-                    &incarnation_id,
-                    project,
-                    installation,
-                )
-                .await?;
-        }
+        let workspace_grant = if let Some((project, installation)) = workspace {
+            Some(
+                store
+                    .rebind_terminal_workspace_in(
+                        &mut tx,
+                        &binding,
+                        &incarnation_id,
+                        project,
+                        installation,
+                    )
+                    .await?,
+            )
+        } else {
+            None
+        };
         let grant = store
             .reserve_terminal_metadata(tx, prior_run, &binding, terminal.get("event_id"))
             .await?;
-        Ok((store, grant))
+        Ok(TerminalReattachment {
+            store,
+            metadata: grant,
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            workspace: workspace_grant,
+        })
     }
 }
 #[cfg(test)]

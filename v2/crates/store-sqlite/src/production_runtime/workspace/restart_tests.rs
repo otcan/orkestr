@@ -43,7 +43,7 @@ async fn reopened_workspace_restart_rebinds_before_reservation_without_generatio
         .await
         .is_err());
     assert_eq!(before, snapshot(&f.store).await);
-    let (next, metadata) = reopened
+    let (next, metadata, renewed) = reopened
         .reattach_terminal_supervisor_with_workspace(
             &f.token,
             takeover(),
@@ -64,16 +64,24 @@ async fn reopened_workspace_restart_rebinds_before_reservation_without_generatio
     next.with_metadata_fence(&metadata, || Ok::<_, ()>(()))
         .unwrap()
         .unwrap();
-    let renewed = next
-        .register_workspace(
-            &f.token,
-            &f.conversation,
-            project,
-            allow.installation(&root).unwrap(),
-        )
-        .await
-        .unwrap();
     assert_eq!(renewed.generation(), g.generation());
+    let WorkspaceLaunchReservationResult::Reserved(reservation) = next
+        .reserve_workspace_launch(&f.token, &renewed, &metadata, "restart-launch")
+        .await
+        .unwrap()
+    else {
+        panic!("fresh");
+    };
+    let WorkspaceLaunchConsumption::Launch(mut launch) = next
+        .consume_workspace_launch(&f.token, reservation)
+        .await
+        .unwrap()
+    else {
+        panic!("fresh");
+    };
+    next.with_workspace_metadata_fence(&f.token, &mut launch, &metadata, |_| Ok::<_, ()>(()))
+        .unwrap()
+        .unwrap();
     let row = sqlx::query(
         "SELECT generation,incarnation_id FROM workspace_session_projects WHERE project_id=?",
     )

@@ -8,7 +8,7 @@ impl Store {
         predecessor: &str,
         project: Uuid,
         installation: WorkspaceInstallation,
-    ) -> Result<()> {
+    ) -> Result<WorkspaceGrant> {
         let c = self.context()?;
         c.validate(tx).await?;
         if project.is_nil() || binding.owner_id != c.owner {
@@ -43,7 +43,17 @@ impl Store {
             .0
             .lock()
             .map_err(db)?
-            .insert(project.to_string(), installation.inner);
-        Ok(())
+            .insert(project.to_string(), installation.inner.clone());
+        Ok(WorkspaceGrant {
+            project: project.to_string(),
+            generation: sqlx::query_scalar("SELECT generation FROM workspace_projects WHERE id=?")
+                .bind(project.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db)?,
+            conversation: binding.conversation_id.clone(),
+            context: c.clone(),
+            installation: installation.inner,
+        })
     }
 }

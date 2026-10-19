@@ -78,7 +78,7 @@ factory activation, hostile mount protection, or a live installation change.
 
 `Store::reattach_terminal_supervisor_with_workspace(credential, config,
 prior_run, project: Uuid, installation: WorkspaceInstallation)` returns the
-existing `(Store, BoundSessionMetadata)` pair. Linux64 only. The original
+`(Store, BoundSessionMetadata, WorkspaceGrant)` triple. Linux64 only. The original
 operator allowlist supplies the installation; browser paths and project IDs
 alone grant nothing. The exact retired predecessor association, owner,
 conversation, retained filesystem identities, active project and unchanged
@@ -87,8 +87,8 @@ The association is transferred to the new incarnation and the local descriptor
 registry installed before terminal metadata reservation. No nested writer,
 new generation, native identity reset or historical dispatch is issued.
 
-After return, `register_workspace` with the same installation/project obtains
-its existing generation for ordinary launch reservation. The legacy restart
+The returned grant retains the same descriptor Arc and unchanged generation
+for ordinary launch reservation; no installation path is reopened. The legacy restart
 method still refuses a workspace binding without this handoff. A failed outer
 transaction may leave a local retained descriptor entry, but every metadata and
 effect fence rechecks the durable association and incarnation; that entry grants
