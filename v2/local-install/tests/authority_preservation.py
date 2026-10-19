@@ -21,8 +21,12 @@ from cross_revision import verify_schema
 
 
 def database_inventory(path):
-    """Hashes/counts only leave this function; never emit cell values."""
-    with closing(sqlite3.connect(path.as_uri()+'?mode=ro&immutable=1', uri=True)) as db:
+    """Read the stopped DB including retained WAL; emit hashes/counts only.
+
+    immutable=1 is invalid here: a stopped server can leave committed WAL pages.
+    Caller supplies a stable owned snapshot/copy; this never checkpoints the DB.
+    """
+    with closing(sqlite3.connect(path.as_uri()+'?mode=ro', uri=True)) as db:
         require(db.execute('PRAGMA integrity_check').fetchall()==[('ok',)], 'SQLite integrity failed')
         require(not db.execute('PRAGMA foreign_key_check').fetchall(), 'foreign key violation')
         schema=db.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").fetchall()
