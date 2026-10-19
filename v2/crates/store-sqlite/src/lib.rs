@@ -9,6 +9,7 @@ use sqlx::{
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
 mod conversation_export;
+mod conversations;
 pub mod fixture_runtime;
 pub use conversation_export::{
     ConversationExport, ConversationExportError, ConversationExportLimits,
@@ -143,7 +144,7 @@ impl Store {
     }
     pub async fn global(&self, owner: &OwnerId) -> Result<ConversationId> {
         let id = sqlx::query_scalar(
-            "SELECT id FROM conversations WHERE owner_id=? AND project_id IS NULL",
+            "SELECT id FROM conversations WHERE owner_id=? AND project_id IS NULL AND standalone=0",
         )
         .bind(owner.to_string())
         .fetch_one(&self.pool)
