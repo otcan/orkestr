@@ -179,3 +179,6 @@ pub use history::*;
 
 mod steering;
 pub use steering::*;
+
+mod attachments;
+pub use attachments::*;

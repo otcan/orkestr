@@ -172,3 +172,5 @@ impl Store {
 pub use production_runtime::{
     CodexSteeringAuthority, ConsumedSteering, SteeringConsumption, SteeringReservation,
 };
+
+pub mod attachment_integrity;
