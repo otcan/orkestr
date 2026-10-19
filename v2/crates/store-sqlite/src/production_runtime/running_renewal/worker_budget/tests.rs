@@ -39,6 +39,7 @@ async fn worker_with_budget(owner_budget: Option<u32>) -> (Case, Box<ConsumedPro
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(task.execution_budget_ms(), owner_budget);
     let row = sqlx::query("SELECT * FROM session_bindings WHERE id=?")
         .bind(input.worker_binding_id.to_string())
         .fetch_one(&f.store.pool)

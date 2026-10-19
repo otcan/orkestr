@@ -49,6 +49,11 @@ impl Store {
                     .parse()
                     .map_err(db)?,
             ),
+            execution_budget_ms: row
+                .get::<Option<i64>, _>("execution_budget_ms")
+                .map(u32::try_from)
+                .transpose()
+                .map_err(db)?,
             lifetime_ms: u32::try_from(row.get::<i64, _>("lifetime_ms")).map_err(db)?,
         };
         tx.commit().await.map_err(db)?;
