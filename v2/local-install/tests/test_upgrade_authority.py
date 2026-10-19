@@ -30,7 +30,7 @@ class AuthorityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'reactivated'):audit.verify(self.before,after)
 
     def test_added_result_authority_or_reenabled_timer_refused(self):
-        for table in ('dormant_timers','worker_tool_results','durable_timer_authorities','production_steering','production_steering_turns'):
+        for table in ('dormant_timers','worker_tool_results','durable_timer_authorities','production_steering','production_steering_turns','worker_running_budgets','owner_execution_budgets'):
             after=copy.deepcopy(self.after);after['ledgers']={table:[('new-authority',)]}
             with self.subTest(table=table),self.assertRaisesRegex(RuntimeError,'authority ledger'):
                 audit.verify(self.before,after)
