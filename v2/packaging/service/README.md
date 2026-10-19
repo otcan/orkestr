@@ -204,8 +204,9 @@ it untouched. Workspace/native state must be empty. Root-owned manager and
 endpoint directories may be absent or pre-reserved empty with configured group
 and modes 0700/0750 respectively. Existing nonempty state is refused.
 
-The exact clean paired Git source must descend from reviewed manager
-`0dbb4226a2fdd611bd75b22d4a17117c438a1484`. Source is exported from Git blobs;
+The exact clean paired Git source must have identical production Python Git
+blobs/modes to reviewed manager `0dbb4226a2fdd611bd75b22d4a17117c438a1484`.
+Commit ancestry is not required (reviewed cherry-picks are supported). Source is exported from Git blobs;
 mutable checkout modules are never imported. Its authoritative `FILES` and
 `MODULES_SERVICE` define the closed inner package. Pair version must be
 `2.0.0-beta.1`, with matching embedded native/web identities and release profiles.
@@ -242,3 +243,15 @@ credential/artifact inode identities, and the complete UI tree without following
 symlinks. Credentials inside the UI tree are refused. This requires the same
 stable trusted namespace as preparation; subsequent hostile path replacement is
 not prevented by this preflight.
+
+The source gate compares all production `.py` files under `v2/provider-broker`,
+including root broker files and the codex_bounded/isolation/codex_service trees,
+before candidate export/import. It excludes only exact root test entrypoint names enumerated from the trusted
+reviewed tree (new names are refused), and three
+explicit reviewed root test helpers: `bounded_proxy_fixture.py`,
+`codex_service_fixture.py`, `selected_codex_fixture.py`. Test files are never
+exported. Any added, missing, changed or mode-changed production Python refuses;
+unverified root modules cannot shadow standard-library imports. The inner
+Package inventory and artifact source/version checks remain unchanged. A tools-only
+successor may be pinned separately from the paired application source; retain
+both identities in operator provenance rather than relabeling the pair.

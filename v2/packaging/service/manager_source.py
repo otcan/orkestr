@@ -1,7 +1,6 @@
 """Load the authoritative inventory only from an exact reviewed Git tree."""
 from contextlib import contextmanager
 import importlib
-import os
 from pathlib import Path
 import re
 import subprocess
@@ -20,21 +19,50 @@ def git(repository, *arguments):
              'GIT_NO_REPLACE_OBJECTS':'1'}).stdout
 
 
+# Reviewed test-only helpers at provider-broker root, not production modules.
+TEST_HELPERS = {'bounded_proxy_fixture.py', 'codex_service_fixture.py',
+                'selected_codex_fixture.py'}
+
+
+def test_entrypoints(repository):
+    """Only reviewed root test entrypoints; candidate-added test names are refused."""
+    names=git(repository,'ls-tree','-r','--name-only',MANAGER_BASE+':v2/provider-broker').decode().splitlines()
+    return TEST_HELPERS | {name for name in names
+                           if '/' not in name and name.startswith('test_') and name.endswith('.py')}
+
+
+def production_inventory(repository, commit):
+    require(re.fullmatch('[0-9a-f]{40}',commit),'exact source required')
+    result={};excluded=test_entrypoints(repository)
+    for row in git(repository,'ls-tree','-rz',commit+':v2/provider-broker').split(b'\0'):
+        if not row:continue
+        header,name=row.split(b'\t',1);mode,kind,oid=header.split()
+        name=name.decode('utf-8');parts=name.split('/')
+        if not name.endswith('.py'):continue
+        require(all(p not in ('','..','.') for p in parts),'safe Git path required')
+        if name in excluded:continue
+        require(mode in (b'100644',b'100755') and kind==b'blob','regular Git source required')
+        result[name]=(mode,oid)
+    require(result,'production Python required')
+    return result
+
+
+def verified_inventory(repository, commit):
+    reviewed=production_inventory(repository,MANAGER_BASE)
+    candidate=production_inventory(repository,commit)
+    require(candidate==reviewed,'reviewed production Python inventory mismatch')
+    return candidate
+
+
 @contextmanager
 def authority(repository, commit):
-    require(re.fullmatch('[0-9a-f]{40}',commit),'exact source required')
-    git(repository,'merge-base','--is-ancestor',MANAGER_BASE,commit)
+    # Cherry-picks preserve reviewed bytes without preserving commit ancestry.
+    # Compare every production Python blob/mode before export or candidate import.
+    inventory=verified_inventory(repository,commit)
     require(not any(n in sys.modules for n in ('codex_service','codex_bounded')), 'fresh isolated packager process required')
     with tempfile.TemporaryDirectory(prefix='service-source-',dir=Path.home()) as scratch:
         root=Path(scratch);total=0
-        listing=git(repository,'ls-tree','-rz',commit+':v2/provider-broker')
-        for row in listing.split(b'\0'):
-            if not row:continue
-            header,name=row.split(b'\t',1);mode,kind,oid=header.split()
-            name=name.decode('utf-8')
-            if not name.endswith('.py'):continue
-            require(mode in (b'100644',b'100755') and kind==b'blob' and
-                    all(p not in ('','..','.') for p in name.split('/')),'regular Git source required')
+        for name,(_,oid) in inventory.items():
             blob=git(repository,'cat-file','blob',oid.decode());total+=len(blob)
             require(total<=16*1024*1024,'source closure bound')
             path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(blob)
