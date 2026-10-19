@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use orkestr_v2_contracts::{ConversationSnapshot, Project, ProjectPage};
+use orkestr_v2_contracts::ConversationSnapshot;
 use orkestr_v2_ui::Projection;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
@@ -65,30 +65,6 @@ pub async fn key() -> Result<String, Failure> {
 pub async fn delay() {
     let _ = document::eval("await new Promise(resolve => setTimeout(resolve, 1500)); return null;")
         .await;
-}
-
-pub async fn projects(csrf: &str) -> Result<Vec<Project>, Failure> {
-    let mut result = Vec::new();
-    let mut after = 0;
-    loop {
-        let page: ProjectPage = request(
-            "GET",
-            &format!("/api/v2/projects?after={after}&limit=100"),
-            Value::Null,
-            csrf,
-            "",
-        )
-        .await?;
-        result.extend(page.projects);
-        if result.len() > 10000 {
-            return Err("Project list exceeds client limit".to_string().into());
-        }
-        match page.next_cursor {
-            Some(next) if next > after => after = next,
-            None => return Ok(result),
-            _ => return Err("Invalid project cursor".to_string().into()),
-        }
-    }
 }
 
 pub async fn history_page(

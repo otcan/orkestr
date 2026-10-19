@@ -1,7 +1,7 @@
 mod about;
 mod acceptance_button;
 mod attachments_view;
-mod automatic_replies_view;
+mod beta_settings;
 mod execution_panel;
 mod execution_poll;
 mod fast_panel;
@@ -9,21 +9,14 @@ mod held_inputs_poll;
 mod held_inputs_view;
 mod history;
 mod host_resources_view;
-mod memory_export_guard;
-mod memory_transport;
-mod memory_view;
 mod progress_view;
 mod steering_view;
 mod stop_button;
-mod timer_detail_view;
-mod timer_screen;
 mod transport;
 mod views;
 mod worker_tasks_panel;
 mod worker_tasks_view;
-mod workers_view;
 use dioxus::prelude::*;
-use orkestr_v2_contracts::{Project, ProjectInput};
 use orkestr_v2_ui::{session_scope::SessionScope, Draft};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -37,9 +30,7 @@ fn App() -> Element {
     let mut csrf = use_signal(String::new);
     let mut global = use_signal(String::new);
     let mut current = use_signal(String::new);
-    let mut projects = use_signal(Vec::<Project>::new);
     let mut drafts = use_signal(BTreeMap::<String, Draft>::new);
-    let mut pending_project = use_signal(|| None::<ProjectInput>);
     let mut session_scope = use_signal(SessionScope::default);
     let mut task_drafts = use_signal(|| {
         orkestr_v2_ui::task_draft_lifetime::TaskDrafts::new(dioxus::dioxus_core::current_scope_id())
@@ -47,11 +38,8 @@ fn App() -> Element {
     use_context_provider(move || task_drafts);
     // Owner-scoped high-water marks outlive keyed conversation and tab remounts.
     let mut execution = use_signal(orkestr_v2_ui::execution::Execution::default);
-    let mut fast_execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut host_resources = use_signal(orkestr_v2_ui::host_resources::HostResources::default);
     let mut held_inputs = use_signal(orkestr_v2_ui::held_inputs::HeldInputs::default);
-    let mut workers = use_signal(orkestr_v2_ui::workers::Workers::default);
-    let mut worker_execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut tab = use_signal(|| "Assistant".to_string());
     let mut notice = use_signal(|| "Sign in to your local server.".to_string());
     let mut refresh = use_signal(|| 0_u64);
@@ -69,11 +57,8 @@ fn App() -> Element {
         {
             Ok(session) => {
                 execution.write().authorization_lost();
-                fast_execution.write().authorization_lost();
                 host_resources.write().clear_owner();
-                workers.write().clear_owner();
                 held_inputs.write().clear_owner();
-                worker_execution.write().authorization_lost();
                 task_drafts.write().clear_owner();
                 session_scope
                     .write()
@@ -81,8 +66,6 @@ fn App() -> Element {
                 task_drafts
                     .write()
                     .activate(session_scope.read().generation());
-                projects.set(Vec::new());
-                pending_project.set(None);
                 global.set(session.global_conversation_id.clone());
                 current.set(session.global_conversation_id);
                 csrf.set(session.csrf_token);
@@ -98,15 +81,10 @@ fn App() -> Element {
     });
     let mut expired = move |_| {
         execution.write().authorization_lost();
-        fast_execution.write().authorization_lost();
         host_resources.write().clear_owner();
-        workers.write().clear_owner();
         held_inputs.write().clear_owner();
-        worker_execution.write().authorization_lost();
         task_drafts.write().clear_owner();
         session_scope.write().invalidate();
-        projects.set(Vec::new());
-        pending_project.set(None);
         global.set(String::new());
         current.set(String::new());
         refresh += 1;
@@ -116,8 +94,8 @@ fn App() -> Element {
     rsx! {
         style { "{include_str!(\"style.css\")}" }
         main {
-            header { h1 { "Orkestr" } p { "Local assistant" } }
-            p { class: "notice", "Controls are available only when shown for a connected run. Approvals are unavailable. Project resources are not connected." }
+            header { h1 { "Orkestr" } p { "Codex Deep · beta" } }
+            p { class: "notice", "One conversation with Codex Deep. Review each proposed result before accepting it. Stop remains available only for the current connected run." }
             p { role: "status", "{notice}" }
             if resuming() {
                 p { role: "status", "Checking browser session…" }
@@ -127,15 +105,12 @@ fn App() -> Element {
                 views::Auth { onlogin: move |session: transport::BrowserSession| {
                     if logging_out() { return; }
                     execution.write().authorization_lost();
-                    fast_execution.write().authorization_lost();
-                    host_resources.write().clear_owner();
-                    workers.write().clear_owner();
-                    held_inputs.write().clear_owner();
-                    worker_execution.write().authorization_lost();
-                    task_drafts.write().clear_owner();
+                        host_resources.write().clear_owner();
+                        held_inputs.write().clear_owner();
+                        task_drafts.write().clear_owner();
                     session_scope.write().activate(&session.global_conversation_id, &mut drafts.write());
                     task_drafts.write().activate(session_scope.read().generation());
-                    projects.set(Vec::new()); pending_project.set(None); refresh += 1;
+                    refresh += 1;
                     tab.set("Assistant".into());
                     global.set(session.global_conversation_id.to_string());
                     current.set(session.global_conversation_id.to_string());
@@ -144,7 +119,7 @@ fn App() -> Element {
                 } }
             } else {
                 nav { "aria-label": "Main",
-                    for name in ["Assistant", "Projects", "Attention", "History", "Timers", "Workers", "Host resources", "Memory", "Settings"] {
+                    for name in ["Assistant", "History", "Host resources", "Settings"] {
                         button { "aria-current": if tab() == name { "page" } else { "false" }, onclick: move |_| {
                             tab.set(name.into());
                             if name == "Assistant" { current.set(global()); }
@@ -161,14 +136,10 @@ fn App() -> Element {
                             match result {
                                 Ok(_) => {
                                     execution.write().authorization_lost();
-                                    fast_execution.write().authorization_lost();
-                                    host_resources.write().clear_owner();
-                                    workers.write().clear_owner();
-                                    held_inputs.write().clear_owner();
-                                    worker_execution.write().authorization_lost();
-                                    task_drafts.write().clear_owner();
+                                                        host_resources.write().clear_owner();
+                                                        held_inputs.write().clear_owner();
+                                                        task_drafts.write().clear_owner();
                                     session_scope.write().invalidate();
-                                    projects.set(Vec::new()); pending_project.set(None);
                                     global.set(String::new()); current.set(String::new()); refresh += 1;
                                     csrf.set(String::new());
                                     notice.set("Signed out. Server session revoked; unsent drafts remain in this page.".into());
@@ -180,36 +151,18 @@ fn App() -> Element {
                         });
                     }, if logging_out() { "Signing out…" } else { "Sign out" } }
                 }
-                if tab() == "Projects" {
-                    views::Projects { csrf: csrf(), session_scope, projects, pending: pending_project, onexpired: expired,
-                        onopen: move |id: String| { current.set(id); tab.set("Assistant".into()); }
-                    }
-                } else if tab() == "Assistant" {
+                if tab() == "Assistant" {
                     section { key: "{current()}-{refresh}",
-                    h2 { if current() == global() { "Assistant" } else { "Project conversation" } }
-                    if current() != global() {
-                        for project in projects().iter().filter(|p| p.conversation_id.to_string() == current()) {
-                            p { "{project.name} · Git: {project.resources.local_git} · OXRM: {project.resources.local_oxrm}" }
-                        }
-                    }
+                    h2 { "Assistant" }
                     button { onclick: move |_| refresh += 1, "Reconnect and reload history" }
-                    views::Conversation { id: current(), csrf: csrf(), session_scope, execution, fast_execution, drafts, held_inputs, onexpired: expired }
+                    views::Conversation { id: current(), csrf: csrf(), session_scope, execution, drafts, held_inputs, onexpired: expired }
                     }
                 } else if tab() == "History" {
                     history::History { key: "{current()}", id: current(), csrf: csrf(), session_scope, onexpired: expired }
-                } else if tab() == "Timers" {
-                    timer_screen::Timers { key:"{current()}-{session_scope.read().generation()}", conversation:current(),csrf:csrf(),session_scope,onexpired:expired }
-                } else if tab() == "Workers" {
-                    workers_view::WorkersView { key: "{current()}-{session_scope.read().generation()}", id: current(), csrf: csrf(), session_scope, workers, execution: worker_execution, onexpired: expired }
                 } else if tab() == "Host resources" {
                     host_resources_view::HostResourcesView { key: "{session_scope.read().generation()}", session_scope, resources: host_resources, onexpired: expired }
-                } else if tab() == "Memory" {
-                    memory_view::MemoryView { key:"{current()}-{session_scope.read().generation()}",csrf:csrf(),project:projects().iter().find(|p|p.conversation_id.to_string()==current()).map(|p|p.project_id.clone()),session_scope,onexpired:expired }
-                } else if tab() == "Attention" {
-                    p { "Approvals, blockers and task attention are unavailable. No pending-work count is inferred." }
                 } else {
-                    about::About {}
-                    p { "Provider setup is unavailable. External integrations are optional." }
+                    beta_settings::BetaSettings {}
                 }
             }
         }
