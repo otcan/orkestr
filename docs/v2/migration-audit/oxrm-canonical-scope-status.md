@@ -189,3 +189,44 @@ compile both TypeScript leaf files with the flags above, copy the `.test.mjs`
 fixture beside the emitted files while changing its import suffix from `.ts`
 to `.js`, then run `node --test fastify_scope_status.test.mjs`. No manifest or
 lockfile changes are required in the product repository.
+
+## Concrete canonical mechanism and disabled verifier contract
+
+Further source discovery found HTTP Basic at `infra/proxy/Caddyfile` and
+`infra/proxy/Caddyfile.demos`: Caddy authenticates against configured admin
+username and password hash before reverse proxying. The main template routes
+`/mcp` and `/mcp/*` to MCP; the proposed `/status/linkedin-outreach` path is
+**not** presently forwarded there. No active deployment configuration or secret
+value was read. Template existence is not evidence that a particular runtime
+uses that proxy. The source supplies no explicit Basic-user-to-workspace/account
+status permission mapping and no in-service session/revocation verifier.
+
+`basic_caller_verifier.ts` now implements the bounded default-disabled contract
+for this actual mechanism: original request Basic credentials only, one
+Authorization field, bounded canonical Base64/UTF-8, no control characters,
+explicit current username + bcrypt hash + immutable revision + exact status
+principal. A mandatory password verifier checks the supplied password against
+that current hash. Current authority is fetched again after password checking;
+revocation, credential rotation or permission/scope changes refuse. The outer
+handler repeats the whole verifier before delivery. No config/env/file lookup,
+credential logging, proxy identity-header trust, global admin-to-scope fallback
+or new credential storage is implemented. With no dependencies it always denies.
+
+This is a **verifier contract**, not an installed authentication authority.
+Installed canonical Node dependencies contain no `bcrypt`, `bcryptjs` or
+`@node-rs/bcrypt`; an audited compatible backend and a current explicit
+status-only scope grant are missing. Password backend tests use a deterministic
+fake verifier and do not claim bcrypt correctness. Canonical-owner integration
+must supply those two dependencies from its real authority, preserve Caddy
+protection and explicitly route the status path to MCP. It must not read admin
+secrets into the product repository or assume existing proxy-wide Basic access
+means permission for any account. No canonical working source was changed;
+that tree already contains unrelated modifications.
+
+New qualification only: strict TypeScript compilation PASS; compiled verifier
+contract tests 5/5 PASS, covering disabled default, exact principal/backend
+invocation, wrong password, current revocation/rotation/scope change and duplicate
+or malformed credentials. Raw compiler and compiled-test logs retained privately.
+Previously passed ded4 Fastify/pure tests were not rerun. Actual bcrypt
+verification, canonical proxy wiring, real credentials and live endpoint tests
+remain **unexecuted**. No deployment or activation is included.
