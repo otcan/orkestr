@@ -27,7 +27,7 @@ impl Store {
         .await
         .map_err(db)?
         .ok_or(RuntimeStoreError::Unauthorized)?;
-        let candidate = sqlx::query("SELECT r.id,s.incarnation_id FROM production_supervisors s JOIN production_runs r ON r.context_id=s.context_id AND r.incarnation_id=s.incarnation_id JOIN production_acceptances a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id JOIN production_graceful_retirements g ON g.context_id=s.context_id AND g.incarnation_id=s.incarnation_id AND g.supervisor_generation=s.generation AND g.prior_run_id=r.id AND g.acceptance_event_id=a.event_id AND g.session_id=b.id AND g.binding_generation=b.generation WHERE s.lease_deadline_ms=0 AND s.owner_id=? AND s.provider_kind=? AND s.namespace=? AND s.supervisor_key=? AND r.conversation_id=? AND r.role='deep' AND r.state='succeeded' AND b.state='ready' AND b.generation=r.binding_generation+1 AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.context_id=s.context_id AND other.state NOT IN ('succeeded','cancelled')) AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation) AND NOT EXISTS(SELECT 1 FROM production_resume_metadata rm WHERE rm.prior_run_id=r.id)")
+        let candidate = sqlx::query("SELECT r.id,s.incarnation_id FROM production_supervisors s JOIN production_runs r ON r.context_id=s.context_id AND r.incarnation_id=s.incarnation_id JOIN production_acceptances a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id JOIN production_graceful_retirements g ON g.context_id=s.context_id AND g.incarnation_id=s.incarnation_id AND g.supervisor_generation=s.generation AND g.prior_run_id=r.id AND g.acceptance_event_id=a.event_id AND g.session_id=b.id AND g.binding_generation=b.generation WHERE s.lease_deadline_ms=0 AND s.owner_id=? AND s.provider_kind=? AND s.namespace=? AND s.supervisor_key=? AND r.conversation_id=? AND r.role IN ('deep','fast') AND r.state='succeeded' AND b.state='ready' AND b.generation=r.binding_generation+1 AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.context_id=s.context_id AND other.state NOT IN ('succeeded','cancelled')) AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation) AND NOT EXISTS(SELECT 1 FROM production_resume_metadata rm WHERE rm.prior_run_id=r.id)")
             .bind(owner).bind(provider_name(config.provider)?).bind(&config.namespace).bind(&config.supervisor_key).bind(conversation.to_string())
             .fetch_optional(&mut *tx).await.map_err(db)?;
         let result = candidate
@@ -41,7 +41,7 @@ impl Store {
         tx.commit().await.map_err(db)?;
         Ok(result)
     }
-    /// Trusted configured restart after an owner-accepted Deep turn. Requires
+    /// Trusted configured restart after an owner-accepted Deep or Fast turn. Requires
     /// exact expired predecessor CAS and returns a single setup reservation in
     /// the same transaction. The server must prove its old owned child reaped.
     /// No historical run or consumed dispatch is reissued; queued input remains.
@@ -98,7 +98,7 @@ impl Store {
         if unresolved != 0 {
             return Err(RuntimeStoreError::Fenced);
         }
-        let terminal = sqlx::query("SELECT r.session_id,a.event_id FROM production_runs r JOIN production_acceptances a ON a.run_id=r.id WHERE r.id=? AND r.owner_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role='deep' AND r.state='succeeded'")
+        let terminal = sqlx::query("SELECT r.session_id,a.event_id FROM production_runs r JOIN production_acceptances a ON a.run_id=r.id WHERE r.id=? AND r.owner_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role IN ('deep','fast') AND r.state='succeeded'")
             .bind(prior_run.to_string()).bind(&owner).bind(&context_id).bind(&incarnation_id)
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
         let session: String = terminal.get("session_id");
