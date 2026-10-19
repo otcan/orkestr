@@ -1,0 +1,21 @@
+{
+  "event_id": "00000000-0000-4000-8000-000000000005",
+  "schema_version": 1,
+  "owner_id": "00000000-0000-4000-8000-000000000001",
+  "scope": {
+    "kind": "project",
+    "project_id": "00000000-0000-4000-8000-000000000002"
+  },
+  "aggregate_id": "00000000-0000-4000-8000-000000000003",
+  "aggregate_version": 1,
+  "sequence": 1,
+  "correlation_id": "00000000-0000-4000-8000-000000000004",
+  "causation_id": "00000000-0000-4000-8000-000000000004",
+  "actor_kind": "owner",
+  "source": "http",
+  "occurred_at": "2026-01-01T00:00:00.000Z",
+  "payload_ref_or_safe_payload": {
+    "kind": "message_accepted",
+    "message_id": "00000000-0000-4000-8000-000000000004"
+  }
+}
