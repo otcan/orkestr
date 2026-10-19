@@ -21,7 +21,13 @@ impl TaskQueue {
         parent: &WorkerSchedule,
     ) -> Result<WorkerProgress, &'static str> {
         if self.closed {
-            return Ok(WorkerProgress::Unknown);
+            return self.drain().await.map(|done| {
+                if done {
+                    WorkerProgress::Completed
+                } else {
+                    WorkerProgress::Running
+                }
+            });
         }
         let status = parent
             .store
@@ -39,10 +45,14 @@ impl TaskQueue {
             return Ok(WorkerProgress::WaitingForParent);
         }
         if status.phase != ExecutionPhase::Running {
-            self.children.clear();
-            self.registration.take();
-            self.closed = true;
-            return Ok(WorkerProgress::Unknown);
+            self.quiesce();
+            return self.drain().await.map(|done| {
+                if done {
+                    WorkerProgress::Completed
+                } else {
+                    WorkerProgress::Running
+                }
+            });
         }
         let mut active = Vec::with_capacity(MAX_ACTIVE);
         for mut child in self.children.drain(..) {
@@ -73,6 +83,32 @@ impl TaskQueue {
         } else {
             WorkerProgress::Running
         })
+    }
+
+    pub(super) fn quiesce(&mut self) {
+        self.closed = true;
+        self.registration.take();
+        for child in &mut self.children {
+            child.quiesce();
+        }
+    }
+
+    pub(super) async fn drain(&mut self) -> Result<bool, &'static str> {
+        self.quiesce();
+        let mut pending = Vec::with_capacity(self.children.len());
+        let mut failure = None;
+        for mut child in self.children.drain(..) {
+            match child.drain_one().await {
+                Ok(true) => {}
+                Ok(false) => pending.push(child),
+                Err(reason) => failure = Some(reason),
+            }
+        }
+        self.children = pending;
+        if let Some(reason) = failure {
+            return Err(reason);
+        }
+        Ok(self.children.is_empty())
     }
 }
 impl WorkerSchedule {
@@ -106,6 +142,8 @@ impl WorkerSchedule {
             deadline: Instant::now() + Duration::from_secs(15),
             lifetime_ms: claim.lifetime_ms(),
             owner_budget_ms: claim.execution_budget_ms(),
+            launch: None,
+            quiesced: false,
             task_claim: Some(claim),
             queue: None,
             slot: Some(slot),
