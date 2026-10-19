@@ -89,10 +89,14 @@ impl Controller {
         }
         // Authenticate the requested conversation BEFORE touching another task.
         // A foreign/stale cookie cannot trigger shutdown or install a scope.
-        self.store
-            .execution_window_status_authenticated(browser, conversation)
+        if let Some(replay) = self
+            .store
+            .inspect_execution_window_request_authenticated(browser, conversation, input)
             .await
-            .map_err(|_| "selected conversation unavailable")?;
+            .map_err(|_| "selected conversation or intent unavailable")?
+        {
+            return Ok(replay);
+        }
         let mut current = self.current()?;
         if current.configured_scope().1 != conversation {
             let previous = current.configured_scope().1.clone();
@@ -183,12 +187,7 @@ fn selected_config(
         let derive = |kind: &str, value: &str| {
             let mut digest = Sha256::new();
             let id = conversation.to_string();
-            for part in [
-                "orkestr-native-conversation-v1",
-                kind,
-                value,
-                &id,
-            ] {
+            for part in ["orkestr-native-conversation-v1", kind, value, &id] {
                 digest.update(part.as_bytes());
                 digest.update([0]);
             }
