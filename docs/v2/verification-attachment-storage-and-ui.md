@@ -19,3 +19,11 @@ The supplied process parent checks equality of selected complete table rows befo
 The hosted CI helper observes one actual Send fetch, returns its original promise and response, restores fetch after the match, and reads only a bounded clone (8 KiB, 128 reads). It makes no replay request. Fresh 202, exact canonical message identity/sequence/text/scope/single admission, reload, CSRF and logout assertions remain. The retained failure log hashes to `a1f4fcb54b49c1e911104a6ed2b5d1c9e04c3e57cd29e46366c9298ab4dc004c`; missing CDP body retention remains an unproved cause. No hosted browser execution is claimed here.
 
 The inert UI consumer preserves bounded descriptor metadata without reading, hashing, saving or promoting it. JavaScript unsafe integer lengths deliberately refuse even where the canonical unsigned wire type can represent them. No transport, storage roundtrip, browser, provider or release qualification follows from these pure tests.
+
+## Additional independent oracle receipt review
+
+Reviewed Migration oracle `7583bdb226321bfb6e5b891e3656b304c7194fcf` without repeating its Store execution. Its retained receipt, raw test/lint logs, binary, committed Store oracle source and seven canonical Core source hashes match the declared digests. Receipt SHA-256: `acb8c4accb6b050e39a383d3eca0b1d0da390fea25d5ef99316c6a332fea91d7`. Both retained test invocations report 2/2 passing; execution remains attributed to the oracle author.
+
+No bounded source/receipt blocker found. The oracle uses actual public authenticated Store operations across two fresh stores, export/import, reopen, exact binary/empty/duplicate-content vectors, persisted source provenance, fresh unbound target references, removal and historical replay, revoked-session refusal, malformed imports, changed request conflict and cross-scope download refusal. Pure-validator integration remains explicitly unexecuted in this receipt.
+
+Its no-admission checks compare counts in four selected tables, not full-row equality or all native authority tables. Malformed-import checks establish target manifest absence, not a complete database rollback snapshot. Reopen is a new pool in the same process, not a fresh executable or crash test. These are limits of this oracle's evidence; HTTP, live import and crash acceptance are not claimed.
