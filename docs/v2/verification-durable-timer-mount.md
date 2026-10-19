@@ -19,3 +19,34 @@ The inspected process oracle uses actual elapsed time and synthetic ordinary HTT
 Independently source-reviewed selective UI commit `fddd4a4044110fade4bf1d6ad7ea26074a84a98a`: no blocking source finding. Its three accepted hold values match the mounted read contract. `scheduler_unavailable` describes saved permission without prescribing a replacement grant; `durable_owner_enable_required` requests fresh owner instructions through disable/enable; the legacy explicit rearm hold retains legacy guidance. The unconditional one-hour/restart statement is removed. Availability still explicitly does not confirm execution.
 
 Validation rejects unknown holds and any armed response carrying a hold. Existing scope/state validation and uncertain mutation retry behavior are unchanged. Inspected supplied label and reducer cases cover these distinctions; they were not independently executed in this source-only review. The author's eleven focused tests and WASM check remain separately attributed. No new bundle, matching browser execution, multi-day continuity or transaction-crash qualification follows.
+
+## Independent mounted process replay
+
+Independently executed the supplied ordinary lifecycle case against the copied
+immutable `fb5a31fa55e342a3189e8f03c8f5ffa82b49cb2d` artifact: **1 passed,
+zero failed/ignored, 70.01 seconds**. Binary hash again matched
+`8d0e27247c53029c55b6246b8c91d497df840aaf9308a0aa6dfab8159d0e8980`.
+
+Used an exact source archive. Registered the supplied Rust seed parent as a
+private Store integration test, replacing only its two compile-time script/binary
+paths with the copied exact artifacts. Setup, public Store imports, all assertions
+and Python source were unchanged. Required-wrapper offline locked invocation
+compiled only the Store fixture; no server rebuild or shared workspace edit.
+
+The case exercised current cookie/Origin/CSRF, natural due intake, creator logout,
+weekly schedule restart without waiting a week, disable-before-due, inert exact
+replay and changed replay conflict, actual SIGKILL after committed intake, new exec
+after real supervisor expiry with no duplicate intake, and machine revocation
+terminating the server. It asserts one intake, zero native runs, schema33 and clean
+foreign keys. Its finally cleanup ran; no matching test/server processes remained.
+
+Raw Cargo/Rust test output and an independently generated receipt remain private;
+receipt SHA256 `349ac6bb29c22aff2a9eb319662f08a768f05d3b343fd06a973cc55853322d65`.
+The unchanged parent captures and discards successful Python JSON stdout, so no
+separate child stdout transcript is claimed. The initial direct Python invocation
+failed argument unpacking before server launch; that raw failure remains preserved.
+
+This supersedes only the earlier lack of independent process execution. It adds
+no mid-transaction crash, multi-day, packaging, real-provider or browser credit.
+The separate exact23b Claude lifecycle independent four-case pass is retained and
+was not repeated.
