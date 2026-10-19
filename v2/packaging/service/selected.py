@@ -21,10 +21,10 @@ def encoded(value):
     return (json.dumps(value,sort_keys=True,indent=2,allow_nan=False)+'\n').encode()
 
 
-def write(path, data, gid, executable=False):
+def write(path, data, gid, executable=False, mode=None):
     fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o440)
     with os.fdopen(fd,'wb') as stream:
-        os.fchown(stream.fileno(),0,gid);os.fchmod(stream.fileno(),0o550 if executable else 0o440)
+        os.fchown(stream.fileno(),0,gid);os.fchmod(stream.fileno(),mode if mode is not None else (0o550 if executable else 0o440))
         stream.write(data);stream.flush();os.fsync(stream.fileno())
 
 
@@ -133,7 +133,7 @@ def prepare(plan):
                      'egress_socket':str(endpoint/'egress.sock'),'supervisor':str(inner/'isolation/supervisor.py'),
                      'hosts':list(config.HOSTS)}
             for name,value in (('beta.json',beta),('service.json',runtime),('profile.json',profile)):
-                write(inner/name,encoded(value),gid)
+                write(inner/name,encoded(value),gid,mode=0o640 if name=='beta.json' else None)
             directory(inner/'ui',gid)
             for name in pair['web']['files']:
                 dest=inner/'ui'/name
@@ -155,6 +155,7 @@ def prepare(plan):
                      'inner_manifest_sha256':digest,'files':inventory(output),'activated':False,
                      'startup_dependencies':{name:pin(trusted(Path(name).resolve())) for name in ('/bin/sh','/usr/bin/python3')},
                      'credential_contents_read':False,'provider_invoked':False,
+                     'transitive_startup_closure_qualified':False,
                      'custody':{str(p.relative_to(output)):{'uid':p.stat().st_uid,'gid':p.stat().st_gid,
                                'mode':p.stat().st_mode&0o777} for p in [output,*output.rglob('*')]}}
             write(output/'release.json',encoded(receipt),gid)

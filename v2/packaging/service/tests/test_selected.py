@@ -52,6 +52,8 @@ class Selected(unittest.TestCase):
             return original(path,*a,**kw)
         with patch.object(Path,'open',guarded):result=selected.prepare(self.plan);self.validate()
         self.assertFalse(result['activated'])
+        beta=self.root/'release/package/beta.json'
+        self.assertEqual((beta.stat().st_uid,beta.stat().st_gid,beta.stat().st_mode&0o777),(0,986,0o640))
         receipt=json.loads((self.root/'release/release.json').read_bytes())
         self.assertFalse(receipt['credential_contents_read'])
         self.assertEqual((self.root/'release').stat().st_mode&0o777,0o750)
