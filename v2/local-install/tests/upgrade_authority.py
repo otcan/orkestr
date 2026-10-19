@@ -13,7 +13,7 @@ def snapshot(home):
                               ('worker_provider_delegations','id,state,grant_hash,admitted_run_id')]:
             authority[table]={row[0]:tuple(row[1:]) for row in db.execute('SELECT '+columns+' FROM '+table)} if table in tables else {}
         ledgers={}
-        for table in ('dormant_timers','worker_tool_results','durable_timer_authorities','production_steering','production_steering_turns','worker_running_budgets','automatic_reply_routes','automatic_reply_permissions','automatic_reply_inputs','automatic_reply_sends'):
+        for table in ('dormant_timers','worker_tool_results','durable_timer_authorities','production_steering','production_steering_turns','worker_running_budgets','automatic_reply_routes','automatic_reply_permissions','automatic_reply_inputs','automatic_reply_sends','workspace_projects','workspace_session_projects','workspace_launches','memory_settings','memory_records','memory_decisions'):
             ledgers[table]=sorted(db.execute('SELECT * FROM '+table).fetchall(),key=repr) if table in tables else []
         if 'worker_tasks' in tables and 'execution_budget_ms' in {r[1] for r in db.execute('PRAGMA table_info(worker_tasks)')}:
             ledgers['owner_execution_budgets']=sorted(db.execute('SELECT id,execution_budget_ms FROM worker_tasks WHERE execution_budget_ms IS NOT NULL').fetchall())
@@ -42,7 +42,7 @@ def verify(before, after):
                     raise RuntimeError('upgrade reactivated run authority')
             elif now != prior:
                 raise RuntimeError('upgrade changed historical delegation authority')
-    for table in ('dormant_timers','worker_tool_results','durable_timer_authorities','production_steering','production_steering_turns','worker_running_budgets','owner_execution_budgets','automatic_reply_routes','automatic_reply_permissions','automatic_reply_inputs','automatic_reply_sends'):
+    for table in ('dormant_timers','worker_tool_results','durable_timer_authorities','production_steering','production_steering_turns','worker_running_budgets','owner_execution_budgets','automatic_reply_routes','automatic_reply_permissions','automatic_reply_inputs','automatic_reply_sends','workspace_projects','workspace_session_projects','workspace_launches','memory_settings','memory_records','memory_decisions'):
         if before.get('ledgers',{}).get(table,[]) != after.get('ledgers',{}).get(table,[]):
             raise RuntimeError('upgrade changed dormant timer or result authority ledger')
     return {'pending_tasks_held':held,'task_receipts_preserved':len(before['tasks']),

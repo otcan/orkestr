@@ -20,6 +20,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'local-install/tests')
 import cross_revision
 
 
+SCHEMA41_INVENTORY = '87ef7bda0699ce0a76ec046c49c0031d7be979db016c8d487deb3175dcbb426f'
 SCHEMA39_INVENTORY = '9ec5c3d00cad3410f662b60405e84e8ad0b931c665d7b2747c6cc7f5fdc30a4d'
 SCHEMA35_INVENTORY = '66c9b7bac0991274ff462f2cb04b43ca0edc71eade81b92d32cf0fbdcd98711c'
 SCHEMA36_INVENTORY = '3037e742dd4578ab3a1e886cc69eed0ba7a7f2340250434301dc3b9582b91d7b'
@@ -67,7 +68,7 @@ def prepare(old, new, old_source, new_source, old_sha, new_sha, successor=24, mi
     receipt.require(schema_version(new_value)==successor,'successor schema differs from requested target')
     inventory_digest=source_inventory(migrations,new_value['schema']['migrations']) if migrations is not None else None
     sqlx_checksums=sqlx_inventory(migrations,new_value['schema']['migrations']) if migrations is not None else None
-    receipt.require(successor not in (28,31,33,34,35,36,39) or bool(sqlx_checksums),'schema28/31/33/34/35/36/39 requires exact Core sources via migrations-dir')
+    receipt.require(successor not in (28,31,33,34,35,36,39,41) or bool(sqlx_checksums),'schema28/31/33/34/35/36/39/41 requires exact Core sources via migrations-dir')
     if successor==31:
         receipt.require(inventory_digest==SCHEMA31_INVENTORY,
                         'schema31 requires exact reviewed Core413 source inventory; later migrations not admitted')
@@ -83,6 +84,9 @@ def prepare(old, new, old_source, new_source, old_sha, new_sha, successor=24, mi
     if successor==39:
         receipt.require(inventory_digest==SCHEMA39_INVENTORY,
                         'schema39 requires exact Core991-supported migration inventory')
+    if successor==41:
+        receipt.require(inventory_digest==SCHEMA41_INVENTORY,
+                        'schema41 requires exact d1bc Core-supported migration inventory')
     admitted=True
     try:
         cross_revision.migration_edge(predecessor,successor)

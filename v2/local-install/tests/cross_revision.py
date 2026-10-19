@@ -43,8 +43,8 @@ def verify_schema(home, count, checksums=None):
 
 
 def migration_edge(old, new):
-    require(type(old) is int and type(new) is int and (old,new) in {(14,15),(14,17),(14,20),(17,20),(14,24),(17,24),(14,28),(17,28),(14,31),(17,31),(14,33),(17,33),(31,33),(14,36),(17,36),(31,36),(33,36),(14,39),(17,39),(31,39),(33,39),(36,39),(37,39),(38,39)},
-            "unsupported migration edge; admitted edges: 14->15/17/20/24/28/31/33 and 17->20/24/28/31/33 and 31->33/36 and 14/17/33->36 and 14/17/31/33/36/37/38->39")
+    require(type(old) is int and type(new) is int and (old,new) in {(14,15),(14,17),(14,20),(17,20),(14,24),(17,24),(14,28),(17,28),(14,31),(17,31),(14,33),(17,33),(31,33),(14,36),(17,36),(31,36),(33,36),(14,39),(17,39),(31,39),(33,39),(36,39),(37,39),(38,39),(14,41),(17,41),(31,41),(33,41),(36,41),(37,41),(38,41),(39,41),(40,41)},
+            "unsupported migration edge; admitted edges: 14->15/17/20/24/28/31/33 and 17->20/24/28/31/33 and 31->33/36 and 14/17/33->36 and 14/17/31/33/36/37/38->39 and 14/17/31/33/36/37/38/39/40->41")
     return old,new
 
 
@@ -62,7 +62,7 @@ def selected_package(args, side, binary, output, schema):
 def exercise(args):
     successor = getattr(args, 'new_schema', 15)
     predecessor, successor = migration_edge(getattr(args, 'old_schema', 14), successor)
-    require(successor not in (28,31,33,36,39) or bool(getattr(args,'sqlx_checksums',None)), 'schema28/31/33/36/39 requires exact Core SQLx checksums; use candidate accept_upgrade with migrations-dir')
+    require(successor not in (28,31,33,36,39,41) or bool(getattr(args,'sqlx_checksums',None)), 'schema28/31/33/36/39/41 requires exact Core SQLx checksums; use candidate accept_upgrade with migrations-dir')
     old, new = Path(args.old_binary).resolve(), Path(args.new_binary).resolve()
     require(sha256(old) == args.old_sha256 and sha256(new) == args.new_sha256, 'pinned artifact mismatch')
     require(args.old_source != args.new_source and args.old_sha256 != args.new_sha256, 'distinct revisions required')
@@ -104,7 +104,7 @@ def exercise(args):
             preflight=root/'preflight-copy'
             copy_home(home,preflight)
             source_before=files(home/'data')
-            authority_before=upgrade_authority.snapshot(preflight) if successor in (31,33,36,39) else None
+            authority_before=upgrade_authority.snapshot(preflight) if successor in (31,33,36,39,41) else None
             invoke(new_entry,'upgrade',preflight,'--package',new_package)
             process=launch(new_entry,preflight,client,log)
             verify_history(client,path,receipt,message)
