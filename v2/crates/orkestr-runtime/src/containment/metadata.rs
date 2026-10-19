@@ -514,3 +514,6 @@ mod tests;
 mod claude;
 
 mod workspace;
+
+mod broker_locator;
+pub use broker_locator::BrokerChildLocator;
