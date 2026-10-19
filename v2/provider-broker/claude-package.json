@@ -2,9 +2,9 @@
   "format": "orkestr-v2-claude-package-v1",
   "entry": "claude_server.py",
   "files": {
-    "claude_server.py": "e66ed5ce8f13d9b4e589783c2bc3144973c6c2c8db634a8bb3a7d63130cf37f0",
-    "claude_connector.py": "3a2afb5d5be4abca7d0abc43706ce1d1aff233ecadd03e82caa5a9c46cf75a29",
-    "claude_protocol.py": "54b22064b7866248be5de3e7b1f0bbe30cea1f56b038ba5ae07b570b1b713fc2",
+    "claude_server.py": "1d71a71b34f57fe6f1e07c1fa50a5f86c85b2890574b6d7dde59773bc933fc02",
+    "claude_connector.py": "692ff382e60cc8e06af573cae061a2132670027d848e2eb6feb20be0a228be15",
+    "claude_protocol.py": "112fb8f46f551ecb967c3b39b5be2b45ef0ce81218878cf38cb4ec3dcf9f29a7",
     "protocol.py": "b80fd19455c79bb11d98674ac972b619b999e59142982fa112d6521039082203",
     "transport.py": "fe7821673c927f3a8a6226ca8f9e08e9c8a5ea4eb9526b62a2a44e3789e8264c",
     "claude_resume.py": "ecc014ec6578791adc2086b3d83dc161c61fbdffa043c957b0cc919c9a2d2850",
@@ -16,7 +16,10 @@
     "claude_system_telemetry.py": "b5ab49d155ef174a062362e002becc3255219ea9789dec1d55458f8820fde741",
     "claude_assistant_metadata.py": "779b44ab143314d87e5fafb41db53bd4f93b8fa477fec4a379ea628d79a0e651",
     "claude_assistant_input.py": "53f1840a683015813fc6a052f31e4f45d9e230eecde76183e6a7fe49a73812e4",
-    "claude_stop_metadata.py": "6a1a7a812a0c1ecd1d5cea590f674fa2b5484aabb20c9aa5ee567db109457e02"
+    "claude_stop_metadata.py": "6a1a7a812a0c1ecd1d5cea590f674fa2b5484aabb20c9aa5ee567db109457e02",
+    "claude_stream_schema.py": "3100e415a986b79079b9f0248da9c700afdacb1bcb72e71c18ff6cac0b4a2996",
+    "claude_stream.py": "940716f883688100ffe5f17684c56eafc7be565303fb52cd1bf96591d3cc8f8f",
+    "claude_pump.py": "7d820f09dea4d9c1d4a2d76f7de4dd17a69bce79f709b79ad888dc0756d9ff6a"
   },
   "activation": "held-installed-cli-and-runtime-composition-review"
 }

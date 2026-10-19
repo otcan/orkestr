@@ -74,7 +74,7 @@ class ClaudeOwnedSession:
 
     def command(self):
         return [str(self._config.executable), "-p", "--input-format", "stream-json",
-                "--output-format", "stream-json", "--verbose",
+                "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                 "--permission-mode", "dontAsk", "--permission-prompts", "none",
                 "--safe-mode", "--restricted", "--disable-slash-commands",
                 "--no-chrome", "--prompt-suggestions", "false", "--tools", "",

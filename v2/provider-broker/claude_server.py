@@ -7,7 +7,7 @@ import sys
 from claude_connector import ClaudeConfiguration
 from claude_protocol import ClaudeChannel
 from protocol import PROTOCOL, Refused
-from transport import Pump
+from claude_pump import ClaudePump
 from reaping import REAPED_EXIT
 
 
@@ -33,7 +33,7 @@ def main(configuration_path=None, account_environment=None):
             if handoff.family != socket.AF_UNIX or handoff.type != socket.SOCK_STREAM:
                 raise Refused("invalid private handoff")
             handoff.getpeername()
-            pump = Pump(session, ClaudeChannel(session), handoff=handoff)
+            pump = ClaudePump(session, ClaudeChannel(session), handoff=handoff)
             pump.run()
             if pump.parent_eof and pump.child is not None and pump.reaped:
                 return REAPED_EXIT

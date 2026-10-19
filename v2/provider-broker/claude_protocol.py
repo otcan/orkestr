@@ -8,6 +8,8 @@ from claude_failure import sanitize_failure
 from claude_system_telemetry import validate_system_telemetry
 from claude_assistant_metadata import contains_thinking, sanitize_assistant
 from claude_assistant_input import AssistantInput
+from claude_stream import ClaudeTextStream
+from claude_stream_schema import MAX_FRAME, MAX_RAW, frame_size
 
 
 class ClaudeChannel:
@@ -30,6 +32,8 @@ class ClaudeChannel:
         self.output_uuids = set()
         self.output_uuid_overflow = False
         self.assistant_input = None
+        self.stream = None
+        self.wire_bytes = 0
 
     def client(self, request):
         require(not self.poisoned)
@@ -89,13 +93,19 @@ class ClaudeChannel:
                 and 0 < len(content.encode()) <= 32768)
         self.input_uuid = input_uuid
         self.assistant_input = AssistantInput(self.native, input_uuid)
+        self.stream = ClaudeTextStream(self.native, input_uuid)
         self.messages.add(message)
         self.active, self.terminal = outer, False
         return frame, None
 
-    def provider(self, frame):
+    def provider(self, frame, *, raw_size=None):
         require(not self.poisoned)
         try:
+            if self.active is not None:
+                size = frame_size(frame) + 1 if raw_size is None else raw_size
+                require(type(size) is int and 0 < size <= MAX_FRAME + 1
+                        and self.wire_bytes + size <= MAX_RAW)
+                self.wire_bytes += size
             return self._provider(frame)
         except Exception:
             self.poisoned = True
@@ -128,12 +138,39 @@ class ClaudeChannel:
         require(not any(key in frame for key in ("sessionId", "parent_tool_use_id"))
                 or frame.get("parent_tool_use_id") is None and "sessionId" not in frame)
         kind = frame.get("type")
+        if kind in ('stream_event', 'assistant', 'result') and self.stream is not None:
+            require(frame.get('uuid') not in self.telemetry_uuids
+                    and frame.get('uuid') not in self.output_uuids
+                    and frame.get('uuid') != self.terminal_uuid
+                    and (self.control is None or frame.get('uuid') not in self.control.notice_ids))
+            if kind == 'stream_event':
+                require(self.initialized and self.system_seen and self.active is not None
+                        and not self.terminal)
+                if self.control is not None and not self.stream.started and 'api_message_id' not in frame:
+                    # Preserve the older bounded cancellation-only notice path.
+                    # It emits nothing, anchors nothing, and cannot acknowledge Stop.
+                    self.control.notice(frame, self.telemetry_uuids)
+                    return None
+                require(not self.assistant_input.events and not self.output_uuids
+                        and (self.stream.started or self.control is None or not self.control.notice_ids))
+                clean = self.stream.receive(frame, cancelled=self.control is not None)
+                if clean is None: return None
+                return {'method': 'BrokerOutput', 'params': {'owned_handle': self.handle,
+                        'request_id': self.active, 'frame': clean}}
+            if self.stream.started:
+                require(self.initialized and self.system_seen and not self.terminal)
+                if kind == 'assistant':
+                    return self.stream.observe_assistant(frame)
+                frame = self.stream.finish(frame, cancelled=self.control is not None)
+            else:
+                require(frame.get('uuid') not in self.stream.events)
         if kind == "system" and frame.get("subtype") in ("thinking_tokens", "status"):
             require(self.initialized and self.system_seen and self.active is not None
                     and not self.output_uuid_overflow)
             event = validate_system_telemetry(frame, self.native, self.input_uuid)
             require(event != self.terminal_uuid and event not in self.telemetry_uuids
                     and event not in self.output_uuids
+                    and (self.stream is None or event not in self.stream.events)
                     and (self.control is None or event not in self.control.notice_ids)
                     and len(self.telemetry_uuids) < 128)
             self.telemetry_uuids.add(event)
@@ -146,6 +183,7 @@ class ClaudeChannel:
             require(isinstance(value, str) and str(uuid.UUID(value)) == value)
             require(value not in (self.native,self.input_uuid,self.terminal_uuid)
                     and (self.control is None or value not in self.control.notice_ids)
+                    and (self.stream is None or value not in self.stream.events)
                     and value not in self.telemetry_uuids and len(self.telemetry_uuids) < 128)
             self.telemetry_uuids.add(value)
             # Even post-terminal telemetry cannot advance readiness or execution state.
