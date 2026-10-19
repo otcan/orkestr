@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import {createGroupParticipantPolicy} from './whatsapp-group-participant-author.js';
 import {createGroupOwnerAuthorPolicy} from './whatsapp-group-owner-author.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
@@ -9,16 +10,18 @@ const fail=code=>{throw new Error(`group_transport_${code}`);};
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 // An explicitly configured, existing-account transport. The surrounding bridge
-// keeps its legacy router disabled; only fresh owner-authored group input enters.
+// keeps its legacy router disabled; only explicitly authorized, fresh group input enters.
 export function createScopedGroupTransport({config,token,base,dbPath=config.journalPath,now=Date.now,routeFence: suppliedFence,proofStore: suppliedProof}) {
   if(!/^\d+@c\.us$/.test(config.ownChatId || '') || !Number.isFinite(Date.parse(config.activatedAt))
       || !Array.isArray(config.groups) || !config.groups.length || !token)fail('configuration_invalid');
   const groups=new Map(config.groups.map(g=>[g.chatId,g]));
   if(groups.size!==config.groups.length || [...groups].some(([id,g])=>!/^\d+(?:-\d+)?@g\.us$/.test(id) || !g.threadId))fail('configuration_invalid');
   const authors=createGroupOwnerAuthorPolicy(config,now);
+  const participants=createGroupParticipantPolicy(config,now);
   const db=new DatabaseSync(dbPath);db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS group_input(id TEXT PRIMARY KEY,chat_id TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_send(id TEXT PRIMARY KEY,hash TEXT NOT NULL,chat_id TEXT NOT NULL,parent_id TEXT NOT NULL,state TEXT NOT NULL,provider_id TEXT,created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS group_input_author(id TEXT PRIMARY KEY,proof TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);`);
   const contract=hash([config.ownChatId,config.activatedAt,config.groups]);
   const prior=db.prepare('SELECT value FROM group_meta WHERE key=?').get('contract');
@@ -87,15 +90,26 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
             || !Number.isFinite(ts) || ts<=Date.parse(config.activatedAt) || ts>now()+5000)return false;
         const remote=message?.id?.remote?._serialized || message?.id?.remote;
         if(remote && remote!==chatId)return false;
-        if(message?.fromMe!==true && !await authors.accepts(client,message))return false;
+        let participant=null;
+        if(message?.fromMe!==true && !await authors.accepts(client,message)) {
+          participant=await participants.identify(client,message,chatId);
+          if(!participant)return false;
+        }
         if(fenced(chatId)) {
           let active;try {active=routeFence.assertActive(config.routeControl.routeId);}catch{return false;}
           if(ts<Date.parse(active.since))return false;
         }
         if(uncertain())fail('delivery_uncertain');
         if(db.prepare('SELECT 1 FROM group_send WHERE provider_id=?').get(id))return false;
-        const result=db.prepare('INSERT OR IGNORE INTO group_input VALUES(?,?,?,?)').run(id,chatId,message.body,new Date(ts).toISOString());
-        return Boolean(result.changes);
+        // Input and participant evidence commit together; a crash cannot turn a
+        // participant input into a legacy owner input on the next relay poll.
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          const result=db.prepare('INSERT OR IGNORE INTO group_input VALUES(?,?,?,?)').run(id,chatId,message.body,new Date(ts).toISOString());
+          if(result.changes && participant) db.prepare('INSERT INTO group_input_author VALUES(?,?)').run(id,JSON.stringify(participant));
+          db.exec('COMMIT');
+          return Boolean(result.changes);
+        } catch(error) {db.exec('ROLLBACK');throw error;}
       });
     },
     sendText(client,to,text,accountId,request={}) {
@@ -110,6 +124,8 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         } else {
           parent=db.prepare('SELECT * FROM group_input WHERE id=? AND chat_id=?').get(request.parentId,to);
           if(!parent)fail('reply_parent_required');
+          const author=db.prepare('SELECT proof FROM group_input_author WHERE id=?').get(parent.id);
+          if(author && !participants.allows(JSON.parse(author.proof),parent))fail('participant_reply_denied');
         }
         const material=hash([to,text,request.parentId]);
         const previous=db.prepare('SELECT * FROM group_send WHERE id=?').get(request.requestId);
@@ -139,7 +155,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         } finally {clearTimeout(timer);}
       });
     },
-    policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,additionalOwnerAuthors:authors.count,timerNotifications:!!scope,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:3000,markSeen:false,automaticRouting:false,strictBearer:true,buildHash};},
+    policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,additionalOwnerAuthors:authors.count,participantGroups:participants.count,timerNotifications:!!scope,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:3000,markSeen:false,automaticRouting:false,strictBearer:true,buildHash};},
     diagnostics(client,buildHash) {return {identityMatches:client?.info?.wid?._serialized===config.ownChatId,...this.policyFields(buildHash)};},
   };
 }

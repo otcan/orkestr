@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import {createGroupParticipantPolicy, participantInputMetadata} from './whatsapp-group-participant-author.js';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
@@ -16,6 +17,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   if (!Array.isArray(heldIds) || heldIds.some(id => typeof id !== 'string' || !id.trim()))
     throw new Error('group_held_inputs_invalid');
   const heldInputIds = new Set(heldIds);
+  const participants = createGroupParticipantPolicy(config);
   const fencedThreads = scopedRouteMembership(config);
   if (config.appendDebugFooter === true && !['shouldAppendWhatsAppDebugFooter', 'stripWhatsAppDebugFooter', 'whatsappDebugFooter'].every(k => typeof formatter?.[k] === 'function'))
     throw new Error('group_footer_formatter_required');
@@ -42,6 +44,19 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         || b?.chatId !== group.chatId || b.enabled !== true || b.routeEligible === false || b.retired || b.deprecated)
       throw new Error('group_binding_inactive');
     return t;
+  }
+
+  async function inputThread(input, group) {
+    const thread = await threadFor(group);
+    const hasAuthors = inbox.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='group_input_author'").get();
+    if (participants.count && !hasAuthors) throw new Error('group_participant_journal_required');
+    const author = hasAuthors ? inbox.prepare('SELECT proof FROM group_input_author WHERE id=?').get(input.id) : null;
+    const metadata = author ? participantInputMetadata({proof: JSON.parse(author.proof), input, group, thread, policy: participants}) : {};
+    if (author) {
+      const check = await api(`/api/threads/${encodeURIComponent(group.threadId)}/whatsapp-participant-check`, {method: 'POST', body: {...metadata, text: input.body}});
+      if (check.allowed !== true) throw new Error('group_participant_security_denied');
+    }
+    return {thread, metadata};
   }
 
   async function answersFor(group, route) {
@@ -82,10 +97,10 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     }
     let route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
     if (route?.completed) return;
-    await threadFor(group);
+    const {metadata} = await inputThread(input, group);
     if (!route) {
       const response = await api(`/api/threads/${encodeURIComponent(group.threadId)}/input`, {method: 'POST', body: {
-        text: `[WhatsApp: ${group.name}]\n\n${input.body}`, source: 'whatsapp_group_relay',
+        ...metadata, text: `[WhatsApp: ${group.name}]\n\n${input.body}`, source: 'whatsapp_group_relay',
         parseCommands: false, controlAllowed: false, idempotencyKey: `group:${key(input.id)}`,
       }});
       const messageId = response.message?.id || response.messageId;
@@ -101,7 +116,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         const payloadId = key(`${input.id}:${answer.id}`);
         let saved = db.prepare('SELECT chunks FROM reply_payloads WHERE id=?').get(payloadId);
         if (!saved) {
-          let thread = await threadFor(group);
+          let {thread} = await inputThread(input, group);
           if (config.appendDebugFooter === true) {
             try {
               const {quota} = await api(`/api/quota/providers?ownerUserId=${encodeURIComponent(config.ownerUserId)}`, {timeoutMs: 1000});
@@ -119,7 +134,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         for (let index = 0; index < chunks.length; index++) {
           const requestId = `reply:${key(`${input.id}:${answer.id}:${index}`)}`;
           if (db.prepare("SELECT 1 FROM replies WHERE id=? AND state='sent'").get(requestId)) continue;
-          await threadFor(group);
+          await inputThread(input, group);
           const result = await send({chatId: input.chat_id, requestId, parentId: input.id, text: chunks[index]});
           if (result.ok !== true || !result.ids?.length) throw new Error('group_reply_unconfirmed');
           db.prepare("INSERT OR REPLACE INTO replies VALUES(?,'sent')").run(requestId);
