@@ -102,3 +102,18 @@ Only canonical retired-record encoding is language-independent. The checked-in
 golden fixture labels Python's serialized bytes as reference-only; their SHA is
 not used as a substitute for the Node receipt. Initial source inspection is not
 committed-source execution or actual store interoperability qualification.
+
+Pinned public-seam integration can be repeated without importing a checkout:
+
+```sh
+DESKTOP_LEGACY_VALIDATOR_REPOSITORY=/path/to/reviewed/repository \
+DESKTOP_LEGACY_VALIDATOR_COMMIT=fc932c7400025ed20f830002706006ada3964192 \
+python3 -B -m unittest discover -s v2/local-install/tests -p 'test_desktop_legacy*.py' -v
+```
+
+The two opt-in public-seam tests verify exact Node prepared bytes and receipt
+hashes, shared canonical cohort digest, retained original/history/unknown fields,
+fresh evidence publication and refusal without staging. They skip when the
+explicit repository and commit are absent. This is disposable offline preparation
+coverage; it does not initialize a desktop store or qualify live writer draining,
+external receipt installation, lease adoption or session preservation.
