@@ -98,6 +98,7 @@ pub(super) async fn snapshot(store: &Store) -> Vec<String> {
         ("production_stop_boundaries","event_id,owner_id,conversation_id,run_id,through_scope_sequence"),
         ("production_held_inputs","event_id,conversation_id,scope_sequence,message_id,boundary_event_id,reason"),
         ("worker_provider_delegations","id,owner_id,conversation_id,parent_run_id,parent_session_id,context_id,incarnation_id,parent_binding_generation,parent_lease_generation,parent_dispatch_fence,parent_deadline_ms,worker_session_id,worker_binding_generation,source_message_id,source_event_id,request_key,input_digest,requested_lifetime_ms,expires_at_ms,state,grant_hash,admitted_run_id"),
+        ("production_stopped_retirements","context_id,incarnation_id,supervisor_generation,prior_run_id,stopped_event_id,session_id,binding_generation,retired_at_ms"),
         ("production_graceful_retirements","context_id,incarnation_id,supervisor_generation,prior_run_id,acceptance_event_id,session_id,binding_generation,retired_at_ms"),
         ("production_acceptances","run_id,owner_id,conversation_id,completion_event_id,event_id,request_key,requested_revision,receipt_revision"),
         ("production_cancellations","run_id,event_id,request_key,lease_generation,dispatch_fence,lease_deadline_ms,receipt_state,inflight_status,request_revision,receipt_revision,request_control_revision"),
