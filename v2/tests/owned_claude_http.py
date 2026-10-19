@@ -105,13 +105,16 @@ def exercise(mode):
                 [("starting", "delivery_unknown")], [("blocked", "delivery_unknown")])
             return
 
-        running = ordinary.wait_for(lambda: case.phase("running"), "matching init must precede Started")
+        def controllable():
+            status = case.phase("running")
+            return status if status and status["progress"] is not None and status["capabilities"]["stop"] else None
+        running = ordinary.wait_for(controllable, "matching init and progress precede live control")
         observed = case.rows("SELECT observed_run_id,observed_event_key FROM production_requested_native")
         assert observed[0][0] == running["run_id"] and observed[0][1]
-        assert running["capabilities"] == {"stop": False, "steer": False}
+        assert running["capabilities"] == {"stop": True, "steer": False}
         intent = {"run_id": running["run_id"], "expected_revision": running["revision"],
-                  "expected_control_revision": running["control_revision"], "request_key": "unsupported-stop"}
-        assert case.request(case.path + "/stop", "POST", intent)[0] == 503
+                  "expected_control_revision": running["control_revision"] + 1, "request_key": "stale-stop"}
+        assert case.request(case.path + "/stop", "POST", intent)[0] == 409
         assert case.rows("SELECT count(*) FROM production_cancellations") == [(0,)]
         if mode == "budget":
             ordinary.wait_for(case.peer_gone, "budget must fence and clean the owned native")
