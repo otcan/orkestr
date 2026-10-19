@@ -2,7 +2,9 @@
 use super::{fence::StoreFence, CodexPump};
 use crate::containment::{Authority, Error};
 use orkestr_v2_application::runtime::RuntimeStoreError;
-use orkestr_v2_store_sqlite::{RunRenewalAuthority, Store};
+use orkestr_v2_store_sqlite::{
+    CodexSteeringAuthority, RunLeaseTransition, RunRenewalAuthority, Store,
+};
 use std::sync::Arc;
 
 impl CodexPump {
@@ -27,10 +29,43 @@ impl CodexPump {
     /// Consume on every outcome. Failed or uncertain renewal quarantines the
     /// owned process; no new frame, spawn, or observation sequence is generated.
     pub async fn renew_lease(
-        mut self,
+        self,
         store: Store,
         authority: &mut RunRenewalAuthority,
     ) -> Result<(Authority, Self), RuntimeStoreError> {
+        let (owner, pump, _) = self.renew_lease_transition(store, authority).await?;
+        Ok((owner, pump))
+    }
+
+    /// Refresh the captured issuer only after the actual same-child fence has
+    /// transferred successfully. Any subsequent refusal quarantines that child.
+    pub async fn renew_lease_with_steering(
+        self,
+        store: Store,
+        authority: &mut RunRenewalAuthority,
+        steering: CodexSteeringAuthority,
+    ) -> Result<(Authority, Self, CodexSteeringAuthority), RuntimeStoreError> {
+        if steering.provider() != &self.admission {
+            self.source.child.quarantine();
+            return Err(RuntimeStoreError::Fenced);
+        }
+        let (owner, pump, transition) = self
+            .renew_lease_transition(store.clone(), authority)
+            .await?;
+        match store.refresh_codex_steering(steering, &transition).await {
+            Ok(steering) => Ok((owner, pump, steering)),
+            Err(error) => {
+                pump.source.child.quarantine();
+                Err(error)
+            }
+        }
+    }
+
+    async fn renew_lease_transition(
+        mut self,
+        store: Store,
+        authority: &mut RunRenewalAuthority,
+    ) -> Result<(Authority, Self, RunLeaseTransition), RuntimeStoreError> {
         if !self.renewal_quiescent() {
             self.source.child.quarantine();
             return Err(RuntimeStoreError::Busy);
@@ -64,6 +99,6 @@ impl CodexPump {
         self.source.child = child;
         self.source.admission = transition.current().run.clone();
         self.admission = transition.current().clone();
-        Ok((authority, self))
+        Ok((authority, self, transition))
     }
 }
