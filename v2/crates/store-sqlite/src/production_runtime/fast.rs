@@ -1,6 +1,6 @@
 //! Fixed-purpose Fast scheduling seam. No Deep claim or Worker delegation.
 use super::*;
-use orkestr_v2_contracts::{EventId, MessageId, SessionId};
+use orkestr_v2_contracts::{ConversationId, EventId, MessageId, SessionId};
 
 /// Trusted supervisor-selected immutable owner input. No caller text or role.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +82,12 @@ impl Store {
             return Err(RuntimeStoreError::Fenced);
         }
         c.validate(&mut tx).await?;
+        self.execution_window_input_in(
+            &mut tx,
+            &ConversationId(conversation.parse().map_err(db)?),
+            Some(&input.source_event_id),
+        )
+        .await?;
         let binding_row = sqlx::query("SELECT b.* FROM session_bindings b JOIN production_readiness r ON r.session_id=b.id WHERE b.id=? AND b.owner_id=? AND b.conversation_id=? AND r.context_id=? AND r.incarnation_id=? AND b.provider_kind=? AND b.provider_namespace=?")
             .bind(input.fast_binding_id.to_string()).bind(c.owner.to_string()).bind(&conversation)
             .bind(&c.id).bind(&c.incarnation).bind(provider_name(c.provider)?).bind(&c.namespace)

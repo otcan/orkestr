@@ -120,6 +120,23 @@ pub(super) fn fast(
     }
 }
 
+/// Scratch custody is independent of native resume authority. Core must still
+/// issue the exact fresh or predecessor metadata grant before any child starts.
+pub(super) fn window_fast(
+    home: &Path,
+    conversation: &orkestr_v2_contracts::ConversationId,
+) -> Result<PathBuf, &'static str> {
+    if conversation.0.is_nil() {
+        return Err("Fast scope requires a conversation");
+    }
+    let path = scoped_root(home)?.join(format!("fast-{conversation}"));
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => existing_directory(home, path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => create_directory(path),
+        Err(_) => Err("Fast scratch custody unavailable"),
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

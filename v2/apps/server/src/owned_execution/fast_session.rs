@@ -40,7 +40,10 @@ impl ConfiguredExecution {
                 ExecutionPhase::Completed => {
                     control.disable();
                     drop(schedule);
-                    let Some(input) = self.fast_input(shutdown, heartbeat).await? else {
+                    let Some(input) = self
+                        .fast_input_checked(shutdown, heartbeat, || live.check_broker_liveness())
+                        .await?
+                    else {
                         let retiring = live
                             .retire_accepted(&self.token)
                             .await
@@ -65,7 +68,24 @@ impl ConfiguredExecution {
                 ExecutionPhase::AwaitingAcceptance => {
                     control.disable();
                     drop(schedule);
+                    live.check_broker_liveness()?;
+                    if self.window.is_some() && self.fast_window_due() {
+                        if let Some(companion) = &self.companion {
+                            companion.retire();
+                        }
+                        let retiring = live
+                            .retire_for_owner_decision(&self.token)
+                            .await
+                            .map_err(|_| "Fast proposal cleanup refused")?;
+                        let proof = self.reaped(retiring, &run, heartbeat).await?;
+                        self.wait_fast_acceptance(&run, proof, heartbeat, shutdown)
+                            .await?;
+                        return Ok(fast::FastExit::Shutdown);
+                    }
                     if *shutdown.borrow() {
+                        if self.fast_status(&run).await?.phase == ExecutionPhase::Completed {
+                            continue;
+                        }
                         break;
                     }
                     tokio::select! {
@@ -80,7 +100,9 @@ impl ConfiguredExecution {
                 ExecutionPhase::Starting | ExecutionPhase::Running => {}
                 ExecutionPhase::Queued => return Err("Fast exact run cannot be an inbox queue"),
             }
-            let cancellation = if *shutdown.borrow() {
+            let cancellation = if self.fast_window_due() {
+                Some("execution-window-work-deadline")
+            } else if *shutdown.borrow() {
                 Some("isolated-fast-shutdown")
             } else {
                 budget.cancellation_key(Instant::now())
@@ -132,10 +154,13 @@ impl ConfiguredExecution {
             }
         }
         live.quarantine();
+        if self.window.is_some() {
+            return Err("Fast window terminal remains unresolved");
+        }
         Ok(fast::FastExit::Shutdown)
     }
 
-    async fn fast_status(
+    pub(super) async fn fast_status(
         &self,
         run: &RunId,
     ) -> Result<orkestr_v2_contracts::ExecutionStatus, &'static str> {
