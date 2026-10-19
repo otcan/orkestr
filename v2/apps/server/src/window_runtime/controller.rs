@@ -38,6 +38,15 @@ enum State {
     Uncertain,
 }
 impl Controller {
+    pub(crate) fn configured_scope(
+        &self,
+    ) -> (
+        &orkestr_v2_contracts::OwnerId,
+        &orkestr_v2_contracts::ConversationId,
+    ) {
+        (&self.config.owner_id, &self.config.conversation_id)
+    }
+
     pub(crate) fn new(
         config: BetaConfig,
         home: PathBuf,
