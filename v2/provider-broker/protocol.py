@@ -2,6 +2,7 @@
 import json
 import math
 import secrets
+import uuid
 
 PROTOCOL = "orkestr-v2-provider-broker-v1"
 MAX_FRAME = 65536
@@ -76,6 +77,7 @@ class Channel:
         self.messages = set()
         self.cancelled = False
         self.cancelled_tool = False
+        self.steer_ids = set()
 
     def client(self, request):
         exact(request, ("id", "method", "params"))
@@ -98,12 +100,13 @@ class Channel:
             # parent/task admission; role JSON cannot create that authority.
             require(identity["role"] in ("fast", "deep", "worker"))
             require(not self.offline_python or identity["role"] == "worker")
+            self.role = identity["role"]
             self.handle = secrets.token_hex(24)
             return None, {"id": outer, "result": {"protocol": PROTOCOL,
                     "identity": identity, "metadata_only": True, "owned_handle": self.handle}}
         exact(params, ("owned_handle", "frame"))
         require(params["owned_handle"] == self.handle)
-        require(method in ("BrokerMetadata", "CommitExecution", "CancelExecution", "ToolResult"))
+        require(method in ("BrokerMetadata", "CommitExecution", "CancelExecution", "ToolResult", "SteerExecution"))
         frame = params["frame"]
         require(self.pending is None)
         require(isinstance(frame, dict))
@@ -117,6 +120,31 @@ class Channel:
             if kind == "initialized":
                 self.stage = "initialized"
                 return frame, {"id": outer, "result": {"owned_handle": self.handle, "frame": None}}
+        elif method == "SteerExecution":
+            # Exclusively owned parent pipe; only Core-issued consumed steer
+            # authority may derive this frame. JSON is not that authority.
+            require(self.role in ("fast", "deep") and not self.offline_python and self.committed and self.turn is not None
+                    and not self.terminal and not self.cancelled)
+            exact(frame, ("id", "method", "params"))
+            request_id = frame["id"]
+            require(isinstance(request_id, str))
+            try:
+                require(str(uuid.UUID(request_id)) == request_id)
+            except ValueError:
+                raise Refused("steer request identity refused") from None
+            require(request_id not in self.steer_ids and len(self.steer_ids) < 128)
+            require(frame["method"] == "turn/steer")
+            exact(frame["params"], ("threadId", "expectedTurnId", "input"))
+            params = frame["params"]
+            require(params["threadId"] == self.native and params["expectedTurnId"] == self.turn)
+            require(isinstance(params["input"], list) and len(params["input"]) == 1)
+            item = params["input"][0]
+            exact(item, ("type", "text", "text_elements"))
+            require(item["type"] == "text" and isinstance(item["text"], str)
+                    and 0 < len(item["text"].encode()) <= 32768 and "\0" not in item["text"]
+                    and item["text_elements"] == [])
+            self.steer_ids.add(request_id)  # burn before preparation/partial write
+            kind = "turn/steer"
         elif method == "CancelExecution":
             # Parent must hold Core cancellation fence for the ORIGINAL binding
             # and receipt.new_fenced_admission. JSON is not issuer evidence.
@@ -248,7 +276,7 @@ class Channel:
         require(self.pending is not None)
         outer, inner, kind = self.pending
         exact(frame, ("id", "result"))
-        require(type(frame["id"]) is int and frame["id"] == inner)
+        require(type(frame["id"]) is type(inner) and frame["id"] == inner)
         result = frame["result"]
         require(isinstance(result, dict))
         if kind == "initialize":
@@ -287,6 +315,11 @@ class Channel:
             require(self.turn is None or self.turn == result["turn"]["id"])
             self.turn = result["turn"]["id"]
             frame = {"id": inner, "result": {"turn": {"id": self.turn, "status": "inProgress"}}}
+        elif kind == "turn/steer":
+            require(not self.terminal and not self.cancelled)
+            exact(result, ("turnId",))
+            require(result["turnId"] == self.turn)
+            frame = {"id": inner, "result": {"turnId": self.turn}}
         elif kind == "turn/interrupt":
             exact(result, ())
             frame = {"id": inner, "result": {}}

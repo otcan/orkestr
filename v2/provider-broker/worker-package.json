@@ -10,7 +10,7 @@
     "worker_server.py": "4e72364ed920739f614dbed2f986c9bd069941f74bc8c87fa5a6ae62c3682694",
     "server.py": "59959b39da32284feea310e4595870a2e5aa9f47dd09382c3accb2386e3e1abe",
     "configuration.py": "1fba545e87e0834d2b3ba36a2c1249ca825631dfa5d6b29cd1b7fa573a8d22ec",
-    "protocol.py": "df9b42414cdc5e18fbe07da55525786adabba1c0a3f84eb6c94b5cde7c094853",
+    "protocol.py": "08ed3149c5ef8c41b0a465292d2d9db70d58b0bf52aec05301039a743fbe486d",
     "transport.py": "fe7821673c927f3a8a6226ca8f9e08e9c8a5ea4eb9526b62a2a44e3789e8264c",
     "reaping.py": "4632be4e94cef92a0b8a2970bad0a55a1925d07d7926eb05a6af32ef512954d7",
     "offline_tool.py": "47491289e1f06a372d4d28d2348629d72a201dcead86b6452b6a0936596b398d",
