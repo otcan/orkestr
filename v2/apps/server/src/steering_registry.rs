@@ -4,7 +4,7 @@ use orkestr_v2_store_sqlite::{CodexSteeringAuthority, ConsumedSteering};
 use std::sync::{Arc, Mutex};
 
 pub(crate) struct Slot {
-    authority: CodexSteeringAuthority,
+    authority: tokio::sync::Mutex<Option<CodexSteeringAuthority>>,
     state: Mutex<SlotState>,
 }
 struct SlotState {
@@ -22,7 +22,7 @@ pub(crate) struct SelectedSteering {
 impl Slot {
     pub(crate) fn new(authority: CodexSteeringAuthority) -> Arc<Self> {
         Arc::new(Self {
-            authority,
+            authority: tokio::sync::Mutex::new(Some(authority)),
             state: Mutex::new(SlotState {
                 active: true,
                 ready: false,
@@ -47,8 +47,10 @@ impl Slot {
     }
 }
 impl RunSteering {
-    pub(crate) fn authority(&self) -> &CodexSteeringAuthority {
-        &self.0.authority
+    pub(crate) async fn authority(
+        &self,
+    ) -> tokio::sync::MutexGuard<'_, Option<CodexSteeringAuthority>> {
+        self.0.authority.lock().await
     }
     pub(crate) fn ready(&self, ready: bool) {
         if let Ok(mut state) = self.0.state.lock() {
@@ -77,10 +79,19 @@ impl SelectedSteering {
         self.scheduling.clone().lock_owned().await
     }
     /// Recheck after acquiring the same lock used by Stop and native polling.
-    pub(crate) fn authority(&self) -> Option<&CodexSteeringAuthority> {
-        self.slot.available().then_some(&self.slot.authority)
+    pub(crate) async fn authority(
+        &self,
+    ) -> Option<tokio::sync::MutexGuard<'_, Option<CodexSteeringAuthority>>> {
+        if !self.slot.available() {
+            return None;
+        }
+        Some(self.slot.authority.lock().await)
     }
-    pub(crate) fn publish(&self, delivery: Box<ConsumedSteering>) -> Result<(), &'static str> {
+    pub(crate) fn publish(
+        &self,
+        delivery: Box<ConsumedSteering>,
+        authority: &CodexSteeringAuthority,
+    ) -> Result<(), &'static str> {
         let mut state = self
             .slot
             .state
@@ -90,7 +101,7 @@ impl SelectedSteering {
             || !state.ready
             || state.pending.is_some()
             || state.submitted >= 128
-            || delivery.provider() != self.slot.authority.provider()
+            || delivery.provider() != authority.provider()
         {
             return Err("steering handoff closed");
         }

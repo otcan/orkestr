@@ -23,6 +23,6 @@ fn steering_is_scoped_durable_and_never_replayed_after_uncertainty() {
         String::from_utf8_lossy(&output.stdout)
             .matches("ordinary synthetic steering HTTP case passed:")
             .count(),
-        8
+        9
     );
 }

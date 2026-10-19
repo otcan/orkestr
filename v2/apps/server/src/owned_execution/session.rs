@@ -262,22 +262,21 @@ impl ConfiguredExecution {
                 && liveness.due(Instant::now())
                 && pump.renewal_quiescent()
             {
-                // The initial issuer is immutable. A new lease generation
-                // retains inference liveness but cannot inherit steering rights.
-                steering.retire();
                 // Same scheduling lock as HTTP Stop and provider observation.
                 // Core rechecks auth/state inside the sealed transition. The
                 // transfer preserves this exact child, turn and event cursor.
                 // Keep selection available while HTTP waits on this lock;
                 // explicitly disable it before releasing a failed transfer.
-                let (next_authority, next_pump) =
-                    match liveness.refresh(self.store.clone(), pump).await {
-                        Ok(refreshed) => refreshed,
-                        Err(reason) => {
-                            run_control.disable();
-                            return Err(reason);
-                        }
-                    };
+                let (next_authority, next_pump) = match steering
+                    .renew(self.store.clone(), pump, &mut liveness)
+                    .await
+                {
+                    Ok(refreshed) => refreshed,
+                    Err(reason) => {
+                        run_control.disable();
+                        return Err(reason);
+                    }
+                };
                 let _ = authority.revoke();
                 authority = next_authority;
                 pump = next_pump;

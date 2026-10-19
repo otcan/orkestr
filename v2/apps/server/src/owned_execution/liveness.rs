@@ -1,6 +1,8 @@
 //! A local refresh schedule never grants inference or extends the user's budget.
 use orkestr_runtime::{containment::Authority, execution::CodexPump};
-use orkestr_v2_store_sqlite::{ConsumedProviderDispatch, RunRenewalAuthority, Store};
+use orkestr_v2_store_sqlite::{
+    CodexSteeringAuthority, ConsumedProviderDispatch, RunRenewalAuthority, Store,
+};
 use std::time::{Duration, Instant};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(20);
@@ -38,9 +40,10 @@ impl RunningLease {
         &mut self,
         store: Store,
         pump: CodexPump,
-    ) -> Result<(Authority, CodexPump), &'static str> {
+        steering: CodexSteeringAuthority,
+    ) -> Result<(Authority, CodexPump, CodexSteeringAuthority), &'static str> {
         let result = pump
-            .renew_lease(store, &mut self.authority)
+            .renew_lease_with_steering(store, &mut self.authority, steering)
             .await
             .map_err(|_| "execution liveness transfer refused; reconciliation required")?;
         self.next_refresh = Instant::now() + REFRESH_INTERVAL;

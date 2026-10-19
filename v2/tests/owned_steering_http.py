@@ -186,22 +186,54 @@ def revoke_browser_before_ack(case):
     assert rows(case, "SELECT count(*) FROM production_acceptances") == [(0,)]
 
 
-def renewal_queues_honestly(case):
+def renewal_preserves_steering(case):
+    configure(case)
+    case.start(configured=True)
+    first = running(case)
+    original = intent(first)
+    original_receipt = submitted(case, original)
+    wait_for(lambda: acknowledged(case), "initial steer acknowledgement missing")
+    wait_for(lambda: rows(case, "SELECT lease_generation FROM production_runs")[0][0] > 1,
+             "long work did not renew its existing native lease", 25)
+    state = wait_for(lambda: available(case), "sealed issuer did not follow the renewed native fence")
+    assert state["run_id"] == first["run_id"]
+    request = intent(state, "steer:renewed")
+    submitted(case, request)
+    wait_for(lambda: acknowledged(case, "steer:renewed"), "renewed steer did not reach the same native turn")
+    assert case.request(case.path + "/steer", "POST", original)[:2] == (200, original_receipt)
+    trace = case.trace()
+    assert sum(r["kind"] == "spawn" for r in trace) == sum(r["kind"] == "turn" for r in trace) == 1
+    assert sum(r["kind"] == "steer" for r in trace) == 2
+    assert rows(case, "SELECT count(*) FROM production_runs") == [(1,)]
+    assert rows(case, "SELECT count(*) FROM production_acceptances") == [(0,)]
+    accept(case, 1)
+
+
+def lifetime_capacity_queues_honestly(case):
     configure(case)
     case.start(configured=True)
     running(case)
-    wait_for(lambda: rows(case, "SELECT lease_generation FROM production_runs")[0][0] > 1,
-             "long work did not renew its existing native lease", 25)
+    for turn in (1, 2):
+        if turn == 2:
+            running(case, 2)
+        for index in range(64):
+            state = wait_for(lambda: available(case), "native capacity disappeared before its bound")
+            key = f"steer:capacity:{turn}:{index}"
+            submitted(case, intent(state, key))
+            wait_for(lambda: acknowledged(case, key), "bounded steer acknowledgement missing")
+        if turn == 1:
+            accept(case, 1)
     state = case.phase("running")
     assert state["capabilities"] == {"stop": True, "steer": False}
     request = intent(state)
     submitted(case, request, "queued_unsupported")
     assert delivery(case)["state"] == "queued" and delivery(case)["written_bytes"] == 0
-    assert not any(r["kind"] == "steer" for r in case.trace())
-    accept(case, 1)
-    wait_for(lambda: len([r for r in case.trace() if r["kind"] == "turn"]) == 2, "unsupported steer input lost")
-    assert [r["text"] for r in case.trace() if r["kind"] == "turn"][1] == request["text"]
     accept(case, 2)
+    wait_for(lambda: len([r for r in case.trace() if r["kind"] == "turn"]) == 3, "unsupported steer input lost")
+    assert [r["text"] for r in case.trace() if r["kind"] == "turn"][2] == request["text"]
+    accept(case, 3)
+    assert sum(r["kind"] == "steer" for r in case.trace()) == 128
+    assert sum(r["kind"] == "spawn" for r in case.trace()) == 1
 
 
 def main():
@@ -212,9 +244,11 @@ def main():
     results = []
     cases = [success_and_replay, auth_and_scope, ordered_input,
              lambda c: uncertain(c, "missing-steer-ack"), lambda c: uncertain(c, "wrong-turn-ack"),
-             stop_after_ack, revoke_browser_before_ack, renewal_queues_honestly]
+             stop_after_ack, revoke_browser_before_ack, renewal_preserves_steering,
+             lifetime_capacity_queues_honestly]
     names = ["success_and_replay", "auth_and_scope", "ordered_input", "missing_ack_unknown", "foreign_ack_unknown",
-             "stop_after_ack", "revoke_browser_before_ack", "renewal_queues_honestly"]
+             "stop_after_ack", "revoke_browser_before_ack", "renewal_preserves_steering",
+             "lifetime_capacity_queues_honestly"]
     for name, operation in zip(names, cases):
         case = Case()
         started = time.monotonic()

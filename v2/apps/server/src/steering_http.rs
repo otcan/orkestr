@@ -37,7 +37,11 @@ pub(crate) async fn submit(
         Some(selected) => Some(selected.serialize().await),
         None => None,
     };
-    let authority = selected.as_ref().and_then(|selected| selected.authority());
+    let held_authority = match &selected {
+        Some(selected) => selected.authority().await,
+        None => None,
+    };
+    let authority = held_authority.as_deref().and_then(|issuer| issuer.as_ref());
     let (receipt, reservation) = scope
         .store
         .steer_execution_authenticated(&credential, &conversation, &input, authority)
@@ -58,7 +62,7 @@ pub(crate) async fn submit(
         selected
             .as_ref()
             .ok_or_else(unavailable)?
-            .publish(delivery)
+            .publish(delivery, authority.ok_or_else(unavailable)?)
             .map_err(|_| unavailable())?;
     }
     Ok(Json(receipt).into_response())
