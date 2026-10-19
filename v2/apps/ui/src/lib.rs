@@ -227,3 +227,5 @@ pub mod worker_tasks;
 pub mod build_identity;
 
 pub mod task_draft_lifetime;
+
+pub mod steering;
