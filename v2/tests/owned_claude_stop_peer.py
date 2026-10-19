@@ -95,7 +95,7 @@ while True:
         'terminal_reason':'aborted_streaming'}
     if mode != 'terminal-first':
         emit(ack); record('interrupt-ack')
-    if mode in ('ack-only','revoke-after-ack'):
+    if mode in ('ack-only','revoke-after-ack','shutdown-after-ack'):
         continue
     barrier('release-terminal')
     if mode == 'burst':

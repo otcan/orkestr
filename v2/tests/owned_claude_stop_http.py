@@ -59,9 +59,18 @@ def exercise(mode):
         held=case.held()
         assert len(held['held'])==1 and held['held'][0]['boundary_run_id']==first['run_id']
         assert held['held'][0]['reason']=='stop_boundary' and not held['eligible_input_available']
-        if mode in ('ack-only','revoke-after-ack'):
+        if mode in ('ack-only','revoke-after-ack','shutdown-after-ack'):
             ordinary.wait_for(lambda:any(r['kind']=='interrupt-ack' for r in case.trace()),'native ACK')
             assert not case.peer_gone()
+            if mode=='shutdown-after-ack':
+                # Normal server shutdown must cancel the observer promptly;
+                # its cleanup is not an invented native terminal.
+                case.stop()
+                assert case.peer_gone()
+                assert case.rows('SELECT state FROM production_runs')==[('cancel_requested',)]
+                assert case.rows("SELECT count(*) FROM production_observations WHERE kind='stopped'")==[(0,)]
+                assert case.rows('SELECT count(*) FROM production_cancellations')==[(1,)]
+                return
             if mode=='revoke-after-ack':
                 case.revoke_machine()
             else:
@@ -104,7 +113,7 @@ def exercise(mode):
 
 
 if __name__=='__main__':
-    modes=sys.argv[2:] or ['success','terminal-first','burst','ack-only','foreign','revoke-after-ack']
+    modes=sys.argv[2:] or ['success','terminal-first','burst','ack-only','foreign','revoke-after-ack','shutdown-after-ack']
     for mode in modes:
         exercise(mode)
         print('ordinary synthetic Claude Stop HTTP passed:',mode)

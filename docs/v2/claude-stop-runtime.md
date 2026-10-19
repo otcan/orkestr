@@ -46,6 +46,11 @@ after the exact prior tree has been reaped. Accepted completion uses the distinc
 accepted-session grant. Historical receipts remain replayable without dispatching
 another interrupt or mutating a successor.
 
+Configured restart currently requires an owner-accepted terminal turn for Core's
+graceful-retirement record. A confirmed Stop can resume a fresh input within the
+same supervisor; stopping the server before an accepted successor does not yet
+qualify for prompt configured restart. ACK-only or unknown work never qualifies.
+
 ## Validation surfaces
 
 Runtime tests use a fixed synthetic native executable and ordinary SQLite Store.

@@ -24,7 +24,10 @@ owner acceptance is separate.
 The callable API names and ownership remain PreparingClaude::open/open_retained,
 poll, confirm; ReadyClaude::attach; ClaudePump::flush/step. Poll readiness means
 protocol initialization, not provider-observed native identity or subscription
-attestation. Stop and continuation are unavailable through this Claude adapter.
+attestation. The original checkpoint below covered only the first turn. Accepted
+continuation is composed by the ordinary server; the later
+[Claude cancellation adapter](claude-stop-runtime.md) adds a distinct consumed
+control path with original-tree cleanup evidence.
 Trusted selected-account configuration remains outside the public repository.
 
 ## Bounded validation
