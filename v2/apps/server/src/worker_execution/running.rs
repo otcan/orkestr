@@ -16,7 +16,7 @@ impl WorkerSchedule {
         {
             let tool_cleanup = running.tools.take().and_then(tools::WorkerTools::cancel);
             let active = control
-                .dispatch(running.authority, running.pump)
+                .dispatch_retiring(running.authority, running.pump)
                 .map_err(|_| "Worker native interruption requires reconciliation")?;
             return Ok((
                 Phase::Stopping(Box::new(Stopping {
@@ -45,11 +45,7 @@ impl WorkerSchedule {
             status.phase == ExecutionPhase::Running && running.pump.pending().is_none(),
         );
         if status.phase == ExecutionPhase::Completed {
-            let _ = running.authority.revoke();
-            return Ok((
-                Phase::Closed(WorkerProgress::Completed),
-                WorkerProgress::Completed,
-            ));
+            return Self::accepted(*running);
         }
         if matches!(
             status.phase,
@@ -65,6 +61,9 @@ impl WorkerSchedule {
                 Phase::Closed(WorkerProgress::Unknown),
                 WorkerProgress::Unknown,
             ));
+        }
+        if self.quiesced {
+            return Err("Worker terminal cleanup refuses unfinished execution");
         }
         if status.phase == ExecutionPhase::AwaitingAcceptance {
             // Preserve a completed native turn while the owner decides, without
@@ -204,7 +203,9 @@ impl WorkerSchedule {
         }))
     }
 
-    pub(super) async fn stopping(mut control: Box<Stopping>) -> (Phase, WorkerProgress) {
+    pub(super) async fn stopping(
+        mut control: Box<Stopping>,
+    ) -> Result<(Phase, WorkerProgress), &'static str> {
         use crate::control_dispatch::StopProgress;
         // Do not persist native Stopped while an offline child still exists.
         // Abort already requested its owned cleanup; HTTP Stop has committed.
@@ -213,25 +214,30 @@ impl WorkerSchedule {
             .as_ref()
             .is_some_and(|tool| !tool.is_reaped())
         {
-            return (Phase::Stopping(control), WorkerProgress::Running);
+            return Ok((Phase::Stopping(control), WorkerProgress::Running));
         }
         control.tool_cleanup.take();
         match control.active.tick().await {
             StopProgress::Pending | StopProgress::InterruptAcknowledged => {
-                (Phase::Stopping(control), WorkerProgress::Running)
+                Ok((Phase::Stopping(control), WorkerProgress::Running))
             }
             StopProgress::Stopped => {
-                // Public runtime truth is read from Core; local lifecycle
-                // completion does not imply successful task completion.
-                (
-                    Phase::Closed(WorkerProgress::Unknown),
-                    WorkerProgress::Unknown,
-                )
+                let broker = control
+                    .active
+                    .retire_broker()
+                    .map_err(|_| "Worker stopped broker retirement refused")?;
+                Ok((
+                    Phase::Retiring(Box::new(retirement::Retiring::new(
+                        broker,
+                        WorkerProgress::Unknown,
+                    ))),
+                    WorkerProgress::Running,
+                ))
             }
             StopProgress::ReconciliationRequired => {
                 // Retain pending/racing terminal evidence until the parent
                 // releases this scheduler. Never repeat the native interrupt.
-                (Phase::Stopping(control), WorkerProgress::Unknown)
+                Ok((Phase::Stopping(control), WorkerProgress::Unknown))
             }
         }
     }

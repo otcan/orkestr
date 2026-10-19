@@ -4,6 +4,8 @@ mod configuration;
 mod directory;
 mod liveness;
 mod policy;
+mod quiescence;
+mod retirement;
 mod running;
 mod session;
 mod tasks;
@@ -17,6 +19,7 @@ use orkestr_v2_application::runtime::{Binding, RunAdmission, SessionRole};
 use orkestr_v2_contracts::{EventId, MessageId, RunId};
 use orkestr_v2_store_sqlite::{ConsumedProviderDispatch, Store, WorkerTaskClaim};
 pub use policy::WorkerPolicy;
+pub use retirement::{WorkerReapProofs, WorkerReaps};
 use std::{
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
@@ -40,6 +43,7 @@ enum Phase {
     Preparing(Box<Preparing>),
     Running(Box<Running>),
     Stopping(Box<Stopping>),
+    Retiring(Box<retirement::Retiring>),
     Closed(WorkerProgress),
 }
 struct Preparing {
@@ -84,6 +88,8 @@ pub struct WorkerSchedule {
     slot: Option<OwnedSemaphorePermit>,
     lifetime_ms: u32,
     owner_budget_ms: Option<u32>,
+    launch: Option<retirement::LaunchWitness>,
+    quiesced: bool,
 }
 
 impl WorkerSchedule {
@@ -101,6 +107,7 @@ impl WorkerSchedule {
         if run.role != SessionRole::Deep || parent.source_event_id().0.is_nil() {
             return Err("Worker scheduling requires an exact ordinary Deep input");
         }
+        configuration.reaps.parent(parent)?;
         let queue = if configuration.policy.owner_tasks() {
             Some(tasks::TaskQueue::new(configuration.tasks.register(run)?))
         } else {
@@ -122,12 +129,23 @@ impl WorkerSchedule {
             slot: None,
             lifetime_ms,
             owner_budget_ms: None,
+            launch: None,
+            quiesced: false,
         })
     }
 
     /// One bounded setup or provider step, with no provider wait in a DB fence.
     /// Uncertain admission/reservation/consumption is terminal for this scheduler.
     pub async fn poll(&mut self) -> Result<WorkerProgress, &'static str> {
+        if self.quiesced {
+            return self.drain().await.map(|done| {
+                if done {
+                    WorkerProgress::Completed
+                } else {
+                    WorkerProgress::Running
+                }
+            });
+        }
         if self.configuration.policy.owner_tasks() {
             let mut queue = self.queue.take().ok_or("Worker task scheduler closed")?;
             let progress = queue.poll(self).await;
