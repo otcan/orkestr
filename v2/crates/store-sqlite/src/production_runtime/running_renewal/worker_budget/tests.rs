@@ -98,6 +98,8 @@ async fn explicit_budget_extends_only_owner_task_and_keeps_tools_stale() {
         .await
         .unwrap();
     assert_eq!(deadline, anchor + 120_000);
+    assert_eq!(budget.hard_deadline_ms(), Some(deadline));
+    assert_eq!(generic.hard_deadline_ms(), None);
     assert!(matches!(
         f.handle
             .authorize_worker_running_renewal(&cap, 180_000)
@@ -110,6 +112,7 @@ async fn explicit_budget_extends_only_owner_task_and_keeps_tools_stale() {
         Err(RuntimeStoreError::Busy)
     ));
     let transition = f.handle.renew_running(&mut budget).await.unwrap();
+    assert_eq!(budget.hard_deadline_ms(), Some(deadline));
     assert!(
         transition.current().run.lease_deadline_ms > transition.previous().run.lease_deadline_ms
     );
