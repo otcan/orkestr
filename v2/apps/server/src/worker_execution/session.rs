@@ -83,9 +83,29 @@ impl WorkerSchedule {
                 .try_acquire_owned()
                 .map_err(|_| "Worker concurrency limit reached")?,
         };
-        self.configuration.verify_launcher()?;
+        let profile = self
+            .configuration
+            .window
+            .as_ref()
+            .map(|pool| pool.reserve())
+            .transpose()?;
+        let (launcher, digest, workspace) = match &profile {
+            Some(slot) => (
+                &slot.launch.launcher,
+                &slot.launch.launcher_sha256,
+                &slot.launch.workspace,
+            ),
+            None => (
+                &self.configuration.launcher,
+                &self.configuration.launcher_sha256,
+                &self.configuration.workspace,
+            ),
+        };
+        super::configuration::verify_launcher(launcher, digest)?;
+        let launcher = launcher.clone();
+        let workspace = workspace.clone();
         let directory = directory::Directory::create(&self.configuration.directory)?;
-        let directories = directory.child(&self.configuration.workspace)?;
+        let directories = directory.child(&workspace)?;
         let binding = self
             .store
             .create_worker_binding(
@@ -115,14 +135,38 @@ impl WorkerSchedule {
         // Register before open: even a failed setup may have launched a child.
         // A lost setup handle never becomes a successful cleanup witness.
         self.launch = Some(self.configuration.reaps.launch(&grant, &self.parent)?);
-        let setup = open(
-            self.store.clone(),
-            grant,
-            &self.configuration.launcher,
-            &self.configuration.workspace,
-            directories,
-            Box::new((directory, slot, self.configuration.children.retain())),
-        )
+        let resources = Box::new((
+            directory,
+            slot,
+            self.configuration.children.retain(),
+            profile,
+        ));
+        let setup = if let Some(window) = &self.configuration.window {
+            let store = self.store.clone();
+            let context = window.context.clone();
+            tokio::task::spawn_blocking(move || {
+                PreparingCodex::open_window_worker_retained(
+                    store,
+                    grant,
+                    &launcher,
+                    &workspace,
+                    directories,
+                    resources,
+                    move |child| context.bind(&child),
+                )
+            })
+            .await
+            .map_err(|_| "Worker window setup worker lost")?
+        } else {
+            open(
+                self.store.clone(),
+                grant,
+                &launcher,
+                &workspace,
+                directories,
+                resources,
+            )
+        }
         .map_err(|_| "Worker native launch refused")?;
         self.deadline = Instant::now() + Duration::from_secs(15);
         Ok((

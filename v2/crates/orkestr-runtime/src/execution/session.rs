@@ -1,4 +1,5 @@
 //! Trusted owned-broker setup. No run or inference authority is invented here.
+mod window;
 use super::*;
 use crate::broker::{channel::BrokerChannel, BrokerOpen};
 use crate::containment::{
@@ -111,40 +112,6 @@ impl PreparingCodex {
             resources,
             None,
             None,
-        )
-    }
-    /// Window-only owned-child bind gate. The callback must synchronously obtain
-    /// the authenticated manager ACK before returning. No broker-open or native
-    /// initialization frame has been queued. Failure drops/quarantines this child.
-    #[allow(clippy::too_many_arguments)]
-    pub fn open_window_retained(
-        store: Store,
-        grant: BoundSessionMetadata,
-        launcher: &Path,
-        workspace: &Path,
-        directories: ChildDirectories,
-        resources: Box<dyn Send + 'static>,
-        bind: impl FnOnce(crate::containment::metadata::BrokerChildLocator) -> Result<(), ()>,
-    ) -> Result<Self, SetupFailure> {
-        if grant.binding().role != orkestr_v2_application::runtime::Role::Deep {
-            return Err(Blocker::Protocol.into());
-        }
-        let mut bind = Some(bind);
-        let mut gate = |child: &MetadataChild| {
-            let locator = child.broker_locator()?;
-            bind.take().ok_or(Blocker::Protocol)?(locator).map_err(|_| Blocker::Protocol.into())
-        };
-        Self::open_mode(
-            store,
-            grant,
-            launcher,
-            workspace,
-            directories,
-            true,
-            false,
-            resources,
-            None,
-            Some(&mut gate),
         )
     }
     /// Explicit trusted descriptor setup. The Core launch is already consumed;

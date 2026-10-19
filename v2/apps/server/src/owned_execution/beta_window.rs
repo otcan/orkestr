@@ -61,6 +61,9 @@ impl ConfiguredExecution {
             offline_python: None,
             initial_grant: Some(grant),
             workspace_grant: None,
+            window_workers: config.roles.as_ref().map(|roles| {
+                crate::worker_execution::WindowWorkers::new(context.clone(), roles.workers.clone())
+            }),
             window: Some(context),
         })
     }
