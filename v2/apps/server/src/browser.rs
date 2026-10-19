@@ -122,11 +122,12 @@ async fn body(
     state: &AppState,
     owner: &OwnerId,
     token: &str,
-) -> Result<Json<serde_json::Value>, Error> {
-    Ok(Json(serde_json::json!({
-        "csrf_token": csrf(token),
-        "global_conversation_id": state.store.global(owner).await?,
-    })))
+) -> Result<Json<orkestr_v2_contracts::BrowserSessionProjection>, Error> {
+    Ok(Json(orkestr_v2_contracts::BrowserSessionProjection {
+        owner_id: owner.clone(),
+        csrf_token: csrf(token),
+        global_conversation_id: state.store.global(owner).await?,
+    }))
 }
 pub async fn login(
     State(state): State<AppState>,
