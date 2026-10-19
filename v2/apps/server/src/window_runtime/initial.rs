@@ -28,7 +28,7 @@ enum State {
     // Set before the async Core call. Cancellation or a lost commit reply must
     // never invoke the initial issuer again in this process.
     Attempted,
-    Ready(WindowAuthority),
+    Ready(Box<WindowAuthority>),
     Transferred,
 }
 impl InitialAuthority {
@@ -89,7 +89,7 @@ impl InitialAuthority {
                         .await?,
                 )
             };
-            *state = State::Ready(authority);
+            *state = State::Ready(Box::new(authority));
         }
         match &*state {
             State::Ready(_) | State::Transferred => {
@@ -108,7 +108,7 @@ impl InitialAuthority {
         match std::mem::replace(&mut *state, State::Attempted) {
             State::Ready(initial) => {
                 *state = State::Transferred;
-                Ok(initial)
+                Ok(*initial)
             }
             other => {
                 *state = other;
