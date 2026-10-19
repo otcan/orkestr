@@ -204,8 +204,9 @@ it untouched. Workspace/native state must be empty. Root-owned manager and
 endpoint directories may be absent or pre-reserved empty with configured group
 and modes 0700/0750 respectively. Existing nonempty state is refused.
 
-The exact clean paired Git source must descend from reviewed manager
-`0dbb4226a2fdd611bd75b22d4a17117c438a1484`. Source is exported from Git blobs;
+The exact clean paired Git source must descend from qualified persistent Deep
+beta `f6fb00a461d792af22ec15c80d089c266081ca3b`, including the reviewed
+paused-launch and retirement corrections. Source is exported from Git blobs;
 mutable checkout modules are never imported. Its authoritative `FILES` and
 `MODULES_SERVICE` define the closed inner package. Pair version must be
 `2.0.0-beta.1` or `2.0.0-beta.2`, with matching embedded native/web identities and release profiles.

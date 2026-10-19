@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -87,6 +88,30 @@ class Selected(unittest.TestCase):
         selected.prepare(self.plan);self.validate()
         self.assertTrue(json.loads((self.root/'release/release.json').read_bytes())['preserved_existing_state'])
         for marker in markers:self.assertEqual(marker.read_bytes(),b'preserve exact bytes')
+    def test_current_source_packages_fixed_roles_and_shared_read_only_workspace(self):
+        source=subprocess.check_output(['/usr/bin/git','-c','safe.directory='+str(REPO),
+            '-C',str(REPO),'rev-parse','HEAD'],text=True).strip()
+        r=self.root
+        for name in ('server','ui/app.wasm'):
+            p=r/name;p.write_bytes(p.read_bytes().replace(MANAGER_BASE.encode(),source.encode())
+                                   .replace(b'2.0.0-beta.1',b'2.0.0-beta.2'))
+        pair=json.loads((r/'pair').read_bytes());pair['source_commit']=source;pair['version']='2.0.0-beta.2'
+        pair['server']['sha256']=sha(r/'server');pair['web']['files']=inventory(r/'ui')
+        pair['web']['server_candidate']=source
+        (r/'pair').write_text(json.dumps(pair));self.plan['pair_sha256']=sha(r/'pair')
+        roles=[]
+        for index in range(5):
+            state=r/f'role-state-{index}';state.mkdir(mode=0o700);os.chown(state,995,986)
+            roles.append({'workspace':str(r/'workspace'),'state_root':str(state)})
+        self.plan['roles']={'fast':roles[0],'workers':roles[1:]}
+        selected.prepare(self.plan)
+        with authority(REPO,source) as (_,manager,_):
+            package=manager.Package(r/'release/package',sha(r/'release/package/manifest.json'))
+            self.assertEqual(set(package.role_profiles),{'deep','fast','worker-0','worker-1','worker-2','worker-3'})
+        for role in ('fast','worker-0','worker-1','worker-2','worker-3'):
+            self.assertIn('broker-'+role,(r/f'release/package/launcher-{role}.py').read_text())
+        receipt=json.loads((r/'release/release.json').read_bytes())
+        self.assertTrue(receipt['roles_enabled']);self.assertFalse(receipt['provider_invoked'])
     def test_reserved_directories_retained(self):
         for name,mode in (('ledger',0o700),('ep',0o750)):
             p=self.root/name;p.mkdir();os.chown(p,0,986);p.chmod(mode)
