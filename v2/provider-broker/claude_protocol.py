@@ -6,6 +6,7 @@ from claude_telemetry import validate_telemetry
 from claude_control import ClaudeControl, canonical
 from claude_failure import sanitize_failure
 from claude_system_telemetry import validate_system_telemetry
+from claude_assistant_metadata import contains_thinking, sanitize_assistant
 
 
 class ClaudeChannel:
@@ -146,6 +147,19 @@ class ClaudeChannel:
             self.telemetry_uuids.add(value)
             # Even post-terminal telemetry cannot advance readiness or execution state.
             return None
+        if kind == "assistant" and contains_thinking(frame):
+            require(self.initialized and self.system_seen and self.active is not None
+                    and not self.terminal and not self.output_uuid_overflow)
+            frame = sanitize_assistant(frame, self.native, self.input_uuid)
+            event = frame["uuid"]
+            require(event not in self.telemetry_uuids and event not in self.output_uuids
+                    and event != self.terminal_uuid and len(self.telemetry_uuids) < 128)
+            if self.control is not None:
+                # Existing cancellation fences discard even the genuine text.
+                self.control.notice(frame, self.telemetry_uuids)
+            self.telemetry_uuids.add(event)
+            if self.control is not None or not frame["message"]["content"]:
+                return None
         if self.control is not None and kind in ("user", "assistant", "stream_event"):
             self.control.notice(frame, self.telemetry_uuids)
             return None
