@@ -45,7 +45,8 @@ fn observe_caller_retirement(
     let until = Instant::now() + Duration::from_secs(3);
     loop {
         // join() waits for thread completion, but its original proc entry may
-        // remain briefly. A zombie is still present; unreadable is not absent.
+        // remain briefly. A zombie is still present; unreadable stays pending
+        // until a positive absence observation or the original deadline.
         let caller_gone = task(caller.tid).map(|now| now.map(|(id, _)| id) != Some(caller));
         let creator_alive = creator.and_then(|original| match original {
             Some(original) if original.tid != caller.tid => task(original.tid).map(|now| {
@@ -53,7 +54,7 @@ fn observe_caller_retirement(
             }),
             _ => Ok(false),
         });
-        if caller_gone != Ok(false) || creator_alive != Ok(true) || Instant::now() >= until {
+        if caller_gone == Ok(true) || creator_alive != Ok(true) || Instant::now() >= until {
             return (caller_gone, creator_alive);
         }
         std::thread::sleep(Duration::from_millis(5));
