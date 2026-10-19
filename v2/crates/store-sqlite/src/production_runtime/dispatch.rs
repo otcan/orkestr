@@ -81,6 +81,25 @@ impl Store {
         }
         if p.run.role == Role::Worker {
             self.worker_lineage_in(conn, &row).await?;
+            let task_key: String = sqlx::query_scalar(
+                "SELECT request_key FROM worker_provider_delegations WHERE id=?",
+            )
+            .bind(row.get::<&str, _>("worker_delegation_id"))
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(db)?;
+            if p.run.purpose == AdmissionPurpose::Execution && task_key.starts_with("task:") {
+                // A budget is effective immediately, including before the first
+                // renewal. Cancellation remains usable for owned cleanup.
+                let deadline: Option<i64> = sqlx::query_scalar(
+                    "SELECT min(t.created_at_ms+t.execution_budget_ms,coalesce(b.deadline_ms,t.created_at_ms+t.execution_budget_ms)) FROM worker_tasks t LEFT JOIN worker_running_budgets b ON b.task_id=t.id WHERE t.delegation_id=(SELECT worker_delegation_id FROM production_runs WHERE id=?) AND t.execution_budget_ms IS NOT NULL"
+                ).bind(p.run.run_id.to_string()).fetch_optional(&mut *conn).await.map_err(db)?.flatten();
+                if let Some(deadline) = deadline {
+                    if deadline <= now(conn).await? {
+                        return Err(RuntimeStoreError::Expired);
+                    }
+                }
+            }
         }
         Ok(row)
     }
