@@ -11,6 +11,7 @@ pub fn ProgressView(
     onexpired: EventHandler<()>,
 ) -> Element {
     let mut output = use_signal(orkestr_v2_ui::payload::Output::default);
+    let mut output_reference = use_signal(|| None::<(String, String, String)>);
     let mut notice = use_signal(|| "Loading provider output…".to_string());
     let mut busy = use_signal(|| false);
     let mut channel = use_signal(|| None::<document::Eval>);
@@ -63,6 +64,11 @@ pub fn ProgressView(
                                     && Some(&payload.run_id) == status.run_id.as_ref()
                                     && payload.payload_id == progress.payload_id =>
                             {
+                                output_reference.set(Some((
+                                    payload.conversation_id.to_string(),
+                                    payload.run_id.to_string(),
+                                    payload.payload_id.to_string(),
+                                )));
                                 notice.set(
                                     if payload.text.is_some() && !output.read().removed() {
                                         "Provider output; review before accepting."
@@ -90,7 +96,15 @@ pub fn ProgressView(
     rsx! {
         section { "aria-label":"Provider output",
             p { role:"status", "{notice}" }
-            if let Some(text)=output.read().text.clone() { pre { "{text}" } }
+            if let (Some(text), Some((conversation, run, payload))) =
+                (output.read().text.clone(), output_reference.read().clone()) {
+                pre {
+                    "data-conversation-id": "{conversation}",
+                    "data-run-id": "{run}",
+                    "data-payload-id": "{payload}",
+                    "{text}"
+                }
+            }
             if output.read().text.is_some() {
                 button { r#type:"button", disabled:busy(), onclick:move |_| {
                     if busy() || !session_scope.read().is_current(owner) {return;}
