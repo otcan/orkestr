@@ -6,6 +6,7 @@ import {executionUi} from './execution-ui.mjs';
 import {executionStatus} from './execution-evidence.mjs';
 import {assertHeldInput} from './window-evidence.mjs';
 import {waitStoppedWindow} from './stopped-window.mjs';
+import {heldPreviewObservation, heldPreviewRendered} from './held-preview.mjs';
 import {loginOwner, reloadOwner} from './ui.mjs';
 import {errorChain, failure} from './diagnostics.mjs';
 
@@ -72,8 +73,9 @@ export async function browserChat({page, context, origin, sourceSha, credentials
       heldBefore = await read('held');
       const proof = assertHeldInput({conversation, stoppedRun: first.run_id, admitted: held.intake.receipt,
         before: heldBefore, after: heldBefore});
-      await page.waitForFunction(text => document.querySelector('section[aria-label="Held input"]')?.textContent.includes(text),
-        {timeout: 10000}, fixture.messages[1]);
+      const expected = heldPreviewObservation({origin, text: fixture.messages[1],
+        held: heldBefore.held.find(row => row.message_id === held.intake.receipt.message_id)});
+      await page.waitForFunction(heldPreviewRendered, {timeout: 10000}, expected);
       return {...proof, held_preview_visible: true};
     });
     let previousRun = first.run_id;
