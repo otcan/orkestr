@@ -18,7 +18,7 @@ pub(crate) async fn read(
 ) -> Result<Response, Error> {
     // Browser auth is checked again by Core in the same snapshot as this read.
     // There is no route here to release, delete or turn a hold into authority.
-    let owner = browser::owner(&state, &headers).await?;
+    browser::owner(&state, &headers).await?;
     let Query(page) = query.map_err(|_| {
         Error(
             StatusCode::BAD_REQUEST,
@@ -43,17 +43,11 @@ pub(crate) async fn read(
         ));
     }
     let credential = browser::credential(&headers)?;
-    let scope = state
-        .execution_scope(&owner, &conversation)
-        .await?
-        .ok_or(Error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "status_unavailable",
-            "Held input status unavailable",
-        ))?;
-    let page = scope
+    // A hold outlives its originating execution scope. Read through the durable
+    // owner store; Core reauthenticates this browser in the same read snapshot.
+    let page = state
         .store
-        .held_owner_inputs_authenticated(&credential, &conversation, after, limit)
+        .held_owner_inputs_for_browser(&credential, &conversation, after, limit)
         .await
         .map_err(|error| match error {
             RuntimeStoreError::Unauthorized => unauthorized(),
@@ -71,7 +65,14 @@ pub(crate) async fn read(
                 "Held input status unavailable",
             ),
         })?;
-    if page.conversation_id != conversation || !page.is_valid() {
+    if page.conversation_id != conversation
+        || !page.is_valid()
+        || page.held.len() > limit as usize
+        || page
+            .held
+            .first()
+            .is_some_and(|row| row.scope_sequence <= after)
+    {
         return Err(Error(
             StatusCode::SERVICE_UNAVAILABLE,
             "invalid_projection",
@@ -80,3 +81,7 @@ pub(crate) async fn read(
     }
     Ok(Json(page).into_response())
 }
+
+#[cfg(test)]
+#[path = "held_inputs_http_tests.rs"]
+mod tests;
