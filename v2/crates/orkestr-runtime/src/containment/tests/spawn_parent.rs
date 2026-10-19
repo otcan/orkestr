@@ -12,6 +12,54 @@ fn task_id() -> u32 {
         .unwrap()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TaskIdentity {
+    tid: u32,
+    start: u64,
+}
+
+fn task(tid: u32) -> Result<Option<(TaskIdentity, char)>, &'static str> {
+    let stat = match fs::read_to_string(format!("/proc/self/task/{tid}/stat")) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("task stat unreadable"),
+    };
+    let (_, fields) = stat.rsplit_once(')').ok_or("task stat malformed")?;
+    let mut fields = fields.split_whitespace();
+    let state = fields
+        .next()
+        .filter(|state| state.len() == 1)
+        .and_then(|state| state.chars().next())
+        .ok_or("task state malformed")?;
+    let start = fields
+        .nth(18)
+        .and_then(|start| start.parse().ok())
+        .ok_or("task start malformed")?;
+    Ok(Some((TaskIdentity { tid, start }, state)))
+}
+
+fn observe_caller_retirement(
+    caller: TaskIdentity,
+    creator: Result<Option<TaskIdentity>, &'static str>,
+) -> (Result<bool, &'static str>, Result<bool, &'static str>) {
+    let until = Instant::now() + Duration::from_secs(3);
+    loop {
+        // join() waits for thread completion, but its original proc entry may
+        // remain briefly. A zombie is still present; unreadable is not absent.
+        let caller_gone = task(caller.tid).map(|now| now.map(|(id, _)| id) != Some(caller));
+        let creator_alive = creator.and_then(|original| match original {
+            Some(original) if original.tid != caller.tid => task(original.tid).map(|now| {
+                now.is_some_and(|(id, state)| id == original && !matches!(state, 'Z' | 'X' | 'x'))
+            }),
+            _ => Ok(false),
+        });
+        if caller_gone != Ok(false) || creator_alive != Ok(true) || Instant::now() >= until {
+            return (caller_gone, creator_alive);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn creator(child: u32) -> Option<u32> {
     fs::read_dir("/proc/self/task").unwrap().find_map(|entry| {
         let entry = entry.ok()?;
@@ -55,6 +103,7 @@ sys.exit(73)
     );
     let thread_scope = scope.clone();
     let caller = std::thread::spawn(move || {
+        let caller = task(task_id()).unwrap().unwrap().0;
         let child = executor.spawn(&thread_scope).unwrap();
         let ready = next_frame(&child, &thread_scope);
         let pid = child
@@ -66,17 +115,21 @@ sys.exit(73)
             .as_ref()
             .unwrap()
             .id();
-        (child, ready, pid, task_id(), creator(pid))
+        let creator = match creator(pid) {
+            Some(tid) => task(tid).map(|now| now.map(|(id, _)| id)),
+            None => Ok(None),
+        };
+        (child, ready, pid, caller, creator)
     });
-    let (child, ready, pid, caller_tid, creator_tid) = caller.join().unwrap();
+    let (child, ready, pid, caller_id, creator_id) = caller.join().unwrap();
     let active = child.shared.active.clone();
-    let caller_gone = !Path::new(&format!("/proc/self/task/{caller_tid}")).exists();
-    let creator_alive = creator_tid.is_some_and(|tid| {
-        tid != caller_tid && Path::new(&format!("/proc/self/task/{tid}")).exists()
-    });
+    let (caller_gone, creator_alive) = observe_caller_retirement(caller_id, creator_id);
     // A second actual exchange occurs only after the original caller has exited.
     // Old source gets SIGKILL, so it cannot satisfy this readiness-independent check.
     let usable = (|| {
+        if caller_gone != Ok(true) || creator_alive != Ok(true) {
+            return Err(Error::PipeClosed);
+        }
         child.enqueue_metadata(&scope, &metadata())?;
         let until = Instant::now() + Duration::from_secs(3);
         while child.flush_stdin(&scope)?.pending_frames != 0 {
@@ -108,7 +161,8 @@ sys.exit(73)
     assert_eq!(active.load(Ordering::Acquire), 0);
     assert!(!Path::new(&format!("/proc/{pid}")).exists());
     assert_eq!(ready, Ok(b"ready".to_vec()));
-    assert!(caller_gone && creator_alive);
+    assert_eq!(caller_gone, Ok(true), "original caller {caller_id:?}");
+    assert_eq!(creator_alive, Ok(true), "original creator {creator_id:?}");
     assert_eq!(usable, Ok(b"alive".to_vec()));
     assert_eq!(proof.unwrap().unwrap().scope(), &scope);
 }
