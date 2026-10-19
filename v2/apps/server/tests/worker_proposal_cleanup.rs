@@ -3,7 +3,10 @@
 fn parent_proposal_cleans_workers_without_acceptance_or_new_dispatch() {
     let home =
         std::path::PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").expect("isolated home"));
-    let report = home.join(format!("worker-proposal-cleanup-{}.json", uuid::Uuid::new_v4()));
+    let report = home.join(format!(
+        "worker-proposal-cleanup-{}.json",
+        uuid::Uuid::new_v4()
+    ));
     let output = std::process::Command::new("python3")
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
