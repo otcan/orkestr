@@ -1,3 +1,5 @@
+mod accepted_results_bridge;
+mod accepted_results_view;
 mod about;
 mod acceptance_button;
 mod attachments_view;

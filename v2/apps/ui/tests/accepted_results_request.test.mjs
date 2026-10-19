@@ -1,0 +1,7 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {acceptedResults} from '../src/accepted_results_request.mjs';
+const conversation='00000000-0000-4000-8000-000000000001';
+test('fixed bounded page route preserves raw sequence',async()=>{const raw='{"acceptance_sequence":9223372036854775807}';const result=await acceptedResults({conversation,after:"0"},async(path,options)=>{assert.equal(path,`/api/v2/conversations/${conversation}/accepted-results?after_sequence=0&limit=20`);assert.equal(options.redirect,'error');assert.equal(options.credentials,'same-origin');return new Response(raw);});assert.equal(result.text,raw);});
+test('unsafe cursor rejected before network',async()=>{await assert.rejects(acceptedResults({conversation,after:2**53},()=>{throw Error('network');}),/cursor/);});
+test('metadata bound and empty flood refuse',async()=>{await assert.rejects(acceptedResults({conversation,after:"0"},async()=>new Response('x'.repeat(65537))),/exceeds/);let reads=0,cancelled=false;await assert.rejects(acceptedResults({conversation,after:"0"},async()=>({status:200,body:{getReader:()=>({read:async()=>{reads++;return{done:false,value:new Uint8Array()};},cancel:async()=>{cancelled=true;}})}})),/read limit/);assert.equal(reads,1024);assert.equal(cancelled,true);});
+
+test("full i64 cursor remains exact",async()=>{await acceptedResults({conversation,after:"9223372036854775807"},async path=>{assert.ok(path.includes("after_sequence=9223372036854775807&"));return new Response("{}");});});
