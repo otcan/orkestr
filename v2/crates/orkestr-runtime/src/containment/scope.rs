@@ -1,11 +1,10 @@
-use super::process::{start_reaper, Process};
+use super::process::{start_reaper, Process, Reaper};
 use super::{sys, ChildDirectories, Error, OwnedChild, TransportBounds};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::Child;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc::Sender, Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionScope {
@@ -98,7 +97,7 @@ pub(super) struct Shared {
     pub state: Mutex<State>,
     pub active: Arc<AtomicUsize>,
     pub maximum: usize,
-    pub reaper: Sender<Child>,
+    pub reaper: Reaper,
 }
 
 impl Shared {

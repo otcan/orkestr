@@ -1,3 +1,4 @@
+pub(super) use super::reaper::{start_reaper, start_reaper_retained, Reaper};
 use super::{
     framing::Framing, scope::Shared, sys, ConsumedTurn, Error, ExecutionScope, Executor, Flush,
     Output, TurnFailure,
@@ -6,10 +7,8 @@ use serde_json::Value;
 use std::process::{Child, Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    mpsc::{self, Sender},
     Arc, Mutex,
 };
-use std::time::Duration;
 
 #[derive(Clone, Copy)]
 pub enum Signal {
@@ -23,56 +22,6 @@ pub struct Exit {
     pub signal: Option<i32>,
 }
 
-pub(super) fn start_reaper(active: Arc<AtomicUsize>) -> Result<Sender<Child>, Error> {
-    start_reaper_retained(active, Box::new(()))
-}
-
-pub(super) fn start_reaper_retained(
-    active: Arc<AtomicUsize>,
-    resources: Box<dyn Send + 'static>,
-) -> Result<Sender<Child>, Error> {
-    // At most maximum_children outstanding Child values, including reaper work:
-    // the capacity slot is released only after wait, never on handle drop.
-    let (sender, receiver) = mpsc::channel::<Child>();
-    std::thread::Builder::new()
-        .name("contained-reaper".into())
-        .spawn(move || {
-            // Keep caller capacity/scratch alive until all owned children are waited.
-            let _resources = resources;
-            let mut pending = Vec::new();
-            let mut disconnected = false;
-            loop {
-                match receiver.recv_timeout(Duration::from_millis(5)) {
-                    Ok(child) => pending.push(child),
-                    Err(mpsc::RecvTimeoutError::Disconnected) => disconnected = true,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                }
-                let mut index = 0;
-                while index < pending.len() {
-                    match pending[index].try_wait() {
-                        Ok(None) => index += 1,
-                        Ok(Some(_)) => {
-                            let mut child = pending.swap_remove(index);
-                            // try_wait cached this status; wait cannot block.
-                            let _ = child.wait();
-                            active.fetch_sub(1, Ordering::AcqRel);
-                        }
-                        // Retain ownership/capacity on observation failure.
-                        Err(_) => index += 1,
-                    }
-                }
-                if disconnected && pending.is_empty() {
-                    break;
-                }
-                if disconnected {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-            }
-        })
-        .map_err(|_| Error::Io)?;
-    Ok(sender)
-}
-
 pub(super) struct Live {
     pub(super) child: Option<Child>,
     pub(super) framing: Framing,
@@ -82,7 +31,7 @@ pub(super) struct Live {
 
 pub(super) struct Process {
     pub(super) live: Mutex<Live>,
-    reaper: Sender<Child>,
+    reaper: Reaper,
     pub(super) workspace: std::path::PathBuf,
     pub(super) max_frame: usize,
     pub(super) broker_launcher: AtomicBool,
@@ -108,7 +57,7 @@ impl Process {
         directories: &super::ChildDirectories,
         bounds: super::TransportBounds,
         active: &Arc<AtomicUsize>,
-        reaper: &Sender<Child>,
+        reaper: &Reaper,
     ) -> Result<Arc<Self>, Error> {
         Self::spawn_config_mode(
             program,
@@ -129,7 +78,7 @@ impl Process {
         directories: &super::ChildDirectories,
         bounds: super::TransportBounds,
         active: &Arc<AtomicUsize>,
-        reaper: &Sender<Child>,
+        reaper: &Reaper,
         provider_fd: bool,
         resume_native: Option<super::resume_bootstrap::ResumeBootstrap<'_>>,
     ) -> Result<Arc<Self>, Error> {
@@ -152,8 +101,8 @@ impl Process {
         args: &[std::ffi::OsString],
         directories: &super::ChildDirectories,
         bounds: super::TransportBounds,
-        active: &Arc<AtomicUsize>,
-        reaper: &Sender<Child>,
+        _active: &Arc<AtomicUsize>,
+        reaper: &Reaper,
         provider_fd: bool,
         resume_native: Option<super::resume_bootstrap::ResumeBootstrap<'_>>,
         workspace: Option<super::workspace_launch::WorkspaceDescriptor>,
@@ -215,9 +164,8 @@ impl Process {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        let mut child = command.spawn().map_err(|_| Error::Io)?;
+        let mut child = reaper.spawn(command)?;
         let handoff = pair.map(|(parent, _)| parent);
-        active.fetch_add(1, Ordering::AcqRel);
         let input = child.stdin.take().ok_or(Error::Io);
         let output = child.stdout.take().ok_or(Error::Io);
         let pipes = input.and_then(|input| output.map(|output| (input, output)));
