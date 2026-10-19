@@ -133,6 +133,9 @@ function isActiveThread(thread = {}) {
 }
 
 function threadsFromPayload(payload) {
+  if (payload?.ok === false || payload?.error) {
+    throw new Error("invalid_threads_payload");
+  }
   const threads = Array.isArray(payload) ? payload
     : payload && Object.hasOwn(payload, "threads") ? payload.threads : payload?.items;
   if (!Array.isArray(threads) || threads.some((thread) => {

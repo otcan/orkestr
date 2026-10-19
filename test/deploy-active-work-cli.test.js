@@ -149,6 +149,10 @@ for (const [label, payload] of [
   ["empty object", {}],
   ["null", null],
   ["error envelope", { error: "fixture_unavailable" }],
+  ["explicit failed threads envelope", { ok: false, threads: [] }],
+  ["explicit error threads envelope", { error: "fixture_unavailable", threads: [] }],
+  ["explicit failed items envelope", { ok: false, items: [] }],
+  ["explicit error despite success flag", { ok: true, error: "fixture_unavailable", items: [] }],
   ["non-array threads", { threads: {} }],
   ["null threads", { threads: null }],
   ["non-array items", { items: {} }],
@@ -175,6 +179,7 @@ for (const [label, envelope] of [
   ["raw array", (threads) => threads],
   ["threads", (threads) => ({ threads })],
   ["items", (threads) => ({ items: threads })],
+  ["success metadata", (threads) => ({ ok: true, error: null, threads })],
 ]) {
   test(`HTTP200 valid ${label} reports retain empty and unsafe-work behavior`, async (t) => {
     const idle = await checkHttpPayload(t, envelope([]));
