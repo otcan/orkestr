@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 from pathlib import Path
 import shlex
 import sys
@@ -10,6 +12,7 @@ from closure import pin
 from release import prepare_release, wrapper
 
 
+@unittest.skipUnless(os.geteuid() == 0, "explicit root synthetic release checks")
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
@@ -29,10 +32,12 @@ class ReleaseTests(unittest.TestCase):
         (self.package/'profile.json').write_text(json.dumps({'native':str(self.output/'package/native'),
             'supervisor':str(self.output/'package/isolation/supervisor.py'),'workspace':beta['workspace']}))
         (self.package/'service.json').write_text(json.dumps({'owner_id':beta['owner_id'],
-            'conversation_id':beta['conversation_id']}))
+            'conversation_id':beta['conversation_id'],'gid':986}))
+        for path in [self.package,*self.package.rglob('*')]:
+            path.chmod(0o750 if path.is_dir() else 0o440)
 
     def test_outer_wrapper_pins_inner_without_inventory_cycle(self):
-        path=prepare_release(self.package,self.digest,self.output)
+        path=prepare_release(self.package,self.digest,self.output,service_gid=986)
         value=json.loads(path.read_text());text=(self.output/'start-service').read_text()
         self.assertIn('-I -S -B',text);self.assertIn(self.digest,text)
         self.assertIn('start-service',value['files'])
@@ -43,19 +48,19 @@ class ReleaseTests(unittest.TestCase):
 
     def test_wrong_manifest_refuses_before_publication(self):
         with self.assertRaisesRegex(RuntimeError,'manifest mismatch'):
-            prepare_release(self.package,'b'*64,self.output)
+            prepare_release(self.package,'b'*64,self.output,service_gid=986)
         self.assertFalse(self.output.exists())
 
     def test_inner_alias_refused(self):
         (self.package/'alias').symlink_to('manifest.json')
         with self.assertRaisesRegex(RuntimeError,'symlinks'):
-            prepare_release(self.package,self.digest,self.output)
+            prepare_release(self.package,self.digest,self.output,service_gid=986)
         self.assertFalse(self.output.exists())
 
     def test_existing_release_preserved(self):
         self.output.mkdir();(self.output/'retained').write_bytes(b'preserved')
         with self.assertRaisesRegex(RuntimeError,'fresh'):
-            prepare_release(self.package,self.digest,self.output)
+            prepare_release(self.package,self.digest,self.output,service_gid=986)
         self.assertEqual((self.output/'retained').read_bytes(),b'preserved')
 
     def test_wrapper_literal_path_and_no_argument_forwarding(self):
@@ -68,12 +73,39 @@ class ReleaseTests(unittest.TestCase):
         path=self.package/'beta.json';value=json.loads(path.read_text())
         value['launcher']=str(self.package/'launcher.py');path.write_text(json.dumps(value))
         with self.assertRaisesRegex(RuntimeError,'final launcher'):
-            prepare_release(self.package,self.digest,self.output)
+            prepare_release(self.package,self.digest,self.output,service_gid=986)
         self.assertFalse(self.output.exists())
 
     def test_scope_mismatch_refused_before_copy(self):
         path=self.package/'service.json';value=json.loads(path.read_text())
         value['conversation_id']='33333333-3333-4333-8333-333333333333';path.write_text(json.dumps(value))
         with self.assertRaisesRegex(RuntimeError,'scope binding'):
-            prepare_release(self.package,self.digest,self.output)
+            prepare_release(self.package,self.digest,self.output,service_gid=986)
+        self.assertFalse(self.output.exists())
+
+    def test_actual_dropped_uid_outer_traversal_before_and_after(self):
+        self.root.chmod(0o750);os.chown(self.root,0,986)
+        plan=prepare_release(self.package,self.digest,self.output,service_gid=986)
+        target=self.output/'package/codex_service/entry.py'
+        command=['/usr/bin/python3','-I','-S','-B','-c',
+                 'import pathlib,sys;pathlib.Path(sys.argv[1]).read_bytes()',str(target)]
+        def probe():
+            return subprocess.run(command,user=995,group=986,extra_groups=[],
+                env={'PATH':'/usr/bin:/bin'},capture_output=True,timeout=3)
+        # Probe the packager-created layout BEFORE any deliberate baseline mutation.
+        passed=probe();self.assertEqual(passed.returncode,0,passed.stderr)
+        self.assertEqual((self.output.stat().st_uid,self.output.stat().st_gid,self.output.stat().st_mode & 0o777),(0,986,0o750))
+        # Preserve deterministic old-layout failure evidence within this fixture.
+        self.output.chmod(0o700)
+        failed=probe();self.assertNotEqual(failed.returncode,0)
+        self.assertIn(b'PermissionError',failed.stderr)
+        self.output.chmod(0o750)
+        passed=probe();self.assertEqual(passed.returncode,0,passed.stderr)
+        receipt=json.loads(plan.read_text())
+        self.assertEqual(receipt['custody']['.'],{'uid':0,'gid':986,'mode':0o750})
+        self.assertEqual(target.read_text(),'raise SystemExit("never executed")\n')
+
+    def test_gid_mismatch_refused_before_publication(self):
+        with self.assertRaisesRegex(RuntimeError,'configured service GID'):
+            prepare_release(self.package,self.digest,self.output,service_gid=987)
         self.assertFalse(self.output.exists())
