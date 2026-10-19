@@ -81,3 +81,21 @@ fn foreign_project_proposal_and_changed_owner_refuse_and_clear() {
     assert_eq!(state.enabled(), None);
     assert!(state.confirm(MemoryConsentAction::Remember).is_err());
 }
+
+#[test]
+fn independent_disable_fences_inflight_old_enabled_settings_and_proposals() {
+    let mut state = MemoryState::default();
+    state.settings(0, settings());
+    let old = state.generation();
+    let mut disabled = settings();
+    disabled.enabled = false;
+    assert!(state.settings(old, disabled));
+    assert!(
+        !state.settings(old, settings()),
+        "stale enabled settings must not undo the observed disable"
+    );
+    assert!(
+        !state.review(old, proposal()),
+        "pre-disable proposal must be fenced"
+    );
+}

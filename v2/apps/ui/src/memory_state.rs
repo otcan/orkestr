@@ -48,6 +48,10 @@ impl MemoryState {
             return false;
         }
         if !value.enabled {
+            // Retain the observed disable while fencing every pre-disable callback.
+            if self.enabled() == Some(true) {
+                self.generation += 1;
+            }
             self.reviewed = None;
             self.pending = None;
         }
