@@ -98,3 +98,6 @@ mod retired_process_tests;
 
 #[cfg(test)]
 mod retired_revalidation_tests;
+
+#[cfg(test)]
+mod role_tests;
