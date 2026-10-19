@@ -1,5 +1,6 @@
 mod about;
 mod acceptance_button;
+mod attachments_view;
 mod execution_panel;
 mod execution_poll;
 mod fast_panel;
