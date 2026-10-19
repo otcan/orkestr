@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 import resource
-import re
+import stat
 import signal
 import sqlite3
 import sys
@@ -23,6 +23,73 @@ CANONICAL = {
     'data/connector-inbox.sqlite': 'ORKESTR_CONNECTOR_INBOX_DB',
 }
 MANIFEST = '.orkestr-sqlite-snapshots.json'
+CONSISTENCY = 'per-database SQLite backup API; no cross-store writer barrier'
+# ECMAScript String.trim(), used only by the two application resolvers that trim.
+JS_SPACE = '\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff'
+
+
+def canonical_path(home, default, variable):
+    configured = os.environ.get(variable, '') if variable else ''
+    if variable in ('ORKESTR_AGENT_JOBS_DB', 'ORKESTR_CONNECTOR_INBOX_DB'):
+        configured = configured.strip(JS_SPACE)
+    if variable == 'ORKESTR_CONNECTOR_INBOX_DB':
+        # Unlike dataPaths, the inbox resolver also trims ORKESTR_HOME.
+        inbox_home = os.environ.get('ORKESTR_HOME', str(home)).strip(JS_SPACE)
+        fallback = Path(inbox_home) / default
+    else:
+        fallback = home / default
+    return Path(os.path.abspath(configured or fallback))
+
+
+def validate_previous_manifest(path):
+    # A restored receipt is metadata, not current-DB integrity evidence: normal
+    # application writes legitimately change its historical digests. Never edit it.
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        if path.is_symlink():
+            raise ValueError('previous snapshot manifest is a symlink')
+        return
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 65536:
+            raise ValueError('previous snapshot manifest must be a bounded regular file')
+        raw = stream.read(65537)
+    if len(raw) > 65536:
+        raise ValueError('previous snapshot manifest exceeds byte limit')
+    def unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate previous snapshot manifest key')
+            result[key] = value
+        return result
+    value = json.loads(raw, object_pairs_hook=unique_pairs)
+    keys = {'format', 'complete', 'consistency', 'databases', 'snapshot_bytes'}
+    if (not isinstance(value, dict) or set(value) != keys or type(value['format']) is not int
+            or value['format'] != 1 or value['complete'] is not True
+            or value['consistency'] != CONSISTENCY or not isinstance(value['databases'], list)
+            or len(value['databases']) > len(CANONICAL)):
+        raise ValueError('unrecognized previous snapshot manifest')
+    total, seen = 0, set()
+    for record in value['databases']:
+        if not isinstance(record, dict) or set(record) != {'original_relative_path', 'bytes', 'sha256', 'complete'}:
+            raise ValueError('invalid previous snapshot manifest database')
+        relative = record['original_relative_path']
+        if (not isinstance(relative, str) or not relative or Path(relative).is_absolute()
+                or any(part in ('', '.', '..') for part in relative.split('/'))
+                or relative == MANIFEST or relative in seen or '\x00' in relative):
+            raise ValueError('invalid previous snapshot manifest relative path')
+        seen.add(relative)
+        size, digest = record['bytes'], record['sha256']
+        if (type(size) is not int or size < 0 or size > 2**63 - 1 or record['complete'] is not True
+                or not isinstance(digest, str) or len(digest) != 64
+                or any(c not in '0123456789abcdef' for c in digest)):
+            raise ValueError('invalid previous snapshot manifest completion/digest')
+        total += size
+    if type(value['snapshot_bytes']) is not int or value['snapshot_bytes'] != total:
+        raise ValueError('invalid previous snapshot manifest byte total')
+
 
 
 def fail_signal(signum, _frame):
@@ -46,10 +113,15 @@ def prepare(home, stage):
         pass
     else:
         raise ValueError('snapshot staging must be outside state home')
-    overlay = stage / 'snapshot-overlay'
+    # Tar exclusions apply before name transformation: never share the live root.
+    overlay_name = 'snapshot-overlay-1' if home.name == 'snapshot-overlay' else 'snapshot-overlay'
+    (stage / 'source-home.nul').write_bytes(os.fsencode(home) + b'\0')
+    overlay = stage / overlay_name
+    (stage / 'overlay-name').write_text(overlay_name)
+    pattern_base = ''.join('\\' + c if c in r'\\*?[]' else c for c in home.name)
+    (stage / 'exclude-root-prefix').write_text(pattern_base)
     overlay.mkdir(mode=0o700)
-    if (home / MANIFEST).exists() or (home / MANIFEST).is_symlink():
-        raise ValueError('reserved snapshot manifest already exists in state')
+    validate_previous_manifest(home / MANIFEST)
     budget = positive('ORKESTR_DEPLOY_SQLITE_MAX_BYTES', 8 * 1024**3)
     seconds = positive('ORKESTR_DEPLOY_SQLITE_TIMEOUT_SECONDS', 300)
     deadline = time.monotonic() + seconds
@@ -58,13 +130,11 @@ def prepare(home, stage):
     signal.setitimer(signal.ITIMER_REAL, seconds)
     patterns = os.environ.get('ORKESTR_DEPLOY_BACKUP_EXCLUDES',
                               'run tmp whatsapp-bridge/sessions wa-skills/*/session wa-skills/*/state').split()
-    exclusions, records = [], []
+    exclusions, records = [MANIFEST], []
     total = 0
     seen = set()
     for default, variable in CANONICAL.items():
-        path = Path(os.environ.get(variable, '') or home / default) if variable else home / default
-        # Relative configured paths follow application path.resolve semantics.
-        path = path.absolute()
+        path = canonical_path(home, default, variable)
         relative = path.relative_to(home).as_posix()
         if any(p == '..' for p in Path(relative).parts):
             raise ValueError('canonical database escapes state root')
@@ -113,12 +183,14 @@ def prepare(home, stage):
                 digest.update(block)
         digest = digest.hexdigest()
         records.append({'original_relative_path': relative, 'bytes': size, 'sha256': digest, 'complete': True})
-    # GNU tar wildcard exclusions must match literal configured DB paths.
-    escaped = [re.sub(r'([\\*?\[\]])', r'\\\1', home.name + '/' + p) for p in exclusions]
-    (stage / 'excludes.nul').write_bytes(b''.join(p.encode() + b'\0' for p in escaped))
-    manifest = {'format': 1, 'complete': True, 'consistency': 'per-database SQLite backup API; no cross-store writer barrier',
+    # The caller applies --anchored --no-wildcards only to these exclusions.
+    (stage / 'excludes.nul').write_bytes(b''.join((home.name + '/' + p).encode() + b'\0' for p in exclusions))
+    manifest = {'format': 1, 'complete': True, 'consistency': CONSISTENCY,
                 'databases': records, 'snapshot_bytes': total}
-    (overlay / MANIFEST).write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
+    encoded = (json.dumps(manifest, sort_keys=True, indent=2) + '\n').encode()
+    if len(encoded) > 65536:
+        raise ValueError('generated snapshot manifest exceeds byte limit')
+    (overlay / MANIFEST).write_bytes(encoded)
     signal.setitimer(signal.ITIMER_REAL, 0)
 
 

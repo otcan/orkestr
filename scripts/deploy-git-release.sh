@@ -455,7 +455,7 @@ resolve_backup_compressor() {
 
 backup_state() (
   local stamp target backup_name pending_backup data_dir data_base data_parent exclude tar_args tar_status compressor_status
-  local compressor gzip_level extension start_ts end_ts elapsed size snapshot_stage
+  local compressor gzip_level extension start_ts end_ts elapsed size snapshot_stage overlay_name pattern_base
   local -a compressor_cmd statuses
   if [ "$run_backup" != "1" ]; then
     require_recent_state_backup || return $?
@@ -506,18 +506,24 @@ backup_state() (
   trap 'exit 143' TERM
   trap 'exit 129' HUP
   pending_backup="$(mktemp "$backup_dir/.state-backup.XXXXXXXX.part")"
-  data_parent="$(dirname "$data_dir")"
-  data_base="$(basename "$data_dir")"
   snapshot_stage="$(mktemp -d "$backup_dir/.sqlite-snapshots.XXXXXXXX")"
   python3 "$script_dir/backup-sqlite-snapshots.py" "$data_dir" "$snapshot_stage" || return $?
+  IFS= read -r -d '' data_dir < "$snapshot_stage/source-home.nul"
+  data_parent="$(dirname "$data_dir")"
+  data_base="$(basename "$data_dir")"
+  overlay_name="$(cat "$snapshot_stage/overlay-name")"
+  pattern_base="$(cat "$snapshot_stage/exclude-root-prefix")"
   tar_args=(-C "$data_parent" -cf - --ignore-failed-read --warning=no-file-changed --warning=no-file-removed --warning=no-failed-read)
   for exclude in $backup_excludes; do
     [ -n "$exclude" ] || continue
     case "$exclude" in
       /*) tar_args+=(--exclude="$exclude") ;;
-      *) tar_args+=(--exclude="$data_base/$exclude") ;;
+      *) tar_args+=(--exclude="$pattern_base/$exclude") ;;
     esac
   done
+  # User patterns above retain GNU tar's existing wildcard/unanchored semantics.
+  # Canonical DBs/companions/old metadata below are exact root member names.
+  tar_args+=(--anchored --no-wildcards)
   while IFS= read -r -d '' exclude; do
     tar_args+=(--exclude="$exclude")
   done < "$snapshot_stage/excludes.nul"
@@ -525,13 +531,13 @@ backup_state() (
   # Escape regex/replacement metacharacters in the original restore root.
   local escaped_base
   escaped_base="$(printf '%s' "$data_base" | sed 's/[\\&|]/\\&/g')"
-  tar_args+=(--transform="flags=r;s|^snapshot-overlay\\(/\\|$\\)|$escaped_base\\1|")
+  tar_args+=(--transform="flags=r;s|^$overlay_name\\(/\\|$\\)|$escaped_base\\1|")
   echo "State backup started: $backup_name using $compressor." >&2
   start_ts="$(date +%s)"
   tar_status=0
   compressor_status=0
   set +e
-  tar "${tar_args[@]}" "$data_base" -C "$snapshot_stage" snapshot-overlay | "${compressor_cmd[@]}" > "$pending_backup"
+  tar "${tar_args[@]}" "$data_base" -C "$snapshot_stage" "$overlay_name" | "${compressor_cmd[@]}" > "$pending_backup"
   statuses=("${PIPESTATUS[@]}")
   set -e
   tar_status="${statuses[0]:-1}"

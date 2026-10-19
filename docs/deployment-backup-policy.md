@@ -33,8 +33,9 @@ private SQLite backup-API snapshots of the canonical stores defined in
 thread-resource-policy, connector-outbox, broker-instances and data/connector-inbox.
 Missing databases are not created. Configured database overrides must remain
 inside the state home; symlink paths, nonregular databases/companions and
-colliding canonical paths fail closed. SQLite may maintain reader locks/shared
-memory; the helper does not query application rows or write source database pages.
+colliding canonical paths fail closed. Agent-job and connector-inbox overrides
+use their application resolvers' trimming rules; the other overrides remain
+literal. SQLite may maintain reader locks/shared memory; the helper does not query application rows or write source database pages.
 
 Each included database is read through SQLite (including its committed WAL),
 checked with `integrity_check`, hashed and staged as a standalone database at its
@@ -43,9 +44,22 @@ excluded from tar; staged copies replace only the database members. Existing
 exclusions also suppress canonical snapshots and continue to apply to caches;
 uploads and other application/user files retain their existing scope. The reserved
 root `.orkestr-sqlite-snapshots.json` records format, completion, original relative
-paths, byte counts and SHA256 digests. A source file with that reserved name is
-refused rather than overwritten. Restore the ordinary state tree with services
-stopped into a fresh destination; never overlay these databases onto stale WAL/SHM.
+paths, byte counts and SHA256 digests. After restore, that historical receipt may
+remain in state. A bounded regular, non-hardlinked receipt with the exact known
+format, completion, unique relative paths, valid digests and matching byte totals
+is recognized and excluded from the live tree; exactly one fresh receipt is added
+from private staging. The source receipt is never modified or deleted. Its old
+digests are historical, not a requirement that databases remain unchanged after
+restore. Arbitrary/invalid metadata, duplicate keys, symlinks, FIFOs and other
+nonregular paths fail closed without replacement. Both generated and accepted
+receipts are limited to 64 KiB. Canonical member exclusions are anchored literal
+paths, separate from existing user wildcard patterns; unrelated nested project
+files and names containing wildcard characters are preserved. Staging uses a
+disjoint archive-member root, including when the home is named `snapshot-overlay`.
+Format recognition is not publisher authentication or current-state attestation.
+The operator-shell restore plan in `packages/core/src/state-backups.js` extracts
+the archive without consuming metadata; this handling supports that unchanged
+layout. Restore the ordinary state tree with services stopped into a fresh destination; never overlay these databases onto stale WAL/SHM.
 
 The total snapshot deadline defaults to 300 seconds and staged database bytes to
 8 GiB. Positive integer overrides are `ORKESTR_DEPLOY_SQLITE_TIMEOUT_SECONDS` and
@@ -71,5 +85,9 @@ Synthetic regression command:
 It exercises a concurrent WAL writer, restored integrity/value bounds, digest and
 restore layout, cache exclusions with preserved uploads, explicit database
 exclusions, malformed database/invalid location/byte/deadline refusal, prior
-archive retention and interrupted process-group cleanup. No production archive,
+archive retention and interrupted process-group cleanup. A second oracle exercises
+actual archive→restore→backup→restore, preserved prior metadata, all canonical resolvers,
+padded overrides, literal wildcard names, nested same-basename files and the
+staging-name collision. It checks byte-identical source DB/WAL files and refusal
+without publication for arbitrary/reserved metadata paths. No production archive,
 provider data or installed service is used.

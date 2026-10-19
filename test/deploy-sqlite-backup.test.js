@@ -8,3 +8,8 @@ test('SQLite archive stage: concurrent WAL, restored values, bounds and interrup
   const {stdout}=await exec('python3',['-B','test/fixtures/sqlite-backup-check.py'],{timeout:30000});
   assert.match(stdout,/all snapshot checks passed/);
 });
+
+test('SQLite restore/rebackup lifecycle, literal anchored paths and resolver padding', async()=>{
+  const {stdout}=await exec('python3',['-B','test/fixtures/sqlite-backup-lifecycle-check.py'],{timeout:30000});
+  assert.match(stdout,/all lifecycle checks passed/);
+});
