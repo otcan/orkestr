@@ -1,5 +1,6 @@
 //! Default-off, explicit browser-owner consent; no provider or effect authority.
 mod read;
+mod settings;
 #[cfg(test)]
 mod tests;
 mod validation;

@@ -74,3 +74,45 @@ copy-first prefixes14/17/31/33/36/37/38/39/40 to41, existing-row equality,
 foreign-key checks and empty new Memory tables. Strict fixture-test-controls
 all-target Store Clippy, workspace formatting and diff checks passed. These
 checks do not qualify HTTP composition or private content migration.
+
+## Consumer handoff: selection read and exact return types
+
+`memory_settings_authenticated(credential) -> Result<MemorySettings>` returns
+`{ owner_id, enabled }` from current auth in the same read transaction. Missing
+selection means enabled=false; disabled selection remains readable. The derived
+owner is a response scope check, never request authority. This read does not
+create a settings row. Revoked/expired/bare-machine credentials refuse.
+
+| Store operation | Successful value |
+| --- | --- |
+| set_memory_enabled_authenticated | unit |
+| memory_settings_authenticated | MemorySettings |
+| propose_memory_authenticated | MemoryProposal |
+| save_memory_authenticated | MemoryReceipt |
+| retrieve_memories_authenticated | Vec<MemoryRecord> |
+| export_memories_authenticated | Vec<MemoryRecord> |
+| memory_context_authenticated | MemoryContext |
+
+All use `memory::Result<T>` with `MemoryError::{Invalid, Unauthorized, Disabled,
+NotFound, Conflict, Limit, Unavailable}`. Invalid denotes malformed proposal,
+consent or bounds; Unauthorized current credential/owner refusal; Disabled
+selection off; NotFound unavailable owned reference; Conflict changed retry or
+stale revision; Limit bounded capacity; Unavailable database/storage failure.
+No HTTP status/body/path is frozen by these Store types. A single separately
+assigned server leaf must publish strict request envelopes, error mapping and
+Origin/CSRF behavior before client transport. Isolation9b202e67 exclusively owns the new `memory_service` server leaf,
+request envelopes, HTTP mapping and route proposal; coordinator retains shared
+mounting. Core owns these Store/contracts only. UI waits for Isolation's exact
+HTTP handoff before transport.
+
+The compatible UI boundary is explicit opt-in followed by normalized per-record
+review and the matching decision action. Uncertain retries retain the exact
+proposal/key/decision tuple; historical receipt requires fresh retrieval before
+showing current content. Owner/logout/project changes fence responses and clear
+volatile consent state. No automatic capture or provider-injected approval.
+
+The added settings regression passed defaultfalse, authenticated owner identity,
+enabled Store reopen, disable reread, bare-machine refusal and revoked read.
+Strict feature all-target Store Clippy, workspace formatting and diff checks
+passed on this successor. Earlier full-suite evidence remains attributed to the
+base Memory checkpoint; this addition was verified with its focused test.

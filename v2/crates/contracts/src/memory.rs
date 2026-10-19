@@ -141,3 +141,11 @@ pub struct MemoryContext {
     pub included_ids: Vec<Uuid>,
     pub omitted_count: usize,
 }
+
+/// Current owner-scoped service selection; not execution/readiness authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemorySettings {
+    pub owner_id: OwnerId,
+    pub enabled: bool,
+}
