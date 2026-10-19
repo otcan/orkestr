@@ -189,3 +189,43 @@ working database, activates a dormant import, or rebinds an owner. Private backu
 rollback state and evidence are intentionally retained under the supplied private
 parent for review; they contain synthetic auth and must not be published. No
 providers or production resources are used. Failed probes retain diagnostics.
+
+### Workspace inventory and schema39 rehearsal preparation
+
+`v2/local-install/workspace_inventory.py::inspect_workspace(workspace, protected_paths)`
+inspects an explicitly selected, operator-owned canonical Git root without changing
+its files, index, branch, or linked-worktree references. The result records HEAD,
+common/per-worktree Git directories and inode anchors; it grants no authority.
+Rejecting a symlink, nested root selection, world-writable root or protected-state
+overlap is an installation precheck, not Runtime sandbox or mount-alias proof.
+The caller must protect this inventory as private operational metadata.
+
+The workflow-refresh local-project gate requires parent/worker worktrees to reopen
+under allowed scope, cross-owner/path escape refusal and retained artifacts. Seven
+new disposable-repository tests cover linked references and dirty source retention,
+explicit root/canonical selection, protected path overlap, common Git metadata,
+other-writable directories, synthetic owner mismatch and changed HEAD without invented generation binding.
+They do not qualify the execution path. Current ordinary execution's canonical
+`workspace` check is separate from a project-owner/allowlist/generation contract.
+Runtime must define that contract before Installation can activate any reference;
+imported or unresolved paths remain unavailable, and no repository is reset,
+rebound, pushed or launched by this inspector.
+
+`tests/schema39-fingerprints.json` pins all 39 SQL files from the recorded exact
+source, with SHA256 and SQLx SHA384. `test_schema39_contract.py` requires those
+exact supplied SQL bytes and rehearses a stopped copy from populated schema38,
+retains attachment bytes/history, checks empty automatic-reply authority tables,
+reopens with integrity/FK checks, and injects transactional DDL failure on the copy.
+This is SQL-only preparation, not an approved historical package edge or actual
+server migration. The existing package runner deliberately continues to refuse
+schema39 pending Core's explicit supported-edge contract and the next immutable,
+matching server/web receipt. No old binary or mutable build is a substitute.
+
+Remaining actual gate: verify the sealed pair's source/version/binary/UI inventory
+and all SQLx checksums; for each Core-supported original package, take a stopped
+locked backup, copy-upgrade before writable original migration, verify retained
+history/attachment and dormant authority rows, reopen, exercise dormant restore
+and rollback, measure backward refusal only on a disposable migrated copy, and
+reopen the untouched predecessor rollback home using its original executable.
+Preserve original backups and raw evidence. None of those schema39 package checks
+has been executed by this preparation.
