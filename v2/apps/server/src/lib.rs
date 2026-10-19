@@ -31,6 +31,7 @@ mod execution_accept;
 mod execution_registry;
 pub mod fast_execution;
 mod held_inputs;
+mod memory_service;
 pub mod offline_python;
 pub mod owned_children;
 pub mod owned_execution;
@@ -254,6 +255,7 @@ pub fn router(state: AppState) -> Router {
         .merge(timer_http::routes(state.timers.clone()))
         .nest("/api/v2",attachment_transfer::router())
         .nest("/api/v2",automatic_reply_control::router())
+        .merge(memory_service::router(state.clone()))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })
         .layer(DefaultBodyLimit::max(40 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(),guard))
