@@ -25,7 +25,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= 8192, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -41,4 +41,19 @@ def validate(raw):
     for name in ('namespace', 'supervisor_key'):
         require(type(value[name]) is str and re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', value[name]), 'bounded beta identifier required')
     require(type(value['launcher_sha256']) is str and re.fullmatch('[0-9a-f]{64}', value['launcher_sha256']), 'beta launcher digest required')
+    if 'roles' in value:
+        roles=value['roles']
+        require(type(roles) is dict and set(roles)=={'fast','workers'},'closed beta roles required')
+        require(type(roles['workers']) is list and len(roles['workers'])==4,'four beta worker slots required')
+        launchers=set()
+        for role in [roles['fast'],*roles['workers']]:
+            require(type(role) is dict and set(role)=={'launcher','launcher_sha256','workspace'},
+                    'closed beta role fields required')
+            for key in ('launcher','workspace'):
+                require(type(role[key]) is str and '\x00' not in role[key] and Path(role[key]).is_absolute(),
+                        'absolute beta role path required')
+            require(type(role['launcher_sha256']) is str and re.fullmatch('[0-9a-f]{64}',role['launcher_sha256']),
+                    'beta role launcher digest required')
+            launchers.add(role['launcher'])
+        require(len(launchers)==5 and value['launcher'] not in launchers,'distinct beta role launchers required')
     return value

@@ -10,7 +10,7 @@ from .package import Package
 from .profile import Configuration
 
 
-def main(root):
+def main(root, role="deep"):
     pump = None
     try:
         package = Package(root)
@@ -18,7 +18,8 @@ def main(root):
         Channel, protocol, Refused, subreaper, reaped_exit, Pump = modules(package.root)
         fresh = ["open-owned-session", "--protocol", protocol]
         resumed = ["resume-owned-session", "--protocol", protocol]
-        require(sys.argv[1:] in (fresh, resumed), "broker_operation")
+        require(role in package.role_profiles and sys.argv[1:] in
+                ((fresh,) if role.startswith("worker-") else (fresh, resumed)), "broker_operation")
         def stop(_number, _frame):
             from protocol import Failure
             raise Refused("owned selected Codex stopped", Failure.SIGNAL)
@@ -33,7 +34,7 @@ def main(root):
             require(handoff.family == socket.AF_UNIX and handoff.type == socket.SOCK_STREAM,
                     "private_writer_endpoint")
             handoff.getpeername()
-            config = Configuration(package)
+            config = Configuration(package, role)
             # The exact owned root manager captures our original pidfd and only
             # then continues us. Runtime calls bind_child before waiting for FD3.
             os.kill(os.getpid(), signal.SIGSTOP)

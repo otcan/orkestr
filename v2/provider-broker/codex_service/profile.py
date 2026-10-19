@@ -8,9 +8,10 @@ from .contract import require
 
 
 class Configuration:
-    def __init__(self, package):
+    def __init__(self, package, role="deep"):
         self.package = package
-        self.profile = SelectedCodexProfile(package.root / "profile.json")
+        require(role in package.role_profiles, "unconfigured_role")
+        self.profile = SelectedCodexProfile(package.role_profiles[role])
         self.workspace_descriptor = None
         self.workspace = self.profile.workspace
         self.issued = False

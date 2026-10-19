@@ -48,6 +48,7 @@ def verified(root, expected):
     # before its import; Package then validates the full fixed module inventory
     # before manager/broker/server imports can execute.
     initial = {"codex_service/__init__.py", "codex_service/package.py", "codex_service/contract.py",
+               "codex_service/role_profiles.py",
                "codex_bounded/__init__.py", "codex_bounded/configuration.py", "codex_bounded/trust.py"}
     dependencies = {str(Path(name).resolve(strict=True)) for name in
                     ("/usr/bin/python3", "/usr/bin/bwrap", "/usr/bin/prlimit", "/etc/ssl/certs/ca-certificates.crt")}
@@ -81,17 +82,19 @@ def main():
         raise ValueError("no-site invocation required")
     root = Path(__file__).resolve().parents[1]
     mode, *arguments = sys.argv[1:]
-    if mode not in ("manager", "broker", "server"):
+    if mode not in ("manager", "broker", "broker-fast", "broker-worker-0",
+                    "broker-worker-1", "broker-worker-2", "broker-worker-3", "server"):
         raise ValueError("fixed entry mode")
     expected = arguments[0] if mode == "manager" and len(arguments) == 1 else None
     verified(root, expected)
     sys.path.insert(0, str(root))
     from codex_service.package import Package
     Package(root, expected)
-    if mode == "broker":
+    if mode == "broker" or mode.startswith("broker-"):
         from codex_service.broker import main as selected
-        sys.argv = [str(root / "launcher.py"), *arguments]
-        return selected(root)
+        role = "deep" if mode == "broker" else mode.removeprefix("broker-")
+        sys.argv = [str(root / ("launcher.py" if role == "deep" else f"launcher-{role}.py")), *arguments]
+        return selected(root, role)
     if mode == "server":
         if len(arguments) != 1:
             raise ValueError("server parent")

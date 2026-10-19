@@ -242,3 +242,25 @@ credential/artifact inode identities, and the complete UI tree without following
 symlinks. Credentials inside the UI tree are refused. This requires the same
 stable trusted namespace as preparation; subsequent hostile path replacement is
 not prevented by this preflight.
+
+### Beta.2 companion and Worker profiles
+
+An optional `roles` plan field enables the existing Fast companion and exactly
+four bounded Worker slots. Its shape is `{"fast":{"workspace":"/private/fast",
+"state_root":"/private/fast-state"},"workers":[...]}`, with four analogous
+Worker entries. Every path is operator supplied. Each generated launcher pins
+one literal role; HTTP inputs cannot select its executable, profile or account.
+All six native homes are disjoint; read-only workspaces may be shared. A native
+home can contain separately bound sessions from different conversations; this
+is role/slot separation, not per-conversation filesystem isolation. Worker
+launchers accept fresh sessions only, and slot reuse requires original cleanup.
+The one outer manager/window retains aggregate limits across these roles.
+
+An explicit `preserve_state: true` plan permits preparing a new immutable package
+against existing private application/native state and protected manager roots.
+Preparation leaves those contents untouched and does not stop the old service.
+The release operator must stop and join the old manager before activation and
+retain a rollback snapshot. The new manager's ordinary transactional ledger
+migration preserves historical windows, generations and consumed budgets;
+unfinished work remains subject to reconciliation. This flag supplies no proof
+of quiescence and grants no permission to replay an unfinished window.

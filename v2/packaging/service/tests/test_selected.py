@@ -71,6 +71,22 @@ class Selected(unittest.TestCase):
         self.plan['pair_sha256']=sha(r/'pair')
         with self.assertRaisesRegex(RuntimeError,'embedded identity mismatch'):
             selected.pair_bytes(self.plan)
+    def test_existing_state_requires_opt_in_and_remains_untouched(self):
+        markers=[]
+        for name in ('workspace','state','ledger','ep'):
+            directory=self.root/name
+            if not directory.exists():
+                directory.mkdir();os.chown(directory,0,986)
+                directory.chmod(0o700 if name=='ledger' else 0o750)
+            marker=directory/'synthetic-existing-state';marker.write_bytes(b'preserve exact bytes')
+            markers.append(marker)
+        with self.assertRaisesRegex(RuntimeError,'fresh native state/workspace'):
+            selected.prepare(self.plan)
+        self.assertFalse((self.root/'release').exists())
+        self.plan['preserve_state']=True
+        selected.prepare(self.plan);self.validate()
+        self.assertTrue(json.loads((self.root/'release/release.json').read_bytes())['preserved_existing_state'])
+        for marker in markers:self.assertEqual(marker.read_bytes(),b'preserve exact bytes')
     def test_reserved_directories_retained(self):
         for name,mode in (('ledger',0o700),('ep',0o750)):
             p=self.root/name;p.mkdir();os.chown(p,0,986);p.chmod(mode)
