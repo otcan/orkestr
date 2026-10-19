@@ -28,6 +28,20 @@ class PackageTests(unittest.TestCase):
         receipt = self.fixture.prepare()
         return Package(receipt["package"], receipt["manifest_sha256"])
 
+    def server_ready(self, runtime, package):
+        # Observe the synthetic server's installed handler, not a sleep or the
+        # short-lived Python exec shim, before asserting graceful shutdown.
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            self.assertIsNone(runtime.child.poll())
+            pid = runtime.child.pid
+            status = Path(f"/proc/{pid}/status").read_text().splitlines()
+            caught = int(next(line.split()[1] for line in status if line.startswith("SigCgt:")), 16)
+            if caught & (1 << (2 - 1)) and Path(f"/proc/{pid}/exe").resolve() == package.root / "server":
+                return
+            time.sleep(.02)
+        self.fail("synthetic graceful signal handler did not become ready")
+
     def test_fresh_package_reads_no_account_and_starts_nothing(self):
         original = Path.open
         auth = self.fixture.auth
@@ -119,13 +133,13 @@ class PackageTests(unittest.TestCase):
         self.addCleanup(runtime.close)
         first = runtime.start()
         self.assertEqual(first["uid"], UID)
-        time.sleep(0.1)
-        self.assertIsNone(runtime.child.poll())
+        self.server_ready(runtime, package)
         runtime.budget.attempt()
         created = runtime.budget.created
         runtime.stop_server()
         self.assertFalse(exists(first))
         second = runtime.start()
+        self.server_ready(runtime, package)
         self.assertNotEqual((first["pid"], first["start"]), (second["pid"], second["start"]))
         self.assertEqual(runtime.budget.created, created)
         self.assertEqual(runtime.budget.attempts, 1)
@@ -155,6 +169,66 @@ class PackageTests(unittest.TestCase):
                         self.assertEqual(list(self.fixture.account.iterdir()), [])
             finally:
                 package.endpoint.unlink()
+
+    def test_forced_stubborn_server_cleanup_permanently_refuses_replacement(self):
+        fixture = Fixture(stubborn=True)
+        self.addCleanup(fixture.close)
+        receipt = fixture.prepare()
+        package = Package(receipt["package"], receipt["manifest_sha256"])
+        runtime = Runtime(package.root, receipt["manifest_sha256"])
+        self.addCleanup(runtime.close)
+        identity = runtime.start()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            self.assertIsNone(runtime.child.poll())
+            status = Path(f"/proc/{identity['pid']}/status").read_text().splitlines()
+            ignored = int(next(line.split()[1] for line in status if line.startswith("SigIgn:")), 16)
+            if ignored & (1 << (2 - 1)) and Path(f"/proc/{identity['pid']}/exe").resolve() == package.root / "server":
+                break
+            time.sleep(.02)
+        else:
+            self.fail("finite stubborn synthetic server did not become ready")
+        with self.assertRaisesRegex(Refused, "owned_cleanup_incomplete"):
+            runtime.stop_server()
+        self.assertTrue(runtime.forced)
+        self.assertFalse(exists(identity))
+        self.assertFalse(package.endpoint.exists())
+        self.assertIsNone(runtime.child)
+        self.assertIsNone(runtime.listener)
+        self.assertIsNone(runtime.egress)
+        # A second cleanup can finish, but must never restore launch authority.
+        runtime.stop_server()
+        with patch("codex_bounded.controller.subprocess.Popen") as launch:
+            with self.assertRaisesRegex(Refused, "execution_window_unusable"):
+                runtime.start()
+            launch.assert_not_called()
+        self.assertTrue(runtime.snapshot()["window_poisoned"])
+
+    def test_recovered_egress_cleanup_error_does_not_restore_replacement_authority(self):
+        package = self.package()
+        runtime = Runtime(package.root, self.fixture.receipt["manifest_sha256"])
+        self.addCleanup(runtime.close)
+        identity = runtime.start()
+        self.server_ready(runtime, package)
+        endpoint = runtime.egress
+        original_close = endpoint.close
+        def completed_then_failed():
+            original_close()
+            raise RuntimeError("synthetic cleanup result lost")
+        with patch.object(endpoint, "close", completed_then_failed):
+            with self.assertRaisesRegex(Refused, "owned_cleanup_incomplete"):
+                runtime.stop_server()
+        self.assertFalse(exists(identity))
+        self.assertFalse(package.endpoint.exists())
+        self.assertIs(runtime.egress, endpoint)
+        runtime.stop_server()
+        self.assertIsNone(runtime.egress)
+        self.assertFalse(runtime.forced)
+        with patch("codex_bounded.controller.subprocess.Popen") as launch:
+            with self.assertRaisesRegex(Refused, "execution_window_unusable"):
+                runtime.start()
+            launch.assert_not_called()
+        self.assertTrue(runtime.snapshot()["window_poisoned"])
 
     def test_controller_death_stops_exact_dropped_uid_server(self):
         from reaping import become_subreaper

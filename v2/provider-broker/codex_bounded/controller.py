@@ -25,11 +25,12 @@ class Runtime:
             lifetime_seconds=self.package.runtime["lifetime_seconds"]))
         self.child = self.identity = self.listener = self.egress = None
         self.endpoint_identity = None
-        self.started = self.forced = self.closed = False
+        self.started = self.forced = self.closed = self.poisoned = False
         self.epochs = []
 
     def start(self):
-        require(not self.closed and self.child is None and self.listener is None and self.egress is None,
+        require(not self.closed and not self.poisoned and not self.forced, "execution_window_unusable")
+        require(self.child is None and self.listener is None and self.egress is None,
                 "previous_server_still_owned")
         package = Package(self.package.root, self.expected)
         self.budget.check()
@@ -63,6 +64,7 @@ class Runtime:
             self.egress.thread.start()
             return dict(self.identity)
         except BaseException:
+            self.poisoned = True
             self.stop_server()
             raise
 
@@ -76,9 +78,12 @@ class Runtime:
                     try:
                         self.child.wait(timeout=12)
                     except subprocess.TimeoutExpired:
-                        self.forced = True
+                        # The process is ours, so reap it; forced disappearance
+                        # does not prove ordinary graceful retirement authority.
+                        self.forced = self.poisoned = True
                         self.child.kill()
                         self.child.wait(timeout=3)
+                require(self.child.returncode == 0, "server_exit_not_graceful")
                 require(not exists(self.identity), "owned_server_not_reaped")
             except BaseException:
                 errors.append("server_cleanup")
@@ -96,8 +101,12 @@ class Runtime:
                 self.epochs.append(self.egress.snapshot())
                 self.egress = None
         if self.listener is not None:
-            self.listener.close()
-            self.listener = None
+            try:
+                self.listener.close()
+            except BaseException:
+                errors.append("listener_cleanup")
+            else:
+                self.listener = None
         if self.endpoint_identity is not None:
             try:
                 info = self.package.endpoint.lstat()
@@ -105,7 +114,12 @@ class Runtime:
                 self.package.endpoint.unlink()
             except BaseException:
                 errors.append("endpoint_cleanup")
-            self.endpoint_identity = None
+            else:
+                self.endpoint_identity = None
+        if errors:
+            # Retrying cleanup is allowed. Recovering replacement authority is
+            # not: uncertainty survives even if a later cleanup attempt works.
+            self.poisoned = True
         require(not errors, "owned_cleanup_incomplete")
 
     def close(self):
@@ -115,6 +129,7 @@ class Runtime:
 
     def snapshot(self):
         return {"source_commit": self.package.manifest["source_commit"], "forced_cleanup": self.forced,
+                "window_poisoned": self.poisoned,
                 "attempts": self.budget.attempts, "combined_bytes": self.budget.bytes,
                 "lifetime_seconds": self.budget.limits.lifetime_seconds,
                 "budget_reason": self.budget.reason, "epochs": self.epochs}
