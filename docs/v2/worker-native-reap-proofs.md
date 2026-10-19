@@ -10,7 +10,8 @@ dispatch fence. Renewal retains this same native transport scope.
 A failed or dropped launch witness permanently prevents factory retirement.
 There is no PID, child-count, deadline, database reconstruction, caller boolean
 or alternative constructor that can satisfy an obligation. Up to 2,048 parent
-identities and 2,048 Worker witnesses are retained; reaching either limit refuses
+identities are recorded and 2,048 aggregate original parent/Worker witnesses are
+reserved, including room for the current parent. Reaching either limit refuses
 new work instead of discarding old evidence. An unresolved Worker does not by
 itself erase later independent work or its original witnesses.
 
@@ -48,6 +49,10 @@ retaining the original parent and all original Worker witnesses. Keep that
 bundle alive across `retire_terminal_supervisor` and drop it afterward. Core's
 current auth, exact terminal provenance and transaction-local negative gates
 remain mandatory. An empty `ChildSet` is only an additional resource barrier.
+
+The separate [stopped continuation handoff](worker-stopped-continuation.md)
+retains prior parent proofs without final freeze. It does not reset or discard
+any Worker obligation.
 
 This leaf does not itself enable shared factory restart. Factory wiring and
 actual HTTP/process qualification are separate integration requirements. Module
