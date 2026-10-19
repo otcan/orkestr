@@ -46,6 +46,8 @@ emit({"type": "control_response", "response": {"subtype": "success",
       "pending_permission_requests": [], "pending_user_dialog_requests": []}})
 record("initialized")
 frame = json.loads(sys.stdin.readline())
+input_uuid = frame.pop("uuid")
+assert input_uuid == str(uuid.UUID(input_uuid))
 assert frame == {"type": "user", "session_id": native, "parent_tool_use_id": None,
                  "message": {"role": "user", "content": "synthetic ordinary HTTP input"}}
 record("turn")
@@ -54,10 +56,12 @@ mode = Path("claude-mode").read_text()
 observed = str(uuid.uuid4()) if mode == "wrong-init" else native
 emit({"type": "system", "subtype": "init", "session_id": observed})
 record("init-emitted")
-emit({"type": "assistant", "session_id": native, "message": {"role": "assistant",
+emit({"type": "assistant", "session_id": native, "uuid": str(uuid.uuid4()),
+      "user_message_uuid": input_uuid, "message": {"role": "assistant",
       "content": [{"type": "text", "text": "Synthetic Claude progress"}]}})
 barrier("release-result")
 emit({"type": "result", "session_id": native, "subtype": "success",
+      "uuid": str(uuid.uuid4()), "user_message_uuid": input_uuid,
       "is_error": False, "result": "Synthetic Claude progress"})
 record("result")
-assert not sys.stdin.read(), "first-turn adapter must not write followup or unsupported Stop"
+assert not sys.stdin.read(), "completed first-turn fixture must not receive more input"
