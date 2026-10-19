@@ -170,7 +170,8 @@ impl ConfiguredExecution {
                 // neither queued text nor browser JSON can mint a new capability.
                 let Some(capability) = self
                     .next_with_liveness(shutdown, heartbeat, || {
-                        pump.check_broker_liveness().map_err(|_| {
+                        pump.check_broker_liveness().map_err(|error| {
+                            eprintln!("owned execution accepted broker liveness refused: {error:?}");
                             "execution accepted broker exited; reconciliation required"
                         })
                     })
