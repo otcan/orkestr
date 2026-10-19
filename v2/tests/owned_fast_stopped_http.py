@@ -33,13 +33,23 @@ def stopped_restart(case, held=False):
     assert process.returncode == 0
     case.gone()
     retired = case.snapshot("stopped-retired-after-owned-shutdown")
-    assert len(retired["stopped_retirements"]) == 1, "genuine stopped Fast must retire after owned shutdown"
-    proof = retired["stopped_retirements"][0]
-    assert proof["prior_run_id"] == first["run_id"]
-    assert proof["context_id"] == original["context_id"]
-    assert proof["incarnation_id"] == original["incarnation_id"]
-    assert proof["stopped_event_id"] in {row["event_id"] for row in retired["observations"]
-        if row["run_id"] == first["run_id"] and row["kind"] == "stopped"}
+    # The held-input fixture also stops Deep. Both independently owned roles now
+    # retain their original reap proof through the same server shutdown.
+    stopped_runs = {row["id"]: row for row in stopped["runs"] if row["state"] == "cancelled"}
+    assert {row["role"] for row in stopped_runs.values()} == ({"deep", "fast"} if held else {"fast"})
+    proofs = {row["prior_run_id"]: row for row in retired["stopped_retirements"]}
+    assert len(proofs) == len(retired["stopped_retirements"]) == len(stopped_runs)
+    assert proofs.keys() == stopped_runs.keys(), "each stopped role must retire its exact predecessor"
+    assert len({row["context_id"] for row in proofs.values()}) == len(proofs)
+    for run_id, run in stopped_runs.items():
+        proof = proofs[run_id]
+        for key in ("context_id", "incarnation_id", "session_id"):
+            assert proof[key] == run[key], key
+        assert proof["binding_generation"] == run["binding_generation"] + 1
+        assert proof["stopped_event_id"] in {row["event_id"] for row in retired["observations"]
+            if row["run_id"] == run_id and row["kind"] == "stopped"}
+        assert [row["lease_deadline_ms"] for row in retired["supervisors"]
+            if row["context_id"] == run["context_id"]] == [0]
     assert retired["held"] == before["held"]
     assert retired["acceptances"] == [] and retired["accepted_retirements"] == []
     if held:
