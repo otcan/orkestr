@@ -1,6 +1,14 @@
 // Attachment routes: Isolation 146bcb4aa6. Core transfer ABI 9cd9268234.
 import {referenceFor,verifyBytes} from './integrity.mjs';
 
+// Inert string UTF-8 caps are 4096+1024+128. JSON can expand each input
+// byte to six bytes (control escapes). 512/reference covers keys, two UUIDs,
+// state and a u64 decimal; 1024 covers each manifest/page envelope.
+// Transfer archives retain their independent 68 MiB wire cap.
+export const ATTACHMENT_MANIFEST_JSON_LIMIT = 1024 + 128 * (6 * (4096 + 1024 + 128) + 512);
+export const ATTACHMENT_PAGE_JSON_LIMIT = 1024 + 16 * ATTACHMENT_MANIFEST_JSON_LIMIT;
+export const ATTACHMENT_RECEIPT_JSON_LIMIT = ATTACHMENT_MANIFEST_JSON_LIMIT + 128 * 256 + 1024;
+
 export function createAttachmentClient({owner,conversation,csrf,current,fetcher=fetch,random=()=>crypto.randomUUID(),hash=bytes=>crypto.subtle.digest('SHA-256',bytes)}) {
  const uuid=/^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  if((owner!=null&&!uuid.test(owner))||!uuid.test(conversation)||!csrf)throw new Error('File session unavailable');
@@ -10,7 +18,7 @@ export function createAttachmentClient({owner,conversation,csrf,current,fetcher=
  const check=()=>{if(closed||!current())throw new Error('File selection changed');};
  const scope=m=>({owner_id:owner,conversation_id:conversation,manifest_id:m.manifest_id});
  const identifier=id=>{if(!uuid.test(id))throw new Error('Invalid file reference');return id;};
- async function request(path,{method='GET',body,raw=false,limit=1024*1024}={}){
+ async function request(path,{method='GET',body,raw=false,limit=ATTACHMENT_RECEIPT_JSON_LIMIT}={}){
   check();const controller=new AbortController();active.add(controller);const timer=setTimeout(()=>controller.abort(),30000);
   try{
    const encoded=body===undefined?undefined:JSON.stringify(body);
@@ -28,14 +36,14 @@ export function createAttachmentClient({owner,conversation,csrf,current,fetcher=
  }
  async function list(after=null){
   if(after!==null)identifier(after);
-  const page=await request(`${root}/attachment-manifests?${after?`after_id=${after}&`:''}limit=16`);
+  const page=await request(`${root}/attachment-manifests?${after?`after_id=${after}&`:''}limit=16`,{limit:ATTACHMENT_PAGE_JSON_LIMIT});
   if(!uuid.test(page.owner_id)||page.conversation_id!==conversation||(owner&&page.owner_id!==owner)||page.after_id!==after||!Array.isArray(page.manifests)||page.manifests.length>16)throw new Error('File list scope mismatch');
   owner=page.owner_id;let previous=after;
   for(const m of page.manifests){validate(m);if(previous&&m.manifest_id<=previous)throw new Error('File list cursor mismatch');previous=m.manifest_id;}
   if(page.next_after_id!==null&&(page.manifests.length!==16||page.next_after_id!==previous))throw new Error('File list cursor mismatch');
   return page;
  }
- async function open(id){const m=await request(`${root}/attachment-manifests/${identifier(id)}`);validate(m);if(m.manifest_id!==id)throw new Error("File collection identity mismatch");return m;}
+ async function open(id){const m=await request(`${root}/attachment-manifests/${identifier(id)}`,{limit:ATTACHMENT_MANIFEST_JSON_LIMIT});validate(m);if(m.manifest_id!==id)throw new Error("File collection identity mismatch");return m;}
  function validate(m){
   if(!Array.isArray(m.references))throw new Error('File metadata invalid');
   // Validate empty manifests too, using the missing-reference result only after scope checks.
