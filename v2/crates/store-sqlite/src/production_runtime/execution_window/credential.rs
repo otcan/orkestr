@@ -24,8 +24,22 @@ impl ExecutionWindowCredential {
 /// is reconciliation, never reissuance. It grants no execution window by itself.
 pub struct ExecutionWindowRetirement {
     pub(super) secret: String,
+    pub(super) run: RunId,
+    pub(super) terminal_event: EventId,
+    pub(super) outcome: String,
 }
 impl ExecutionWindowRetirement {
+    /// Exact canonical terminal evidence, committed before this handoff exists.
+    pub fn terminal_event_id(&self) -> &EventId {
+        &self.terminal_event
+    }
+    pub fn run_id(&self) -> &RunId {
+        &self.run
+    }
+    /// Canonical terminal kind: only `accepted` or `stopped`.
+    pub fn outcome(&self) -> &str {
+        &self.outcome
+    }
     pub fn credential(&self) -> &str {
         &self.secret
     }

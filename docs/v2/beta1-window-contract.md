@@ -109,3 +109,5 @@ check, allowing only its one newly admitted Opening row, and checks that row's
 predecessor against the latest exact CLOSED window. Terminal reattachment repeats
 that same check before changing supervisor incarnation or reserving metadata.
 Neither a retained discovery handle nor manager ACK bypasses a changed history.
+
+The committed `ExecutionWindowRetirement` handoff exposes read-only `run_id() -> &RunId`, `terminal_event_id() -> &EventId`, and `outcome() -> &str` (`accepted` or `stopped`). These are selected from exact `production_terminal_evidence` joined to the same context/incarnation/generation retirement provenance inside the window-close transaction. For accepted runs the terminal event is the owner acceptance event, not the earlier completed-proposal event. Runtime retains original reap proof separately; these getters neither create proof nor grant another effect/budget.
