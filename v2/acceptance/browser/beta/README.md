@@ -166,3 +166,16 @@ node --test v2/acceptance/browser/beta/*.test.mjs
 ```
 
 The full Memory race matrix is outside this beta milestone.
+# Attachment timeout diagnostics
+
+Attachment receipts can retain a fixed substep, an allowlisted Thread files
+notice category, and bounded counts of events accepted by the existing owned
+download recorder. The optional trusted manager wrapper observes the original
+record callback only after it succeeds, and propagates the same rejection.
+It adds no wire method or CDP subscription. The notice is classified inside the
+owned page; arbitrary text, URLs, identifiers and headers do not enter receipts.
+The final notice sample uses at most one second within the existing phase budget.
+Its timer is not transport-join evidence; normal owned-context cleanup still runs.
+These observations distinguish an application refusal, no accepted download
+begin, and an incomplete accepted download. They cannot establish saved bytes,
+deletion or cleanup. The ten-second download wait and all success checks remain.
