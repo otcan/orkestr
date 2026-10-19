@@ -21,6 +21,11 @@ impl Store {
             request_key: row.get("request_key"),
             title,
             instructions,
+            execution_budget_ms: row
+                .get::<Option<i64>, _>("execution_budget_ms")
+                .map(u32::try_from)
+                .transpose()
+                .map_err(db)?,
             lifetime_ms: u32::try_from(row.get::<i64, _>("lifetime_ms")).map_err(db)?,
         };
         if !request.is_valid() || request_digest(&request) != row.get::<&str, _>("request_digest") {

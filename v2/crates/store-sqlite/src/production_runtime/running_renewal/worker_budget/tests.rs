@@ -6,6 +6,9 @@ use crate::production_runtime::{
 use orkestr_v2_contracts::WorkerTaskCreateRequest;
 
 async fn worker() -> (Case, Box<ConsumedProviderDispatch>) {
+    worker_with_budget(Some(120_000)).await
+}
+async fn worker_with_budget(owner_budget: Option<u32>) -> (Case, Box<ConsumedProviderDispatch>) {
     let f = setup().await;
     let (parent, input) = running(&f).await;
     let revision: i64 =
@@ -24,7 +27,8 @@ async fn worker() -> (Case, Box<ConsumedProviderDispatch>) {
                 request_key: "budget-task".into(),
                 title: "Synthetic task".into(),
                 instructions: "Summarize synthetic bounded input".into(),
-                lifetime_ms: 1000,
+                lifetime_ms: 5000,
+                execution_budget_ms: owner_budget,
             },
         )
         .await
@@ -153,7 +157,7 @@ async fn explicit_budget_extends_only_owner_task_and_keeps_tools_stale() {
             .fetch_one(&f.store.pool)
             .await
             .unwrap();
-    assert_eq!(requests, 1000);
+    assert_eq!(requests, 5000);
 }
 #[tokio::test]
 async fn budget_cas_one_winner_revoke_and_stop_refuse() {
@@ -293,4 +297,42 @@ async fn legacy_non_task_worker_and_parent_terminal_cannot_get_or_spend_budget()
         before,
         crate::production_runtime::tests::snapshot(&f.store).await
     );
+}
+
+#[tokio::test]
+async fn owner_opt_in_required_and_host_cap_clamped() {
+    let (f, cap) = worker_with_budget(None).await;
+    let before = crate::production_runtime::tests::snapshot(&f.store).await;
+    assert!(matches!(
+        f.handle
+            .authorize_worker_running_renewal(&cap, 120_000)
+            .await,
+        Err(RuntimeStoreError::Fenced)
+    ));
+    assert_eq!(
+        before,
+        crate::production_runtime::tests::snapshot(&f.store).await
+    );
+    let (f, cap) = worker_with_budget(Some(60_000)).await;
+    f.handle
+        .authorize_worker_running_renewal(&cap, 120_000)
+        .await
+        .unwrap();
+    let (anchor, deadline): (i64, i64) =
+        sqlx::query_as("SELECT anchor_ms,deadline_ms FROM worker_running_budgets")
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(deadline - anchor, 60_000);
+    let (f, cap) = worker_with_budget(Some(120_000)).await;
+    f.handle
+        .authorize_worker_running_renewal(&cap, 60_000)
+        .await
+        .unwrap();
+    let (anchor, deadline): (i64, i64) =
+        sqlx::query_as("SELECT anchor_ms,deadline_ms FROM worker_running_budgets")
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(deadline - anchor, 60_000);
 }
