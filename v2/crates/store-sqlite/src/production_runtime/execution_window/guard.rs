@@ -81,10 +81,12 @@ impl Store {
             return Ok(());
         };
         if c.provider != ProviderKind::Codex
-            || binding.role != Role::Deep
             || w.get::<String, _>("conversation_id") != binding.conversation_id.to_string()
             || !matches!(w.get::<&str, _>("state"), "opening" | "active")
             || w.get::<i64, _>("work_deadline_ms") <= now(tx).await?
+            || (binding.role == Role::Worker
+                && (w.get::<&str, _>("state") != "active" || binding.parent_session_id.is_none()))
+            || (binding.role != Role::Worker && binding.parent_session_id.is_some())
         {
             return Err(RuntimeStoreError::Fenced);
         }
@@ -104,12 +106,32 @@ impl Store {
         let Some(w) = c.window_scope(tx).await? else {
             return Ok(());
         };
-        if p.run.role != Role::Deep
-            || w.get::<String, _>("conversation_id") != p.run.conversation_id.to_string()
-        {
+        if w.get::<String, _>("conversation_id") != p.run.conversation_id.to_string() {
             return Err(RuntimeStoreError::Fenced);
         }
+        // Worker task inputs are separate events. Their authority remains the
+        // exact consumed Deep parent whose ordinary input belongs to this window.
+        let source = if p.run.role == Role::Worker {
+            let parent = sqlx::query_scalar::<_, String>("SELECT p.event_id FROM production_runs r JOIN worker_provider_delegations d ON d.id=r.worker_delegation_id JOIN production_runs p ON p.id=d.parent_run_id JOIN execution_window_inputs i ON i.event_id=p.event_id WHERE r.id=? AND r.owner_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role='worker' AND r.session_id=? AND d.worker_session_id=r.session_id AND d.parent_session_id=p.session_id AND p.role='deep' AND p.owner_id=r.owner_id AND p.conversation_id=r.conversation_id AND p.context_id=r.context_id AND p.incarnation_id=r.incarnation_id AND i.window_id=?")
+                .bind(p.run.run_id.to_string()).bind(c.owner.to_string()).bind(&c.id)
+                .bind(&c.incarnation).bind(p.run.session_id.to_string()).bind(w.get::<String,_>("id"))
+                .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
+            EventId(parent.parse().map_err(db)?)
+        } else {
+            EventId(event.parse().map_err(db)?)
+        };
         if cleanup {
+            let membership: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM execution_window_inputs WHERE window_id=? AND event_id=?",
+            )
+            .bind(w.get::<String, _>("id"))
+            .bind(source.to_string())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+            if membership != 1 {
+                return Err(RuntimeStoreError::Fenced);
+            }
             if !matches!(
                 w.get::<&str, _>("state"),
                 "active" | "retiring" | "reconciliation_required"
@@ -118,8 +140,7 @@ impl Store {
                 return Err(RuntimeStoreError::Expired);
             }
         } else {
-            let event = EventId(event.parse().map_err(db)?);
-            self.execution_window_input_in(tx, &p.run.conversation_id, Some(&event))
+            self.execution_window_input_in(tx, &p.run.conversation_id, Some(&source))
                 .await?;
         }
         Ok(())
