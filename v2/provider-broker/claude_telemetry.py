@@ -11,7 +11,10 @@ def validate_telemetry(frame, input_uuid):
     if frame['type'] == 'command_lifecycle':
         exact(frame, ('type', 'session_id', 'uuid', 'command_uuid', 'state'))
         require(input_uuid is not None and frame['command_uuid'] == input_uuid)
-        require(frame['state'] in ('queued', 'started', 'completed'))
+        # Native command fate is metadata, including removal or failed turns.
+        # None of these states is an interrupt acknowledgement or run terminal.
+        require(frame['state'] in ('queued', 'started', 'completed',
+                                   'cancelled', 'discarded', 'refused'))
         return
     exact(frame, ('type', 'session_id', 'uuid', 'rate_limit_info'))
     info = frame['rate_limit_info']
