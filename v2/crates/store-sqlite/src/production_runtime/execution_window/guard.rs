@@ -39,6 +39,9 @@ impl Store {
         let Some(c) = &self.authority else {
             return Ok(None);
         };
+        if c.window_bootstrap_only {
+            return Err(RuntimeStoreError::Fenced);
+        }
         let Some(w) = c.window_scope(tx).await? else {
             return Ok(None);
         };
@@ -71,6 +74,9 @@ impl Store {
         binding: &Binding,
     ) -> Result<()> {
         let c = self.context()?;
+        if c.window_bootstrap_only {
+            return Err(RuntimeStoreError::Fenced);
+        }
         let Some(w) = c.window_scope(tx).await? else {
             return Ok(());
         };
@@ -92,6 +98,9 @@ impl Store {
         cleanup: bool,
     ) -> Result<()> {
         let c = self.context()?;
+        if c.window_bootstrap_only {
+            return Err(RuntimeStoreError::Fenced);
+        }
         let Some(w) = c.window_scope(tx).await? else {
             return Ok(());
         };

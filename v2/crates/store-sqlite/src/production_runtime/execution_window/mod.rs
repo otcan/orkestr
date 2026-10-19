@@ -6,6 +6,8 @@ use orkestr_v2_contracts::{
 };
 use sqlx::sqlite::SqliteRow;
 mod admission;
+mod bootstrap;
+pub use bootstrap::ExecutionWindowBootstrap;
 mod credential;
 mod guard;
 mod lifecycle;
@@ -83,3 +85,6 @@ async fn window_in(
 
 #[cfg(test)]
 mod terminal_tests;
+
+#[cfg(test)]
+mod bootstrap_tests;

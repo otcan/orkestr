@@ -88,7 +88,7 @@ impl Store {
         idle_owner: bool,
     ) -> Result<ExecutionWindowCredential> {
         if !idle_owner {
-            self.worker_credential(credential)?;
+            self.window_issuance_credential(credential)?;
         }
         let c = self.context()?;
         if c.provider != ProviderKind::Codex
@@ -210,7 +210,7 @@ impl Store {
         credential: &str,
         grant: &ExecutionWindowCredential,
     ) -> Result<Store> {
-        self.worker_credential(credential)?;
+        self.window_issuance_credential(credential)?;
         let c = self.context()?;
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         c.validate(&mut tx).await?;
@@ -248,6 +248,7 @@ impl Store {
         let mut store = self.clone();
         let mut context = c.clone();
         context.token_hash = crate::digest(&grant.secret);
+        context.window_bootstrap_only = false;
         store.authority = Some(context);
         Ok(store)
     }
