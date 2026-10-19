@@ -1,4 +1,4 @@
-//! Accepted Claude turns resume only after the exact prior native tree is gone.
+//! Terminal Claude turns resume only after the exact prior native tree is gone.
 use super::{claude::ClaudeExit, *};
 use orkestr_v2_application::runtime::RuntimeStore;
 use std::time::Instant;
@@ -11,8 +11,8 @@ impl ConfiguredExecution {
         let mut heartbeat = Instant::now();
         self.maintain(&mut heartbeat).await?;
         let mut grant = if let Some(grant) = self.initial_grant.take() {
-            // Restart authority is already sealed to the accepted predecessor.
-            // Accepted history by itself must not start another native process.
+            // Restart authority is already sealed to the terminal predecessor.
+            // Terminal history by itself must not start another native process.
             if !self.wait_eligible(&mut shutdown, &mut heartbeat).await? {
                 return Ok(());
             }
@@ -49,9 +49,7 @@ impl ConfiguredExecution {
             // Old queued input remains ordinary durable FIFO input. Held input
             // is never made eligible by acceptance, reap, or a process restart.
             if !self.wait_eligible(&mut shutdown, &mut heartbeat).await? {
-                if !stopped {
-                    self.retire_accepted(&run, proof).await?;
-                }
+                self.retire_terminal(&run, proof).await?;
                 return Ok(());
             }
             self.current().await?;
