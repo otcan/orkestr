@@ -9,7 +9,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from codex_bounded.trust import digest, exists, process
+from codex_bounded.trust import digest, exists, process, protected, Refused as TrustRefused
 from codex_service.contract import Refused
 from codex_service.custody import StateLock, OwnedSocket
 from codex_service.manager import Manager
@@ -40,6 +40,17 @@ class PackageTests(unittest.TestCase):
         self.assertFalse(package.control.exists())
         self.assertFalse(package.endpoint.exists())
         self.assertEqual(list(self.fixture.account.iterdir()), [])
+
+    def test_fixture_owns_protected_ancestry_without_relaxing_writable_parent_refusal(self):
+        self.assertEqual(self.fixture.root.parent, Path("/"))
+        self.assertEqual(protected(self.root, True), self.root)
+        delegated = self.fixture.root / "synthetic-delegated-parent"
+        delegated.mkdir(mode=0o755)
+        delegated.chmod(0o777)
+        child = delegated / "package"
+        child.mkdir(mode=0o755)
+        with self.assertRaisesRegex(TrustRefused, "protected_package_required"):
+            protected(child, True)
 
     def test_fixed_no_site_entry_rejects_missing_flags_before_package_import(self):
         for options in (("-I", "-B"), ("-S", "-B"), ("-I", "-S")):

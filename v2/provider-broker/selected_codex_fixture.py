@@ -19,8 +19,8 @@ UID = GID = 65534
 
 
 class Fixture:
-    def __init__(self, *, stubborn=False, roles=False):
-        self.root = Path(tempfile.mkdtemp(prefix="selected-codex-test-", dir="/opt"))
+    def __init__(self, *, stubborn=False, roles=False, fixture_parent="/opt"):
+        self.root = Path(tempfile.mkdtemp(prefix="selected-codex-test-", dir=fixture_parent))
         self.root.chmod(0o755)
         self.repository = self.root / "repository"
         self.repository.mkdir()

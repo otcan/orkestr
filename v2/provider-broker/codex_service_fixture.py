@@ -12,7 +12,10 @@ from selected_codex_fixture import Fixture, UID, GID, packager, ROOT
 
 class ServiceFixture(Fixture):
     def __init__(self):
-        super().__init__()
+        # Hosted runners may delegate /opt to their unprivileged runner user.
+        # This explicit-root fixture owns its entire ancestry below /; never
+        # chmod a shared host directory or relax production package validation.
+        super().__init__(fixture_parent="/")
         self.package = self.root / "service-package"
         self.endpoint = self.root / "service-endpoint"
         self.ledger_directory = self.root / "service-ledger"
