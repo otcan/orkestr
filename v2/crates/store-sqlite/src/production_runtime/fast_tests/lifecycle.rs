@@ -302,3 +302,78 @@ async fn fast_source_selected_before_stop_is_held_and_fresh_intent_remains_indep
             > selected.sequence
     );
 }
+
+#[tokio::test]
+async fn fast_status_is_context_scoped_and_never_projects_deep_queue() {
+    let f = harness::setup().await;
+    let i = input(&f).await;
+    assert!(f
+        .handle
+        .execution_fast_status(&f.token, &f.conversation)
+        .await
+        .unwrap()
+        .is_none());
+    let a = f.handle.admit_fast(&f.token, &i).await.unwrap();
+    let browser = "browser:synthetic-fast-status";
+    f.store.save_session(browser, &f.owner).await.unwrap();
+    let before = harness::snapshot(&f.store).await;
+    let status = f
+        .handle
+        .execution_fast_status_authenticated(browser, &f.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.run_id.as_ref(), Some(&a.provider.run.run_id));
+    assert!(status.is_valid());
+    assert!(status.queue_age_ms.is_none());
+    let machine = f
+        .handle
+        .execution_fast_status(&f.token, &f.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(machine.run_id, status.run_id);
+    assert_eq!(before, harness::snapshot(&f.store).await);
+    let c = f.handle.context().unwrap();
+    let other = f
+        .store
+        .authorize_supervisor(
+            &f.token,
+            ProductionSupervisorConfig {
+                provider: c.provider,
+                namespace: c.namespace.clone(),
+                supervisor_key: "other-fast-status-context".into(),
+                takeover: ProductionTakeover::First,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(other
+        .execution_fast_status_authenticated(browser, &f.conversation)
+        .await
+        .unwrap()
+        .is_none());
+    let roles_a = f
+        .handle
+        .ensure_role_bindings(&f.owner, &f.conversation)
+        .await
+        .unwrap();
+    let roles_b = other
+        .ensure_role_bindings(&f.owner, &f.conversation)
+        .await
+        .unwrap();
+    assert_eq!(roles_a.fast, roles_b.fast);
+    assert_ne!(roles_a.fast.session_id, roles_a.deep.session_id);
+    f.store.revoke_session(browser).await.unwrap();
+    assert!(f
+        .handle
+        .execution_fast_status_authenticated(browser, &f.conversation)
+        .await
+        .is_err());
+    f.store.revoke_session(&f.token).await.unwrap();
+    assert!(f
+        .handle
+        .execution_fast_status(&f.token, &f.conversation)
+        .await
+        .is_err());
+}

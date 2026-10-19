@@ -10,7 +10,7 @@ impl Store {
         owner: &OwnerId,
         conversation: &ConversationId,
     ) -> Result<Option<ExecutionStatus>> {
-        self.execution_status_in_scope(owner, conversation, None, None)
+        self.execution_status_in_scope(owner, conversation, None, None, false)
             .await
     }
     /// Bound supervisor read of one exact run, including independent Workers.
@@ -27,7 +27,7 @@ impl Store {
         if self.context()?.owner != *owner {
             return Err(RuntimeStoreError::Unauthorized);
         }
-        self.execution_status_in_scope(owner, conversation, Some(run), None)
+        self.execution_status_in_scope(owner, conversation, Some(run), None, false)
             .await
     }
     /// Browser read boundary. The exact current credential and bound supervisor
@@ -47,7 +47,33 @@ impl Store {
             .as_ref()
             .ok_or(RuntimeStoreError::Unauthorized)?
             .owner;
-        self.execution_status_in_scope(owner, conversation, Some(run), Some(credential))
+        self.execution_status_in_scope(owner, conversation, Some(run), Some(credential), false)
+            .await
+    }
+    /// Latest Fast execution in this exact live supervisor context. No Deep queue
+    /// projection or execution authority is returned.
+    pub async fn execution_fast_status(
+        &self,
+        credential: &str,
+        conversation: &ConversationId,
+    ) -> Result<Option<ExecutionStatus>> {
+        self.worker_credential(credential)?;
+        let owner = &self.context()?.owner;
+        self.execution_status_in_scope(owner, conversation, None, None, true)
+            .await
+    }
+
+    /// Current browser-session authenticated Fast-only projection.
+    pub async fn execution_fast_status_authenticated(
+        &self,
+        credential: &str,
+        conversation: &ConversationId,
+    ) -> Result<Option<ExecutionStatus>> {
+        if credential.is_empty() || credential.len() > 1024 {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        let owner = &self.context()?.owner;
+        self.execution_status_in_scope(owner, conversation, None, Some(credential), true)
             .await
     }
     async fn execution_status_in_scope(
@@ -56,6 +82,7 @@ impl Store {
         conversation: &ConversationId,
         exact_run: Option<&RunId>,
         credential: Option<&str>,
+        fast_only: bool,
     ) -> Result<Option<ExecutionStatus>> {
         let mut tx = self.pool.begin().await.map_err(db)?;
         if let Some(credential) = credential {
@@ -86,11 +113,17 @@ impl Store {
             sqlx::query("SELECT id,state FROM production_runs WHERE id=? AND owner_id=? AND conversation_id=? AND context_id=? AND incarnation_id=?")
                 .bind(id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(&context.id).bind(&context.incarnation)
                 .fetch_optional(&mut *tx).await.map_err(db)?
+        } else if fast_only {
+            let context = self.context()?;
+            context.validate(&mut tx).await?;
+            sqlx::query("SELECT id,state FROM production_runs WHERE owner_id=? AND conversation_id=? AND context_id=? AND incarnation_id=? AND role='fast' ORDER BY scope_sequence DESC,id DESC LIMIT 1")
+                .bind(owner.to_string()).bind(conversation.to_string()).bind(&context.id).bind(&context.incarnation)
+                .fetch_optional(&mut *tx).await.map_err(db)?
         } else {
             sqlx::query("SELECT id,state FROM production_runs WHERE owner_id=? AND conversation_id=? AND role='deep' ORDER BY scope_sequence DESC LIMIT 1")
                 .bind(owner.to_string()).bind(conversation.to_string()).fetch_optional(&mut *tx).await.map_err(db)?
         };
-        let queued: Option<i64> = if exact_run.is_some() {
+        let queued: Option<i64> = if exact_run.is_some() || fast_only {
             None
         } else {
             sqlx::query_scalar("SELECT CAST((julianday(e.occurred_at)-2440587.5)*86400000 AS INTEGER) FROM reasoning_inbox i JOIN events e ON e.id=i.event_id WHERE i.conversation_id=? AND i.state!='consumed' AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) ORDER BY i.sequence LIMIT 1")
