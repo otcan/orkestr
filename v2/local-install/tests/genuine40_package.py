@@ -27,7 +27,9 @@ NEW_OBJECTS = MEMORY | {'memory_records_owner', *('sqlite_autoindex_'+n+'_1' for
 
 
 def connect(path):
-    return closing(sqlite3.connect(path.as_uri()+'?mode=ro', uri=True))
+    db=sqlite3.connect(path.as_uri()+'?mode=ro', uri=True)
+    db.execute('BEGIN')
+    return closing(db)
 
 
 def verify_baseline(path, checksums):

@@ -27,6 +27,7 @@ def database_inventory(path):
     Caller supplies a stable owned snapshot/copy; this never checkpoints the DB.
     """
     with closing(sqlite3.connect(path.as_uri()+'?mode=ro', uri=True)) as db:
+        db.execute('BEGIN')  # One read snapshot across integrity, schema and all rows.
         require(db.execute('PRAGMA integrity_check').fetchall()==[('ok',)], 'SQLite integrity failed')
         require(not db.execute('PRAGMA foreign_key_check').fetchall(), 'foreign key violation')
         schema=db.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").fetchall()
