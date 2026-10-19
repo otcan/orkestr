@@ -133,10 +133,16 @@ function isActiveThread(thread = {}) {
 }
 
 function threadsFromPayload(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.threads)) return payload.threads;
-  if (Array.isArray(payload?.items)) return payload.items;
-  return [];
+  const threads = Array.isArray(payload) ? payload
+    : payload && Object.hasOwn(payload, "threads") ? payload.threads : payload?.items;
+  if (!Array.isArray(threads) || threads.some((thread) => {
+    if (!thread || typeof thread !== "object" || Array.isArray(thread)) return true;
+    const id = thread.id || thread.threadId;
+    return typeof id !== "string" || !id.trim();
+  })) {
+    throw new Error("invalid_threads_payload");
+  }
+  return threads;
 }
 
 export function summarizeActiveThreads(payload) {

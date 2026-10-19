@@ -122,3 +122,78 @@ test("deploy guard preserves unavailable-service and valid report behavior", () 
   assert.equal(safe.status, 0, safe.stderr);
   assert.match(safe.stdout, /DEPLOY_ALLOWED/);
 });
+
+async function checkHttpPayload(t, payload) {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-active-payload-"));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  let requests = 0;
+  const server = http.createServer((_request, response) => {
+    requests += 1;
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify(payload));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const result = await execFileAsync(process.execPath, [path.join(root, "scripts/deploy-active-work-check.mjs"),
+    "--url", `http://127.0.0.1:${server.address().port}/api/threads`], {
+    env: { PATH: "/usr/bin:/bin", HOME: temporary, ORKESTR_HOME: temporary },
+    timeout: 5000,
+    maxBuffer: 64 * 1024,
+  });
+  assert.equal(requests, 1);
+  assert.equal(result.stderr, "");
+  return { report: JSON.parse(result.stdout), guarded: runGuard(result.stdout) };
+}
+
+for (const [label, payload] of [
+  ["empty object", {}],
+  ["null", null],
+  ["error envelope", { error: "fixture_unavailable" }],
+  ["non-array threads", { threads: {} }],
+  ["null threads", { threads: null }],
+  ["non-array items", { items: {} }],
+  ["conflicting envelope", { threads: {}, items: [] }],
+  ["null record", [null]],
+  ["string record", ["not a thread"]],
+  ["array record", [[]]],
+  ["missing record identity", [{}]],
+  ["invalid record identity", [{ id: 42 }]],
+]) {
+  test(`HTTP200 ${label} is unavailable and blocks an active-service deploy`, async (t) => {
+    const { report, guarded } = await checkHttpPayload(t, payload);
+    assert.equal(report.ok, false);
+    assert.equal(report.unavailable, true);
+    assert.equal(report.error, "invalid_threads_payload");
+    assert.deepEqual(report.active, []);
+    assert.equal(guarded.status, 75, guarded.stderr);
+    assert.doesNotMatch(guarded.stdout, /DEPLOY_ALLOWED/);
+    assert.match(guarded.stderr, /active thread state is unavailable.*invalid_threads_payload/);
+  });
+}
+
+for (const [label, envelope] of [
+  ["raw array", (threads) => threads],
+  ["threads", (threads) => ({ threads })],
+  ["items", (threads) => ({ items: threads })],
+]) {
+  test(`HTTP200 valid ${label} reports retain empty and unsafe-work behavior`, async (t) => {
+    const idle = await checkHttpPayload(t, envelope([]));
+    assert.equal(idle.report.ok, true);
+    assert.equal(idle.report.unavailable, false);
+    assert.deepEqual(idle.report.active, []);
+    assert.equal(idle.guarded.status, 0, idle.guarded.stderr);
+    assert.match(idle.guarded.stdout, /DEPLOY_ALLOWED/);
+    const active = await checkHttpPayload(t, envelope([
+      { threadId: "legacy-fixture", state: "working", runtimeKind: "raw-terminal", activeTurnId: "fixture-turn" },
+      { id: "managed-fixture", threadId: "provider-fixture", state: "working", runtimeKind: "raw-terminal" },
+    ]));
+    assert.equal(active.report.ok, true);
+    assert.equal(active.report.unavailable, false);
+    assert.deepEqual(active.report.active.map(({ id, restartSafe }) => ({ id, restartSafe })), [
+      { id: "legacy-fixture", restartSafe: false },
+      { id: "managed-fixture", restartSafe: false },
+    ]);
+    assert.equal(active.guarded.status, 75, active.guarded.stderr);
+    assert.doesNotMatch(active.guarded.stdout, /DEPLOY_ALLOWED/);
+  });
+}
