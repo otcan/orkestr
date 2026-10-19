@@ -12,7 +12,7 @@ import { scanEnvironment } from "../scripts/security/secret-scan-scope.mjs";
 const binary = process.env.ORKESTR_TEST_GITLEAKS_BINARY;
 const config = fileURLToPath(new URL("../scripts/security/gitleaks.toml", import.meta.url));
 const lifetimeDigest = "4632be4e94cef92a0b8a2970bad0a55a1925d07d7926eb05a6af32ef512954d7";
-const manifests = ["codex", "claude"].map(kind => `v2/provider-broker/${kind}-package.json`);
+const manifests = ["codex", "claude", "worker"].map(kind => `v2/provider-broker/${kind}-package.json`);
 const entry = value => `  "reaping.py": "${value}"`;
 
 async function fixture(t) {
@@ -65,11 +65,11 @@ async function fixture(t) {
   };
 }
 
-test("pinned scanner exempts only the reviewed digest in both exact inventories", { skip: !binary }, async t => {
+test("pinned scanner exempts only the reviewed digest in the three exact inventories", { skip: !binary }, async t => {
   const peer = await fixture(t);
   await peer.write(Object.fromEntries(manifests.map(name => [name, `{\n${entry(lifetimeDigest)}\n}`])));
   const before = await peer.scan(peer.defaults);
-  assert.deepEqual(before.map(row => row.path).sort(), [...manifests].sort(), "fixture must reproduce both false positives");
+  assert.deepEqual(before.map(row => row.path).sort(), [...manifests].sort(), "fixture must reproduce all three false positives");
   assert.ok(before.every(row => row.rule === "generic-api-key"));
   assert.deepEqual(await peer.scan(), []);
 });
@@ -99,11 +99,14 @@ test("credentials and the same digest outside the exact entry remain detectable"
 test("arbitrary hashes and altered entry contexts are never exempt", { skip: !binary }, async t => {
   const peer = await fixture(t);
   await peer.write({ [manifests[0]]: `{\n${entry(randomBytes(32).toString("hex"))}\n}`,
-    [manifests[1]]: `{\n  "api_key": "${lifetimeDigest}"\n}` });
+    [manifests[1]]: `{\n  "api_key": "${lifetimeDigest}"\n}`,
+    [manifests[2]]: `{\n${entry(randomBytes(32).toString("hex"))}\n}` });
   const found = await peer.scan();
   assert.deepEqual(found.map(row => row.path).sort(), [...manifests].sort());
   assert.ok(found.every(row => row.rule === "generic-api-key"));
-  await peer.write({ [manifests[0]]: `{ ${entry(lifetimeDigest)}, "api_key": "${randomBytes(32).toString("hex")}" }` });
+  await peer.write(Object.fromEntries(manifests.map(name => [name,
+    `{ ${entry(lifetimeDigest)}, "api_key": "${randomBytes(32).toString("hex")}" }`])));
   const later = await peer.scan();
-  assert.ok(later.some(row => row.path === manifests[0] && row.line === 1 && row.rule === "generic-api-key"));
+  for (const name of manifests)
+    assert.ok(later.some(row => row.path === name && row.line === 1 && row.rule === "generic-api-key"));
 });

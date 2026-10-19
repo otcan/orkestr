@@ -10,5 +10,5 @@ description = "Reviewed broker lifetime source fingerprint"
 targetRules = ["generic-api-key"]
 condition = "AND"
 regexTarget = "line"
-paths = ['''^v2/provider-broker/(codex|claude)-package\.json$''']
+paths = ['''^v2/provider-broker/(codex|claude|worker)-package\.json$''']
 regexes = ['''^\s*"reaping\.py"\s*:\s*"4632be4e94cef92a0b8a2970bad0a55a1925d07d7926eb05a6af32ef512954d7"\s*,?\s*$''']
