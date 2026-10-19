@@ -73,8 +73,13 @@ class ClaudeStreamProcessTests(unittest.TestCase):
                     channel.client({'id': 4, 'method': 'CancelExecution', 'params': {
                         'owned_handle': channel.handle, 'frame': interrupt}})
                     os.write(writer, encode(interrupt))
-                    self.assertEqual(observe()['params']['request_id'], 4)
+                    self.assertEqual(observe(), {'method': 'BrokerOutput', 'params': {
+                        'owned_handle': channel.handle, 'request_id': 4,
+                        'frame': {'type': 'control_response', 'response': {
+                            'subtype': 'success', 'request_id': 'stop:synthetic',
+                            'response': {'turn': 'stopped'}}}}})
                     self.assertTrue(channel.control.ack); self.assertFalse(channel.terminal)
+                    self.assertIsNone(pump.child.poll())
                 (root / 'release-synthetic-stream').touch()
                 pieces = [piece]
                 while not channel.terminal or pump.queues[101]:

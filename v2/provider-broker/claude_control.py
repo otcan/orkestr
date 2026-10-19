@@ -47,8 +47,13 @@ class ClaudeControl:
         require(set(response) <= {'subtype', 'request_id', 'response', *pending})
         require(all(response[k] == [] for k in pending if k in response))
         require(response.get('subtype') == 'success' and response.get('request_id') == self.key)
-        exact(response.get('response'), ('turn',))
-        require(response['response']['turn'] == 'stopped')
+        payload = response.get('response')
+        require(isinstance(payload, dict) and {'turn'} <= set(payload)
+                and set(payload) <= {'turn', 'still_queued'})
+        # Native interrupt receipts include the surviving queue. This channel
+        # submits one input only; any survivor is outside that owned lifetime.
+        require('still_queued' not in payload or payload['still_queued'] == [])
+        require(payload['turn'] == 'stopped')
         self.ack = True
         return {'type':'control_response', 'response':{'subtype':'success',
                 'request_id':self.key, 'response':{'turn':'stopped'}}}

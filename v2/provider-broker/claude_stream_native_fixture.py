@@ -70,7 +70,8 @@ def main():
         assert control['request'] == {'subtype': 'interrupt', 'cancel_queued': False,
                                       'for_user_message_uuids': [current]}
         emit({'type': 'control_response', 'response': {'subtype': 'success',
-              'request_id': control['request_id'], 'response': {'turn': 'stopped'}}})
+              'request_id': control['request_id'],
+              'response': {'turn': 'stopped', 'still_queued': []}}})
         event({'type': 'content_block_delta', 'index': 1,
                'delta': {'type': 'text_delta', 'text': 'late text must be discarded'}})
     deadline = time.monotonic() + 5
