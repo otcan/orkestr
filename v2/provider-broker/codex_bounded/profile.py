@@ -7,10 +7,11 @@ from isolation import policy
 
 
 class Configuration:
-    def __init__(self, package):
-        self.package = Package(package)
-        self.profile = SelectedCodexProfile(self.package.root / "profile.json")
-        self.workspace = self.profile.workspace
+    def __init__(self, package, *, workspace_descriptor=None):
+        self.package = Package(package, workspace_descriptor=workspace_descriptor)
+        self.profile = SelectedCodexProfile(self.package.root / "profile.json", workspace_descriptor=workspace_descriptor)
+        self.workspace_descriptor = workspace_descriptor
+        self.workspace = self.profile.workspace if workspace_descriptor is None else "/workspace"
         self.issued = False
 
     def isolated_command(self):
@@ -25,7 +26,8 @@ class Configuration:
                 mounts += ["--ro-bind", str(path), "/opt/provider/" + name]
             index = command.index("--chdir")
             command[index:index] = mounts
-            return command, (descriptor,)
+            # Parent owns 5 until this one child is spawned; broker then closes its copy.
+            return command, (descriptor,) if self.workspace_descriptor is None else (descriptor,5)
         except BaseException:
             os.close(descriptor)
             raise

@@ -31,7 +31,7 @@ def pump_type(base, become_subreaper):
             become_subreaper()
             command, descriptors = self.config.isolated_command()
             try:
-                self.child = subprocess.Popen(command, env={}, cwd=self.config.workspace,
+                self.child = subprocess.Popen(command, env={}, cwd=self.config.workspace if self.config.workspace_descriptor is None else None,
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                     close_fds=True, pass_fds=descriptors, process_group=0)
             finally:
@@ -57,18 +57,24 @@ def pump_type(base, become_subreaper):
 def main(root):
     # No configuration, command, credential or protocol fallback selected by argv.
     try:
-        package = Package(root)
+        arguments = sys.argv[1:]
+        workspace_descriptor = None
+        workspace_fresh = ["open-owned-workspace-session", "--protocol", "orkestr-v2-provider-broker-v1"]
+        workspace_resume = ["resume-owned-workspace-session", "--protocol", "orkestr-v2-provider-broker-v1"]
+        if arguments in (workspace_fresh,workspace_resume):
+            from isolation.workspace_fd import InheritedWorkspace
+            workspace_descriptor = InheritedWorkspace()  # Mandatory FD5; no fallback.
+        package = Package(root, workspace_descriptor=workspace_descriptor)
         require(os.geteuid() == package.uid, "broker_executor_identity")
         Channel, protocol, Refused, become_subreaper, reaped_exit, Pump = modules(package.root)
-        arguments = sys.argv[1:]
-        resumed = arguments == ["resume-owned-session", "--protocol", protocol]
-        require(resumed or arguments == ["open-owned-session", "--protocol", protocol], "broker_operation")
+        resumed = arguments == ["resume-owned-session", "--protocol", protocol] or arguments == workspace_resume
+        require(resumed or arguments == ["open-owned-session", "--protocol", protocol] or arguments == workspace_fresh, "broker_operation")
         def stop(_signal, _frame):
             raise Refused("owned selected Codex stopped")
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
         from .profile import Configuration
-        config = Configuration(package.root)
+        config = Configuration(package.root, workspace_descriptor=workspace_descriptor)
         expected_native = None
         if resumed:
             from codex_bootstrap import receive

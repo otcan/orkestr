@@ -7,7 +7,7 @@ from .trust import digest, metadata, private, protected, require
 HOSTS = ("chatgpt.com",)
 HELPERS = ("bounded_budget.py", "bounded_io.py", "bounded_pool.py", "bounded_dns.py", "bounded_proxy.py")
 ISOLATION = ("__init__.py", "policy.py", "launch.py", "authenticated.py",
-             "authenticated_budget.py", "supervisor.py", *HELPERS)
+             "authenticated_budget.py", "supervisor.py", "workspace_fd.py", *HELPERS)
 BROKER = ("configuration.py", "protocol.py", "transport.py", "reaping.py", "codex_bootstrap.py")
 MODULES = ("__init__.py", "trust.py", "configuration.py", "profile.py", "broker.py",
            "peer.py", "egress.py", "controller.py", "server_child.py")
@@ -18,7 +18,7 @@ FILES |= {"codex_bounded/" + name for name in MODULES}
 
 
 class Package:
-    def __init__(self, root, expected=None):
+    def __init__(self, root, expected=None, *, workspace_descriptor=None):
         self.root = protected(root, True)
         manifest_path = protected(self.root / "manifest.json")
         if expected is not None:
@@ -46,9 +46,9 @@ class Package:
         self.manifest = manifest
         self.runtime = metadata(self.root / "runtime.json")
         self.profile = metadata(self.root / "profile.json")
-        self._bindings()
+        self._bindings(workspace_descriptor)
 
-    def _bindings(self):
+    def _bindings(self, workspace_descriptor=None):
         value = self.runtime
         require(set(value) == {"format", "uid", "gid", "home", "execution_config",
                 "execution_config_sha256", "bootstrap_file", "port", "lifetime_seconds"} and
@@ -85,7 +85,13 @@ class Package:
                 profile["hosts"] == list(HOSTS), "profile_artifact_binding")
         for path in (self.root / "server", self.root / "native", self.root / "launcher.py"):
             require(path.stat().st_mode & 0o111, "executable_required")
-        workspace = private(profile["workspace"], self.uid, True)
+        if workspace_descriptor is None:
+            workspace = private(profile["workspace"], self.uid, True)
+        else:
+            from isolation.workspace_fd import InheritedWorkspace, logical_workspace
+            require(type(workspace_descriptor) is InheritedWorkspace,"workspace_descriptor_type")
+            workspace_descriptor.validate()
+            workspace = Path(logical_workspace(profile["workspace"]))
         account = private(profile["state_root"], self.uid, True)
         auth = private(profile["auth_file"], self.uid)
         require(auth.name == "auth.json", "canonical_auth_reference")

@@ -73,7 +73,7 @@ class SelectedCodexProfile:
     """Server-private immutable configuration, never deserialize request JSON here."""
     _provider="codex"
 
-    def __init__(self, configuration):
+    def __init__(self, configuration, *, workspace_descriptor=None):
         path=Path(configuration)
         if path.resolve(strict=True)!=path or not path.is_file():
             raise ValueError("immutable profile required")
@@ -111,7 +111,15 @@ class SelectedCodexProfile:
             raise ValueError("selected canonical Codex auth file required")
         self.state_root=self._state(value["state_root"]) if modern else None
         self.sessions=None if modern else private_path(value["sessions"],True)
-        self.workspace=private_path(value["workspace"],True)
+        if workspace_descriptor is None:
+            self.workspace=private_path(value["workspace"],True)
+        else:
+            from .workspace_fd import InheritedWorkspace, logical_workspace
+            if type(workspace_descriptor) is not InheritedWorkspace:
+                raise ValueError("issued workspace descriptor required")
+            workspace_descriptor.validate()
+            self.workspace=logical_workspace(value["workspace"])
+        self._workspace_descriptor=workspace_descriptor
         endpoint=Path(value["egress_socket"])
         if endpoint.resolve(strict=True)!=endpoint or not stat.S_ISSOCK(endpoint.stat().st_mode):
             raise ValueError("private egress endpoint required")
@@ -167,8 +175,19 @@ class SelectedCodexProfile:
         start=argv.index("--",argv.index("--clearenv"))
         argv[start+1:]=["/usr/bin/python3","-I","-B","/opt/provider/supervisor.py",
             str(fd),",".join(self.hosts),mode]
-        argv[argv.index("--chdir")+1]=self.workspace
-        mounts=["--ro-bind",self.workspace,self.workspace,"--ro-bind",self.supervisor,"/opt/provider/supervisor.py",
+        workspace=getattr(self,"_workspace_descriptor",None)
+        if workspace is None:
+            workspace_mounts=["--ro-bind",self.workspace,self.workspace]
+            argv[argv.index("--chdir")+1]=self.workspace
+        else:
+            # Capability is the retained open description, never config cwd.
+            help_result=subprocess.run([policy.trusted("/usr/bin/bwrap"),"--help"],
+                env={},stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,timeout=2,check=True)
+            arguments=workspace.mount_arguments(help_result.stdout)
+            workspace_mounts=list(arguments[:3])
+            argv[argv.index("--chdir")+1]=arguments[-1]
+        mounts=workspace_mounts+["--ro-bind",self.supervisor,"/opt/provider/supervisor.py",
             "--ro-bind",str(Path(self.supervisor).with_name("authenticated_budget.py")),
             "/opt/provider/authenticated_budget.py",
             "--ro-bind",self.endpoint,"/run/provider-egress.sock",
