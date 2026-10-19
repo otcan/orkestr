@@ -197,3 +197,6 @@ pub use memory::*;
 
 mod execution_window;
 pub use execution_window::*;
+
+mod beta;
+pub use beta::*;
