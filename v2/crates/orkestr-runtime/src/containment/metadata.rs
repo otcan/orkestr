@@ -17,7 +17,7 @@
 //! overrides, live-session adoption, or canonical credential access is provided.
 //! Runtime must supply a separately authorized canonical subscription route;
 //! an executable or disposable HOME is not subscription authorization.
-use super::process::{start_reaper_retained, validate_metadata, Process};
+use super::process::{start_reaper_retained, validate_metadata, Process, Reaper};
 use super::scope::{Shared, State};
 use super::{
     sys, Authority, ChildDirectories, ConsumedTurn, DispatchFence, Error, ExecutionScope, Exit,
@@ -30,9 +30,8 @@ use orkestr_v2_store_sqlite::{
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::Child;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc::Sender, Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 #[derive(Clone, PartialEq, Eq)]
 struct MetadataScope {
@@ -70,7 +69,7 @@ struct MetadataShared {
     scope: MetadataScope,
     state: Mutex<MetadataState>,
     active: Arc<AtomicUsize>,
-    reaper: Sender<Child>,
+    reaper: Reaper,
 }
 impl MetadataShared {
     fn quarantine(&self, process: &Process) {

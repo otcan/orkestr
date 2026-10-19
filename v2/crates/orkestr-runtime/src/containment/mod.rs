@@ -10,6 +10,7 @@ mod lease_refresh;
 pub mod metadata;
 mod process;
 mod provider_fd;
+mod reaper;
 mod resume_bootstrap;
 mod retirement;
 pub use retirement::{ReapedBroker, RetiringBroker};
