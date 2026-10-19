@@ -69,3 +69,15 @@ test('ordinary multi-chunk input copies bytes without retaining mutable chunk re
  x.reader.read=async()=>{if(index===3)return {done:true};chunk[0]=++index;return {done:false,value:chunk};};
  assert.deepEqual((await verifyBytes(x)).bytes,new Uint8Array([1,2,3]));assert.equal(x.cancelled(),1);
 });
+test('inert legacy out-of-cap metadata is preserved without reading or hashing bytes',async()=>{
+ const x=await fixture();Object.assign(x.manifest.references[0],{state:'inert',filename:'../legacy/location',media_type:'legacy unknown',sha256:'legacy checksum',byte_length:20000000});
+ await assert.rejects(verifyBytes(x),/inert/);assert.equal(x.cancelled(),1);
+ x.reader=null;x.digest=()=>assert.fail('must not hash inert metadata');
+ assert.deepEqual(await verifyBytes(x),{state:'inert',filename:'../legacy/location',byte_length:20000000});
+});
+test('inert references excluded from active aggregate but bounded and validated',async()=>{
+ const x=await fixture();const inert={...x.manifest.references[0],reference_id:id(8),state:'inert',byte_length:20000000};x.manifest.references.push(inert);
+ assert.equal((await verifyBytes(x)).state,'verified');
+ inert.filename='x\0y';assert.throws(()=>referenceFor(x.manifest,x.scope,x.referenceId),/invalid/);
+ inert.filename='x';inert.byte_length=Number.MAX_SAFE_INTEGER+1;assert.throws(()=>referenceFor(x.manifest,x.scope,x.referenceId),/invalid/);
+});

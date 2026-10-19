@@ -1,4 +1,4 @@
-// Wire compatibility: Core 9788ef14d attachments.rs. No transport or authority grant.
+// Wire compatibility: Core 9cd9268234 attachments.rs. No transport or authority grant.
 const MAX = 16 * 1024 * 1024;
 // Bound hostile readers independently of byte length, including empty chunks.
 export const ATTACHMENT_MAX_READS = 65536;
@@ -20,17 +20,22 @@ export function referenceFor(manifest, scope, referenceId) {
     if (!fields(ref, ['reference_id','message_id','filename','media_type','byte_length','sha256','state'],
       ['reference_id','filename','media_type','byte_length','sha256','state']) || !uuid(ref.reference_id) ||
       (ref.message_id != null && !uuid(ref.message_id)) ||
-      typeof ref.filename !== 'string' || !ref.filename || encoder.encode(ref.filename).length > 255 ||
+      typeof ref.filename !== 'string' || typeof ref.media_type !== 'string' ||
+      typeof ref.sha256 !== 'string' || !Number.isSafeInteger(ref.byte_length) || ref.byte_length < 0 ||
+      !['available','removed','inert'].includes(ref.state)) fail('metadata invalid');
+    if (ref.state === 'inert') {
+      if (!ref.filename || encoder.encode(ref.filename).length > 4096 ||
+          encoder.encode(ref.media_type).length > 1024 || encoder.encode(ref.sha256).length > 128 ||
+          [ref.filename,ref.media_type,ref.sha256].some(value => value.includes('\0'))) fail('metadata invalid');
+    } else if (!ref.filename || encoder.encode(ref.filename).length > 255 ||
       ['.','..'].includes(ref.filename) || /[\p{Cc}/\\:]/u.test(ref.filename) ||
-      typeof ref.media_type !== 'string' || ref.media_type.length > 127 ||
+      ref.media_type.length > 127 ||
       !/^[A-Za-z0-9!#$&^_.+\-]+\/[A-Za-z0-9!#$&^_.+\-]+$/.test(ref.media_type) ||
-      !Number.isSafeInteger(ref.byte_length) || ref.byte_length < 0 || ref.byte_length > MAX ||
-      typeof ref.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(ref.sha256) ||
-      !['available','removed'].includes(ref.state)) fail('metadata invalid');
+      ref.byte_length > MAX || !/^[0-9a-f]{64}$/.test(ref.sha256)) fail('metadata invalid');
     // UUID identity is case insensitive, matching the canonical UUID type.
     const id = ref.reference_id.toLowerCase();
     if (seen.has(id)) fail('duplicate reference');
-    seen.add(id); total += ref.byte_length;
+    seen.add(id); if (ref.state !== 'inert') total += ref.byte_length;
     if (total > MAX) fail('manifest exceeds limit');
   }
   const same = (a,b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
@@ -48,9 +53,9 @@ export async function verifyBytes({manifest, scope, referenceId, reader, current
     const ref = referenceFor(manifest, scope, referenceId);
     const check = () => { if (!current()) fail('scope changed'); };
     check();
-    if (ref.state === 'removed') {
-      if (reader != null) fail('removed');
-      return Object.freeze({state:'removed', filename:ref.filename, byte_length:ref.byte_length});
+    if (ref.state === 'removed' || ref.state === 'inert') {
+      if (reader != null) fail(ref.state);
+      return Object.freeze({state:ref.state, filename:ref.filename, byte_length:ref.byte_length});
     }
     if (!reader) fail('bytes missing');
     const bytes = new Uint8Array(ref.byte_length);
