@@ -81,8 +81,11 @@ impl ConfiguredExecution {
             takeover: ProductionTakeover::First,
         };
         let (bound, initial_grant, directory) = if let Some(status) = status {
-            if status.phase != orkestr_v2_contracts::ExecutionPhase::Completed
-                || config.worker.is_some()
+            if !matches!(
+                status.phase,
+                orkestr_v2_contracts::ExecutionPhase::Completed
+                    | orkestr_v2_contracts::ExecutionPhase::Cancelled
+            ) || config.worker.is_some()
             {
                 return Err(
                     "existing execution requires reconciliation; automatic startup refused",

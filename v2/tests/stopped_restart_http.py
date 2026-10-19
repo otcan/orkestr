@@ -40,12 +40,14 @@ def refuse_restart(case):
     import subprocess
     env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'ORKESTR_V2_HOME': str(case.home),
            'ORKESTR_V2_BIND': f'127.0.0.1:{case.port}', 'ORKESTR_V2_ORIGIN': case.origin,
+           'ORKESTR_V2_BOOTSTRAP_TOKEN': case.bootstrap,
            'ORKESTR_V2_EXECUTION_CONFIG': str(case.root / 'execution.json')}
     result = subprocess.run([str(ordinary.binary)], env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, timeout=6)
     print(json.dumps({'event': 'refused_restart', 'code': result.returncode,
                       'stderr': result.stderr}), flush=True)
     assert result.returncode != 0
+    assert 'requires reconciliation' in result.stderr or 'graceful retirement' in result.stderr
 
 
 def stopped_codex():
@@ -65,7 +67,11 @@ def stopped_codex():
         # held input, a stopped projection, restart, or process disappearance.
         time.sleep(.2)
         counts(case, 1, [1])
-        assert case.request(case.path + '/stop', 'POST', intent)[:2] == (200, receipt)
+        replay = case.request(case.path + '/stop', 'POST', intent)
+        print(json.dumps({'event': 'old_stop_replay', 'response': replay[:2]}), flush=True)
+        # No live controller exists before fresh input. Refusal must remain inert.
+        assert replay[0] == 503 and replay[1]['code'] == 'control_unavailable'
+        assert case.rows('SELECT count(*) FROM production_stopped_retirements') == [(1,)]
         assert assert_held(case, old, first['run_id']) == held
         assert case.message(3)[0] == 202
         second = ordinary.wait_for(lambda: case.phase('awaiting_acceptance'), 'fresh restarted Codex input')
@@ -111,7 +117,11 @@ def stopped_claude():
         time.sleep(.2)
         assert len([r for r in case.trace() if r['kind'] == 'spawn']) == 1
         assert case.held()['held'] == held
-        assert case.request(case.path + '/stop', 'POST', intent)[:2] == (200, receipt)
+        replay = case.request(case.path + '/stop', 'POST', intent)
+        print(json.dumps({'event': 'old_stop_replay', 'response': replay[:2]}), flush=True)
+        # No live controller exists before fresh input. Refusal must remain inert.
+        assert replay[0] == 503 and replay[1]['code'] == 'control_unavailable'
+        assert case.rows('SELECT count(*) FROM production_stopped_retirements') == [(1,)]
         assert case.message(3)[0] == 202
         second = case.live(2)
         assert second['run_id'] != first['run_id'] and case.old_gone(1)
@@ -133,6 +143,7 @@ def unconfirmed(mode):
     try:
         if mode == 'foreign':
             case.release('terminal', 1)
+            ordinary.wait_for(case.peer_gone, 'foreign terminal must quarantine original child')
         # Shutdown while ACK-only/foreign is unresolved must promptly clean up,
         # remain unknown, and issue no stopped retirement even after native EOF.
         clean_shutdown(case)
