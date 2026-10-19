@@ -19,6 +19,7 @@ mod session;
 mod steering;
 mod stopping;
 mod worker;
+mod worker_continuation;
 mod worker_retirement;
 use config::Config;
 use orkestr_v2_application::runtime::{ProductionSupervisorConfig, ProductionTakeover};
