@@ -11,6 +11,15 @@ pub struct RunRenewalAuthority {
     renewed: bool,
 }
 
+impl RunRenewalAuthority {
+    /// Immutable owner/host budget deadline, for trusted scheduling only.
+    /// None means no extended Worker budget was issued; ordinary lease and
+    /// current authority checks still apply on every operation.
+    pub fn hard_deadline_ms(&self) -> Option<i64> {
+        self.worker_budget
+    }
+}
+
 /// One committed old -> new lease transition. No input text, reservation or
 /// dispatch capability is issued. Lost replies require reconciliation, not retry
 /// of provider I/O. Transport must quiesce pending events/writes before renewal.

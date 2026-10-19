@@ -25,6 +25,11 @@ the smaller of the owner budget and private host cap. Host opt-in alone cannot
 extend a legacy task. Repeating
 the same issuance preserves that deadline; a changed budget conflicts.
 
+`renewal.hard_deadline_ms()` returns the captured effective absolute budget
+(`Some`) or `None` for generic renewal. It is a scheduling hint, never authority.
+When the current lease reaches that bound, composition must stop renewing and
+schedule its existing durable Stop before expiry; the accessor cannot extend it.
+
 Existing `renew_running(&mut renewal)` advances only the same Running run and
 its admitted delegation, by at most 30 seconds from the transaction clock,
 clipped to the immutable budget and current parent/supervisor deadlines. It
