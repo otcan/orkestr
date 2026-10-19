@@ -358,6 +358,12 @@ pub struct ReadyCodex {
 }
 
 impl ReadyCodex {
+    /// Check only this retained broker while waiting for input. An exit closes
+    /// local authority and schedules owned reaping; it never authorizes recovery.
+    pub fn check_broker_liveness(&self) -> Result<(), crate::containment::Error> {
+        self.child.check_broker_liveness()
+    }
+
     /// Consume Core's single-use capability while transferring the very same
     /// metadata child. Failure cannot return or recreate the capability.
     pub fn attach(

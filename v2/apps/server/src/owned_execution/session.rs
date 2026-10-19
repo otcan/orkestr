@@ -91,7 +91,14 @@ impl ConfiguredExecution {
         heartbeat: &mut Instant,
     ) -> Result<SessionExit, &'static str> {
         let conversation = &self.config.conversation_id;
-        let Some(capability) = self.next(shutdown, heartbeat).await? else {
+        let Some(capability) = self
+            .next_with_liveness(shutdown, heartbeat, || {
+                ready
+                    .check_broker_liveness()
+                    .map_err(|_| "execution ready broker exited; reconciliation required")
+            })
+            .await?
+        else {
             return Ok(SessionExit::Shutdown);
         };
         let mut run = capability.provider().run.run_id.clone();
@@ -147,7 +154,14 @@ impl ConfiguredExecution {
                 // Only explicit committed owner acceptance releases the binding.
                 // Inputs received during an active turn remain ordered in Core;
                 // neither queued text nor browser JSON can mint a new capability.
-                let Some(capability) = self.next(shutdown, heartbeat).await? else {
+                let Some(capability) = self
+                    .next_with_liveness(shutdown, heartbeat, || {
+                        pump.check_broker_liveness().map_err(|_| {
+                            "execution accepted broker exited; reconciliation required"
+                        })
+                    })
+                    .await?
+                else {
                     // Owner acceptance is durable, but replacement still needs
                     // this exact native tree's cleanup witness before retirement.
                     let retiring = pump
@@ -184,6 +198,8 @@ impl ConfiguredExecution {
             }
             if status.phase == ExecutionPhase::AwaitingAcceptance {
                 steering.retire();
+                pump.check_broker_liveness()
+                    .map_err(|_| "execution proposal broker exited; reconciliation required")?;
                 // The proposal has fenced descendants. Keep driving their bounded
                 // terminal cleanup while owner acceptance remains pending.
                 Self::poll_worker(&mut worker).await;

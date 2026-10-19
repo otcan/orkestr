@@ -506,6 +506,7 @@ impl ReadyMetadataChild {
 }
 
 mod broker_admission;
+mod liveness;
 #[cfg(test)]
 mod tests;
 
