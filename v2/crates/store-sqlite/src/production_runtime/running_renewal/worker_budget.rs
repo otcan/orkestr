@@ -31,9 +31,13 @@ impl Store {
         let task = sqlx::query("SELECT t.* FROM worker_tasks t JOIN worker_provider_delegations d ON d.id=t.delegation_id WHERE d.admitted_run_id=? AND d.state='admitted' AND t.state='delegated' AND t.owner_id=? AND t.context_id=? AND t.incarnation_id=? AND t.issuer_token_hash=?")
             .bind(dispatch.provider().run.run_id.to_string()).bind(c.owner.to_string()).bind(&c.id).bind(&c.incarnation).bind(&c.token_hash)
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
+        let owner_budget = task
+            .get::<Option<i64>, _>("execution_budget_ms")
+            .ok_or(RuntimeStoreError::Fenced)?;
+        let effective = i64::from(max_run_ms).min(owner_budget);
         let anchor: i64 = task.get("created_at_ms");
         let deadline = anchor
-            .checked_add(i64::from(max_run_ms))
+            .checked_add(effective)
             .ok_or(RuntimeStoreError::InvalidInput)?;
         if deadline <= now(&mut tx).await? {
             return Err(RuntimeStoreError::Expired);
@@ -93,7 +97,7 @@ impl Store {
         budget: i64,
         supervisor_deadline: i64,
     ) -> Result<i64> {
-        let stored:i64 = sqlx::query_scalar("SELECT b.deadline_ms FROM worker_running_budgets b JOIN worker_tasks t ON t.id=b.task_id WHERE b.run_id=? AND t.delegation_id=? AND t.state='delegated'")
+        let stored:i64 = sqlx::query_scalar("SELECT b.deadline_ms FROM worker_running_budgets b JOIN worker_tasks t ON t.id=b.task_id WHERE b.run_id=? AND t.delegation_id=? AND t.state='delegated' AND t.execution_budget_ms IS NOT NULL AND b.deadline_ms<=t.created_at_ms+t.execution_budget_ms")
             .bind(run.get::<&str,_>("id")).bind(run.get::<&str,_>("worker_delegation_id"))
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
         if budget != stored {

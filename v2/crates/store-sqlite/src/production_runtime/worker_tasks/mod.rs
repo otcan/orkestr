@@ -44,7 +44,7 @@ impl WorkerTaskClaim {
 }
 
 fn request_digest(request: &WorkerTaskCreateRequest) -> String {
-    hash(
+    let legacy = hash(
         "worker-task-input-v1",
         &[
             &request.parent_run_id.to_string(),
@@ -54,7 +54,14 @@ fn request_digest(request: &WorkerTaskCreateRequest) -> String {
             &request.instructions,
             &request.lifetime_ms.to_string(),
         ],
-    )
+    );
+    match request.execution_budget_ms {
+        None => legacy,
+        Some(budget) => hash(
+            "worker-task-owner-budget-v1",
+            &[&legacy, &budget.to_string()],
+        ),
+    }
 }
 fn delegation_key(id: &TaskId, digest: &str) -> String {
     format!("task:{id}:{digest}")
