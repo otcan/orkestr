@@ -20,7 +20,7 @@ impl ConfiguredExecution {
             directory::create_for(home, &config.conversation_id)?
         };
         let owner = config.owner_id.clone();
-        Ok(Self {
+        let mut factory = Self {
             config: Config {
                 schema_version: 1,
                 mode: "isolated_acceptance".into(),
@@ -65,7 +65,11 @@ impl ConfiguredExecution {
                 crate::worker_execution::WindowWorkers::new(context.clone(), roles.workers.clone())
             }),
             window: Some(context),
-        })
+            companion: None,
+            fast_factory: None,
+        };
+        factory.attach_window_roles(home, config)?;
+        Ok(factory)
     }
 }
 
@@ -79,11 +83,7 @@ impl ConfiguredExecution {
         heartbeat: &mut Instant,
         shutdown: &mut watch::Receiver<bool>,
     ) -> Result<(), &'static str> {
-        self.window
-            .as_ref()
-            .ok_or("window context missing")?
-            .begin_retirement(&self.store, &self.token)
-            .await?;
+        self.begin_role_retirement().await?;
         loop {
             if *shutdown.borrow() {
                 return Err("late owner wait interrupted; reconciliation required");

@@ -35,7 +35,10 @@ impl ConfiguredExecution {
         // Workers retain their transports until the caller drains them after
         // genuine parent Stop. Preserve this original parent witness meanwhile;
         // final retirement checks the global resource barrier with all proofs.
-        if self.config.worker.is_none() && !self.children.wait_empty(Duration::from_secs(2)).await {
+        if self.config.worker.is_none()
+            && self.companion.is_none()
+            && !self.children.wait_empty(Duration::from_secs(2)).await
+        {
             return Err("execution retained child resources remain active");
         }
         Ok(proof)
@@ -52,6 +55,14 @@ impl ConfiguredExecution {
         {
             return Err("execution retirement scope mismatch");
         }
+        if self.config.role == config::ExecutionRole::Fast {
+            if let Some(companion) = &self.companion {
+                companion.retire();
+                return companion.retain(proof);
+            }
+        }
+        self.begin_role_retirement().await?;
+        let fast_proof = self.companion_reap().await?;
         // Freezing consumes the original parent witness and every retained
         // Worker witness. A missing or poisoned launch refuses replacement.
         let proofs = self.finish_worker_reaps(proof)?;
@@ -61,9 +72,6 @@ impl ConfiguredExecution {
             return Err("execution retained child resources remain active");
         }
         self.current().await?;
-        if let Some(window) = &self.window {
-            window.begin_retirement(&self.store, &self.token).await?;
-        }
         self.store
             .retire_terminal_supervisor(&self.token, run)
             .await
@@ -73,6 +81,7 @@ impl ConfiguredExecution {
         }
         // Retain the original native-tree witness through Core AND manager close.
         drop(proofs);
+        drop(fast_proof);
         Ok(())
     }
 }
