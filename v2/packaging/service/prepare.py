@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from closure import elf_files, pin, python_files, require
+from beta_config import validate as validate_beta_config
 
 
 def inventory(root):
@@ -66,6 +67,8 @@ def prepare(pair, pair_sha, binary, ui, output, home, origin, port, uid, beta_co
         require(not beta_config.is_symlink(),'beta config symlink refused')
         st=beta_config.stat()
         require(st.st_uid==0 and st.st_gid==config['gid'] and st.st_nlink==1 and (st.st_mode&0o777)==0o640,'root-managed service-group-readable private beta config required')
+        require(st.st_size<=8192,'bounded beta config required')
+        validate_beta_config(beta_config.read_bytes())
         config['beta_config']=pin(beta_config)
         config['environment']['ORKESTR_V2_BETA_CONFIG']=str(beta_config.resolve())
         config['execution']='private beta config supplied; manager ABI/runtime qualification separately required'
@@ -75,7 +78,7 @@ def prepare(pair, pair_sha, binary, ui, output, home, origin, port, uid, beta_co
         shutil.copyfile(binary,output/'server');(output/'server').chmod(0o500)
         shutil.copytree(ui,output/'ui')
         tools=output/'tools';tools.mkdir()
-        for name in ('start.py','closure.py','prepare.py'):shutil.copyfile(Path(__file__).parent/name,tools/name)
+        for name in ('start.py','closure.py','prepare.py','beta_config.py'):shutil.copyfile(Path(__file__).parent/name,tools/name)
         (output/'paired-artifacts.json').write_bytes(pair.read_bytes())
         require(inventory(output/'ui')==value['web']['files'] and pin(output/'server')['sha256']==value['server']['sha256'],'copied artifact mismatch')
         # A root preparer publishes group-readable files to the dropped service.
