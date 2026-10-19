@@ -18,6 +18,7 @@ mod retirement;
 mod session;
 mod steering;
 mod stopping;
+mod window_task;
 mod worker;
 mod worker_continuation;
 mod worker_retirement;
@@ -32,6 +33,7 @@ use std::{
     time::Duration,
 };
 use tokio::{sync::watch, task::JoinHandle};
+pub(crate) use window_task::WindowTask;
 
 /// Not serializable, clonable or constructible from a browser DTO.
 pub struct ConfiguredExecution {

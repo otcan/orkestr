@@ -66,6 +66,7 @@ async fn status_for(
         // the browser credential and exact scope in the projection snapshot.
         let credential = browser::credential(&headers)?;
         scope
+            .as_ref()
             .ok_or(Error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "status_unavailable",
@@ -76,7 +77,7 @@ async fn status_for(
             .await
     } else if fast {
         let credential = browser::credential(&headers)?;
-        let Some(scope) = scope else {
+        let Some(scope) = scope.as_ref() else {
             return Ok(StatusCode::NO_CONTENT.into_response());
         };
         scope
@@ -114,6 +115,7 @@ async fn status_for(
         {
             status.capabilities.stop = status.phase == ExecutionPhase::Running
                 && scope
+                    .as_ref()
                     .and_then(|scope| scope.control.as_ref())
                     .is_some_and(|control| {
                         status
@@ -124,6 +126,7 @@ async fn status_for(
             status.capabilities.steer = status.phase == ExecutionPhase::Running
                 && status.queue_age_ms.is_none()
                 && scope
+                    .as_ref()
                     .and_then(|scope| scope.control.as_ref())
                     .is_some_and(|control| {
                         status.run_id.as_ref().is_some_and(|run| {

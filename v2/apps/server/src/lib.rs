@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 mod attachment_transfer;
 mod auth;
+mod beta_config;
 mod automatic_reply_control;
 mod browser;
 pub mod build_identity;
@@ -45,6 +46,7 @@ pub mod stop_execution;
 pub mod timer_bootstrap;
 pub mod timer_http;
 mod timer_lifecycle;
+mod window_runtime;
 mod worker_discovery;
 pub mod worker_execution;
 pub mod worker_tasks;
@@ -54,6 +56,7 @@ pub struct AppState {
     pub store: Store,
     executions: execution_registry::ExecutionRegistry,
     fast_executions: execution_registry::ExecutionRegistry,
+    window_handles: Option<window_runtime::handles::Handles>,
     bootstrap_token: Arc<String>,
     origin: Arc<String>,
     authority: Arc<String>,
@@ -97,6 +100,7 @@ impl AppState {
             store,
             executions: execution_registry::ExecutionRegistry::default(),
             fast_executions: execution_registry::ExecutionRegistry::default(),
+            window_handles: None,
             bootstrap_token: Arc::new(bootstrap_token),
             origin: Arc::new(origin),
             authority: Arc::new(authority),

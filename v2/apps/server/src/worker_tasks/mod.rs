@@ -39,11 +39,11 @@ fn invalid() -> Error {
         "Invalid Worker task request",
     )
 }
-async fn scope<'a>(
-    state: &'a AppState,
+async fn scope(
+    state: &AppState,
     owner: &OwnerId,
     conversation: &ConversationId,
-) -> Result<&'a crate::execution_registry::ExecutionScope, Error> {
+) -> Result<crate::execution_registry::ExecutionScope, Error> {
     state
         .execution_scope(owner, conversation)
         .await?
