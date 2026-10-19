@@ -85,3 +85,15 @@ approved inventory of remote refs before claiming complete private-repository
 history coverage. A clean synthetic or range scan does not qualify all refs or
 justify closing security alerts. Retain only aggregate schema-v2 evidence; never
 attach raw/redacted finding payloads to Jira or CI artifacts.
+
+## V2 unsigned iOS runner exception
+
+Only `.github/workflows/v2-ios.yml` may use the exact GitHub-hosted image
+`macos-15`. Other workflows retain the Ubuntu-only runner allowlist. Floating,
+larger, self-hosted and dynamic runner selections remain rejected. This file
+must use only pull-request/push triggers with explicit `v2/` branch filters,
+read-only contents permissions and the existing reviewed immutable action pins;
+checkout must disable credential persistence. No secrets, signing, provisioning
+profiles, certificates, TestFlight or App Store operations are authorized.
+The exception permits unsigned simulator build verification; policy tests are
+not evidence of simulator execution or native acceptance.

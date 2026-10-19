@@ -1,39 +1,103 @@
-name: Orkestr 2.0 Rust prototype
+name: Orkestr 2.0 intake checks
 
 on:
   push:
-    branches:
-      - v2/rust-rewrite
-    paths:
-      - 'v2/**'
-      - '.github/workflows/v2-rust.yml'
+    branches: [v2/rust-rewrite]
+    paths: ['v2/**', '.github/workflows/v2-rust.yml']
   pull_request:
-    paths:
-      - 'v2/**'
-      - '.github/workflows/v2-rust.yml'
+    branches: ['v2/**']
+    paths: ['v2/**', '.github/workflows/v2-rust.yml']
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Only superseded PR checks cancel; manual and integration push runs stay independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   rust-v2:
     runs-on: ubuntu-latest
+    # Process-failure tests exercise real deadlines; allow the full suite to finish.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: v2
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Install pinned Rust with lint and formatter
+      - name: Isolate candidate data and build output
         run: |
-          rustup show active-toolchain
+          echo "ORKESTR_V2_HOME=$RUNNER_TEMP/orkestr-v2-intake" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/orkestr-v2-target" >> "$GITHUB_ENV"
+      - name: Install namespace test prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y bubblewrap apparmor
+      - name: Qualify hosted-runner lifetime namespace policy
+        run: |
+          python3 -B -m unittest discover -s tests -p test_ci_lifetime_namespace.py -v
+          python3 tests/ci_lifetime_namespace.py
+      - name: Probe unprivileged provider lifetime namespaces
+        run: python3 tests/probe_lifetime_namespaces.py
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - name: Architecture boundaries
+        run: python3 tests/check_boundaries.py
+      - name: Persistent manager ledger and owned-process regressions
+        run: |
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_ledger.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_clock.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_process.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_boundaries.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_bind_deadline.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_native_state.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_exit_diagnostics.py -v
+      - name: Protected synthetic manager package regressions
+        run: sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_package.py -v
+      - name: Mocked provider metadata probe safety
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s tools/tests -v
+      - name: Release evidence policy regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s acceptance -p 'test_release_readiness.py' -v
+      - name: Candidate assembly and Docker policy regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 -m unittest discover -s packaging/candidate/tests -v
+          python3 -m unittest discover -s packaging/docker/tests -v
+          node --check acceptance/browser/execution-scenarios.mjs
+      - name: Inert migration and independent quarantine regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 -m unittest discover -s migration/tests -v
+          python3 acceptance/migration_quarantine_replay.py --checkout .. --revision "$(git rev-parse HEAD)"
       - name: Rust format
-        run: cargo fmt --all -- --check
+        run: cargo +1.99.1 fmt --all -- --check
       - name: Rust lint
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Rust tests
-        run: cargo test --locked --workspace
-      - name: Smoke CLI
-        run: cargo run --locked -p orkestr-v2-demo
+        run: cargo +1.99.1 clippy --locked --workspace --all-targets -- -D warnings
+      - name: Locked build
+        run: cargo +1.99.1 build --locked --workspace
+      - name: Unit and HTTP process-failure tests (requires Python 3)
+        run: cargo +1.99.1 test --locked --workspace
+      - name: Offline domain demo smoke check
+        run: cargo +1.99.1 run --locked -p orkestr-v2-demo
+      - name: Retain synthetic worker lifecycle evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v2-worker-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}
+          # Explicit report files only: never upload the candidate home or databases.
+          path: |
+            ${{ runner.temp }}/orkestr-v2-intake/worker-retirement-*.json
+            ${{ runner.temp }}/orkestr-v2-intake/worker-continuation-*.json
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,0 +1,20 @@
+{
+  "format": "orkestr-v2-worker-broker-package-v1",
+  "entry": "worker_server.py",
+  "argv": [
+    "open-owned-worker-session",
+    "--protocol",
+    "orkestr-v2-provider-broker-v1"
+  ],
+  "files": {
+    "worker_server.py": "4e72364ed920739f614dbed2f986c9bd069941f74bc8c87fa5a6ae62c3682694",
+    "server.py": "59959b39da32284feea310e4595870a2e5aa9f47dd09382c3accb2386e3e1abe",
+    "configuration.py": "1fba545e87e0834d2b3ba36a2c1249ca825631dfa5d6b29cd1b7fa573a8d22ec",
+    "protocol.py": "bf861bddb2ec1380801782e7a8dfa4ff3014c7436954e6fbf0432ba5aa9a466a",
+    "transport.py": "98de61e59d50df6ee48ba66f4d4ac0b52f04076203b32071f424100a58ae22a7",
+    "reaping.py": "4632be4e94cef92a0b8a2970bad0a55a1925d07d7926eb05a6af32ef512954d7",
+    "offline_tool.py": "47491289e1f06a372d4d28d2348629d72a201dcead86b6452b6a0936596b398d",
+    "offline_route.py": "07369c78a2a35c1dc21ff7c44eaf0fb0f227edc6a986ad0212488dcc50715d0c"
+  },
+  "activation": "held-core-result-fence-runtime-composition-and-private-config-review"
+}

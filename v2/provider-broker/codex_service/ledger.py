@@ -1,0 +1,272 @@
+"""Durable conservative egress reservations, independent from Core authority.
+
+The manager is the sole writer. Restart never reopens an unfinished window.
+SQLite FULL commits precede any admission/forwarding; lost credits are spent.
+"""
+from contextlib import contextmanager
+import hashlib
+import json
+from pathlib import Path
+import sqlite3
+import threading
+import time
+import uuid
+
+from .contract import (CREDIT_BYTES, DRAIN_ATTEMPTS, DRAIN_BYTES, DRAIN_SECONDS,
+                       LIFETIME_SECONDS, MAX_ATTEMPTS, MAX_BYTES, Refused,
+                       canonical, generation, identifier, require)
+
+
+class ClockPoison(Refused):
+    """Commit the loss of authority, then propagate refusal; never a write grant."""
+
+
+class Clock:
+    def __init__(self):
+        self.boot = identifier(Path("/proc/sys/kernel/random/boot_id").read_text().strip())
+
+    def sample(self):
+        return self.boot, time.time_ns(), time.monotonic_ns()
+
+
+class Ledger:
+    """Storage logic; production custody and singleton lock belong to Manager."""
+    def __init__(self, path, owner, conversation, *, clock=None):
+        self.owner, self.conversation = identifier(owner), identifier(conversation)
+        self.clock = clock or Clock()
+        self.lock = threading.RLock()
+        self.db = sqlite3.connect(path, isolation_level=None, timeout=0.5, check_same_thread=False)
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA synchronous=FULL")
+        self.db.execute("PRAGMA foreign_keys=ON")
+        with self.transaction():
+            self.db.execute("CREATE TABLE IF NOT EXISTS service_scope (singleton INTEGER PRIMARY KEY CHECK(singleton=1), version INTEGER NOT NULL, owner TEXT NOT NULL, conversation TEXT NOT NULL)")
+            self.db.execute("INSERT OR IGNORE INTO service_scope VALUES(1,1,?,?)", (owner, conversation))
+            scope = self.db.execute("SELECT * FROM service_scope").fetchone()
+            require(tuple(scope) == (1, 1, owner, conversation), "ledger_scope")
+            self.db.execute("CREATE TABLE IF NOT EXISTS windows (id TEXT PRIMARY KEY, generation INTEGER NOT NULL UNIQUE, request_id TEXT NOT NULL UNIQUE, input_id TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('active','draining','expired','retired','reconciliation')), boot TEXT NOT NULL, created_wall_ns INTEGER NOT NULL, deadline_wall_ns INTEGER NOT NULL, deadline_mono_ns INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0, reason TEXT, outcome TEXT, run_id TEXT, terminal_event_id TEXT)")
+            self.db.execute("CREATE TABLE IF NOT EXISTS reservations (id TEXT PRIMARY KEY, window_id TEXT NOT NULL REFERENCES windows(id), kind TEXT NOT NULL CHECK(kind IN ('attempt','bytes')), amount INTEGER NOT NULL CHECK(amount>0))")
+            self.db.execute("CREATE TABLE IF NOT EXISTS admissions (request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, window_id TEXT NOT NULL REFERENCES windows(id), input_id TEXT NOT NULL UNIQUE, event_id TEXT NOT NULL UNIQUE)")
+            self.db.execute("CREATE TABLE IF NOT EXISTS endpoints (name TEXT PRIMARY KEY, device INTEGER NOT NULL, inode INTEGER NOT NULL)")
+            # A durable reservation without an independently retained process owner
+            # is spent/uncertain even when no forwarding happened before the crash.
+            self.db.execute("UPDATE windows SET state='reconciliation',reason='manager_restarted' WHERE state IN ('active','draining','expired')")
+        self.last_clocks = {}
+
+    @contextmanager
+    def transaction(self):
+        with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+            except ClockPoison:
+                # Clock rejection is irrevocable. Rolling this transition back
+                # would let a subsequent clock correction resurrect authority.
+                self.db.execute("COMMIT")
+                raise
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+            else:
+                self.db.execute("COMMIT")
+
+    def close(self):
+        with self.lock:
+            self.db.close()
+
+    def endpoint(self, name):
+        require(name in ("control", "egress"), "endpoint_name")
+        with self.lock:
+            row = self.db.execute("SELECT device,inode FROM endpoints WHERE name=?", (name,)).fetchone()
+            return tuple(row) if row else None
+
+    def set_endpoint(self, name, identity):
+        self.endpoint(name)
+        with self.transaction():
+            self.db.execute("INSERT INTO endpoints VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET device=excluded.device,inode=excluded.inode", (name, *identity))
+
+    def clear_endpoint(self, name, identity):
+        self.endpoint(name)
+        with self.transaction():
+            self.db.execute("DELETE FROM endpoints WHERE name=? AND device=? AND inode=?", (name, *identity))
+
+    def _latest(self):
+        return self.db.execute("SELECT * FROM windows ORDER BY generation DESC LIMIT 1").fetchone()
+
+    def _exact(self, window, selected_generation):
+        identifier(window)
+        generation(selected_generation)
+        row = self._latest()
+        require(row is not None and row["id"] == window and row["generation"] == selected_generation,
+                "window_generation")
+        return row
+
+    def _scope(self, request):
+        require(request["owner_id"] == self.owner and request["conversation_id"] == self.conversation,
+                "scope")
+
+    def _receipt(self, row):
+        scope = {"owner_id": self.owner, "conversation_id": self.conversation}
+        if row is None:
+            return {**scope, "generation": 0, "state": "idle", "window_id": None}
+        return {**scope, "generation": row["generation"], "window_id": row["id"], "state": row["state"],
+                "attempts": row["attempts"], "reserved_bytes": row["reserved_bytes"],
+                "boot_id": row["boot"], "opened_at_ms": row["created_wall_ns"] // 1_000_000,
+                "work_deadline_ms": row["deadline_wall_ns"] // 1_000_000 - DRAIN_SECONDS * 1000,
+                "expires_at_ms": row["deadline_wall_ns"] // 1_000_000,
+                "limits": {"duration_ms": LIFETIME_SECONDS * 1000, "attempts": MAX_ATTEMPTS,
+                           "bytes": MAX_BYTES, "cleanup_ms": DRAIN_SECONDS * 1000,
+                           "cleanup_attempts": DRAIN_ATTEMPTS, "cleanup_bytes": DRAIN_BYTES},
+                "reason": row["reason"], "outcome": row["outcome"],
+                "run_id": row["run_id"], "terminal_event_id": row["terminal_event_id"]}
+
+    def status(self):
+        with self.lock:
+            return self._receipt(self._latest())
+
+    def details(self, window, selected_generation):
+        with self.lock:
+            return dict(self._exact(window, selected_generation))
+
+    def _clock(self, row):
+        boot, wall, mono = self.clock.sample()
+        previous = self.last_clocks.get(row["id"], (row["created_wall_ns"],
+            row["deadline_mono_ns"] - LIFETIME_SECONDS * 1_000_000_000))
+        # Wall and monotonic clocks share a captured offset. Small scheduling/
+        # clock-slew differences never extend either hard deadline. Discontinuity
+        # or reversal loses authority permanently, including during late retire.
+        skew = (wall - mono) - (row["deadline_wall_ns"] - row["deadline_mono_ns"])
+        if not (boot == row["boot"] and wall >= previous[0] and mono >= previous[1]
+                and abs(skew) <= 1_000_000_000):
+            self.db.execute("UPDATE windows SET state='reconciliation',reason='clock_changed' WHERE id=?", (row["id"],))
+            raise ClockPoison("window_clock")
+        self.last_clocks[row["id"]] = (wall, mono)
+        return boot, wall, mono
+
+    def _live_clock(self, row):
+        boot, wall, mono = self._clock(row)
+        if wall >= row["deadline_wall_ns"] or mono >= row["deadline_mono_ns"]:
+            self.db.execute("UPDATE windows SET state='expired',reason='hard_deadline' WHERE id=?", (row["id"],))
+            raise ClockPoison("window_clock")
+        return boot, wall, mono
+
+    def admit(self, request):
+        self._scope(request)
+        # Only the authenticated fixed server may reach this method. The input is
+        # already linked to its durable Core admission; this creates no dispatch.
+        fingerprint = hashlib.sha256(canonical(request)).hexdigest()
+        with self.transaction():
+            boot, wall, mono = self.clock.sample()
+            old = self.db.execute("SELECT a.fingerprint,w.* FROM admissions a JOIN windows w ON w.id=a.window_id WHERE a.request_id=?", (request["request_id"],)).fetchone()
+            if old is not None:
+                require(old["fingerprint"] == fingerprint, "idempotency_conflict")
+                # Historical replay is evidence only: Manager must never reopen it.
+                return self._receipt(old), False
+            latest = self._latest()
+            previous = latest["generation"] if latest else 0
+            require(request["expected_generation"] == previous, "window_generation")
+            require(self.db.execute("SELECT 1 FROM admissions WHERE input_id=? OR event_id=?",
+                (request["input_message_id"], request["input_event_id"])).fetchone() is None,
+                "input_reused")
+            if latest is not None and latest["id"] == request["window_id"]:
+                require(latest["state"] == "active", "window_not_accepting_inputs")
+                boot, wall, mono = self._live_clock(latest)
+                require(request["generation"] == previous and latest["state"] == "active" and
+                        request["predecessor_window_id"] is None and
+                        request["opened_at_ms"] * 1_000_000 == latest["created_wall_ns"] and
+                        request["expires_at_ms"] * 1_000_000 == latest["deadline_wall_ns"] and
+                        wall < latest["deadline_wall_ns"] - DRAIN_SECONDS * 1_000_000_000 and
+                        mono < latest["deadline_mono_ns"] - DRAIN_SECONDS * 1_000_000_000 and
+                        latest["attempts"] < MAX_ATTEMPTS - DRAIN_ATTEMPTS and
+                        latest["reserved_bytes"] < MAX_BYTES - DRAIN_BYTES,
+                        "window_not_accepting_inputs")
+                self._record_admission(request, fingerprint)
+                return self._receipt(latest), False
+            require(request["generation"] == previous + 1, "window_generation")
+            require(latest is None or latest["state"] == "retired", "previous_window_unretired")
+            require(request["predecessor_window_id"] == (latest["id"] if latest else None), "window_predecessor")
+            require(self.db.execute("SELECT 1 FROM windows WHERE id=?", (request["window_id"],)).fetchone() is None,
+                    "window_reused")
+            opened = request["opened_at_ms"] * 1_000_000
+            deadline = request["expires_at_ms"] * 1_000_000
+            require(opened <= wall < deadline - DRAIN_SECONDS * 1_000_000_000 and
+                    deadline - opened == LIFETIME_SECONDS * 1_000_000_000 and
+                    request["work_deadline_ms"] == request["expires_at_ms"] - DRAIN_SECONDS * 1000,
+                    "window_deadlines")
+            self.db.execute("INSERT INTO windows(id,generation,request_id,input_id,fingerprint,state,boot,created_wall_ns,deadline_wall_ns,deadline_mono_ns) VALUES(?,?,?,?,?,'active',?,?,?,?)",
+                (request["window_id"], request["generation"], request["request_id"], request["input_message_id"],
+                 fingerprint, boot, opened, deadline, mono + deadline - wall))
+            self._record_admission(request, fingerprint)
+            return self._receipt(self._latest()), True
+
+    def _record_admission(self, request, fingerprint):
+        self.db.execute("INSERT INTO admissions VALUES(?,?,?,?,?)", (request["request_id"], fingerprint,
+            request["window_id"], request["input_message_id"], request["input_event_id"]))
+
+    def tick(self, window, selected_generation):
+        with self.transaction():
+            row = self._exact(window, selected_generation)
+            if row["state"] in ("retired", "reconciliation"):
+                return self._receipt(row)
+            _boot, wall, mono = self._clock(row)
+            if row["state"] == "expired":
+                return self._receipt(row)
+            if wall >= row["deadline_wall_ns"] or mono >= row["deadline_mono_ns"]:
+                self.db.execute("UPDATE windows SET state='expired',reason='hard_deadline' WHERE id=?", (window,))
+            elif (wall >= row["deadline_wall_ns"] - DRAIN_SECONDS * 1_000_000_000 or
+                  mono >= row["deadline_mono_ns"] - DRAIN_SECONDS * 1_000_000_000 or
+                  row["attempts"] >= MAX_ATTEMPTS - DRAIN_ATTEMPTS or
+                  row["reserved_bytes"] >= MAX_BYTES - DRAIN_BYTES):
+                self.db.execute("UPDATE windows SET state='draining',reason=coalesce(reason,'shutdown_margin') WHERE id=?", (window,))
+            return self._receipt(self._latest())
+
+    def reserve(self, window, selected_generation, reservation, kind, amount):
+        identifier(reservation)
+        require(kind in ("attempt", "bytes"), "reservation_kind")
+        require(type(amount) is int and (amount == 1 if kind == "attempt" else
+                0 < amount <= CREDIT_BYTES), "reservation_amount")
+        self.tick(window, selected_generation)
+        with self.transaction():
+            row = self._exact(window, selected_generation)
+            require(row["state"] in ("active", "draining"), "window_closed")
+            self._live_clock(row)  # Tick and lock acquisition are not one transaction.
+            require(self.db.execute("SELECT 1 FROM reservations WHERE id=?", (reservation,)).fetchone() is None,
+                    "reservation_replay")
+            column, maximum = ("attempts", MAX_ATTEMPTS) if kind == "attempt" else ("reserved_bytes", MAX_BYTES)
+            require(row[column] <= maximum - amount, "attempt_limit" if kind == "attempt" else "byte_limit")
+            self.db.execute("INSERT INTO reservations VALUES(?,?,?,?)", (reservation, window, kind, amount))
+            self.db.execute(f"UPDATE windows SET {column}={column}+? WHERE id=?", (amount, window))
+            return row[column] + amount
+
+    def drain(self, window, selected_generation):
+        with self.transaction():
+            row = self._exact(window, selected_generation)
+            require(row["state"] in ("active", "draining"), "window_closed")
+            self.db.execute("UPDATE windows SET state='draining',reason=coalesce(reason,'runtime_drain') WHERE id=?", (window,))
+            return self._receipt(self._latest())
+
+    def uncertain(self, window, selected_generation, reason):
+        require(reason in ("runtime_refused", "auth_revoked", "cleanup_unknown", "server_lost", "manager_stopped", "clock_changed"), "reason")
+        with self.transaction():
+            row = self._exact(window, selected_generation)
+            require(row["state"] != "retired", "window_retired")
+            self.db.execute("UPDATE windows SET reason=CASE WHEN state='reconciliation' THEN coalesce(reason,?) ELSE ? END,state='reconciliation' WHERE id=?", (reason, reason, window))
+            return self._receipt(self._latest())
+
+    def retire(self, request):
+        self._scope(request)
+        with self.transaction():
+            row = self._exact(request["window_id"], request["generation"])
+            desired = (request["outcome"], request["run_id"], request["terminal_event_id"])
+            if row["state"] == "retired":
+                require(tuple(row[key] for key in ("outcome", "run_id", "terminal_event_id")) == desired,
+                        "retirement_conflict")
+                return self._receipt(row)
+            require(row["state"] in ("active", "draining", "expired"), "window_reconciliation_required")
+            self._clock(row)
+            # Manager calls this only after its own relay/child checks AND the
+            # exact trusted Runtime's committed Core terminal+retirement proof.
+            self.db.execute("UPDATE windows SET state='retired',outcome=?,run_id=?,terminal_event_id=? WHERE id=?",
+                            (*desired, request["window_id"]))
+            return self._receipt(self._latest())

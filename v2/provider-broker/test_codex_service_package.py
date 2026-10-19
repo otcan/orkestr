@@ -1,0 +1,157 @@
+"""Explicit root run: protected dummy package, fixed synthetic ELF, local IPC."""
+import json
+import os
+from pathlib import Path
+import signal
+import socket
+import subprocess
+import time
+import unittest
+from unittest.mock import patch
+
+from codex_bounded.trust import digest, exists, process, protected, Refused as TrustRefused
+from codex_service.contract import Refused
+from codex_service.custody import StateLock, OwnedSocket
+from codex_service.manager import Manager
+from codex_service.package import Package
+from codex_service_fixture import ServiceFixture, UID, GID
+
+
+@unittest.skipUnless(os.geteuid() == 0, "explicit root run required for protected synthetic fixture")
+class PackageTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = ServiceFixture()
+        self.addCleanup(self.fixture.close)
+        self.receipt = self.fixture.prepare()
+        self.root = self.fixture.package
+
+    def test_package_and_environment_never_read_dummy_account_or_select_other_mode(self):
+        original = Path.open
+        def guarded(path, *args, **kwargs):
+            self.assertNotEqual(path, self.fixture.auth)
+            return original(path, *args, **kwargs)
+        with patch.object(Path, "open", guarded):
+            package = Package(self.root, self.receipt["manifest_sha256"])
+        environment = package.environment()
+        self.assertIn("ORKESTR_V2_BETA_CONFIG", environment)
+        self.assertEqual(environment["ORKESTR_V2_UI_DIST"], str(self.root / "ui"))
+        self.assertNotIn("ORKESTR_V2_EXECUTION_CONFIG", environment)
+        self.assertNotIn("CODEX_HOME", environment)
+        self.assertFalse(package.control.exists())
+        self.assertFalse(package.endpoint.exists())
+        self.assertEqual(list(self.fixture.account.iterdir()), [])
+
+    def test_fixture_owns_protected_ancestry_without_relaxing_writable_parent_refusal(self):
+        self.assertEqual(self.fixture.root.parent, Path("/"))
+        self.assertEqual(protected(self.root, True), self.root)
+        delegated = self.fixture.root / "synthetic-delegated-parent"
+        delegated.mkdir(mode=0o755)
+        delegated.chmod(0o777)
+        child = delegated / "package"
+        child.mkdir(mode=0o755)
+        with self.assertRaisesRegex(TrustRefused, "protected_package_required"):
+            protected(child, True)
+
+    def test_fixed_no_site_entry_rejects_missing_flags_before_package_import(self):
+        for options in (("-I", "-B"), ("-S", "-B"), ("-I", "-S")):
+            result = subprocess.run([str(Path("/usr/bin/python3").resolve()), *options,
+                str(self.root / "codex_service/entry.py"), "broker", "invalid"],
+                env={"PATH": "/usr/bin:/bin"}, capture_output=True, timeout=3)
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stderr, b"selected Codex service entry refused\n")
+        self.assertFalse((self.fixture.endpoint / "control.sock").exists())
+
+    def test_hash_drift_and_rehashed_cross_binding_refuse(self):
+        source = self.root / "codex_service/contract.py"
+        source.write_bytes(source.read_bytes() + b"\n# synthetic drift\n")
+        result = subprocess.run([str(self.root / "manager.py"), self.receipt["manifest_sha256"]],
+            env={"PATH": "/usr/bin:/bin"}, capture_output=True, timeout=3)
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse((self.fixture.endpoint / "control.sock").exists())
+        self.fixture.alter("profile.json", lambda value: value.update(hosts=["example.invalid"]))
+        manifest = self.root / "manifest.json"
+        value = json.loads(manifest.read_text())
+        value["files"]["codex_service/contract.py"] = digest(source)
+        manifest.write_text(json.dumps(value))
+        with self.assertRaisesRegex(Refused, "profile_binding"):
+            Package(self.root)
+
+    def test_actual_dropped_uid_peer_and_ordered_shutdown(self):
+        manager = Manager(self.root, self.receipt["manifest_sha256"])
+        try:
+            manager.start()
+            identity = dict(manager.identity)
+            self.assertEqual(identity["uid"], UID)
+            report = self.fixture.home / "data/synthetic-peer.json"
+            deadline = time.monotonic() + 4
+            while not report.exists() and time.monotonic() < deadline:
+                manager.once()
+            self.assertTrue(report.exists())
+            self.assertTrue(json.loads(report.read_text())["ok"])
+            self.assertEqual(Path(f"/proc/{identity['pid']}/exe").resolve(), self.root / "server")
+            self.assertEqual(manager.ledger.status()["state"], "idle")
+        finally:
+            self.assertTrue(manager.close())
+        self.assertFalse(exists(identity))
+        self.assertFalse((self.fixture.endpoint / "control.sock").exists())
+
+    def test_singleton_and_replaced_socket_refuse_without_unlink(self):
+        manager = Manager(self.root, self.receipt["manifest_sha256"])
+        try:
+            with self.assertRaises(BlockingIOError):
+                StateLock(self.fixture.ledger_directory)
+            original = manager.control.identity
+            manager.control.path.unlink()
+            other = socket.socket(socket.AF_UNIX)
+            other.bind(str(manager.control.path))
+            self.addCleanup(other.close)
+            with self.assertRaisesRegex(Refused, "socket_replaced"):
+                manager.control.close()
+            self.assertNotEqual(original, (manager.control.path.stat().st_dev, manager.control.path.stat().st_ino))
+            self.assertTrue(manager.control.path.exists())
+        finally:
+            self.assertFalse(manager.close())
+
+    def test_manager_abrupt_death_triggers_server_parent_death(self):
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        old = ctypes.c_int()
+        self.assertEqual(libc.prctl(37, ctypes.byref(old), 0, 0, 0), 0)
+        self.assertEqual(libc.prctl(36, 1, 0, 0, 0), 0)
+        child = subprocess.Popen([str(self.root / "manager.py"), self.receipt["manifest_sha256"]],
+            env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        identity = None
+        try:
+            deadline = time.monotonic() + 4
+            report = self.fixture.home / "data/synthetic-peer.json"
+            while not report.exists() and time.monotonic() < deadline:
+                self.assertIsNone(child.poll())
+                time.sleep(.01)
+            self.assertTrue(report.exists())
+            for pid in Path(f"/proc/{child.pid}/task/{child.pid}/children").read_text().split():
+                selected = process(int(pid))
+                if selected and Path(f"/proc/{pid}/exe").resolve() == self.root / "server":
+                    identity = selected
+            self.assertIsNotNone(identity)
+            child.kill();child.wait(3)
+            deadline = time.monotonic() + 3
+            while exists(identity) and time.monotonic() < deadline:
+                try:
+                    os.waitpid(identity["pid"], os.WNOHANG)
+                except ChildProcessError:
+                    pass
+                time.sleep(.01)
+            self.assertFalse(exists(identity))
+            successor = Manager(self.root, self.receipt["manifest_sha256"])
+            self.assertTrue(successor.close())
+        finally:
+            if child.poll() is None:
+                child.kill();child.wait(3)
+            if identity and exists(identity):
+                os.kill(identity["pid"], signal.SIGKILL)
+                os.waitpid(identity["pid"], 0)
+            libc.prctl(36, old.value, 0, 0, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

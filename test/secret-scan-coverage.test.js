@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -97,8 +96,10 @@ test("real fresh-repo scan reports nonzero coverage without fixture-local advice
 
 test("candidate grafts, replacement refs and advice cannot hide credential-shaped history", { skip: !binary }, async t => {
   const peer = await fixture(t);
-  // Random, temporary and never associated with any provider/account.
-  await peer.add("fixture.txt", `api_key = "${randomBytes(32).toString("hex")}"`);
+  // Balanced hex has entropy 4 and avoids the pinned rule's hex stopwords.
+  // This constructed fixture has never been associated with a provider/account.
+  const syntheticValue = Array.from({ length: 64 }, (_, index) => ((index * 5 + 3) % 16).toString(16)).join("");
+  await peer.add("fixture.txt", `api_key = "${syntheticValue}"`);
   const head = await peer.add("README", "Later harmless content");
   peer.git(["replace", "--graft", head]);
   await fs.mkdir(path.join(peer.root, "repo/.git/info"), { recursive: true });

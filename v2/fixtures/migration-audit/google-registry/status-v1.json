@@ -1,0 +1,109 @@
+{
+  "format_version": 1,
+  "success": {
+    "format_version": 1,
+    "status": "configuration_observed",
+    "metadata": {
+      "format_version": 1,
+      "connections": 0,
+      "capabilities": {
+        "gmail_read": 0,
+        "gmail_send": 0,
+        "gmail_actions": 0,
+        "gmail_drafts": 0,
+        "calendar_read": 0,
+        "calendar_actions": 0
+      },
+      "unknown_capability_connections": 0,
+      "health": {
+        "connected": 0,
+        "disconnected": 0,
+        "error": 0,
+        "unknown": 0
+      },
+      "use_mode": {
+        "default": 0,
+        "available": 0,
+        "explicit_only": 0,
+        "unknown": 0
+      },
+      "configuration_only": true,
+      "activity_proven": false,
+      "provider_readiness_verified": false
+    }
+  },
+  "refusals": [
+    {
+      "http_status": 400,
+      "body": {
+        "format_version": 1,
+        "status": "refused",
+        "error": "request_parameters_rejected"
+      }
+    },
+    {
+      "http_status": 401,
+      "body": {
+        "format_version": 1,
+        "status": "refused",
+        "error": "authentication_required"
+      }
+    },
+    {
+      "http_status": 403,
+      "body": {
+        "format_version": 1,
+        "status": "refused",
+        "error": "host_rejected"
+      }
+    },
+    {
+      "http_status": 403,
+      "body": {
+        "format_version": 1,
+        "status": "refused",
+        "error": "origin_rejected"
+      }
+    },
+    {
+      "http_status": 403,
+      "body": {
+        "format_version": 1,
+        "status": "refused",
+        "error": "owner_scope_changed"
+      }
+    },
+    {
+      "http_status": 404,
+      "body": {
+        "format_version": 1,
+        "status": "refused",
+        "error": "not_found"
+      }
+    },
+    {
+      "http_status": 405,
+      "body": {
+        "format_version": 1,
+        "status": "refused",
+        "error": "method_not_allowed"
+      }
+    },
+    {
+      "http_status": 503,
+      "body": {
+        "format_version": 1,
+        "status": "refused",
+        "error": "authority_unavailable"
+      }
+    },
+    {
+      "http_status": 503,
+      "body": {
+        "format_version": 1,
+        "status": "refused",
+        "error": "registry_unavailable"
+      }
+    }
+  ]
+}

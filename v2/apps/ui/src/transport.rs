@@ -1,0 +1,123 @@
+use dioxus::prelude::*;
+use orkestr_v2_contracts::ConversationSnapshot;
+use orkestr_v2_ui::Projection;
+use serde::{de::DeserializeOwned, Deserialize};
+use serde_json::{json, Value};
+
+#[derive(Debug, Clone)]
+pub struct Failure {
+    pub status: u16,
+    pub message: String,
+}
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Self { status: 0, message }
+    }
+}
+
+#[derive(Clone, Deserialize)]
+pub struct BrowserSession {
+    pub csrf_token: String,
+    pub global_conversation_id: String,
+}
+
+#[derive(Deserialize)]
+struct Response {
+    status: u16,
+    body: Value,
+}
+
+pub async fn request<T: DeserializeOwned>(
+    method: &str,
+    path: &str,
+    body: Value,
+    csrf: &str,
+    bootstrap: &str,
+) -> Result<T, Failure> {
+    let eval = document::eval(include_str!("request.js"));
+    eval.send(json!({"method":method,"path":path,"body":body,"csrf":csrf,"bootstrap":bootstrap}))
+        .map_err(|_| Failure::from("Browser bridge unavailable".to_string()))?;
+    let response: Response = eval.join().await.map_err(|_| {
+        Failure::from(
+            "Connection interrupted; receipt unknown. Retry retains the same request.".to_string(),
+        )
+    })?;
+    if !(200..300).contains(&response.status) {
+        return Err(Failure {
+            status: response.status,
+            message: response.body["message"]
+                .as_str()
+                .unwrap_or("API request rejected")
+                .into(),
+        });
+    }
+    serde_json::from_value(response.body)
+        .map_err(|_| Failure::from("Unexpected API contract".to_string()))
+}
+
+pub async fn key() -> Result<String, Failure> {
+    document::eval("return crypto.randomUUID();")
+        .join()
+        .await
+        .map_err(|_| Failure::from("Secure request ID generation unavailable".to_string()))
+}
+
+pub async fn delay() {
+    let _ = document::eval("await new Promise(resolve => setTimeout(resolve, 1500)); return null;")
+        .await;
+}
+
+pub async fn history_page(
+    id: &str,
+    csrf: &str,
+    after: i64,
+) -> Result<ConversationSnapshot, Failure> {
+    let page: ConversationSnapshot = request(
+        "GET",
+        &format!("/api/v2/conversations/{id}?after={after}&limit=100"),
+        Value::Null,
+        csrf,
+        "",
+    )
+    .await?;
+    if page.conversation_id.to_string() != id {
+        return Err("Snapshot scope mismatch".to_string().into());
+    }
+    if page.last_sequence < after {
+        return Err("Snapshot watermark moved backwards".to_string().into());
+    }
+    if page
+        .messages
+        .iter()
+        .any(|message| message.sequence <= after)
+        || page.next_cursor.is_some_and(|next| next <= after)
+    {
+        return Err("Invalid snapshot cursor".to_string().into());
+    }
+    Ok(page)
+}
+
+pub async fn snapshot(
+    id: &str,
+    csrf: &str,
+    after: i64,
+    projection: Projection,
+    required_watermark: i64,
+) -> Result<Projection, Failure> {
+    orkestr_v2_ui::reconcile(id, after, &projection, required_watermark, |cursor| {
+        history_page(id, csrf, cursor)
+    })
+    .await
+}
+
+use orkestr_v2_ui::StreamItem;
+
+pub async fn event(id: &str, cursor: i64) -> Result<StreamItem, Failure> {
+    let eval = document::eval(include_str!("stream.js"));
+    eval.send(json!({"path":format!("/api/v2/conversations/{id}/events"),"cursor":cursor}))
+        .map_err(|_| Failure::from("Stream bridge unavailable".to_string()))?;
+    let raw: Value = eval.join().await.map_err(|_| {
+        Failure::from("Disconnected; reconnecting from last applied cursor".to_string())
+    })?;
+    Ok(orkestr_v2_ui::decode_stream(raw))
+}

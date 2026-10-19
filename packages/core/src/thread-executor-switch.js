@@ -28,6 +28,9 @@ export { normalizeExecutorTarget, threadExecutorSummary } from "./thread-executo
 
 const claudeEfforts = ["low", "medium", "high", "max"];
 const switchChains = new Map();
+// Only retain tokens while a waiter is reading storage. A switch that starts
+// and settles entirely during that read must invalidate its snapshot too.
+const switchReads = new Map();
 
 function switchError(code, statusCode = 400, extra = {}) {
   return Object.assign(new Error(code), { code, statusCode, ...extra });
@@ -49,6 +52,7 @@ export function selfSwitchIntervalMs(env = process.env) {
 // Serialize switch application per thread so a completion hook and an
 // explicit request can never apply the same pending switch twice.
 function withSwitchLock(threadId, fn) {
+  for (const read of switchReads.get(threadId) || []) read.overlapped = true;
   const previous = switchChains.get(threadId) || Promise.resolve();
   const run = previous.catch(() => {}).then(fn);
   const settled = run.catch(() => {});
@@ -257,9 +261,26 @@ async function performSwitch(thread, request, runtime, env) {
 async function waitForPendingApplied(threadId, env) {
   const deadline = Date.now() + positiveMs(env.ORKESTR_EXECUTOR_SWITCH_INTERRUPT_WAIT_MS, 10_000);
   for (;;) {
-    const current = await getThread(threadId, env);
-    if (!current?.pendingExecutorSwitch || Date.now() >= deadline) return current;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Pending is cleared before asynchronous validation/handoff/start finishes.
+    // Track operations across the entire read, including those that start AND
+    // settle within it. Never await the lock itself: a stalled holder must
+    // still respect the caller's interrupt wait budget.
+    const wasApplying = switchChains.has(threadId);
+    const read = { overlapped: false };
+    const readers = switchReads.get(threadId) || new Set();
+    switchReads.set(threadId, readers);
+    readers.add(read);
+    let current;
+    try {
+      current = await getThread(threadId, env);
+    } finally {
+      readers.delete(read);
+      if (!readers.size) switchReads.delete(threadId);
+    }
+    const applying = wasApplying || read.overlapped || switchChains.has(threadId);
+    const remaining = deadline - Date.now();
+    if ((!current?.pendingExecutorSwitch && !applying) || remaining <= 0) return { thread: current, applying };
+    await new Promise((resolve) => setTimeout(resolve, Math.min(100, remaining)));
   }
 }
 
@@ -298,13 +319,16 @@ export async function switchThreadExecutor(threadId, target, options = {}, env =
     }
     const interrupt = from === EXECUTOR_CLAUDE ? runtime.interruptClaude : runtime.interruptCodex;
     const interrupted = await Promise.resolve(interrupt?.(deferred, env)).catch(() => ({ interrupted: false }));
-    const settled = interrupted?.interrupted ? await waitForPendingApplied(thread.id, env) : deferred;
-    if (!settled?.pendingExecutorSwitch) {
+    const waited = interrupted?.interrupted
+      ? await waitForPendingApplied(thread.id, env)
+      : { thread: deferred, applying: false };
+    const settled = waited.thread;
+    if (!waited.applying && !settled?.pendingExecutorSwitch) {
       const applied = activeThreadExecutor(settled || {}) === to;
       if (!applied) throw switchError("executor_switch_failed", 409);
       return { ok: true, changed: true, deferred: false, from, to, thread: settled, executor: threadExecutorSummary(settled) };
     }
-    if (turnActive(settled, runtime)) {
+    if (waited.applying || turnActive(settled, runtime)) {
       return { ok: true, changed: false, deferred: true, from, to, thread: settled, executor: threadExecutorSummary(settled) };
     }
     return applyPendingExecutorSwitch(thread.id, { runtime }, env);
