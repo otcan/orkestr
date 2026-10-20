@@ -20,8 +20,8 @@ class Conversations(unittest.TestCase):
         self.ledger = None
         self.addCleanup(lambda: self.ledger.close() if self.ledger else None)
 
-    def open(self):
-        self.ledger = Ledger(self.path, self.owner, self.home, clock=self.clock)
+    def open(self, **options):
+        self.ledger = Ledger(self.path, self.owner, self.home, clock=self.clock, **options)
         return self.ledger
 
     def request(self, conversation, generation=1, predecessor=None, key="same-key"):
@@ -37,11 +37,11 @@ class Conversations(unittest.TestCase):
         return {**request, "outcome": "accepted", "run_id": uid(), "terminal_event_id": uid()}
 
     def test_switch_preserves_scoped_lineage_spent_credits_and_replays(self):
-        ledger = self.open()
+        ledger = self.open(live_windows=1)
         a, b = self.request(self.home), self.request(self.other)
         ledger.admit(a)
         ledger.reserve(a["window_id"], 1, uid(), "bytes", 16384)
-        with self.assertRaisesRegex(Refused, "other_window_unretired"):
+        with self.assertRaisesRegex(Refused, "window_capacity"):
             ledger.admit(b)
         terminal = self.terminal(a)
         old = ledger.retire(terminal)
@@ -58,16 +58,62 @@ class Conversations(unittest.TestCase):
         with self.assertRaisesRegex(Refused, "window_generation"):
             ledger.retire(terminal)
 
-    def test_unknown_other_conversation_cannot_bypass_unreaped_window(self):
-        ledger = self.open()
+    def test_unreaped_window_blocks_only_its_own_conversation(self):
+        ledger = self.open(live_windows=1)
         a = self.request(self.home)
         ledger.admit(a)
         ledger.uncertain(a["window_id"], 1, "cleanup_unknown")
-        for conversation in (self.home, self.other):
+        for request in (self.request(self.home), self.request(self.home, 2, a["window_id"], "next")):
             with self.assertRaises(Refused):
-                ledger.admit(self.request(conversation))
+                ledger.admit(request)
         self.assertEqual(ledger.status(self.home)["reason"], "cleanup_unknown")
-        self.assertEqual(ledger.status(self.other)["state"], "idle")
+        # Its custody was terminated; it no longer holds a live slot.
+        self.assertTrue(ledger.admit(self.request(self.other))[1])
+        self.assertEqual(ledger.status(self.other)["state"], "active")
+        self.assertEqual(ledger.status(self.home)["state"], "reconciliation")
+
+    def test_concurrent_windows_keep_separate_budgets_up_to_capacity(self):
+        third = uid()
+        ledger = self.open(live_windows=2)
+        a, b, c = self.request(self.home), self.request(self.other), self.request(third)
+        self.assertTrue(ledger.admit(a)[1])
+        self.assertTrue(ledger.admit(b)[1])
+        with self.assertRaisesRegex(Refused, "window_capacity"):
+            ledger.admit(c)
+        ledger.reserve(a["window_id"], 1, uid(), "bytes", 16384)
+        ledger.reserve(b["window_id"], 1, uid(), "attempt", 1)
+        self.assertEqual((ledger.status(self.home)["reserved_bytes"], ledger.status(self.home)["attempts"]), (16384, 0))
+        self.assertEqual((ledger.status(self.other)["reserved_bytes"], ledger.status(self.other)["attempts"]), (0, 1))
+        self.assertEqual([row["window_id"] for row in ledger.unfinished()], [a["window_id"], b["window_id"]])
+        # Follow-up admission into a live window never needs another slot.
+        follow = {**a, "request_id": "follow", "input_message_id": uid(), "input_event_id": uid(),
+                  "expected_generation": 1}
+        self.assertFalse(ledger.admit(follow)[1])
+        with self.assertRaisesRegex(Refused, "scope"):
+            ledger.retire({**self.terminal(a), "conversation_id": self.other})
+        ledger.retire(self.terminal(a))
+        self.assertTrue(ledger.admit(c)[1])
+        self.assertEqual(ledger.status(third)["state"], "active")
+
+    def test_restart_reconciles_every_live_window_independently(self):
+        ledger = self.open(live_windows=2)
+        a, b = self.request(self.home), self.request(self.other)
+        ledger.admit(a)
+        ledger.admit(b)
+        ledger.close()
+        ledger = self.open(live_windows=2)
+        for conversation in (self.home, self.other):
+            receipt = ledger.status(conversation)
+            self.assertEqual((receipt["state"], receipt["reason"]), ("reconciliation", "manager_restarted"))
+        self.assertEqual(ledger.unfinished(), [])
+        with self.assertRaisesRegex(Refused, "previous_window_unretired"):
+            ledger.admit(self.request(self.other, 2, b["window_id"], "after-restart"))
+        self.assertTrue(ledger.admit(self.request(uid()))[1])
+
+    def test_live_window_bound_is_closed(self):
+        for value in (0, 17, True, "2", None):
+            with self.subTest(value=value), self.assertRaisesRegex(Refused, "live_window_bound"):
+                Ledger(self.path, self.owner, self.home, clock=self.clock, live_windows=value)
 
     def test_foreign_retirement_and_cross_conversation_input_reuse_refuse(self):
         ledger = self.open()
@@ -144,8 +190,10 @@ class Conversations(unittest.TestCase):
                     self.assertEqual(receipt["state"], "reconciliation")
                     self.assertEqual(receipt["reason"], "cleanup_unknown" if state == "reconciliation" else "manager_restarted")
                     self.assertEqual((receipt["attempts"], receipt["reserved_bytes"]), (1, 16384))
-                    with self.assertRaisesRegex(Refused, "other_window_unretired"):
-                        ledger.admit(self.request(self.other))
+                    with self.assertRaisesRegex(Refused, "previous_window_unretired"):
+                        ledger.admit(self.request(self.home, 2, receipt["window_id"], "next"))
+                    # The upgraded uncertain row holds no live custody elsewhere.
+                    self.assertTrue(ledger.admit(self.request(self.other))[1])
                 finally:
                     ledger.close()
                     self.ledger = None

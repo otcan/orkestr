@@ -13,7 +13,7 @@ import time
 import uuid
 
 from .contract import (CREDIT_BYTES, DRAIN_ATTEMPTS, DRAIN_BYTES, DRAIN_SECONDS,
-                       LIFETIME_SECONDS, MAX_ATTEMPTS, MAX_BYTES, Refused,
+                       LIFETIME_SECONDS, MAX_ATTEMPTS, MAX_BYTES, MAX_LIVE_WINDOWS, Refused,
                        canonical, generation, identifier, require)
 
 
@@ -57,8 +57,10 @@ def schema(db, owner, conversation):
 
 class Ledger:
     """Storage logic; production custody and singleton lock belong to Manager."""
-    def __init__(self, path, owner, conversation, *, clock=None):
+    def __init__(self, path, owner, conversation, *, clock=None, live_windows=MAX_LIVE_WINDOWS):
         self.owner, self.conversation = identifier(owner), identifier(conversation)
+        require(type(live_windows) is int and 0 < live_windows <= MAX_LIVE_WINDOWS, "live_window_bound")
+        self.live_windows = live_windows
         self.clock = clock or Clock()
         self.lock = threading.RLock()
         self.db = sqlite3.connect(path, isolation_level=None, timeout=0.5, check_same_thread=False)
@@ -148,6 +150,12 @@ class Ledger:
         with self.lock:
             return self._receipt(self._latest(conversation), conversation)
 
+    def unfinished(self):
+        """Every window that still owns live custody, oldest first."""
+        with self.lock:
+            return [self._receipt(row) for row in self.db.execute(
+                "SELECT * FROM windows WHERE state IN ('active','draining','expired') ORDER BY rowid")]
+
     def details(self, window, selected_generation):
         with self.lock:
             return dict(self._exact(window, selected_generation))
@@ -209,10 +217,11 @@ class Ledger:
                 return self._receipt(latest), False
             require(request["generation"] == previous + 1, "window_generation")
             require(latest is None or latest["state"] == "retired", "previous_window_unretired")
-            # All conversations share one original child set, relay and budget.
-            # An uncertain/unfinished scope can never be bypassed with a new ID.
-            require(self.db.execute("SELECT 1 FROM windows WHERE state!='retired' LIMIT 1").fetchone() is None,
-                    "other_window_unretired")
+            # Each window owns its own child set, relay pool and durable budget.
+            # An uncertain/unfinished scope still blocks its own conversation
+            # above; live custody across conversations is bounded here.
+            live = self.db.execute("SELECT count(*) FROM windows WHERE state IN ('active','draining','expired')").fetchone()[0]
+            require(live < self.live_windows, "window_capacity")
             require(request["predecessor_window_id"] == (latest["id"] if latest else None), "window_predecessor")
             require(self.db.execute("SELECT 1 FROM windows WHERE id=?", (request["window_id"],)).fetchone() is None,
                     "window_reused")

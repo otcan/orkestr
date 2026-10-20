@@ -15,14 +15,27 @@ impl Store {
         tx.commit().await.map_err(db)?;
         Ok(result)
     }
-    /// A new opening is durable BEFORE manager IPC. A receipt is never a native grant.
+    /// Single-window admission: any other live owner window refuses as Busy.
     pub async fn admit_execution_window_authenticated(
         &self,
         credential: &str,
         conversation: &ConversationId,
         input: &ExecutionWindowRequest,
     ) -> Result<ExecutionWindowAdmission> {
-        if !input.is_valid() {
+        self.admit_execution_window_capped_authenticated(credential, conversation, input, 1)
+            .await
+    }
+    /// A new opening is durable BEFORE manager IPC. A receipt is never a native grant.
+    /// `capacity` bounds the owner's live (opening/active/retiring) windows across
+    /// conversations; each conversation still has at most one unresolved window.
+    pub async fn admit_execution_window_capped_authenticated(
+        &self,
+        credential: &str,
+        conversation: &ConversationId,
+        input: &ExecutionWindowRequest,
+        capacity: u32,
+    ) -> Result<ExecutionWindowAdmission> {
+        if !input.is_valid() || capacity == 0 {
             return Err(RuntimeStoreError::InvalidInput);
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
@@ -57,10 +70,10 @@ impl Store {
             }
             r
         } else {
-            let other: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows WHERE owner_id=? AND conversation_id!=? AND state!='closed'")
+            let other: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows WHERE owner_id=? AND conversation_id!=? AND state IN ('opening','active','retiring')")
                 .bind(owner.to_string()).bind(conversation.to_string())
                 .fetch_one(&mut *tx).await.map_err(db)?;
-            if other != 0 {
+            if other >= i64::from(capacity) {
                 return Err(RuntimeStoreError::Busy);
             }
             match latest.as_ref() {
@@ -94,6 +107,7 @@ impl Store {
             .bind(receipt.status.window_id.to_string()).bind(input.input_message_id.to_string()).bind(input.input_event_id.to_string())
             .bind(&input.input_request_key).bind(serde_json::to_string(&receipt).map_err(db)?)
             .execute(&mut *tx).await.map_err(db)?;
+        super::queue::mark_dispatched(&mut tx, &owner, input, receipt.status.window_id).await?;
         tx.commit().await.map_err(db)?;
         Ok(receipt)
     }

@@ -207,3 +207,5 @@ pub use memory::*;
 
 mod execution_window;
 pub use execution_window::*;
+mod execution_window_queue;
+pub use execution_window_queue::*;

@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from types import SimpleNamespace
 import unittest
@@ -129,6 +130,7 @@ class LifecycleTests(LedgerTests):
         manager = Manager.__new__(Manager)
         manager.child, manager.ledger = child, self.ledger
         manager.failed = manager.closed = False
+        manager.windows, manager.egress, manager.guard = {}, None, threading.RLock()
         with self.assertRaisesRegex(Refused, "unexpected_server_exit"):
             manager.tick()
         self.assertTrue(manager.failed)
@@ -142,7 +144,7 @@ class LifecycleTests(LedgerTests):
         manager = Manager.__new__(Manager)
         manager.child, manager.ledger = child, self.ledger
         manager.failed = manager.closed = False
-        manager.children = manager.egress = manager.budget = None
+        manager.windows, manager.egress, manager.guard = {}, None, threading.RLock()
         self.clock.advance(901)
         manager.tick()
         self.assertIsNone(child.poll())

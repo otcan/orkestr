@@ -190,7 +190,7 @@ async fn bootstrap_current_auth_foreign_scope_and_history_refuse_without_writes(
 }
 
 #[tokio::test]
-async fn another_native_conversation_requires_all_prior_retirement_and_distinct_context() {
+async fn another_native_conversation_requires_its_own_retirement_and_distinct_context() {
     use orkestr_v2_contracts::ConversationInput;
     let root = std::path::PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").unwrap())
         .join(format!("native-conversation-retired-{}", Uuid::new_v4()));
@@ -249,11 +249,30 @@ async fn another_native_conversation_requires_all_prior_retirement_and_distinct_
     let mut config = fixtures::config(ProductionTakeover::First);
     config.namespace = "native-third-context".into();
     config.supervisor_key = "native-third-supervisor".into();
-    // An issued-but-unused private context is not discarded or bypassed.
-    assert!(store
+    // Another conversation's issued-but-unused private context neither blocks
+    // an independent conversation nor is discarded, replaced or reissued.
+    let third_initial = store
         .bootstrap_execution_window_authenticated(browser, &third.conversation_id, config)
         .await
+        .unwrap();
+    assert_eq!(
+        third_initial.binding().conversation_id,
+        third.conversation_id
+    );
+    let mut second = fixtures::config(ProductionTakeover::First);
+    second.namespace = "native-second-context".into();
+    second.supervisor_key = "native-second-supervisor".into();
+    assert!(store
+        .bootstrap_execution_window_authenticated(browser, &new.conversation_id, second)
+        .await
         .is_err());
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM production_supervisors WHERE namespace='native-second-context'",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(live, 1);
     let windows: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows")
         .fetch_one(&store.pool)
         .await

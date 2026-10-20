@@ -12,10 +12,13 @@ mod credential;
 mod fast_metadata;
 mod guard;
 mod lifecycle;
+mod queue;
 mod switching;
 pub use credential::{ExecutionWindowCredential, ExecutionWindowRetirement};
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod queue_tests;
 
 fn state(value: &str) -> Result<ExecutionWindowState> {
     Ok(match value {
