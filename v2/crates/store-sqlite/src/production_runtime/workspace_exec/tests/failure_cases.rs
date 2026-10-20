@@ -65,7 +65,7 @@ async fn elapsed_tool_lease_prevents_spawn_preparation_and_retained_result_write
     let unstarted = consumed(&x, 1).await;
     let (finished, mut result) = delivery(&x, 2).await;
     let deadline = unstarted.expires_at_ms().max(finished.expires_at_ms());
-    let clock = now(&mut *x.f.store.pool.acquire().await.unwrap())
+    let clock = now(&mut x.f.store.pool.acquire().await.unwrap())
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(

@@ -2,6 +2,7 @@ use super::*;
 use crate::runtime::ledger::{hash, secret};
 
 impl Store {
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn delegate_workspace_exec_in_context(
         &self,
         credential: &str,

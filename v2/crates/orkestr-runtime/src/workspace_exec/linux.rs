@@ -212,7 +212,9 @@ mod tests {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).unwrap();
         let instructions: Vec<_> = bytes
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .map(|b| {
                 (
                     u16::from_le_bytes([b[0], b[1]]),
