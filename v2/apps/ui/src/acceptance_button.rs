@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use orkestr_v2_contracts::ExecutionAcceptanceReceipt;
 use orkestr_v2_ui::{execution::Execution, session_scope::SessionScope};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 // Enabled only in a registered matching server candidate.
 const ACCEPTANCE_ACTIVATED: bool = cfg!(feature = "execution-controls");
