@@ -22,6 +22,7 @@ import { recordCodexRuntimeAuthInvalidSignal } from "./codex-auth-health.js";
 import { deployDrainActiveSync } from "./deploy-drain.js";
 import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
 import { remoteWhatsAppRuntimeBinding } from "./thread-remote-runtime-binding.js";
+import { dropHeldLocalInputs } from "./remote-runtime-held-inputs.js";
 import { ensureConnectorOutboxJob, listConnectorOutboxJobs } from "../../connectors/src/connector-outbox.js";
 import { setConnectorOutboxJobAdapter } from "./connector-outbox-adapter.js";
 import { clearPaneProgressCache, paneBackgroundWork, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
@@ -3947,7 +3948,11 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
   }
   let thread = await getThread(threadId, env);
   if (!thread) return [];
-  if (remoteWhatsAppRuntimeBinding(thread, env)) return [];
+  if (remoteWhatsAppRuntimeBinding(thread, env)) {
+    // Never run here, and never hold local input for a burst after handback.
+    await dropHeldLocalInputs(thread, env).catch(() => []);
+    return [];
+  }
   if (String(thread.retiredAt || "").trim() || ["retiring", "retired"].includes(String(thread.state || "").trim().toLowerCase())) {
     await appendEvent({ type: "thread_input_delivery_blocked", threadId: thread.id, reason: "thread_retired" }, env).catch(() => null);
     return [];

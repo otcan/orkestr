@@ -1,12 +1,18 @@
 import {notificationScope,notificationKey,createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
+import {createRemoteTimerReplies,remoteTimerEventEligible,remoteTimerParentEvent} from './whatsapp-scoped-remote-timer-replies.js';
 
 const sources=new Set(['codex-app-server','codex-rollout','codex-app-server-import','claude-code']);
 const visible=m=>!['hidden','internal','private'].includes(m.visibility) && m.signalMode!=='record_only' && m.deliveryMode!=='record_only' && m.notify!==false && m.notificationEligible!==false;
 // A scheduler run that produced no deliverable answer within this window is
 // closed so it is never re-read; its answer could no longer pass maxAgeMs anyway.
 const RUN_TTL_MS=6*60*60*1000;
+// V1 notices posted to the thread for a timer: Gmail re-auth, or a timer
+// paused because the thread is delegated to the remote runtime (Orkestr V2).
+const noticeSources=new Set(['timer_connector_health','timer_delegation_fence']);
+const delegationNoticeAllowed=(timer,event)=>event.source==='timer_delegation_fence' && timer?.enabled===false
+  && timer.pausedReason==='thread_delegated_to_remote_runtime' && timer.lastDelegationNoticeMessageId===event.messageId;
 export function timerRunEligible(timer,event,owner,threadId) {
   if(!timer || timer.ownerUserId!==owner || timer.target!==threadId || timer.targetType!=='thread' || !visible(timer) || timer.blockedReason || timer.disabledReason)return false;
   if(timer.enabled===true)return true;
@@ -29,7 +35,8 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
   const legacySingle=scope.threads.size===1;
   let lastTick=-Infinity,lastStatus=null;
   const allowedTimer=(timer,event,threadId)=>event.type==='thread_signal_appended'
-    ? timer?.enabled===true && timer.ownerUserId===config.ownerUserId && timer.target===threadId && timer.targetType==='thread' && visible(timer) && timer.lastAuthNoticeMessageId===event.messageId && timer.blockedReason==='blocked_auth'
+    ? timer?.ownerUserId===config.ownerUserId && timer.target===threadId && timer.targetType==='thread' && visible(timer)
+      && (delegationNoticeAllowed(timer,event) || (event.source!=='timer_delegation_fence' && timer.enabled===true && timer.lastAuthNoticeMessageId===event.messageId && timer.blockedReason==='blocked_auth'))
     : timerRunEligible(timer,event,config.ownerUserId,threadId);
   async function thread(threadId) {
     const chatId=scope.threads.get(threadId);
@@ -52,13 +59,17 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
     }
     throw new Error('timer_notification_history_incomplete');
   }
-  async function deliverThread(threadId,runs,since,eligible) {
+  const remoteReplies=createRemoteTimerReplies({config,api,send,formatter,env,now,proofs,fence,scope,thread,runTtlMs:RUN_TTL_MS});
+  async function deliverThread(threadId,allRuns,since,eligible) {
     const chatId=scope.threads.get(threadId);
     const t=await thread(threadId);
-    // The owner turned reply mirroring off for this binding: close, never send.
-    if(t.binding.mirrorReplies===false){for(const e of runs)proofs.finish(e.messageId,'suppressed',new Date(now()).toISOString());return 0;}
-    const messages=await history(threadId,Math.min(...runs.map(e=>Date.parse(e.ts))));
+    const messages=await history(threadId,Math.min(...allRuns.map(e=>Date.parse(e.ts))));
     let sent=0;
+    // Replies to V2 timer turns report their outcome back so the remote input settles.
+    for(const event of allRuns.filter(e=>e.type===remoteTimerParentEvent))sent+=await remoteReplies.deliver(threadId,t,event,messages,since);
+    const runs=allRuns.filter(e=>e.type!==remoteTimerParentEvent);
+    // The owner turned reply mirroring off for this binding: close, never send.
+    if(t.binding.mirrorReplies===false){for(const e of runs)proofs.finish(e.messageId,'suppressed',new Date(now()).toISOString());return sent;}
     for(const event of runs) {
       const timer=eligible.find(x=>x.id===event.timerId);
       const notice=event.type==='thread_signal_appended';
@@ -67,7 +78,7 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
       // message listing; the scheduler event is then the parent receipt.
       const listed=messages.find(m=>m.id===event.messageId);
       const parent=listed || (notice ? null : {id:event.messageId,role:'user',source:'timer_due',timerId:event.timerId,ownerUserId:config.ownerUserId,chatId,createdAt:event.ts});
-      const parentValid=notice ? parent?.role==='assistant' && parent.source==='timer_connector_health' && parent.phase==='signal' && parent.state==='completed' && parent.signalMode==='notify_passively'
+      const parentValid=notice ? parent?.role==='assistant' && noticeSources.has(parent.source) && parent.source===event.source && parent.phase==='signal' && parent.state==='completed' && parent.signalMode==='notify_passively'
         : parent?.role==='user' && parent.source==='timer_due' && parent.timerId===event.timerId;
       if(!parentValid || parent.ownerUserId!==config.ownerUserId || (parent.chatId && parent.chatId!==chatId) || !visible(parent)
         || !Number.isFinite(Date.parse(parent.createdAt)) || Date.parse(parent.createdAt)>now() || Date.parse(parent.createdAt)<since){
@@ -147,8 +158,9 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
       }
       for(const e of events||[])if(e.type==='timer_due' && e.ownerUserId===config.ownerUserId && scope.threads.has(e.target) && e.targetType==='thread'
         && e.messageId && Date.parse(e.ts)>=since && Date.parse(e.ts)<=now() && eligible.some(x=>x.id===e.timerId && x.target===e.target))proofs.remember(e);
-      for(const e of events||[])if(e.type==='thread_signal_appended' && e.source==='timer_connector_health' && e.signalMode==='notify_passively' && e.ownerUserId===config.ownerUserId && scope.threads.has(e.threadId) && Date.parse(e.ts)>=since && Date.parse(e.ts)<=now()) {
-        const timer=eligible.find(x=>x.lastAuthNoticeMessageId===e.messageId && x.target===e.threadId);
+      for(const e of events||[])if(remoteTimerEventEligible(e,config,scope,since,now()))proofs.remember(e);
+      for(const e of events||[])if(e.type==='thread_signal_appended' && noticeSources.has(e.source) && e.signalMode==='notify_passively' && e.ownerUserId===config.ownerUserId && scope.threads.has(e.threadId) && Date.parse(e.ts)>=since && Date.parse(e.ts)<=now()) {
+        const timer=eligible.find(x=>(e.source==='timer_delegation_fence' ? x.lastDelegationNoticeMessageId : x.lastAuthNoticeMessageId)===e.messageId && x.target===e.threadId);
         if(timer)proofs.remember({...e,target:e.threadId,timerId:timer.id});
       }
       proofs.scanned(new Date(now()).toISOString());

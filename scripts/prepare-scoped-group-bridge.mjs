@@ -48,6 +48,7 @@ const files = ['packages/connectors/src/whatsapp-scoped-group-transport.js',
   'packages/connectors/src/whatsapp-group-participant-author.js',
   'packages/connectors/src/whatsapp-scoped-group-formatting.js',
   'packages/connectors/src/whatsapp-scoped-timer-notifications.js',
+  'packages/connectors/src/whatsapp-scoped-remote-timer-replies.js',
   'packages/connectors/src/whatsapp-timer-notification-proof.js',
   'packages/connectors/src/whatsapp-delivery-route-fence.js',
   'packages/connectors/src/whatsapp-scoped-group-relay.js', 'scripts/scoped-group-relay.mjs', 'apps/cli/src/api-client.js'];

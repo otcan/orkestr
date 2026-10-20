@@ -155,6 +155,10 @@ transition adapter (`v2/compat/v1_runtime`). Set the binding's `remoteBackend`,
   from an admitted non-owner participant.
 - A transient backend failure returns 502. The relay retries the same
   idempotent input, and the backend deduplicates it by public message ID.
+  Retries stop once the input is older than `ORKESTR_REMOTE_RELAY_INPUT_MAX_AGE_MS`
+  (default 30 minutes, at least one minute). A paused or refused binding
+  answers 503, for example. The input is then closed like a definite refusal
+  (`remote_runtime_input_expired:<status>`), so it never runs stale.
 - A definite refusal marks the input failed and adds one short explanatory
   answer. The relay sends that answer and closes the turn.
 - Replies are imported by the existing remote mirror sync and sent by the relay.
@@ -162,8 +166,35 @@ transition adapter (`v2/compat/v1_runtime`). Set the binding's `remoteBackend`,
   receipt to `POST /api/threads/<id>/messages/<message-id>/scoped-relay-delivery`.
   The mirror acknowledgement then reports `delivered` to the runtime. A failed
   report is retried on the next poll and never resends.
+- Replies to V2 timer turns have no relay input to answer. V1 gives each one a
+  local parent (source `orkestr-v2-timer`) and records the server event
+  `whatsapp_remote_timer_parent_materialized`. The relay's timer notifications
+  (`timerNotifications` must include the thread) deliver the reply to the
+  thread's bound chat, labelled `[Timer: <label>]`. They use the same proof
+  journal, route fence and uncertain rules as a V1 timer run. The proof chain
+  is: event, then the parent bound to the same `remoteThreadId`, then the
+  imported final reply. After the send, the relay reports the receipt to
+  `scoped-relay-delivery`, and the mirror acknowledgement settles the remote
+  input. Some replies are definitely not sent: stale replies, replies on a
+  binding with `mirrorReplies: false`, and sends rejected before dispatch.
+  These are reported with `{"outcome":"suppressed"|"failed","reason":...}`, so
+  the input still settles. An uncertain send blocks delivery and is never
+  reported or retried.
+- The remote runtime is the delegated thread's only executor. V1-owned timers
+  that target the thread do not run there. When one falls due, V1 pauses it
+  (`pausedReason: "thread_delegated_to_remote_runtime"`, event
+  `timer_due_refused`) and posts a passive notice that the relay delivers once.
+  `orkestr timers run` answers `409 timer_target_delegated_to_remote_runtime`.
+  Move the timer to V2 (`orkestr timers handoff`), or turn it back on after the
+  handback. Timers owned by V2 are not affected.
+- Other pending local input on a delegated thread is dropped. This covers UI or
+  API messages, executor commands, and V1 timer input queued before the
+  delegation. It is marked `failed`/`dropped` with event
+  `thread_input_dropped_delegated`, so nothing runs in a burst after the
+  handback. Forwarded owner WhatsApp input is not affected.
 - Roll back by clearing the remote binding fields, or by setting
-  `remoteRuntimeEnabled: false`. The thread then runs locally again.
+  `remoteRuntimeEnabled: false`. The thread then runs locally again. Re-enable
+  any timer paused during the delegation.
 
 ## Synthetic health probe
 
