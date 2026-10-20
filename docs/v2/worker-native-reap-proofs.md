@@ -15,8 +15,13 @@ reserved, including room for the current parent. Reaching either limit refuses
 new work instead of discarding old evidence. An unresolved Worker does not by
 itself erase later independent work or its original witnesses.
 
-Accepted Workers retire their owned pump only after current exact acceptance
-and no locally pending tool/result work. A Worker Stop retains its original
+Completed Worker proposals retire their owned pump with no locally pending
+tool/result work. The consuming transition detaches the exact original child
+before dropping its execution authority. Its original wait proof remains in
+`WorkerReaps` while the durable run stays `awaiting_acceptance` and its binding
+stays busy; cleanup does not accept output. Later owner acceptance uses current
+authentication and exact completion/revision correlation. Execution deadlines
+do not erase a completed proposal after its original process is reaped. A Worker Stop retains its original
 issued `ActiveControl`, then consumes it into `RetiringBroker` only after the
 canonical interrupted terminal is committed. Both paths poll owned retirement
 with a three-second bound. ACK-only, failed, blocked, expired, lost setup and
@@ -29,7 +34,14 @@ The factory creates one `WorkerReaps::new(owner, conversation, namespace)` and
 passes clones in `WorkerConfiguration.reaps` for **every** parent turn. A new
 ledger per scheduler would lose historical obligations and is incorrect.
 
-Before dropping a scheduler at parent completion, Stop or shutdown:
+An ordinary parent proposal closes new task admission and durably holds queued
+or claimed tasks. Already consumed children may finish under their unchanged
+lineage, context, window and execution deadlines. No new child grant or parent
+execution can be issued. Parent acceptance still refuses every unresolved child
+decision; Stop, failure, replacement and revocation still fence descendants.
+Migration 0044 changes this transition without restoring historical blocked rows.
+
+Before dropping a scheduler after parent acceptance, Stop or shutdown:
 
 1. Call `WorkerSchedule::quiesce()` to close task registration and fresh claims.
 2. Bounded-poll `WorkerSchedule::drain().await`; it only checks exact terminal

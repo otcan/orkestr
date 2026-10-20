@@ -45,7 +45,7 @@ impl WorkerSchedule {
             status.phase == ExecutionPhase::Running && running.pump.pending().is_none(),
         );
         if status.phase == ExecutionPhase::Completed {
-            return Self::accepted(*running);
+            return Self::retire_proposal(*running, WorkerProgress::Completed);
         }
         if matches!(
             status.phase,
@@ -62,31 +62,11 @@ impl WorkerSchedule {
                 WorkerProgress::Unknown,
             ));
         }
+        if status.phase == ExecutionPhase::AwaitingAcceptance {
+            return Self::retire_proposal(*running, WorkerProgress::AwaitingAcceptance);
+        }
         if self.quiesced {
             return Err("Worker terminal cleanup refuses unfinished execution");
-        }
-        if status.phase == ExecutionPhase::AwaitingAcceptance {
-            // Preserve a completed native turn while the owner decides, without
-            // writing more execution bytes. Idle retention remains bounded.
-            let now = Instant::now();
-            let expired = match &running.liveness {
-                Some(lease) => {
-                    lease.must_stop(now)
-                        || running
-                            .budget
-                            .as_ref()
-                            .is_some_and(|budget| budget.expired(now))
-                }
-                None => now >= self.deadline,
-            };
-            if expired {
-                let _ = running.authority.revoke();
-                return Ok((
-                    Phase::Closed(WorkerProgress::AwaitingAcceptance),
-                    WorkerProgress::AwaitingAcceptance,
-                ));
-            }
-            return Ok((Phase::Running(running), WorkerProgress::AwaitingAcceptance));
         }
         let now = Instant::now();
         let cancellation = running

@@ -1,4 +1,4 @@
-"""Parent proposal must clean fenced Workers before any owner acceptance."""
+"""Completed Worker proposals retire their originals before owner acceptance."""
 import argparse
 import hashlib
 import json
@@ -61,8 +61,8 @@ class ProposalCase(tasks.TaskCase):
                     for name, query in queries.items()}
 
 
-def awaiting_parent_never_owns_live_fenced_workers(case):
-    # Execute the unchanged case that exposed the hosted regression first.
+def awaiting_parent_retains_completed_worker_decisions(case):
+    # Exercise ordinary parent completion with four existing child analyses.
     tasks.parent_proposal_durably_holds_unissued_tasks(case)
     assert case.phase("awaiting_acceptance")["run_id"] == case.parent["id"]
     assert not case.task_list()["can_create"]
@@ -80,7 +80,7 @@ def awaiting_parent_never_owns_live_fenced_workers(case):
     deadline = time.monotonic() + 0.3
     while time.monotonic() < deadline:
         assert case.phase("awaiting_acceptance")["run_id"] == case.parent["id"]
-        assert case.worker_gone(), "fenced Worker or retained scratch reappeared"
+        assert case.worker_gone(), "completed Worker or retained scratch reappeared"
         assert case.snapshot() == before, "owner decision wait changed authoritative state"
         assert case.trace() == trace, "owner decision wait dispatched native traffic"
         time.sleep(0.025)
@@ -95,12 +95,12 @@ def main():
     case = ProposalCase()
     report = {"binary_sha256": hashlib.sha256(ordinary.binary.read_bytes()).hexdigest(),
               "provider_kind": "synthetic-executable", "full_release_evidence": False,
-              "name": "awaiting_parent_never_owns_live_fenced_workers", "status": "failed"}
+              "name": "awaiting_parent_retains_completed_worker_decisions", "status": "failed"}
     start = time.monotonic()
     failure = None
     try:
         case.setup()
-        awaiting_parent_never_owns_live_fenced_workers(case)
+        awaiting_parent_retains_completed_worker_decisions(case)
     except BaseException as error:
         failure = error
         report["failure"] = repr(error)

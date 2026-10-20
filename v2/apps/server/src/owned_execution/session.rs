@@ -217,8 +217,8 @@ impl ConfiguredExecution {
                 steering.retire();
                 pump.check_broker_liveness()
                     .map_err(|_| "execution proposal broker exited; reconciliation required")?;
-                // The proposal has fenced descendants. Keep driving their bounded
-                // terminal cleanup while owner acceptance remains pending.
+                // Close new descendant admission while driving existing child
+                // turns and their original cleanup through the owner decision.
                 Self::poll_worker(&mut worker).await;
                 drop(schedule);
                 if self.window.as_ref().is_some_and(|window| window.work_due()) {

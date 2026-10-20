@@ -28,7 +28,7 @@ async fn selected(
         .collect::<Vec<_>>()
         .join(" || '|' || ");
     let filter = if table == "_sqlx_migrations" {
-        format!(" WHERE version<={}", prefix.unwrap_or(43))
+        format!(" WHERE version<={}", prefix.unwrap_or(44))
     } else {
         String::new()
     };
@@ -41,7 +41,7 @@ async fn selected(
 }
 
 #[tokio::test]
-async fn populated_prefixes_copy_first_edges_to_43_preserve_rows_and_rollback_source() {
+async fn populated_prefixes_copy_first_edges_to_44_preserve_rows_and_rollback_source() {
     for prefix in [14, 17, 31, 33, 36, 37, 38, 39, 40] {
         let dir = Directory::new();
         let mut conn = populated_payload_prefix(&dir).await;
@@ -112,7 +112,7 @@ async fn populated_prefixes_copy_first_edges_to_43_preserve_rows_and_rollback_so
                 .fetch_one(&mut upgraded)
                 .await
                 .unwrap(),
-            43
+            44
         );
         assert!(sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&mut upgraded)

@@ -44,7 +44,10 @@ impl TaskQueue {
         if status.phase == ExecutionPhase::Starting && Instant::now() < parent.deadline {
             return Ok(WorkerProgress::WaitingForParent);
         }
-        if status.phase != ExecutionPhase::Running {
+        if status.phase == ExecutionPhase::AwaitingAcceptance {
+            // Close new admission, but finish already consumed child work.
+            self.registration.take();
+        } else if status.phase != ExecutionPhase::Running {
             self.quiesce();
             return self.drain().await.map(|done| {
                 if done {
@@ -65,7 +68,7 @@ impl TaskQueue {
         self.children = active;
         // At most one fresh claim per parent tick. Reserve actual child capacity
         // before consuming the claim; reapers retain permits until actual wait.
-        if self.children.len() < MAX_ACTIVE {
+        if self.registration.is_some() && self.children.len() < MAX_ACTIVE {
             if let Ok(slot) = capacity().clone().try_acquire_owned() {
                 if let Some(claim) = parent
                     .store
