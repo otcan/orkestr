@@ -201,6 +201,7 @@ pub fn Conversation(
         section { class: "conversation-pane", "aria-label": "Conversation",
             crate::execution_poll::ExecutionPoll { key: "{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, execution, worker_tasks: false, headless: true, clock: Some(now), onexpired }
             div { class: "conversation-scroll", tabindex: "0", "aria-label": "Conversation transcript",
+                crate::intelligence_view::IntelligencePanel { key:"intelligence-{id}-{generation}", id:id.clone(), csrf:csrf.clone(), session_scope, execution, onexpired, onaccepted:move |revision|accepted_revision.set(revision) }
                 crate::accepted_results_view::AcceptedReplies { key: "accepted-{id}-{generation}", id: id.clone(), session_scope, messages, update: Some(accepted_revision), inline: true, onexpired }
                 if let Some(current) = live_status.filter(|s| s.progress.is_some() && s.phase != orkestr_v2_contracts::ExecutionPhase::Completed) {
                     article { class: "assistant-proposal",
@@ -214,7 +215,8 @@ pub fn Conversation(
                     crate::held_inputs_poll::HeldInputsPanel { key: "held-{id}-{generation}", id: id.clone(), session_scope, model: held_inputs, projection, onexpired }
                 }
                 details { class: "conversation-tools",
-                    summary { "Connection details" }
+                    summary { "Connection and work details" }
+                    crate::beta_window_view::WindowView { key: "window-{id}-{generation}", id:id.clone(), session_scope, onexpired }
                     p { "{status}" }
                     p { "Latest 100 saved inputs. History has earlier pages. Unsent drafts remain in this page." }
                 }
@@ -222,7 +224,6 @@ pub fn Conversation(
             div { class: "composer-dock",
                 crate::execution_panel::ExecutionPanel { execution, now_ms: now(), parent_tasks: false, csrf: csrf.clone(), session_scope, onexpired, compact: true, onaccepted: Some(EventHandler::new(move |revision| accepted_revision.set(revision))) }
                 crate::composer::Composer { key: "composer-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, drafts, onexpired }
-                crate::beta_window_view::WindowView { key: "window-{id}-{generation}", id, csrf, session_scope, onexpired }
             }
         }
     }

@@ -62,6 +62,15 @@ details[open] > summary { margin-bottom: .4rem; }
 .assistant-proposal h3 { color: #345e53; font-size: .85rem; }
 .assistant-proposal > section { padding: 0; }
 .assistant-proposal details { font-size: .8rem; }
+.intelligence-layers { margin-bottom: 1rem; font-size: .8rem; }
+.intelligence-summary, .intelligence-tools { display: flex; flex-wrap: wrap; align-items: start; gap: .35rem 1rem; }
+.intelligence-summary { color: #637583; }
+.intelligence-summary .deep-label { color: #214f44; }
+.intelligence-layer[open] { width: 100%; padding: .6rem .85rem; border: 1px solid #d9e3e9; border-radius: .5rem; background: #f8fafb; }
+.intelligence-layer section { margin-top: .7rem; }
+.intelligence-layer p, .intelligence-layer button { margin-block: .25rem; }
+.intelligence-layer label { margin-top: .5rem; }
+.intelligence-layer select { min-height: 2.75rem; font: inherit; }
 .conversation-tools { border-top: 1px solid #e4eaee; margin-top: .75rem; }
 .conversation-tools section { padding: .7rem; background: #f7f9fa; margin-block: .4rem; }
 .conversation-tools button { margin: .25rem .3rem .25rem 0; }

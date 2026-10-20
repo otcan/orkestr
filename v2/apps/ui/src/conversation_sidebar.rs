@@ -27,6 +27,7 @@ pub fn ConversationSidebar(
     csrf: String,
     session_scope: Signal<SessionScope>,
     onselect: EventHandler<ConversationSummary>,
+    onloaded: EventHandler<Vec<ConversationSummary>>,
     onexpired: EventHandler<()>,
 ) -> Element {
     let owner = session_scope.read().generation();
@@ -69,6 +70,7 @@ pub fn ConversationSidebar(
                 Ok(reply) if reply.status == 200 => {
                     match serde_json::from_str::<ConversationPage>(&reply.text) {
                         Ok(value) if value.valid(cursor) => {
+                            onloaded.call(value.conversations.clone());
                             page.set(Some(value));
                             notice.set(String::new());
                         }
