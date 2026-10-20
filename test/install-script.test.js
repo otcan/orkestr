@@ -405,6 +405,13 @@ test("install script provisions isolated connector MCP and WhatsApp worker servi
   assert.match(releaseScript, /"\$node_bin" "\$release_dir\/scripts\/orkestr-connectors-doctor\.mjs"/);
   assert.match(releaseScript, /restore_doctor_timer/);
   assert.doesNotMatch(releaseScript, /systemctl (?:stop|restart) orkestr(?:-ui)?\.service/);
+  assert.match(releaseScript, /scripts\/scoped-group-preflight\.mjs" "\$\{scoped_configs\[@\]\}"/);
+  assert.ok(releaseScript.indexOf('scoped-group-preflight.mjs') < releaseScript.indexOf('systemctl stop "${gateway_service}.service" "${worker_service}.service"'),
+    'scoped preflight runs before any connector service stops');
+  assert.match(releaseScript, /--property=RequiredBy/);
+  assert.match(releaseScript, /did not stay active \(partial WhatsApp rollout\)/);
+  assert.match(releaseScript, /ORKESTR_WA_DEPLOY_PROBE_COMMAND/);
+  assert.match(releaseScript, /WhatsApp end-to-end probe failed after activation/);
   assert.match(migrationScript, /--activate/);
   assert.match(migrationScript, /Connector MCP cutover failed; embedded UI routing was restored/);
   assert.match(migrationScript, /ORKESTR_WHATSAPP_AUTOSTART=0/);

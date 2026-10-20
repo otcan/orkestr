@@ -22,18 +22,26 @@ const MEDIA_TABLE='CREATE TABLE IF NOT EXISTS group_input_media(id TEXT PRIMARY 
 
 // An explicitly configured, existing-account transport. The surrounding bridge
 // keeps its legacy router disabled; only explicitly authorized, fresh group input enters.
-export function createScopedGroupTransport({config,token,base,dbPath=config.journalPath,now=Date.now,routeFence: suppliedFence,proofStore: suppliedProof}) {
-  if(!/^\d+@c\.us$/.test(config.ownChatId || '') || !Number.isFinite(Date.parse(config.activatedAt))
-      || !Array.isArray(config.groups) || !config.groups.length || !token)fail('configuration_invalid');
+// Pure contract validation: no files are opened. Shared by the transport and
+// the deploy preflight, so a release that rejects a live config is never activated.
+export function validateScopedGroupConfig(config,now=Date.now) {
+  if(!/^\d+@c\.us$/.test(config?.ownChatId || '') || !Number.isFinite(Date.parse(config.activatedAt))
+      || !Array.isArray(config.groups) || !config.groups.length)fail('configuration_invalid');
   const groups=new Map(config.groups.map(g=>[g.chatId,g]));
   if(groups.size!==config.groups.length || [...groups].some(([id,g])=>!/^\d+(?:-\d+)?@g\.us$/.test(id) || !g.threadId))fail('configuration_invalid');
   const authors=createGroupOwnerAuthorPolicy(config,now);
   const participants=createGroupParticipantPolicy(config,now);
-  // Validate the whole contract before opening durable state: a build that
-  // rejects the live configuration must leave the journal untouched.
   const scope=notificationScope(config);
   const fencedThreads=scopedRouteMembership(config);
   if(fencedThreads && [...fencedThreads].some(id=>!config.groups.some(g=>g.threadId===id)))fail('route_thread_invalid');
+  return {groups,authors,participants,scope,fencedThreads};
+}
+
+export function createScopedGroupTransport({config,token,base,dbPath=config.journalPath,now=Date.now,routeFence: suppliedFence,proofStore: suppliedProof}) {
+  if(!token)fail('configuration_invalid');
+  // Validate the whole contract before opening durable state: a build that
+  // rejects the live configuration must leave the journal untouched.
+  const {groups,authors,participants,scope,fencedThreads}=validateScopedGroupConfig(config,now);
   const db=new DatabaseSync(dbPath);db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS group_input(id TEXT PRIMARY KEY,chat_id TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_send(id TEXT PRIMARY KEY,hash TEXT NOT NULL,chat_id TEXT NOT NULL,parent_id TEXT NOT NULL,state TEXT NOT NULL,provider_id TEXT,created_at TEXT NOT NULL);
