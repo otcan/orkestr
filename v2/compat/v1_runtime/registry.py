@@ -12,7 +12,7 @@ import threading
 
 from . import config as config_module
 from .ledger import Ledger
-from .worker import Worker
+from .worker import Worker, attachment_export_settings
 
 UNIQUE_KEYS = ("remote_thread_id", "conversation_id", "public_thread_id", "chat_id")
 MUTABLE_KEYS = ("enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs", "max_input_age_seconds",
@@ -149,7 +149,8 @@ class Registry:
     def _start(self, binding):
         if binding.worker is None:
             client = self.client_factory(binding.config["conversation_id"])
-            binding.worker = Worker(client, binding.ledger)
+            directory, gid = attachment_export_settings()
+            binding.worker = Worker(client, binding.ledger, attachment_dir=directory, attachment_gid=gid)
         binding.worker.progress_updates = binding.config["progress_updates"]
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
         if binding.thread is None and self.workers:
