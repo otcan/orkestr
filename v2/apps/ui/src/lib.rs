@@ -244,5 +244,6 @@ pub mod page_memory;
 
 pub mod chat_timeline;
 pub mod conversation_directory;
+pub mod conversation_status;
 pub mod intelligence;
 pub mod send_intent;

@@ -77,6 +77,8 @@ function api(state, req, res, url) {
     return json(res, 200, { schema_version: 1, conversation_id: id, provider: 'codex', role: 'deep',
       controls: { stop: true, steer: true, accept: true }, limits: LIMITS, window: state.window[id] });
   }
+  if (path === '/api/v2/projects' && req.method === 'GET') return json(res, 200, { next_cursor: null, projects: [
+    { project_id: uuid(601), conversation_id: C, name: 'Errand project', resources: { local_git: 'not_configured', local_oxrm: 'not_configured' } }] });
   if (path === '/api/v2/conversations' && req.method === 'GET') return json(res, 200, {
     conversations: [A, B, C].map((id, i) => ({ conversation_id: id, name: names[id], scope: { kind: 'global' }, last_sequence: state.messages[id].length + i })),
     next_cursor: null });
@@ -98,6 +100,11 @@ function api(state, req, res, url) {
     const rows = state.archived.filter(x => x.archive_sequence > after).slice(0, limit);
     const more = state.archived.some(x => x.archive_sequence > (rows.at(-1)?.archive_sequence ?? after));
     return json(res, 200, { conversation_id: id, entries: rows, next_after: more ? rows.at(-1).archive_sequence : null });
+  }
+  if (rest === '/execution' && req.method === 'GET') {
+    if (id !== B) { res.writeHead(204, { 'cache-control': 'no-store' }); return res.end(); }
+    return json(res, 200, { schema_version: 1, conversation_id: B, run_id: uuid(204), revision: 3, observed_at_ms: Date.now(), phase: 'running',
+      queue_age_ms: null, progress: null, resources: null, capabilities: { stop: true, steer: true } });
   }
   if (rest === '/messages' && req.method === 'POST') return intake(state, req, res, id);
   if (rest === '/window' && req.method === 'POST') return admit(state, req, res, id);

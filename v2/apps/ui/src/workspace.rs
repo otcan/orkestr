@@ -2,6 +2,17 @@ use dioxus::prelude::*;
 use orkestr_v2_ui::{session_scope::SessionScope, Draft};
 use std::collections::BTreeMap;
 
+const TABS: [&str; 8] = [
+    "Chat",
+    "Work",
+    "History",
+    "Projects",
+    "Timers",
+    "Memory",
+    "Host resources",
+    "Settings",
+];
+
 /// Navigation changes presentation only. Work admission remains an explicit action.
 #[component]
 pub fn Workspace(
@@ -37,12 +48,13 @@ pub fn Workspace(
                     reload += 1;
                 }
             }
+            if sidebar() { button { class: "drawer-scrim", r#type: "button", "aria-label": "Close conversations", onclick: move |_| sidebar.set(false) } }
             div { class: "workspace-main",
                 header { class: "conversation-heading",
                     button { class: "threads-toggle", "aria-expanded": "{sidebar}", onclick: move |_| sidebar.set(!sidebar()), "Conversations" }
                     h2 { "{title}" }
                     nav { "aria-label": "Main",
-                        for name in ["Chat", "History", "Host resources", "Settings"] {
+                        for name in TABS {
                             button { "aria-current": if tab() == name { "page" } else { "false" }, onclick: move |_| {
                                 if tab() == name { return; }
                                 execution.write().select(&current(), "");
@@ -58,8 +70,25 @@ pub fn Workspace(
                     }
                 } else {
                     div { class: "workspace-page",
-                        if tab() == "History" {
+                        if tab() == "Work" {
+                            crate::work_view::WorkView { key: "{current()}-{session_scope.read().generation()}", id: current(), csrf, session_scope, execution, onexpired }
+                        } else if tab() == "History" {
                             crate::history::History { key: "{current()}", id: current(), csrf, session_scope, onexpired }
+                        } else if tab() == "Projects" {
+                            crate::projects_view::Projects { key: "{session_scope.read().generation()}", csrf, session_scope, onexpired,
+                                onopen: move |(id, name): (String, String)| {
+                                    execution.write().select(&id, "");
+                                    current.set(id);
+                                    crate::conversation_location::replace(Some(&current()));
+                                    title.set(name);
+                                    tab.set("Chat".into());
+                                    reload += 1;
+                                }
+                            }
+                        } else if tab() == "Timers" {
+                            crate::timer_screen::Timers { key: "{current()}-{session_scope.read().generation()}", conversation: current(), csrf, session_scope, onexpired }
+                        } else if tab() == "Memory" {
+                            crate::memory_view::MemoryView { key: "{session_scope.read().generation()}", csrf, project: None, session_scope, onexpired }
                         } else if tab() == "Host resources" {
                             crate::host_resources_view::HostResourcesView { session_scope, resources, onexpired }
                         } else {

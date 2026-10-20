@@ -42,6 +42,10 @@ pub fn ConversationSidebar(
     let mut open = use_signal(|| false);
     let mut busy = use_signal(|| false);
     let read_ticket = use_hook(|| Rc::new(Cell::new(0_u64)));
+    let statuses = use_signal(
+        std::collections::BTreeMap::<String, orkestr_v2_ui::conversation_status::RowStatus>::new,
+    );
+    let slots = use_signal(|| None::<orkestr_v2_ui::conversation_status::Slots>);
     use_drop(move || {
         mounted.set(false);
         for channel in [reading(), writing()].into_iter().flatten() {
@@ -86,6 +90,18 @@ pub fn ConversationSidebar(
         }
     });
     let next = page.read().as_ref().and_then(|p| p.next_cursor);
+    let ids: Vec<String> = page
+        .read()
+        .as_ref()
+        .map(|p| {
+            p.conversations
+                .iter()
+                .map(|c| c.conversation_id.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    // A list item, so a changed page always remounts the poller with its new ids.
+    let poll_key = format!("{owner}-{}", ids.join(","));
     rsx! { aside { class:"conversation-sidebar", "aria-label":"Conversations",
         div { class:"sidebar-heading", h2 {"Conversations"} button { onclick:move |_|open.set(!open()), "New conversation" } }
         if open() {
@@ -120,9 +136,16 @@ pub fn ConversationSidebar(
                 button {r#type:"submit",disabled:busy(),if busy(){"Creating…"}else if create.read().pending.is_some(){"Retry creation"}else{"Create conversation"}}
             }
         }
+        for key in [poll_key] { crate::conversation_status_poll::StatusPoll { key:"{key}", ids: ids.clone(), session_scope, statuses, slots, onexpired } }
+        if let Some(slots)=slots() { p {class:"slot-summary", "{slots.label()}"} }
         nav { "aria-label":"Conversation list",
             if let Some(value)=page.read().as_ref(){for row in &value.conversations {
-                button {key:"{row.conversation_id}",class:"conversation-choice","aria-current":if row.conversation_id.to_string()==selected{"page"}else{"false"},onclick:{let row=row.clone();move |_|{if session_scope.read().is_current(owner){onselect.call(row.clone());}}},"{row.name}"}
+                button {key:"{row.conversation_id}",class:"conversation-choice","aria-current":if row.conversation_id.to_string()==selected{"page"}else{"false"},onclick:{let row=row.clone();move |_|{if session_scope.read().is_current(owner){onselect.call(row.clone());}}},
+                    span {class:"conversation-name","{row.name}"}
+                    if let Some(status)=statuses.read().get(&row.conversation_id.to_string()) {
+                        span {class:"conversation-status {status.tone.class()}","{status.label}"}
+                    }
+                }
             }}
         }
         p {role:"status","{notice}"}

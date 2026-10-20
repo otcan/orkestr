@@ -67,6 +67,36 @@ export const scenarios = [
     assert.equal(Object.keys(state.intake).length, intakes, 'Retry after reload must not create another message');
     assert.equal(await draft(), 'Draft survives reload + edit while busy', 'Edits made after Send are kept');
   }],
+  ['conversation-list', async label => {
+    if (label === 'phone') await clickText('Conversations');
+    await page.waitForFunction(() => document.querySelectorAll('.conversation-status').length >= 2, { timeout: 20000 });
+    const badges = await page.$$eval('.conversation-choice', rows => Object.fromEntries(rows.map(r =>
+      [r.querySelector('.conversation-name')?.textContent, r.querySelector('.conversation-status')?.textContent ?? ''])));
+    assert.equal(badges['Research notes'], 'Working');
+    assert.equal(badges['Queued errands'], 'Queued #2');
+    assert.match(await text('.slot-summary'), /2 of 2 work slots in use · 3 queued/);
+    await page.evaluate(() => [...document.querySelectorAll('.conversation-choice')].find(b => b.textContent.includes('Research notes')).click());
+    await page.waitForFunction(() => document.querySelector('.conversation-heading h2')?.textContent === 'Research notes');
+    if (label === 'phone') assert.equal(await page.$eval('.workspace', n => n.dataset.sidebarOpen), 'false', 'Selecting closes the phone drawer');
+    await page.waitForSelector('#composer');
+  }],
+  ['tabs', async () => {
+    for (const [tab, expected] of [['Work', 'Provider'], ['Projects', 'Create project'], ['Timers', 'Saved timer ID'], ['Memory', 'Optional saved facts'], ['Chat', 'Message']]) {
+      await clickText(tab);
+      await waitText(expected);
+    }
+    await clickText('Work');
+    await waitText('Codex');
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => /^(Stop|Stop unavailable)$/.test(b.textContent.trim())));
+    await waitText('Steer running work');
+    await clickText('Projects');
+    await waitText('Git: not_configured');
+    await clickText('Errand project');
+    // A listed conversation keeps its directory name; otherwise the project name is shown.
+    await page.waitForFunction(() => ['Errand project', 'Queued errands'].includes(document.querySelector('.conversation-heading h2')?.textContent));
+    await page.waitForSelector('#composer');
+    assert.ok(page.url().endsWith('#conversation/00000000-0000-4000-8000-00000000000c'), 'Project opens its conversation');
+  }],
 ];
 
 try {

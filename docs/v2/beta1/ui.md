@@ -1,11 +1,20 @@
 # Beta UI checkpoint
 
-The beta shell exposes Assistant, History, Host resources and Settings for one
-configured Codex Deep conversation. Native setup/sign-in, editable page-scoped
-drafts, reconnect, canonical history, held inputs, saved thread files, progress,
-owner acceptance, Stop and capability-gated steering reuse the existing flows.
-Fast, Worker, Memory, timers, external reply controls and project provisioning
-are not mounted in this shell. Deferred source remains in the repository.
+The beta shell lists many conversations, each with a read-only status badge
+(Working, Starting, Stopping, Reply ready, Failed, Needs attention, Queued #N)
+and an owner-wide work-slot summary. The badges come from each listed
+conversation's `GET …/execution` and `GET …/window/queue`, read once every
+10 seconds while the list is mounted. Per conversation the tabs are Chat, Work
+(configured provider and role, Stop/Steer availability, Deep run with worker
+tasks, window and queue state, independent Workers), History, Projects (list,
+create, open project conversation), Timers, Memory, Host resources and Settings.
+Native setup/sign-in, editable drafts, reconnect, canonical and archived
+history, held inputs, saved thread files, progress, Fast replies, owner
+acceptance, Stop and capability-gated steering reuse the existing flows.
+Model and reasoning effort are fixed by server configuration; no
+per-conversation selection is offered until the server exposes one. External
+reply controls stay unmounted. Below 52rem the conversation list is a drawer
+with a scrim, and the tabs scroll horizontally.
 
 After native sign-in or session resume, the shell requires authenticated beta
 discovery before mounting chat or history. The browser session's global
