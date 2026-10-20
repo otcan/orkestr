@@ -63,6 +63,9 @@ jobs:
         run: |
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_package.py -v
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_roles.py -v
+      - name: Scoped V1 runtime compatibility regressions
+        working-directory: ${{ github.workspace }}
+        run: python3 -B -m unittest discover -s v2/compat/v1_runtime/tests -v
       - name: Mocked provider metadata probe safety
         env:
           PYTHONDONTWRITEBYTECODE: '1'
