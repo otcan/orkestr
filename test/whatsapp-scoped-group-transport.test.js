@@ -193,3 +193,48 @@ test('account drift and unauthorized HTTP operations fail closed',async t=>{
  assert.equal(check('GET',`/api/chats/${group}/meta`,'Bearer test-token').passed,true);
  assert.equal(check('POST','/send-text','Bearer test-token',{to:group,text:'unsolicited',accountId:'main'}).code,403);
 });
+
+function mediaFixture(t,client={}) {
+ const now=Date.now(),own='15550000001@c.us',group='120000000001@g.us',reports=[];
+ const config={ownChatId:own,activatedAt:new Date(now-1000).toISOString(),groups:[{chatId:group,threadId:'thread-1'}]};
+ const p=createScopedGroupTransport({config,token:'test-token',base:{},dbPath:':memory:',now:()=>now,
+  report:entry=>reports.push(entry),mediaDownloadOptions:{retryMs:0,timeoutMs:200}});
+ t.after(()=>p.close());
+ const message={id:{_serialized:'owner-image-2'},fromMe:true,to:group,body:'look',timestamp:now/1000,hasMedia:true,type:'image'};
+ return {p,reports,message,client:{info:{wid:{_serialized:own}},...client}};
+}
+const png={data:Buffer.from('fake-image').toString('base64'),mimetype:'image/png',filename:'x.png'};
+
+test('an image whose media is not resolved yet is retried on a refreshed message', async t => {
+ const {p,reports,message,client}=mediaFixture(t,{getMessageById:async()=>({...message,downloadMedia:async()=>png})});
+ assert.equal(await p.observe(client,{...message,downloadMedia:async()=>undefined}),true);
+ assert.equal(reports.length,1);
+ assert.equal(reports[0].event,'scoped_group_media_download_recovered');
+ assert.equal(reports[0].attempt,2);
+ assert.ok(!JSON.stringify(reports).includes('owner-image-2'),'reports carry an id hash, never the message id');
+});
+
+test('the in-browser store fallback recovers an image the wrapper cannot download', async t => {
+ const evaluate=async fn=>String(fn).includes('downloadAndMaybeDecrypt') ? png : null;
+ const {p,reports,message,client}=mediaFixture(t,{pupPage:{evaluate}});
+ assert.equal(await p.observe(client,{...message,downloadMedia:async()=>{throw new Error('t');}}),true);
+ assert.equal(reports[0].stage,'browser_store');
+});
+
+test('a failed media download is reported with codes and journaled as a visible note', async t => {
+ const {p,reports,message,client}=mediaFixture(t);
+ let calls=0;
+ assert.equal(await p.observe(client,{...message,downloadMedia:async()=>{calls++;throw new Error('t');}}),true);
+ assert.equal(calls,3);
+ assert.equal(reports.length,1);
+ assert.equal(reports[0].event,'scoped_group_media_download_failed');
+ assert.deepEqual(reports[0].errors.filter(e=>e.stage==='primary').map(e=>e.code),['t','t','t']);
+});
+
+test('voice notes and videos are skipped without downloading', async t => {
+ const {p,reports,message,client}=mediaFixture(t);
+ let calls=0;
+ assert.equal(await p.observe(client,{...message,type:'ptt',downloadMedia:async()=>{calls++;return png;}}),true);
+ assert.equal(calls,0);
+ assert.equal(reports.length,0);
+});

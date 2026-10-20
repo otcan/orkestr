@@ -9,11 +9,15 @@ import {SCOPED_SEND_MAX_TEXT_LENGTH, encodeReplyEntry, validReplyDocument} from 
 import {DatabaseSync} from 'node:sqlite';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {notificationScope, createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
+import {downloadScopedGroupMedia} from './whatsapp-scoped-group-media.js';
 
 const fail=code=>{throw new Error(`group_transport_${code}`);};
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const IMAGE_MIME_EXTENSIONS=new Map([['image/jpeg','.jpg'],['image/png','.png'],['image/gif','.gif'],['image/webp','.webp']]);
 const MAX_GROUP_MEDIA_BYTES=10*1024*1024;
+// Types that can never become an image attachment: skip the download so a large
+// video or voice note cannot hold the serial input queue.
+const NON_IMAGE_MEDIA_TYPES=new Set(['video','audio','ptt','ptv']);
 const safeMediaName=value=>path.basename(String(value||'image').replace(/[\\/\0]/g,'_')).replace(/[^a-zA-Z0-9_. -]/g,'_').slice(0,180)||'image';
 
 // Media evidence lives in a side table so group_input keeps the exact four-column
@@ -38,7 +42,8 @@ export function validateScopedGroupConfig(config,now=Date.now) {
   return {groups,authors,participants,scope,fencedThreads};
 }
 
-export function createScopedGroupTransport({config,token,base,dbPath=config.journalPath,now=Date.now,routeFence: suppliedFence,proofStore: suppliedProof,sendLookupDelayMs=1000}) {
+export function createScopedGroupTransport({config,token,base,dbPath=config.journalPath,now=Date.now,routeFence: suppliedFence,proofStore: suppliedProof,sendLookupDelayMs=1000,
+    report=entry=>console.error(JSON.stringify(entry)),mediaDownloadOptions={}}) {
   if(!token)fail('configuration_invalid');
   // Validate the whole contract before opening durable state: a build that
   // rejects the live configuration must leave the journal untouched.
@@ -131,11 +136,14 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         if(db.prepare('SELECT 1 FROM group_send WHERE provider_id=?').get(id))return false;
         let body=message.body,mediaPath='',mediaFilename='',mediaMimetype='',mediaSize=0;
         if(hasMedia) {
+          const type=String(message?.type||'').toLowerCase();
           let media=null;
-          try {if(typeof message.downloadMedia==='function')media=await message.downloadMedia();} catch { /* converted to a visible skip note */ }
+          if(NON_IMAGE_MEDIA_TYPES.has(type)) media={data:'',mimetype:type,skip:true};
+          else media=(await downloadScopedGroupMedia({client,message,chatId,report,options:mediaDownloadOptions})).media;
           const mimetype=String(media?.mimetype||'').split(';')[0].trim().toLowerCase();
           const encoded=String(media?.data||'');
-          if(!media?.data) body=[body.trim(),'[WhatsApp attachment skipped: download failed]'].filter(Boolean).join('\n\n');
+          if(media?.skip) body=[body.trim(),`[WhatsApp attachment skipped: unsupported media type ${type}]`].filter(Boolean).join('\n\n');
+          else if(!media?.data) body=[body.trim(),'[WhatsApp attachment skipped: download failed]'].filter(Boolean).join('\n\n');
           else if(!IMAGE_MIME_EXTENSIONS.has(mimetype)) body=[body.trim(),`[WhatsApp attachment skipped: unsupported media type ${mimetype||'unknown'}]`].filter(Boolean).join('\n\n');
           else if(encoded.length>Math.ceil(MAX_GROUP_MEDIA_BYTES*4/3)+8) body=[body.trim(),'[WhatsApp attachment skipped: file exceeds 10 MiB limit]'].filter(Boolean).join('\n\n');
           else {
