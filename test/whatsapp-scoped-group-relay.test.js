@@ -16,9 +16,9 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
     {chatId: 'group-1', threadId: 'thread-1', name: 'First'},
     {chatId: 'group-2', threadId: 'thread-2', name: 'Second'},
   ]};
-  const {readMediaFile = fs.readFile, uploadFailures = 0, ...relayConfig} = extraConfig;
+  const {readMediaFile = fs.readFile, uploadFailures = 0, now = Date.now, ...relayConfig} = extraConfig;
   Object.assign(config, relayConfig);
-  const state = {posts: [], uploads: [], sent: [], reports: [], failReport: false, pages: {}, retired: new Set(), failReply: false,
+  const state = {posts: [], uploads: [], sent: [], reports: [], failReport: false, suppressUpdates: false, messageReads: 0, pages: {}, retired: new Set(), failReply: false,
     suppressFooter: false, quotaFails: false, quotaCalls: 0, uploadFailures,
     quota: {codex: {fiveHourRemainingPct: 73}, claude: {weeklyRemainingPct: 64}}};
   const api = async (url, options) => {
@@ -42,11 +42,11 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
       state.posts.push({url, ...options});
       return {message: {id: `input-${threadId}`}};
     }
-    if (url.includes('/messages')) return state.pages[url] || {messages: []};
+    if (url.includes('/messages')) { state.messageReads++; return state.pages[url] || {messages: []}; }
     return {thread: {ownerUserId: config.ownerUserId, codexModel: 'example-model', retired: state.retired.has(threadId),
-      binding: {chatId: groupId, enabled: true, suppressWhatsAppDebugFooter: state.suppressFooter}}};
+      binding: {chatId: groupId, enabled: true, suppressWhatsAppDebugFooter: state.suppressFooter, suppressWhatsAppUpdates: state.suppressUpdates}}};
   };
-  const relay = createScopedGroupRelay({config, inboxDb, relayDb, api, formatter, env: {}, readMediaFile, send: async payload => {
+  const relay = createScopedGroupRelay({config, inboxDb, relayDb, api, formatter, env: {}, readMediaFile, now, send: async payload => {
     state.sent.push(payload);
     if (state.failReply) throw new Error('transport_disconnected');
     return {ok: true, ids: ['sent-1']};
@@ -414,4 +414,65 @@ test('local replies are not reported as remote deliveries', async t => {
   state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [answer('final')]};
   assert.equal((await relay.tick()).completed, 1);
   assert.equal(state.sent.length, 1); assert.equal(state.reports.length, 0);
+});
+
+test('commentary honours the thread suppression; approval requests still reach the owner', async t => {
+  const {relay, state} = fixture(t, false, true);
+  state.suppressUpdates = true;
+  const page = '/api/threads/thread-1/messages?limit=200';
+  state.pages[page] = {messages: [
+    {...answer('progress', 'input-thread-1', 'commentary'), createdAt: '2026-01-02T00:00:00Z', cursor: 1},
+    {...answer('approval', 'input-thread-1', 'awaiting_approval'), createdAt: '2026-01-02T00:00:01Z', cursor: 2},
+  ]};
+  assert.equal((await relay.tick()).completed, 0);
+  assert.equal(state.sent.length, 1);
+  assert.match(state.sent[0].requestId, /^reply:/);
+  state.pages[page].messages.push({...answer('final'), cursor: 3});
+  assert.equal((await relay.tick()).completed, 1);
+  assert.equal(state.sent.length, 2);
+});
+
+test('a late api-session reply to the newest completed input is sent once, within the window', async t => {
+  let clock = Date.parse('2026-01-01T00:00:00Z') + 60_000;
+  const {relay, state, inboxDb} = fixture(t, false, false, {now: () => clock});
+  inboxDb.exec("UPDATE group_input SET created_at='2026-01-01T00:00:00.000Z'");
+  const page = '/api/threads/thread-1/messages?limit=200';
+  state.pages[page] = {messages: [answer('fast-final')]};
+  assert.equal((await relay.tick()).completed, 1);
+  assert.equal(state.sent.length, 1);
+  const late = '/api/threads/thread-1/messages?limit=50';
+  const coordinator = {...answer('coordinator'), source: 'api-session', text: 'agent: coordinator answer', createdAt: '2026-01-01T00:02:00Z', cursor: 9};
+  state.pages[late] = {messages: [
+    answer('fast-final'), coordinator,
+    {...answer('other-source'), source: 'codex-app-server', createdAt: '2026-01-01T00:02:00Z'},
+    {...answer('other-parent', 'elsewhere'), source: 'api-session', createdAt: '2026-01-01T00:02:00Z'},
+  ]};
+  clock += 20_000;
+  await relay.tick();
+  assert.equal(state.sent.length, 2);
+  assert.equal(state.sent[1].text, 'agent: coordinator answer');
+  assert.equal(state.sent[1].parentId, 'wa-1');
+  clock += 20_000;
+  await relay.tick();
+  assert.equal(state.sent.length, 2, 'never resent');
+  const reads = state.messageReads;
+  await relay.tick();
+  assert.equal(state.messageReads, reads, 'polled at most every ten seconds');
+  clock += 7 * 60 * 60 * 1000;
+  state.pages[late].messages.push({...coordinator, id: 'too-late', createdAt: new Date(clock).toISOString()});
+  await relay.tick();
+  assert.equal(state.sent.length, 2, 'outside the window nothing is sent');
+});
+
+test('a late reply is not sent while any transport delivery is uncertain', async t => {
+  let clock = Date.parse('2026-01-01T00:01:00Z');
+  const {relay, state, inboxDb} = fixture(t, false, false, {now: () => clock});
+  inboxDb.exec("UPDATE group_input SET created_at='2026-01-01T00:00:00.000Z'");
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [answer('fast-final')]};
+  await relay.tick();
+  state.pages['/api/threads/thread-1/messages?limit=50'] = {messages: [{...answer('coordinator'), source: 'api-session', createdAt: '2026-01-01T00:02:00Z'}]};
+  inboxDb.exec("INSERT INTO group_send VALUES('uncertain')");
+  clock += 20_000;
+  assert.equal((await relay.tick()).error, 'group_delivery_requires_review');
+  assert.equal(state.sent.length, 1);
 });

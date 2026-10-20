@@ -123,6 +123,23 @@ keep the turn open, use the same durable payload/receipt journal and label their
 footer `msg:*update*`. A final supersedes any unsent progress already in history.
 Enabling updates does not reopen completed turns or change legacy group bindings.
 
+## Replies after the turn (bound api-session)
+
+An assistant message posted with `orkestr api-session message` on a WhatsApp
+thread whose legacy mirror is off (`mirrorToWhatsApp: false`) is parented to the
+newest relay-routed owner input. That input must be newer than
+`ORKESTR_API_SESSION_RELAY_PARENT_MAX_AGE_MS` (default 6 hours). An explicit
+`parentMessageId` is kept. The response reports `relayParentMessageId` and no
+legacy delivery is attempted.
+
+The relay watches the newest completed input of each group for six hours, at
+most every ten seconds. It delivers an `api-session` final reply with that
+parent once, through the same payload/receipt journal, and never while a send
+is uncertain.
+
+With `forwardProgressUpdates`, commentary honours the thread's
+`suppressWhatsAppUpdates`. Approval requests are still sent.
+
 ## Delegated (remote runtime) threads
 
 A relay thread can be delegated to a remote runtime, for example the Rust

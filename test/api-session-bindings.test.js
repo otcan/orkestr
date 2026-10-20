@@ -494,3 +494,50 @@ test("watcher alerts suppress WhatsApp mirroring when bridge is unavailable", as
   assert.equal(messages[0].chatId || "", "");
   assert.equal(messages[0].originSurface || "", "");
 });
+
+test("api session replies on a relay-served thread are parented to the newest recent relay input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-session-relay-"));
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-session-relay-repo-"));
+  const runtimeEnv = env(home);
+  await createThread({
+    id: "relay-thread", name: "Relay Thread", cwd: repo, repoPath: repo,
+    binding: { connector: "whatsapp", chatId: "group-1@g.us", mirrorToWhatsApp: false },
+  }, runtimeEnv);
+  await bindApiSessionToThread({ apiSessionId: "relay-session", threadId: "relay-thread", cwd: repo }, runtimeEnv);
+  const { appendThreadMessage } = await import("../packages/core/src/threads.js");
+
+  const none = await appendApiSessionMessage({ apiSessionId: "relay-session", role: "assistant", text: "Nothing to answer yet." }, runtimeEnv);
+  assert.equal(none.relayParentMessageId, null);
+  assert.equal(none.message.parentMessageId ?? null, null);
+
+  await appendThreadMessage("relay-thread", { role: "user", state: "completed", source: "whatsapp_group_relay", text: "first" }, runtimeEnv);
+  const latest = await appendThreadMessage("relay-thread", { role: "user", state: "completed", source: "whatsapp_group_relay", text: "second" }, runtimeEnv);
+  await appendThreadMessage("relay-thread", { role: "user", state: "completed", source: "ui", text: "browser input is not a relay parent" }, runtimeEnv);
+  const reply = await appendApiSessionMessage({ apiSessionId: "relay-session", role: "assistant", text: "Coordinator answer." }, runtimeEnv);
+  assert.equal(reply.relayParentMessageId, latest.id);
+  assert.equal(reply.message.parentMessageId, latest.id);
+  assert.equal(reply.message.phase, "final_answer");
+  assert.equal(reply.message.source, "api-session");
+  assert.equal(reply.deliveryExpected, false, "the legacy outbox never sends for a relay-served thread");
+
+  const explicit = await appendApiSessionMessage({ apiSessionId: "relay-session", role: "assistant", text: "x", parentMessageId: "other" }, runtimeEnv);
+  assert.equal(explicit.message.parentMessageId, "other");
+  assert.equal(explicit.relayParentMessageId, null);
+
+  const stale = await appendApiSessionMessage({ apiSessionId: "relay-session", role: "assistant", text: "late" },
+    { ...runtimeEnv, ORKESTR_API_SESSION_RELAY_PARENT_MAX_AGE_MS: "1" });
+  assert.equal(stale.relayParentMessageId, null, "an old input is never answered implicitly");
+});
+
+test("api session replies on a mirrored thread keep their legacy delivery and no relay parent", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-session-mirror-"));
+  const runtimeEnv = env(home);
+  await createThread({ id: "mirror-thread", name: "Mirror", binding: { connector: "whatsapp", chatId: "chat-2", mirrorToWhatsApp: true } }, runtimeEnv);
+  await bindApiSessionToThread({ apiSessionId: "mirror-session", threadId: "mirror-thread" }, runtimeEnv);
+  const { appendThreadMessage } = await import("../packages/core/src/threads.js");
+  await appendThreadMessage("mirror-thread", { role: "user", state: "completed", source: "whatsapp_group_relay", text: "hi" }, runtimeEnv);
+  const reply = await appendApiSessionMessage({ apiSessionId: "mirror-session", role: "assistant", text: "ok" }, runtimeEnv);
+  assert.equal(reply.relayParentMessageId, null);
+  assert.equal(reply.message.parentMessageId ?? null, null);
+  assert.equal(reply.deliveryExpected, true);
+});
