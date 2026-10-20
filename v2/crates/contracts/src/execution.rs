@@ -37,6 +37,27 @@ pub struct ExecutionResources {
     pub resident_bytes: u64,
     pub observed_at_ms: i64,
 }
+/// Closed provider failure class for a `failed` run. Derived only from the
+/// provider's own closed error class; never provider text or account data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionFailureClass {
+    /// The provider account is not logged in or its login was rejected.
+    Authentication,
+    /// A usage or rate limit was reached.
+    Quota,
+    /// The account's billing does not permit the request.
+    Billing,
+    /// The provider rejected or failed the request for another stated reason.
+    Provider,
+    /// The provider reported failure without a recognized class.
+    Unknown,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionFailure {
+    pub class: ExecutionFailureClass,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionAcceptanceCandidate {
@@ -67,6 +88,9 @@ pub struct ExecutionStatus {
     pub progress: Option<ExecutionProgress>,
     pub resources: Option<ExecutionResources>,
     pub capabilities: ExecutionCapabilities,
+    /// Present only for a `failed` run whose provider stated a closed class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<ExecutionFailure>,
 }
 impl ExecutionStatus {
     /// Compare equal-revision durable meaning, excluding only read-time clock
@@ -82,6 +106,7 @@ impl ExecutionStatus {
             && self.progress == other.progress
             && self.resources == other.resources
             && self.capabilities == other.capabilities
+            && self.failure == other.failure
     }
 
     pub fn is_valid(&self) -> bool {
@@ -107,6 +132,7 @@ impl ExecutionStatus {
                     && s.observed_at_ms > 0
                     && s.observed_at_ms <= self.observed_at_ms
             })
+            && (self.failure.is_none() || self.phase == ExecutionPhase::Failed)
     }
 }
 
@@ -116,6 +142,7 @@ mod tests {
     #[test]
     fn equal_revision_excludes_only_clock_and_queue_age_samples() {
         let first = ExecutionStatus {
+            failure: None,
             schema_version: 1,
             conversation_id: ConversationId(uuid::Uuid::from_u128(1)),
             run_id: None,

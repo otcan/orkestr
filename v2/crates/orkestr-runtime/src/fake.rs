@@ -47,6 +47,7 @@ impl FakeProvider {
             event,
             ProviderEvent::CompletedProposal { .. }
                 | ProviderEvent::Failed
+                | ProviderEvent::FailedWith(_)
                 | ProviderEvent::Stopped
                 | ProviderEvent::Lost
         );

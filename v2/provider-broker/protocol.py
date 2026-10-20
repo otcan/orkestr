@@ -42,6 +42,9 @@ class Refused(Exception):
         self.failure = failure if type(failure) is Failure else Failure.INTERNAL
 
 
+CODEX_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+
+
 def require(condition, failure=Failure.PROTOCOL):
     if not condition:
         raise Refused("broker protocol refused", failure)
@@ -96,7 +99,11 @@ def encode(value):
 
 class Channel:
     def __init__(self, workspace, *, expected_native=None, offline_python=False, workspace_exec=False,
-                 workspace_trusted=False):
+                 workspace_trusted=False, host_full_access=False):
+        # Operator instance opt-in only: Codex danger-full-access on the host.
+        require(type(host_full_access) is bool)
+        self.sandbox = ("danger-full-access", "dangerFullAccess") if host_full_access else (
+            "read-only", "readOnly")
         require(type(offline_python) is bool and type(workspace_exec) is bool
                 and type(workspace_trusted) is bool and not (offline_python and workspace_exec)
                 and (workspace_exec or not workspace_trusted))
@@ -269,7 +276,7 @@ class Channel:
                 params = dict(params)
                 del params["dynamicTools"]
             require(params == {"cwd": self.workspace, "approvalPolicy": "never",
-                               "sandbox": "read-only", "ephemeral": False, "modelProvider": "openai"}
+                               "sandbox": self.sandbox[0], "ephemeral": False, "modelProvider": "openai"}
                     and params["ephemeral"] is False)
         else:
             raise Refused("metadata method refused")
@@ -279,7 +286,16 @@ class Channel:
         exact(frame, ("id", "method", "params"))
         require(type(frame["id"]) is int and frame["id"] > 0 and frame["method"] == "turn/start")
         params = frame["params"]
-        exact(params, ("threadId", "clientUserMessageId", "input"))
+        # Optional owner conversation settings, as V1 turnStartParams sends them.
+        overrides = tuple(key for key in ("model", "effort") if isinstance(params, dict) and key in params)
+        if "model" in overrides:
+            model = params["model"]
+            require(isinstance(model, str) and 0 < len(model) <= 120 and not model.isdigit()
+                    and all(c.isascii() and (c.isalnum() or c in "._:-") for c in model)
+                    and model.lower() not in ("openai", "azure", "openrouter"))
+        if "effort" in overrides:
+            require(params["effort"] in CODEX_EFFORTS)
+        exact(params, ("threadId", "clientUserMessageId", "input") + overrides)
         require(params["threadId"] == self.native and identifier(params["clientUserMessageId"]))
         require(isinstance(params["input"], list) and len(params["input"]) == 1)
         item = params["input"][0]
@@ -395,12 +411,14 @@ class Channel:
             require(result.get("approvalPolicy") == "never")
             sandbox = result.get("sandbox")
             require(isinstance(sandbox, dict))
-            require(sandbox.get("type") == "readOnly" and sandbox.get("networkAccess", False) is False)
+            require(sandbox.get("type") == self.sandbox[1] and (
+                self.sandbox[1] == "dangerFullAccess" or sandbox.get("networkAccess", False) is False))
             self.native = thread["id"]
             self.stage = "ready"
             frame = {"id": inner, "result": {"thread": {k: thread[k] for k in ("id", "cwd", "ephemeral", "modelProvider")},
                      "cwd": self.workspace, "approvalPolicy": "never", "modelProvider": "openai",
-                     "sandbox": {"type": "readOnly", "networkAccess": False}}}
+                     "sandbox": {"type": "readOnly", "networkAccess": False}
+                     if self.sandbox[1] == "readOnly" else {"type": "dangerFullAccess"}}}
         elif kind == "turn/start":
             require(isinstance(result.get("turn"), dict))
             require(identifier(result["turn"].get("id")))

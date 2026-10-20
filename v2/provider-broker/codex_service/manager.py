@@ -41,9 +41,16 @@ class Manager:
         package = self.package
         command = [str(Path("/usr/bin/python3").resolve()), "-I", "-S", "-B",
                    str(package.root / "codex_service/entry.py"), "server", str(os.getpid())]
+        # Host full access (operator opt-in) keeps the service user's real
+        # supplementary groups, like V1 executors; otherwise none.
+        groups = []
+        if type(package.beta.get("host_full_access")) is dict:
+            import pwd
+            groups = [g for g in os.getgrouplist(pwd.getpwuid(package.uid).pw_name, package.gid)
+                      if g != package.gid]
         # Retain trusted server diagnostics; contained provider stderr remains closed.
         self.child = subprocess.Popen(command, env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
-            cwd="/", user=package.uid, group=package.gid, extra_groups=[], close_fds=True,
+            cwd="/", user=package.uid, group=package.gid, extra_groups=groups, close_fds=True,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=None,
             process_group=0)
         self.identity = process(self.child.pid)
@@ -187,7 +194,14 @@ class Manager:
             self._uncertain_all("server_lost")
             raise Refused("unexpected_server_exit")
         for window in list(self.windows.values()):
-            window.children.observe()
+            try:
+                window.children.observe()
+            except Exception:
+                # One window's descendant tree cannot be followed (bound,
+                # identity or metadata). Only that window loses custody; the
+                # shared manager and every other conversation keep running.
+                self._uncertain(window.window, window.generation, "cleanup_unknown")
+                self._terminate(window)
         for status in self.ledger.unfinished():
             try:
                 status = self.ledger.tick(status["window_id"], status["generation"])

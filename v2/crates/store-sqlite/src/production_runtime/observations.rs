@@ -46,6 +46,8 @@ impl Store {
             }
             ProviderEvent::CompletedProposal { synthetic: true } => ("completed_proposal", "true"),
             ProviderEvent::Failed => ("failed", ""),
+            // The closed class joins the digest so a replay cannot change it.
+            ProviderEvent::FailedWith(class) => ("failed", failure_class_name(*class)),
             ProviderEvent::Lost => ("lost", ""),
             ProviderEvent::Progress(text) => ("progress", text.as_str()),
             ProviderEvent::Stopped => ("stopped", ""),
@@ -91,7 +93,10 @@ impl Store {
         }
         if !matches!(
             input.event,
-            ProviderEvent::Failed | ProviderEvent::Lost | ProviderEvent::Stopped
+            ProviderEvent::Failed
+                | ProviderEvent::FailedWith(_)
+                | ProviderEvent::Lost
+                | ProviderEvent::Stopped
         ) {
             self.require_observed_native(&mut tx, provider).await?;
         }
@@ -123,6 +128,17 @@ impl Store {
         sqlx::query("INSERT INTO production_observations(event_id,run_id,run_sequence,semantic_digest,kind,lease_generation,dispatch_fence,receipt_state) VALUES(?,?,?,?,?,?,?,?)")
             .bind(event_id.to_string()).bind(input.run_id.to_string()).bind(input.sequence as i64).bind(digest).bind(kind)
             .bind(input.lease_generation as i64).bind(input.dispatch_fence as i64).bind(target).execute(&mut *tx).await.map_err(db)?;
+        if let ProviderEvent::FailedWith(class) = &input.event {
+            sqlx::query(
+                "INSERT INTO production_failure_classes(event_id,run_id,class) VALUES(?,?,?)",
+            )
+            .bind(event_id.to_string())
+            .bind(input.run_id.to_string())
+            .bind(failure_class_name(*class))
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        }
         if kind == "progress" {
             sqlx::query("INSERT INTO production_payloads(id,event_id,owner_id,conversation_id,run_id,text) VALUES(?,?,?,?,?,?)")
                 .bind(Uuid::new_v4().to_string()).bind(event_id.to_string()).bind(owner.to_string())
@@ -170,6 +186,31 @@ impl Store {
         })
     }
 }
+pub(super) fn failure_class_name(
+    class: orkestr_v2_contracts::ExecutionFailureClass,
+) -> &'static str {
+    use orkestr_v2_contracts::ExecutionFailureClass as Class;
+    match class {
+        Class::Authentication => "authentication",
+        Class::Quota => "quota",
+        Class::Billing => "billing",
+        Class::Provider => "provider",
+        Class::Unknown => "unknown",
+    }
+}
+
+pub(super) fn failure_class(value: &str) -> Option<orkestr_v2_contracts::ExecutionFailureClass> {
+    use orkestr_v2_contracts::ExecutionFailureClass as Class;
+    Some(match value {
+        "authentication" => Class::Authentication,
+        "quota" => Class::Quota,
+        "billing" => Class::Billing,
+        "provider" => Class::Provider,
+        "unknown" => Class::Unknown,
+        _ => return None,
+    })
+}
+
 fn state(value: &str) -> Result<RunState> {
     match value {
         "cancelled" => Ok(RunState::Cancelled),

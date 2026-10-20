@@ -21,7 +21,8 @@ MAX_BIND_MS = 5000
 MAX_LIVE_WINDOWS = 16
 BIND_REPLY_SECONDS = 0.1
 # Core's audited decision for a window whose opener is gone. Never a grant.
-RECONCILED_OUTCOMES = ("accepted", "stopped", "abandoned")
+# "failed": the open failed before the window ran anything; it names no run.
+RECONCILED_OUTCOMES = ("accepted", "stopped", "abandoned", "failed")
 
 
 class Refused(Exception):
@@ -88,8 +89,12 @@ def decode(raw):
     require(set(value) == common | fields[operation], "fields")
     require(type(value["version"]) is int and value["version"] == VERSION, "version")
     key(value["request_id"])
+    # A failed open has no run of its own: both run fields are exactly null.
+    runless = operation == "reconcile" and value.get("outcome") == "failed"
+    if runless:
+        require(value["run_id"] is None and value["terminal_event_id"] is None, "terminal_run")
     for field in ("owner_id", "conversation_id", "window_id", "input_message_id", "input_event_id", "run_id", "terminal_event_id"):
-        if field in value:
+        if field in value and not (runless and field in ("run_id", "terminal_event_id")):
             identifier(value[field])
     for field in ("generation", "expected_generation"):
         if field in value:

@@ -14,8 +14,10 @@ mod guard;
 mod lifecycle;
 mod queue;
 pub(super) use queue::enqueue_timer_intent;
+mod provider_choice;
 mod switching;
 pub use credential::{ExecutionWindowCredential, ExecutionWindowRetirement};
+use provider_choice::window_provider;
 #[cfg(test)]
 mod queue_tests;
 #[cfg(test)]
@@ -69,6 +71,25 @@ async fn browser_owner(
         .bind(crate::digest(credential)).fetch_optional(tx).await.map_err(db)?
         .ok_or(RuntimeStoreError::Unauthorized)?;
     Ok(OwnerId(owner.parse().map_err(db)?))
+}
+/// A window whose open failed is transparent to its successor: the lineage
+/// continues from the retired window it restored. `None`: no retired lineage
+/// (no predecessor, or only failed first openings).
+pub(super) async fn effective_predecessor(
+    tx: &mut SqliteConnection,
+    predecessor: Option<String>,
+) -> Result<Option<String>> {
+    let Some(predecessor) = predecessor else {
+        return Ok(None);
+    };
+    let failed: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT restored_window_id FROM execution_window_open_failures WHERE window_id=?",
+    )
+    .bind(&predecessor)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(db)?;
+    Ok(failed.unwrap_or(Some(predecessor)))
 }
 async fn window_in(
     tx: &mut SqliteConnection,

@@ -127,6 +127,45 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'duplicate'):validate(b'{"schema_version":1,"schema_version":1}')
         with self.assertRaisesRegex(RuntimeError,'bounded'):validate(b' '*16385)
 
+    def test_selected_plan_accepts_only_closed_host_full_access(self):
+        from selected import OPTIONAL, optional
+        self.assertIn('host_full_access', OPTIONAL)
+        access = {'providers': True, 'environment': {'HOME': '/home/service', 'PATH': '/usr/bin:/bin'}}
+        host = {'code_mode_host': '/opt/codex/bin/codex-code-mode-host', 'code_mode_host_sha256': 'a' * 64}
+        optional({'host_full_access': access, **host})
+        for bad in ({'providers': True}, {'environment': {'PATH': '/bin'}},
+                    {'providers': 'yes', 'environment': access['environment']},
+                    dict(access, extra=True)):
+            with self.subTest(bad=bad), self.assertRaises(RuntimeError):
+                optional({'host_full_access': bad, **host})
+        profile = {'conversation_id': '33333333-3333-4333-8333-333333333333',
+                   'project_id': '44444444-4444-4444-8444-444444444444', 'workspace': '/srv/project',
+                   'allowed_roots': ['/srv/project'], 'protected_roots': ['/srv/private'],
+                   'cgroup_root': '/sys/fs/cgroup/example', 'toolchain_root': '/opt/image',
+                   'trusted': {'host_privileged': True}}
+        with self.assertRaisesRegex(RuntimeError, 'require host_full_access'):
+            optional({'roles': {}, 'workspace_exec': profile})
+        optional({'roles': {}, 'workspace_exec': profile, 'host_full_access': access, **host})
+
+    def test_host_natives_require_exactly_one_pinned_code_mode_host(self):
+        from selected import OPTIONAL, optional
+        self.assertLessEqual({'code_mode_host', 'code_mode_host_sha256'}, OPTIONAL)
+        access = {'providers': True, 'environment': {'HOME': '/home/service', 'PATH': '/usr/bin:/bin'}}
+        host = {'code_mode_host': '/opt/codex/bin/codex-code-mode-host', 'code_mode_host_sha256': 'b' * 64}
+        # Codex fails every dynamic tool call without its code-mode host.
+        with self.assertRaisesRegex(RuntimeError, 'code_mode_host'):
+            optional({'host_full_access': access})
+        # A sandboxed provider forbids subprocesses: no host binary there.
+        for plan in ({**host}, {'host_full_access': dict(access, providers=False), **host}):
+            with self.subTest(plan=sorted(plan)), self.assertRaisesRegex(RuntimeError, 'code_mode_host'):
+                optional(plan)
+        optional({'host_full_access': dict(access, providers=False)})
+        for bad in ({'code_mode_host': host['code_mode_host']},
+                    {'code_mode_host': 'relative', 'code_mode_host_sha256': 'b' * 64},
+                    {'code_mode_host': host['code_mode_host'], 'code_mode_host_sha256': 'B' * 64}):
+            with self.subTest(bad=bad), self.assertRaises(RuntimeError):
+                optional({'host_full_access': access, **bad})
+
     def test_workspace_exec_profile_is_explicit_exact_and_never_browser_authority(self):
         from beta_config import validate, workspace_exec
         profile={'conversation_id':'11111111-1111-4111-8111-111111111111',
@@ -157,6 +196,31 @@ class ServiceTests(unittest.TestCase):
                           'workspace':'/srv/native-readonly'}
         base['roles']={'fast':role('fast'),'workers':[role('w'+str(i)) for i in range(4)]}
         self.assertEqual(validate(json.dumps(base).encode())['workspace_exec'],profile)
+
+    def test_host_full_access_is_explicit_and_required_by_host_privileged(self):
+        from beta_config import validate, host_full_access
+        access={'environment':{'HOME':'/home/example','PATH':'/usr/bin:/bin'}}
+        self.assertEqual(host_full_access(access),access)
+        for bad in ({'environment':{'PATH':'/usr/bin'}},{'environment':{'HOME':'rel','PATH':'/x'}},
+                    dict(access,sandbox='off'),dict(access,providers='yes')):
+            with self.assertRaises(RuntimeError):host_full_access(bad)
+        role=lambda name:{'launcher':'/opt/example/'+name,'launcher_sha256':'b'*64,
+                          'workspace':'/srv/native-readonly'}
+        base={'schema_version':1,'owner_id':'11111111-1111-4111-8111-111111111111',
+              'conversation_id':'33333333-3333-4333-8333-333333333333',
+              'manager_socket':'/run/example/control.sock','launcher':'/opt/example/launcher',
+              'launcher_sha256':'a'*64,'workspace':'/srv/native-readonly',
+              'namespace':'synthetic','supervisor_key':'synthetic.deep',
+              'roles':{'fast':role('fast'),'workers':[role('w'+str(i)) for i in range(4)]},
+              'workspace_exec':{'conversation_id':'33333333-3333-4333-8333-333333333333',
+                 'project_id':'22222222-2222-4222-8222-222222222222',
+                 'workspace':'/srv/project','allowed_roots':['/srv/project'],
+                 'protected_roots':['/srv/provider-account'],
+                 'cgroup_root':'/sys/fs/cgroup/commands','toolchain_root':'/opt/command-image',
+                 'trusted':{'host_privileged':True}}}
+        with self.assertRaisesRegex(RuntimeError,'host_full_access'):validate(json.dumps(base).encode())
+        base['host_full_access']=access
+        self.assertEqual(validate(json.dumps(base).encode())['host_full_access'],access)
 
     def test_trusted_workspace_profile_is_closed_shape_with_empty_default_credentials(self):
         from beta_config import workspace_exec

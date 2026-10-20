@@ -99,14 +99,23 @@ impl Rlimits {
 }
 
 /// `inherited` entries below zero are unused slots.
-pub(super) fn configure(command: &mut std::process::Command, inherited: [i32; 6], limits: Rlimits) {
+/// `no_new_privs` is false only for the operator's host-privileged mode,
+/// where setuid programs such as sudo must keep working.
+pub(super) fn configure(
+    command: &mut std::process::Command,
+    inherited: [i32; 6],
+    limits: Rlimits,
+    no_new_privs: bool,
+) {
     use std::os::unix::process::CommandExt;
     // SAFETY: after fork, only fixed syscalls/errno access; no allocation or locks.
     // Mark all inherited descriptors CLOEXEC, except our sealed seccomp policy.
     // The standard Command exec-error channel remains usable until exec succeeds.
     unsafe {
         command.pre_exec(move || {
-            if close_range(3, u32::MAX, 4) != 0 || prctl(38, 1_u64, 0_u64, 0_u64, 0_u64) != 0 {
+            if close_range(3, u32::MAX, 4) != 0
+                || (no_new_privs && prctl(38, 1_u64, 0_u64, 0_u64, 0_u64) != 0)
+            {
                 return Err(std::io::Error::last_os_error());
             }
             for fd in inherited {

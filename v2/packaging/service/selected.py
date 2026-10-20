@@ -11,7 +11,8 @@ import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from artifact_boundary import separate
-from beta_config import validate as validate_beta, workspace_exec as validate_workspace_exec
+from beta_config import (validate as validate_beta, workspace_exec as validate_workspace_exec,
+                         host_full_access as validate_host_full_access)
 from closure import pin, require, trusted
 from manager_source import authority
 from prepare import inventory, settings
@@ -35,7 +36,7 @@ def directory(path, gid, mode=0o750):
 
 
 def entry(root, mode):
-    require(mode in ('manager','broker', *('broker-' + role for role in selected_roles.NAMES)),
+    require(mode in ('manager','broker','broker-claude', *('broker-' + role for role in selected_roles.NAMES)),
             'fixed entry mode required')
     interpreter=Path('/usr/bin/python3').resolve(strict=True)
     return ('#!/bin/sh\nset -eu\nexec '+shlex.join([str(interpreter),'-I','-S','-B',
@@ -60,10 +61,65 @@ def pair_bytes(plan):
         blob=path.read_bytes();prefix=b'ORKESTR_V2_BUILD_IDENTITY_V1|'
         record=f"ORKESTR_V2_BUILD_IDENTITY_V1|{component}|{pair['version']}|{source}|END".encode()
         require(blob.count(prefix)>0 and blob.count(prefix)==blob.count(record),'embedded identity mismatch')
-    for path in (server,native):
+    artifacts=[server,native]
+    if 'code_mode_host' in plan:
+        host=Path(plan['code_mode_host'])
+        require(not host.is_symlink() and pin(host)['sha256']==plan['code_mode_host_sha256'],
+                'artifact digest mismatch')
+        artifacts.append(host)
+    for path in artifacts:
         blob=path.read_bytes()[:20]
         require(blob[:6]==b'\x7fELF\x02\x01' and blob[18:20]==b'\x3e\x00','Linux x86_64 ELF required')
     return pair
+
+
+OPTIONAL = {'roles', 'preserve_state', 'workspace_exec', 'max_active_windows', 'host_full_access',
+            'code_mode_host', 'code_mode_host_sha256', 'claude', 'live_map'}
+CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
+# Account selection stays with the Claude account reference, never the env.
+CLAUDE_FORBIDDEN_ENV = {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
+                        'CLAUDE_CONFIG_DIR'}
+
+
+def claude(plan):
+    """Optional Claude Deep/Fast window runtime; requires host full access."""
+    value = plan['claude']
+    require(type(value) is dict and set(value) - {'default', 'fast'} == set(CLAUDE_PATHS)
+            and all(type(value.get(k, False)) is bool for k in ('default', 'fast')),
+            'closed Claude plan required')
+    require(all(type(value[k]) is str and value[k].startswith('/') and '\x00' not in value[k]
+                and '..' not in Path(value[k]).parts for k in CLAUDE_PATHS), 'absolute Claude paths required')
+    access = plan.get('host_full_access')
+    require(type(access) is dict, 'Claude windows require host_full_access')
+    require(not CLAUDE_FORBIDDEN_ENV & set(access['environment']),
+            'host environment must not select a Claude account')
+    return value
+
+
+def optional(plan):
+    """Shape of the optional plan extensions copied into the protected beta config."""
+    if 'workspace_exec' in plan:
+        require('roles' in plan, 'workspace execution requires configured Worker roles')
+        validate_workspace_exec(plan['workspace_exec'])
+    if 'host_full_access' in plan:
+        # Operator opt-in equivalent to host root; never derived from HTTP or model input.
+        validate_host_full_access(plan['host_full_access'])
+    # Host natives start Codex's code-mode host (dynamic tools) from their own
+    # directory: the same-release binary is pinned beside the native.
+    host_providers = plan.get('host_full_access', {}).get('providers', True) is True \
+        if 'host_full_access' in plan else False
+    require(('code_mode_host' in plan) == ('code_mode_host_sha256' in plan) == host_providers,
+            'host_full_access providers require exactly one pinned code_mode_host')
+    if 'code_mode_host' in plan:
+        require(type(plan['code_mode_host']) is str and plan['code_mode_host'].startswith('/')
+                and type(plan['code_mode_host_sha256']) is str
+                and re.fullmatch('[0-9a-f]{64}', plan['code_mode_host_sha256']),
+                'pinned code_mode_host required')
+    if 'claude' in plan:
+        claude(plan)
+    privileged = plan.get('workspace_exec', {}).get('trusted', {}).get('host_privileged') is True
+    require(not privileged or 'host_full_access' in plan,
+            'host-privileged commands require host_full_access')
 
 
 def prepare(plan):
@@ -72,11 +128,9 @@ def prepare(plan):
     fields={'format','output','source_repository','pair','pair_sha256','server','ui','native','native_sha256',
             'uid','gid','home','workspace','state_root','auth_file','bootstrap_file','ledger_directory',
             'endpoint_directory','owner_id','conversation_id','namespace','supervisor_key','origin','port'}
-    require(set(plan) - {'roles', 'preserve_state', 'workspace_exec', 'max_active_windows', 'live_map'} == fields and
+    require(set(plan) - OPTIONAL == fields and
             plan['format']=='orkestr-v2-selected-service-plan-v1','closed plan required')
-    if 'workspace_exec' in plan:
-        require('roles' in plan, 'workspace execution requires configured Worker roles')
-        validate_workspace_exec(plan['workspace_exec'])
+    optional(plan)
     if 'live_map' in plan:
         # Opt-in read-only live map file; the server reads it, the packager never does.
         live=plan['live_map']
@@ -123,7 +177,23 @@ def prepare(plan):
                         'project must be separate from provider and service state')
         role_files = getattr(manager,'ROLE_FILES',set()) if role_paths is not None else set()
         require(role_paths is None or len(role_files)==10,'manager role inventory required')
-        package_files = manager.FILES | role_files
+        host_files = set(getattr(manager,'HOST_FILES',set())) if 'code_mode_host' in plan else set()
+        require(not host_files or host_files == {'codex-code-mode-host'},'manager host inventory required')
+        claude_plan = plan.get('claude')
+        claude_files = set(getattr(manager,'CLAUDE_FILES',set())) if claude_plan else set()
+        require(not claude_plan or len(claude_files)==8,'manager Claude inventory required')
+        if claude_plan:
+            # Paths only: the account directory is never opened, listed or hashed.
+            require(Path(claude_plan['executable']).resolve(strict=True)==Path(claude_plan['executable'])
+                    and Path(claude_plan['executable']).is_file()
+                    and Path(claude_plan['account']).resolve(strict=True)==Path(claude_plan['account']),
+                    'canonical Claude executable and account required')
+            claude_dirs=[trust.private(claude_plan[k],uid,True) for k in ('workspace','home','temporary')]
+            require(preserve or not any(claude_dirs[0].iterdir()),'fresh Claude workspace required')
+            for index,a in enumerate(claude_dirs):
+                for b in [*roots,*claude_dirs[index+1:]]:
+                    require(a!=b and a not in b.parents and b not in a.parents,'isolated Claude path overlap')
+        package_files = manager.FILES | role_files | host_files | claude_files
         modules={}
         for folder,names in (('broker',config.BROKER),('isolation',config.ISOLATION),
                              ('codex_bounded',config.MODULES),('codex_service',manager.MODULES_SERVICE)):
@@ -132,6 +202,9 @@ def prepare(plan):
                 modules[folder+'/'+name]=original.read_bytes()
         generated={'server','native','manager.py','launcher.py','service.json','profile.json','beta.json'}
         require(set(modules)|generated==manager.FILES,'authoritative inventory changed; review packager')
+        if claude_plan:
+            for name in manager.CLAUDE_BROKER:
+                modules['broker/'+name]=(src/name).read_bytes()
         deps={str(Path(p).resolve(strict=True)):pin(trust.protected(Path(p).resolve(strict=True)))['sha256']
               for p in manager.DEPENDENCIES}
         directory(output,gid)
@@ -144,6 +217,10 @@ def prepare(plan):
             for folder in ('broker','isolation','codex_bounded','codex_service'):directory(inner/folder,gid)
             for name,blob in modules.items():write(inner/name,blob,gid,name=='isolation/supervisor.py')
             for name in ('server','native'):write(inner/name,Path(plan[name]).read_bytes(),gid,True)
+            if host_files:
+                write(inner/'codex-code-mode-host',Path(plan['code_mode_host']).read_bytes(),gid,True)
+                require(pin(inner/'codex-code-mode-host')['sha256']==plan['code_mode_host_sha256'],
+                        'copied executable mismatch')
             for name,mode in (('manager.py','manager'),('launcher.py','broker')):write(inner/name,entry(inner,mode),gid,True)
             beta={'schema_version':1,'owner_id':plan['owner_id'],'conversation_id':plan['conversation_id'],
                   'manager_socket':str(endpoint/'control.sock'),'launcher':str(inner/'launcher.py'),
@@ -163,8 +240,19 @@ def prepare(plan):
                 beta['workspace_exec']=plan['workspace_exec']
             if 'max_active_windows' in plan:
                 beta['max_active_windows']=plan['max_active_windows']
+            if 'host_full_access' in plan:
+                beta['host_full_access']=plan['host_full_access']
             if 'live_map' in plan:
                 runtime['live_map']=plan['live_map']
+            if claude_plan:
+                launcher=inner/'launcher-claude.py'
+                write(launcher,entry(inner,'broker-claude'),gid,True)
+                private={**{k:claude_plan[k] for k in CLAUDE_PATHS},
+                         'host_full_access':{'environment':plan['host_full_access']['environment']}}
+                write(inner/'claude-private.json',encoded(private),gid)
+                beta['claude']={'launcher':str(launcher),'launcher_sha256':pin(launcher)['sha256'],
+                                'workspace':claude_plan['workspace'],'default':claude_plan.get('default',False),
+                                'fast':claude_plan.get('fast',False)}
             validate_beta(encoded(beta))
             for name,value in (('beta.json',beta),('service.json',runtime),('profile.json',profile)):
                 write(inner/name,encoded(value),gid,mode=0o640 if name=='beta.json' else None)
@@ -191,6 +279,8 @@ def prepare(plan):
                      'credential_contents_read':False,'provider_invoked':False,
                      'preserved_existing_state':preserve,'roles_enabled':role_paths is not None,
                      'workspace_exec_enabled':'workspace_exec' in beta,
+                     'host_full_access_enabled':'host_full_access' in beta,
+                     'claude_enabled':'claude' in beta,
                      'transitive_startup_closure_qualified':False,
                      'custody':{str(p.relative_to(output)):{'uid':p.stat().st_uid,'gid':p.stat().st_gid,
                                'mode':p.stat().st_mode&0o777} for p in [output,*output.rglob('*')]}}

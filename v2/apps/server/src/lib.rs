@@ -30,7 +30,10 @@ pub mod build_identity;
 pub mod claude_execution;
 pub mod control_dispatch;
 pub mod control_registry;
+mod conversation_resources_http;
 mod conversations_http;
+mod desktop_broker;
+mod desktop_http;
 mod execution;
 mod execution_accept;
 mod execution_registry;
@@ -74,6 +77,9 @@ pub struct AppState {
     resources: resource_health::ResourceSampler,
     timers: timer_http::DurableOwnerController,
     live_map: Option<Arc<std::path::PathBuf>>,
+    desktop_broker: Option<Arc<desktop_broker::Broker>>,
+    /// Whether this installation can run a conversation's turns on Claude.
+    claude_turns: bool,
 }
 impl AppState {
     pub async fn shutdown_beta_window(&self) -> Result<(), &'static str> {
@@ -89,6 +95,14 @@ impl AppState {
         home: &std::path::Path,
     ) -> Result<Self, &'static str> {
         let config = beta_config::loading::load(path, home)?;
+        if config
+            .host_full_access
+            .as_ref()
+            .is_some_and(|access| access.providers)
+        {
+            // Operator opt-in, before any provider session exists.
+            orkestr_runtime::provider_access::enable_host_full_access();
+        }
         let stat = std::fs::read_to_string("/proc/self/stat")
             .map_err(|_| "beta manager parent unavailable")?;
         let (_, fields) = stat
@@ -138,7 +152,26 @@ impl AppState {
         self.window_controller = Some(controller);
         self.initial_window = Some(initial);
         self.window_handles = Some(handles);
+        // An installed Claude window runtime is the Claude turn path for the
+        // owner's per-conversation provider setting.
+        if config.claude.is_some() {
+            self = self.with_claude_turns();
+        }
         Ok(self)
+    }
+    /// Trusted startup only: the private V1 desktop broker client configuration.
+    pub fn with_desktop_broker_file(
+        mut self,
+        path: &std::path::Path,
+    ) -> Result<Self, &'static str> {
+        self.desktop_broker = Some(Arc::new(desktop_broker::Broker::load(path)?));
+        Ok(self)
+    }
+    /// Trusted startup only: the Claude execution path for conversation turns
+    /// is installed, so owners may select Claude in conversation settings.
+    pub fn with_claude_turns(mut self) -> Self {
+        self.claude_turns = true;
+        self
     }
     /// The ordinary server owns the bounded controller task and its shutdown.
     /// With a beta window runtime, every timer occurrence also queues its Deep
@@ -192,6 +225,8 @@ impl AppState {
             auth_window: Arc::new(Mutex::new((Instant::now(), 0))),
             resources: resource_health::ResourceSampler::new(),
             live_map: None,
+            desktop_broker: None,
+            claude_turns: false,
         })
     }
 }
@@ -362,6 +397,8 @@ pub fn router_with_google_catalog(
         .nest("/api/v2",automatic_reply_control::router())
         .merge(memory_service::router(state.clone()))
         .merge(archived_history_http::router())
+        .merge(conversation_resources_http::router())
+        .merge(desktop_http::router())
         .merge(google_registry_metadata::router(catalog))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })
         .layer(DefaultBodyLimit::max(40 * 1024))

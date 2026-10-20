@@ -105,7 +105,7 @@ impl Store {
             self.window_issuance_credential(credential)?;
         }
         let c = self.context()?;
-        if c.provider != ProviderKind::Codex
+        if !window_provider(c.provider)
             || !valid(boot_id)
             || manager_ack_digest.len() != 64
             || !manager_ack_digest
@@ -168,10 +168,11 @@ impl Store {
                 Some(&opening),
             )
             .await?;
-            if retired.get::<String, _>("context_id") != c.id
+            if retired.get::<String, _>("provider_kind") != provider_name(c.provider)?
+                || retired.get::<String, _>("context_id") != c.id
                 || retired.get::<String, _>("incarnation_id") != c.incarnation
                 || retired.get::<i64, _>("generation") != c.generation
-                || row.get::<Option<String>, _>("predecessor_window_id")
+                || effective_predecessor(&mut tx, row.get("predecessor_window_id")).await?
                     != Some(retired.get("closed_window"))
             {
                 return Err(RuntimeStoreError::Fenced);

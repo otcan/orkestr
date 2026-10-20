@@ -97,6 +97,26 @@ pub(super) fn metadata(frame: &[u8], workspace: &Path) -> Result<Vec<u8>, Error>
     serde_json::to_vec(&value).map_err(|_| Error::InvalidFrame)
 }
 
+/// Optional owner-selected `model`/`effort` turn overrides; returns how many.
+fn turn_overrides(params: &serde_json::Map<String, Value>) -> Result<usize, Error> {
+    let mut count = 0;
+    if let Some(model) = params.get("model") {
+        let model = model.as_str().ok_or(Error::InvalidFrame)?;
+        if !orkestr_v2_contracts::launch_model_valid(model) {
+            return Err(Error::InvalidFrame);
+        }
+        count += 1;
+    }
+    if let Some(effort) = params.get("effort") {
+        let effort = effort.as_str().ok_or(Error::InvalidFrame)?;
+        if !orkestr_v2_contracts::CODEX_EFFORTS.contains(&effort) {
+            return Err(Error::InvalidFrame);
+        }
+        count += 1;
+    }
+    Ok(count)
+}
+
 fn committed_inner(value: &Value) -> Result<(), Error> {
     let object = value.as_object().ok_or(Error::InvalidFrame)?;
     let params = value
@@ -109,7 +129,7 @@ fn committed_inner(value: &Value) -> Result<(), Error> {
             .get("id")
             .and_then(Value::as_u64)
             .is_some_and(|id| id > 0)
-        || params.len() != 3
+        || params.len() != 3 + turn_overrides(params)?
         || !["threadId", "clientUserMessageId"].iter().all(|key| {
             params
                 .get(*key)
@@ -218,6 +238,28 @@ mod tests {
         serde_json::to_vec(&json!({"id":2,"method":method,"params":{
             "owned_handle":"synthetic_owned","frame":frame}}))
         .unwrap()
+    }
+    #[test]
+    fn committed_turn_accepts_only_valid_owner_overrides() {
+        let base = json!({"id":4,"method":"turn/start","params":{"threadId":"synthetic-native",
+            "clientUserMessageId":"m1","input":[{"type":"text","text":"hi","text_elements":[]}]}});
+        assert!(committed_inner(&base).is_ok());
+        let mut with = base.clone();
+        with["params"]["model"] = json!("gpt-5.1-codex");
+        with["params"]["effort"] = json!("xhigh");
+        assert!(committed_inner(&with).is_ok());
+        for (key, value) in [
+            ("model", json!("openai")),
+            ("model", json!("a b")),
+            ("model", json!(5)),
+            ("effort", json!("extreme")),
+            ("sandboxPolicy", json!({"type":"dangerFullAccess"})),
+            ("cwd", json!("/")),
+        ] {
+            let mut denied = base.clone();
+            denied["params"][key] = value;
+            assert!(committed_inner(&denied).is_err(), "{key}");
+        }
     }
     #[test]
     fn claude_initialize_is_closed_and_broker_only() {

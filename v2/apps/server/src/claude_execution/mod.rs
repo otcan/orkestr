@@ -45,6 +45,26 @@ impl PreparingClaudeExecution {
         )?;
         Ok(Self { store, preparing })
     }
+    /// Execution-window launch gated by the root manager's bind of the
+    /// stopped service launcher (see `PreparingClaude::open_window_retained`).
+    pub fn open_window_retained(
+        store: Store,
+        grant: BoundSessionMetadata,
+        trusted_launcher: &Path,
+        owned_directories: ChildDirectories,
+        resources: Box<dyn Send + 'static>,
+        bind: impl FnOnce(orkestr_runtime::containment::metadata::BrokerChildLocator) -> Result<(), ()>,
+    ) -> Result<Self, SetupFailure> {
+        let preparing = PreparingClaude::open_window_retained(
+            store.clone(),
+            grant,
+            trusted_launcher,
+            owned_directories,
+            resources,
+            bind,
+        )?;
+        Ok(Self { store, preparing })
+    }
     pub fn poll_ready(&mut self) -> Result<bool, SetupFailure> {
         self.preparing.poll()
     }

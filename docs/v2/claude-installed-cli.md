@@ -84,15 +84,28 @@ jobs belong to the workspace-exec profile, not to the Claude native).
 | Full access: Bash tool with `sudo -n`, resume, Stop during a tool | pass |
 | Full access: 80 s tool run across 4 lease renewals, then Stop at 75 s | pass |
 
+## Failure cause
+
+A `failed` execution status carries `failure: {"class": ...}` when the provider
+stated a closed class: `authentication` (not logged in or login rejected),
+`quota` (usage or rate limit), `billing`, `provider` (invalid request, server
+error, output limit) or `unknown`. Runtime takes only the first assistant
+`error` class of the turn; provider text and account data are never stored.
+The class is part of the committed observation digest, so a replay cannot
+relabel it, and it is absent for every other phase and for unclassified
+failures (Codex does not state a class). The web status line shows a short
+cause, for example `Failed: provider usage limit reached`.
+
 ## Known limits
 
-- Fast and Worker roles refuse `provider: "claude"` by configuration. Fast needs
-  a persistent Claude session wrapper; Worker needs typed Claude Worker
-  composition. Beta execution windows (the pilot service) are Codex-only.
+- Beta execution windows run Claude Deep, and optionally a Claude Fast
+  companion, per conversation setting (see `claude-windows.md`). The isolated
+  execution-config factory stays Deep-only for Claude. Claude Workers (typed
+  Worker tasks under a Claude parent) are not implemented: Worker tasks in a
+  Claude conversation are refused rather than run on Codex.
 - Steer is unavailable; a follow-up stays queued until acceptance.
 - Any single text block over 8 KiB refuses the turn (same per-item bound as
   Codex snapshots); the run becomes `blocked`, never a partial success.
-- The failure class is not shown to the owner yet: the status reads `failed`.
 - A real quota exhaustion was not induced; quota evidence replays the
   installed CLI's frame shapes through the real server and broker.
 

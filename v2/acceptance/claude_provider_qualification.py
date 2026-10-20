@@ -223,7 +223,7 @@ class Candidate:
         return [l.split()[0] for l in out.splitlines() if str(self.workspace) in Path(f"/proc/{l.split()[0]}/cwd").resolve().as_posix()] if out else []
 
     def summary(self, s):
-        return {k: s.get(k) for k in ("phase", "run_id", "revision", "capabilities")} | {
+        return {k: s.get(k) for k in ("phase", "run_id", "revision", "capabilities", "failure")} | {
             "has_progress": bool(s.get("progress")), "has_candidate": bool(s.get("acceptance_candidate"))}
 
 
@@ -295,6 +295,7 @@ def auth(c):
     log("auth_status", status=c.summary(s), payload=(c.payload(s) or "")[:160],
         observations=c.db("SELECT kind FROM production_observations"))
     assert s["phase"] == "failed" and not s.get("progress")
+    assert s.get("failure") == {"class": "authentication"}, s.get("failure")
 
 
 def quota(c):
@@ -304,6 +305,7 @@ def quota(c):
     s = wait_for(lambda: c.phase_in("failed", "blocked", "awaiting_acceptance", "completed"), "quota failure surfaces", 30)
     log("quota_status", status=c.summary(s), observations=c.db("SELECT kind FROM production_observations"))
     assert s["phase"] == "failed" and not s.get("progress")
+    assert s.get("failure") == {"class": "quota"}, s.get("failure")
 
 
 def yolo(c):

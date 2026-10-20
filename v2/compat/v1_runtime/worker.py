@@ -3,6 +3,7 @@ import time
 import uuid
 
 from .ledger import PROGRESS_LIMIT, no_reply
+from .rust_client import ClientError
 
 PROGRESS_INTERVAL_S = 60
 PROGRESS_MAX_CHARS = 3500
@@ -253,13 +254,32 @@ class Worker:
             after = cursor
         if len(matches) != 1 or matches[0].get("payload_removed") is not False or any(matches[0].get(k) != deep[k] for k in ("run_id", "completion_event_id")) or matches[0].get("payload_id") != data["deep_payload"]["payload_id"]:
             raise Refused("accepted_history_mismatch")
-        text = data["deep_payload"]["text"]
+        text = self.render_final(data["deep_payload"]["text"])
         reply = {"id": deep["acceptance_event_id"], "role": "assistant", "state": "completed",
                  "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": data["remote_id"], "text": text}
-        if no_reply(text):
+        if text is None:
             # V1 never transports an exact NO_REPLY; it acknowledges it as no_reply.
             reply.update(text="NO_REPLY", noReply=True)
         self.ledger.complete(data, reply)
+
+    def render_final(self, text):
+        """Apply the conversation's reply settings (NO_REPLY, prefix, footer)
+        through Rust's canonical `settings/render`; None means silent.
+
+        A server without the route (404) keeps the V1 NO_REPLY rule only.
+        """
+        try:
+            value = self.call("POST", "/settings/render", {"text": text})
+        except ClientError as error:
+            if error.status != 404:
+                raise
+            return None if no_reply(text) or not text.strip() else text
+        outcome = value.get("outcome") if isinstance(value, dict) else None
+        if outcome == "suppressed" and value.get("reason") in ("no_reply", "empty"):
+            return None
+        if outcome != "deliver" or not isinstance(value.get("text"), str) or not value["text"].strip() or no_reply(value["text"]):
+            raise Refused("render_shape")
+        return value["text"]
 
     def run(self, stop, active=lambda: True):
         while not stop.wait(1):

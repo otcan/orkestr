@@ -52,6 +52,8 @@ pub enum TerminalOutcome {
     Stopped,
     /// Only from `reconcile`: Core's audited abandonment of unaccepted work.
     Abandoned,
+    /// Only from `reconcile`: the window's open failed before any run of its own.
+    Failed,
 }
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -265,7 +267,10 @@ impl ManagerClient {
         terminal_event_id: EventId,
         deadline: Instant,
     ) -> Result<WindowReceipt> {
-        if outcome == TerminalOutcome::Abandoned {
+        if matches!(
+            outcome,
+            TerminalOutcome::Abandoned | TerminalOutcome::Failed
+        ) {
             return Err(ManagerError::InvalidRequest);
         }
         self.terminal(
@@ -273,48 +278,42 @@ impl ManagerClient {
             request_id,
             window,
             outcome,
-            run_id,
-            terminal_event_id,
+            Some((run_id, terminal_event_id)),
             deadline,
         )
         .await
     }
     /// Release a stranded window (expired/reconciliation, no live custody in
     /// the manager) after Core prepared its audited decision. Idempotent.
+    /// Only a `Failed` open names no run.
     pub async fn reconcile(
         &self,
         request_id: &str,
         window: &Window,
         outcome: TerminalOutcome,
-        run_id: Uuid,
-        terminal_event_id: EventId,
+        run: Option<(Uuid, EventId)>,
         deadline: Instant,
     ) -> Result<WindowReceipt> {
-        self.terminal(
-            "reconcile",
-            request_id,
-            window,
-            outcome,
-            run_id,
-            terminal_event_id,
-            deadline,
-        )
-        .await
+        self.terminal("reconcile", request_id, window, outcome, run, deadline)
+            .await
     }
-    #[allow(clippy::too_many_arguments)]
     async fn terminal(
         &self,
         operation: &str,
         request_id: &str,
         window: &Window,
         outcome: TerminalOutcome,
-        run_id: Uuid,
-        terminal_event_id: EventId,
+        run: Option<(Uuid, EventId)>,
         deadline: Instant,
     ) -> Result<WindowReceipt> {
-        if run_id.is_nil() || terminal_event_id.0.is_nil() {
+        if (outcome == TerminalOutcome::Failed) != run.is_none()
+            || run
+                .as_ref()
+                .is_some_and(|(run_id, event)| run_id.is_nil() || event.0.is_nil())
+        {
             return Err(ManagerError::InvalidRequest);
         }
+        let (run_id, terminal_event_id) = run.unzip();
         let mut request = self.request(operation, request_id, Some(window))?;
         request["outcome"] = json!(outcome);
         request["run_id"] = json!(run_id);
@@ -323,8 +322,8 @@ impl ManagerClient {
             .mutation(request, window, WindowState::Retired, deadline)
             .await?;
         if receipt.outcome != Some(outcome)
-            || receipt.run_id != Some(run_id)
-            || receipt.terminal_event_id != Some(terminal_event_id)
+            || receipt.run_id != run_id
+            || receipt.terminal_event_id != terminal_event_id
         {
             return Err(ManagerError::Protocol);
         }
@@ -540,8 +539,11 @@ impl ManagerClient {
                 ]
                 .contains(&s)
             })
+            // Only a failed open is retired without naming a run.
             || (r.state == WindowState::Retired
-                && (r.outcome.is_none() || r.run_id.is_none() || r.terminal_event_id.is_none()))
+                && (r.outcome.is_none()
+                    || (r.outcome == Some(TerminalOutcome::Failed)) != r.run_id.is_none()
+                    || r.run_id.is_none() != r.terminal_event_id.is_none()))
             || (r.state != WindowState::Retired
                 && (r.outcome.is_some() || r.run_id.is_some() || r.terminal_event_id.is_some()))
         {

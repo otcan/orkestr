@@ -15,7 +15,9 @@ impl ConfiguredExecution {
         heartbeat: &mut Instant,
     ) -> Result<bool, &'static str> {
         loop {
-            if *shutdown.borrow() {
+            // An execution window accepts follow-up turns until its work
+            // deadline; afterwards its owner retires it and a successor resumes.
+            if *shutdown.borrow() || self.window.as_ref().is_some_and(|window| window.work_due()) {
                 return Ok(false);
             }
             self.maintain(heartbeat).await?;

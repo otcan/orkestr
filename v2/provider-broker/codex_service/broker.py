@@ -44,11 +44,17 @@ def main(root, role="deep"):
             if sys.argv[1:] == resumed:
                 from codex_bootstrap import receive
                 expected_native = receive()  # Strict one-use FD4, after bind ACK.
+                if getattr(config, "host_full_access", False) is True:
+                    # A sandbox-created thread lives in this role's private
+                    # state; the host native reads the real CODEX_HOME.
+                    config.host_resume(expected_native)
             pump = pump_type(Pump, subreaper)(config,
                 Channel(config.workspace, expected_native=expected_native,
                         workspace_exec=sys.argv[1:] == workspace,
                         workspace_trusted=sys.argv[1:] == workspace and type(
-                            package.beta["workspace_exec"].get("trusted")) is dict), handoff=handoff,
+                            package.beta["workspace_exec"].get("trusted")) is dict,
+                        host_full_access=getattr(config, "host_full_access", False) is True),
+                handoff=handoff,
                 diagnostics=True)
             pump.run()
             if pump.parent_eof and pump.child is not None and pump.reaped:

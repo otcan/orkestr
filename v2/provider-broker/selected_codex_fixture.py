@@ -15,7 +15,10 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("selected_codex_packager", ROOT / "v2/packaging/selected_codex.py")
 packager = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(packager)
-UID = GID = 65534
+# Synthetic service identity. A real-provider fixture may select the actual
+# executor identity so an existing account directory stays readable by reference.
+UID = int(os.environ.get("ORKESTR_FIXTURE_SERVICE_UID", "65534"))
+GID = int(os.environ.get("ORKESTR_FIXTURE_SERVICE_GID", str(UID)))
 
 
 class Fixture:

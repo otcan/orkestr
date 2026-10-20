@@ -12,6 +12,9 @@ from .contract import MAX_BIND_MS, require
 from .role_profiles import ROLE_NAMES
 
 MAX_CHILDREN = 256
+# Host full access runs real commands (builds, sudo, code-mode hosts) under the
+# native, so its live descendant tree is larger and may include setuid children.
+HOST_MAX_CHILDREN = 512
 
 
 def serialized(function):
@@ -22,13 +25,24 @@ def serialized(function):
     return wrapped
 
 
+def same(identity, any_uid=False):
+    """Original pid+start (and uid unless a host descendant may change it)."""
+    if not any_uid:
+        return exists(identity)
+    current = process(identity["pid"])
+    return bool(current and current["start"] == identity["start"])
+
+
 class Process:
-    def __init__(self, identity):
+    def __init__(self, identity, any_uid=False):
         self.identity = dict(identity)
-        require(exists(identity), "owned_process_missing")
+        # Host mode: an original descendant may exec a setuid program (sudo);
+        # it stays the same owned process for cleanup and reap proof.
+        self.any_uid = any_uid
+        require(same(identity, any_uid), "owned_process_missing")
         self.fd = os.pidfd_open(identity["pid"], 0)
         try:
-            require(exists(identity), "owned_process_changed")
+            require(same(identity, any_uid), "owned_process_changed")
         except BaseException:
             self.close()
             raise
@@ -38,7 +52,7 @@ class Process:
 
     def gone(self):
         # pidfd readiness includes a zombie. Retirement requires actual reap.
-        return not exists(self.identity)
+        return not same(self.identity, self.any_uid)
 
     def send(self, number):
         if not self.exited():
@@ -50,9 +64,19 @@ class Process:
             self.fd = None
 
 
+def host_full_access(package):
+    access = getattr(package, "beta", {}).get("host_full_access")
+    return type(access) is dict and access.get("providers", True) is True
+
+
 class Children:
     def __init__(self, package, server):
         self.package, self.server = package, dict(server)
+        # Operator opt-in (V1-equivalent): the native and its commands run
+        # directly on the host. Descendants may legitimately run as another
+        # uid (sudo), and a long window may start many short-lived commands.
+        self.host = host_full_access(package)
+        self.bound = HOST_MAX_CHILDREN if self.host else MAX_CHILDREN
         self.records = {}
         self.brokers = set()
         self.forced = self.uncertain = False
@@ -62,9 +86,18 @@ class Children:
     def remember(self, identity):
         key = (identity["pid"], identity["start"])
         if key not in self.records:
-            require(len(self.records) < MAX_CHILDREN, "owned_child_bound")
-            self.records[key] = Process(identity)
+            if len(self.records) >= self.bound:
+                self._forget_reaped()
+            require(len(self.records) < self.bound, "owned_child_bound")
+            self.records[key] = Process(identity, any_uid=self.host)
         return self.records[key]
+
+    def _forget_reaped(self):
+        """Drop reaped non-broker descendants. A reaped original identity stays
+        gone, so every cleanup and retirement proof is unchanged."""
+        for key in [key for key, record in self.records.items()
+                    if key not in self.brokers and record.gone()]:
+            self.records.pop(key).close()
 
     @serialized
     def bind(self, pid, start, deadline):
@@ -96,6 +129,8 @@ class Children:
                     bytes(self.package.root / "codex_service/entry.py")]
         modes = {b"broker": "deep", **{("broker-" + role).encode(): role
                  for role in ROLE_NAMES if role in getattr(self.package, "role_profiles", {})}}
+        if getattr(self.package, "claude", None) is not None:
+            modes[b"broker-claude"] = "claude"
         fresh = [b"open-owned-session", b"--protocol", b"orkestr-v2-provider-broker-v1"]
         resumed = [b"resume-owned-session", b"--protocol", b"orkestr-v2-provider-broker-v1"]
         arguments = (path / "cmdline").read_bytes().split(b"\0")[:-1]
@@ -127,10 +162,10 @@ class Children:
             while pending:
                 parent = pending.pop()
                 key = (parent["pid"], parent["start"])
-                if key in visited or not exists(parent):
+                if key in visited or not same(parent, self.host):
                     continue
                 visited.add(key)
-                require(len(visited) <= MAX_CHILDREN, "owned_child_bound")
+                require(len(visited) <= self.bound, "owned_child_bound")
                 path = Path(f"/proc/{parent['pid']}/task/{parent['pid']}/children")
                 try:
                     with path.open("rb") as stream:
@@ -143,7 +178,7 @@ class Children:
                     child = process(int(token))
                     if child is None or child["ppid"] != parent["pid"]:
                         continue
-                    require(child["uid"] == self.package.uid, "owned_child_identity")
+                    require(self.host or child["uid"] == self.package.uid, "owned_child_identity")
                     self.remember(child)
                     pending.append(child)
         except BaseException:
@@ -177,7 +212,7 @@ class Children:
             for record in self.records.values():
                 # We may adopt an orphan under the root subreaper. Never wait on
                 # arbitrary pids; wait only original owned identities/pidfds.
-                if record.exited() and exists(record.identity):
+                if record.exited() and same(record.identity, record.any_uid):
                     try:
                         os.waitid(os.P_PIDFD, record.fd, os.WEXITED | os.WNOHANG)
                     except ChildProcessError:

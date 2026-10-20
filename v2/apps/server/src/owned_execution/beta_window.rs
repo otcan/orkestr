@@ -15,18 +15,31 @@ impl ConfiguredExecution {
     pub(crate) async fn from_window(
         home: &Path,
         config: &BetaConfig,
+        provider: orkestr_v2_application::runtime::ProviderKind,
         setup: WindowSetup,
         context: Arc<Context>,
         resumed: bool,
     ) -> Result<Self, &'static str> {
         config.validate()?;
+        // A Claude conversation runs only its Deep role in this window: no
+        // Codex Fast companion, Worker slots or descriptor workspace profile.
+        let claude = match provider {
+            orkestr_v2_application::runtime::ProviderKind::Codex => None,
+            orkestr_v2_application::runtime::ProviderKind::Claude => Some(
+                config
+                    .claude
+                    .as_ref()
+                    .ok_or("Claude window runtime not configured")?,
+            ),
+            _ => return Err("unsupported window provider"),
+        };
         let WindowSetup {
             store,
             token,
             metadata: grant,
             workspace: workspace_grant,
         } = setup;
-        let workspace_exec = match config.workspace_profile() {
+        let workspace_exec = match config.workspace_profile().filter(|_| claude.is_none()) {
             Some(profile) => {
                 let workspace = workspace_grant.as_ref().ok_or("workspace grant missing")?;
                 let authority = store
@@ -41,6 +54,7 @@ impl ConfiguredExecution {
                             .iter()
                             .flat_map(|roles| roles.launches().map(|r| r.workspace.clone())),
                     ),
+                    config.host_full_access.as_ref(),
                 )?;
                 // Private per-project job records beside the server's own state.
                 let jobs = home.join(format!("workspace-jobs-{}", profile.project_id));
@@ -71,13 +85,19 @@ impl ConfiguredExecution {
                 mode: "isolated_acceptance".into(),
                 conversation_id: config.conversation_id.clone(),
                 machine_token_file: PathBuf::new(),
-                launcher: config.launcher.clone(),
-                launcher_sha256: config.launcher_sha256.clone(),
-                workspace: config.workspace.clone(),
+                launcher: claude.map_or(config.launcher.clone(), |c| c.launcher.clone()),
+                launcher_sha256: claude.map_or(config.launcher_sha256.clone(), |c| {
+                    c.launcher_sha256.clone()
+                }),
+                workspace: claude.map_or(config.workspace.clone(), |c| c.workspace.clone()),
                 workspace_authority: None,
                 namespace: config.namespace.clone(),
                 supervisor_key: config.supervisor_key.clone(),
-                provider: config::Provider::Codex,
+                provider: if claude.is_some() {
+                    config::Provider::Claude
+                } else {
+                    config::Provider::Codex
+                },
                 role: config::ExecutionRole::Deep,
                 execution_budget: budget::ExecutionBudget {
                     max_run_ms: 870_000,
@@ -107,14 +127,26 @@ impl ConfiguredExecution {
             workspace_exec,
             initial_grant: Some(grant),
             workspace_grant,
-            window_workers: config.roles.as_ref().map(|roles| {
-                crate::worker_execution::WindowWorkers::new(context.clone(), roles.workers.clone())
-            }),
+            window_workers: config
+                .roles
+                .as_ref()
+                .filter(|_| claude.is_none())
+                .map(|roles| {
+                    crate::worker_execution::WindowWorkers::new(
+                        context.clone(),
+                        roles.workers.clone(),
+                    )
+                }),
             window: Some(context),
             companion: None,
+            window_activated: std::sync::atomic::AtomicBool::new(false),
             fast_factory: None,
         };
-        factory.attach_window_roles(home, config)?;
+        if claude.is_none() {
+            factory.attach_window_roles(home, config)?;
+        } else {
+            factory.attach_claude_fast(home, config)?;
+        }
         Ok(factory)
     }
 }

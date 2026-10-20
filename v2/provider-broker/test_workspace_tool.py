@@ -83,9 +83,9 @@ class WorkspaceToolTests(unittest.TestCase):
 
     def test_core_native_request_id_boundary(self):
         from workspace_tool import request_id
-        for value in (1,2**53-1,'synthetic-id','é'*64):
+        for value in (0,1,2**53-1,'synthetic-id','é'*64):
             self.assertTrue(request_id(value))
-        for value in (True,False,0,-1,2**53,1.0,None,'','é'*65,
+        for value in (True,False,-1,2**53,1.0,None,'','é'*65,
                       'line\nfeed','nul\0byte','delete\x7f','next\x85line'):
             self.assertFalse(request_id(value))
             frame=call();frame['id']=value

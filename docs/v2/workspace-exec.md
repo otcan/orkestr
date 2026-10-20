@@ -50,3 +50,60 @@ passing Core tests alone is not evidence of an operational coding Worker.
 
 The optional trusted owner profile (toolchains, network, detached jobs,
 explicit credential allowlists) is described in `workspace-exec-trusted.md`.
+
+## Host full access (operator opt-in, equivalent to host root)
+
+An operator may opt an instance into V1-equivalent "full access". It is off by
+default and only settable in the root-managed beta config, never from HTTP,
+browser or model input. **When enabled it is equivalent to giving the model
+host root** (the service user has passwordless sudo on typical hosts). Mount
+lists, credential allowlists and path exclusions are **not a security
+boundary** in this mode: everything the service user can reach is reachable.
+
+Instance level, every conversation served by the instance:
+
+```json
+"host_full_access": {
+  "providers": true,
+  "environment": {"HOME": "/home/<service-user>", "PATH": "/usr/local/bin:/usr/bin:/bin"}
+}
+```
+
+- Codex Deep, Fast and Worker sessions start with sandbox
+  `danger-full-access` and approval `never`, and the pinned native runs
+  directly on the host (`env -i` with exactly `environment`, cwd = role
+  workspace): no provider namespace, seccomp filter, egress proxy or account
+  mounts. Runtime and the provider broker both require the provider to report
+  `dangerFullAccess`; without the opt-in they still require `readOnly`.
+- The root manager starts the server with the service user's real
+  supplementary groups instead of none.
+- The release pins Codex's `codex-code-mode-host` beside the native
+  (selected plan fields `code_mode_host` and `code_mode_host_sha256`, required
+  exactly when providers use host access). Codex starts it from the native's
+  own directory for every dynamic tool call, including
+  `orkestr_workspace_exec`; without it each call fails with
+  `failed to spawn code-mode host: No such file or directory`.
+- The native reads threads from the real `CODEX_HOME` (default
+  `$HOME/.codex`), not from the role's private native state. When Core resumes
+  a Deep or Fast thread that the sandboxed provider created earlier, the broker
+  first copies that one rollout file from the role's private state into the
+  host `CODEX_HOME` (never overwriting). Without it, Codex refuses the resume
+  with `no rollout found` and the window open fails.
+- The root manager follows the native's descendants as host commands: a
+  descendant may run as another uid (`sudo`), reaped descendants no longer
+  count against the per-window bound, and a tree that cannot be followed
+  closes only that window instead of stopping the shared manager.
+- Claude sessions are not used by beta windows and keep their restricted flags.
+
+Per project, a trusted workspace profile may add `"host_privileged": true`
+(requires `host_full_access`). Commands then run as the service user directly
+on the host: no bwrap, namespaces, seccomp or `no_new_privs`, so setuid `sudo`
+works; the environment is `host_full_access.environment` plus operator and
+credential-file additions; cwd starts at the real project path and any path is
+reachable. Kept for operability: a fresh job cgroup per command with generous
+configurable limits (default 32 GiB, 4096 tasks, 8 CPUs), `cgroup.kill` and
+reaping on timeout/cancel/revocation (root descendants included, unless a
+root process deliberately leaves the cgroup), detached jobs, Core delegation
+with exactly-once result delivery, and the audited command text. Because there
+is no PID namespace, a crashed server can leave commands behind; the next
+host-privileged startup kills and removes every foreign job cgroup.

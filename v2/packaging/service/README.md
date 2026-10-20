@@ -305,3 +305,12 @@ longer limits, detached jobs, explicit credential/skill allowlists that default
 to empty). Packaging checks only its closed shape; Runtime validates limits,
 overlaps and credential defaults at startup. It requires a command image whose
 supervisor supports the sealed layout mode.
+
+The optional plan field `host_full_access` (instance-level, equivalent to host
+root; see `docs/v2/workspace-exec.md`) is validated with the same closed shape
+and copied into the protected beta configuration. A trusted profile with
+`host_privileged` requires it. The release receipt records
+`host_full_access_enabled`. When `host_full_access.providers` is true, the plan
+must also pin `code_mode_host` and `code_mode_host_sha256` (the same Codex
+release's `codex-code-mode-host`), which is packaged beside `native`. No other
+package may carry it.

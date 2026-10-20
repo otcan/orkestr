@@ -13,6 +13,15 @@ pub(super) struct WorkerBudget {
 }
 
 impl WorkerBudget {
+    /// No host command effects: only the owner's explicit budget (and Core's
+    /// parent, window and supervisor deadlines) bound renewal.
+    pub(super) fn owner_tasks() -> Self {
+        Self {
+            max_run_ms: MAX_RUN_MS,
+            max_idle_ms: None,
+        }
+    }
+
     pub(super) fn workspace_commands() -> Self {
         Self {
             max_run_ms: 300_000,
@@ -165,9 +174,15 @@ mod tests {
         assert!(policy
             .start(start, 45_000)
             .expired(start + Duration::from_secs(45)));
-        assert!(WorkerPolicy::window_owner_tasks()
+        let owner = WorkerPolicy::window_owner_tasks();
+        owner.validate().unwrap();
+        assert_eq!(owner.execution_budget().unwrap().max_run_ms, MAX_RUN_MS);
+        assert!(owner
             .execution_budget()
-            .is_none());
+            .unwrap()
+            .start(start, 120_000)
+            .expired(start + Duration::from_secs(120)));
+        assert!(!owner.offline_python_enabled());
         let configured = WorkerPolicy::window_workspace_tasks();
         configured.validate().unwrap();
         assert_eq!(configured.execution_budget().unwrap().max_run_ms, 300_000);

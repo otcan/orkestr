@@ -32,6 +32,9 @@ pub(super) enum ClaudeExit {
         orkestr_v2_contracts::RunId,
         orkestr_runtime::containment::ReapedBroker,
     ),
+    /// Execution window reached its work deadline with a proposal pending;
+    /// the late owner decision already retired the window.
+    WindowClosed,
 }
 
 impl ConfiguredExecution {
@@ -46,6 +49,42 @@ impl ConfiguredExecution {
         let Some(capability) = self.next(shutdown, heartbeat).await? else {
             return Ok(None);
         };
+        self.drive_claude_capability(ready, capability, shutdown, heartbeat)
+            .await
+    }
+
+    /// Exact status of this factory's role: the conversation's Deep status,
+    /// or the exact Fast run's status for a Fast companion.
+    async fn claude_status(
+        &self,
+        run: &orkestr_v2_contracts::RunId,
+    ) -> Result<orkestr_v2_contracts::ExecutionStatus, &'static str> {
+        if self.config.role == super::config::ExecutionRole::Fast {
+            return self.fast_status(run).await;
+        }
+        self.store
+            .execution_status(&self.owner, &self.config.conversation_id)
+            .await
+            .map_err(|_| "Claude status unavailable")?
+            .ok_or("Claude status missing")
+    }
+
+    /// Window work for this role is due (the Fast companion also yields to
+    /// its Deep owner's retirement).
+    fn claude_window_due(&self) -> bool {
+        if self.config.role == super::config::ExecutionRole::Fast {
+            return self.fast_window_due();
+        }
+        self.window.as_ref().is_some_and(|window| window.work_due())
+    }
+
+    pub(super) async fn drive_claude_capability(
+        &self,
+        ready: ReadyClaudeExecution,
+        capability: Box<orkestr_v2_store_sqlite::ConsumedProviderDispatch>,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+    ) -> Result<Option<ClaudeExit>, &'static str> {
         let run = capability.provider().run.run_id.clone();
         // Capture before the consumed grant moves into Runtime, as for Codex.
         let mut liveness = super::liveness::RunningLease::capture(&self.store, &capability).await?;
@@ -60,12 +99,7 @@ impl ConfiguredExecution {
         loop {
             let schedule = run_control.serialize().await;
             self.maintain(heartbeat).await?;
-            let status = self
-                .store
-                .execution_status(&self.owner, &self.config.conversation_id)
-                .await
-                .map_err(|_| "Claude status unavailable")?
-                .ok_or("Claude status missing")?;
+            let status = self.claude_status(&run).await?;
             if status.run_id.as_ref() != Some(&run) {
                 return Err("Claude scope changed; reconciliation required");
             }
@@ -103,6 +137,23 @@ impl ConfiguredExecution {
                     if *shutdown.borrow() {
                         return Ok(None);
                     }
+                    if self.claude_window_due() {
+                        // Same as Codex: reap the transport, then wait for the
+                        // owner's decision metadata-only and retire the window.
+                        drop(schedule);
+                        let retiring = live
+                            .retire_completed()
+                            .map_err(|_| "window proposal cleanup refused")?;
+                        let proof = self.reaped(retiring, &run, heartbeat).await?;
+                        if self.config.role == super::config::ExecutionRole::Fast {
+                            self.wait_fast_acceptance(&run, proof, heartbeat, shutdown)
+                                .await?;
+                        } else {
+                            self.wait_window_acceptance(&run, proof, heartbeat, shutdown)
+                                .await?;
+                        }
+                        return Ok(Some(ClaudeExit::WindowClosed));
+                    }
                 }
                 ExecutionPhase::Failed | ExecutionPhase::Blocked | ExecutionPhase::Cancelled => {
                     return Err("Claude execution requires reconciliation");
@@ -116,7 +167,11 @@ impl ConfiguredExecution {
                     return Ok(Some(ClaudeExit::Stopped(run, proof)));
                 }
                 ExecutionPhase::Starting | ExecutionPhase::Running => {
-                    let cancellation = budget.cancellation_key(Instant::now());
+                    let cancellation = if self.claude_window_due() {
+                        Some("execution-window-work-deadline")
+                    } else {
+                        budget.cancellation_key(Instant::now())
+                    };
                     if let Some(key) = cancellation {
                         // Budget expiry uses the same issued control as
                         // owner Stop; no status-derived receipt is constructed.
@@ -167,12 +222,7 @@ impl ConfiguredExecution {
             }
             // Refresh after a step: a pending observation or committed terminal
             // must disable fresh HTTP control before releasing this run's lock.
-            let current = self
-                .store
-                .execution_status(&self.owner, &self.config.conversation_id)
-                .await
-                .map_err(|_| "Claude status unavailable")?
-                .ok_or("Claude status missing")?;
+            let current = self.claude_status(&run).await?;
             if current.run_id.as_ref() != Some(&run) {
                 return Err("Claude scope changed; reconciliation required");
             }
@@ -265,13 +315,51 @@ impl ConfiguredExecution {
             &self.directory.join("tmp"),
         )
         .map_err(|_| "Claude child directories unavailable")?;
-        let mut setup = PreparingClaudeExecution::open_retained(
-            self.store.clone(),
-            grant,
-            &self.config.launcher,
-            directories,
-            self.children.retain(),
-        )
+        // The owner's model/effort for this conversation apply from the next
+        // native launch (each Claude turn is a new process), never mid-turn.
+        let launch = self
+            .store
+            .conversation_turn_launch(&self.owner, &self.config.conversation_id)
+            .await
+            .map_err(|_| "Claude turn settings unavailable")?;
+        let directories = if self.config.role == super::config::ExecutionRole::Fast {
+            // Fast presents the input quickly: lowest effort, default model.
+            directories
+                .with_claude_launch(None, Some("low"))
+                .map_err(|_| "Claude turn settings invalid")?
+        } else if launch.provider == orkestr_v2_contracts::ConversationProvider::Claude {
+            directories
+                .with_claude_launch(launch.model.as_deref(), launch.reasoning_effort.as_deref())
+                .map_err(|_| "Claude turn settings invalid")?
+        } else {
+            directories
+        };
+        let mut setup = if let Some(context) = &self.window {
+            let store = self.store.clone();
+            let launcher = self.config.launcher.clone();
+            let resources = self.children.retain();
+            let context = context.clone();
+            tokio::task::spawn_blocking(move || {
+                PreparingClaudeExecution::open_window_retained(
+                    store,
+                    grant,
+                    &launcher,
+                    directories,
+                    resources,
+                    move |child| context.bind(&child),
+                )
+            })
+            .await
+            .map_err(|_| "Claude window setup worker lost")?
+        } else {
+            PreparingClaudeExecution::open_retained(
+                self.store.clone(),
+                grant,
+                &self.config.launcher,
+                directories,
+                self.children.retain(),
+            )
+        }
         .map_err(|_| "Claude broker setup refused")?;
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
@@ -293,10 +381,41 @@ impl ConfiguredExecution {
                 _ = shutdown.changed() => return Ok(None),
             }
         }
-        setup
+        let ready = setup
             .confirm()
             .await
-            .map(Some)
-            .map_err(|_| "Claude protocol readiness commit refused")
+            .map_err(|_| "Claude protocol readiness commit refused")?;
+        // Deep activates the window once, after its Fast companion (if any)
+        // has a ready native; the companion waits for that activation.
+        if let Some(context) = self
+            .window
+            .as_ref()
+            .filter(|_| self.config.role == super::config::ExecutionRole::Deep)
+        {
+            if !self
+                .window_activated
+                .swap(true, std::sync::atomic::Ordering::AcqRel)
+            {
+                self.wait_companion_setup(shutdown, heartbeat, true).await?;
+                context
+                    .activate_roles(
+                        &self.store,
+                        &self.token,
+                        crate::execution_registry::ExecutionScope {
+                            store: self.store.clone(),
+                            control: Some(self.control.clone()),
+                            tasks: None,
+                        },
+                        self.companion.as_ref().map(|companion| companion.scope()),
+                    )
+                    .await?;
+                if let Some(companion) = &self.companion {
+                    companion.activate();
+                }
+                self.wait_companion_setup(shutdown, heartbeat, false)
+                    .await?;
+            }
+        }
+        Ok(Some(ready))
     }
 }

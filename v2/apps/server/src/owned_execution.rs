@@ -15,6 +15,7 @@ mod fast_bootstrap;
 mod fast_session;
 mod group;
 pub use group::{ConfiguredExecutions, ExecutionTasks};
+mod claude_fast;
 mod liveness;
 mod retirement;
 mod session;
@@ -56,6 +57,8 @@ pub struct ConfiguredExecution {
     window: Option<std::sync::Arc<crate::window_runtime::context::Context>>,
     window_workers: Option<crate::worker_execution::WindowWorkers>,
     companion: Option<std::sync::Arc<window_roles::Companion>>,
+    /// Claude windows activate on their first native setup only.
+    window_activated: std::sync::atomic::AtomicBool,
     fast_factory: Option<Box<ConfiguredExecution>>,
 }
 pub struct ExecutionTask {
@@ -203,6 +206,7 @@ impl ConfiguredExecution {
             window: None,
             window_workers: None,
             companion: None,
+            window_activated: std::sync::atomic::AtomicBool::new(false),
             fast_factory: None,
         })
     }
@@ -250,7 +254,10 @@ impl ConfiguredExecution {
 
     async fn run(self, shutdown: watch::Receiver<bool>) -> Result<(), &'static str> {
         if self.config.role == config::ExecutionRole::Fast {
-            return self.run_fast(shutdown).await;
+            return match self.config.provider {
+                config::Provider::Codex => self.run_fast(shutdown).await,
+                config::Provider::Claude => self.run_claude_fast(shutdown).await,
+            };
         }
         match self.config.provider {
             config::Provider::Codex => self.run_codex(shutdown).await,

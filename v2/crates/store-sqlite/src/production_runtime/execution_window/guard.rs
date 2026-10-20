@@ -45,7 +45,7 @@ impl Store {
         let Some(w) = c.window_scope(tx).await? else {
             return Ok(None);
         };
-        if c.provider != ProviderKind::Codex
+        if !window_provider(c.provider)
             || w.get::<String, _>("conversation_id") != conversation.to_string()
             || w.get::<&str, _>("state") != "active"
             || w.get::<i64, _>("work_deadline_ms") <= now(tx).await?
@@ -80,7 +80,7 @@ impl Store {
         let Some(w) = c.window_scope(tx).await? else {
             return Ok(());
         };
-        if c.provider != ProviderKind::Codex
+        if !window_provider(c.provider)
             || w.get::<String, _>("conversation_id") != binding.conversation_id.to_string()
             || !matches!(w.get::<&str, _>("state"), "opening" | "active")
             || w.get::<i64, _>("work_deadline_ms") <= now(tx).await?

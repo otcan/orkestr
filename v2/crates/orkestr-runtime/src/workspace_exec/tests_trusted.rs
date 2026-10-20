@@ -3,7 +3,9 @@
 //! supervisor. Never real credentials: the credential fixtures are synthetic.
 use super::profile::{Mount, MountKind, Resources, TrustedProfile};
 use super::*;
+use std::os::unix::process::ExitStatusExt;
 use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 
 struct Retained(Arc<AtomicBool>);
 impl Drop for Retained {
@@ -47,6 +49,7 @@ impl Fixture {
             job_timeout: Duration::from_secs(20),
             job_output: 64 * 1024,
             max_jobs: 1,
+            host: None,
         };
         configure(&mut profile, &root);
         let sandbox = WorkspaceExecSandbox::configured_trusted(&cgroup, &image, profile).unwrap();
@@ -218,4 +221,113 @@ fn trusted_output_truncates_and_jobs_stream_until_reaped_timeout() {
     assert!(matches!(result, Err(Error::Timeout)));
     assert_eq!(seen, b"line-1\nline-2\nline-3\n");
     f.clear(&retained);
+}
+
+fn host_access() -> super::profile::HostAccess {
+    super::profile::HostAccess {
+        environment: vec![
+            (
+                "HOME".into(),
+                std::env::var("HOME").unwrap_or_else(|_| "/".into()),
+            ),
+            (
+                "PATH".into(),
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".into(),
+            ),
+        ],
+    }
+}
+
+#[test]
+#[ignore = "requires a non-root runner with passwordless sudo and a delegated cgroup"]
+fn host_privileged_runs_sudo_on_the_host_but_default_trusted_cannot() {
+    let sandboxed = Fixture::new(|_, _| {});
+    let (process, retained) = sandboxed.start(
+        "if sudo -n true 2>/dev/null; then echo sudo-ok; else echo sudo-refused; fi",
+        CommandKind::Command,
+    );
+    let output = process
+        .wait_truncated(&WorkerCancellation::default())
+        .unwrap();
+    assert_eq!(output.stdout, b"sudo-refused\n");
+    sandboxed.clear(&retained);
+    drop(sandboxed);
+
+    let host = Fixture::new(|profile, root| {
+        profile.workspace_target = root.join("workspace");
+        profile.host = Some(host_access());
+    });
+    let workspace = host.root.join("workspace");
+    let check = format!(
+        r#"set -e
+test "$(pwd -P)" = "{workspace}"; test "$PWD" = "{workspace}"; test "$HOME" = "{home}"
+test "$(id -u)" != 0
+sudo -n true && echo sudo-ok
+test "$(sudo -n id -u)" = 0
+test -r /etc/passwd; test -d /proc/1
+"#,
+        workspace = workspace.display(),
+        home = std::env::var("HOME").unwrap_or_else(|_| "/".into())
+    );
+    let (process, retained) = host.start(&check, CommandKind::Command);
+    let output = process
+        .wait_truncated(&WorkerCancellation::default())
+        .unwrap();
+    assert_eq!(
+        output.exit_code,
+        Some(0),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"sudo-ok\n");
+    host.clear(&retained);
+
+    // Without a PID namespace, cgroup.kill still ends a detached descendant
+    // (including one started through sudo) when the job times out.
+    let marker = host.root.join("survivor");
+    let (job, retained) = host.start(
+        &format!(
+            "(setsid sh -c 'sleep 60; touch {m}' &); (sudo -n setsid sleep 60 &); echo started; sleep 60",
+            m = marker.display()
+        ),
+        CommandKind::Job,
+    );
+    let mut seen = Vec::new();
+    let started = Instant::now();
+    let result = job.wait_streaming(&WorkerCancellation::default(), &mut |_, b| {
+        seen.extend_from_slice(b)
+    });
+    assert!(matches!(result, Err(Error::Timeout)));
+    assert!(started.elapsed() < Duration::from_secs(30));
+    assert_eq!(seen, b"started\n");
+    host.clear(&retained);
+    assert!(fs::read_dir(&host.cgroup)
+        .unwrap()
+        .all(|e| !e.unwrap().file_type().unwrap().is_dir()));
+    assert!(!marker.exists());
+}
+
+#[test]
+#[ignore = "requires a non-root runner with passwordless sudo and a delegated cgroup"]
+fn host_privileged_startup_reclaims_a_crashed_servers_job_cgroup() {
+    let cgroup = variable("ORKESTR_TEST_COMMAND_CGROUP");
+    let stale = cgroup.join("job-1-999");
+    fs::create_dir(&stale).unwrap();
+    let mut child = std::process::Command::new("/bin/sleep")
+        .arg("60")
+        .spawn()
+        .unwrap();
+    fs::write(stale.join("cgroup.procs"), child.id().to_string()).unwrap();
+    // The restricted/sandboxed configuration refuses a foreign populated job.
+    assert!(matches!(
+        WorkspaceExecSandbox::configured(&cgroup, &variable("ORKESTR_TEST_TRUSTED_IMAGE")),
+        Err(Error::InvalidConfig)
+    ));
+    let _host = Fixture::new(|profile, root| {
+        profile.workspace_target = root.join("workspace");
+        profile.host = Some(host_access());
+    });
+    assert!(child.wait().unwrap().signal().is_some());
+    assert!(!stale.exists());
 }
