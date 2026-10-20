@@ -1370,6 +1370,21 @@ sync_standalone_connectors_release() {
     bash "$script" --activate --source "$release_dir"
 }
 
+# Full WhatsApp end-to-end probe after the UI restart has lifted the deploy
+# drain, so a thread can actually answer. A failure means the deploy is not
+# reported as successful. The connector step runs only an intake probe.
+run_post_deploy_whatsapp_probe() {
+  local probe_command="${ORKESTR_WA_POST_DEPLOY_PROBE_COMMAND:-}"
+  [ -n "$probe_command" ] || return 0
+  echo "Running post-deploy WhatsApp end-to-end probe."
+  if timeout "${ORKESTR_WA_POST_DEPLOY_PROBE_TIMEOUT:-900}" bash -c "$probe_command"; then
+    echo "Post-deploy WhatsApp end-to-end probe passed."
+    return 0
+  fi
+  echo "Post-deploy WhatsApp end-to-end probe failed; deploy is not reported as successful." >&2
+  return 1
+}
+
 restart_and_verify_public_service() {
   local enabled public_service public_unit working_directory expected_release expected_revision
   local actual_release actual_revision version_json main_pid process_cwd
@@ -1910,6 +1925,10 @@ install_command() {
   if restart_and_verify; then
     if ! verify_required_whatsapp_accounts; then
       write_history_event "failed" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "whatsapp_required_accounts_not_ready" "$provenance_file"
+      exit 1
+    fi
+    if ! run_post_deploy_whatsapp_probe; then
+      write_history_event "failed" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "whatsapp_probe_failed" "$provenance_file"
       exit 1
     fi
     fanout_status=0

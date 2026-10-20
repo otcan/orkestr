@@ -7,7 +7,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {runProbe, recordOutcome, PROBE_LABEL} from '../scripts/whatsapp-group-probe.mjs';
 
 const own = '15550000001@c.us', second = '15550000002@c.us', chat = '120000000009@g.us';
-function fixture(t, {members = [own, second], deliver = true, record = true} = {}) {
+function fixture(t, {members = [own, second], deliver = true, record = true, route = true} = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-probe-'));
   t.after(() => fs.rmSync(dir, {recursive: true, force: true}));
   const primaryPath = path.join(dir, 'primary.sqlite'), senderPath = path.join(dir, 'sender.sqlite');
@@ -19,7 +19,11 @@ function fixture(t, {members = [own, second], deliver = true, record = true} = {
     INSERT INTO group_input VALUES('parent-1','${chat}','earlier','2026-01-01');`);
   s.close();
   t.after(() => p.close());
-  const primary = {ownChatId: own, journalPath: primaryPath, groups: [{chatId: chat, threadId: 'probe-thread'}, {chatId: '120000000001@g.us', threadId: 'work'}]};
+  const relayPath = path.join(dir, 'relay.sqlite');
+  const r = new DatabaseSync(relayPath);
+  r.exec('CREATE TABLE routed(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,message_id TEXT NOT NULL,completed INTEGER NOT NULL DEFAULT 0)');
+  t.after(() => r.close());
+  const primary = {ownChatId: own, journalPath: primaryPath, relayJournalPath: relayPath, groups: [{chatId: chat, threadId: 'probe-thread'}, {chatId: '120000000001@g.us', threadId: 'work'}]};
   const sender = {ownChatId: second, journalPath: senderPath, groups: [{chatId: chat, threadId: 'x'}]};
   const probe = {chatId: chat, threadId: 'probe-thread', senderUrl: 'http://sender.invalid', timeoutMs: 1000, pollMs: 1};
   const calls = [];
@@ -29,6 +33,7 @@ function fixture(t, {members = [own, second], deliver = true, record = true} = {
     if (url.endsWith('/meta')) return {ok: true, json: async () => ({groupMetadata: {participants: members.map(id => ({id: {_serialized: id}}))}})};
     const body = JSON.parse(options.body);
     if (record) p.prepare('INSERT INTO group_input VALUES(?,?,?,?)').run('in-1', body.to, body.text, '2026-01-02');
+    if (record && route) r.prepare("INSERT INTO routed VALUES('in-1','probe-thread','m1',0)").run();
     if (deliver) p.prepare("INSERT INTO group_send VALUES('r1','h',?,'in-1','sent','prov-1','2026-01-02')").run(body.to);
     return {ok: true, json: async () => ({ok: true, ids: ['x']})};
   };
@@ -77,4 +82,11 @@ test('alerts once after two consecutive failures and resets on success', t => {
   assert.equal(recordOutcome(file, {ok: true}, {alert}).consecutiveFailures, 0);
   recordOutcome(file, {ok: false, code: 'x'}, {alert}); recordOutcome(file, {ok: false, code: 'x'}, {alert});
   assert.deepEqual(alerts, [2, 2]);
+});
+
+test('intake-only mode passes on record + route even while the reply is held (deploy drain)', async t => {
+  const r = await runProbe({...fixture(t, {deliver: false}), token: 't', intakeOnly: true});
+  assert.equal(r.ok, true);
+  assert.equal(r.intakeOnly, true);
+  await assert.rejects(runProbe({...fixture(t, {deliver: false, route: false}), token: 't', intakeOnly: true}), /probe_input_not_routed/);
 });
