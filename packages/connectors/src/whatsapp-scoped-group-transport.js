@@ -38,7 +38,7 @@ export function validateScopedGroupConfig(config,now=Date.now) {
   return {groups,authors,participants,scope,fencedThreads};
 }
 
-export function createScopedGroupTransport({config,token,base,dbPath=config.journalPath,now=Date.now,routeFence: suppliedFence,proofStore: suppliedProof}) {
+export function createScopedGroupTransport({config,token,base,dbPath=config.journalPath,now=Date.now,routeFence: suppliedFence,proofStore: suppliedProof,sendLookupDelayMs=1000}) {
   if(!token)fail('configuration_invalid');
   // Validate the whole contract before opening durable state: a build that
   // rejects the live configuration must leave the journal untouched.
@@ -173,7 +173,8 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
     },
     sendText(client,to,text,accountId,request={}) {
       const valid=typeof text==='string' && Boolean(text.trim()) && text.length<=SCOPED_SEND_MAX_TEXT_LENGTH;
-      return deliver(client,to,valid ? text : '',accountId,request,()=>client.sendMessage(to,text,{sendSeen:false}),valid);
+      return deliver(client,to,valid ? text : '',accountId,request,()=>client.sendMessage(to,text,{sendSeen:false}),valid,
+        message=>message?.type==='chat' && message.body===text);
     },
     // The full text of a long reply as one Markdown document. It is one more
     // journaled send: same parent/proof authorization, dedupe, uncertainty and
@@ -182,14 +183,38 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
       const valid=validReplyDocument(document) && typeof createMedia==='function';
       return deliver(client,to,valid ? encodeReplyEntry({document}) : '',accountId,request,()=>client.sendMessage(to,
         createMedia({mimetype:document.mimetype,data:Buffer.from(document.text,'utf8').toString('base64'),filename:document.filename}),
-        {sendSeen:false,sendMediaAsDocument:true}),valid);
+        {sendSeen:false,sendMediaAsDocument:true}),valid,
+        message=>message?.type==='document' && message?._data?.filename===document?.filename);
     },
     policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,additionalOwnerAuthors:authors.count,participantGroups:participants.count,timerNotifications:!!scope,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:SCOPED_SEND_MAX_TEXT_LENGTH,markSeen:false,automaticRouting:false,strictBearer:true,buildHash};},
     diagnostics(client,buildHash) {return {identityMatches:client?.info?.wid?._serialized===config.ownChatId,...this.policyFields(buildHash)};},
   };
   // `text` is the canonical payload string: the message itself, or a
   // document's envelope. It is what proofs authorize and the journal hashes.
-  function deliver(client,to,text,accountId,request,dispatch,valid) {
+  // WhatsApp Web can create and deliver a message yet return no usable model
+  // from sendMessage (seen with a ~20000-character text). Before journaling the
+  // send as uncertain, look for exactly one own message in this group that was
+  // created after the send started, matches the payload, is not journaled yet
+  // and has a server ack. Anything else stays uncertain.
+  async function confirmByLookup(client,to,startedAt,matches) {
+    if(typeof client?.getChatById!=='function')return null;
+    for(let attempt=0;attempt<6;attempt++) {
+      if(attempt)await new Promise(resolve=>setTimeout(resolve,sendLookupDelayMs));
+      try {
+        const chat=await client.getChatById(to);
+        const found=(await chat.fetchMessages({limit:20})).filter(message=>{
+          const id=message?.id?._serialized;
+          return message?.fromMe===true && typeof id==='string' && id && !id.startsWith('summary:')
+            && Number(message.timestamp)*1000>=startedAt-5000 && matches(message)
+            && !db.prepare('SELECT 1 FROM group_send WHERE provider_id=?').get(id);
+        });
+        if(found.length>1)return null;
+        if(found.length===1 && Number(found[0].ack)>=1)return found[0].id._serialized;
+      } catch { /* a failed lookup proves nothing; retry, then stay uncertain */ }
+    }
+    return null;
+  }
+  function deliver(client,to,text,accountId,request,dispatch,valid,matches) {
       return serial(async()=>{
         assertClient(client);
         if(!valid || !groups.has(to) || accountId!=='main' || !/^[a-zA-Z0-9:._-]{1,200}$/.test(request.requestId || ''))fail('scope_denied');
@@ -216,14 +241,24 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         if(shared?.duplicate)return {ok:true,ids:[shared.providerId],duplicate:true};
         db.prepare('INSERT INTO group_send VALUES(?,?,?,?,?,?,?)').run(request.requestId,material,to,request.parentId,'sending',null,new Date(now()).toISOString());
         let timer;
-        try {
-          const sent=await Promise.race([dispatch(),new Promise((_,reject)=>{
-            timer=setTimeout(()=>reject(new Error('send_timeout')),30000);
-          })]);
-          const id=sent?.id?._serialized;if(typeof id!=='string' || !id || id.startsWith('summary:'))fail('delivery_uncertain');
+        const startedAt=now();
+        const settle=id=>{
           db.prepare("UPDATE group_send SET state='sent',provider_id=? WHERE id=?").run(id,request.requestId);
           if(routed)routeFence.sent(request.requestId,id);
           return {ok:true,ids:[id]};
+        };
+        try {
+          let sent=null;
+          try {
+            sent=await Promise.race([dispatch(),new Promise((_,reject)=>{
+              timer=setTimeout(()=>reject(new Error('send_timeout')),30000);
+            })]);
+          } catch { /* the outcome is unknown; confirmed or left uncertain below */ }
+          const id=sent?.id?._serialized;
+          if(typeof id==='string' && id && !id.startsWith('summary:'))return settle(id);
+          const found=await confirmByLookup(client,to,startedAt,matches);
+          if(found)return settle(found);
+          fail('delivery_uncertain');
         } catch {
           db.prepare("UPDATE group_send SET state='uncertain' WHERE id=?").run(request.requestId);
           if(routed)routeFence.uncertain(request.requestId);
