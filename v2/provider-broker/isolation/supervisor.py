@@ -139,6 +139,11 @@ def main():
         # This explicit isolated acceptance role has no plugin tools. Legacy
         # Codex/Claude roles keep their existing configuration and budget.
         options=["-c","features.plugins=false"] if sys.argv[1]=="native-bounded" else []
+        # The installed filter refuses every subprocess, so Codex's out-of-process
+        # code-mode host can never start here. Keep dynamic tools (for example
+        # orkestr_workspace_exec) as direct function calls instead of failing
+        # with EPERM before the tool request reaches the broker.
+        options+=["-c","features.code_mode=false","-c","features.code_mode_host=false"]
         os.execve("/opt/provider/native",["native",*options,"app-server","--listen","stdio://"],dict(os.environ))
     claude=len(sys.argv)==6 and sys.argv[3] in ("claude","claude-resume","claude-synthetic")
     if not claude and (len(sys.argv)!=4 or sys.argv[3] not in ("codex","codex-bounded","synthetic")):return 2

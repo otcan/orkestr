@@ -12,7 +12,9 @@ class ExecObserved(Exception):
 
 class RoleTests(unittest.TestCase):
     def test_exact_native_modes_preserve_legacy_command(self):
-        for mode, options in (("native", []), ("native-bounded", ["-c", "features.plugins=false"])):
+        code_mode = ["-c", "features.code_mode=false", "-c", "features.code_mode_host=false"]
+        for mode, options in (("native", code_mode),
+                              ("native-bounded", ["-c", "features.plugins=false", *code_mode])):
             with self.subTest(mode=mode), \
                  patch.object(sys,"argv",["supervisor.py",mode,"9"]), \
                  patch.object(supervisor,"install_filter") as filter_install, \
