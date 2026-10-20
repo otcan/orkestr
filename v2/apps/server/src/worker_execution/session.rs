@@ -125,6 +125,12 @@ impl WorkerSchedule {
         {
             return Err("Worker binding requires reconciliation");
         }
+        if let Some(workspace) = &self.configuration.workspace_grant {
+            self.store
+                .bind_workspace_session(&self.credential, workspace, &binding)
+                .await
+                .map_err(|_| "Worker workspace binding refused")?;
+        }
         let grant = self
             .store
             .authorize_worker_metadata(&self.credential, &self.parent.run_id, &binding)
@@ -147,8 +153,13 @@ impl WorkerSchedule {
         let setup = if let Some(window) = &self.configuration.window {
             let store = self.store.clone();
             let context = window.context.clone();
+            let open = if self.configuration.workspace_exec.is_some() {
+                PreparingCodex::open_window_workspace_exec_retained
+            } else {
+                PreparingCodex::open_window_worker_retained
+            };
             tokio::task::spawn_blocking(move || {
-                PreparingCodex::open_window_worker_retained(
+                open(
                     store,
                     grant,
                     &launcher,
@@ -288,6 +299,19 @@ impl WorkerSchedule {
             ),
             None => None,
         };
+        let workspace_tools = match &self.configuration.workspace_exec {
+            Some(dispatcher) => Some(
+                workspace_tools::WorkspaceTools::prepare(
+                    self.store.clone(),
+                    self.credential.clone(),
+                    &capability,
+                    dispatcher.clone(),
+                    self.configuration.children.clone(),
+                )
+                .await?,
+            ),
+            None => None,
+        };
         let (authority, pump) = ready
             .attach(self.store.clone(), capability)
             .map_err(|_| "Worker attachment is uncertain; automatic replay refused")?;
@@ -309,6 +333,7 @@ impl WorkerSchedule {
                 control,
                 controls,
                 tools,
+                workspace_tools,
                 liveness,
                 budget,
             })),

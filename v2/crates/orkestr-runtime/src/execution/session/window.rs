@@ -25,6 +25,7 @@ impl PreparingCodex {
             resources,
             bind,
             Role::Deep,
+            ToolProfile::None,
         )
     }
 
@@ -47,6 +48,7 @@ impl PreparingCodex {
             resources,
             bind,
             Role::Fast,
+            ToolProfile::None,
         )
     }
 
@@ -73,6 +75,34 @@ impl PreparingCodex {
             resources,
             bind,
             Role::Worker,
+            ToolProfile::None,
+        )
+    }
+
+    /// A Worker starts only a fresh native session under its sealed parent grant.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_window_workspace_exec_retained(
+        store: Store,
+        grant: BoundSessionMetadata,
+        launcher: &Path,
+        workspace: &Path,
+        directories: ChildDirectories,
+        resources: Box<dyn Send + 'static>,
+        bind: impl FnOnce(BrokerChildLocator) -> Result<(), ()>,
+    ) -> Result<Self, SetupFailure> {
+        if grant.binding().native_session_id.is_some() {
+            return Err(Blocker::Protocol.into());
+        }
+        Self::open_window_role(
+            store,
+            grant,
+            launcher,
+            workspace,
+            directories,
+            resources,
+            bind,
+            Role::Worker,
+            ToolProfile::WorkspaceExec,
         )
     }
 
@@ -86,6 +116,7 @@ impl PreparingCodex {
         resources: Box<dyn Send + 'static>,
         bind: impl FnOnce(BrokerChildLocator) -> Result<(), ()>,
         role: Role,
+        tool_profile: ToolProfile,
     ) -> Result<Self, SetupFailure> {
         if grant.binding().role != role {
             return Err(Blocker::Protocol.into());
@@ -102,7 +133,7 @@ impl PreparingCodex {
             workspace,
             directories,
             true,
-            false,
+            tool_profile,
             resources,
             None,
             Some(&mut gate),

@@ -9,7 +9,8 @@ HOSTS = ("chatgpt.com",)
 HELPERS = ("bounded_budget.py", "bounded_io.py", "bounded_pool.py", "bounded_dns.py", "bounded_proxy.py")
 ISOLATION = ("__init__.py", "policy.py", "launch.py", "authenticated.py",
              "authenticated_budget.py", "supervisor.py", "workspace_fd.py", *HELPERS)
-BROKER = ("configuration.py", "protocol.py", "transport.py", "reaping.py", "codex_bootstrap.py")
+BROKER = ("configuration.py", "protocol.py", "transport.py", "reaping.py", "codex_bootstrap.py",
+          "workspace_tool.py", "workspace_route.py", "workspace_exec_supervisor.py")
 MODULES = ("__init__.py", "trust.py", "configuration.py", "profile.py", "broker.py",
            "peer.py", "egress.py", "controller.py", "server_child.py")
 ROLES = ("deep", "fast")

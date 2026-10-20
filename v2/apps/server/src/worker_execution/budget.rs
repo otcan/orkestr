@@ -13,6 +13,13 @@ pub(super) struct WorkerBudget {
 }
 
 impl WorkerBudget {
+    pub(super) fn workspace_commands() -> Self {
+        Self {
+            max_run_ms: 300_000,
+            max_idle_ms: None,
+        }
+    }
+
     pub(super) fn validate(&self) -> Result<(), &'static str> {
         if !(30_000..=MAX_RUN_MS).contains(&self.max_run_ms)
             || self
@@ -134,6 +141,29 @@ mod tests {
         }
         .start(start, MAX_RUN_MS);
         assert!(budget.expired(start + Duration::from_secs(40)));
+    }
+
+    #[test]
+    fn workspace_profile_is_finite_and_owner_budget_can_only_narrow_it() {
+        let policy = WorkerBudget::workspace_commands();
+        policy.validate().unwrap();
+        let start = Instant::now();
+        assert!(policy
+            .start(start, 600_000)
+            .expired(start + Duration::from_secs(300)));
+        assert!(!policy
+            .start(start, 600_000)
+            .expired(start + Duration::from_secs(299)));
+        assert!(policy
+            .start(start, 45_000)
+            .expired(start + Duration::from_secs(45)));
+        assert!(WorkerPolicy::window_owner_tasks()
+            .execution_budget()
+            .is_none());
+        let configured = WorkerPolicy::window_workspace_tasks();
+        configured.validate().unwrap();
+        assert_eq!(configured.execution_budget().unwrap().max_run_ms, 300_000);
+        assert!(!configured.offline_python_enabled());
     }
 
     #[test]

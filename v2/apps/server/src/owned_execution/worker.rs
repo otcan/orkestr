@@ -30,6 +30,8 @@ impl ConfiguredExecution {
                         reaps: self.worker_reaps.clone(),
                         tasks: self.tasks.clone(),
                         offline_python: self.offline_python.clone(),
+                        workspace_exec: self.workspace_exec.clone(),
+                        workspace_grant: self.workspace_grant.clone(),
                         window: self.window_workers.clone(),
                     },
                     parent,

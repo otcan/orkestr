@@ -3,17 +3,50 @@ use super::*;
 use crate::{beta_config::BetaConfig, window_runtime::context::Context};
 use std::{sync::Arc, time::Instant};
 
+/// Opaque authority moved from the exact window controller, never from HTTP.
+pub(crate) struct WindowSetup {
+    pub store: Store,
+    pub token: String,
+    pub metadata: BoundSessionMetadata,
+    pub workspace: Option<Arc<orkestr_v2_store_sqlite::WorkspaceGrant>>,
+}
+
 impl ConfiguredExecution {
-    pub(crate) fn from_window(
+    pub(crate) async fn from_window(
         home: &Path,
         config: &BetaConfig,
-        store: Store,
-        token: String,
-        grant: BoundSessionMetadata,
+        setup: WindowSetup,
         context: Arc<Context>,
         resumed: bool,
     ) -> Result<Self, &'static str> {
         config.validate()?;
+        let WindowSetup {
+            store,
+            token,
+            metadata: grant,
+            workspace: workspace_grant,
+        } = setup;
+        let workspace_exec = match config.workspace_profile() {
+            Some(profile) => {
+                let workspace = workspace_grant.as_ref().ok_or("workspace grant missing")?;
+                let authority = store
+                    .install_workspace_exec(&token, workspace)
+                    .await
+                    .map_err(|_| "workspace execution installation refused")?;
+                Some(Arc::new(
+                    crate::workspace_exec::WorkspaceExecDispatcher::configured(
+                        store.clone(),
+                        token.clone(),
+                        Arc::new(authority),
+                        &profile.cgroup_root,
+                        &profile.toolchain_root,
+                    )
+                    .map_err(|_| "workspace command sandbox unavailable")?,
+                ))
+            }
+            None if workspace_grant.is_none() => None,
+            None => return Err("workspace profile scope changed"),
+        };
         let directory = if resumed {
             directory::existing_for(home, &config.conversation_id)?
         } else {
@@ -59,8 +92,9 @@ impl ConfiguredExecution {
             owner,
             children: crate::owned_children::ChildSet::default(),
             offline_python: None,
+            workspace_exec,
             initial_grant: Some(grant),
-            workspace_grant: None,
+            workspace_grant,
             window_workers: config.roles.as_ref().map(|roles| {
                 crate::worker_execution::WindowWorkers::new(context.clone(), roles.workers.clone())
             }),

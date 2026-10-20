@@ -55,6 +55,7 @@ mod window_runtime;
 mod worker_discovery;
 pub mod worker_execution;
 pub mod worker_tasks;
+mod workspace_exec;
 
 #[derive(Clone)]
 pub struct AppState {

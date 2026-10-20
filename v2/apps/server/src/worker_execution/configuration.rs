@@ -21,6 +21,9 @@ pub struct WorkerConfiguration {
     pub tasks: crate::worker_tasks::WorkerTaskAccess,
     /// Fixed trusted server profile; no browser/provider-selected paths or tools.
     pub offline_python: Option<std::sync::Arc<crate::offline_python::OfflinePythonDispatcher>>,
+    pub(crate) workspace_exec:
+        Option<std::sync::Arc<crate::workspace_exec::WorkspaceExecDispatcher>>,
+    pub(crate) workspace_grant: Option<std::sync::Arc<orkestr_v2_store_sqlite::WorkspaceGrant>>,
     pub(crate) window: Option<super::WindowWorkers>,
 }
 
@@ -28,7 +31,14 @@ impl WorkerConfiguration {
     pub(super) fn validate(&self) -> Result<(), &'static str> {
         self.policy.validate()?;
         if self.window.is_some() && (!self.policy.owner_tasks() || self.offline_python.is_some()) {
-            return Err("window Workers require explicit owner tasks without tool profiles");
+            return Err("window Workers require explicit owner tasks without offline Python");
+        }
+        if self.workspace_exec.is_some()
+            && (self.window.is_none()
+                || self.workspace_grant.is_none()
+                || self.offline_python.is_some())
+        {
+            return Err("workspace commands require their exact window project profile");
         }
         if self.policy.offline_python_enabled() != self.offline_python.is_some()
             || self.policy.broker_launcher().is_some_and(|(path, digest)| {

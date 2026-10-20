@@ -66,10 +66,10 @@ impl CodexPump {
             || self.source.eof
             || self.source.writing.is_some()
             || self.source.steering.is_some()
-            || self.source.tool_write.is_some()
-            || self.pending_offline_python().is_some()
-            || self.source.tool_write.is_some()
-            || self.pending_offline_python().is_some()
+            || (self.source.tool_write.is_some() || self.source.workspace_write.is_some())
+            || (self.pending_offline_python().is_some() || self.pending_workspace_exec().is_some())
+            || (self.source.tool_write.is_some() || self.source.workspace_write.is_some())
+            || (self.pending_offline_python().is_some() || self.pending_workspace_exec().is_some())
             || self.cursor.pending().is_some()
             || self.cursor.rejected().is_some()
             || !matches!(

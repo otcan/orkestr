@@ -18,8 +18,11 @@ def main(root, role="deep"):
         Channel, protocol, Refused, subreaper, reaped_exit, Pump = modules(package.root)
         fresh = ["open-owned-session", "--protocol", protocol]
         resumed = ["resume-owned-session", "--protocol", protocol]
-        require(role in package.role_profiles and sys.argv[1:] in
-                ((fresh,) if role.startswith("worker-") else (fresh, resumed)), "broker_operation")
+        workspace = ["open-owned-workspace-worker-session", "--protocol", protocol]
+        worker = role.startswith("worker-")
+        workspace_enabled = worker and package.beta.get("workspace_exec") is not None
+        allowed = (fresh, workspace) if workspace_enabled else ((fresh,) if worker else (fresh, resumed))
+        require(role in package.role_profiles and sys.argv[1:] in allowed, "broker_operation")
         def stop(_number, _frame):
             from protocol import Failure
             raise Refused("owned selected Codex stopped", Failure.SIGNAL)
@@ -42,7 +45,8 @@ def main(root, role="deep"):
                 from codex_bootstrap import receive
                 expected_native = receive()  # Strict one-use FD4, after bind ACK.
             pump = pump_type(Pump, subreaper)(config,
-                Channel(config.workspace, expected_native=expected_native), handoff=handoff,
+                Channel(config.workspace, expected_native=expected_native,
+                        workspace_exec=sys.argv[1:] == workspace), handoff=handoff,
                 diagnostics=True)
             pump.run()
             if pump.parent_eof and pump.child is not None and pump.reaped:

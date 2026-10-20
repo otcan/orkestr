@@ -11,3 +11,4 @@ pub mod codex_rpc;
 pub mod containment;
 pub mod execution;
 pub mod worker_sandbox;
+pub mod workspace_exec;

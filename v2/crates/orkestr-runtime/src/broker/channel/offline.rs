@@ -3,7 +3,7 @@ use super::*;
 use crate::broker::offline_tool::PendingOfflinePythonCall;
 #[derive(Default)]
 pub(super) struct OfflineState {
-    enabled: bool,
+    pub(super) enabled: bool,
     pub(super) pending: Option<PendingOfflinePythonCall>,
     seen_requests: std::collections::HashSet<String>,
     seen_calls: std::collections::HashSet<String>,
@@ -35,7 +35,11 @@ impl BrokerChannel {
         Ok(())
     }
     pub(crate) fn enable_offline_python(&mut self) -> Result<(), Blocker> {
-        if self.execution_claimed || self.pending.is_some() || self.next != 2 {
+        if self.execution_claimed
+            || self.pending.is_some()
+            || self.next != 2
+            || self.workspace_tool.enabled
+        {
             return Err(Blocker::Protocol);
         }
         self.offline.enabled = true;

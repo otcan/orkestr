@@ -15,6 +15,10 @@ impl WorkerSchedule {
             .map_err(|_| "Worker control handoff unavailable")?
         {
             let tool_cleanup = running.tools.take().and_then(tools::WorkerTools::cancel);
+            let workspace_cleanup = running
+                .workspace_tools
+                .take()
+                .and_then(workspace_tools::WorkspaceTools::cancel);
             let active = control
                 .dispatch_retiring(running.authority, running.pump)
                 .map_err(|_| "Worker native interruption requires reconciliation")?;
@@ -23,6 +27,7 @@ impl WorkerSchedule {
                     active,
                     _control: running.control,
                     tool_cleanup,
+                    workspace_cleanup,
                 })),
                 WorkerProgress::Running,
             ));
@@ -98,7 +103,15 @@ impl WorkerSchedule {
             // deadline commit/publication. No concurrent Worker pump can race it.
             return Ok((Phase::Running(running), WorkerProgress::Running));
         }
+        // Refresh an already-due empty lease before receiving a new tool call.
+        // A pending call/job is never renewed or given replacement authority.
+        if running.workspace_tools.is_some() && renewal_due(&running) {
+            running = self.refresh_running(running).await?;
+        }
         if let Some(tools) = &mut running.tools {
+            tools.poll(&mut running.pump).await?;
+        }
+        if let Some(tools) = &mut running.workspace_tools {
             tools.poll(&mut running.pump).await?;
         }
         if running.pump.pending().is_none() {
@@ -133,17 +146,7 @@ impl WorkerSchedule {
         } else {
             status.phase
         };
-        if phase == ExecutionPhase::Running
-            && running
-                .liveness
-                .as_ref()
-                .is_some_and(|lease| lease.due(Instant::now()))
-            && running.pump.renewal_quiescent()
-            && running
-                .tools
-                .as_ref()
-                .is_none_or(tools::WorkerTools::renewal_quiescent)
-        {
+        if phase == ExecutionPhase::Running && renewal_due(&running) {
             running = self.refresh_running(running).await?;
         }
         // A Busy persistence step can retain a new observation. Refresh before
@@ -162,6 +165,7 @@ impl WorkerSchedule {
             control,
             controls,
             mut tools,
+            mut workspace_tools,
             mut liveness,
             budget,
         } = *running;
@@ -171,6 +175,9 @@ impl WorkerSchedule {
         if let Some(tools) = &mut tools {
             tools.refresh_parent(lease.authority()).await?;
         }
+        if let Some(tools) = &mut workspace_tools {
+            tools.refresh_parent(lease.authority()).await?;
+        }
         Ok(Box::new(Running {
             authority: next_authority,
             pump: next_pump,
@@ -178,6 +185,7 @@ impl WorkerSchedule {
             control,
             controls,
             tools,
+            workspace_tools,
             liveness,
             budget,
         }))
@@ -193,10 +201,15 @@ impl WorkerSchedule {
             .tool_cleanup
             .as_ref()
             .is_some_and(|tool| !tool.is_reaped())
+            || control
+                .workspace_cleanup
+                .as_ref()
+                .is_some_and(|tool| !tool.is_reaped())
         {
             return Ok((Phase::Stopping(control), WorkerProgress::Running));
         }
         control.tool_cleanup.take();
+        control.workspace_cleanup.take();
         match control.active.tick().await {
             StopProgress::Pending | StopProgress::InterruptAcknowledged => {
                 Ok((Phase::Stopping(control), WorkerProgress::Running))
@@ -221,4 +234,20 @@ impl WorkerSchedule {
             }
         }
     }
+}
+
+fn renewal_due(running: &Running) -> bool {
+    running
+        .liveness
+        .as_ref()
+        .is_some_and(|lease| lease.due(Instant::now()))
+        && running.pump.renewal_quiescent()
+        && running
+            .tools
+            .as_ref()
+            .is_none_or(tools::WorkerTools::renewal_quiescent)
+        && running
+            .workspace_tools
+            .as_ref()
+            .is_none_or(workspace_tools::WorkspaceTools::renewal_quiescent)
 }

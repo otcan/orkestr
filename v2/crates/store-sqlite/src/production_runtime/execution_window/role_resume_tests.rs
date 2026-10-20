@@ -47,7 +47,26 @@ async fn accept(w: &Window, provider: &ProviderAdmission, key: &str) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn companion_resume_requires_exact_closed_predecessor_and_is_single_use() {
-    let w = Window::open().await;
+    resume_case(false).await;
+}
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workspace_companion_resume_rebinds_only_exact_closed_predecessor_atomically() {
+    resume_case(true).await;
+}
+async fn resume_case(with_workspace: bool) {
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    let (w, project) = if with_workspace {
+        let (window, project) = open_project_window().await;
+        (window, Some(project))
+    } else {
+        (Window::open().await, None)
+    };
+    #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+    let w = {
+        assert!(!with_workspace);
+        Window::open().await
+    };
     let fast = w.ready_fast().await;
     w.activate().await;
     let fast_admission = w
@@ -139,6 +158,33 @@ async fn companion_resume_requires_exact_closed_predecessor_and_is_single_use() 
     let config = fixtures::config(ProductionTakeover::ExpiredPredecessor {
         incarnation_id: retired.supervisor_incarnation().unwrap().into(),
     });
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    let (current, deep_metadata, current_project) = if let Some((allow, path, id)) = &project {
+        let (store, metadata, grant) =
+            w.f.store
+                .reattach_terminal_supervisor_with_workspace(
+                    credential.credential(),
+                    config,
+                    &deep_dispatch.provider().run.run_id,
+                    *id,
+                    allow.installation(path).unwrap(),
+                )
+                .await
+                .unwrap();
+        (store, metadata, Some(grant))
+    } else {
+        let (store, metadata) =
+            w.f.store
+                .reattach_terminal_supervisor(
+                    credential.credential(),
+                    config,
+                    &deep_dispatch.provider().run.run_id,
+                )
+                .await
+                .unwrap();
+        (store, metadata, None)
+    };
+    #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
     let (current, deep_metadata) =
         w.f.store
             .reattach_terminal_supervisor(
@@ -190,10 +236,15 @@ async fn companion_resume_requires_exact_closed_predecessor_and_is_single_use() 
         .await
         .unwrap();
         let before = fixtures::snapshot(&w.f.store).await;
-        assert!(current
-            .authorize_window_fast_metadata(credential.credential(), &lost)
-            .await
-            .is_err());
+        assert!(metadata(
+            &current,
+            credential.credential(),
+            &lost,
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            current_project.as_ref(),
+        )
+        .await
+        .is_err());
         assert_eq!(before, fixtures::snapshot(&w.f.store).await);
         sqlx::query(&format!(
             "UPDATE execution_windows SET {column}=? WHERE id=?"
@@ -204,16 +255,26 @@ async fn companion_resume_requires_exact_closed_predecessor_and_is_single_use() 
         .await
         .unwrap();
     }
-    let grant = current
-        .authorize_window_fast_metadata(credential.credential(), &lost)
-        .await
-        .unwrap();
+    let grant = metadata(
+        &current,
+        credential.credential(),
+        &lost,
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        current_project.as_ref(),
+    )
+    .await
+    .unwrap();
     assert_eq!(grant.binding().role, Role::Fast);
     assert_eq!(grant.binding().native_session_id, lost.native_session_id);
-    assert!(current
-        .authorize_window_fast_metadata(credential.credential(), &lost)
-        .await
-        .is_err());
+    assert!(metadata(
+        &current,
+        credential.credential(),
+        &lost,
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        current_project.as_ref(),
+    )
+    .await
+    .is_err());
     assert_eq!(
         current
             .with_metadata_fence(&grant, || Ok::<_, ()>(1))
@@ -239,4 +300,115 @@ async fn companion_resume_requires_exact_closed_predecessor_and_is_single_use() 
         confirmed.binding().native_session_id,
         fast.native_session_id
     );
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    if let Some((_, path, _)) = project {
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+async fn metadata(
+    store: &Store,
+    credential: &str,
+    binding: &Binding,
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))] workspace: Option<
+        &WorkspaceGrant,
+    >,
+) -> Result<BoundSessionMetadata> {
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    if let Some(workspace) = workspace {
+        return store
+            .authorize_window_fast_metadata_with_workspace(credential, binding, workspace)
+            .await;
+    }
+    store
+        .authorize_window_fast_metadata(credential, binding)
+        .await
+}
+
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+async fn open_project_window() -> (
+    Window,
+    (WorkspaceOperatorAllowlist, std::path::PathBuf, Uuid),
+) {
+    use std::os::unix::fs::MetadataExt;
+    let f = fixtures::setup().await;
+    let browser = browser(&f).await;
+    let mut roles = f
+        .handle
+        .ensure_role_bindings(&f.owner, &f.conversation)
+        .await
+        .unwrap();
+    let path = f.root.with_extension("workspace");
+    std::fs::create_dir_all(path.join(".git")).unwrap();
+    let allow = WorkspaceOperatorAllowlist::new(
+        vec![path.clone()],
+        vec![f.root.clone()],
+        std::fs::metadata(&path).unwrap().uid(),
+    )
+    .unwrap();
+    let id = Uuid::new_v4();
+    let grant = f
+        .handle
+        .register_workspace(
+            &f.token,
+            &f.conversation,
+            id,
+            allow.installation(&path).unwrap(),
+        )
+        .await
+        .unwrap();
+    for binding in [&roles.deep, &roles.fast] {
+        f.handle
+            .bind_workspace_session(&f.token, &grant, binding)
+            .await
+            .unwrap();
+    }
+    roles.deep = fixtures::ready(&f).await;
+    let old = input(&f, "old-project-input").await;
+    let source = input(&f, "project-window-input").await;
+    let status = f
+        .store
+        .admit_execution_window_authenticated(&browser, &f.conversation, &source)
+        .await
+        .unwrap()
+        .status;
+    let credential = f
+        .handle
+        .issue_execution_window_credential(
+            &f.token,
+            status.window_id,
+            1,
+            "role-test-boot",
+            status.expires_at_ms,
+            &"a".repeat(64),
+        )
+        .await
+        .unwrap();
+    let bound = f
+        .handle
+        .bind_execution_window(&f.token, &credential)
+        .await
+        .unwrap();
+    bound
+        .register_workspace(
+            credential.credential(),
+            &f.conversation,
+            id,
+            allow.installation(&path).unwrap(),
+        )
+        .await
+        .unwrap();
+    (
+        Window {
+            f,
+            browser_credential: browser,
+            bound,
+            credential,
+            status,
+            roles,
+            old,
+            source,
+        },
+        (allow, path, id),
+    )
 }

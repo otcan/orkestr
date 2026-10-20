@@ -1,6 +1,6 @@
 use super::*;
 impl Store {
-    pub(super) async fn workspace_grant_in(
+    pub(in crate::production_runtime) async fn workspace_grant_in(
         &self,
         tx: &mut SqliteConnection,
         grant: &WorkspaceGrant,

@@ -1,6 +1,7 @@
 //! Closed operator configuration; never accepted from HTTP.
 pub(crate) mod loading;
 pub(crate) mod roles;
+pub(crate) mod workspace_exec;
 use orkestr_v2_contracts::{ConversationId, OwnerId};
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -19,6 +20,8 @@ pub(crate) struct BetaConfig {
     pub supervisor_key: String,
     #[serde(default)]
     pub roles: Option<roles::Roles>,
+    #[serde(default)]
+    pub workspace_exec: Option<workspace_exec::WorkspaceExecConfig>,
 }
 impl BetaConfig {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
@@ -47,7 +50,19 @@ impl BetaConfig {
         if let Some(roles) = &self.roles {
             roles.validate(&self.launcher)?;
         }
+        if let Some(profile) = &self.workspace_exec {
+            profile.validate()?;
+            if self.roles.is_none() {
+                return Err("workspace execution requires configured Worker roles");
+            }
+        }
         Ok(())
+    }
+
+    pub(crate) fn workspace_profile(&self) -> Option<&workspace_exec::WorkspaceExecConfig> {
+        self.workspace_exec
+            .as_ref()
+            .filter(|profile| profile.conversation_id == self.conversation_id)
     }
 }
 

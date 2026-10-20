@@ -1,6 +1,8 @@
 //! Correlated framing only. These bytes never confer dispatch authority.
 use super::*;
 mod offline;
+mod workspace;
+use workspace::WorkspaceState;
 mod steering;
 use offline::OfflineState;
 
@@ -8,6 +10,7 @@ use offline::OfflineState;
 pub(crate) struct BrokerChannel {
     handle: String,
     offline: OfflineState,
+    workspace_tool: WorkspaceState,
     steering: Option<steering::Correlation>,
     steering_ids: std::collections::HashSet<String>,
     native: Option<String>,
@@ -43,6 +46,7 @@ impl OwnedMetadataHandle {
         BrokerChannel {
             handle: self._handle,
             offline: OfflineState::default(),
+            workspace_tool: WorkspaceState::default(),
             steering: None,
             steering_ids: std::collections::HashSet::new(),
             native: None,
@@ -76,6 +80,7 @@ impl BrokerChannel {
         let bytes = self.wrap("CancelExecution", frame)?;
         self.cancellation_pending = true;
         self.offline.cancel();
+        self.workspace_tool.cancel();
         Ok((lineage, bytes))
     }
     /// Enable only for the actual-FD transport before submitting any setup.
@@ -181,6 +186,7 @@ impl BrokerChannel {
             || !self.terminal_observed
             || self.pending.is_some()
             || self.offline.pending.is_some()
+            || self.workspace_tool.pending.is_some()
             || self.active_turn.is_none()
             || self.preparation.is_some_and(|p| p != Preparation::Written)
             || inner_id <= self.last_execution_inner
@@ -292,10 +298,12 @@ impl BrokerChannel {
         // Notifications from the already-written active turn can precede the
         // broker's cancellation preparation (or arrive during suffix writes).
         // This exception never admits a correlated ACK or new-turn output.
-        let cancelling_output =
-            (self.cancellation_pending || self.offline.result_pending || self.steering.is_some())
-                && self.active_turn.is_some()
-                && value.get("method").and_then(Value::as_str) == Some("BrokerOutput");
+        let cancelling_output = (self.cancellation_pending
+            || self.offline.result_pending
+            || self.workspace_tool.result_pending
+            || self.steering.is_some())
+            && self.active_turn.is_some()
+            && value.get("method").and_then(Value::as_str) == Some("BrokerOutput");
         if self.pending.is_some()
             && self.preparation.is_some()
             && self.preparation != Some(Preparation::Written)
@@ -318,13 +326,18 @@ impl BrokerChannel {
                 .filter(|v| v.is_object())
                 .ok_or(Blocker::Protocol)?;
             if frame.get("method").and_then(Value::as_str) == Some("item/tool/call") {
-                self.accept_offline_call(frame)?;
+                if self.workspace_tool.enabled {
+                    self.accept_workspace_call(frame)?;
+                } else {
+                    self.accept_offline_call(frame)?;
+                }
                 return Ok(None);
             }
             if frame.get("id").is_some() {
                 return Err(Blocker::Protocol);
             }
             self.validate_offline_terminal(frame)?;
+            self.validate_workspace_terminal(frame)?;
             self.observe_turn(frame)?;
             return Ok(Some(frame.clone()));
         }
@@ -365,6 +378,10 @@ impl BrokerChannel {
         if self.offline.result_pending {
             self.offline.result_pending = false;
             self.offline.pending = None;
+        }
+        if self.workspace_tool.result_pending {
+            self.workspace_tool.result_pending = false;
+            self.workspace_tool.pending = None;
         }
         Ok((!frame.is_null()).then(|| frame.clone()))
     }

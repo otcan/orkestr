@@ -11,6 +11,7 @@ mod session;
 mod tasks;
 mod tools;
 mod window;
+mod workspace_tools;
 pub use configuration::WorkerConfiguration;
 use orkestr_runtime::{
     containment::Authority,
@@ -63,6 +64,7 @@ struct Running {
     control: crate::control_registry::RunControl,
     controls: crate::control_dispatch::ControlReceiver,
     tools: Option<tools::WorkerTools>,
+    workspace_tools: Option<workspace_tools::WorkspaceTools>,
     liveness: Option<liveness::WorkerLease>,
     budget: Option<budget::RunBudget>,
 }
@@ -71,6 +73,7 @@ struct Stopping {
     // Retain registration through Stop drive and any pending reconciliation.
     _control: crate::control_registry::RunControl,
     tool_cleanup: Option<tools::ToolCleanup>,
+    workspace_cleanup: Option<workspace_tools::ToolCleanup>,
 }
 
 /// Held by the parent's ordinary session loop, never a detached task. The same

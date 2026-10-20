@@ -57,3 +57,33 @@ impl Store {
         })
     }
 }
+
+impl Store {
+    /// Called only after the same transaction proves the Fast companion's exact
+    /// gracefully closed predecessor. Never a general Lost-session binder.
+    pub(in crate::production_runtime) async fn rebind_window_fast_workspace_in(
+        &self,
+        tx: &mut SqliteConnection,
+        grant: &WorkspaceGrant,
+        binding: &Binding,
+        predecessor_incarnation: &str,
+    ) -> Result<()> {
+        self.workspace_grant_in(tx, grant).await?;
+        let c = self.context()?;
+        if binding.role != Role::Fast
+            || binding.state != SessionState::Lost
+            || binding.conversation_id != grant.conversation
+            || binding.owner_id != c.owner
+        {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        let changed = sqlx::query("UPDATE workspace_session_projects SET incarnation_id=? WHERE session_id=? AND project_id=? AND generation=? AND context_id=? AND incarnation_id=?")
+            .bind(&c.incarnation).bind(binding.session_id.to_string()).bind(&grant.project)
+            .bind(grant.generation).bind(&c.id).bind(predecessor_incarnation)
+            .execute(tx).await.map_err(db)?.rows_affected();
+        if changed != 1 {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        Ok(())
+    }
+}

@@ -3625,7 +3625,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orkestr-runtime"
-version = "2.0.0-beta.2"
+version = "2.0.0-beta.3"
 dependencies = [
  "orkestr-v2-application",
  "orkestr-v2-contracts",
@@ -3636,7 +3636,7 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-application"
-version = "2.0.0-beta.2"
+version = "2.0.0-beta.3"
 dependencies = [
  "async-trait",
  "orkestr-v2-contracts",
@@ -3644,7 +3644,7 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-contracts"
-version = "2.0.0-beta.2"
+version = "2.0.0-beta.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -3653,14 +3653,14 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-demo"
-version = "2.0.0-beta.2"
+version = "2.0.0-beta.3"
 dependencies = [
  "orkestr-v2-domain",
 ]
 
 [[package]]
 name = "orkestr-v2-domain"
-version = "2.0.0-beta.2"
+version = "2.0.0-beta.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -3668,7 +3668,7 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-server"
-version = "2.0.0-beta.2"
+version = "2.0.0-beta.3"
 dependencies = [
  "argon2",
  "async-stream",
@@ -3686,7 +3686,7 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-store-sqlite"
-version = "2.0.0-beta.2"
+version = "2.0.0-beta.3"
 dependencies = [
  "orkestr-v2-application",
  "orkestr-v2-contracts",
@@ -3701,7 +3701,7 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-ui"
-version = "2.0.0-beta.2"
+version = "2.0.0-beta.3"
 dependencies = [
  "dioxus",
  "orkestr-v2-contracts",

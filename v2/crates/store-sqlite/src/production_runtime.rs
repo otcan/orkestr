@@ -81,6 +81,10 @@ mod timer_supervisor;
 pub use timer_issuer::TimerSchedulerIssuer;
 mod worker_tool;
 pub use worker_tool::*;
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+mod workspace_exec;
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+pub use workspace_exec::*;
 #[cfg(test)]
 mod stop_tests;
 #[cfg(feature = "fixture-test-controls")]

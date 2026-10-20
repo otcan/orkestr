@@ -40,6 +40,45 @@ fn default_context_is_preserved_and_selected_keys_are_stable_distinct_and_bounde
     selected_config(&long, &a).unwrap().validate().unwrap();
 }
 
+#[test]
+fn workspace_profile_follows_only_its_exact_operator_selected_conversation() {
+    let mut base = config();
+    let selected = ConversationId(Uuid::new_v4());
+    let role = |name: &str| {
+        serde_json::json!({
+            "launcher":format!("/opt/synthetic/{name}"),
+            "launcher_sha256":"a".repeat(64), "workspace":"/srv/native-readonly"
+        })
+    };
+    base.roles = Some(
+        serde_json::from_value(serde_json::json!({
+            "fast":role("fast"), "workers":[role("w0"),role("w1"),role("w2"),role("w3")]
+        }))
+        .unwrap(),
+    );
+    base.workspace_exec = Some(
+        serde_json::from_value(serde_json::json!({
+            "conversation_id":selected, "project_id":Uuid::new_v4(),
+            "workspace":"/srv/project", "allowed_roots":["/srv/project"],
+            "protected_roots":["/srv/account"], "cgroup_root":"/sys/fs/cgroup/commands",
+            "toolchain_root":"/opt/command-image"
+        }))
+        .unwrap(),
+    );
+    base.validate().unwrap();
+    assert!(base.workspace_profile().is_none());
+    let target = selected_config(&base, &selected).unwrap();
+    assert!(target.workspace_profile().is_some());
+    assert!(selected_config(&base, &ConversationId(Uuid::new_v4()))
+        .unwrap()
+        .workspace_profile()
+        .is_none());
+    assert_eq!(target.owner_id, base.owner_id);
+    let mut missing_roles = target;
+    missing_roles.roles = None;
+    assert!(missing_roles.validate().is_err());
+}
+
 #[tokio::test]
 async fn revoked_or_foreign_selection_cannot_replace_the_current_controller() {
     let root = std::env::temp_dir().join(format!("controller-selection-{}", Uuid::new_v4()));

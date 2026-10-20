@@ -110,6 +110,36 @@ impl TrustedLauncher {
         Ok((authority, child.mark_broker_launcher(BrokerLaunch(()))))
     }
 
+    pub(crate) fn open_workspace_worker_metadata_fd_retained(
+        &self,
+        store: Store,
+        grant: BoundSessionMetadata,
+        directories: ChildDirectories,
+        bounds: TransportBounds,
+        resources: Box<dyn Send + 'static>,
+    ) -> Result<(MetadataAuthority, MetadataChild), Error> {
+        if grant.provider() != orkestr_v2_application::runtime::ProviderKind::Codex
+            || grant.binding().role != orkestr_v2_application::runtime::Role::Worker
+            || grant.binding().native_session_id.is_some()
+        {
+            return Err(Error::AuthorityProtocol);
+        }
+        let authority = MetadataAuthority::new_retained(store, grant, resources)?;
+        let child = authority
+            .issue_executor(
+                &self.executable,
+                &[
+                    "open-owned-workspace-worker-session".into(),
+                    "--protocol".into(),
+                    PROTOCOL.into(),
+                ],
+                directories,
+                bounds,
+            )?
+            .spawn_with_provider_fd()?;
+        Ok((authority, child.mark_broker_launcher(BrokerLaunch(()))))
+    }
+
     /// No client args, account ID, environment, profile directory or socket.
     /// The provider/account selection belongs inside this specific launcher.
     pub(crate) fn open_metadata(

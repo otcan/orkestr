@@ -13,6 +13,8 @@ mod pump;
 mod reuse;
 mod session;
 mod steering;
+mod workspace_pump;
+mod workspace_result;
 pub use claude_pump::{ClaudePump, StoppingClaude};
 pub use claude_session::{PreparingClaude, ReadyClaude};
 pub use pump::{CodexPump, StopFailure, StoppingCodex};

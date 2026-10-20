@@ -13,6 +13,31 @@ FIELDS = {'schema_version', 'owner_id', 'conversation_id', 'manager_socket',
           'launcher', 'launcher_sha256', 'workspace', 'namespace', 'supervisor_key'}
 
 
+def workspace_exec(value):
+    fields = {'conversation_id', 'project_id', 'workspace', 'allowed_roots',
+              'protected_roots', 'cgroup_root', 'toolchain_root'}
+    require(type(value) is dict and set(value) == fields, 'closed workspace execution profile required')
+    for key in ('conversation_id', 'project_id'):
+        try:
+            require(type(value[key]) is str and uuid.UUID(value[key]).int != 0,
+                    'workspace execution UUID required')
+        except ValueError:
+            raise RuntimeError('workspace execution UUID required') from None
+    require(value['allowed_roots'] == [value['workspace']], 'one exact workspace root required')
+    protected = value['protected_roots']
+    require(type(protected) is list and 1 <= len(protected) <= 55, 'bounded protected roots required')
+    paths = [value[k] for k in ('workspace', 'cgroup_root', 'toolchain_root')]
+    for path in [*paths, *protected]:
+        require(type(path) is str and 0 < len(path.encode()) <= 4096 and '\x00' not in path and
+                Path(path).is_absolute() and Path(path) != Path('/') and '..' not in Path(path).parts,
+                'absolute bounded workspace profile path required')
+    for index, path in enumerate(map(Path, paths)):
+        for other in map(Path, paths[index + 1:]):
+            require(path != other and path not in other.parents and other not in path.parents,
+                    'workspace command roots must be separate')
+    return value
+
+
 def unique(pairs):
     value = {}
     for key, item in pairs:
@@ -25,7 +50,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= 8192, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) - {'roles'} == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles', 'workspace_exec'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -56,4 +81,7 @@ def validate(raw):
                     'beta role launcher digest required')
             launchers.add(role['launcher'])
         require(len(launchers)==5 and value['launcher'] not in launchers,'distinct beta role launchers required')
+    if 'workspace_exec' in value:
+        require('roles' in value, 'workspace execution requires configured Worker roles')
+        workspace_exec(value['workspace_exec'])
     return value

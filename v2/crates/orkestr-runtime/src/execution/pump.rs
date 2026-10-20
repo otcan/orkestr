@@ -22,6 +22,7 @@ pub(super) struct CodexOutput {
     pub(super) broker: Option<crate::broker::channel::BrokerChannel>,
     pub(super) steering: Option<super::steering::SteerWrite>,
     pub(super) tool_write: Option<super::offline_result::ToolResultWrite>,
+    pub(super) workspace_write: Option<super::workspace_result::WorkspaceResultWrite>,
     pub(super) writing: Option<super::provider_write::PendingWrite>,
 }
 impl Provider for CodexOutput {
@@ -43,6 +44,13 @@ impl Provider for CodexOutput {
         }
         if self
             .tool_write
+            .as_ref()
+            .is_some_and(|w| w.prepared() && !w.finished())
+        {
+            return Ok(None);
+        }
+        if self
+            .workspace_write
             .as_ref()
             .is_some_and(|w| w.prepared() && !w.finished())
         {
@@ -85,6 +93,8 @@ impl Provider for CodexOutput {
                                 if let Some(steering) = self.steering.as_mut() {
                                     steering.prepare(broker)?;
                                 } else if let Some(tool) = self.tool_write.as_mut() {
+                                    tool.prepare(broker)?;
+                                } else if let Some(tool) = self.workspace_write.as_mut() {
                                     tool.prepare(broker)?;
                                 } else {
                                     self.writing
@@ -160,6 +170,7 @@ impl CodexPump {
                 broker: None,
                 writing: None,
                 tool_write: None,
+                workspace_write: None,
                 steering: None,
             },
             #[cfg(all(test, feature = "fixture-test-controls"))]
