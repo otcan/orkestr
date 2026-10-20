@@ -35,7 +35,8 @@ def advertisement(trusted=False):
 
 
 def request_id(value):
-    return (type(value) is int and 0<value<2**53) or (
+    # Codex numbers server requests from 0 in each app-server process.
+    return (type(value) is int and 0<=value<2**53) or (
         isinstance(value,str) and 0<len(value.encode())<=128
         and not any(unicodedata.category(char)=='Cc' for char in value))
 

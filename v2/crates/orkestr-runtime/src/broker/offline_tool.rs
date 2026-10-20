@@ -151,8 +151,11 @@ mod tests {
     }
     #[test]
     fn native_id_and_utf8_source_bounds_match_core() {
+        // A fresh Codex app-server numbers its first server request 0.
+        let mut first = frame();
+        first["id"] = json!(0);
+        assert!(decode(&first).is_ok());
         for id in [
-            json!(0),
             json!(9007199254740992_u64),
             json!(-1),
             json!(1.5),

@@ -172,6 +172,13 @@ mod tests {
         let text = "\u{0000}".repeat(8192);
         assert!(response(&id, &text, true).unwrap().len() < 65536);
         assert!(response(&id, &(text + "x"), true).is_err());
-        assert!(response(&OfflinePythonNativeRequestId::Integer(0), "", true).is_err());
+        // Codex numbers its first server request 0; above the JSON safe range is refused.
+        assert!(response(&OfflinePythonNativeRequestId::Integer(0), "", true).is_ok());
+        assert!(response(
+            &OfflinePythonNativeRequestId::Integer(9_007_199_254_740_992),
+            "",
+            true
+        )
+        .is_err());
     }
 }
