@@ -1,6 +1,8 @@
 use super::*;
 use crate::held_inputs::read;
-use orkestr_v2_application::runtime::{ProductionSupervisorConfig, ProductionTakeover};
+use orkestr_v2_application::runtime::{
+    ProductionSupervisorConfig, ProductionTakeover, ProviderKind,
+};
 use std::io::{Read, Write};
 
 #[path = "../held_inputs_http_tests/fixture.rs"]
@@ -269,7 +271,7 @@ async fn historical_reads_do_not_enable_worker_creation_or_stop() {
         Ok(Json(ExecutionControlRequest {
             run_id: run.clone(),
             expected_revision: status.revision,
-            expected_control_revision: status.control_revision.unwrap(),
+            expected_control_revision: status.control_revision,
             request_key: "no-history-stop".into(),
         })),
     )
