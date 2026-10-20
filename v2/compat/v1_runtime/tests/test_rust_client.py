@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from v2.compat.v1_runtime import rust_client as client_module
-from v2.compat.v1_runtime.rust_client import ClientError, RustClient
+from v2.compat.v1_runtime.rust_client import ClientError, RustClient, RustSession
 
 OWNER = "00000000-0000-4000-8000-000000000001"
 CONVERSATION = "00000000-0000-4000-8000-000000000002"
@@ -25,6 +25,7 @@ TOKEN = "b" * 64
 CSRF = hashlib.sha256(f"orkestr-v2-browser-csrf-v1:{TOKEN}".encode()).hexdigest()
 ORIGIN = "https://example.test"
 PREFIX = f"/api/v2/conversations/{CONVERSATION}"
+OTHER = "00000000-0000-4000-8000-000000000007"
 INTAKE = dict(message_id=MESSAGE, event_id=EVENT, sequence=4, status="accepted")
 
 
@@ -98,6 +99,12 @@ class ClientTests(unittest.TestCase):
             return 202, INTAKE, {}
         if path == PREFIX + "/window":
             return 204, b"", {}
+        if path == f"/api/v2/conversations/{OTHER}":
+            return 200, {"conversation_id": OTHER, "messages": [], "last_sequence": 0}, {}
+        if path == PREFIX + "/attachment-imports" and method == "POST":
+            request = self.server.observed[-1][3]
+            return 200, {"import_id": RUN, "manifest": request["target_manifest"], "mapping": request["mapping"],
+                         "source_manifest_id": request["source"]["manifest"]["manifest_id"]}, {}
         return 404, {"error": {"code": "not_found"}}, {}
 
     def posts(self, path):
@@ -269,6 +276,35 @@ class ClientTests(unittest.TestCase):
             bad[key] = value
             with self.subTest(key=key), self.assertRaises(ClientError):
                 self.client.window_request(INTAKE, "input:1", "window:1", bad)
+
+    def test_bindings_share_one_login_and_scope_failures_stay_local(self):
+        session = self.client.session
+        other = RustClient(conversation_id=OTHER, session=session)
+        wrong = RustClient(conversation_id=WINDOW, session=session)
+        self.client.ensure_login()
+        other.ensure_login()
+        self.assertEqual(len(self.posts(client_module.SESSION)), 1)
+        with self.assertRaises(ClientError):
+            wrong.ensure_login()
+        with self.assertRaisesRegex(ClientError, "conversation_scope_mismatch"):
+            wrong.request("POST", "/messages", {}, (202,))
+        self.assertEqual(self.client.request("POST", "/messages", {"client_message_id": "k", "text": "t"}, (202,))[0], 202)
+        self.assertFalse(any(path.startswith(f"/api/v2/conversations/{WINDOW}/") for _, path, _, _ in self.server.observed))
+        self.assertIsInstance(session, RustSession)
+
+    def test_attachment_import_is_conversation_pinned_and_receipt_checked(self):
+        reference = dict(reference_id=MESSAGE, message_id=None, filename="a.txt", media_type="text/plain",
+                         byte_length=1, sha256=hashlib.sha256(b"a").hexdigest(), state="available")
+        manifest = dict(schema_version=1, manifest_id=EVENT, owner_id=OWNER, conversation_id=RUN, references=[reference])
+        target = dict(manifest, manifest_id=WINDOW, conversation_id=CONVERSATION,
+                      references=[dict(reference, reference_id=OTHER)])
+        request = dict(request_key="k", source=dict(manifest=manifest, contents=[dict(reference_id=MESSAGE, bytes=[97])]),
+                       target_manifest=target, mapping=[dict(source_reference_id=MESSAGE, target_reference_id=OTHER)])
+        self.assertEqual(self.client.import_attachments(request)["import_id"], RUN)
+        headers = self.posts(PREFIX + "/attachment-imports")[0][2]
+        self.assertEqual(headers["X-Orkestr-CSRF"], CSRF)
+        with self.assertRaisesRegex(ClientError, "attachment_scope_refused"):
+            self.client.import_attachments(dict(request, target_manifest=dict(target, conversation_id=OTHER)))
 
 
 if __name__ == "__main__":

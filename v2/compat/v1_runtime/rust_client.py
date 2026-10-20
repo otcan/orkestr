@@ -18,6 +18,8 @@ MAX_BODY = 1024 * 1024
 LIMITS = dict(duration_ms=900000, attempts=32, bytes=67108864,
               cleanup_ms=30000, cleanup_attempts=4, cleanup_bytes=1048576)
 SESSION = "/api/v2/browser/session"
+# Matches the server JSON limit for raw-octet attachment bundles.
+ATTACHMENT_MAX_JSON = 68 * 1024 * 1024
 
 
 class ClientError(RuntimeError):
@@ -95,9 +97,11 @@ def credentials(path):
     return {"username": value["username"], "password": value["password"]}
 
 
-class RustClient:
+class RustSession:
+    """One owner login shared by every binding. Never pinned to a conversation."""
+
     def __init__(self, *, origin, loopback_url, credentials_path, expected_owner,
-                 conversation_id, expected_source, timeout_s=5):
+                 expected_source, timeout_s=5):
         try:
             public, local = urlsplit(origin), urlsplit(loopback_url)
             require(public.scheme in ("http", "https") and public.hostname and
@@ -118,19 +122,21 @@ class RustClient:
                 "source_refused")
         self.origin, self.authority = origin.rstrip("/"), public.netloc
         self.host, self.port, self.timeout_s = local.hostname, local.port, timeout_s
-        self.owner, self.conversation = identity(expected_owner), identity(conversation_id)
+        self.owner = identity(expected_owner)
         self.source, self.credentials_path = expected_source, credentials_path
-        self.prefix = f"/api/v2/conversations/{self.conversation}"
         self._cookie = self._csrf = None
         self._revoked = False
+        self.generation = 0
         self._lock = threading.RLock()
 
-    def _wire(self, method, path, body=None, allowed=(200,), events=False):
+    def _wire(self, method, path, body=None, allowed=(200,), events=False,
+              max_request=32768, timeout_s=None):
         try:
             data = None if body is None else json.dumps(body, allow_nan=False, separators=(",", ":")).encode()
         except (TypeError, ValueError, UnicodeError):
             raise ClientError("request_shape_refused") from None
-        require(data is None or len(data) <= 32768, "request_too_large")
+        require(data is None or len(data) <= max_request, "request_too_large")
+        timeout_s = timeout_s or self.timeout_s
         headers = {"Host": self.authority, "Accept": "text/event-stream" if events else "application/json",
                    "Connection": "close"}
         if self._cookie and path != "/api/v2/health":
@@ -139,7 +145,7 @@ class RustClient:
             headers.update({"Origin": self.origin, "Content-Type": "application/json"})
             if path != SESSION:
                 headers["X-Orkestr-CSRF"] = self._csrf
-        connection = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout_s)
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=timeout_s)
         started, timer = time.monotonic(), None
         raw = bytearray()
         try:
@@ -150,7 +156,7 @@ class RustClient:
                     retained_socket.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
-            timer = threading.Timer(max(0.001, self.timeout_s - (time.monotonic() - started)), expire)
+            timer = threading.Timer(max(0.001, timeout_s - (time.monotonic() - started)), expire)
             timer.daemon = True
             timer.start()
             connection.request(method, path, body=data, headers=headers)
@@ -206,14 +212,15 @@ class RustClient:
         require(isinstance(value, dict) and value.get("owner_id") == self.owner and
                 value.get("csrf_token") == self._csrf, "session_scope_mismatch")
 
-    def ensure_login(self):
+    def login(self):
+        """Returns the session generation; a new generation needs scope re-verification."""
         with self._lock:
             require(not self._revoked, "session_revoked")
             self._health()
             if self._cookie:
                 _, value, _ = self._wire("GET", SESSION)
                 self._session(value)
-                return
+                return self.generation
             _, value, headers = self._wire("POST", SESSION, credentials(self.credentials_path))
             cookies = [v for k, v in headers if k.lower() == "set-cookie"]
             require(len(cookies) == 1, "session_cookie_refused")
@@ -231,14 +238,61 @@ class RustClient:
             self._csrf = hashlib.sha256(f"orkestr-v2-browser-csrf-v1:{cookie.value}".encode()).hexdigest()
             try:
                 self._session(value)
-                self._cookie = f"orkestr_v2_session={cookie.value}"
-                _, snapshot, _ = self._wire("GET", self.prefix)
-                require(isinstance(snapshot, dict) and snapshot.get("conversation_id") == self.conversation,
-                        "conversation_scope_mismatch")
             except ClientError:
                 self._cookie = self._csrf = None
                 self._revoked = True
                 raise
+            self._cookie = f"orkestr_v2_session={cookie.value}"
+            self.generation += 1
+            return self.generation
+
+
+class RustClient:
+    """Conversation-pinned view of a shared owner session."""
+
+    def __init__(self, *, conversation_id, session=None, **session_options):
+        self.session = session or RustSession(**session_options)
+        self.owner, self.conversation = self.session.owner, identity(conversation_id)
+        self.prefix = f"/api/v2/conversations/{self.conversation}"
+        self._verified = None
+        self._scope_refused = False
+
+    # Compatibility views used by diagnostics and tests.
+    @property
+    def _cookie(self):
+        return self.session._cookie
+
+    @property
+    def _revoked(self):
+        return self.session._revoked or self._scope_refused
+
+    @_revoked.setter
+    def _revoked(self, value):
+        self.session._revoked = self._scope_refused = bool(value)
+
+    @property
+    def _lock(self):
+        return self.session._lock
+
+    def _wire(self, *args, **kwargs):
+        return self.session._wire(*args, **kwargs)
+
+    def ensure_login(self):
+        with self._lock:
+            require(not self._scope_refused, "conversation_scope_mismatch")
+            generation = self.session.login()
+            if self._verified == generation:
+                return
+            try:
+                _, snapshot, _ = self._wire("GET", self.prefix)
+                require(isinstance(snapshot, dict) and snapshot.get("conversation_id") == self.conversation,
+                        "conversation_scope_mismatch")
+            except ClientError as error:
+                # A wrong conversation refuses only this binding, never the shared session.
+                if error.code == "conversation_scope_mismatch" or error.status == 404:
+                    self._scope_refused = True
+                raise
+            self._verified = generation
 
     def _path(self, method, suffix):
         require(isinstance(suffix, str) and suffix.isascii() and
@@ -279,6 +333,24 @@ class RustClient:
                 require(value.get("conversation_id", self.conversation) == self.conversation and
                         value.get("owner_id", self.owner) == self.owner, "response_scope_mismatch")
             return status, value
+
+    def import_attachments(self, request):
+        """Copy staged V1 bytes into this conversation's attachment store (idempotent by request_key)."""
+        require(isinstance(request, dict) and set(request) == {"request_key", "source", "target_manifest", "mapping"},
+                "request_shape_refused")
+        target = request["target_manifest"]
+        require(isinstance(target, dict) and target.get("owner_id") == self.owner and
+                target.get("conversation_id") == self.conversation, "attachment_scope_refused")
+        with self._lock:
+            self.ensure_login()
+            _, value, _ = self._wire("POST", self.prefix + "/attachment-imports", request, (200,),
+                                     max_request=ATTACHMENT_MAX_JSON, timeout_s=60)
+        require(isinstance(value, dict) and value.get("manifest") == target and
+                value.get("mapping") == request["mapping"] and
+                value.get("source_manifest_id") == request["source"]["manifest"]["manifest_id"],
+                "attachment_receipt_mismatch")
+        identity(value.get("import_id"))
+        return value
 
     def read_events(self, after, maximum=100):
         require(integer(after) and type(maximum) is int and 1 <= maximum <= 100, "cursor_refused")

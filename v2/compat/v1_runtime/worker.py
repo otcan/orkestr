@@ -1,13 +1,85 @@
-"""Serial, restart-safe Rust intake. Only a matched accepted Deep result is mirrored."""
+"""Serial, restart-safe Rust intake for one binding. Only the matched Deep run is mirrored."""
+import time
+import uuid
+
+from .ledger import PROGRESS_LIMIT, no_reply
+
+PROGRESS_INTERVAL_S = 60
+PROGRESS_MAX_CHARS = 3500
 
 
 class Refused(RuntimeError):
     """A safety condition requires operator reconciliation, never silent replay."""
 
 
+def attachment_note(text, manifest_id, references):
+    lines = ["[WhatsApp attachments imported into this conversation's attachment store, manifest %s:" % manifest_id]
+    lines += ["- %s (%s, %d bytes, reference %s)" % (r["filename"], r["media_type"], r["byte_length"], r["reference_id"])
+              for r in references]
+    return (text.rstrip() + "\n\n" if text.strip() else "") + "\n".join(lines) + "]"
+
+
 class Worker:
-    def __init__(self, client, ledger):
+    def __init__(self, client, ledger, progress_updates=False):
         self.client, self.ledger = client, ledger
+        self.progress_updates = progress_updates
+
+    def import_attachments(self, data):
+        if "attachment_request" not in data:
+            def reference(item, message=None):
+                return {"reference_id": str(uuid.uuid4()), "message_id": message, "filename": item["filename"],
+                        "media_type": item["media_type"], "byte_length": item["size"], "sha256": item["sha256"],
+                        "state": "available"}
+            source = [reference(item) for item in data["attachments"]]
+            target = [dict(r, reference_id=str(uuid.uuid4())) for r in source]
+            manifest = lambda conversation, refs: {"schema_version": 1, "manifest_id": str(uuid.uuid4()),
+                "owner_id": self.client.owner, "conversation_id": conversation, "references": refs}
+            # The source manifest only describes the transported bytes; the
+            # server verifies length and digest of every copied object.
+            data["attachment_request"] = {"request_key": data["keys"]["attachments"],
+                "source": {"manifest": manifest(str(uuid.uuid4()), source)},
+                "target_manifest": manifest(self.client.conversation, target),
+                "mapping": [{"source_reference_id": a["reference_id"], "target_reference_id": b["reference_id"]}
+                            for a, b in zip(source, target)]}
+            self.ledger.save(data)
+        request = dict(data["attachment_request"])
+        contents = []
+        for item, ref in zip(data["attachments"], request["source"]["manifest"]["references"]):
+            content = self.ledger.upload_bytes(item["upload_id"])
+            if content is None:
+                raise Refused("attachment_bytes_missing")
+            contents.append({"reference_id": ref["reference_id"], "bytes": list(content)})
+        request["source"] = dict(request["source"], contents=contents)
+        receipt = self.client.import_attachments(request)
+        target = request["target_manifest"]
+        data["attachment_receipt"] = {"import_id": receipt["import_id"], "manifest_id": target["manifest_id"]}
+        data["intake_text"] = attachment_note(data["text"], target["manifest_id"], target["references"])
+        self.ledger.save(data)
+        self.ledger.release_uploads([item["upload_id"] for item in data["attachments"]])
+
+    def capture_progress(self, data, status, ids):
+        """Export distinct intermediate Deep payloads of this exact run, bounded and spaced."""
+        if not self.progress_updates or not isinstance(status, dict) or status.get("phase") != "running":
+            return
+        payload_id = (status.get("progress") or {}).get("payload_id")
+        seen = data.setdefault("progress_seen", [])
+        if status.get("run_id") not in ids or not payload_id or payload_id in seen or len(seen) >= PROGRESS_LIMIT:
+            return
+        now = time.time()
+        if now - data.get("progress_at", data.get("admitted_at", now)) < PROGRESS_INTERVAL_S:
+            return
+        payload = self.call("GET", "/payloads/" + payload_id)
+        if payload.get("run_id") != status["run_id"] or payload.get("payload_id") != payload_id:
+            raise Refused("progress_payload_mismatch")
+        seen.append(payload_id)
+        data["progress_at"] = now
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip() or no_reply(text):
+            self.ledger.save(data)
+            return
+        if len(text) > PROGRESS_MAX_CHARS:
+            text = text[:PROGRESS_MAX_CHARS].rstrip() + " …"
+        self.ledger.add_progress(data, payload_id, text)
 
     def call(self, method, route, body=None, allowed=(200,)):
         return self.client.request(method, route, body=body, allowed=allowed)[1]
@@ -15,11 +87,14 @@ class Worker:
     def step(self, data):
         if data.get("blocked"):
             return
+        if data.get("attachments") and "attachment_receipt" not in data:
+            self.import_attachments(data)
         if "intake" not in data:
-            intake = self.call("POST", "/messages", {"client_message_id": data["keys"]["message"], "text": data["text"]}, (200, 202))
+            text = data.get("intake_text", data["text"])
+            intake = self.call("POST", "/messages", {"client_message_id": data["keys"]["message"], "text": text}, (200, 202))
             if intake.get("status") != "accepted" or not all(intake.get(k) for k in ("message_id", "event_id", "sequence")):
                 raise Refused("intake_receipt")
-            data.update(intake=intake, cursor=intake["sequence"] - 1, phase="admitted")
+            data.update(intake=intake, cursor=intake["sequence"] - 1, phase="admitted", admitted_at=time.time())
             self.ledger.save(data)
         if "window" not in data:
             if "window_request" not in data:
@@ -62,6 +137,7 @@ class Worker:
         self.ledger.save(data)
         statuses = {role: self.call("GET", route, allowed=(200, 204)) for role, route in
                     (("fast", "/fast/execution"), ("deep", "/execution"))}
+        self.capture_progress(data, statuses["deep"], ids)
         accepted = data.setdefault("accepted", {})
         for role, value in statuses.items():
             if role in accepted or role + "_accept_request" in data:
@@ -114,29 +190,35 @@ class Worker:
             after = cursor
         if len(matches) != 1 or matches[0].get("payload_removed") is not False or any(matches[0].get(k) != deep[k] for k in ("run_id", "completion_event_id")) or matches[0].get("payload_id") != data["deep_payload"]["payload_id"]:
             raise Refused("accepted_history_mismatch")
-        data["reply"] = {"id": deep["acceptance_event_id"], "role": "assistant", "state": "completed",
-                         "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": data["remote_id"],
-                         "text": data["deep_payload"]["text"]}
-        data["phase"] = "completed"
-        self.ledger.save(data)
+        text = data["deep_payload"]["text"]
+        reply = {"id": deep["acceptance_event_id"], "role": "assistant", "state": "completed",
+                 "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": data["remote_id"], "text": text}
+        if no_reply(text):
+            # V1 never transports an exact NO_REPLY; it acknowledges it as no_reply.
+            reply.update(text="NO_REPLY", noReply=True)
+        self.ledger.complete(data, reply)
 
-    def run(self, stop):
+    def run(self, stop, active=lambda: True):
         while not stop.wait(1):
-            data = self.ledger.next_input()
-            if not data:
-                continue
-            try:
-                self.step(data)
-            except Refused as error:
-                data["blocked"] = str(error)
+            if active():
+                self.run_once(stop)
+
+    def run_once(self, stop):
+        data = self.ledger.next_input()
+        if not data:
+            return
+        try:
+            self.step(data)
+        except Refused as error:
+            data["blocked"] = str(error)
+            data["phase"] = "blocked"
+            self.ledger.save(data)
+        except Exception as error:
+            # Only transport failures have an automatic retry path. Preserve
+            # immutable POST keys when the commit outcome is unknown.
+            code = getattr(error, "code", None)
+            if code is not None and code not in ("transport_failed", "transport_outcome_unknown"):
+                data["blocked"] = "upstream_refused"
                 data["phase"] = "blocked"
                 self.ledger.save(data)
-            except Exception as error:
-                # Only transport failures have an automatic retry path. Preserve
-                # immutable POST keys when the commit outcome is unknown.
-                code = getattr(error, "code", None)
-                if code is not None and code not in ("transport_failed", "transport_outcome_unknown"):
-                    data["blocked"] = "upstream_refused"
-                    data["phase"] = "blocked"
-                    self.ledger.save(data)
-                stop.wait(4)
+            stop.wait(4)
