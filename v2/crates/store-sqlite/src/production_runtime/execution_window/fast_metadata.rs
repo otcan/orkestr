@@ -9,6 +9,32 @@ impl Store {
         credential: &str,
         binding: &Binding,
     ) -> Result<BoundSessionMetadata> {
+        self.window_fast_metadata(
+            credential,
+            binding,
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            None,
+        )
+        .await
+    }
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    pub async fn authorize_window_fast_metadata_with_workspace(
+        &self,
+        credential: &str,
+        binding: &Binding,
+        workspace: &WorkspaceGrant,
+    ) -> Result<BoundSessionMetadata> {
+        self.window_fast_metadata(credential, binding, Some(workspace))
+            .await
+    }
+    async fn window_fast_metadata(
+        &self,
+        credential: &str,
+        binding: &Binding,
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))] workspace: Option<
+            &WorkspaceGrant,
+        >,
+    ) -> Result<BoundSessionMetadata> {
         self.worker_credential(credential)?;
         let c = self.context()?;
         if binding.role != Role::Fast || binding.parent_session_id.is_some() {
@@ -16,6 +42,13 @@ impl Store {
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         c.validate(&mut tx).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        if let Some(workspace) = workspace {
+            self.workspace_grant_in(&mut tx, workspace).await?;
+            if *workspace.exec_identity().2 != binding.conversation_id {
+                return Err(RuntimeStoreError::Fenced);
+            }
+        }
         let window = c
             .window_scope(&mut tx)
             .await?
@@ -51,6 +84,16 @@ impl Store {
             .map_err(db)?;
         if crate::runtime::binding(&row)? != *binding {
             return Err(RuntimeStoreError::Fenced);
+        }
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        if let Some(workspace) = workspace {
+            self.rebind_window_fast_workspace_in(
+                &mut tx,
+                workspace,
+                binding,
+                prior.get("incarnation_id"),
+            )
+            .await?;
         }
         let changed = sqlx::query("UPDATE production_readiness SET incarnation_id=? WHERE session_id=? AND context_id=? AND incarnation_id=?")
             .bind(&c.incarnation).bind(binding.session_id.to_string()).bind(&c.id)

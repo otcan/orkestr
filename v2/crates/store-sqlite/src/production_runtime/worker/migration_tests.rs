@@ -28,7 +28,19 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
     .execute(&mut *tx)
     .await
     .unwrap();
-    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=44")
+    // Model the actual schema-43 source, including absence of later opt-in
+    // tables. Removing only a checksum row would create a foreign schema.
+    for table in [
+        "workspace_exec_results",
+        "workspace_exec_delegations",
+        "workspace_exec_profiles",
+    ] {
+        sqlx::query(&format!("DROP TABLE {table}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version>=44")
         .execute(&mut *tx)
         .await
         .unwrap();
@@ -57,5 +69,5 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
         .fetch_one(&reopened.pool)
         .await
         .unwrap();
-    assert_eq!(latest, 44);
+    assert_eq!(latest, 45);
 }

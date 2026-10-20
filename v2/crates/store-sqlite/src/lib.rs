@@ -47,7 +47,12 @@ pub use production_runtime::test_controls::ProductionCheckpoint;
 
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub use production_runtime::{
-    WorkspaceDescriptors, WorkspaceDirectoryIdentity, WorkspaceGrant, WorkspaceInstallation,
+    CompletedWorkspaceExecDelivery, ConsumedWorkspaceExec, WorkspaceDescriptors,
+    WorkspaceDirectoryIdentity, WorkspaceExecAdmission, WorkspaceExecConsumption,
+    WorkspaceExecDelegation, WorkspaceExecNativeCall, WorkspaceExecNativeRequestId,
+    WorkspaceExecOutcome, WorkspaceExecOutput, WorkspaceExecParent, WorkspaceExecProfile,
+    WorkspaceExecReceipt, WorkspaceExecResultConsumption, WorkspaceExecResultPreparation,
+    WorkspaceExecResultReservation, WorkspaceExecState, WorkspaceGrant, WorkspaceInstallation,
     WorkspaceLaunch, WorkspaceLaunchConsumption, WorkspaceLaunchReservation,
     WorkspaceLaunchReservationResult, WorkspaceOperatorAllowlist,
 };

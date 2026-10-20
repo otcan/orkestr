@@ -47,6 +47,13 @@ pub enum WorkspaceLaunchConsumption {
     ReconciliationRequired,
 }
 impl WorkspaceGrant {
+    pub(super) fn exec_identity(&self) -> (&str, i64, &ConversationId) {
+        (&self.project, self.generation, &self.conversation)
+    }
+    pub(super) fn exec_descriptors(&self) -> WorkspaceDescriptors<'_> {
+        self.installation.descriptors()
+    }
+
     fn retained(&self) -> Self {
         Self {
             project: self.project.clone(),
