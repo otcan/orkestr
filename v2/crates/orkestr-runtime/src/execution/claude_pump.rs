@@ -1,5 +1,6 @@
 //! First-turn Claude output, with actual native writes fenced on every suffix.
 mod control;
+mod lease;
 use super::*;
 use crate::{
     broker::claude::ClaudeChannel,

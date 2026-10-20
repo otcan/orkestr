@@ -124,6 +124,10 @@ class ClaudeControl:
         # Bounded discard only. No control/tool/system passthrough or authority.
         require(self.terminal is None and self.notices < (1024 if self.tools else 128))
         kind = frame.get('type')
+        if self.tools and kind in ('tool_progress', 'tool_use_summary', 'prompt_suggestion'):
+            require(frame.get('session_id', self.native) == self.native and self.notices < 1024)
+            self.notices += 1
+            return
         require(kind in ('user', 'assistant', 'stream_event'))
         require(frame.get('session_id') == self.native)
         if self.tools:

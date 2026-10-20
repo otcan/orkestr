@@ -12,8 +12,17 @@ use std::{
 };
 
 async fn exercise(failure: bool, revoke_before_observation: bool, retry_observation: bool) {
+    exercise_with(failure, revoke_before_observation, retry_observation, false).await
+}
+
+async fn exercise_with(
+    failure: bool,
+    revoke_before_observation: bool,
+    retry_observation: bool,
+    renew: bool,
+) {
     let root = std::path::PathBuf::from(std::env::var("ORKESTR_V2_HOME").unwrap()).join(format!(
-        "claude-owned-{}-{failure}-{revoke_before_observation}-{retry_observation}",
+        "claude-owned-{}-{failure}-{revoke_before_observation}-{retry_observation}-{renew}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).unwrap();
@@ -46,6 +55,18 @@ for line in sys.stdin:
             )
     } else {
         source.into()
+    };
+    // Hold the turn after init until the test has renewed the running lease.
+    let source = if renew {
+        source.replace(
+            " assert f['session_id']==native",
+            &format!(
+                " import os,time\n while not os.path.exists({:?}): time.sleep(.01)\n assert f['session_id']==native",
+                root.join("release").to_str().unwrap()
+            ),
+        )
+    } else {
+        source
     };
     std::fs::write(&native, source).unwrap();
     std::fs::set_permissions(&native, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -161,7 +182,12 @@ for line in sys.stdin:
         .append_provider_event(&owner, &p, &early)
         .await
         .is_err());
-    let (authority, mut pump) = ready.attach(bound.clone(), cap).unwrap();
+    let mut renewal = if renew {
+        Some(bound.authorize_running_renewal(&cap).await.unwrap())
+    } else {
+        None
+    };
+    let (mut authority, mut pump) = ready.attach(bound.clone(), cap).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut retried = false;
     loop {
@@ -233,6 +259,22 @@ for line in sys.stdin:
             .await
             .unwrap()
             .unwrap();
+        if status.phase == ExecutionPhase::Running && pump.renewal_quiescent() {
+            if let Some(mut lease) = renewal.take() {
+                // A renewal must strictly extend the 60 s claim lease.
+                tokio::time::sleep(Duration::from_millis(1100)).await;
+                bound.heartbeat_supervisor().await.unwrap();
+                let before = pump.pending().is_none();
+                let (renewed, next) = pump.renew_lease(bound.clone(), &mut lease).await.unwrap();
+                pump = next;
+                authority.revoke().unwrap();
+                authority = renewed;
+                assert!(before && pump.pending().is_none());
+                let leases: i64 = sqlx_free_lease_count(&root);
+                assert_eq!(leases, 2, "renewal adds exactly one lease generation");
+                std::fs::write(root.join("release"), b"").unwrap();
+            }
+        }
         if failure && status.phase == ExecutionPhase::Failed {
             assert!(status.acceptance_candidate.is_none());
             break;
@@ -251,6 +293,7 @@ for line in sys.stdin:
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
     assert_eq!(retried, retry_observation);
+    assert!(renewal.is_none(), "renewal must run when requested");
     if failure || revoke_before_observation {
         assert!(pump.retire_completed().is_err());
     } else {
@@ -261,6 +304,25 @@ for line in sys.stdin:
     drop(bound);
     drop(store);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+fn sqlx_free_lease_count(root: &std::path::Path) -> i64 {
+    let output = std::process::Command::new("/usr/bin/python3")
+        .arg("-c")
+        .arg("import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute(\"SELECT count(*) FROM production_run_leases WHERE purpose='execution'\").fetchone()[0])")
+        .arg(root.join("state.sqlite3"))
+        .output()
+        .unwrap();
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_running_lease_renews_on_the_same_child_and_completes() {
+    exercise_with(false, false, false, true).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
