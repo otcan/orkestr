@@ -52,6 +52,34 @@ with tempfile.TemporaryDirectory(prefix="workspace-subreaper-") as root:
         self.assertEqual({row["kind"] for row in rows[:-1]}, {"launcher", "grandchild"})
         self.assertTrue(all(not Path(f"/proc/{row['pid']}").exists() for row in rows[:-1]))
 
+    def test_trusted_layout_keeps_isolation_flags_and_closed_environment(self):
+        import importlib.util, os, tempfile
+        helper = Path(__file__).with_name("workspace_exec_supervisor.py")
+        spec = importlib.util.spec_from_file_location("owned_supervisor_layout", helper)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        base = ["/usr/bin/bwrap", *module.REQUIRED, "--cap-drop", "ALL", "--seccomp", "10"]
+        def load(value):
+            with tempfile.TemporaryFile() as stream:
+                stream.write(json.dumps(value).encode())
+                stream.seek(0)
+                return module.layout(os.dup(stream.fileno()), 10, 12, 11)
+        argv, env, passed = load({"argv": base, "env": {"HOME": "/home/worker"}, "pass": [10, 12]})
+        self.assertEqual((argv, env, passed), (base, {"HOME": "/home/worker"}, (10, 12)))
+        for value in (
+            {"argv": base[:-1], "env": {}, "pass": [10, 12]},
+            {"argv": [a for a in base if a != "--unshare-pid"], "env": {}, "pass": [10, 12]},
+            {"argv": ["/bin/sh", *base[1:]], "env": {}, "pass": [10, 12]},
+            {"argv": [*base, "--", "x"], "env": {}, "pass": [10, 12]},
+            {"argv": base, "env": {"LD_PRELOAD": "/x"}, "pass": [10, 12]},
+            {"argv": base, "env": {"PYTHONPATH": "/x"}, "pass": [10, 12]},
+            {"argv": base, "env": {}, "pass": [10, 12, 13]},
+            {"argv": base, "env": {}, "pass": [10]},
+            {"argv": base, "env": {}, "pass": [10, 12], "extra": True},
+        ):
+            with self.assertRaises(ValueError):
+                load(value)
+
     def test_unknown_operation_refuses_before_spawning(self):
         helper = Path(__file__).with_name("workspace_exec_supervisor.py")
         result = subprocess.run([sys.executable, "-I", "-S", "-B", str(helper), "arbitrary"],

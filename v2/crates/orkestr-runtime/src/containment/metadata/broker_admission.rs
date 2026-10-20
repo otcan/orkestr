@@ -16,7 +16,7 @@ impl MetadataChild {
         Ok(())
     }
 
-    pub(crate) fn enable_workspace_exec(&self) -> Result<(), Error> {
+    pub(crate) fn enable_workspace_exec(&self, trusted: bool) -> Result<(), Error> {
         let state = self.shared.state.lock().map_err(|_| Error::Revoked)?;
         if self.shared.scope.binding.role != orkestr_v2_application::runtime::Role::Worker
             || self.shared.scope.provider != ProviderKind::Codex
@@ -27,6 +27,9 @@ impl MetadataChild {
         {
             return Err(Error::WrongScope);
         }
+        self.process
+            .workspace_exec_trusted
+            .store(trusted, Ordering::Release);
         self.process.workspace_exec.store(true, Ordering::Release);
         Ok(())
     }
@@ -57,6 +60,7 @@ impl MetadataChild {
                     super::super::broker_frames::workspace::metadata(
                         &frame,
                         &self.process.workspace,
+                        self.process.workspace_exec_trusted.load(Ordering::Acquire),
                     )?
                 } else {
                     super::super::broker_frames::metadata(&frame, &self.process.workspace)?

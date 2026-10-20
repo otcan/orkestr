@@ -13,10 +13,47 @@ FIELDS = {'schema_version', 'owner_id', 'conversation_id', 'manager_socket',
           'launcher', 'launcher_sha256', 'workspace', 'namespace', 'supervisor_key'}
 
 
+TRUSTED_FLAGS = {'network', 'host_toolchain'}
+TRUSTED_PATHS = {'workspace_target', 'home'}
+TRUSTED_PATH_LISTS = {'path', 'toolchain_mounts', 'cache_mounts', 'credential_mounts',
+                      'credential_env_files', 'skill_mounts'}
+TRUSTED_NUMBERS = {'command_timeout_ms', 'command_output_bytes', 'job_timeout_ms',
+                   'job_output_bytes', 'max_jobs', 'worker_run_ms', 'memory_bytes', 'pids',
+                   'cpus', 'tmp_bytes', 'home_bytes', 'file_bytes', 'open_files'}
+
+
+def absolute(path):
+    return (type(path) is str and 0 < len(path.encode()) <= 4096 and '\x00' not in path and
+            Path(path).is_absolute() and Path(path) != Path('/') and '..' not in Path(path).parts)
+
+
+def trusted(value):
+    """Shape only. Runtime owns overlap, ceiling and credential-default checks."""
+    fields = TRUSTED_FLAGS | TRUSTED_PATHS | TRUSTED_PATH_LISTS | TRUSTED_NUMBERS | {'environment'}
+    require(type(value) is dict and set(value) <= fields, 'closed trusted command profile required')
+    for key in TRUSTED_FLAGS & set(value):
+        require(type(value[key]) is bool, 'trusted profile flag required')
+    for key in TRUSTED_PATHS & set(value):
+        require(absolute(value[key]), 'trusted profile path required')
+    for key in TRUSTED_PATH_LISTS & set(value):
+        require(type(value[key]) is list and len(value[key]) <= 64 and
+                all(absolute(path) for path in value[key]), 'trusted profile path list required')
+    for key in TRUSTED_NUMBERS & set(value):
+        require(type(value[key]) is int and value[key] > 0, 'trusted profile number required')
+    environment = value.get('environment', {})
+    require(type(environment) is dict and len(environment) <= 64 and all(
+        type(k) is str and re.fullmatch(r'[A-Z_][A-Z0-9_]{0,127}', k) and type(v) is str
+        and '\x00' not in v for k, v in environment.items()), 'trusted profile environment required')
+    return value
+
+
 def workspace_exec(value):
     fields = {'conversation_id', 'project_id', 'workspace', 'allowed_roots',
               'protected_roots', 'cgroup_root', 'toolchain_root'}
-    require(type(value) is dict and set(value) == fields, 'closed workspace execution profile required')
+    require(type(value) is dict and set(value) - {'trusted'} == fields,
+            'closed workspace execution profile required')
+    if 'trusted' in value:
+        trusted(value['trusted'])
     for key in ('conversation_id', 'project_id'):
         try:
             require(type(value[key]) is str and uuid.UUID(value[key]).int != 0,
@@ -47,7 +84,7 @@ def unique(pairs):
 
 
 def validate(raw):
-    require(type(raw) is bytes and len(raw) <= 8192, 'bounded beta config required')
+    require(type(raw) is bytes and len(raw) <= 16384, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
     require(type(value) is dict and set(value) - {'roles', 'workspace_exec'} == FIELDS, 'closed beta config fields required')

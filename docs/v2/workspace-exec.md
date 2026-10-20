@@ -47,3 +47,6 @@ Validation includes Core scope/revocation/replay tests, schema-44 copy-first
 upgrade preservation, and companion restart checks. Physical command isolation,
 descendant cleanup and real provider tool use require separate qualification;
 passing Core tests alone is not evidence of an operational coding Worker.
+
+The optional trusted owner profile (toolchains, network, detached jobs,
+explicit credential allowlists) is described in `workspace-exec-trusted.md`.

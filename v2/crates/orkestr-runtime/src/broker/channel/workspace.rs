@@ -4,6 +4,7 @@ use crate::broker::workspace_tool::PendingWorkspaceExecCall;
 #[derive(Default)]
 pub(super) struct WorkspaceState {
     pub(super) enabled: bool,
+    trusted: bool,
     pub(super) pending: Option<PendingWorkspaceExecCall>,
     seen_requests: std::collections::HashSet<String>,
     seen_calls: std::collections::HashSet<String>,
@@ -31,7 +32,7 @@ impl BrokerChannel {
         self.workspace_tool.pending = Some(call);
         Ok(())
     }
-    pub(crate) fn enable_workspace_exec(&mut self) -> Result<(), Blocker> {
+    pub(crate) fn enable_workspace_exec(&mut self, trusted: bool) -> Result<(), Blocker> {
         if self.execution_claimed
             || self.pending.is_some()
             || self.next != 2
@@ -40,6 +41,7 @@ impl BrokerChannel {
             return Err(Blocker::Protocol);
         }
         self.workspace_tool.enabled = true;
+        self.workspace_tool.trusted = trusted;
         Ok(())
     }
     pub(crate) fn pending_workspace_exec(&self) -> Option<&PendingWorkspaceExecCall> {
@@ -64,6 +66,7 @@ impl BrokerChannel {
             native,
             turn,
             self.lineage.clone().ok_or(Blocker::Protocol)?,
+            self.workspace_tool.trusted,
         )?;
         let key = frame["id"].to_string();
         if self.workspace_tool.seen_requests.contains(&key)
@@ -118,7 +121,7 @@ mod tests {
             lineage: Some(std::sync::Arc::new(())),
         }
         .into_channel();
-        c.enable_workspace_exec().unwrap();
+        c.enable_workspace_exec(false).unwrap();
         c.bind_tool_native(Some("native".into()));
         c.require_prepared().unwrap();
         c.reserve_execution(7).unwrap();

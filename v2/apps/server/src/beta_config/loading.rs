@@ -23,7 +23,7 @@ const REFUSED: &str = "beta configuration custody refused";
 pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str> {
     let (uid, gid) = identity()?;
     let home_info = private_directory(home, uid, gid)?;
-    let raw = protected_bytes(path, gid, false, 8192)?;
+    let raw = protected_bytes(path, gid, false, 16384)?;
     let config: BetaConfig = serde_json::from_slice(&raw).map_err(|_| REFUSED)?;
     config.validate()?;
     let workspace_info = private_directory(&config.workspace, uid, gid)?;
@@ -64,10 +64,28 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
                     .flat_map(|roles| roles.launches().map(|r| r.workspace.clone())),
             ),
         )?;
-        orkestr_runtime::workspace_exec::WorkspaceExecSandbox::configured(
-            &profile.cgroup_root,
-            &profile.toolchain_root,
-        )
+        let trusted = profile.trusted_profile(
+            home,
+            std::iter::once(config.workspace.clone()).chain(
+                config
+                    .roles
+                    .iter()
+                    .flat_map(|roles| roles.launches().map(|r| r.workspace.clone())),
+            ),
+        )?;
+        match trusted {
+            Some(trusted) => {
+                orkestr_runtime::workspace_exec::WorkspaceExecSandbox::configured_trusted(
+                    &profile.cgroup_root,
+                    &profile.toolchain_root,
+                    trusted,
+                )
+            }
+            None => orkestr_runtime::workspace_exec::WorkspaceExecSandbox::configured(
+                &profile.cgroup_root,
+                &profile.toolchain_root,
+            ),
+        }
         .map_err(|_| "workspace command sandbox unavailable")?;
     }
     control_socket(&config.manager_socket, gid)?;

@@ -99,9 +99,11 @@ class Package:
             require(type(beta[key]) is str and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", beta[key]), "beta_key")
         if "workspace_exec" in beta:
             command = beta["workspace_exec"]
-            require(type(command) is dict and set(command) == {"conversation_id", "project_id",
-                    "workspace", "allowed_roots", "protected_roots", "cgroup_root", "toolchain_root"}
-                    and "roles" in beta, "workspace_exec_config")
+            require(type(command) is dict and set(command) - {"trusted"} == {"conversation_id",
+                    "project_id", "workspace", "allowed_roots", "protected_roots", "cgroup_root",
+                    "toolchain_root"} and "roles" in beta, "workspace_exec_config")
+            # Runtime validates the trusted profile's fields, limits and overlaps.
+            require(type(command.get("trusted", {})) is dict, "workspace_exec_trusted")
             identifier(command["conversation_id"])
             identifier(command["project_id"])
             require(type(command["workspace"]) is str and command["allowed_roots"] == [command["workspace"]]

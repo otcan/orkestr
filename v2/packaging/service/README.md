@@ -110,7 +110,7 @@ Private service units, origin, socket locations and host configuration are suppl
 by the operator outside this repository. No unit or proxy installation is performed.
 
 Optional HTTP beta configuration now receives closed-field grammar validation
-against Runtime checkpoint `1b2dc432b` before packaging, with an 8192-byte operator
+against Runtime checkpoint `1b2dc432b` before packaging, with a 16384-byte operator
 file cap and duplicate-key refusal. This cap is a packaging restriction. All nine
 fields are required; account/token/role/limits additions refuse. The file remains
 externally root-managed and byte-pinned. Shape validation alone authenticates no
@@ -298,3 +298,10 @@ waits for the retained original command cleanup before confirming native Stopped
 Native result delivery remains separate from assistant progress and acceptance.
 Real command execution, cancellation, restart and preserved-history qualification
 are required separately from this inert packaging step.
+
+An optional `workspace_exec.trusted` object selects the trusted owner profile
+described in `docs/v2/workspace-exec.md` (host toolchains, optional network,
+longer limits, detached jobs, explicit credential/skill allowlists that default
+to empty). Packaging checks only its closed shape; Runtime validates limits,
+overlaps and credential defaults at startup. It requires a command image whose
+supervisor supports the sealed layout mode.

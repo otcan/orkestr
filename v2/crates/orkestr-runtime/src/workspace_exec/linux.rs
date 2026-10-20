@@ -73,13 +73,34 @@ unsafe extern "C" {
     fn memfd_create(name: *const std::ffi::c_char, flags: u32) -> i32;
 }
 
-pub(super) fn configure(
-    command: &mut std::process::Command,
-    inherited: [i32; 5],
-    timeout: Duration,
-) {
+/// Per-process rlimits for the supervisor and everything it starts.
+#[derive(Clone, Copy)]
+pub(super) struct Rlimits {
+    pub cpu_seconds: u64,
+    pub file_bytes: u64,
+    pub open_files: u64,
+}
+impl Rlimits {
+    pub(super) fn restricted(timeout: Duration) -> Self {
+        Self {
+            cpu_seconds: timeout.as_secs() + 2,
+            file_bytes: 256 * 1024 * 1024,
+            open_files: 256,
+        }
+    }
+    /// CPU seconds scale with the job's cgroup CPU allowance and timeout.
+    pub(super) fn trusted(timeout: Duration, resources: &super::profile::Resources) -> Self {
+        Self {
+            cpu_seconds: timeout.as_secs().saturating_mul(resources.cpus.into()) + 2,
+            file_bytes: resources.file_bytes,
+            open_files: resources.open_files.into(),
+        }
+    }
+}
+
+/// `inherited` entries below zero are unused slots.
+pub(super) fn configure(command: &mut std::process::Command, inherited: [i32; 6], limits: Rlimits) {
     use std::os::unix::process::CommandExt;
-    let cpu = timeout.as_secs() + 2;
     // SAFETY: after fork, only fixed syscalls/errno access; no allocation or locks.
     // Mark all inherited descriptors CLOEXEC, except our sealed seccomp policy.
     // The standard Command exec-error channel remains usable until exec succeeds.
@@ -89,7 +110,7 @@ pub(super) fn configure(
                 return Err(std::io::Error::last_os_error());
             }
             for fd in inherited {
-                if fcntl(fd, 2, 0) != 0 {
+                if fd >= 0 && fcntl(fd, 2, 0) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
             }
@@ -97,7 +118,12 @@ pub(super) fn configure(
             // counts are enforced for the entire subtree, not this shared UID.
             // No RLIMIT_NPROC: its same-UID accounting could affect unrelated work;
             // process/thread counts are bounded by this exact job cgroup.
-            for (resource, value) in [(0, cpu), (1, 256 * 1024 * 1024), (4, 0), (7, 256)] {
+            for (resource, value) in [
+                (0, limits.cpu_seconds),
+                (1, limits.file_bytes),
+                (4, 0),
+                (7, limits.open_files),
+            ] {
                 let limit = Rlimit {
                     current: value,
                     maximum: value,
@@ -111,7 +137,9 @@ pub(super) fn configure(
     }
 }
 
-pub(super) fn filter() -> Result<File> {
+/// `network` permits only socket creation (socket/socketpair) and is used
+/// solely with a profile that shares the host network namespace on purpose.
+pub(super) fn filter(network: bool) -> Result<File> {
     // Classic BPF sock_filter fields: code, jt, jf, k. Kill wrong ABI/x32.
     let mut instructions: Vec<(u16, u8, u8, u32)> = vec![
         (0x20, 0, 0, 4),
@@ -141,22 +169,32 @@ pub(super) fn filter() -> Result<File> {
         298, 321, 323, 169, 175, 176, 246, 313, 320, 303, 304, 319, 29, 30, 31, 64, 65, 66, 67, 68,
         69, 70, 71, 220, 428, 429, 430, 431, 432, 433, 442,
     ] {
+        if network && matches!(syscall, 41 | 53) {
+            continue;
+        }
         instructions.push((0x15, 0, 1, syscall));
         instructions.push((0x06, 0, 0, 0x00050001)); // SECCOMP_RET_ERRNO | EPERM
     }
     // ALLOW remaining syscalls.
     instructions.push((0x06, 0, 0, 0x7fff0000));
-    // SAFETY: static nul-terminated name; successful fd becomes uniquely owned.
-    let fd = unsafe { memfd_create(c"orkestr-workspace-policy".as_ptr(), 3) };
+    let mut bytes = Vec::with_capacity(instructions.len() * 8);
+    for (code, jt, jf, k) in instructions {
+        bytes.extend_from_slice(&code.to_le_bytes());
+        bytes.extend_from_slice(&[jt, jf]);
+        bytes.extend_from_slice(&k.to_le_bytes());
+    }
+    sealed(c"orkestr-workspace-policy", &bytes)
+}
+
+/// Sealed, close-on-exec memfd holding exactly `bytes`, positioned at zero.
+pub(super) fn sealed(name: &std::ffi::CStr, bytes: &[u8]) -> Result<File> {
+    // SAFETY: nul-terminated name; successful fd becomes uniquely owned.
+    let fd = unsafe { memfd_create(name.as_ptr(), 3) };
     if fd < 0 {
         return Err(Error::Io);
     }
     let mut file = unsafe { File::from_raw_fd(fd) };
-    for (code, jt, jf, k) in instructions {
-        file.write_all(&code.to_le_bytes()).map_err(|_| Error::Io)?;
-        file.write_all(&[jt, jf]).map_err(|_| Error::Io)?;
-        file.write_all(&k.to_le_bytes()).map_err(|_| Error::Io)?;
-    }
+    file.write_all(bytes).map_err(|_| Error::Io)?;
     file.seek(SeekFrom::Start(0)).map_err(|_| Error::Io)?;
     // SAFETY: owned memfd; seal against write/grow/shrink and further seal changes.
     if unsafe { fcntl(file.as_raw_fd(), 1033, 15) } < 0 {
@@ -208,7 +246,10 @@ mod tests {
     // Execute the actual generated classic-BPF instructions against synthetic
     // seccomp_data. This checks branch offsets as well as policy intent.
     fn decision(syscall: u32, flags: u32, arch: u32) -> u32 {
-        let mut file = filter().unwrap();
+        decision_with(false, syscall, flags, arch)
+    }
+    fn decision_with(network: bool, syscall: u32, flags: u32, arch: u32) -> u32 {
+        let mut file = filter(network).unwrap();
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).unwrap();
         let instructions: Vec<_> = bytes
@@ -265,6 +306,20 @@ mod tests {
         }
         assert_eq!(decision(0, 0, 0x40000003), 0x80000000);
         assert_eq!(decision(0x40000000, 0, 0xc000003e), 0x80000000);
-        assert!(policy_is_sealed(&mut filter().unwrap()));
+        assert!(policy_is_sealed(&mut filter(false).unwrap()));
+    }
+
+    #[test]
+    fn network_profile_allows_only_socket_creation_in_addition() {
+        for syscall in [41, 53] {
+            assert_eq!(decision_with(true, syscall, 0, 0xc000003e), 0x7fff0000);
+        }
+        for syscall in [101, 165, 272, 308, 310, 425, 321] {
+            assert_eq!(decision_with(true, syscall, 0, 0xc000003e), 0x50001);
+        }
+        for flags in [0x20000, 0x10000000, 0x40000000, 0x80] {
+            assert_eq!(decision_with(true, 56, flags | 17, 0xc000003e), 0x50001);
+        }
+        assert_eq!(decision_with(true, 0, 0, 0x40000003), 0x80000000);
     }
 }

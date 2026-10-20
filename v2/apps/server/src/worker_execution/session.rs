@@ -153,7 +153,14 @@ impl WorkerSchedule {
         let setup = if let Some(window) = &self.configuration.window {
             let store = self.store.clone();
             let context = window.context.clone();
-            let open = if self.configuration.workspace_exec.is_some() {
+            let open = if self
+                .configuration
+                .workspace_exec
+                .as_ref()
+                .is_some_and(|dispatcher| dispatcher.trusted())
+            {
+                PreparingCodex::open_window_trusted_workspace_exec_retained
+            } else if self.configuration.workspace_exec.is_some() {
                 PreparingCodex::open_window_workspace_exec_retained
             } else {
                 PreparingCodex::open_window_worker_retained

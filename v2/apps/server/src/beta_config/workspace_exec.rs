@@ -14,6 +14,9 @@ pub(crate) struct WorkspaceExecConfig {
     pub protected_roots: Vec<PathBuf>,
     pub cgroup_root: PathBuf,
     pub toolchain_root: PathBuf,
+    /// Optional trusted owner profile; absent keeps the restricted beta.3 profile.
+    #[serde(default)]
+    pub trusted: Option<super::workspace_exec_trusted::TrustedConfig>,
 }
 
 impl WorkspaceExecConfig {
@@ -45,7 +48,38 @@ impl WorkspaceExecConfig {
         {
             return Err("invalid workspace execution profile");
         }
+        if let Some(trusted) = &self.trusted {
+            trusted.profile()?.validate(&[
+                &self.workspace,
+                &self.cgroup_root,
+                &self.toolchain_root,
+            ])?;
+        }
         Ok(())
+    }
+
+    /// Full trusted validation against every host location the server owns:
+    /// its private home, provider workspaces, cgroup root, image and project.
+    pub(crate) fn trusted_profile(
+        &self,
+        home: &Path,
+        native_workspaces: impl Iterator<Item = PathBuf>,
+    ) -> Result<Option<orkestr_runtime::workspace_exec::profile::TrustedProfile>, &'static str>
+    {
+        let Some(trusted) = &self.trusted else {
+            return Ok(None);
+        };
+        let profile = trusted.profile()?;
+        let natives: Vec<PathBuf> = native_workspaces.collect();
+        let mut reserved: Vec<&Path> = vec![
+            home,
+            &self.workspace,
+            &self.cgroup_root,
+            &self.toolchain_root,
+        ];
+        reserved.extend(natives.iter().map(PathBuf::as_path));
+        profile.validate(&reserved)?;
+        Ok(Some(profile))
     }
 
     pub(crate) fn installation(
@@ -107,6 +141,28 @@ mod tests {
                 .unwrap()
                 .validate()
                 .is_err());
+        }
+        let mut trusted = value.clone();
+        trusted["trusted"] = serde_json::json!({"network": true, "host_toolchain": true,
+            "cache_mounts": ["/var/cache/example"]});
+        let config = serde_json::from_value::<WorkspaceExecConfig>(trusted.clone()).unwrap();
+        config.validate().unwrap();
+        let profile = config
+            .trusted_profile(Path::new("/srv/orkestr-home"), std::iter::empty())
+            .unwrap()
+            .unwrap();
+        assert!(profile.network && !profile.credentials_exposed());
+        for overlap in ["/srv/project", "/srv", "/srv/orkestr-home/secrets", "/opt"] {
+            let mut bad = trusted.clone();
+            bad["trusted"]["credential_mounts"] = serde_json::json!([overlap]);
+            let config = serde_json::from_value::<WorkspaceExecConfig>(bad).unwrap();
+            assert!(
+                config.validate().is_err()
+                    || config
+                        .trusted_profile(Path::new("/srv/orkestr-home"), std::iter::empty())
+                        .is_err(),
+                "{overlap}"
+            );
         }
         for key in ["command", "environment", "network", "owner_id"] {
             let mut bad = value.clone();

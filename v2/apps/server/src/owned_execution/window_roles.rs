@@ -163,11 +163,19 @@ impl ConfiguredExecution {
             companion: Some(companion.clone()),
             fast_factory: None,
         };
-        self.config.worker = Some(if self.workspace_exec.is_some() {
-            crate::worker_execution::WorkerPolicy::window_workspace_tasks()
-        } else {
-            crate::worker_execution::WorkerPolicy::window_owner_tasks()
-        });
+        self.config.worker = Some(
+            if let Some(run_ms) = self
+                .workspace_exec
+                .as_ref()
+                .and_then(|dispatcher| dispatcher.worker_run_ms())
+            {
+                crate::worker_execution::WorkerPolicy::window_trusted_workspace_tasks(run_ms)
+            } else if self.workspace_exec.is_some() {
+                crate::worker_execution::WorkerPolicy::window_workspace_tasks()
+            } else {
+                crate::worker_execution::WorkerPolicy::window_owner_tasks()
+            },
+        );
         self.companion = Some(companion);
         self.fast_factory = Some(Box::new(fast));
         Ok(())

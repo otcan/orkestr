@@ -1,4 +1,6 @@
 //! Trusted image and exact Core descriptor composition. No model-selected paths.
+use super::layout;
+use super::profile::{Resources, TrustedProfile};
 use super::*;
 use std::{
     fs::{self, File},
@@ -13,21 +15,30 @@ use std::{
 };
 
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
-pub(super) struct Slot;
+/// Background jobs never consume the short-command slots.
+static JOBS: AtomicUsize = AtomicUsize::new(0);
+pub(super) struct Slot(&'static AtomicUsize);
 impl Slot {
-    fn acquire() -> Result<Self> {
-        ACTIVE
+    fn acquire(counter: &'static AtomicUsize, maximum: usize) -> Result<Self> {
+        counter
             .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < 4).then_some(n + 1)
+                (n < maximum).then_some(n + 1)
             })
             .map_err(|_| Error::Busy)?;
-        Ok(Self)
+        Ok(Self(counter))
     }
 }
 impl Drop for Slot {
     fn drop(&mut self) {
-        ACTIVE.fetch_sub(1, Ordering::AcqRel);
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
+}
+
+/// Short tool-call command or detached background job.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CommandKind {
+    Command,
+    Job,
 }
 
 pub struct WorkspaceExecSandbox {
@@ -35,7 +46,10 @@ pub struct WorkspaceExecSandbox {
     image: Arc<File>,
     supervisor: PathBuf,
     cgroups: cgroup::Root,
+    trusted: Option<Arc<TrustedProfile>>,
 }
+
+const LAYOUT_MARKER: &[u8] = b"ORKESTR_SUPERVISOR_LAYOUT_V1";
 
 pub(super) fn directory(path: &Path, root_only: bool) -> Result<PathBuf> {
     if !path.is_absolute() || path.canonicalize().ok().as_deref() != Some(path) {
@@ -86,7 +100,57 @@ impl WorkspaceExecSandbox {
             supervisor,
             image: Arc::new(image),
             cgroups: cgroup::Root::configured(cgroup_root)?,
+            trusted: None,
         })
+    }
+
+    /// Operator-configured trusted profile. Requires the layout-capable
+    /// supervisor; the restricted image supervisor is never reinterpreted.
+    pub fn configured_trusted(
+        cgroup_root: &Path,
+        toolchain_root: &Path,
+        profile: TrustedProfile,
+    ) -> Result<Self> {
+        let mut sandbox = Self::configured(cgroup_root, toolchain_root)?;
+        profile
+            .validate(&[cgroup_root, toolchain_root])
+            .map_err(|_| Error::InvalidConfig)?;
+        let mut text = Vec::new();
+        use std::io::Read;
+        File::open(&sandbox.supervisor)
+            .and_then(|file| file.take(256 * 1024).read_to_end(&mut text))
+            .map_err(|_| Error::InvalidConfig)?;
+        if !text
+            .windows(LAYOUT_MARKER.len())
+            .any(|window| window == LAYOUT_MARKER)
+        {
+            return Err(Error::InvalidConfig);
+        }
+        sandbox.trusted = Some(Arc::new(profile));
+        Ok(sandbox)
+    }
+
+    pub fn trusted(&self) -> Option<&TrustedProfile> {
+        self.trusted.as_deref()
+    }
+
+    /// Upper bounds a caller may request for one kind of command.
+    pub fn limits(&self, kind: CommandKind) -> Option<WorkerLimits> {
+        match (&self.trusted, kind) {
+            (None, CommandKind::Command) => Some(WorkerLimits {
+                timeout: Duration::from_secs(30),
+                max_output_bytes: 128 * 1024,
+            }),
+            (None, CommandKind::Job) => None,
+            (Some(profile), CommandKind::Command) => Some(WorkerLimits {
+                timeout: profile.sync_timeout,
+                max_output_bytes: profile.sync_output,
+            }),
+            (Some(profile), CommandKind::Job) => (profile.max_jobs > 0).then_some(WorkerLimits {
+                timeout: profile.job_timeout,
+                max_output_bytes: profile.job_output,
+            }),
+        }
     }
 
     /// Spawn is called only inside Core's consumed WorkspaceExec fence. The
@@ -105,23 +169,59 @@ impl WorkspaceExecSandbox {
                 .try_clone_to_owned()
                 .map_err(|_| Error::Io)?,
         );
-        self.start_directory(command, directory, limits, cancellation, retained)
+        self.start_directory(
+            command,
+            directory,
+            limits,
+            cancellation,
+            retained,
+            CommandKind::Command,
+        )
     }
-    fn start_directory(
+
+    /// Detached background job: separate slot pool and the profile's longer
+    /// bounds. Containment, cgroup kill and reap witness are identical.
+    pub fn start_job(
+        &self,
+        command: &str,
+        workspace: WorkspaceDescriptors<'_>,
+        limits: WorkerLimits,
+        cancellation: &WorkerCancellation,
+        retained: Box<dyn Send>,
+    ) -> Result<WorkspaceExecProcess> {
+        let directory = File::from(
+            workspace
+                .workspace()
+                .try_clone_to_owned()
+                .map_err(|_| Error::Io)?,
+        );
+        self.start_directory(
+            command,
+            directory,
+            limits,
+            cancellation,
+            retained,
+            CommandKind::Job,
+        )
+    }
+
+    pub(super) fn start_directory(
         &self,
         command: &str,
         directory: File,
         limits: WorkerLimits,
         cancellation: &WorkerCancellation,
         retained: Box<dyn Send>,
+        kind: CommandKind,
     ) -> Result<WorkspaceExecProcess> {
+        let maximum = self.limits(kind).ok_or(Error::InvalidInput)?;
         if command.is_empty()
             || command.len() > 32768
             || command.contains('\0')
             || limits.timeout.is_zero()
-            || limits.timeout > Duration::from_secs(30)
+            || limits.timeout > maximum.timeout
             || limits.max_output_bytes == 0
-            || limits.max_output_bytes > 128 * 1024
+            || limits.max_output_bytes > maximum.max_output_bytes
         {
             return Err(Error::InvalidInput);
         }
@@ -141,9 +241,32 @@ impl WorkspaceExecSandbox {
         if !directory.metadata().map_err(|_| Error::Io)?.is_dir() {
             return Err(Error::InvalidConfig);
         }
-        let slot = Slot::acquire()?;
-        let job = self.cgroups.job()?;
-        let policy = linux::filter()?;
+        let slot = match (kind, &self.trusted) {
+            (CommandKind::Job, Some(profile)) => Slot::acquire(&JOBS, profile.max_jobs)?,
+            _ => Slot::acquire(&ACTIVE, 4)?,
+        };
+        let resources = self
+            .trusted
+            .as_ref()
+            .map_or(Resources::RESTRICTED, |p| p.resources);
+        let policy = linux::filter(self.trusted.as_ref().is_some_and(|p| p.network))?;
+        // Built (and credential files read) before any cgroup or process exists.
+        let layout = match &self.trusted {
+            Some(profile) => Some(linux::sealed(
+                c"orkestr-workspace-layout",
+                &layout::encode(&layout::trusted(
+                    profile,
+                    layout::Descriptors {
+                        policy: policy.as_raw_fd(),
+                        image: self.image.as_raw_fd(),
+                        workspace: directory.as_raw_fd(),
+                    },
+                    layout::credentials(profile)?,
+                )?),
+            )?),
+            None => None,
+        };
+        let job = self.cgroups.job(&resources)?;
         let deadline = Instant::now() + limits.timeout;
         let (readiness, notify) = std::os::unix::net::UnixStream::pair().map_err(|_| Error::Io)?;
         let mut child = Command::new("/usr/bin/python3");
@@ -158,8 +281,11 @@ impl WorkspaceExecSandbox {
             .arg(self.image.as_raw_fd().to_string())
             .arg(directory.as_raw_fd().to_string())
             .arg(job.procs.as_raw_fd().to_string())
-            .arg(notify.as_raw_fd().to_string())
-            .args(["--", command]);
+            .arg(notify.as_raw_fd().to_string());
+        if let Some(layout) = &layout {
+            child.arg(layout.as_raw_fd().to_string());
+        }
+        child.args(["--", command]);
         linux::configure(
             &mut child,
             [
@@ -168,13 +294,17 @@ impl WorkspaceExecSandbox {
                 directory.as_raw_fd(),
                 job.procs.as_raw_fd(),
                 notify.as_raw_fd(),
+                layout.as_ref().map_or(-1, |l| l.as_raw_fd()),
             ],
-            limits.timeout,
+            match &self.trusted {
+                Some(profile) => linux::Rlimits::trusted(limits.timeout, &profile.resources),
+                None => linux::Rlimits::restricted(limits.timeout),
+            },
         );
         process::start(
             child,
             job,
-            (self.image.clone(), directory, policy, notify),
+            Box::new((self.image.clone(), directory, policy, notify, layout)),
             readiness,
             limits,
             deadline,
@@ -234,3 +364,6 @@ fn validate_shell(image: &Path) -> Result<()> {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "tests_trusted.rs"]
+mod tests_trusted;

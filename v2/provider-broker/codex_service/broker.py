@@ -46,7 +46,9 @@ def main(root, role="deep"):
                 expected_native = receive()  # Strict one-use FD4, after bind ACK.
             pump = pump_type(Pump, subreaper)(config,
                 Channel(config.workspace, expected_native=expected_native,
-                        workspace_exec=sys.argv[1:] == workspace), handoff=handoff,
+                        workspace_exec=sys.argv[1:] == workspace,
+                        workspace_trusted=sys.argv[1:] == workspace and type(
+                            package.beta["workspace_exec"].get("trusted")) is dict), handoff=handoff,
                 diagnostics=True)
             pump.run()
             if pump.parent_eof and pump.child is not None and pump.reaped:

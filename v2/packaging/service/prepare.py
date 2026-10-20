@@ -76,7 +76,7 @@ def prepare(pair, pair_sha, binary, ui, output, home, origin, port, uid, beta_co
         require(not beta_config.is_symlink(),'beta config symlink refused')
         st=beta_config.stat()
         require(st.st_uid==0 and st.st_gid==config['gid'] and st.st_nlink==1 and (st.st_mode&0o777)==0o640,'root-managed service-group-readable private beta config required')
-        require(st.st_size<=8192,'bounded beta config required')
+        require(st.st_size<=16384,'bounded beta config required')
         validate_beta_config(beta_config.read_bytes())
         config['beta_config']=pin(beta_config)
         config['environment']['ORKESTR_V2_BETA_CONFIG']=str(beta_config.resolve())

@@ -35,6 +35,15 @@ impl WorkerPolicy {
             ..Self::window_owner_tasks()
         }
     }
+    /// Trusted command profile: Workers may poll detached jobs for longer.
+    pub(crate) fn window_trusted_workspace_tasks(max_run_ms: u32) -> Self {
+        Self {
+            execution_budget: Some(super::budget::WorkerBudget::trusted_workspace_commands(
+                max_run_ms,
+            )),
+            ..Self::window_owner_tasks()
+        }
+    }
     /// One independently bound Worker for the parent's immutable input. This
     /// policy cannot select an owner, parent, native session, prompt or privilege.
     pub fn validate(&self) -> Result<(), &'static str> {

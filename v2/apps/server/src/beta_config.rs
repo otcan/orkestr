@@ -2,6 +2,7 @@
 pub(crate) mod loading;
 pub(crate) mod roles;
 pub(crate) mod workspace_exec;
+pub(crate) mod workspace_exec_trusted;
 use orkestr_v2_contracts::{ConversationId, OwnerId};
 use serde::Deserialize;
 use std::path::PathBuf;

@@ -44,6 +44,7 @@ impl Fixture {
                 limits,
                 &WorkerCancellation::default(),
                 Box::new(Retained(retained.clone())),
+                CommandKind::Command,
             )
             .unwrap();
         assert!(!retained.load(Ordering::Acquire));

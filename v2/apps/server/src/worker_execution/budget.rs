@@ -20,6 +20,14 @@ impl WorkerBudget {
         }
     }
 
+    /// Validation still bounds this by `MAX_RUN_MS`; owners can only narrow it.
+    pub(super) fn trusted_workspace_commands(max_run_ms: u32) -> Self {
+        Self {
+            max_run_ms,
+            max_idle_ms: None,
+        }
+    }
+
     pub(super) fn validate(&self) -> Result<(), &'static str> {
         if !(30_000..=MAX_RUN_MS).contains(&self.max_run_ms)
             || self

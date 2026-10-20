@@ -76,7 +76,7 @@ impl Root {
         }
         Ok(Self { path, directory })
     }
-    pub(super) fn job(&self) -> Result<Job> {
+    pub(super) fn job(&self, resources: &super::profile::Resources) -> Result<Job> {
         same(&self.directory, &self.path)?;
         let name = format!(
             "job-{}-{}",
@@ -88,11 +88,16 @@ impl Root {
         let result = (|| {
             let directory = File::open(&path).map_err(|_| Error::Io)?;
             super::linux::cgroup2(&directory)?;
+            let (memory, pids, cpu) = (
+                resources.memory_bytes.to_string(),
+                resources.pids.to_string(),
+                format!("{} 100000", u64::from(resources.cpus) * 100_000),
+            );
             for (name, value) in [
-                ("memory.max", "2147483648"),
+                ("memory.max", memory.as_str()),
                 ("memory.swap.max", "0"),
-                ("pids.max", "64"),
-                ("cpu.max", "200000 100000"),
+                ("pids.max", pids.as_str()),
+                ("cpu.max", cpu.as_str()),
                 ("memory.oom.group", "1"),
             ] {
                 open(&path.join(name), true)?
