@@ -41,6 +41,7 @@ pub mod fast_execution;
 pub mod google_registry_metadata;
 mod held_inputs;
 mod intelligence_http;
+pub mod live_map;
 mod memory_service;
 pub mod offline_python;
 pub mod owned_children;
@@ -75,6 +76,7 @@ pub struct AppState {
     auth_window: Arc<Mutex<(Instant, u32)>>,
     resources: resource_health::ResourceSampler,
     timers: timer_http::DurableOwnerController,
+    live_map: Option<Arc<std::path::PathBuf>>,
     desktop_broker: Option<Arc<desktop_broker::Broker>>,
     /// Whether this installation can run a conversation's turns on Claude.
     claude_turns: bool,
@@ -222,6 +224,7 @@ impl AppState {
             authority: Arc::new(authority),
             auth_window: Arc::new(Mutex::new((Instant::now(), 0))),
             resources: resource_health::ResourceSampler::new(),
+            live_map: None,
             desktop_broker: None,
             claude_turns: false,
         })
@@ -365,6 +368,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/browser/session",post(browser::login).get(browser::session).delete(browser::logout))
         .route("/api/v2/projects",get(routes::projects).post(routes::create_project))
         .route("/api/v2/resources",get(resource_health::resources))
+        .route("/api/v2/live-map",get(live_map::read))
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
         .route("/api/v2/conversations",get(conversations_http::list).post(conversations_http::create))
         .route("/api/v2/conversations/{id}/accepted-results",get(accepted_results_http::read))

@@ -67,6 +67,25 @@ async function admit(state, req, res, id) {
     input_request_key: request.input_request_key, request_key: request.request_key, duplicate: false });
 }
 
+// Synthetic live map: one live view with a running agent, one idle view, one delegated to B.
+function liveMap() {
+  const now = Date.now();
+  const view = (name, thread, sessions, delegated = null) => ({ view: 'whatsapp-group', name, chat_id: `synthetic-${thread}`, thread_id: thread,
+    fast_layer: 'V1 thread executor (Codex)', delegated_to_v2: delegated, sessions });
+  return { schema_version: 1, observed_at_ms: now, conversations_truncated: false,
+    host: { status: 'ready', generated_at_ms: now - 5000, modified_at_ms: now - 5000, views: [
+      view('Busy synthetic group', 'thread-busy', [{ session_id: 'synthetic-session-live', kind: 'claude-code', role: 'attached', live: true, last_activity_ms: now - 3000,
+        agents: [{ agent_id: 'a01', name: 'Synthetic running agent', status: 'running', started_at_ms: now - 60000, last_activity_ms: now - 2000 },
+                 { agent_id: 'a02', name: 'Synthetic finished agent', status: 'finished', started_at_ms: now - 90000, last_activity_ms: now - 80000 }] }]),
+      view('Quiet synthetic group', 'thread-quiet', [{ session_id: 'synthetic-session-idle', kind: 'codex', role: 'attached', live: false, last_activity_ms: null, agents: [] }]),
+      view('Delegated synthetic group', 'thread-delegated', [], { remote_backend: 'v2', remote_thread_id: B, remote_runtime_enabled: true, conversation_id: B }),
+    ] },
+    conversations: [A, B, C].map(id => ({ conversation_id: id, name: names[id], partial: false, fast: null,
+      deep: id === B ? { run_id: uuid(204), phase: 'running', observed_at_ms: now } : null,
+      window: id === B ? { window_id: uuid(201), generation: 1, state: 'active', opened_at_ms: now - 10000, work_deadline_ms: now + 600000, expires_at_ms: now + 700000 } : null,
+      workers: id === B ? [{ run_id: uuid(205), session_id: uuid(206), parent_run_id: uuid(204), state: 'running', recovery: 'current_incarnation' }] : [] })) };
+}
+
 function api(state, req, res, url) {
   const path = url.pathname, q = url.searchParams;
   state.requests.push(`${req.method} ${path.replace(/[0-9a-f-]{36}/g, ':id')}`);
@@ -77,6 +96,9 @@ function api(state, req, res, url) {
     return json(res, 200, { schema_version: 1, conversation_id: id, provider: 'codex', role: 'deep',
       controls: { stop: true, steer: true, accept: true }, limits: LIMITS, window: state.window[id] });
   }
+  if (path === '/api/v2/live-map' && req.method === 'GET') return json(res, 200, liveMap());
+  if (path === '/api/v2/projects' && req.method === 'GET') return json(res, 200, { next_cursor: null, projects: [
+    { project_id: uuid(601), conversation_id: C, name: 'Errand project', resources: { local_git: 'not_configured', local_oxrm: 'not_configured' } }] });
   if (path === '/api/v2/conversations' && req.method === 'GET') return json(res, 200, {
     conversations: [A, B, C].map((id, i) => ({ conversation_id: id, name: names[id], scope: { kind: 'global' }, last_sequence: state.messages[id].length + i })),
     next_cursor: null });
@@ -98,6 +120,11 @@ function api(state, req, res, url) {
     const rows = state.archived.filter(x => x.archive_sequence > after).slice(0, limit);
     const more = state.archived.some(x => x.archive_sequence > (rows.at(-1)?.archive_sequence ?? after));
     return json(res, 200, { conversation_id: id, entries: rows, next_after: more ? rows.at(-1).archive_sequence : null });
+  }
+  if (rest === '/execution' && req.method === 'GET') {
+    if (id !== B) { res.writeHead(204, { 'cache-control': 'no-store' }); return res.end(); }
+    return json(res, 200, { schema_version: 1, conversation_id: B, run_id: uuid(204), revision: 3, observed_at_ms: Date.now(), phase: 'running',
+      queue_age_ms: null, progress: null, resources: null, capabilities: { stop: true, steer: true } });
   }
   if (rest === '/messages' && req.method === 'POST') return intake(state, req, res, id);
   if (rest === '/window' && req.method === 'POST') return admit(state, req, res, id);

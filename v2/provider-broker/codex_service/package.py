@@ -32,6 +32,17 @@ DEPENDENCIES = ("/usr/bin/python3", "/usr/bin/bwrap", "/usr/bin/prlimit",
                 "/etc/ssl/certs/ca-certificates.crt")
 
 
+LIVE_MAP_ENV = "ORKESTR_V2_LIVE_MAP"
+
+
+def live_map_path(value):
+    """Optional operator-selected live-map JSON. Read-only by the server; never package input."""
+    require(type(value) is str and value.startswith("/") and 1 < len(value) <= 4096
+            and "\0" not in value and ".." not in Path(value).parts
+            and not any(ord(c) < 32 for c in value), "live_map_path")
+    return value
+
+
 class Package:
     def __init__(self, root, expected=None):
         self.root = protected(root, True)
@@ -77,9 +88,10 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - {"live_map"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
+        self.live_map = live_map_path(value["live_map"]) if "live_map" in value else None
         require(all(type(value[k]) is int and 0 < value[k] < 2**31 for k in ("uid", "gid")),
                 "service_identity")
         require(type(value["port"]) is int and 1024 <= value["port"] <= 65535, "service_port")
@@ -202,4 +214,5 @@ class Package:
                 "ORKESTR_V2_HOME": str(self.data), "ORKESTR_V2_BIND": f"127.0.0.1:{self.runtime['port']}",
                 "ORKESTR_V2_BETA_CONFIG": str(self.root / "beta.json"),
                 "ORKESTR_V2_UI_DIST": str(self.root / "ui"),
-                "ORKESTR_V2_ORIGIN": self.runtime["trusted_origin"]}
+                "ORKESTR_V2_ORIGIN": self.runtime["trusted_origin"],
+                **({LIVE_MAP_ENV: self.live_map} if self.live_map else {})}

@@ -74,7 +74,7 @@ def pair_bytes(plan):
 
 
 OPTIONAL = {'roles', 'preserve_state', 'workspace_exec', 'max_active_windows', 'host_full_access',
-            'code_mode_host', 'code_mode_host_sha256', 'claude'}
+            'code_mode_host', 'code_mode_host_sha256', 'claude', 'live_map'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
 # Account selection stays with the Claude account reference, never the env.
 CLAUDE_FORBIDDEN_ENV = {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
@@ -131,6 +131,11 @@ def prepare(plan):
     require(set(plan) - OPTIONAL == fields and
             plan['format']=='orkestr-v2-selected-service-plan-v1','closed plan required')
     optional(plan)
+    if 'live_map' in plan:
+        # Opt-in read-only live map file; the server reads it, the packager never does.
+        live=plan['live_map']
+        require(type(live) is str and live.startswith('/') and 1<len(live)<=4096 and '\0' not in live
+                and '..' not in Path(live).parts and not any(ord(c)<32 for c in live),'live map path')
     preserve=plan.get('preserve_state',False)
     require(type(preserve) is bool,'explicit preserve_state boolean required')
     separate(plan)  # Metadata only: MUST precede every artifact read/hash.
@@ -237,6 +242,8 @@ def prepare(plan):
                 beta['max_active_windows']=plan['max_active_windows']
             if 'host_full_access' in plan:
                 beta['host_full_access']=plan['host_full_access']
+            if 'live_map' in plan:
+                runtime['live_map']=plan['live_map']
             if claude_plan:
                 launcher=inner/'launcher-claude.py'
                 write(launcher,entry(inner,'broker-claude'),gid,True)
