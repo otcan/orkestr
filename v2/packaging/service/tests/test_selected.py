@@ -112,6 +112,35 @@ class Selected(unittest.TestCase):
             self.assertIn('broker-'+role,(r/f'release/package/launcher-{role}.py').read_text())
         receipt=json.loads((r/'release/release.json').read_bytes())
         self.assertTrue(receipt['roles_enabled']);self.assertFalse(receipt['provider_invoked'])
+    def test_current_source_pins_the_code_mode_host_beside_host_natives(self):
+        source=subprocess.check_output(['/usr/bin/git','-c','safe.directory='+str(REPO),
+            '-C',str(REPO),'rev-parse','HEAD'],text=True).strip()
+        r=self.root
+        for name in ('server','ui/app.wasm'):
+            p=r/name;p.write_bytes(p.read_bytes().replace(MANAGER_BASE.encode(),source.encode())
+                                   .replace(b'2.0.0-beta.1',b'2.0.0-beta.3'))
+        pair=json.loads((r/'pair').read_bytes());pair['source_commit']=source;pair['version']='2.0.0-beta.3'
+        pair['server']['sha256']=sha(r/'server');pair['web']['files']=inventory(r/'ui')
+        pair['web']['server_candidate']=source
+        (r/'pair').write_text(json.dumps(pair));self.plan['pair_sha256']=sha(r/'pair')
+        header=b'\x7fELF\x02\x01'+b'\0'*12+b'\x3e\0'
+        (r/'code-mode-host').write_bytes(header+b'synthetic-code-mode-host')
+        self.plan['host_full_access']={'providers':True,'environment':{'HOME':'/home/service','PATH':'/usr/bin:/bin'}}
+        with self.assertRaisesRegex(RuntimeError,'code_mode_host'):selected.prepare(self.plan)
+        self.plan['code_mode_host']=str(r/'code-mode-host')
+        self.plan['code_mode_host_sha256']='0'*64
+        with self.assertRaisesRegex(RuntimeError,'artifact digest mismatch'):selected.prepare(self.plan)
+        self.assertFalse((r/'release').exists())
+        self.plan['code_mode_host_sha256']=sha(r/'code-mode-host')
+        selected.prepare(self.plan)
+        packaged=r/'release/package/codex-code-mode-host'
+        self.assertEqual(sha(packaged),sha(r/'code-mode-host'))
+        self.assertTrue(packaged.stat().st_mode&0o111)
+        self.assertEqual(packaged.parent,(r/'release/package/native').parent)
+        with authority(REPO,source) as (_,manager,_):
+            package=manager.Package(r/'release/package',sha(r/'release/package/manifest.json'))
+            self.assertIn('codex-code-mode-host',package.manifest['files'])
+        self.assertTrue(json.loads((r/'release/release.json').read_bytes())['host_full_access_enabled'])
     def test_reserved_directories_retained(self):
         for name,mode in (('ledger',0o700),('ep',0o750)):
             p=self.root/name;p.mkdir();os.chown(p,0,986);p.chmod(mode)

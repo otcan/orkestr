@@ -170,7 +170,7 @@ class ExitDiagnostics(unittest.TestCase):
                 decode(raw)
             self.assertEqual(caught.exception.failure, Failure.FRAME_DECODE)
 
-    def service(self, *, resumed=False, failure=None, parent_eof=True, reaped=True):
+    def service(self, *, resumed=False, failure=None, parent_eof=True, reaped=True, host=None):
         from codex_service import broker
         class SyntheticPump:
             def __init__(self, config, channel, **kwargs):
@@ -187,8 +187,10 @@ class ExitDiagnostics(unittest.TestCase):
             role_profiles={"deep": "/synthetic/profile.json"})
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(broker, "Package", return_value=package))
-            configuration = stack.enter_context(patch.object(broker, "Configuration", return_value=types.SimpleNamespace(
-                workspace="/synthetic/workspace")))
+            config = types.SimpleNamespace(workspace="/synthetic/workspace")
+            if host is not None:
+                config.host_full_access, config.host_resume = True, host
+            configuration = stack.enter_context(patch.object(broker, "Configuration", return_value=config))
             stack.enter_context(patch.object(broker, "modules", return_value=(
                 Channel, PROTOCOL, Refused, lambda: None, 73, object)))
             stack.enter_context(patch.object(broker, "pump_type", return_value=SyntheticPump))
@@ -206,6 +208,15 @@ class ExitDiagnostics(unittest.TestCase):
             self.assertEqual(receive.call_count, int(resumed))
             self.assertNotIn("SYNTHETIC-CANARY", output.getvalue())
             return result
+
+    def test_host_resume_imports_only_the_received_native_after_bind(self):
+        for resumed in (False, True):
+            imported = []
+            self.assertEqual(self.service(resumed=resumed, host=imported.append), 73)
+            self.assertEqual(imported, ["synthetic-native"] if resumed else [])
+        def refused(_native):
+            raise Refused("SYNTHETIC-CANARY")
+        self.assertEqual(self.service(resumed=True, host=refused), 2)
 
     def test_service_fresh_resume_codes_and_exclusive_reap_exit(self):
         for resumed in (False, True):

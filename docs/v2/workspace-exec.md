@@ -77,6 +77,22 @@ Instance level, every conversation served by the instance:
   `dangerFullAccess`; without the opt-in they still require `readOnly`.
 - The root manager starts the server with the service user's real
   supplementary groups instead of none.
+- The release pins Codex's `codex-code-mode-host` beside the native
+  (selected plan fields `code_mode_host` and `code_mode_host_sha256`, required
+  exactly when providers use host access). Codex starts it from the native's
+  own directory for every dynamic tool call, including
+  `orkestr_workspace_exec`; without it each call fails with
+  `failed to spawn code-mode host: No such file or directory`.
+- The native reads threads from the real `CODEX_HOME` (default
+  `$HOME/.codex`), not from the role's private native state. When Core resumes
+  a Deep or Fast thread that the sandboxed provider created earlier, the broker
+  first copies that one rollout file from the role's private state into the
+  host `CODEX_HOME` (never overwriting). Without it, Codex refuses the resume
+  with `no rollout found` and the window open fails.
+- The root manager follows the native's descendants as host commands: a
+  descendant may run as another uid (`sudo`), reaped descendants no longer
+  count against the per-window bound, and a tree that cannot be followed
+  closes only that window instead of stopping the shared manager.
 - Claude sessions are not used by beta windows and keep their restricted flags.
 
 Per project, a trusted workspace profile may add `"host_privileged": true`

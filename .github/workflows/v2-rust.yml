@@ -64,6 +64,7 @@ jobs:
         run: |
           python3 -I -S -B -m unittest discover -s provider-broker -p 'test_claude_*.py' -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_reaping.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_host_full_access.py -v
       - name: Protected synthetic manager package regressions
         run: |
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_package.py -v

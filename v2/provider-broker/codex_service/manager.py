@@ -194,7 +194,14 @@ class Manager:
             self._uncertain_all("server_lost")
             raise Refused("unexpected_server_exit")
         for window in list(self.windows.values()):
-            window.children.observe()
+            try:
+                window.children.observe()
+            except Exception:
+                # One window's descendant tree cannot be followed (bound,
+                # identity or metadata). Only that window loses custody; the
+                # shared manager and every other conversation keep running.
+                self._uncertain(window.window, window.generation, "cleanup_unknown")
+                self._terminate(window)
         for status in self.ledger.unfinished():
             try:
                 status = self.ledger.tick(status["window_id"], status["generation"])

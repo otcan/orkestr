@@ -131,12 +131,13 @@ class ServiceTests(unittest.TestCase):
         from selected import OPTIONAL, optional
         self.assertIn('host_full_access', OPTIONAL)
         access = {'providers': True, 'environment': {'HOME': '/home/service', 'PATH': '/usr/bin:/bin'}}
-        optional({'host_full_access': access})
+        host = {'code_mode_host': '/opt/codex/bin/codex-code-mode-host', 'code_mode_host_sha256': 'a' * 64}
+        optional({'host_full_access': access, **host})
         for bad in ({'providers': True}, {'environment': {'PATH': '/bin'}},
                     {'providers': 'yes', 'environment': access['environment']},
                     dict(access, extra=True)):
             with self.subTest(bad=bad), self.assertRaises(RuntimeError):
-                optional({'host_full_access': bad})
+                optional({'host_full_access': bad, **host})
         profile = {'conversation_id': '33333333-3333-4333-8333-333333333333',
                    'project_id': '44444444-4444-4444-8444-444444444444', 'workspace': '/srv/project',
                    'allowed_roots': ['/srv/project'], 'protected_roots': ['/srv/private'],
@@ -144,7 +145,26 @@ class ServiceTests(unittest.TestCase):
                    'trusted': {'host_privileged': True}}
         with self.assertRaisesRegex(RuntimeError, 'require host_full_access'):
             optional({'roles': {}, 'workspace_exec': profile})
-        optional({'roles': {}, 'workspace_exec': profile, 'host_full_access': access})
+        optional({'roles': {}, 'workspace_exec': profile, 'host_full_access': access, **host})
+
+    def test_host_natives_require_exactly_one_pinned_code_mode_host(self):
+        from selected import OPTIONAL, optional
+        self.assertLessEqual({'code_mode_host', 'code_mode_host_sha256'}, OPTIONAL)
+        access = {'providers': True, 'environment': {'HOME': '/home/service', 'PATH': '/usr/bin:/bin'}}
+        host = {'code_mode_host': '/opt/codex/bin/codex-code-mode-host', 'code_mode_host_sha256': 'b' * 64}
+        # Codex fails every dynamic tool call without its code-mode host.
+        with self.assertRaisesRegex(RuntimeError, 'code_mode_host'):
+            optional({'host_full_access': access})
+        # A sandboxed provider forbids subprocesses: no host binary there.
+        for plan in ({**host}, {'host_full_access': dict(access, providers=False), **host}):
+            with self.subTest(plan=sorted(plan)), self.assertRaisesRegex(RuntimeError, 'code_mode_host'):
+                optional(plan)
+        optional({'host_full_access': dict(access, providers=False)})
+        for bad in ({'code_mode_host': host['code_mode_host']},
+                    {'code_mode_host': 'relative', 'code_mode_host_sha256': 'b' * 64},
+                    {'code_mode_host': host['code_mode_host'], 'code_mode_host_sha256': 'B' * 64}):
+            with self.subTest(bad=bad), self.assertRaises(RuntimeError):
+                optional({'host_full_access': access, **bad})
 
     def test_workspace_exec_profile_is_explicit_exact_and_never_browser_authority(self):
         from beta_config import validate, workspace_exec

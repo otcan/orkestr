@@ -76,6 +76,26 @@ class PackageTests(unittest.TestCase):
         with self.assertRaisesRegex(Refused, "profile_binding"):
             Package(self.root)
 
+    def test_host_natives_carry_exactly_their_pinned_code_mode_host(self):
+        from codex_service_fixture import packager
+        access = {"providers": True, "environment": {"HOME": "/synthetic", "PATH": "/usr/bin:/bin"}}
+        self.fixture.alter("beta.json", lambda value: value.update(host_full_access=access))
+        with self.assertRaisesRegex(Refused, "code_mode_host_inventory"):
+            Package(self.root, self.fixture.receipt["manifest_sha256"])
+        host = self.root / "codex-code-mode-host"
+        packager.write(host, b"synthetic code-mode host", GID, 0o550)
+        manifest = self.root / "manifest.json"
+        value = json.loads(manifest.read_text())
+        value["files"]["codex-code-mode-host"] = digest(host)
+        manifest.write_bytes(packager.encoded(value))
+        self.fixture.receipt["manifest_sha256"] = digest(manifest)
+        package = Package(self.root, self.fixture.receipt["manifest_sha256"])
+        self.assertIn("codex-code-mode-host", package.manifest["files"])
+        # A sandboxed provider never carries one.
+        self.fixture.alter("beta.json", lambda value: value.pop("host_full_access"))
+        with self.assertRaisesRegex(Refused, "code_mode_host_inventory"):
+            Package(self.root, self.fixture.receipt["manifest_sha256"])
+
     def test_actual_dropped_uid_peer_and_ordered_shutdown(self):
         manager = Manager(self.root, self.receipt["manifest_sha256"])
         try:

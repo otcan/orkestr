@@ -10,6 +10,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
+import unittest.mock
 
 from codex_bounded.trust import process
 from codex_service.channel import receive, respond, ServerPeer
@@ -83,6 +84,69 @@ class ProcessTests(unittest.TestCase):
         self.assertTrue(self.children.forced)
         with self.assertRaisesRegex(Refused, "original_cleanup_proof_missing"):
             self.children.proven_gone()
+
+    def host_children(self):
+        package = SimpleNamespace(root=self.root, uid=os.getuid(), beta={
+            "host_full_access": {"environment": {"HOME": "/synthetic", "PATH": "/usr/bin:/bin"}}})
+        children = Children(package, process(os.getpid()))
+        self.addCleanup(children.close)
+        return children
+
+    def bound_parent(self, children):
+        # The bound broker starts one long-lived descendant (a host command).
+        self.entry.write_text("import os,signal,subprocess,time\nos.kill(os.getpid(),signal.SIGSTOP)\n"
+                              "child=subprocess.Popen(['/usr/bin/sleep','30'])\n"
+                              "time.sleep(30)\n")
+        child = self.spawn()
+        identity = process(child.pid)
+        self.assertTrue(children.bind(child.pid, identity["start"], time.monotonic() + 2))
+        deadline = time.monotonic() + 2
+        while not Path(f"/proc/{child.pid}/task/{child.pid}/children").read_text().split():
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.005)
+        return child, int(Path(f"/proc/{child.pid}/task/{child.pid}/children").read_text().split()[0])
+
+    def test_host_descendant_running_as_another_uid_stays_owned(self):
+        import codex_service.ownership as ownership
+        real = ownership.process
+        for host in (False, True):
+            children = self.host_children() if host else self.children
+            child, grandchild = self.bound_parent(children)
+
+            def setuid_view(pid):
+                identity = real(pid)
+                if identity is not None and pid == grandchild:
+                    identity["uid"] = 0  # As /proc reports a running sudo.
+                return identity
+            with unittest.mock.patch.object(ownership, "process", setuid_view):
+                if not host:
+                    with self.assertRaisesRegex(Refused, "owned_child_identity"):
+                        children.observe()
+                    self.assertTrue(children.uncertain)
+                else:
+                    children.observe()
+                    self.assertIn(grandchild, {key[0] for key in children.records})
+                    self.assertFalse(children.uncertain)
+                    start = real(grandchild)["start"]
+                    # Cleanup reaches the foreign-uid descendant and proves its reap.
+                    self.assertTrue(children.cleanup())
+                    current = real(grandchild)
+                    self.assertTrue(current is None or current["start"] != start)
+            child.kill()
+            child.wait(3)
+
+    def test_reaped_descendants_do_not_exhaust_the_window_bound(self):
+        for children in (self.children, self.host_children()):
+            batch = []
+            for _ in range(children.bound + 64):
+                batch.append(subprocess.Popen(["/usr/bin/true"], env={"PATH": "/usr/bin:/bin"}))
+                # Remember while alive or as an unreaped zombie, then reap it.
+                identity = process(batch[-1].pid)
+                children.remember(identity)
+                batch[-1].wait(3)
+            self.assertLessEqual(len(children.records), children.bound)
+            # Every reaped original remains proven gone; nothing live was dropped.
+            self.assertTrue(all(record.gone() for record in children.records.values()))
 
     def test_frame_deadline_truncation_and_extra_bytes_are_bounded(self):
         request = {"version": 1, "operation": "status", "request_id": "synthetic",
