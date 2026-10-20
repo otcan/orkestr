@@ -100,7 +100,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= 16384, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'max_active_windows', 'host_full_access'} == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'max_active_windows', 'host_full_access', 'claude'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -136,6 +136,14 @@ def validate(raw):
         require(type(capacity) is int and 1 <= capacity <= 12, 'bounded beta window capacity required')
     if 'host_full_access' in value:
         host_full_access(value['host_full_access'])
+    if 'claude' in value:
+        selected = value['claude']
+        require(type(selected) is dict and set(selected) - {'fast'} == {'launcher', 'launcher_sha256', 'workspace', 'default'}
+                and all(absolute(selected[k]) for k in ('launcher', 'workspace'))
+                and type(selected['launcher_sha256']) is str and re.fullmatch('[0-9a-f]{64}', selected['launcher_sha256'])
+                and type(selected['default']) is bool and type(selected.get('fast', False)) is bool
+                and selected['launcher'] != value['launcher'] and 'host_full_access' in value,
+                'closed Claude window configuration requires host_full_access')
     if 'workspace_exec' in value:
         require('roles' in value, 'workspace execution requires configured Worker roles')
         workspace_exec(value['workspace_exec'])

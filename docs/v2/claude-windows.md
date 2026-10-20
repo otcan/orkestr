@@ -15,7 +15,11 @@ The root-owned service package gains, together:
   `temporary`, `host_full_access.environment`) and
 - the `broker/claude_*.py` modules.
 
-`beta.json` gets `"claude": {"launcher", "launcher_sha256", "workspace",
+The selected-service packager does this from the plan's optional
+`"claude": {"executable", "account", "workspace", "home", "temporary",
+"default"?, "fast"?}`. It requires `host_full_access` and reuses its
+environment, never opens the account directory, and refuses an environment
+that carries an account or API key. `beta.json` gets `"claude": {"launcher", "launcher_sha256", "workspace",
 "default"}`. `default: true` runs conversations whose settings were never
 changed on Claude. The account is a path reference (an existing logged-in
 `CLAUDE_CONFIG_DIR`); the package never reads or copies it. Only host full
