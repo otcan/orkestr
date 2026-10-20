@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use orkestr_v2_contracts::ExecutionAcceptanceReceipt;
 use orkestr_v2_ui::{execution::Execution, session_scope::SessionScope};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // Enabled only in a registered matching server candidate.
 const ACCEPTANCE_ACTIVATED: bool = cfg!(feature = "execution-controls");
@@ -47,7 +47,13 @@ pub fn AcceptanceButton(
         .as_ref()
         .and_then(|s| execution.read().acceptances.notice(s));
     rsx! {
-        button { r#type: "button", disabled: !enabled, title: if ACCEPTANCE_ACTIVATED { if fast_reply { "Accept this Fast reply" } else { "Accept this completion" } } else { "Completion acceptance is not available on this server yet" }, onclick: move |_| {
+        button {
+            r#type: "button", disabled: !enabled,
+            "data-conversation-id": status.as_ref().map(|s| s.conversation_id.to_string()),
+            "data-run-id": status.as_ref().and_then(|s| s.run_id.as_ref()).map(ToString::to_string),
+            "data-completion-event-id": status.as_ref().and_then(|s| s.acceptance_candidate.as_ref()).map(|c| c.completion_event_id.to_string()),
+            "data-execution-revision": status.as_ref().map(|s| s.revision.to_string()),
+            title: if ACCEPTANCE_ACTIVATED { if fast_reply { "Accept this Fast reply" } else { "Accept this completion" } } else { "Completion acceptance is not available on this server yet" }, onclick: move |_| {
             if !enabled || busy() { return; }
             let csrf = csrf.clone();
             let owner = session_scope.read().generation();
