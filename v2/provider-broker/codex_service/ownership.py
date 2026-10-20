@@ -158,6 +158,12 @@ class Children:
         return True
 
     @serialized
+    def released(self):
+        """Every original identity reaped and cleanup certain. Not graceful proof."""
+        self.observe()
+        return not self.uncertain and all(record.gone() for record in self.records.values())
+
+    @serialized
     def cleanup(self, seconds=2):
         """Emergency owned cleanup. Forced signals permanently lose proof."""
         self.observe()

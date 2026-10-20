@@ -124,6 +124,16 @@ impl Controller {
         Ok(entry)
     }
 
+    /// Drop a retained controller whose window was closed by reconciliation.
+    /// Only called when it holds no local task (checked under `opening`).
+    pub(super) fn forget(&self, conversation: &ConversationId) -> Result<(), &'static str> {
+        self.conversations
+            .lock()
+            .map_err(|_| "window registry poisoned")?
+            .remove(conversation);
+        Ok(())
+    }
+
     fn entries(&self) -> Vec<Arc<ConversationController>> {
         self.conversations
             .lock()
@@ -195,6 +205,9 @@ impl Controller {
         }
         let _opening = self.opening.lock().await;
         self.sweep(browser).await;
+        // Windows stranded by a previous process past their hard deadline are
+        // abandoned (audited) so their conversations can open again.
+        self.reconcile_expired_locked(browser).await;
         // Earlier durable intents (any conversation) take free slots first.
         self.drain_locked(browser).await;
         let mut room = input.window_id.is_some() || self.live(browser).await? < self.capacity;
@@ -244,6 +257,11 @@ impl Controller {
         browser: &str,
         conversation: &ConversationId,
     ) -> Result<Option<ExecutionWindowStatus>, RuntimeStoreError> {
+        // Never wait behind an opening window just to poll status.
+        if let Ok(_opening) = self.opening.try_lock() {
+            self.sweep(browser).await;
+            self.reconcile_expired_locked(browser).await;
+        }
         let result = self.status_inner(browser, conversation).await;
         if result.is_ok() {
             self.queue.remember(browser);
@@ -361,6 +379,10 @@ pub(super) fn selected_config(
     config.validate()?;
     Ok(config)
 }
+
+#[path = "stranded.rs"]
+mod stranded;
+pub(crate) use stranded::ReconcileError;
 
 #[cfg(test)]
 #[path = "controller_tests.rs"]

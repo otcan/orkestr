@@ -151,6 +151,21 @@ class Manager:
             if window is not None:
                 self._terminate(window)
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
+        if operation == "reconcile":
+            if row["state"] != "retired" and window is not None:
+                # This window still has custody in this manager (same manager
+                # life). Its egress must be closed and every original child
+                # reaped; uncertain cleanup is never promoted. A fresh manager
+                # never holds custody of a previous life's window. An exact
+                # replay of a retired record needs no custody check.
+                require(window.egress_closed, "window_egress_owned")
+                require(window.children.released(), "owned_child_not_reaped")
+            receipt = self.ledger.reconcile(request)
+            if window is not None:
+                with self.guard:
+                    self.windows.pop(window.window, None)
+                window.children.close()
+            return {"ok": True, "receipt": receipt}
         require(operation == "retire", "operation")
         if row["state"] != "retired":
             require(window is not None, "original_cleanup_proof_missing")

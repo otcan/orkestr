@@ -195,6 +195,7 @@ impl Controller {
             return;
         }
         self.sweep(&browser).await;
+        self.reconcile_expired_locked(&browser).await;
         self.drain_locked(&browser).await;
     }
 

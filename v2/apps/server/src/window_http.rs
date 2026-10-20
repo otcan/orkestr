@@ -115,6 +115,77 @@ pub(crate) async fn queue(
     Ok(Json(queue).into_response())
 }
 
+/// Owner decision for a window stranded by a previous process: abandon its
+/// unaccepted proposals, or retire it after the owner accepted/stopped them.
+pub(crate) async fn reconcile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<ExecutionWindowReconciliationRequest>, JsonRejection>,
+) -> Result<Response, Error> {
+    browser::owner(&state, &headers).await?;
+    browser::guard(
+        &state,
+        &axum::http::Method::POST,
+        "execution_window",
+        &headers,
+    )
+    .await?;
+    let credential = browser::credential(&headers)?;
+    let conversation = conversation(&id)?;
+    let Json(input) = body.map_err(|_| invalid())?;
+    if !input.is_valid() {
+        return Err(invalid());
+    }
+    let Some(controller) = state.window_controller.clone() else {
+        return Err(Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "window_unavailable",
+            "Window runtime is not configured",
+        ));
+    };
+    // Like admission, the decision completes across HTTP disconnect.
+    let receipt = tokio::spawn(async move {
+        controller
+            .reconcile_owner(&credential, &conversation, &input)
+            .await
+            .map_err(|error| match error {
+                window_runtime::ReconcileError::LiveOwner => Error(
+                    StatusCode::CONFLICT,
+                    "window_live",
+                    "The window is still owned by a running task; accept or stop it",
+                ),
+                window_runtime::ReconcileError::NotFound => Error(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "No such unfinished window",
+                ),
+                window_runtime::ReconcileError::Refused => Error(
+                    StatusCode::CONFLICT,
+                    "window_conflict",
+                    "Window cannot be reconciled in its current state",
+                ),
+            })
+    })
+    .await
+    .map_err(|_| {
+        Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "window_unavailable",
+            "Window reconciliation outcome is uncertain",
+        )
+    })??;
+    Ok((
+        if receipt.duplicate {
+            StatusCode::OK
+        } else {
+            StatusCode::CREATED
+        },
+        Json(receipt),
+    )
+        .into_response())
+}
+
 fn conversation(id: &str) -> Result<ConversationId, Error> {
     Uuid::parse_str(id)
         .ok()
