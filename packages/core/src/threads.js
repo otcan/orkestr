@@ -844,13 +844,25 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
           );
       if (duplicate) return { ...duplicate, duplicate: true, duplicateReason: "external_id" };
     }
+    // A caller may pin the local id (e.g. a parent materialized from a remote
+    // runtime row); replaying the same id returns the stored message.
+    const requestedMessageId = String(input.requestedMessageId || "").trim();
+    if (requestedMessageId) {
+      if (!/^[A-Za-z0-9._:-]{1,160}$/.test(requestedMessageId)) {
+        throw Object.assign(new Error("invalid_message_id"), { statusCode: 400 });
+      }
+      const existing = sqlite
+        ? await messageRepository.get(thread.id, requestedMessageId)
+        : messages.find((item) => item.id === requestedMessageId);
+      if (existing) return { ...existing, duplicate: true, duplicateReason: "message_id" };
+    }
     const cursor =
       Number(input.cursor || 0) ||
       (sqlite
         ? await messageRepository.nextCursor(thread.id)
         : Math.max(0, ...messages.map((item) => Number(item.cursor || 0)).filter(Number.isFinite)) + 1);
     let nextMessage = {
-      id: randomUUID(),
+      id: requestedMessageId || randomUUID(),
       ownerUserId: normalizeUserId(input.ownerUserId || thread.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
       role,
       source,

@@ -6,6 +6,7 @@ import { remoteWhatsAppRuntimeBinding } from "../../core/src/thread-remote-runti
 import { remoteParentExpectedFields, remoteParentRecoveryCandidate } from "./whatsapp-remote-parent.js";
 import { acknowledgeRemoteMirrorDeliveries, remoteMirrorAckSupported } from "./whatsapp-remote-mirror-ack.js";
 import { uploadRemoteInputAttachments } from "./whatsapp-remote-attachment-upload.js";
+import { materializeRemoteTimerParent, remoteTimerParentSource } from "./whatsapp-remote-timer-parent.js";
 
 export { remoteWhatsAppRuntimeBinding };
 
@@ -356,6 +357,16 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
         const remoteMessageId = pickString(remoteMessage.id, remoteMessage.messageId);
         if (!remoteMessageId) continue;
         const known = localByRemoteId.get(remoteMessageId);
+        // V2 timer turns have no V1 input; give their reply a local parent once.
+        if (known?.source === remoteTimerParentSource) continue;
+        if (!known && remoteMessage.source === remoteTimerParentSource) {
+          const timerParent = await materializeRemoteTimerParent({ thread, remote, remoteMessage, remoteMessages, localMessages, env });
+          if (timerParent) {
+            localByRemoteId.set(remoteMessageId, timerParent.message);
+            if (timerParent.created) imported += 1;
+          }
+          continue;
+        }
         const local = known || remoteParentRecoveryCandidate(thread, remote, remoteMessage, localMessages, remoteMessages);
         if (!local || local.role !== "user") continue;
         const changed = await updatePublicRemoteParent(thread, local, remoteMessage, remote, env, !known);
