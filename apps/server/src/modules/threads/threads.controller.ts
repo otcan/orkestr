@@ -1427,7 +1427,8 @@ export class ThreadsController {
     const deletedTimers: string[] = [];
     for (const timer of timers) {
       const target = String(timer.target || timer.threadId || "").trim();
-      if (timer.targetType === "thread" && deleted.has(target)) {
+      // V2-owned timers are left for V2 to retire; V1 must not delete them.
+      if (timer.targetType === "thread" && deleted.has(target) && timer.ownedBy !== "v2") {
         if (await deleteTimerForPrincipal(timer.id, principal)) deletedTimers.push(timer.id);
       }
     }
