@@ -23,6 +23,12 @@ class Configuration:
         # with the real executor environment (V1-equivalent, host-root equivalent).
         self.host_full_access = type(access) is dict and access.get("providers", True) is True
         self.host_environment = dict(access["environment"]) if self.host_full_access else None
+        # Host natives run real commands: a CommandExecution item/completed
+        # carries the full aggregated output and can exceed the 64 KiB default.
+        # Only the provider source is raised (transport bounds it at 16 MiB);
+        # such tool items are parsed and dropped, never forwarded.
+        if self.host_full_access:
+            self.max_provider_frame = HOST_PROVIDER_FRAME
 
     def isolated_command(self):
         require(not self.issued, "isolated_command_already_issued")
@@ -54,6 +60,7 @@ class Configuration:
         return import_rollout(Path(state), host_codex_home(self.host_environment), native)
 
 
+HOST_PROVIDER_FRAME = 16 * 1024 * 1024
 ROLLOUT_DATE = re.compile(r"[0-9]{4}/[0-9]{2}/[0-9]{2}")
 NATIVE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
