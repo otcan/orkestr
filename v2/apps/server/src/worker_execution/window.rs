@@ -59,6 +59,14 @@ impl Pool {
     }
 }
 
+impl Drop for Slot {
+    fn drop(&mut self) {
+        if let Ok(mut occupied) = self.occupied.lock() {
+            occupied[self.index] = false;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,13 +127,5 @@ mod tests {
         .join()
         .is_err());
         assert!(pool.reserve().is_err());
-    }
-}
-
-impl Drop for Slot {
-    fn drop(&mut self) {
-        if let Ok(mut occupied) = self.occupied.lock() {
-            occupied[self.index] = false;
-        }
     }
 }

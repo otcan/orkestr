@@ -3647,6 +3647,7 @@ name = "orkestr-v2-contracts"
 version = "2.0.0-beta.2"
 dependencies = [
  "serde",
+ "serde_json",
  "uuid",
 ]
 

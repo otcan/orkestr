@@ -1,5 +1,8 @@
 //! Actual Fast native lifecycle; no reconstructed grants or synthetic observations.
+// This target exercises ordinary Fast lifecycle; window-only entry points are
+// compiled and checked with the production server library.
 #[path = "../src/fast_execution/mod.rs"]
+#[allow(dead_code)]
 mod fast_execution;
 #[path = "support/fast_process.rs"]
 mod fixture;
