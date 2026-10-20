@@ -55,6 +55,12 @@ renewal, with a stale authority, after Stop, or with a foreign credential refuse
 Existing tool grants, results and deadlines remain unextended and stale; this
 port does not reissue an old tool request or result delivery.
 
+Every window Worker profile opts in. A Worker with command authority uses its
+command profile's host cap (300 s by default, or the trusted `worker_run_ms`).
+A Worker without command authority uses the one-hour maximum as host cap, so
+only the owner's explicit task budget and Core's parent, window and supervisor
+deadlines bound it. Without an owner budget the task keeps its hard lifetime.
+
 Author checks: five ordinary Store budget tests plus five existing renewal
 tests cover owner-task restriction, immutable budget, legacy refusal, concurrent
 CAS, stale tools, fresh tools, natural expiry, machine revocation, Stop and parent

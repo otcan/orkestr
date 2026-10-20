@@ -248,6 +248,32 @@ class LedgerTests(unittest.TestCase):
             with self.subTest(bad=bad["operation"]), self.assertRaises(contract.Refused):
                 contract.decode(contract.canonical(bad))
 
+    def test_failed_open_reconciles_without_a_run_and_unblocks_the_successor(self):
+        request = self.admit()
+        self.ledger.uncertain(request["window_id"], 1, "runtime_refused")
+        failed = {**self.reconciliation(request, "failed"), "run_id": None, "terminal_event_id": None}
+        for bad in ({**failed, "run_id": uid()},
+                    {**failed, "terminal_event_id": uid()},
+                    {**self.reconciliation(request, "abandoned"), "run_id": None}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(contract.Refused, "terminal_run"):
+                self.ledger.reconcile(bad)
+        self.assertEqual(self.ledger.status()["state"], "reconciliation")
+        receipt = self.ledger.reconcile(failed)
+        self.assertEqual((receipt["state"], receipt["reason"], receipt["outcome"], receipt["run_id"],
+                          receipt["terminal_event_id"]),
+                         ("retired", "runtime_refused", "failed", None, None))
+        self.assertEqual(self.ledger.reconcile(failed), receipt)
+        with self.assertRaisesRegex(contract.Refused, "retirement_conflict"):
+            self.ledger.reconcile({**self.reconciliation(request, "abandoned")})
+        self.assertTrue(self.ledger.admit(self.request(2))[1])
+        wire = {**failed, "version": 1, "operation": "reconcile", "request_id": uid()}
+        self.assertEqual(contract.decode(contract.canonical(wire)), wire)
+        for bad in ({**wire, "run_id": uid()},
+                    {**wire, "outcome": "abandoned"},
+                    {**wire, "operation": "retire"}):
+            with self.subTest(wire=bad), self.assertRaises(contract.Refused):
+                contract.decode(contract.canonical(bad))
+
     def test_manager_reconcile_requires_released_custody(self):
         import threading
         from types import SimpleNamespace

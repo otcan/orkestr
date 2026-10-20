@@ -30,10 +30,14 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
     .unwrap();
     // Model the actual schema-43 source, including absence of later opt-in
     // tables. Removing only a checksum row would create a foreign schema.
-    // Undo 0048 first: its views replaced the 0037 evidence views.
+    // Undo 0052 and 0048 first: their views replaced the 0037 evidence views.
     for statement in [
         "DROP VIEW production_retirement_provenance",
         "DROP VIEW production_terminal_evidence",
+        "DROP TABLE production_run_failures",
+        "DROP TABLE execution_window_failed_resume_metadata",
+        "DROP TABLE execution_window_open_failure_inputs",
+        "DROP TABLE execution_window_open_failures",
         "DROP TABLE production_abandoned_retirements",
         "DROP TABLE execution_window_released_inputs",
         "DROP TABLE production_run_abandonments",
@@ -99,5 +103,5 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
         .fetch_one(&reopened.pool)
         .await
         .unwrap();
-    assert_eq!(latest, 51);
+    assert_eq!(latest, 52);
 }

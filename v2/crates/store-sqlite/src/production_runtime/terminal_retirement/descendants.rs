@@ -41,7 +41,9 @@ pub(in crate::production_runtime) async fn descendants_clear(
     if results != 0 {
         return Ok(false);
     }
-    let controls: i64 = sqlx::query_scalar("SELECT count(*) FROM production_control_outbox o JOIN production_runs r ON r.id=o.run_id WHERE r.context_id=? AND o.state!='acknowledged'")
+    // A Worker failed by audited reconciliation keeps its never-acknowledged
+    // control as history; its process and lease are gone, nothing will answer.
+    let controls: i64 = sqlx::query_scalar("SELECT count(*) FROM production_control_outbox o JOIN production_runs r ON r.id=o.run_id WHERE r.context_id=? AND o.state!='acknowledged' AND NOT EXISTS(SELECT 1 FROM production_terminal_evidence t WHERE t.run_id=o.run_id AND t.terminal_kind='failed')")
         .bind(context).fetch_one(&mut *tx).await.map_err(db)?;
     Ok(controls == 0)
 }

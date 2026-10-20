@@ -99,7 +99,7 @@ pub(super) async fn retired_row_in(
     opening: Option<&str>,
 ) -> Result<SqliteRow> {
     all_prior_retired(tx, owner, conversation, namespace, key, opening).await?;
-    let row = sqlx::query("SELECT s.*,w.id AS closed_window,r.id AS prior_run,b.id AS binding_id FROM execution_windows w JOIN production_supervisors s ON s.context_id=w.context_id AND s.incarnation_id=w.incarnation_id JOIN production_runs r ON r.id=w.terminal_run_id AND r.context_id=s.context_id AND r.incarnation_id=s.incarnation_id JOIN production_terminal_evidence t ON t.run_id=r.id JOIN session_bindings b ON b.id=r.session_id JOIN production_retirement_provenance g ON g.context_id=s.context_id AND g.incarnation_id=s.incarnation_id AND g.supervisor_generation=s.generation AND g.prior_run_id=r.id AND g.terminal_event_id=t.event_id AND g.session_id=b.id AND g.binding_generation=b.generation JOIN production_readiness rd ON rd.session_id=b.id AND rd.context_id=s.context_id AND rd.incarnation_id=s.incarnation_id WHERE w.owner_id=? AND w.conversation_id=? AND w.state='closed' AND w.generation=(SELECT max(latest.generation) FROM execution_windows latest WHERE latest.owner_id=w.owner_id AND latest.conversation_id=w.conversation_id AND latest.state='closed') AND w.credential_issued=1 AND w.credential_bound=1 AND s.owner_id=w.owner_id AND s.provider_kind='codex' AND s.namespace=? AND s.supervisor_key=? AND s.lease_deadline_ms=0 AND r.owner_id=w.owner_id AND r.conversation_id=w.conversation_id AND r.role='deep' AND r.provider_kind=s.provider_kind AND b.owner_id=w.owner_id AND b.conversation_id=w.conversation_id AND b.role='deep' AND b.state='ready' AND b.provider_kind='codex' AND b.provider_namespace=s.namespace AND b.native_session_id=r.native_session_id AND b.generation=r.binding_generation+1 AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation) AND NOT EXISTS(SELECT 1 FROM production_resume_metadata rm WHERE rm.prior_run_id=r.id) ORDER BY w.generation DESC LIMIT 1")
+    let row = sqlx::query("SELECT s.*,w.id AS closed_window,r.id AS prior_run,b.id AS binding_id FROM execution_windows w JOIN production_supervisors s ON s.context_id=w.context_id AND s.incarnation_id=w.incarnation_id JOIN production_runs r ON r.id=w.terminal_run_id AND r.context_id=s.context_id AND r.incarnation_id=s.incarnation_id JOIN production_terminal_evidence t ON t.run_id=r.id JOIN session_bindings b ON b.id=r.session_id JOIN production_retirement_provenance g ON g.context_id=s.context_id AND g.incarnation_id=s.incarnation_id AND g.supervisor_generation=s.generation AND g.prior_run_id=r.id AND g.terminal_event_id=t.event_id AND g.session_id=b.id AND g.binding_generation=b.generation JOIN production_readiness rd ON rd.session_id=b.id AND rd.context_id=s.context_id AND rd.incarnation_id=s.incarnation_id WHERE w.owner_id=? AND w.conversation_id=? AND w.state='closed' AND w.generation=(SELECT max(latest.generation) FROM execution_windows latest WHERE latest.owner_id=w.owner_id AND latest.conversation_id=w.conversation_id AND latest.state='closed' AND NOT EXISTS(SELECT 1 FROM execution_window_open_failures f WHERE f.window_id=latest.id)) AND w.credential_issued=1 AND w.credential_bound=1 AND s.owner_id=w.owner_id AND s.provider_kind='codex' AND s.namespace=? AND s.supervisor_key=? AND s.lease_deadline_ms=0 AND r.owner_id=w.owner_id AND r.conversation_id=w.conversation_id AND r.role='deep' AND r.provider_kind=s.provider_kind AND b.owner_id=w.owner_id AND b.conversation_id=w.conversation_id AND b.role='deep' AND b.state='ready' AND b.provider_kind='codex' AND b.provider_namespace=s.namespace AND b.native_session_id=r.native_session_id AND b.generation=r.binding_generation+1 AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation) AND NOT EXISTS(SELECT 1 FROM production_resume_metadata rm WHERE rm.prior_run_id=r.id) ORDER BY w.generation DESC LIMIT 1")
             .bind(owner.to_string()).bind(conversation.to_string()).bind(namespace).bind(key)
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
     Ok(row)
@@ -107,7 +107,7 @@ pub(super) async fn retired_row_in(
 
 /// Supervisors belonging to one conversation: its derived namespace/key, any
 /// context its windows used, or any context with readiness for its sessions.
-const CONVERSATION_SUPERVISORS: &str = "s.owner_id=? AND ((s.namespace=? AND s.supervisor_key=?) OR EXISTS(SELECT 1 FROM execution_windows cw WHERE cw.context_id=s.context_id AND cw.owner_id=s.owner_id AND cw.conversation_id=?) OR EXISTS(SELECT 1 FROM production_readiness cr JOIN session_bindings cb ON cb.id=cr.session_id WHERE cr.context_id=s.context_id AND cb.owner_id=s.owner_id AND cb.conversation_id=?))";
+pub(super) const CONVERSATION_SUPERVISORS: &str = "s.owner_id=? AND ((s.namespace=? AND s.supervisor_key=?) OR EXISTS(SELECT 1 FROM execution_windows cw WHERE cw.context_id=s.context_id AND cw.owner_id=s.owner_id AND cw.conversation_id=?) OR EXISTS(SELECT 1 FROM production_readiness cr JOIN session_bindings cb ON cb.id=cr.session_id WHERE cr.context_id=s.context_id AND cb.owner_id=s.owner_id AND cb.conversation_id=?))";
 
 pub(super) async fn all_prior_retired(
     tx: &mut SqliteConnection,
@@ -184,9 +184,14 @@ impl Store {
         }
         // Legacy first window can be associated with an already retired
         // pre-window supervisor. A window successor always proves its cut.
-        let Some(predecessor) = window.get::<Option<String>, _>("predecessor_window_id") else {
+        let Some(declared) = window.get::<Option<String>, _>("predecessor_window_id") else {
             return Ok(());
         };
+        // A failed opening in between is transparent; with none retired yet
+        // there is nothing to reattach to.
+        let predecessor = effective_predecessor(tx, Some(declared))
+            .await?
+            .ok_or(RuntimeStoreError::Fenced)?;
         let conversation = ConversationId(
             window
                 .get::<String, _>("conversation_id")

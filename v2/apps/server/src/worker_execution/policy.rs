@@ -18,11 +18,14 @@ pub struct WorkerPolicy {
 }
 
 impl WorkerPolicy {
+    /// Window Workers without command authority. The owner's explicit task
+    /// budget (never this host cap alone) enables same-child lease renewal, so
+    /// a longer task no longer stops at the 30 second initial lease.
     pub(crate) fn window_owner_tasks() -> Self {
         Self {
             mode: "owner-tasks-v1".into(),
             lifetime_ms: 30_000,
-            execution_budget: None,
+            execution_budget: Some(super::budget::WorkerBudget::owner_tasks()),
             offline_python: false,
             broker_launcher: None,
             broker_launcher_sha256: None,

@@ -10,6 +10,11 @@
 //! and Core steps are both idempotent, so a lost reply is retried safely and a
 //! Core refusal never leaves Core closed while the manager still blocks.
 //!
+//! Besides proposals awaiting acceptance, Core also fails a Worker left
+//! `cancel_requested` after its lease deadline, and closes a window whose open
+//! failed before it ran anything as `failed` (restoring its retired
+//! predecessor), so neither shape blocks the conversation any longer.
+//!
 //! Automatic recovery (`Actor::Startup`) runs on the first owner-authenticated
 //! window request after start and only for windows past their hard deadline.
 //! Core needs the owner's browser credential for every mutation, so there is
@@ -146,6 +151,13 @@ impl Controller {
             Outcome::Accepted => TerminalOutcome::Accepted,
             Outcome::Stopped => TerminalOutcome::Stopped,
             Outcome::Abandoned => TerminalOutcome::Abandoned,
+            Outcome::Failed => TerminalOutcome::Failed,
+        };
+        // A failed open names no run; every other outcome names exactly one.
+        let run = match (run, event) {
+            (Some(run), Some(event)) => Some((run.0, event)),
+            (None, None) => None,
+            _ => return Err("stranded window plan is inconsistent"),
         };
         self.manager
             .for_conversation(conversation.clone())
@@ -157,8 +169,7 @@ impl Controller {
                     generation: window.generation,
                 },
                 manager_outcome,
-                run.0,
-                event.clone(),
+                run,
                 Instant::now() + Duration::from_secs(5),
             )
             .await

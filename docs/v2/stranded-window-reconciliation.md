@@ -66,15 +66,71 @@ Observations, payloads, messages and receipts are kept. Nothing is dispatched ag
 
   The endpoint returns 409 `window_live` while this process still runs the window.
 
+## Deadline-cancelled Workers (0052)
+
+A Worker whose deadline cancellation was requested (`cancel_requested`) but never
+acknowledged before the process stopped used to block the window: its run had
+no terminal evidence, and its control stayed pending. The plan now fails such a
+Worker when all of these hold:
+
+- its lease deadline has passed, so Core already refuses every effect of the
+  lost child;
+- the exact issued cancellation receipt exists (`cancel_requested`,
+  delivery unknown) at the run's current lease generation and fence;
+- its delegation and Worker binding belong to this window's context.
+
+At commit the Worker run becomes `cancelled` with a `production_run_failures`
+row (cause `cancel_unacknowledged`) and terminal kind `failed`; it is never
+stopped, accepted or re-executed. Its binding is marked `lost` at the next
+generation, because the native session's last turn is unknown. The pending
+control and its `cancel_requested` receipt stay as history. Workers are failed
+before their Deep parent is abandoned, under either decision. Any other
+pending descendant effect still refuses.
+
+## Failed opens (0052)
+
+A window whose open failed before it ran anything of its own (for example,
+broker readiness or Fast setup was refused) has no Deep run to anchor on. The
+plan closes it with outcome `failed` and an `execution_window_open_failures`
+audit row. The cause is derived from durable state:
+
+- `credential_unissued`: the manager admitted the window, but no credential was
+  issued;
+- `credential_unbound`: the credential was issued but never bound;
+- `setup_incomplete`: the window was bound, but no run exists.
+
+A successor opening has already taken over its retired predecessor's
+supervisor: new incarnation and generation, readiness and workspace
+association, and resume reservations for the predecessor turns. Reconciliation
+reverts exactly those effects. It requires that no run, busy binding or
+per-generation native request exists under the new incarnation. Reservations
+move to `execution_window_failed_resume_metadata` and are never confirmed. The
+conversation then continues from the same retired window (`restored_window_id`).
+Successor recovery, idle issuance, predecessor reattachment and Fast companion
+recovery all see through failed windows to that retired window.
+
+A first window has no retired lineage. Its bootstrap supervisor's lease is
+zeroed. When every window of a conversation failed this way, the next opening
+bootstraps again: the supervisor is taken over at the next generation, and the
+never-used Fast and Deep bindings are `retired` for fresh ones.
+
+Inputs the failed window admitted are released for re-admission
+(`execution_window_open_failure_inputs`), and its credential is revoked. The
+manager records the window `retired` with outcome `failed` and no run.
+
 ## Not covered
 
 Any of the following refuses the reconciliation and changes nothing:
 
-- A window that was never credential-bound.
-- A window with no Deep run.
-- An interrupted turn in `running`, `starting`, `cancel_requested`, `failed` or
-  `blocked`, where delivery is uncertain and the native session may be mid-turn.
-- Unfinished Worker descendants.
+- A window whose Deep turn is interrupted in `running`, `starting`,
+  `cancel_requested`, `failed` or `blocked`, where delivery is uncertain and
+  the native session may be mid-turn.
+- A Worker whose lease has not yet expired, or that is unfinished in any state
+  other than a deadline-cancelled `cancel_requested`.
+- A window that ran only some roles before failing (for example a Fast turn but
+  no Deep turn).
+- A window the manager never admitted. No credential is issued without a
+  manager acknowledgement, and the manager's own generation must stay in step.
 
 ## Clean stop with an unresolved window
 
