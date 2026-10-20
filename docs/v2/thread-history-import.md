@@ -47,6 +47,14 @@ state is stored but excluded. Per-source checksum chains digests in position
 order. `snapshot_id` is derived from source instance, thread, content hash and
 watermark, so re-exporting unchanged data yields the same ID.
 
+**Group participants.** A user message from a non-owner group participant
+(V1 `senderTrustLevel`/`senderEffectiveRole` other than `owner`) keeps its
+author: its text becomes `<label>: <text>` after the `[WhatsApp: <group>]`
+header, with the label from `senderLabel`, else `senderParticipantId`. Owner
+and assistant rows are unchanged. Because the label is part of the text, a
+thread with participant messages that was exported before this mapping yields
+a different snapshot; import it into a new conversation.
+
 **Import.** Per `(conversation, source_instance, source_thread_id)` the server
 keeps a cursor (max imported position). `v2-import` reads it and sends only
 later messages (delta) in ordered batches of ≤500 messages / 4 MiB. The server

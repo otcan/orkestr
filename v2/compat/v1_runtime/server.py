@@ -11,6 +11,7 @@ import signal
 import threading
 from urllib.parse import parse_qs, urlsplit
 
+from . import participants
 from .config import load
 from .ledger import MAX_ATTACHMENT_BYTES, OUTCOMES, Conflict
 from .registry import Registry
@@ -96,8 +97,9 @@ class Handler(BaseHTTPRequestHandler):
         if binding is None or action not in ("messages", "health"):
             return self.answer(404, {"ok": False, "error": "route_not_found"})
         if action == "health" and not target.query:
+            members = sum(entry["role"] == participants.MEMBER for entry in binding.config["participants"])
             return self.answer(200, dict(ok=True, state=binding.state, error=binding.error,
-                                         enabled=binding.state == "enabled", **binding.ledger.health()))
+                                         enabled=binding.state == "enabled", members=members, **binding.ledger.health()))
         if binding.state in ("revoked", "refused"):
             return self.answer(410 if binding.state == "revoked" else 503,
                                {"ok": False, "error": binding.error or "binding_revoked"})
@@ -139,17 +141,13 @@ class Handler(BaseHTTPRequestHandler):
         # as originOwner/controlAllowed are never treated as authorization.
         scope = {"publicThreadId": config["public_thread_id"], "chatId": config["chat_id"],
                  "accountId": config["account_id"], "source": "whatsapp_inbound", "connector": "whatsapp", "role": "user"}
-        principal = body.get("externalPrincipal")
-        principal_scope = {"connector": "whatsapp", "accountId": config["account_id"], "chatId": config["chat_id"],
-                           "threadId": config["public_thread_id"]}
-        sender = body.get("senderParticipantId")
-        owner_verified = (isinstance(principal, dict) and
-            all(principal.get(key) == value for key, value in principal_scope.items()) and
-            sender in config["allowed_principals"] and
-            all(value == sender for value in (body.get("from"), principal.get("senderId"), principal.get("participantId"))) and
-            body.get("senderTrustLevel") == "owner" and body.get("senderEffectiveRole") == "owner")
-        if any(body.get(key) != value for key, value in scope.items()) or not owner_verified:
+        if any(body.get(key) != value for key, value in scope.items()):
             return self.answer(403, {"ok": False, "error": "input_scope"})
+        try:
+            author = participants.author(config, body)
+        except participants.Refusal as refusal:
+            return self.answer(refusal.status, {"ok": False, "error": refusal.code})
+        author["labelled"] = participants.labelled(config, author)
         public_id = body.get("publicMessageId")
         text = body.get("text")
         attachments = body.get("attachments") or []
@@ -158,11 +156,12 @@ class Handler(BaseHTTPRequestHandler):
         if attachments and not config["attachments"]:
             return self.answer(422, {"ok": False, "error": "text_only_binding"})
         if (not isinstance(text, str) or (not text.strip() and not attachments) or body.get("promptFile") or
-                len(json.dumps({"client_message_id": "0" * 36, "text": text}).encode()) >
+                len(json.dumps({"client_message_id": "0" * 36,
+                                "text": participants.compose({"text": text, "author": author})}).encode()) >
                 (28672 if config["attachments"] else 32768)):  # Room for the attachment note.
             return self.answer(422, {"ok": False, "error": "text_only_pilot" if not config["attachments"] else "invalid_text"})
         try:
-            data, duplicate = binding.ledger.enqueue(dict(body, attachments=attachments))
+            data, duplicate = binding.ledger.enqueue(dict(body, attachments=attachments), author)
         except Conflict as error:
             return self.answer(409 if str(error) != "attachment_reference_invalid" else 422, {"ok": False, "error": str(error)})
         return self.answer(200 if duplicate else 202, {"ok": True, "duplicate": duplicate,

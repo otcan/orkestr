@@ -172,5 +172,29 @@ class V1ExportTests(unittest.TestCase):
                          '48cfb477f978ae01f8ab07e5ea5022a42ede0749293c15ce86f5fbd2aa69551a')
 
 
+class ParticipantAuthorTests(unittest.TestCase):
+    """Group participant input keeps its author; owner and assistant rows are unchanged."""
+
+    def mapped(self, role='user', **data):
+        import v1_records
+        row = {'id': 'm1', 'position': 1, 'cursor': 1, 'role': role,
+               'data': json.dumps(dict({'role': role, 'text': '[WhatsApp: Example group]\n\nhello'}, **data))}
+        return v1_records.message_of(row, '/nonexistent', 'alpha', None)[0]['text']
+
+    def test_participant_rows_keep_author_labels(self):
+        self.assertEqual(self.mapped(senderParticipantId='100000000000001@lid', senderTrustLevel='trusted',
+                                     senderEffectiveRole='trusted', senderLabel='Ayse'),
+                         '[WhatsApp: Example group]\n\nAyse: hello')
+        self.assertEqual(self.mapped(senderParticipantId='491700000001@c.us', senderEffectiveRole='member'),
+                         '[WhatsApp: Example group]\n\n491700000001@c.us: hello')
+
+    def test_owner_and_assistant_rows_are_unchanged(self):
+        plain = '[WhatsApp: Example group]\n\nhello'
+        self.assertEqual(self.mapped(senderParticipantId='scoped-owner:admin', senderTrustLevel='owner',
+                                     senderEffectiveRole='owner'), plain)
+        self.assertEqual(self.mapped(), plain)
+        self.assertEqual(self.mapped('assistant', senderParticipantId='x', senderTrustLevel='trusted'), plain)
+
+
 if __name__ == '__main__':
     unittest.main()
