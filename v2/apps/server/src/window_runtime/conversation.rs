@@ -36,6 +36,11 @@ enum State {
     Starting,
     Running(WindowTask),
     Uncertain,
+    /// The durable window is unresolved, but this process holds no custody:
+    /// it never ran a task for it, or its task stopped and every original
+    /// child was reaped. Only audited reconciliation may close it; shutdown
+    /// is clean because nothing local remains to prove.
+    Released,
 }
 impl ConversationController {
     pub(super) fn handles(&self) -> &Handles {
@@ -106,7 +111,7 @@ impl ConversationController {
             if status.state != orkestr_v2_contracts::ExecutionWindowState::Closed
                 && matches!(
                     *self.state.lock().await,
-                    State::Idle | State::Uncertain | State::Starting
+                    State::Idle | State::Uncertain | State::Starting | State::Released
                 )
             {
                 let status = self
@@ -118,7 +123,11 @@ impl ConversationController {
                         status.generation,
                     )
                     .await?;
-                *self.state.lock().await = State::Uncertain;
+                let mut state = self.state.lock().await;
+                *state = match *state {
+                    State::Idle | State::Released => State::Released,
+                    _ => State::Uncertain,
+                };
                 self.handles.poison();
                 return Ok(Some(status));
             }
@@ -146,13 +155,14 @@ impl ConversationController {
         {
             return Ok(false);
         }
-        Self::stop_task(&self.handles, &mut state)
-            .await
-            .map(|_| true)
+        Self::stop_task(&self.handles, &mut state).await
     }
-    async fn stop_task(handles: &Handles, state: &mut State) -> Result<(), &'static str> {
+    /// Ok(true): retired. Ok(false): not retirable (for example proposals still
+    /// await acceptance) but every original child is reaped, so the window is
+    /// durably left for audited reconciliation. Err: custody is uncertain.
+    async fn stop_task(handles: &Handles, state: &mut State) -> Result<bool, &'static str> {
         let State::Running(task) = state else {
-            return Ok(());
+            return Ok(false);
         };
         let deadline = task
             .cleanup_deadline()
@@ -160,21 +170,26 @@ impl ConversationController {
         let result = task.stop_until(deadline).await;
         if result.is_ok() && task.is_closed() {
             *state = State::Idle;
-            return Ok(());
+            return Ok(true);
+        }
+        let released = task.custody_released(deadline).await;
+        handles.poison();
+        if released {
+            *state = State::Released;
+            return Ok(false);
         }
         *state = State::Uncertain;
-        handles.poison();
         Err("window shutdown is not proven retirement")
     }
     pub(crate) async fn shutdown(&self) -> Result<(), &'static str> {
         let _operation = self.operation.lock().await;
         // Observe completed retirement before applying a live cleanup deadline.
-        self.refresh().await?;
+        let _ = self.refresh().await;
         let mut state = self.state.lock().await;
         if matches!(*state, State::Running(_)) {
-            return Self::stop_task(&self.handles, &mut state).await;
+            return Self::stop_task(&self.handles, &mut state).await.map(|_| ());
         }
-        if matches!(*state, State::Idle) {
+        if matches!(*state, State::Idle | State::Released) {
             return Ok(());
         }
         let status = self
@@ -207,12 +222,17 @@ impl ConversationController {
                 if result.is_ok() && task.is_closed() {
                     *state = State::Idle;
                 } else {
-                    *state = State::Uncertain;
+                    let released = task.custody_released(tokio::time::Instant::now()).await;
+                    *state = if released {
+                        State::Released
+                    } else {
+                        State::Uncertain
+                    };
                     self.handles.poison();
                 }
             }
         }
-        if matches!(*state, State::Uncertain) {
+        if matches!(*state, State::Uncertain | State::Released) {
             return Err("window requires reconciliation");
         }
         Ok(())

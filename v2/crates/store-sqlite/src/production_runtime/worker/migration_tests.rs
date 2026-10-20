@@ -30,6 +30,25 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
     .unwrap();
     // Model the actual schema-43 source, including absence of later opt-in
     // tables. Removing only a checksum row would create a foreign schema.
+    // Undo 0048 first: its views replaced the 0037 evidence views.
+    for statement in [
+        "DROP VIEW production_retirement_provenance",
+        "DROP VIEW production_terminal_evidence",
+        "DROP TABLE production_abandoned_retirements",
+        "DROP TABLE execution_window_released_inputs",
+        "DROP TABLE production_run_abandonments",
+        "DROP TABLE execution_window_reconciliations",
+    ] {
+        sqlx::query(statement).execute(&mut *tx).await.unwrap();
+    }
+    let views = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/migrations/0037_stopped_retirement.sql"
+    ));
+    let views = &views[views
+        .find("CREATE VIEW production_terminal_evidence")
+        .unwrap()..];
+    sqlx::raw_sql(views).execute(&mut *tx).await.unwrap();
     for table in [
         "execution_window_queue",
         "archived_history_messages",
@@ -73,5 +92,5 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
         .fetch_one(&reopened.pool)
         .await
         .unwrap();
-    assert_eq!(latest, 47);
+    assert_eq!(latest, 48);
 }

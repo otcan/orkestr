@@ -9,7 +9,7 @@ mod execution_window;
 mod historical_guard_fixture;
 pub use execution_window::{
     ExecutionWindowBootstrap, ExecutionWindowCredential, ExecutionWindowRetirement,
-    RetiredExecutionWindowContext,
+    RetiredExecutionWindowContext, StrandedExecutionWindow, StrandedExecutionWindowPlan,
 };
 mod acceptance;
 #[cfg(all(test, unix))]

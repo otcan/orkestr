@@ -198,6 +198,87 @@ class LedgerTests(unittest.TestCase):
         with self.assertRaises(contract.Refused):
             self.ledger.retire(self.retirement(next_request))
 
+    def reconciliation(self, request, outcome="abandoned"):
+        return {**self.retirement(request), "outcome": outcome}
+
+    def test_stranded_window_reconciles_after_restart_without_clock_or_budget(self):
+        request = self.admit()
+        self.ledger.reserve(request["window_id"], 1, uid(), "bytes", 16384)
+        decision = self.reconciliation(request)
+        with self.assertRaisesRegex(contract.Refused, "window_not_stranded"):
+            self.ledger.reconcile(decision)
+        # Manager stop, host reboot: new boot id and clock. Retire stays refused.
+        self.ledger.uncertain(request["window_id"], 1, "manager_stopped")
+        self.ledger.close()
+        self.clock.boot = uid()
+        self.clock.advance(3600)
+        self.ledger = Ledger(self.path, self.owner, self.conversation, clock=self.clock)
+        with self.assertRaisesRegex(contract.Refused, "window_reconciliation_required"):
+            self.ledger.retire(self.retirement(request))
+        # The stranded conversation itself cannot open a successor until then.
+        blocked = self.request(2)
+        with self.assertRaisesRegex(contract.Refused, "previous_window_unretired"):
+            self.ledger.admit(blocked)
+        receipt = self.ledger.reconcile(decision)
+        self.assertEqual((receipt["state"], receipt["reason"], receipt["outcome"]),
+                         ("retired", "manager_stopped", "abandoned"))
+        self.assertEqual(receipt["reserved_bytes"], 16384)
+        self.assertEqual(self.ledger.reconcile(decision), receipt)
+        with self.assertRaisesRegex(contract.Refused, "retirement_conflict"):
+            self.ledger.reconcile({**decision, "run_id": uid()})
+        with self.assertRaises(contract.Refused):
+            self.ledger.reserve(request["window_id"], 1, uid(), "attempt", 1)
+        self.assertTrue(self.ledger.admit(blocked)[1])
+        self.assertEqual(self.ledger.status()["state"], "active")
+
+    def test_expired_window_reconciles_and_outcomes_are_closed(self):
+        request = self.admit()
+        self.clock.advance(900)
+        self.assertEqual(self.ledger.tick(request["window_id"], 1)["state"], "expired")
+        with self.assertRaisesRegex(contract.Refused, "terminal_outcome"):
+            self.ledger.reconcile(self.reconciliation(request, "succeeded"))
+        self.assertEqual(self.ledger.reconcile(self.reconciliation(request, "accepted"))["outcome"],
+                         "accepted")
+        wire = {**self.reconciliation(request), "version": 1, "operation": "reconcile",
+                "request_id": uid()}
+        self.assertEqual(contract.decode(contract.canonical(wire)), wire)
+        for bad in ({**wire, "outcome": "succeeded"},
+                    {**wire, "operation": "retire"},
+                    {**wire, "reason": "manager_stopped"}):
+            with self.subTest(bad=bad["operation"]), self.assertRaises(contract.Refused):
+                contract.decode(contract.canonical(bad))
+
+    def test_manager_reconcile_requires_released_custody(self):
+        import threading
+        from types import SimpleNamespace
+        from codex_service.manager import Manager
+        request = self.admit()
+        self.ledger.uncertain(request["window_id"], 1, "server_lost")
+        manager = Manager.__new__(Manager)
+        manager.ledger, manager.guard = self.ledger, threading.Lock()
+        closed = []
+        window = SimpleNamespace(window=request["window_id"], egress_closed=False,
+                                 children=SimpleNamespace(released=lambda: True,
+                                                          close=lambda: closed.append(1)))
+        manager.windows = {request["window_id"]: window}
+        decision = {**self.reconciliation(request), "operation": "reconcile"}
+        with self.assertRaisesRegex(contract.Refused, "window_egress_owned"):
+            manager.dispatch(decision)
+        window.egress_closed = True
+        window.children.released = lambda: False
+        with self.assertRaisesRegex(contract.Refused, "owned_child_not_reaped"):
+            manager.dispatch(decision)
+        self.assertEqual(self.ledger.status()["state"], "reconciliation")
+        window.children.released = lambda: True
+        self.assertEqual(manager.dispatch(decision)["receipt"]["state"], "retired")
+        self.assertEqual((manager.windows, closed), ({}, [1]))
+        # A fresh manager holds no custody of a previous life's window, and an
+        # exact replay is answered while other windows are live.
+        manager.windows = {"other": SimpleNamespace(egress_closed=False)}
+        self.assertEqual(manager.dispatch(decision)["receipt"]["outcome"], "abandoned")
+        with self.assertRaisesRegex(contract.Refused, "retirement_conflict"):
+            manager.dispatch({**decision, "outcome": "accepted"})
+
     def test_shared_credit_combines_directions_before_forwarding(self):
         request = self.admit()
         budget = WindowBudget(self.ledger, request["window_id"], 1)

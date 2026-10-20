@@ -363,3 +363,6 @@ async fn fast_cleanup_uses_remaining_margin_but_never_extends_hard_deadline() {
 
 #[path = "role_resume_tests.rs"]
 mod resume;
+
+#[path = "stranded_tests.rs"]
+mod stranded;

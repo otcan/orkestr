@@ -50,6 +50,8 @@ pub enum WindowState {
 pub enum TerminalOutcome {
     Accepted,
     Stopped,
+    /// Only from `reconcile`: Core's audited abandonment of unaccepted work.
+    Abandoned,
 }
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -263,10 +265,57 @@ impl ManagerClient {
         terminal_event_id: EventId,
         deadline: Instant,
     ) -> Result<WindowReceipt> {
+        if outcome == TerminalOutcome::Abandoned {
+            return Err(ManagerError::InvalidRequest);
+        }
+        self.terminal(
+            "retire",
+            request_id,
+            window,
+            outcome,
+            run_id,
+            terminal_event_id,
+            deadline,
+        )
+        .await
+    }
+    /// Release a stranded window (expired/reconciliation, no live custody in
+    /// the manager) after Core prepared its audited decision. Idempotent.
+    pub async fn reconcile(
+        &self,
+        request_id: &str,
+        window: &Window,
+        outcome: TerminalOutcome,
+        run_id: Uuid,
+        terminal_event_id: EventId,
+        deadline: Instant,
+    ) -> Result<WindowReceipt> {
+        self.terminal(
+            "reconcile",
+            request_id,
+            window,
+            outcome,
+            run_id,
+            terminal_event_id,
+            deadline,
+        )
+        .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn terminal(
+        &self,
+        operation: &str,
+        request_id: &str,
+        window: &Window,
+        outcome: TerminalOutcome,
+        run_id: Uuid,
+        terminal_event_id: EventId,
+        deadline: Instant,
+    ) -> Result<WindowReceipt> {
         if run_id.is_nil() || terminal_event_id.0.is_nil() {
             return Err(ManagerError::InvalidRequest);
         }
-        let mut request = self.request("retire", request_id, Some(window))?;
+        let mut request = self.request(operation, request_id, Some(window))?;
         request["outcome"] = json!(outcome);
         request["run_id"] = json!(run_id);
         request["terminal_event_id"] = json!(terminal_event_id);

@@ -20,6 +20,8 @@ MAX_BIND_MS = 5000
 # this manager records retirement, so the ceiling keeps that ordering slack.
 MAX_LIVE_WINDOWS = 16
 BIND_REPLY_SECONDS = 0.1
+# Core's audited decision for a window whose opener is gone. Never a grant.
+RECONCILED_OUTCOMES = ("accepted", "stopped", "abandoned")
 
 
 class Refused(Exception):
@@ -79,6 +81,7 @@ def decode(raw):
         "drain": {"window_id", "generation"},
         "bind_child": {"window_id", "generation", "broker_pid", "broker_start", "bind_deadline_ms"},
         "retire": {"window_id", "generation", "outcome", "run_id", "terminal_event_id"},
+        "reconcile": {"window_id", "generation", "outcome", "run_id", "terminal_event_id"},
         "uncertain": {"window_id", "generation", "reason"},
     }
     require(type(operation) is str and operation in fields, "operation")
@@ -103,6 +106,8 @@ def decode(raw):
                 "window_deadlines")
     if operation == "retire":
         require(value["outcome"] in ("accepted", "stopped"), "terminal_outcome")
+    if operation == "reconcile":
+        require(value["outcome"] in RECONCILED_OUTCOMES, "terminal_outcome")
     if operation == "bind_child":
         require(type(value["broker_pid"]) is int and 1 < value["broker_pid"] < 2**31,
                 "broker_pid")

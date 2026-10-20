@@ -120,6 +120,18 @@ impl WindowTask {
     }
 }
 
+impl WindowTask {
+    /// After a stop attempt: every original owned child is gone by the same
+    /// original deadline. This is custody release, never retirement evidence.
+    pub(crate) async fn custody_released(&self, deadline: tokio::time::Instant) -> bool {
+        self.task.is_none()
+            && self
+                .children
+                .wait_empty(deadline.saturating_duration_since(tokio::time::Instant::now()))
+                .await
+    }
+}
+
 impl Drop for WindowTask {
     fn drop(&mut self) {
         self.request_stop();

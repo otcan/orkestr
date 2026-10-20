@@ -97,6 +97,9 @@ mod bootstrap_tests;
 mod retired_context;
 pub use retired_context::RetiredExecutionWindowContext;
 
+mod stranded;
+pub use stranded::{StrandedExecutionWindow, StrandedExecutionWindowPlan};
+
 #[cfg(test)]
 mod retired_process_tests;
 

@@ -13,8 +13,8 @@ import time
 import uuid
 
 from .contract import (CREDIT_BYTES, DRAIN_ATTEMPTS, DRAIN_BYTES, DRAIN_SECONDS,
-                       LIFETIME_SECONDS, MAX_ATTEMPTS, MAX_BYTES, MAX_LIVE_WINDOWS, Refused,
-                       canonical, generation, identifier, require)
+                       LIFETIME_SECONDS, MAX_ATTEMPTS, MAX_BYTES, MAX_LIVE_WINDOWS,
+                       RECONCILED_OUTCOMES, Refused, canonical, generation, identifier, require)
 
 
 class ClockPoison(Refused):
@@ -307,6 +307,29 @@ class Ledger:
             self._clock(row)
             # Manager calls this only after its own relay/child checks AND the
             # exact trusted Runtime's committed Core terminal+retirement proof.
+            self.db.execute("UPDATE windows SET state='retired',outcome=?,run_id=?,terminal_event_id=? WHERE id=?",
+                            (*desired, request["window_id"]))
+            return self._receipt(self._exact(request["window_id"], request["generation"]))
+
+    def reconcile(self, request):
+        """Retire a stranded window after Core committed its audited decision.
+
+        Only for a window whose budget authority is already gone (expired or
+        reconciliation). No clock is sampled: a reboot or clock change must not
+        keep a dead window blocking every later admission. Original reason is
+        kept; state only moves to retired, so no budget is ever re-granted.
+        """
+        self._scope(request)
+        require(request["outcome"] in RECONCILED_OUTCOMES, "terminal_outcome")
+        with self.transaction():
+            row = self._exact(request["window_id"], request["generation"])
+            require(row["conversation"] == request["conversation_id"], "scope")
+            desired = (request["outcome"], request["run_id"], request["terminal_event_id"])
+            if row["state"] == "retired":
+                require(tuple(row[key] for key in ("outcome", "run_id", "terminal_event_id")) == desired,
+                        "retirement_conflict")
+                return self._receipt(row)
+            require(row["state"] in ("reconciliation", "expired"), "window_not_stranded")
             self.db.execute("UPDATE windows SET state='retired',outcome=?,run_id=?,terminal_event_id=? WHERE id=?",
                             (*desired, request["window_id"]))
             return self._receipt(self._exact(request["window_id"], request["generation"]))
