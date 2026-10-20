@@ -145,3 +145,33 @@ details[open] > summary { margin-bottom: .4rem; }
  .workspace-page { padding: .85rem; }
  .execution-toolbar button, .window-toolbar button { min-height: 2.75rem; }
 }
+.live-map-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .4rem; }
+.live-map-heading h2 { margin: 0; }
+.live-filter { display: flex; gap: .25rem; }
+.workspace-page .live-filter button { margin: 0; font-size: .8rem; min-height: 2.3rem; }
+.live-filter button[aria-pressed=true] { background: #e1eeeb; border-color: #95bab0; color: #174c40; }
+.live-map-note, .live-map-status { font-size: .8rem; color: #617786; }
+.live-map h3 { margin: 1rem 0 .4rem; }
+.live-tree { list-style: none; margin: 0; padding: 0 0 0 .9rem; border-left: 1px solid #dfe6eb; display: flex; flex-direction: column; gap: .3rem; }
+.live-map > .live-tree { padding-left: 0; border-left: 0; }
+.live-node { min-width: 0; overflow-wrap: anywhere; font-size: .85rem; }
+.live-view { padding: .35rem .6rem; border: 1px solid #e2e8ed; border-radius: .6rem; background: #fbfcfd; }
+.live-view > details > summary { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; color: inherit; padding: .2rem 0; }
+.live-line, .live-thread, .live-conversation > .live-label { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15rem .5rem; }
+.live-thread { display: flex; }
+.live-title { font-weight: 600; min-width: 0; }
+.live-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: #6a7c89; }
+.live-id { font-family: ui-monospace, monospace; font-size: .75rem; color: #4e6572; }
+.live-meta { font-size: .75rem; color: #637583; }
+.live-roles { margin: .15rem 0; }
+.live-role { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: .25rem; font-size: .75rem; }
+.live-hidden, .live-empty { font-size: .75rem; color: #7b8b96; }
+.live-badge { flex: none; font-size: .65rem; padding: 0 .4rem; border-radius: 1rem; border: 1px solid #c3ccd3; color: #6a7c89; white-space: nowrap; }
+.live-badge.live-on { background: #e1eeeb; color: #174c40; border-color: #95bab0; }
+.live-badge.live-v2 { background: #e8eef8; color: #24426e; border-color: #a9bcd9; }
+.live-badge.live-warn { background: #fbe9e4; color: #7a2c17; border-color: #e3ad9c; }
+.live-badge.live-kind { text-transform: none; }
+@media (max-width: 52rem) {
+ .live-tree { padding-left: .55rem; }
+ .live-view { padding: .3rem .45rem; }
+}

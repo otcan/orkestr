@@ -7,7 +7,8 @@ conversation's `GET …/execution` and `GET …/window/queue`, read once every
 10 seconds while the list is mounted. Per conversation the tabs are Chat, Work
 (configured provider and role, Stop/Steer availability, Deep run with worker
 tasks, window and queue state, independent Workers), History, Projects (list,
-create, open project conversation), Timers, Memory, Host resources and Settings.
+create, open project conversation), Timers, Memory, Live map, Host resources
+and Settings.
 Native setup/sign-in, editable drafts, reconnect, canonical and archived
 history, held inputs, saved thread files, progress, Fast replies, owner
 acceptance, Stop and capability-gated steering reuse the existing flows.
@@ -15,6 +16,19 @@ Model and reasoning effort are fixed by server configuration; no
 per-conversation selection is offered until the server exposes one. External
 reply controls stay unmounted. Below 52rem the conversation list is a drawer
 with a scrim, and the tabs scroll horizontally.
+
+Live map is owner-wide and read-only. It polls `GET /api/v2/live-map` every
+10 seconds and shows a tree: view (WhatsApp group) → V1 thread and, when the
+view is delegated to V2, its native conversation with window, Fast, Deep and
+Worker states → attached sessions (Claude Code, Codex; live or idle, last
+activity) → their agents (running or finished). "Active only" (default) hides
+idle views, idle sessions and finished agents; "All" shows everything. Native
+conversations no view links to are listed separately. The view data comes from
+an operator-configured external JSON file named by the server's
+`ORKESTR_V2_LIVE_MAP` environment key (service plan key `live_map`). Unset, the
+endpoint answers 404 `live_map_unconfigured` and the page says so. The server
+opens the file read-only, refuses anything over 4 MiB or outside the schema
+bounds, and never forwards the generator's `transcript` paths.
 
 After native sign-in or session resume, the shell requires authenticated beta
 discovery before mounting chat or history. The browser session's global

@@ -97,6 +97,24 @@ export const scenarios = [
     await page.waitForSelector('#composer');
     assert.ok(page.url().endsWith('#conversation/00000000-0000-4000-8000-00000000000c'), 'Project opens its conversation');
   }],
+  ['live-map', async () => {
+    await clickText('Live map');
+    await waitText('Busy synthetic group');
+    await waitText('Synthetic running agent');
+    await waitText('Delegated to V2');
+    await waitText('Research notes');
+    const body = () => page.evaluate(() => document.querySelector('.live-map').textContent);
+    assert.ok(!(await body()).includes('Quiet synthetic group'), 'Active only hides idle views');
+    assert.ok(!(await body()).includes('Synthetic finished agent'), 'Active only hides finished agents');
+    await noHorizontalScroll();
+    await clickText('All');
+    await waitText('Quiet synthetic group');
+    await page.evaluate(() => document.querySelectorAll('.live-view details').forEach(d => { d.open = true; }));
+    await waitText('Synthetic finished agent');
+    await noHorizontalScroll();
+    await clickText('Chat');
+    await page.waitForSelector('#composer');
+  }],
 ];
 
 try {

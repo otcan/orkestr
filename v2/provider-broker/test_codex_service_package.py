@@ -13,8 +13,23 @@ from codex_bounded.trust import digest, exists, process, protected, Refused as T
 from codex_service.contract import Refused
 from codex_service.custody import StateLock, OwnedSocket
 from codex_service.manager import Manager
-from codex_service.package import Package
+from codex_service.package import LIVE_MAP_ENV, Package, live_map_path
 from codex_service_fixture import ServiceFixture, UID, GID
+
+
+class LiveMapPathTests(unittest.TestCase):
+    def test_optional_live_map_is_absolute_and_only_reaches_server_environment(self):
+        self.assertEqual(live_map_path("/var/lib/synthetic/map.json"), "/var/lib/synthetic/map.json")
+        for bad in ("relative/map.json", "/", "/var/../map.json", "/x\0y", "/x\ny", 7, None, "/" + "a" * 4096):
+            with self.assertRaises(Refused):
+                live_map_path(bad)
+        stub = object.__new__(Package)
+        stub.provider_home, stub.data, stub.root = Path("/p"), Path("/d"), Path("/r")
+        stub.runtime = {"port": 19842, "trusted_origin": "https://example.invalid"}
+        stub.live_map = None
+        self.assertNotIn(LIVE_MAP_ENV, Package.environment(stub))
+        stub.live_map = "/var/lib/synthetic/map.json"
+        self.assertEqual(Package.environment(stub)[LIVE_MAP_ENV], "/var/lib/synthetic/map.json")
 
 
 @unittest.skipUnless(os.geteuid() == 0, "explicit root run required for protected synthetic fixture")
@@ -37,6 +52,7 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(environment["ORKESTR_V2_UI_DIST"], str(self.root / "ui"))
         self.assertNotIn("ORKESTR_V2_EXECUTION_CONFIG", environment)
         self.assertNotIn("CODEX_HOME", environment)
+        self.assertNotIn("ORKESTR_V2_LIVE_MAP", environment)
         self.assertFalse(package.control.exists())
         self.assertFalse(package.endpoint.exists())
         self.assertEqual(list(self.fixture.account.iterdir()), [])

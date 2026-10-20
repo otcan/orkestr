@@ -60,6 +60,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         }
         state = state.with_beta_config_file(&PathBuf::from(path), &home)?;
     }
+    if let Some(path) = std::env::var_os(orkestr_v2_server::live_map::LIVE_MAP_ENV) {
+        // Opt-in: absent means the live map endpoint reports "not configured".
+        state = state.with_live_map_file(&PathBuf::from(path))?;
+    }
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let catalog = match std::env::var_os("ORKESTR_V2_GOOGLE_CATALOG") {
         Some(path) => {

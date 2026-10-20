@@ -246,4 +246,5 @@ pub mod chat_timeline;
 pub mod conversation_directory;
 pub mod conversation_status;
 pub mod intelligence;
+pub mod live_map;
 pub mod send_intent;

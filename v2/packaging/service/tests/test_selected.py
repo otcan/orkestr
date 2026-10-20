@@ -104,14 +104,21 @@ class Selected(unittest.TestCase):
             state=r/f'role-state-{index}';state.mkdir(mode=0o700);os.chown(state,995,986)
             roles.append({'workspace':str(r/'workspace'),'state_root':str(state)})
         self.plan['roles']={'fast':roles[0],'workers':roles[1:]}
+        self.plan['live_map']='/var/lib/synthetic-live-map/map.json'
         selected.prepare(self.plan)
         with authority(REPO,source) as (_,manager,_):
             package=manager.Package(r/'release/package',sha(r/'release/package/manifest.json'))
             self.assertEqual(set(package.role_profiles),{'deep','fast','worker-0','worker-1','worker-2','worker-3'})
+            self.assertEqual(package.environment()['ORKESTR_V2_LIVE_MAP'],'/var/lib/synthetic-live-map/map.json')
         for role in ('fast','worker-0','worker-1','worker-2','worker-3'):
             self.assertIn('broker-'+role,(r/f'release/package/launcher-{role}.py').read_text())
         receipt=json.loads((r/'release/release.json').read_bytes())
         self.assertTrue(receipt['roles_enabled']);self.assertFalse(receipt['provider_invoked'])
+    def test_live_map_path_refused_before_any_artifact_read(self):
+        for bad in ('relative/map.json','/var/../map.json',7):
+            self.plan['live_map']=bad
+            with self.assertRaisesRegex(RuntimeError,'live map path'):selected.prepare(self.plan)
+        self.assertFalse((self.root/'release').exists())
     def test_reserved_directories_retained(self):
         for name,mode in (('ledger',0o700),('ep',0o750)):
             p=self.root/name;p.mkdir();os.chown(p,0,986);p.chmod(mode)

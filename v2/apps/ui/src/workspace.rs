@@ -2,13 +2,14 @@ use dioxus::prelude::*;
 use orkestr_v2_ui::{session_scope::SessionScope, Draft};
 use std::collections::BTreeMap;
 
-const TABS: [&str; 8] = [
+const TABS: [&str; 9] = [
     "Chat",
     "Work",
     "History",
     "Projects",
     "Timers",
     "Memory",
+    "Live map",
     "Host resources",
     "Settings",
 ];
@@ -89,6 +90,8 @@ pub fn Workspace(
                             crate::timer_screen::Timers { key: "{current()}-{session_scope.read().generation()}", conversation: current(), csrf, session_scope, onexpired }
                         } else if tab() == "Memory" {
                             crate::memory_view::MemoryView { key: "{session_scope.read().generation()}", csrf, project: None, session_scope, onexpired }
+                        } else if tab() == "Live map" {
+                            crate::live_map_view::LiveMapView { key: "{session_scope.read().generation()}", session_scope, onexpired }
                         } else if tab() == "Host resources" {
                             crate::host_resources_view::HostResourcesView { session_scope, resources, onexpired }
                         } else {

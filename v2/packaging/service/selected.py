@@ -72,11 +72,16 @@ def prepare(plan):
     fields={'format','output','source_repository','pair','pair_sha256','server','ui','native','native_sha256',
             'uid','gid','home','workspace','state_root','auth_file','bootstrap_file','ledger_directory',
             'endpoint_directory','owner_id','conversation_id','namespace','supervisor_key','origin','port'}
-    require(set(plan) - {'roles', 'preserve_state', 'workspace_exec', 'max_active_windows'} == fields and
+    require(set(plan) - {'roles', 'preserve_state', 'workspace_exec', 'max_active_windows', 'live_map'} == fields and
             plan['format']=='orkestr-v2-selected-service-plan-v1','closed plan required')
     if 'workspace_exec' in plan:
         require('roles' in plan, 'workspace execution requires configured Worker roles')
         validate_workspace_exec(plan['workspace_exec'])
+    if 'live_map' in plan:
+        # Opt-in read-only live map file; the server reads it, the packager never does.
+        live=plan['live_map']
+        require(type(live) is str and live.startswith('/') and 1<len(live)<=4096 and '\0' not in live
+                and '..' not in Path(live).parts and not any(ord(c)<32 for c in live),'live map path')
     preserve=plan.get('preserve_state',False)
     require(type(preserve) is bool,'explicit preserve_state boolean required')
     separate(plan)  # Metadata only: MUST precede every artifact read/hash.
@@ -158,6 +163,8 @@ def prepare(plan):
                 beta['workspace_exec']=plan['workspace_exec']
             if 'max_active_windows' in plan:
                 beta['max_active_windows']=plan['max_active_windows']
+            if 'live_map' in plan:
+                runtime['live_map']=plan['live_map']
             validate_beta(encoded(beta))
             for name,value in (('beta.json',beta),('service.json',runtime),('profile.json',profile)):
                 write(inner/name,encoded(value),gid,mode=0o640 if name=='beta.json' else None)

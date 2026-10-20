@@ -20,6 +20,7 @@ mod held_inputs_view;
 mod history;
 mod host_resources_view;
 mod intelligence_view;
+mod live_map_view;
 mod memory_export_guard;
 mod memory_transport;
 mod memory_view;
