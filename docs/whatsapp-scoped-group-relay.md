@@ -108,7 +108,11 @@ the same parent or timer-proof authorization, deduplication and uncertainty
 rules as a text; it needs a scoped native worker (`/send-document`). Timer
 notifications behave the same way. Payloads frozen by an older build keep their
 stored chunks on retry. The footer stays on the message and is not counted
-against the budget. Quota telemetry comes from
+against the budget; a `dbg:` footer already embedded at the end of a long reply
+stays on the message as well. When WhatsApp Web delivers a message but
+`sendMessage` returns no usable model (or throws), the transport confirms the
+send only by exactly one own, server-acked, not yet journaled message in that
+group created after the send started; otherwise it stays `uncertain`. Quota telemetry comes from
 the existing owner-scoped API and is optional. When upgrading an older relay,
 stop it gracefully and confirm every accepted transport send has a relay receipt
 and no partially delivered reply remains before enabling changed formatting.

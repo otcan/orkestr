@@ -119,6 +119,52 @@ test('an uncertain document send blocks replay and later sends',async t=>{
  await assert.rejects(p.sendText(client,group,'reply','main',{requestId:'r2',parentId:'owner-1'}),/delivery_uncertain/);
  assert.equal(calls,1);
 });
+function lookupFixture(t,{messages,send}) {
+ const now=Date.now(),own='15550000001@c.us',group='120000000001@g.us';
+ const config={ownChatId:own,activatedAt:new Date(now-1000).toISOString(),groups:[{chatId:group,threadId:'thread-1'}]};
+ const p=createScopedGroupTransport({config,token:'test-token',base:{},dbPath:':memory:',now:()=>now,sendLookupDelayMs:1});
+ t.after(()=>p.close());
+ const state={lookups:0};
+ const client={info:{wid:{_serialized:own}},sendMessage:send,
+  getChatById:async()=>({fetchMessages:async()=>{state.lookups++;return messages(now);}})};
+ return {p,client,group,now,state,message:{id:{_serialized:'owner-1'},fromMe:true,to:group,body:'hello',timestamp:now/1000}};
+}
+test('a send that returns no message model is confirmed by one exact, acked own message in the group',async t=>{
+ const text='x'.repeat(19978);
+ const f=lookupFixture(t,{send:async()=>undefined,messages:now=>[
+  {id:{_serialized:'older'},fromMe:true,type:'chat',body:text,timestamp:(now-60000)/1000,ack:2},
+  {id:{_serialized:'theirs'},fromMe:false,type:'chat',body:text,timestamp:now/1000,ack:2},
+  {id:{_serialized:'sent-long'},fromMe:true,type:'chat',body:text,timestamp:now/1000,ack:1}]});
+ await f.p.observe(f.client,f.message);
+ assert.deepEqual(await f.p.sendText(f.client,f.group,text,'main',{requestId:'r1',parentId:'owner-1'}),{ok:true,ids:['sent-long']});
+ assert.equal((await f.p.sendText(f.client,f.group,text,'main',{requestId:'r1',parentId:'owner-1'})).duplicate,true);
+ assert.equal(f.p.blocked(),false);
+});
+test('a thrown send is confirmed by lookup; a reply document is matched by its file name',async t=>{
+ const document={filename:'reply-0123456789.md',mimetype:'text/markdown',text:'full'};
+ const f=lookupFixture(t,{send:async()=>{throw new Error('evaluation failed');},messages:now=>[
+  {id:{_serialized:'doc-1'},fromMe:true,type:'document',body:'',_data:{filename:document.filename},timestamp:now/1000,ack:1}]});
+ await f.p.observe(f.client,f.message);
+ assert.deepEqual((await f.p.sendDocument(f.client,f.group,document,'main',{requestId:'d1',parentId:'owner-1'},m=>m)).ids,['doc-1']);
+});
+test('no match, an ambiguous match or a missing server ack stays uncertain',async t=>{
+ for(const variant of ['none','two','unacked','journaled']) {
+  const text='y'.repeat(5000);
+  const f=lookupFixture(t,{send:async()=>({id:{_serialized:variant==='journaled' ? 'first' : 'summary:x'}}),messages:now=>({
+   none:[],
+   two:[{id:{_serialized:'a'},fromMe:true,type:'chat',body:text,timestamp:now/1000,ack:1},{id:{_serialized:'b'},fromMe:true,type:'chat',body:text,timestamp:now/1000,ack:1}],
+   unacked:[{id:{_serialized:'a'},fromMe:true,type:'chat',body:text,timestamp:now/1000,ack:0}],
+   journaled:[{id:{_serialized:'first'},fromMe:true,type:'chat',body:text,timestamp:now/1000,ack:1}],
+  })[variant]});
+  await f.p.observe(f.client,f.message);
+  if(variant==='journaled') {
+   await f.p.sendText(f.client,f.group,text,'main',{requestId:'r0',parentId:'owner-1'});
+   f.client.sendMessage=async()=>undefined;
+  }
+  await assert.rejects(f.p.sendText(f.client,f.group,text,'main',{requestId:'r1',parentId:'owner-1'}),/delivery_uncertain/,variant);
+  assert.equal(f.p.blocked(),true,variant);
+ }
+});
 test('uncertain provider outcome blocks replay and later sends',async t=>{
  let calls=0;const {p,client,message,group}=fixture(t,async()=>{calls++;throw new Error('provider timeout');});
  await p.observe(client,message);
