@@ -1,7 +1,8 @@
 # Multi-chat WhatsApp transition adapter
 
 This optional adapter keeps V1 as the existing WhatsApp transport and sole
-reply producer. New owner messages from explicitly delegated V1 bindings run
+reply producer. New owner (and explicitly listed group member) messages from
+explicitly delegated V1 bindings run
 in saved Rust conversations, one conversation per binding. It does **not**
 enable Rust Core's automatic-reply transport, import old V1 commands, or
 migrate the linked WhatsApp account. No dependency beyond Python 3.11+ is
@@ -67,6 +68,8 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `attachments` | Accept inbound attachments for this binding |
 | `max_outstanding_inputs` | 1–64 unsettled inputs before intake answers 409 |
 | `max_input_age_seconds` | Optional, 60–604800 (default 1800): how long an input may wait without a Rust window before it is refused as `input_expired` |
+| `participants` | Optional (default `[]`): other people in the group, see [Group participants](#group-participants) |
+| `owner_label` | Optional (default `"Owner"`): the owner's label once the binding has participants |
 
 `conversation_id`, `remote_thread_id`, `public_thread_id` and `chat_id` must be
 unique across bindings. A newcomer that collides with a serving binding is
@@ -77,11 +80,71 @@ or create a new binding. A damaged file pauses only its binding. Revocation is
 recorded in the ledger and cannot be undone by editing the file. Every change
 applies to one binding only; other bindings keep running.
 
+## Group participants
+
+The owner is always and only the verified `allowed_principals`. Other people in
+the group are listed explicitly, one entry per person:
+
+```json
+"participants": [
+  {"ids": ["491700000001@c.us", "100000000000001@lid"], "label": "Ayse", "role": "member"},
+  {"ids": ["491700000005@c.us"], "label": "Cem", "role": "none"}
+]
+```
+
+* `ids`: that person's WhatsApp phone JID and/or LID (1–8). An id may not be
+  an owner principal or belong to two entries.
+* `label`: 1–64 printable characters without `:`; unique per binding and not
+  the `owner_label`.
+* `role`: `member` may instruct this thread; `none` keeps the entry but
+  refuses it. There is no participant `owner` or `admin` role.
+
+Members can send messages and instruct their group's thread. They cannot add
+or invite anyone, change group, thread or binding settings, ACLs or roles, or
+approve owner-only actions: forwarded `originOwner`/`controlAllowed`/
+`parseCommands` flags confer nothing, no adapter route changes a binding, and a
+member's slash command or group administration request (for example "add X to
+the group", in English, Turkish or German) is refused with
+`409 member_not_permitted` before it reaches Rust. A member input also tells the
+model that the sender is a member and that such requests must be declined.
+
+A LID author matches an entry that lists the LID, or the phone JID V1 resolved
+for it (`senderPhoneId`, equal to `externalPrincipal.phoneId`). A sender that
+claims the owner role without being an owner principal is refused (403). A
+well-formed sender that is not a `member` is refused with
+`409 participant_not_allowed`; V1 treats it as definite and answers in the
+group with a visible notice. Nothing is queued or run.
+
+`participants` and `owner_label` are not pinned in the ledger: editing them and
+sending `SIGHUP` applies the new roles to later inputs without refusing the
+binding. `GET /threads/<id>/health` reports `members`.
+
+**Author identity.** Each input keeps its verified author (`role`, `id`,
+`label`). Once a binding has participants, the text sent to Rust is
+`<label>: <text>` after V1's `[WhatsApp: <group>]` header, for the owner as
+well, so the conversation shows and the model reads who wrote each message.
+Bindings without participants keep the owner's text unchanged. Listed user
+rows carry `authorId`, `authorLabel` and `authorRole`. Replies still go to the
+group once, through V1, exactly as for the owner.
+
+**Mapping V1's policy at bind time.** `participant_policy` prints the
+`participants` V1 currently admits for one thread: phone JIDs in the relay's
+`participantAuthors` rule for that group that the V1 binding (with
+`allowOtherPeople: true` and `mirrorToWhatsApp: false`) also lists in
+`authorizedContactIds`, minus owner aliases and blocked ids, each as `member`.
+It never lists more than V1 admits, and V1 still runs its own participant check
+before forwarding:
+
+```sh
+python3 -m v2.compat.v1_runtime.participant_policy \
+  --relay-config /private/relay.json --v1-threads-db /private/threads.sqlite --thread-id <V1 thread>
+```
+
 ## Intake
 
 The compatibility API requires the configured Bearer secret on every route
 and only admits input from the binding's account, group, V1 thread and
-verified owner aliases. Forwarded `originOwner`, command and control flags
+verified owner aliases or listed members. Forwarded `originOwner`, command and control flags
 confer no additional permission. Edits receive explicit refusals.
 
 POST intake commits an idempotent ledger entry before acknowledging delivery.

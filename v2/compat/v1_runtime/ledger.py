@@ -153,11 +153,18 @@ class Ledger:
         return result
 
     # Intake ------------------------------------------------------------
-    def enqueue(self, body):
+    def enqueue(self, body, author=None):
+        """Record one verified input. `author` is the verified sender
+        ({role, id, label, labelled, phone?}); it is kept with the input and
+        shown to Rust and V1 as the message's author."""
         # Hash only immutable input identity/content; transport delivery metadata may vary.
         content = {k: body.get(k) for k in ("publicThreadId", "publicMessageId", "chatId", "accountId", "text", "externalId", "sourceEventId")}
         if body.get("attachments"):
             content["attachments"] = body["attachments"]
+        if author and author.get("role") != "owner":
+            # Owner rows keep their pre-participant digest; a participant row
+            # also pins who wrote it, so another author cannot reuse its ID.
+            content["author"] = author["id"]
         digest = hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -177,6 +184,8 @@ class Ledger:
                     "phase": "queued", "queued_at": time.time(), "keys": {k: str(uuid.uuid4()) for k in keys}}
             if attachments:
                 data["attachments"] = attachments
+            if author:
+                data["author"] = {k: author[k] for k in ("role", "id", "label", "labelled", "phone") if author.get(k) is not None}
             db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (body["publicMessageId"], digest, remote_id, json.dumps(data)))
             return data, False
 
@@ -346,11 +355,15 @@ class Ledger:
                                                    "ORDER BY seq", (data["remote_id"],)).fetchall():
                         rows.append(dict(json.loads(message), exportSequence=seq))
                     continue
-                rows.append({"id": data["remote_id"], "role": "user", "text": data["text"],
-                             "publicMessageId": data["public_id"], "publicThreadId": data["public_thread_id"],
-                             "chatId": data["chat_id"], "accountId": data["account_id"],
-                             "source": "whatsapp_inbound", "connector": "whatsapp",
-                             "state": "delivered", "deliveryState": "delivered", "observedVia": "rust-pilot-ledger"})
+                row = {"id": data["remote_id"], "role": "user", "text": data["text"],
+                       "publicMessageId": data["public_id"], "publicThreadId": data["public_thread_id"],
+                       "chatId": data["chat_id"], "accountId": data["account_id"],
+                       "source": "whatsapp_inbound", "connector": "whatsapp",
+                       "state": "delivered", "deliveryState": "delivered", "observedVia": "rust-pilot-ledger"}
+                author = data.get("author")
+                if author:
+                    row.update(authorId=author["id"], authorLabel=author["label"], authorRole=author["role"])
+                rows.append(row)
                 for seq, message in db.execute("SELECT seq,message FROM exports WHERE input_id=? AND (outcome IS NULL OR outcome='uncertain') "
                                                "ORDER BY seq", (data["remote_id"],)).fetchall():
                     rows.append(dict(json.loads(message), exportSequence=seq))

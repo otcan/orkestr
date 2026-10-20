@@ -72,6 +72,37 @@ def text_of(data):
     return ''
 
 
+# V1 marks a non-owner group participant's input with its verified sender and
+# a non-owner trust level. Their author survives the import as `<label>: `.
+OWNER_ROLES = {'owner', ''}
+RELAY_HEADER = re.compile(r'^(\[WhatsApp: [^\]\n]{0,256}\]\n\n)(.*)$', re.S)
+LABEL_MAX = 64
+
+
+def participant_label(data):
+    """Display label of a non-owner participant's user message, else None."""
+    if not isinstance(data, dict):
+        return None
+    roles = {str(data.get(k) or '').strip().lower() for k in ('senderEffectiveRole', 'senderTrustLevel')}
+    if roles <= OWNER_ROLES:
+        return None
+    for key in ('senderLabel', 'senderParticipantId'):
+        value = data.get(key)
+        if isinstance(value, str):
+            value = ' '.join(value.replace(':', ' ').split())[:LABEL_MAX]
+            if value and value.isprintable():
+                return value
+    return None
+
+
+def authored_text(text, label):
+    if not label:
+        return text
+    match = RELAY_HEADER.match(text)
+    header, body = (match.group(1), match.group(2)) if match else ('', text)
+    return f'{header}{label}: {body}'
+
+
 def parse_time(value):
     if not isinstance(value, str) or not value:
         return None
@@ -156,7 +187,7 @@ def message_of(row, home, thread_id, store):
         'source_kind': _clean(row.get('source') or data.get('source'), 64, 'invalid_source'),
         'created_at': _clean(row.get('created_at') or data.get('createdAt') or data.get('timestamp'), 64, 'invalid_time'),
         'updated_at': _clean(row.get('updated_at') or data.get('updatedAt'), 64, 'invalid_time'),
-        'text': text_of(data),
+        'text': authored_text(text_of(data), participant_label(data) if role_of(row, data) == 'user' else None),
         'attachments': attachments,
     }
     if not message['source_message_id'] or message['source_position'] < 1:

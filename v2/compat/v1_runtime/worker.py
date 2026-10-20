@@ -3,6 +3,7 @@ import time
 import uuid
 
 from .ledger import DEFAULT_MAX_INPUT_AGE_S, PROGRESS_LIMIT, no_reply
+from .participants import compose
 from .rust_client import ClientError
 
 PROGRESS_INTERVAL_S = 60
@@ -74,7 +75,7 @@ class Worker:
         receipt = self.client.import_attachments(request)
         target = request["target_manifest"]
         data["attachment_receipt"] = {"import_id": receipt["import_id"], "manifest_id": target["manifest_id"]}
-        data["intake_text"] = attachment_note(data["text"], target["manifest_id"], target["references"])
+        data["intake_text"] = attachment_note(compose(data), target["manifest_id"], target["references"])
         self.ledger.save(data)
         self.ledger.release_uploads([item["upload_id"] for item in data["attachments"]])
 
@@ -170,7 +171,7 @@ class Worker:
         if data.get("attachments") and "attachment_receipt" not in data:
             self.import_attachments(data)
         if "intake" not in data:
-            text = data.get("intake_text", data["text"])
+            text = data.get("intake_text") or compose(data)
             intake = self.call("POST", "/messages", {"client_message_id": data["keys"]["message"], "text": text}, (200, 202))
             if intake.get("status") != "accepted" or not all(intake.get(k) for k in ("message_id", "event_id", "sequence")):
                 raise Refused("intake_receipt")

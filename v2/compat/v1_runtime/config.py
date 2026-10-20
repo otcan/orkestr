@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import uuid
 from urllib.parse import urlsplit
@@ -12,7 +13,14 @@ SCOPE_FIELDS = {"conversation_id", "public_thread_id", "chat_id", "account_id", 
                 "allowed_principals", "excluded_public_ids", "automatic_accept_roles", "outbound_role"}
 BINDING_FIELDS = SCOPE_FIELDS | {"enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs"}
 # Optional binding fields and their defaults.
-OPTIONAL_BINDING_FIELDS = {"max_input_age_seconds": 30 * 60}
+OPTIONAL_BINDING_FIELDS = {"max_input_age_seconds": 30 * 60, "participants": [], "owner_label": "Owner"}
+# Group participants other than the owner. The owner is only ever the verified
+# `allowed_principals`; a participant can never hold the owner role.
+PARTICIPANT_ROLES = ("member", "none")
+PARTICIPANT_FIELDS = {"ids", "label", "role"}
+MAX_PARTICIPANTS = 64
+MAX_PARTICIPANT_IDS = 8
+WHATSAPP_ID = re.compile(r"^[0-9]{5,24}@(?:c\.us|lid|s\.whatsapp\.net)$")
 MAX_INPUT_AGE_RANGE = (60, 7 * 24 * 60 * 60)
 # The single-chat pilot file: service and one binding in one document.
 PILOT_FIELDS = (SERVICE_FIELDS - {"bindings_dir", "ledger_dir"}) | SCOPE_FIELDS | {"ledger_path", "enabled"}
@@ -59,6 +67,42 @@ def _service(value):
     return value
 
 
+def label(value):
+    """A display name: 1-64 printable characters, no line breaks or colons."""
+    if (not isinstance(value, str) or not 1 <= len(value) <= 64 or value != value.strip() or ":" in value or
+            not value.isprintable()):
+        raise ValueError("config_participant_label")
+    return value
+
+
+def participants(value, owner_principals):
+    """Explicit per-binding participant policy: [{ids, label, role}].
+
+    `ids` are the WhatsApp phone JIDs and/or LIDs of one person. Only role
+    `member` may instruct the thread; `none` keeps the entry but refuses it.
+    """
+    if not isinstance(value, list) or len(value) > MAX_PARTICIPANTS:
+        raise ValueError("config_participants")
+    seen_ids, seen_labels = set(owner_principals), set()
+    for entry in value:
+        if not isinstance(entry, dict) or set(entry) != PARTICIPANT_FIELDS:
+            raise ValueError("config_participants")
+        ids = entry["ids"]
+        if (not isinstance(ids, list) or not 1 <= len(ids) <= MAX_PARTICIPANT_IDS or
+                not all(isinstance(x, str) and WHATSAPP_ID.match(x) for x in ids)):
+            raise ValueError("config_participant_ids")
+        if seen_ids & set(ids) or len(set(ids)) != len(ids):
+            # An owner alias or another person's id: never two roles for one id.
+            raise ValueError("config_participant_conflict")
+        seen_ids |= set(ids)
+        if entry["role"] not in PARTICIPANT_ROLES:
+            raise ValueError("config_participant_role")
+        if label(entry["label"]).casefold() in seen_labels:
+            raise ValueError("config_participant_label")
+        seen_labels.add(entry["label"].casefold())
+    return value
+
+
 def binding(value, owner):
     """Validate one binding document; returns it with its pinned ledger scope."""
     if not isinstance(value, dict) or set(value) - set(OPTIONAL_BINDING_FIELDS) != BINDING_FIELDS:
@@ -84,6 +128,10 @@ def binding(value, owner):
         raise ValueError("config_principals")
     if type(value["max_outstanding_inputs"]) is not int or not 1 <= value["max_outstanding_inputs"] <= 64:
         raise ValueError("config_capacity")
+    participants(value["participants"], value["allowed_principals"])
+    label(value["owner_label"])
+    if value["owner_label"].casefold() in {p["label"].casefold() for p in value["participants"]}:
+        raise ValueError("config_participant_label")
     value = dict(value)
     value["scope"] = {key: owner if key == "expected_owner" else value[key] for key in LEDGER_SCOPE_KEYS}
     return value
