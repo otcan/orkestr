@@ -18,7 +18,7 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
   ]};
   const {readMediaFile = fs.readFile, uploadFailures = 0, ...relayConfig} = extraConfig;
   Object.assign(config, relayConfig);
-  const state = {posts: [], uploads: [], sent: [], pages: {}, retired: new Set(), failReply: false,
+  const state = {posts: [], uploads: [], sent: [], reports: [], failReport: false, pages: {}, retired: new Set(), failReply: false,
     suppressFooter: false, quotaFails: false, quotaCalls: 0, uploadFailures,
     quota: {codex: {fiveHourRemainingPct: 73}, claude: {weeklyRemainingPct: 64}}};
   const api = async (url, options) => {
@@ -33,6 +33,11 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
       return {attachments: [{id: 'attachment-safe-1', name: 'sample.png', mimetype: 'image/png', path: '/server-owned/inbound/media.png'}]};
     }
     const threadId = url.split('/')[3], groupId = threadId.replace('thread', 'group');
+    if (url.endsWith('/scoped-relay-delivery')) {
+      state.reports.push({url, ...options});
+      if (state.failReport) throw new Error('synthetic_report_failure');
+      return {ok: true};
+    }
     if (url.endsWith('/input')) {
       state.posts.push({url, ...options});
       return {message: {id: `input-${threadId}`}};
@@ -381,4 +386,32 @@ test('media evidence is read from the additive side table', async t => {
   await relay.tick();
   assert.equal(uploads.length, 1);
   assert.equal(posts.length, 1);
+});
+
+test('a mirrored remote reply is reported once after its confirmed send, retrying without resending', async t => {
+  const {relay, state} = fixture(t);
+  const page = '/api/threads/thread-1/messages?limit=200';
+  state.pages[page] = {messages: [answer('local-final', 'other'), {...answer('remote-final'), source: 'remote-runtime', remoteMessageId: 'remote-1'}]};
+  state.failReport = true;
+  const failed = await relay.tick();
+  assert.equal(failed.ok, false); assert.equal(failed.completed, 0);
+  assert.equal(state.sent.length, 1); assert.equal(state.reports.length, 1);
+  state.failReport = false;
+  assert.equal((await relay.tick()).completed, 1);
+  assert.equal(state.sent.length, 1, 'the confirmed chunk is never resent');
+  assert.equal(state.reports.length, 2);
+  const report = state.reports[1];
+  assert.equal(report.url, '/api/threads/thread-1/messages/remote-final/scoped-relay-delivery');
+  assert.equal(report.method, 'POST');
+  assert.equal(report.body.requestIds.length, 1);
+  assert.match(report.body.requestIds[0], /^reply:[0-9a-f]{64}$/);
+  assert.deepEqual(report.body.connectorMessageIds, ['sent-1']);
+  await relay.tick();
+  assert.equal(state.reports.length, 2);
+});
+test('local replies are not reported as remote deliveries', async t => {
+  const {relay, state} = fixture(t);
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [answer('final')]};
+  assert.equal((await relay.tick()).completed, 1);
+  assert.equal(state.sent.length, 1); assert.equal(state.reports.length, 0);
 });

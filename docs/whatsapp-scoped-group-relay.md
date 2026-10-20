@@ -123,6 +123,31 @@ keep the turn open, use the same durable payload/receipt journal and label their
 footer `msg:*update*`. A final supersedes any unsent progress already in history.
 Enabling updates does not reopen completed turns or change legacy group bindings.
 
+## Delegated (remote runtime) threads
+
+A relay thread can be delegated to a remote runtime, for example the Rust
+transition adapter (`v2/compat/v1_runtime`). Set the binding's `remoteBackend`,
+`remoteThreadId`, `remoteRuntimeEnabled` and `remoteMirrorEnabled`, and keep
+`mirrorToWhatsApp: false`. The relay remains the only WhatsApp sender.
+
+- The relay's `POST /api/threads/<id>/input` is forwarded to the backend
+  configured in `ORKESTR_REMOTE_THREAD_BACKENDS_JSON` as owner input. The
+  principal is `scoped-owner:<ownerUserId>`, because the transport only admits
+  owner-authored input. The local dispatch fence keeps V1 from running it.
+- Input is refused (409) when the legacy mirror is enabled, and when it comes
+  from an admitted non-owner participant.
+- A transient backend failure returns 502. The relay retries the same
+  idempotent input, and the backend deduplicates it by public message ID.
+- A definite refusal marks the input failed and adds one short explanatory
+  answer. The relay sends that answer and closes the turn.
+- Replies are imported by the existing remote mirror sync and sent by the relay.
+  After every chunk of a mirrored reply is confirmed, the relay reports the
+  receipt to `POST /api/threads/<id>/messages/<message-id>/scoped-relay-delivery`.
+  The mirror acknowledgement then reports `delivered` to the runtime. A failed
+  report is retried on the next poll and never resends.
+- Roll back by clearing the remote binding fields, or by setting
+  `remoteRuntimeEnabled: false`. The thread then runs locally again.
+
 ## Synthetic health probe
 
 `scripts/whatsapp-group-probe.mjs <probe.json>` checks the whole scoped path:

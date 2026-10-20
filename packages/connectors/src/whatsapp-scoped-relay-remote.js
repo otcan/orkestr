@@ -1,0 +1,170 @@
+// Delegated (remote runtime) threads served by the scoped group relay.
+//
+// The scoped relay posts owner-authored group input to `/api/threads/<id>/input`
+// and sends replies itself. For a thread with an enabled remote binding, V1 must
+// not execute that input locally (the dispatch fence already holds it); it is
+// forwarded to the remote backend instead. Replies come back through the
+// existing remote mirror import and are sent by the relay, never by V1's legacy
+// outbox: forwarding therefore requires the binding's legacy mirror to be off.
+// After the relay confirms a send it reports the provider receipt here, which
+// lets the existing mirror acknowledgement settle the remote input.
+import crypto from "node:crypto";
+import { appendEvent } from "../../storage/src/store.js";
+import { appendThreadMessage, getThreadMessage, updateThreadMessage } from "../../core/src/threads.js";
+import { enqueueRemoteWhatsAppThreadInput, remoteWhatsAppRuntimeBinding } from "./whatsapp-remote-runtime.js";
+
+export const scopedRelaySource = "whatsapp_group_relay";
+export const scopedRelayRefusalSource = "remote-runtime-relay-refusal";
+
+function pickString(...values) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function statusError(code, statusCode) {
+  return Object.assign(new Error(code), { statusCode });
+}
+
+// The relay only admits input authored by the configured owner accounts, so the
+// forwarded principal is the thread owner, not a WhatsApp participant.
+export function scopedRelayRemotePrincipal(thread = {}) {
+  return `scoped-owner:${pickString(thread.ownerUserId, "admin")}`;
+}
+
+export function scopedRelayRemoteAccountId(binding = {}) {
+  return pickString(binding.inboundAccountId, binding.receivingAccountId, binding.senderAccountId, binding.responderAccountId, binding.accountId);
+}
+
+// Returns the remote binding when this relay input must be delegated, else null.
+export function scopedRelayRemoteBinding(thread, body = {}, env = process.env) {
+  if (pickString(body.source) !== scopedRelaySource) return null;
+  const remote = remoteWhatsAppRuntimeBinding(thread, env);
+  if (!remote) return null;
+  // Exactly one sender: with the legacy mirror on, V1's outbox would also send.
+  if (remote.binding.mirrorToWhatsApp !== false) throw statusError("scoped_relay_delegation_requires_mirror_disabled", 409);
+  // Admitted non-owner participants keep their local, thread-scoped policy.
+  if (body.scopedParticipant) throw statusError("scoped_relay_delegation_owner_only", 409);
+  return remote;
+}
+
+function definiteRefusal(error) {
+  const status = Number(error?.statusCode || 0);
+  return status >= 400 && status < 500 && ![401, 403, 408, 425, 429].includes(status);
+}
+
+// Forwards one relay-posted local user message. Transient failures throw (the
+// relay retries the same idempotent input); a definite refusal is recorded and
+// answered once so the relay can tell the owner and close the turn.
+export async function forwardScopedRelayInputToRemote({ thread, message, remote }, env = process.env, fetchImpl = fetch) {
+  if (!thread || !message?.id || !remote) throw statusError("scoped_relay_forward_invalid", 400);
+  if (message.remoteMessageId && message.remoteBackend === remote.backendId && message.remoteThreadId === remote.remoteThreadId) {
+    return { message, forwarded: false, duplicate: true };
+  }
+  if (message.observedVia === "remote_runtime_refused") return { message, forwarded: false, refused: true };
+  const binding = remote.binding;
+  const accountId = scopedRelayRemoteAccountId(binding);
+  const chatId = pickString(binding.chatId);
+  const principal = scopedRelayRemotePrincipal(thread);
+  const input = {
+    source: "whatsapp_inbound",
+    text: String(message.text || ""),
+    chatId,
+    accountId,
+    from: principal,
+    externalId: pickString(message.externalId, message.clientMessageId, message.id),
+    externalPrincipal: {
+      connector: "whatsapp", accountId, chatId, threadId: thread.id,
+      senderId: principal, participantId: principal, fromMe: true,
+    },
+    senderParticipantId: principal,
+    senderTrustLevel: "owner",
+    senderEffectiveRole: "owner",
+    originTransport: "whatsapp-scoped-group-relay",
+  };
+  let result;
+  try {
+    result = await enqueueRemoteWhatsAppThreadInput({ thread, message, input }, env, fetchImpl);
+  } catch (error) {
+    const reason = /^[a-z0-9_:-]{1,120}$/i.test(String(error?.message || "")) ? error.message : "remote_runtime_request_failed";
+    await appendEvent({
+      type: "whatsapp_scoped_relay_remote_forward_failed", threadId: thread.id, messageId: message.id,
+      remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, error: reason,
+      definite: definiteRefusal(error),
+    }, env).catch(() => {});
+    if (!definiteRefusal(error)) throw statusError("scoped_relay_remote_unavailable", 502);
+    const refused = await updateThreadMessage(thread.id, message.id, {
+      state: "failed", deliveryState: "failed", observedVia: "remote_runtime_refused", error: reason,
+      remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId,
+    }, env).catch(() => message);
+    await appendThreadMessage(thread.id, {
+      role: "assistant", phase: "final_answer", state: "completed", source: scopedRelayRefusalSource,
+      connector: "whatsapp", chatId, parentMessageId: message.id,
+      clientMessageId: `remote-refusal:${message.id}`, dedupeAssistantByIdempotencyKey: true,
+      text: `The Rust runtime did not accept this message (${reason}). It was not run.`,
+    }, env);
+    return { message: refused, forwarded: false, refused: true, error: reason };
+  }
+  const remoteMessage = result?.message || {};
+  const remoteMessageId = pickString(remoteMessage.id, remoteMessage.messageId);
+  if (!remoteMessageId) throw statusError("scoped_relay_remote_unacknowledged", 502);
+  const updated = await updateThreadMessage(thread.id, message.id, {
+    remoteBackend: remote.backendId,
+    remoteThreadId: remote.remoteThreadId,
+    remoteMessageId,
+    remoteRoutedAt: new Date().toISOString(),
+    state: pickString(remoteMessage.state, "delivered"),
+    deliveryState: pickString(remoteMessage.deliveryState, "delivered"),
+    observedVia: pickString(remoteMessage.observedVia, "remote_runtime_forwarded"),
+    error: null,
+  }, env);
+  await appendEvent({
+    type: "whatsapp_scoped_relay_remote_forwarded", threadId: thread.id, messageId: message.id,
+    remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, remoteMessageId,
+  }, env).catch(() => {});
+  return { message: updated, forwarded: true };
+}
+
+function receiptIds(value) {
+  if (!Array.isArray(value) || value.length > 32) throw statusError("scoped_relay_delivery_invalid", 400);
+  const ids = value.map(item => pickString(item));
+  if (ids.some(id => !id || id.length > 256)) throw statusError("scoped_relay_delivery_invalid", 400);
+  return [...new Set(ids)];
+}
+
+// Records the relay's confirmed provider send for one mirrored remote reply. The
+// mirror acknowledgement loop then reports it as `delivered`. Never sends.
+export async function recordScopedRelayRemoteDelivery({ thread, messageId, body = {} }, env = process.env) {
+  const remote = remoteWhatsAppRuntimeBinding(thread, env);
+  if (!remote) throw statusError("scoped_relay_delivery_not_delegated", 409);
+  if (remote.binding.mirrorToWhatsApp !== false) throw statusError("scoped_relay_delegation_requires_mirror_disabled", 409);
+  const message = await getThreadMessage(thread.id, messageId, env);
+  if (!message) throw statusError("message_not_found", 404);
+  if (message.role !== "assistant" || !pickString(message.remoteMessageId) ||
+      message.remoteBackend !== remote.backendId || message.remoteThreadId !== remote.remoteThreadId) {
+    throw statusError("scoped_relay_delivery_target_invalid", 409);
+  }
+  const requestIds = receiptIds(body.requestIds);
+  const providerIds = receiptIds(body.connectorMessageIds || []);
+  if (!requestIds.length) throw statusError("scoped_relay_delivery_invalid", 400);
+  const outboxJobId = `scoped-relay:${crypto.createHash("sha256").update(requestIds.join("\n")).digest("hex").slice(0, 40)}`;
+  if (pickString(message.deliveryState) === "delivered") {
+    if (pickString(message.mirrorOutboxJobId) !== outboxJobId) throw statusError("scoped_relay_delivery_conflict", 409);
+    return { message, duplicate: true };
+  }
+  const deliveredAt = Number.isFinite(Date.parse(body.deliveredAt)) ? new Date(Date.parse(body.deliveredAt)).toISOString() : new Date().toISOString();
+  const updated = await updateThreadMessage(thread.id, message.id, {
+    deliveryState: "delivered",
+    deliveredAt,
+    mirrorOutboxJobId: outboxJobId,
+    whatsappMessageIds: providerIds,
+    observedVia: "whatsapp_scoped_group_relay",
+  }, env);
+  await appendEvent({
+    type: "whatsapp_scoped_relay_remote_delivery_recorded", threadId: thread.id, messageId: message.id,
+    remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, outboxJobId, providerIds: providerIds.length,
+  }, env).catch(() => {});
+  return { message: updated, duplicate: false };
+}
