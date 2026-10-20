@@ -4,12 +4,17 @@
 // no journal, route fence or proof database is opened. Prints codes only.
 import fs from 'node:fs';
 import { validateScopedGroupConfig } from '../packages/connectors/src/whatsapp-scoped-group-transport.js';
+import { validateScopedDirectChats } from '../packages/connectors/src/whatsapp-scoped-direct-chats.js';
+import { scopedRouteMembership } from '../packages/connectors/src/whatsapp-scoped-route-membership.js';
 import { isMainModule } from './main-module.mjs';
 
 export function preflightScopedGroupConfigs(paths, { readFile = file => fs.readFileSync(file, 'utf8') } = {}) {
   const results = [...new Set(paths.filter(Boolean))].map(file => {
     try {
-      validateScopedGroupConfig(JSON.parse(readFile(file)));
+      const config = JSON.parse(readFile(file));
+      validateScopedGroupConfig(config);
+      // Owner-approved direct chats are validated exactly as the worker does at startup.
+      validateScopedDirectChats(config, scopedRouteMembership(config) || new Set((config.groups || []).map(group => group.threadId)));
       return { file, ok: true };
     } catch (error) {
       const code = String(error?.message || 'unknown');

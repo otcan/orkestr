@@ -26,3 +26,20 @@ test('preflight blocks activation on a rejected contract and never echoes file c
   assert.equal(result.results.find(r => r.file === '/cfg/garbage.json').code, 'configuration_unreadable');
   assert.doesNotMatch(JSON.stringify(result), /4915550000000|secret-ish/);
 });
+
+test('preflight validates owner-approved direct chats like the worker does at startup', () => {
+  const direct = {journalPath: '/nonexistent/direct.sqlite', routes: [{threadId: 'thread-a', chatIds: ['15550000002@c.us']}]};
+  const extra = {
+    '/cfg/direct-ok.json': JSON.stringify({...base, directChats: direct}),
+    '/cfg/direct-bad-thread.json': JSON.stringify({...base, directChats: {...direct, routes: [{threadId: 'not-scoped', chatIds: ['15550000002@c.us']}]}}),
+    '/cfg/direct-no-journal.json': JSON.stringify({...base, directChats: {routes: direct.routes}}),
+  };
+  const read = file => extra[file] ?? readFile(file);
+  assert.equal(preflightScopedGroupConfigs(['/cfg/direct-ok.json'], {readFile: read}).ok, true);
+  for (const file of ['/cfg/direct-bad-thread.json', '/cfg/direct-no-journal.json']) {
+    const result = preflightScopedGroupConfigs([file], {readFile: read});
+    assert.equal(result.ok, false, file);
+    assert.equal(result.results[0].code, 'scoped_worker_direct_configuration_invalid');
+    assert.doesNotMatch(JSON.stringify(result), /15550000002/);
+  }
+});
