@@ -201,6 +201,7 @@ pub fn Conversation(
         section { class: "conversation-pane", "aria-label": "Conversation",
             crate::execution_poll::ExecutionPoll { key: "{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, execution, worker_tasks: false, headless: true, clock: Some(now), onexpired }
             div { class: "conversation-scroll", tabindex: "0", "aria-label": "Conversation transcript",
+                crate::archived_history_view::ArchivedHistory { key: "archived-{id}-{generation}", id: id.clone(), session_scope, onexpired }
                 crate::intelligence_view::IntelligencePanel { key:"intelligence-{id}-{generation}", id:id.clone(), csrf:csrf.clone(), session_scope, execution, onexpired, onaccepted:move |revision|accepted_revision.set(revision) }
                 crate::accepted_results_view::AcceptedReplies { key: "accepted-{id}-{generation}", id: id.clone(), session_scope, messages, update: Some(accepted_revision), inline: true, onexpired }
                 if let Some(current) = live_status.filter(|s| s.progress.is_some() && s.phase != orkestr_v2_contracts::ExecutionPhase::Completed) {

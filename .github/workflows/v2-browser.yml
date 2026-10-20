@@ -52,3 +52,5 @@ jobs:
           bash apps/ui/scripts/bundle.sh
       - name: CI headless rendering with synthetic data
         run: node v2/ci/headless-rendering.mjs
+      - name: CI configured workspace rendering against a synthetic API
+        run: node v2/ci/headless-workspace.mjs

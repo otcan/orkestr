@@ -2,6 +2,7 @@ mod about;
 mod acceptance_button;
 mod accepted_results_bridge;
 mod accepted_results_view;
+mod archived_history_view;
 mod attachments_view;
 mod beta_bridge;
 mod beta_discovery;
