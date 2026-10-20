@@ -140,19 +140,28 @@ pub(crate) async fn list(
     if query.parent_run_id.0.is_nil() {
         return Err(invalid());
     }
-    let scope = scope(&state, &owner, &conversation).await?;
-    let mut list = scope
-        .store
-        .worker_tasks_authenticated(
-            &browser::credential(&headers)?,
-            &conversation,
-            &query.parent_run_id,
-        )
-        .await
-        .map_err(error)?;
+    let scope = state.execution_scope(&owner, &conversation).await?;
+    let credential = browser::credential(&headers)?;
+    let mut list = if let Some(scope) = &scope {
+        scope
+            .store
+            .worker_tasks_authenticated(&credential, &conversation, &query.parent_run_id)
+            .await
+    } else {
+        state
+            .store
+            .worker_task_history_authenticated(
+                &credential,
+                &owner,
+                &conversation,
+                &query.parent_run_id,
+            )
+            .await
+    }
+    .map_err(error)?;
     list.can_create &= scope
-        .tasks
         .as_ref()
+        .and_then(|scope| scope.tasks.as_ref())
         .is_some_and(|access| access.available(&owner, &conversation, &query.parent_run_id));
     if !list.is_valid()
         || list.conversation_id != conversation

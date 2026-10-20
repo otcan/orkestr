@@ -1,4 +1,7 @@
 //! Authenticated execution projection and revision-guarded Stop handoff.
+#[cfg(test)]
+#[path = "execution/retired_history_tests.rs"]
+mod retired_history_tests;
 use super::*;
 use axum::extract::{rejection::QueryRejection, Path, Query};
 use orkestr_v2_application::runtime::RuntimeStoreError;
@@ -62,18 +65,18 @@ async fn status_for(
         state.execution_scope(&owner, &conversation).await?
     };
     let status = if let Some(run) = &query.run_id {
-        // A run locator selects a read, never provider authority. Core checks
-        // the browser credential and exact scope in the projection snapshot.
-        let credential = browser::credential(&headers)?;
-        scope
-            .as_ref()
-            .ok_or(Error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "status_unavailable",
-                "Execution status unavailable",
-            ))?
+        // Durable exact-run evidence survives retirement and newer windows.
+        // The current browser credential and owner tuple share one snapshot;
+        // only the separate live registry below may advertise controls.
+        state
             .store
-            .execution_run_status_authenticated(&credential, &conversation, run)
+            .execution_run_history_authenticated(
+                &browser::credential(&headers)?,
+                &owner,
+                &conversation,
+                run,
+                fast,
+            )
             .await
     } else if fast {
         let credential = browser::credential(&headers)?;

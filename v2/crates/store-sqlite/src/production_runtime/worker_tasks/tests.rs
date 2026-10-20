@@ -347,4 +347,5 @@ async fn owner_budget_digest_legacy_compatibility_and_changed_replay_conflict() 
     consume(&f, &run).await;
 }
 
+mod history_tests;
 mod proposal_tests;

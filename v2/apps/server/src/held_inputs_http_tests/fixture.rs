@@ -6,9 +6,9 @@ use orkestr_v2_application::{runtime::*, IntakeStore};
 use orkestr_v2_store_sqlite::ExecutionConsumption;
 use std::time::Duration;
 
-pub(super) const COOKIE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-pub(super) const AUTHORITY: &str = "synthetic.example:19880";
-pub(super) fn state(store: Store) -> AppState {
+pub(crate) const COOKIE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+pub(crate) const AUTHORITY: &str = "synthetic.example:19880";
+pub(crate) fn state(store: Store) -> AppState {
     AppState::new(
         store,
         "synthetic-bootstrap-not-a-deployed-secret".into(),
@@ -17,13 +17,13 @@ pub(super) fn state(store: Store) -> AppState {
     .unwrap()
 }
 
-pub(super) struct Temporary(pub std::path::PathBuf);
+pub(crate) struct Temporary(pub std::path::PathBuf);
 impl Drop for Temporary {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
-pub(super) struct Case {
+pub(crate) struct Case {
     pub root: Temporary,
     pub state: AppState,
     pub owner: OwnerId,
@@ -42,7 +42,7 @@ fn event(p: &ProviderAdmission, sequence: u64, event: ProviderEvent) -> Provider
     }
 }
 
-pub(super) async fn retired() -> Case {
+pub(crate) async fn retired() -> Case {
     let root = Temporary(std::env::temp_dir().join(format!("held-owner-http-{}", Uuid::new_v4())));
     std::fs::create_dir(&root.0).unwrap();
     let store = Store::open(&root.0.join("core.sqlite3")).await.unwrap();
@@ -288,7 +288,7 @@ pub(super) async fn retired() -> Case {
     }
 }
 
-pub(super) fn headers(cookie: Option<&str>, host: &str) -> HeaderMap {
+pub(crate) fn headers(cookie: Option<&str>, host: &str) -> HeaderMap {
     let mut h = HeaderMap::new();
     h.insert("host", host.parse().unwrap());
     if let Some(cookie) = cookie {
@@ -299,7 +299,7 @@ pub(super) fn headers(cookie: Option<&str>, host: &str) -> HeaderMap {
     }
     h
 }
-pub(super) async fn request(
+pub(crate) async fn request(
     state: &AppState,
     id: &str,
     query: &str,
@@ -317,7 +317,7 @@ pub(super) async fn request(
     .await
     .unwrap_or_else(IntoResponse::into_response)
 }
-pub(super) async fn page(state: &AppState, conversation: &ConversationId) -> HeldOwnerInputPage {
+pub(crate) async fn page(state: &AppState, conversation: &ConversationId) -> HeldOwnerInputPage {
     let response = request(
         state,
         &conversation.to_string(),
