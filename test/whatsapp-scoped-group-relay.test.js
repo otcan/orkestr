@@ -16,9 +16,10 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
     {chatId: 'group-1', threadId: 'thread-1', name: 'First'},
     {chatId: 'group-2', threadId: 'thread-2', name: 'Second'},
   ]};
-  Object.assign(config, extraConfig);
+  const {readMediaFile = fs.readFile, uploadFailures = 0, ...relayConfig} = extraConfig;
+  Object.assign(config, relayConfig);
   const state = {posts: [], uploads: [], sent: [], pages: {}, retired: new Set(), failReply: false,
-    suppressFooter: false, quotaFails: false, quotaCalls: 0,
+    suppressFooter: false, quotaFails: false, quotaCalls: 0, uploadFailures,
     quota: {codex: {fiveHourRemainingPct: 73}, claude: {weeklyRemainingPct: 64}}};
   const api = async (url, options) => {
     if (url.startsWith('/api/quota/providers')) {
@@ -28,6 +29,7 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
     }
     if (url.endsWith('/inbound-media')) {
       state.uploads.push({url, ...options});
+      if (state.uploadFailures > 0) { state.uploadFailures--; throw new Error('synthetic_upload_failure'); }
       return {attachments: [{id: 'attachment-safe-1', name: 'sample.png', mimetype: 'image/png', path: '/server-owned/inbound/media.png'}]};
     }
     const threadId = url.split('/')[3], groupId = threadId.replace('thread', 'group');
@@ -39,7 +41,7 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
     return {thread: {ownerUserId: config.ownerUserId, codexModel: 'example-model', retired: state.retired.has(threadId),
       binding: {chatId: groupId, enabled: true, suppressWhatsAppDebugFooter: state.suppressFooter}}};
   };
-  const relay = createScopedGroupRelay({config, inboxDb, relayDb, api, formatter, env: {}, send: async payload => {
+  const relay = createScopedGroupRelay({config, inboxDb, relayDb, api, formatter, env: {}, readMediaFile, send: async payload => {
     state.sent.push(payload);
     if (state.failReply) throw new Error('transport_disconnected');
     return {ok: true, ids: ['sent-1']};
@@ -47,6 +49,48 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
   t.after(() => {inboxDb.close(); relayDb.close();});
   return {relay, state, inboxDb, relayDb, config};
 }
+
+test('staged media read failure is visible and still routes caption', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scoped-group-media-'));
+  t.after(() => fs.rm(dir, {recursive: true, force: true}));
+  const {relay, state, inboxDb} = fixture(t, false, false, {mediaDir: dir,
+    readMediaFile: async () => { throw new Error('synthetic_staged_read_failure'); }});
+  const mediaPath = path.join(dir, 'media.png');
+  await fs.writeFile(mediaPath, Buffer.from('synthetic-image'));
+  inboxDb.prepare(`INSERT INTO group_input(id,chat_id,body,created_at,media_path,media_filename,media_mimetype,media_size)
+    VALUES(?,?,?,?,?,?,?,?)`).run('wa-read-error', 'group-1', 'caption survives', '2026-01-02', mediaPath, 'sample.png', 'image/png', 15);
+  await relay.tick();
+  const posts = state.posts.filter(post => post.url.endsWith('/input') && /caption survives/.test(post.body.text));
+  assert.equal(posts.length, 1);
+  assert.match(posts[0].body.text, /attachment skipped.*could not be read/i);
+  assert.equal(state.uploads.length, 0);
+  assert.equal(await fs.stat(mediaPath).then(() => true, () => false), false);
+});
+
+test('upload failures retry at most three polls, then visibly skip media and route caption', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scoped-group-media-'));
+  t.after(() => fs.rm(dir, {recursive: true, force: true}));
+  const {relay, state, inboxDb} = fixture(t, false, false, {mediaDir: dir, uploadFailures: 3});
+  const mediaPath = path.join(dir, 'media.png');
+  await fs.writeFile(mediaPath, Buffer.from('synthetic-image'));
+  inboxDb.prepare(`INSERT INTO group_input(id,chat_id,body,created_at,media_path,media_filename,media_mimetype,media_size)
+    VALUES(?,?,?,?,?,?,?,?)`).run('wa-upload-error', 'group-1', 'caption survives', '2026-01-02', mediaPath, 'sample.png', 'image/png', 15);
+  await relay.tick();
+  assert.equal(state.posts.filter(post => post.url.endsWith('/input') && /caption survives/.test(post.body.text)).length, 0);
+  await relay.tick();
+  assert.equal(state.posts.filter(post => post.url.endsWith('/input') && /caption survives/.test(post.body.text)).length, 0);
+  await relay.tick();
+  const posts = state.posts.filter(post => post.url.endsWith('/input') && /caption survives/.test(post.body.text));
+  assert.equal(state.uploads.length, 3);
+  assert.equal(posts.length, 1);
+  assert.match(posts[0].body.text, /caption survives/);
+  assert.match(posts[0].body.text, /attachment skipped.*upload failed after 3 attempts/i);
+  assert.equal(posts[0].body.attachments, undefined);
+  assert.equal(await fs.stat(mediaPath).then(() => true, () => false), false);
+  await relay.tick();
+  assert.equal(state.uploads.length, 3);
+  assert.equal(state.posts.filter(post => post.url.endsWith('/input') && /caption survives/.test(post.body.text)).length, 1);
+});
 
 test('scoped group media is uploaded through thread attachments and routed once with caption', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scoped-group-media-'));
@@ -100,6 +144,8 @@ test('captionless supported image is visibly described and attached; unsupported
   const oversize = posts.find(post => /large image/.test(post.body.text));
   assert.match(oversize.body.text, /attachment skipped/);
   assert.equal(oversize.body.attachments, undefined);
+  assert.equal(await fs.stat(docPath).then(() => true, () => false), false);
+  assert.equal(await fs.stat(largePath).then(() => true, () => false), false);
 });
 const answer = (id, parent = 'input-thread-1', phase = 'final_answer') => ({id, role: 'assistant', source: 'codex-app-server', state: 'completed', phase, parentMessageId: parent, text: 'agent: answer'});
 test('only the matching final is sent; input and completed output do not replay', async t => {
