@@ -9,29 +9,67 @@ impl Store {
         conversation: &ConversationId,
         parent: &RunId,
     ) -> Result<WorkerTaskList> {
-        let context = self.context()?;
+        self.worker_task_list_in(credential, &self.context()?.owner, conversation, parent)
+            .await
+    }
+
+    /// Durable current-browser history without a supervisor or scheduler.
+    /// Missing live authority holds pending tasks and never grants creation.
+    pub async fn worker_task_history_authenticated(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        parent: &RunId,
+    ) -> Result<WorkerTaskList> {
+        if self.authority.is_some() {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        if owner.0.is_nil() || conversation.0.is_nil() || parent.0.is_nil() {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
+        self.worker_task_list_in(credential, owner, conversation, parent)
+            .await
+    }
+
+    async fn worker_task_list_in(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        parent: &RunId,
+    ) -> Result<WorkerTaskList> {
+        if credential.is_empty() || credential.len() > 1024 {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
         let mut tx = self.pool.begin().await.map_err(db)?;
-        self.task_browser_in(&mut tx, credential, conversation)
-            .await?;
+        let authorized: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
+            .bind(crate::digest(credential)).bind(owner.to_string())
+            .fetch_one(&mut *tx).await.map_err(db)?;
+        if authorized != 1 {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        crate::runtime::scope(&mut tx, owner, conversation).await?;
         let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs WHERE id=? AND owner_id=? AND conversation_id=? AND role='deep'")
-            .bind(parent.to_string()).bind(context.owner.to_string()).bind(conversation.to_string())
+            .bind(parent.to_string()).bind(owner.to_string()).bind(conversation.to_string())
             .fetch_one(&mut *tx).await.map_err(db)?;
         if exists != 1 {
             return Err(RuntimeStoreError::NotFound);
         }
-        let eligible = match self.worker_parent_current_in(&mut tx, parent).await {
-            Ok(_) => true,
-            Err(
-                RuntimeStoreError::Unauthorized
-                | RuntimeStoreError::Fenced
-                | RuntimeStoreError::StaleLease
-                | RuntimeStoreError::Expired
-                | RuntimeStoreError::NotFound,
-            ) => false,
-            Err(error) => return Err(error),
-        };
+        let eligible = self.authority.is_some()
+            && match self.worker_parent_current_in(&mut tx, parent).await {
+                Ok(_) => true,
+                Err(
+                    RuntimeStoreError::Unauthorized
+                    | RuntimeStoreError::Fenced
+                    | RuntimeStoreError::StaleLease
+                    | RuntimeStoreError::Expired
+                    | RuntimeStoreError::NotFound,
+                ) => false,
+                Err(error) => return Err(error),
+            };
         let rows = sqlx::query("SELECT t.*,CASE WHEN length(CAST(p.title AS BLOB))<=160 THEN p.title END AS title,p.task_id AS payload_present,d.admitted_run_id,r.state AS run_state FROM worker_tasks t LEFT JOIN worker_task_payloads p ON p.task_id=t.id LEFT JOIN worker_provider_delegations d ON d.id=t.delegation_id LEFT JOIN production_runs r ON r.id=d.admitted_run_id WHERE t.owner_id=? AND t.conversation_id=? AND t.parent_run_id=? ORDER BY t.ordinal LIMIT 33")
-            .bind(context.owner.to_string()).bind(conversation.to_string()).bind(parent.to_string())
+            .bind(owner.to_string()).bind(conversation.to_string()).bind(parent.to_string())
             .fetch_all(&mut *tx).await.map_err(db)?;
         if rows.len() > MAX_WORKER_TASKS_PER_PARENT {
             return Err(RuntimeStoreError::Unavailable);
@@ -46,7 +84,9 @@ impl Store {
             let available = row.get::<Option<String>, _>("payload_present").is_some();
             // Creation remains Running-only. A consumed child instead reports
             // its own current authority, including a retained parent proposal.
-            let current = if let Some(run) = run_id.as_ref().filter(|_| {
+            let current = if self.authority.is_none() {
+                Err(RuntimeStoreError::Fenced)
+            } else if let Some(run) = run_id.as_ref().filter(|_| {
                 matches!(
                     row.get::<Option<&str>, _>("run_state"),
                     Some("starting" | "running")

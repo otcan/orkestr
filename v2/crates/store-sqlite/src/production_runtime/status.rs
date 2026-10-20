@@ -50,6 +50,26 @@ impl Store {
         self.execution_status_in_scope(owner, conversation, Some(run), Some(credential), false)
             .await
     }
+    /// Current browser credential and exact owner/run history, independent of
+    /// the runtime incarnation. Fast and Deep/Worker route roles stay separate;
+    /// this unbound read never supplies controls.
+    pub async fn execution_run_history_authenticated(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        run: &RunId,
+        fast_only: bool,
+    ) -> Result<Option<ExecutionStatus>> {
+        if self.authority.is_some() || credential.is_empty() || credential.len() > 1024 {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        if owner.0.is_nil() || conversation.0.is_nil() || run.0.is_nil() {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
+        self.execution_status_in_scope(owner, conversation, Some(run), Some(credential), fast_only)
+            .await
+    }
     /// Latest Fast execution in this exact live supervisor context. No Deep queue
     /// projection or execution authority is returned.
     pub async fn execution_fast_status(
@@ -108,11 +128,17 @@ impl Store {
                 .await
                 .map_err(db)?;
         let run = if let Some(id) = exact_run {
-            let context = self.context()?;
-            context.validate(&mut tx).await?;
-            sqlx::query("SELECT id,state FROM production_runs WHERE id=? AND owner_id=? AND conversation_id=? AND context_id=? AND incarnation_id=?")
-                .bind(id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(&context.id).bind(&context.incarnation)
-                .fetch_optional(&mut *tx).await.map_err(db)?
+            if let Some(context) = &self.authority {
+                context.validate(&mut tx).await?;
+                sqlx::query("SELECT id,state FROM production_runs WHERE id=? AND owner_id=? AND conversation_id=? AND context_id=? AND incarnation_id=?")
+                    .bind(id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(&context.id).bind(&context.incarnation)
+                    .fetch_optional(&mut *tx).await.map_err(db)?
+            } else {
+                sqlx::query("SELECT id,state FROM production_runs WHERE id=? AND owner_id=? AND conversation_id=? AND ((?=1 AND role='fast') OR (?=0 AND role IN ('deep','worker')))")
+                    .bind(id.to_string()).bind(owner.to_string()).bind(conversation.to_string())
+                    .bind(fast_only).bind(fast_only)
+                    .fetch_optional(&mut *tx).await.map_err(db)?
+            }
         } else if fast_only {
             let context = self.context()?;
             context.validate(&mut tx).await?;

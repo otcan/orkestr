@@ -188,7 +188,11 @@ def unknown_shutdown():
         assert status["run_id"] == first["run_id"] and status["phase"] == "cancel_requested"
         assert status["capabilities"] == {"stop": False, "steer": False}
         assert status.get("acceptance_candidate") is None
-        assert case.request(case.path + "/execution?run_id=" + first["run_id"])[0] == 503
+        code, exact, _ = case.request(case.path + "/execution?run_id=" + first["run_id"])
+        assert code == 200 and exact["run_id"] == first["run_id"]
+        assert exact["phase"] == "cancel_requested"
+        assert exact["capabilities"] == {"stop": False, "steer": False}
+        assert exact.get("acceptance_candidate") is None
         case.stop()
         # Ordinary configured restart must refuse unresolved native truth before
         # another process/input; local reaping cannot manufacture Stopped.
