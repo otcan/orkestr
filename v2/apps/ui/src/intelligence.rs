@@ -26,7 +26,7 @@ impl RoleCapability {
         } else if self.available {
             "Available"
         } else {
-            "Not currently available"
+            "Configured"
         }
     }
 }

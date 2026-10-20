@@ -204,9 +204,9 @@ pub fn Conversation(
                 crate::intelligence_view::IntelligencePanel { key:"intelligence-{id}-{generation}", id:id.clone(), csrf:csrf.clone(), session_scope, execution, onexpired, onaccepted:move |revision|accepted_revision.set(revision) }
                 crate::accepted_results_view::AcceptedReplies { key: "accepted-{id}-{generation}", id: id.clone(), session_scope, messages, update: Some(accepted_revision), inline: true, onexpired }
                 if let Some(current) = live_status.filter(|s| s.progress.is_some() && s.phase != orkestr_v2_contracts::ExecutionPhase::Completed) {
-                    article { class: "assistant-proposal",
+                    article { key: "{current.conversation_id}/{current.progress.as_ref().unwrap().payload_id}", class: "assistant-proposal",
                         h3 { "Assistant" }
-                        crate::progress_view::ProgressView { key: "{current.conversation_id}/{current.progress.as_ref().unwrap().payload_id}", status: current, csrf: csrf.clone(), execution, session_scope, onexpired }
+                        crate::progress_view::ProgressView { status: current, csrf: csrf.clone(), execution, session_scope, onexpired }
                     }
                 }
                 details { class: "conversation-tools",

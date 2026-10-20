@@ -8,7 +8,7 @@ fn value() -> Value {
 fn configured_roles_can_be_temporarily_unavailable_without_gaining_authority() {
     let caps: IntelligenceCapabilities = serde_json::from_value(value()).unwrap();
     assert!(caps.valid(ID));
-    assert_eq!(caps.fast.label(), "Not currently available");
+    assert_eq!(caps.fast.label(), "Configured");
     assert!(!caps.valid("foreign"));
 }
 #[test]
