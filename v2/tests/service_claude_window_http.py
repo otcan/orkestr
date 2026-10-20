@@ -24,9 +24,10 @@ def expect(case, route, code=200, method="GET", body=None):
     return value
 
 
-def proposal(case, previous=None, seconds=90):
+def proposal(case, previous=None, seconds=90, role="deep"):
+    route = path(case.conversation) + ("/fast" if role == "fast" else "") + "/execution"
     def ready():
-        code, value, _ = case.request(path(case.conversation) + "/execution")
+        code, value, _ = case.request(route)
         if code != 200 or value["run_id"] == previous:
             return None
         assert value["phase"] not in ("blocked", "failed", "cancel_requested"), value
@@ -44,15 +45,41 @@ def admit(case, key, text, window=None, generation=0, predecessor=None):
     return expect(case, path(case.conversation) + "/window", 201, "POST", request)["status"]
 
 
-def turn(case, key, text, window=None, generation=0, previous=None, seconds=90, predecessor=None):
-    status = admit(case, key, text, window, generation, predecessor)
-    value = proposal(case, previous, seconds)
+def accept(case, key, role, run):
+    """Accept the exact proposal. The revision is per conversation and the
+    other role may advance it between the read and the decision: re-read."""
+    route = path(case.conversation) + ("/fast" if role == "fast" else "") + "/execution?run_id=" + run
+    for _ in range(20):
+        current = expect(case, route)
+        code, value, _ = case.request(path(case.conversation) + "/accept", "POST",
+                                      {**current["acceptance_candidate"], "expected_revision": current["revision"],
+                                       "request_key": f"accept:{role}:{key}"})
+        if code == 200:
+            assert value["outcome"] == "succeeded", value
+            return value
+        assert code == 409 and value["code"] == "revision_conflict", (code, value)
+        time.sleep(0.1)
+    raise AssertionError("acceptance kept conflicting")
+
+
+def settle(case, key, role, previous, seconds):
+    value = proposal(case, previous, seconds, role)
     payload = expect(case, path(case.conversation) + "/payloads/" + value["progress"]["payload_id"])
-    accepted = expect(case, path(case.conversation) + "/accept", 200, "POST",
-                      {**value["acceptance_candidate"], "expected_revision": value["revision"],
-                       "request_key": "accept:" + key})
-    assert accepted["outcome"] == "succeeded"
-    return status, value, payload["text"]
+    accept(case, key, role, value["run_id"])
+    return value, payload["text"]
+
+
+FAST = {}
+
+
+def turn(case, key, text, window=None, generation=0, previous=None, seconds=90, predecessor=None):
+    """One input: the Claude Deep turn and its Claude Fast presentation."""
+    status = admit(case, key, text, window, generation, predecessor)
+    value, answer = settle(case, key, "deep", previous, seconds)
+    fast, presented = settle(case, key, "fast", FAST.get("run"), seconds)
+    assert fast["run_id"] != value["run_id"] and presented
+    FAST["run"] = fast["run_id"]
+    return status, value, answer
 
 
 def select_claude(case, real):
@@ -90,6 +117,23 @@ def run(case, real):
     expect(case, path(case.conversation) + "/stop", 200, "POST",
            {"run_id": live["run_id"], "expected_revision": live["revision"],
             "expected_control_revision": live["control_revision"], "request_key": "stop:3"})
+    # Its Fast presentation of the same input is stopped on its own route.
+    def fast_running():
+        code, value, _ = case.request(path(case.conversation) + "/fast/execution")
+        if code != 200 or value["run_id"] == FAST["run"]:
+            return None
+        if value["phase"] == "awaiting_acceptance":
+            return value
+        return value if value["phase"] == "running" and value["capabilities"]["stop"] else None
+    fast = wait_for(fast_running, "Claude Fast presentation of the held input", 60)
+    if fast["phase"] == "running":
+        current = expect(case, path(case.conversation) + "/execution")
+        expect(case, path(case.conversation) + "/fast/stop", 200, "POST",
+               {"run_id": fast["run_id"], "expected_revision": current["revision"],
+                "expected_control_revision": fast["control_revision"], "request_key": "fast-stop:3"})
+    else:
+        settle(case, "claude:3", "fast", FAST["run"], 60)
+    FAST["run"] = fast["run_id"]
     def settled():
         code, value, _ = case.request(path(case.conversation) + "/execution")
         return value if value["run_id"] == live["run_id"] and value["phase"] == "cancelled" else None
@@ -104,18 +148,27 @@ def run(case, real):
         None, 1, live["run_id"], predecessor=window["window_id"])
     assert successor["generation"] == 2 and successor["window_id"] != window["window_id"]
     assert ("amber" in text4.lower()) if real else text4 == "synthetic Claude turn 4", text4
-    runs = case.rows("SELECT id,role,provider_kind,native_session_id,state FROM production_runs ORDER BY rowid")
-    assert [(r["role"], r["provider_kind"], r["state"]) for r in runs] == [
-        ("deep", "claude", "succeeded")] * 2 + [("deep", "claude", "cancelled"), ("deep", "claude", "succeeded")]
+    every = case.rows("SELECT id,role,provider_kind,native_session_id,state FROM production_runs ORDER BY rowid")
+    runs = [r for r in every if r["role"] == "deep"]
+    fasts = [r for r in every if r["role"] == "fast"]
+    assert [(r["provider_kind"], r["state"]) for r in runs] == [
+        ("claude", "succeeded")] * 2 + [("claude", "cancelled"), ("claude", "succeeded")]
     assert len({r["native_session_id"] for r in runs}) == 1
+    assert len(fasts) == 4 and {r["provider_kind"] for r in fasts} == {"claude"}
+    assert len({r["native_session_id"] for r in fasts}) == 1
+    assert {r["native_session_id"] for r in fasts}.isdisjoint({r["native_session_id"] for r in runs})
     supervisors = case.rows("SELECT provider_kind FROM production_supervisors")
     assert {row["provider_kind"] for row in supervisors} == {"claude"}, supervisors
     trace = case.trace()
     if not real:
-        spawns = [row for row in trace if row["kind"] == "spawn"]
+        deep_native = runs[0]["native_session_id"]
+        spawns = [row for row in trace if row["kind"] == "spawn" and row["native"] == deep_native]
+        fast_spawns = [row for row in trace if row["kind"] == "spawn" and row["native"] != deep_native]
         assert [row["resumed"] for row in spawns] == [False, True, True, True]
+        assert [row["resumed"] for row in fast_spawns][:4] == [False, True, True, True]
         assert {(row["model"], row["effort"]) for row in spawns} == {("synthetic-claude-model", "low")}
-        assert len([row for row in trace if row["kind"] == "interrupt"]) == 1
+        assert {(row["model"], row["effort"]) for row in fast_spawns} == {(None, "low")}
+        assert len([row for row in trace if row["kind"] == "interrupt"]) == 2
     case.stop()
     final = case.rows("SELECT state FROM execution_windows")
     assert [row["state"] for row in final] == ["closed", "closed"], final

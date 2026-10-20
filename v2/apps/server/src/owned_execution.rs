@@ -15,6 +15,7 @@ mod fast_bootstrap;
 mod fast_session;
 mod group;
 pub use group::{ConfiguredExecutions, ExecutionTasks};
+mod claude_fast;
 mod liveness;
 mod retirement;
 mod session;
@@ -253,7 +254,10 @@ impl ConfiguredExecution {
 
     async fn run(self, shutdown: watch::Receiver<bool>) -> Result<(), &'static str> {
         if self.config.role == config::ExecutionRole::Fast {
-            return self.run_fast(shutdown).await;
+            return match self.config.provider {
+                config::Provider::Codex => self.run_fast(shutdown).await,
+                config::Provider::Claude => self.run_claude_fast(shutdown).await,
+            };
         }
         match self.config.provider {
             config::Provider::Codex => self.run_codex(shutdown).await,

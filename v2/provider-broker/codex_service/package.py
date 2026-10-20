@@ -175,7 +175,8 @@ class Package:
             return
         selected = self.beta["claude"]
         launcher = self.root / "launcher-claude.py"
-        require(type(selected) is dict and set(selected) == {"launcher", "launcher_sha256", "workspace", "default"}
+        require(type(selected) is dict and set(selected) - {"fast"} == {"launcher", "launcher_sha256", "workspace", "default"}
+                and type(selected.get("fast", False)) is bool
                 and selected["launcher"] == str(launcher)
                 and selected["launcher_sha256"] == digest(launcher)
                 and type(selected["default"]) is bool

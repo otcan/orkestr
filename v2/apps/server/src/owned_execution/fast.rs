@@ -149,7 +149,7 @@ impl ConfiguredExecution {
         result
     }
 
-    async fn fast_source(
+    pub(super) async fn fast_source(
         &self,
         shutdown: &mut watch::Receiver<bool>,
         heartbeat: &mut Instant,

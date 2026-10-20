@@ -47,6 +47,9 @@ pub(crate) struct ClaudeWindow {
     pub workspace: PathBuf,
     #[serde(default)]
     pub default: bool,
+    /// Present each input on a Claude Fast companion as well.
+    #[serde(default)]
+    pub fast: bool,
 }
 /// Default number of conversations that may hold a live window at once.
 pub(crate) const DEFAULT_ACTIVE_WINDOWS: u32 = 8;

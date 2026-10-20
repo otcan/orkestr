@@ -144,6 +144,8 @@ impl ConfiguredExecution {
         };
         if claude.is_none() {
             factory.attach_window_roles(home, config)?;
+        } else {
+            factory.attach_claude_fast(home, config)?;
         }
         Ok(factory)
     }

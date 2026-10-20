@@ -60,7 +60,11 @@ impl PreparingClaude {
         resources: Box<dyn Send + 'static>,
         bind: impl FnOnce(crate::containment::metadata::BrokerChildLocator) -> Result<(), ()>,
     ) -> Result<Self, SetupFailure> {
-        if grant.binding().role != orkestr_v2_application::runtime::Role::Deep {
+        if !matches!(
+            grant.binding().role,
+            orkestr_v2_application::runtime::Role::Deep
+                | orkestr_v2_application::runtime::Role::Fast
+        ) {
             return Err(Blocker::Protocol.into());
         }
         let mut bind = Some(bind);

@@ -35,8 +35,11 @@ selection in conversation settings (`with_claude_turns`).
   briefly answer `503 window_unavailable` (retryable) until the root manager
   has retired the stopped window.
 - Run leases renew as for Codex; the window work deadline cancels through Stop.
-- A Claude conversation runs only its Deep role: no Codex Fast companion,
-  Worker slots or descriptor workspace profile.
+- With `"fast": true` in `beta.claude`, each input is also presented on a
+  Claude Fast companion: a distinct Fast native binding and session, lowest
+  effort, its own Stop (`…/fast/stop`) and owner acceptance, resumed per
+  presentation exactly like Deep. Workers and the descriptor workspace profile
+  stay Codex-only for Claude conversations.
 - Switching provider after a conversation already has a committed native
   identity of the other provider is refused at window admission (`409`) until
   the handoff path exists; new or untouched conversations may select either.

@@ -68,7 +68,8 @@ class ClaudeWindowCase(ServiceRolesCase):
                                                  "LANG": "C.UTF-8"}}}), GID)
         beta = json.loads((f.package / "beta.json").read_bytes())
         beta["claude"] = {"launcher": str(launcher), "launcher_sha256": digest(launcher),
-                          "workspace": str(self.claude_workspace), "default": False}
+                          "workspace": str(self.claude_workspace), "default": False,
+                          "fast": True}
         (f.package / "beta.json").write_bytes(packager.encoded(beta))
         (f.package / "beta.json").chmod(0o640)
         manifest = json.loads((f.package / "manifest.json").read_bytes())
