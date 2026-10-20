@@ -188,6 +188,37 @@ class Selected(unittest.TestCase):
         private=json.loads((r/'release/package/claude-private.json').read_bytes())
         self.assertEqual(private['host_full_access'],{'environment':environment})
         self.assertTrue(json.loads((r/'release/release.json').read_bytes())['claude_enabled'])
+    def test_current_source_packages_command_profiles_for_several_conversations(self):
+        source=subprocess.check_output(['/usr/bin/git','-c','safe.directory='+str(REPO),
+            '-C',str(REPO),'rev-parse','HEAD'],text=True).strip()
+        r=self.root
+        for name in ('server','ui/app.wasm'):
+            p=r/name;p.write_bytes(p.read_bytes().replace(MANAGER_BASE.encode(),source.encode())
+                                   .replace(b'2.0.0-beta.1',b'2.0.0-beta.3'))
+        pair=json.loads((r/'pair').read_bytes());pair['source_commit']=source;pair['version']='2.0.0-beta.3'
+        pair['server']['sha256']=sha(r/'server');pair['web']['files']=inventory(r/'ui')
+        pair['web']['server_candidate']=source
+        (r/'pair').write_text(json.dumps(pair));self.plan['pair_sha256']=sha(r/'pair')
+        roles=[]
+        for index in range(5):
+            state=r/f'role-state-{index}';state.mkdir(mode=0o700);os.chown(state,995,986)
+            roles.append({'workspace':str(r/'workspace'),'state_root':str(state)})
+        self.plan['roles']={'fast':roles[0],'workers':roles[1:]}
+        def profile(conversation,project,name):
+            workspace=r/name;workspace.mkdir(mode=0o700);os.chown(workspace,995,986)
+            return {'conversation_id':conversation,'project_id':project,'workspace':str(workspace),
+                    'allowed_roots':[str(workspace)],'protected_roots':[str(r/'home')],
+                    'cgroup_root':'/sys/fs/cgroup/example/jobs','toolchain_root':'/opt/example-image/root'}
+        self.plan['workspace_exec']=profile(self.plan['conversation_id'],'44444444-4444-4444-8444-444444444444','project-a')
+        second=profile('55555555-5555-4555-8555-555555555555','66666666-6666-4666-8666-666666666666','project-b')
+        self.plan['additional_workspace_exec']=[dict(second,project_id='44444444-4444-4444-8444-444444444444')]
+        with self.assertRaisesRegex(RuntimeError,'overlap'):selected.prepare(self.plan)
+        self.assertFalse((r/'release').exists())
+        self.plan['additional_workspace_exec']=[second]
+        selected.prepare(self.plan)
+        with authority(REPO,source) as (_,manager,_):
+            package=manager.Package(r/'release/package',sha(r/'release/package/manifest.json'))
+            self.assertEqual(package.beta['additional_workspace_exec'],[second])
     def test_reserved_directories_retained(self):
         for name,mode in (('ledger',0o700),('ep',0o750)):
             p=self.root/name;p.mkdir();os.chown(p,0,986);p.chmod(mode)

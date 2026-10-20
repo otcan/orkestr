@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from artifact_boundary import separate
 from beta_config import (validate as validate_beta, workspace_exec as validate_workspace_exec,
+                         additional_workspace_exec as validate_additional_workspace_exec,
                          host_full_access as validate_host_full_access)
 from closure import pin, require, trusted
 from manager_source import authority
@@ -73,7 +74,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'roles', 'preserve_state', 'workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'live_map'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
 # Account selection stays with the Claude account reference, never the env.
@@ -120,6 +121,9 @@ def optional(plan):
     privileged = plan.get('workspace_exec', {}).get('trusted', {}).get('host_privileged') is True
     require(not privileged or 'host_full_access' in plan,
             'host-privileged commands require host_full_access')
+    if 'additional_workspace_exec' in plan:
+        require('roles' in plan, 'workspace execution requires configured Worker roles')
+        validate_additional_workspace_exec(plan)
 
 
 def prepare(plan):
@@ -169,8 +173,8 @@ def prepare(plan):
         for index,a in enumerate(roots):
             for b in roots[index+1:]:require(a!=b and a not in b.parents and b not in a.parents,'isolated path overlap')
         role_paths = selected_roles.validate(plan['roles'],trust,uid,roots,preserve) if 'roles' in plan else None
-        if 'workspace_exec' in plan:
-            project = trust.private(plan['workspace_exec']['workspace'],uid,True)
+        for command in ([plan['workspace_exec']] if 'workspace_exec' in plan else [])+plan.get('additional_workspace_exec',[]):
+            project = trust.private(command['workspace'],uid,True)
             isolated = [*roots, *(p for pair in role_paths.values() for p in pair)]
             for other in isolated:
                 require(project != other and project not in other.parents and other not in project.parents,
@@ -238,6 +242,8 @@ def prepare(plan):
                 beta['roles']=selected_roles.emit(inner,role_paths,profile,gid,entry,write,encoded)
             if 'workspace_exec' in plan:
                 beta['workspace_exec']=plan['workspace_exec']
+            if 'additional_workspace_exec' in plan:
+                beta['additional_workspace_exec']=plan['additional_workspace_exec']
             if 'max_active_windows' in plan:
                 beta['max_active_windows']=plan['max_active_windows']
             if 'host_full_access' in plan:

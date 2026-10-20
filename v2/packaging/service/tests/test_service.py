@@ -196,6 +196,25 @@ class ServiceTests(unittest.TestCase):
                           'workspace':'/srv/native-readonly'}
         base['roles']={'fast':role('fast'),'workers':[role('w'+str(i)) for i in range(4)]}
         self.assertEqual(validate(json.dumps(base).encode())['workspace_exec'],profile)
+        # Further conversations: their own conversation, project and workspace.
+        other=dict(profile,conversation_id='55555555-5555-4555-8555-555555555555',
+                   project_id='66666666-6666-4666-8666-666666666666',
+                   workspace='/srv/second-project',allowed_roots=['/srv/second-project'])
+        base['additional_workspace_exec']=[other]
+        self.assertEqual(validate(json.dumps(base).encode())['additional_workspace_exec'],[other])
+        for key,bad in (('conversation_id',profile['conversation_id']),('project_id',profile['project_id']),
+                        ('workspace',profile['workspace']+'/nested')):
+            clash=dict(other,**{key:bad})
+            if key=='workspace':clash['allowed_roots']=[bad]
+            base['additional_workspace_exec']=[clash]
+            with self.subTest(key=key),self.assertRaisesRegex(RuntimeError,'overlap'):
+                validate(json.dumps(base).encode())
+        mixed=dict(other,trusted={'network':True}) if 'trusted' not in profile else {
+            k:v for k,v in other.items() if k!='trusted'}
+        base['additional_workspace_exec']=[mixed]
+        with self.assertRaisesRegex(RuntimeError,'one kind'):validate(json.dumps(base).encode())
+        alone=dict(base);alone.pop('workspace_exec');alone['additional_workspace_exec']=[other]
+        with self.assertRaises(RuntimeError):validate(json.dumps(alone).encode())
 
     def test_host_full_access_is_explicit_and_required_by_host_privileged(self):
         from beta_config import validate, host_full_access

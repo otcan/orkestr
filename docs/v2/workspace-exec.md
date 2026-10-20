@@ -51,6 +51,19 @@ passing Core tests alone is not evidence of an operational coding Worker.
 The optional trusted owner profile (toolchains, network, detached jobs,
 explicit credential allowlists) is described in `workspace-exec-trusted.md`.
 
+## Several conversations
+
+`workspace_exec` names one conversation and project. Further conversations are
+listed in `additional_workspace_exec` (up to 8), each with the same closed
+fields: its own `conversation_id`, `project_id` and `workspace` (a Git checkout
+owned by the service user), its protected roots, cgroup root and image. Profiles
+never share a conversation or project and no workspace contains another. All
+profiles are of one kind, trusted or restricted, because every Worker broker
+advertises one tool schema. A conversation without a profile keeps the
+read-only Worker profile. Detached job records stay per project
+(`workspace-jobs-<project>`). Profiles may share the job cgroup root: one server
+only reclaims job cgroups of a previous process.
+
 ## Host full access (operator opt-in, equivalent to host root)
 
 An operator may opt an instance into V1-equivalent "full access". It is off by

@@ -24,6 +24,10 @@ pub(crate) struct BetaConfig {
     pub roles: Option<roles::Roles>,
     #[serde(default)]
     pub workspace_exec: Option<workspace_exec::WorkspaceExecConfig>,
+    /// Further conversations with their own project and workspace, each with
+    /// the same command profile shape (trusted or not) as `workspace_exec`.
+    #[serde(default)]
+    pub additional_workspace_exec: Vec<workspace_exec::WorkspaceExecConfig>,
     /// Owner-wide bound on concurrently live execution windows (conversations
     /// with active Deep work). Further fresh-window intents queue durably.
     #[serde(default)]
@@ -109,8 +113,22 @@ impl BetaConfig {
             if self.roles.is_none() {
                 return Err("workspace execution requires configured Worker roles");
             }
+        } else if !self.additional_workspace_exec.is_empty() {
+            return Err("additional workspace execution requires workspace_exec");
         }
-        Ok(())
+        workspace_exec::validate_set(
+            self.workspace_profiles().collect(),
+            self.host_full_access.as_ref(),
+        )
+    }
+
+    /// Every configured command profile, primary first.
+    pub(crate) fn workspace_profiles(
+        &self,
+    ) -> impl Iterator<Item = &workspace_exec::WorkspaceExecConfig> {
+        self.workspace_exec
+            .iter()
+            .chain(self.additional_workspace_exec.iter())
     }
 
     /// The window provider for a conversation: its owner setting, or the
@@ -145,10 +163,10 @@ impl BetaConfig {
         self.max_active_windows.unwrap_or(DEFAULT_ACTIVE_WINDOWS)
     }
 
+    /// The command profile of this conversation, if it has one.
     pub(crate) fn workspace_profile(&self) -> Option<&workspace_exec::WorkspaceExecConfig> {
-        self.workspace_exec
-            .as_ref()
-            .filter(|profile| profile.conversation_id == self.conversation_id)
+        self.workspace_profiles()
+            .find(|profile| profile.conversation_id == self.conversation_id)
     }
 }
 
@@ -227,6 +245,47 @@ mod tests {
             claude.window_provider(&launch, Some(ProviderKind::Claude)),
             Ok(ProviderKind::Claude)
         );
+    }
+    #[test]
+    fn each_conversation_finds_only_its_own_command_profile() {
+        let profile = |conversation: &str, project: &str, workspace: &str| {
+            serde_json::json!({"conversation_id":conversation, "project_id":project,
+                "workspace":workspace, "allowed_roots":[workspace],
+                "protected_roots":["/srv/private"], "cgroup_root":"/sys/fs/cgroup/example",
+                "toolchain_root":"/opt/example-command-image"})
+        };
+        let primary = "22222222-2222-4222-8222-222222222222";
+        let other = "33333333-3333-4333-8333-333333333333";
+        let mut value = input();
+        value["workspace_exec"] = profile(
+            primary,
+            "44444444-4444-4444-8444-444444444444",
+            "/srv/project",
+        );
+        value["additional_workspace_exec"] = serde_json::json!([profile(
+            other,
+            "55555555-5555-4555-8555-555555555555",
+            "/srv/pa"
+        )]);
+        let mut config: BetaConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(config.workspace_profiles().count(), 2);
+        assert_eq!(
+            config.workspace_profile().unwrap().workspace,
+            PathBuf::from("/srv/project")
+        );
+        config.conversation_id = ConversationId(other.parse().unwrap());
+        assert_eq!(
+            config.workspace_profile().unwrap().workspace,
+            PathBuf::from("/srv/pa")
+        );
+        config.conversation_id =
+            ConversationId("66666666-6666-4666-8666-666666666666".parse().unwrap());
+        assert!(config.workspace_profile().is_none());
+        // Additional profiles never stand alone.
+        let mut lone = value;
+        lone.as_object_mut().unwrap().remove("workspace_exec");
+        let lone: BetaConfig = serde_json::from_value(lone).unwrap();
+        assert!(lone.validate().is_err());
     }
     #[test]
     fn window_capacity_defaults_and_is_bounded() {
