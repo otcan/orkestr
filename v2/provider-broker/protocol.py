@@ -95,9 +95,12 @@ def encode(value):
 
 
 class Channel:
-    def __init__(self, workspace, *, expected_native=None, offline_python=False, workspace_exec=False):
+    def __init__(self, workspace, *, expected_native=None, offline_python=False, workspace_exec=False,
+                 workspace_trusted=False):
         require(type(offline_python) is bool and type(workspace_exec) is bool
-                and not (offline_python and workspace_exec))
+                and type(workspace_trusted) is bool and not (offline_python and workspace_exec)
+                and (workspace_exec or not workspace_trusted))
+        self.workspace_trusted = workspace_trusted
         self.offline_python = offline_python
         self.workspace_exec = workspace_exec
         self.tool_enabled = offline_python or workspace_exec
@@ -107,7 +110,7 @@ class Channel:
             self.offline_route = OfflineRoute()
         if workspace_exec:
             from workspace_route import WorkspaceRoute
-            self.offline_route = WorkspaceRoute()
+            self.offline_route = WorkspaceRoute(workspace_trusted)
         require(expected_native is None or identifier(expected_native))
         self.expected_native = expected_native
         self.workspace = str(workspace)
@@ -261,7 +264,8 @@ class Channel:
                     from workspace_tool import advertisement
                 else:
                     from offline_tool import advertisement
-                require(isinstance(params, dict) and params.get("dynamicTools") == [advertisement()])
+                tool = advertisement(self.workspace_trusted) if self.workspace_exec else advertisement()
+                require(isinstance(params, dict) and params.get("dynamicTools") == [tool])
                 params = dict(params)
                 del params["dynamicTools"]
             require(params == {"cwd": self.workspace, "approvalPolicy": "never",

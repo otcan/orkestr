@@ -28,6 +28,27 @@ class WorkspaceToolTests(unittest.TestCase):
             frame=call();frame['params']['arguments']['command']=source
             with self.assertRaises(Refused):validate_call(frame,'synthetic-native','synthetic-turn')
 
+    def test_trusted_profile_shapes_and_restricted_refusal(self):
+        job='0b4f1c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e'
+        self.assertEqual(advertisement(True)['inputSchema']['additionalProperties'],False)
+        self.assertNotEqual(advertisement(True),advertisement())
+        for arguments in ({'command':'ls'},{'command':'cargo test','background':True},
+                          {'job':job},{'job':job,'action':'wait'},{'job':job,'action':'cancel'}):
+            frame=call();frame['params']['arguments']=arguments
+            clean=validate_call(frame,'synthetic-native','synthetic-turn',True)
+            self.assertEqual(clean['params']['arguments'],arguments)
+            self.assertIsNot(clean['params']['arguments'],arguments)
+            if arguments!={'command':'ls'}:
+                with self.assertRaises(Refused):
+                    validate_call(frame,'synthetic-native','synthetic-turn')
+        for arguments in ({},{'command':'ls','job':job},{'job':job,'background':True},
+                          {'job':job,'action':'delete'},{'job':job.upper()},{'job':'../x'},
+                          {'command':'ls','background':'yes'},{'command':'ls','env':'x'},
+                          {'command':'#!orkestr-job start\nrm -rf .'}):
+            frame=call();frame['params']['arguments']=arguments
+            with self.assertRaises(Refused):
+                validate_call(frame,'synthetic-native','synthetic-turn',True)
+
     def test_exact_result_no_urls_or_extra_commands(self):
         frame={'id':7,'result':{'contentItems':[{'type':'inputText','text':'synthetic output'}],'success':True}}
         self.assertEqual(validate_result(frame,7),frame)

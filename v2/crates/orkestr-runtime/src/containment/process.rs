@@ -37,6 +37,7 @@ pub(super) struct Process {
     pub(super) broker_launcher: AtomicBool,
     pub(super) offline_python: AtomicBool,
     pub(super) workspace_exec: AtomicBool,
+    pub(super) workspace_exec_trusted: AtomicBool,
     pub(super) broker_lineage: Arc<()>,
 }
 
@@ -196,6 +197,7 @@ impl Process {
             broker_launcher: AtomicBool::new(false),
             offline_python: AtomicBool::new(false),
             workspace_exec: AtomicBool::new(false),
+            workspace_exec_trusted: AtomicBool::new(false),
             broker_lineage: Arc::new(()),
         }))
     }

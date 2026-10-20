@@ -6,6 +6,18 @@ pub(super) enum ToolProfile {
     None,
     OfflinePython,
     WorkspaceExec,
+    /// Operator-configured trusted command profile (background jobs).
+    TrustedWorkspaceExec,
+}
+impl ToolProfile {
+    /// `Some(trusted)` for either workspace command profile.
+    pub(super) fn workspace(self) -> Option<bool> {
+        match self {
+            Self::WorkspaceExec => Some(false),
+            Self::TrustedWorkspaceExec => Some(true),
+            Self::None | Self::OfflinePython => None,
+        }
+    }
 }
 
 impl PreparingCodex {

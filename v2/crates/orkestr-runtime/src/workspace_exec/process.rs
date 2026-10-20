@@ -1,8 +1,8 @@
 //! The command's creating OS thread owns the original Child through wait. No
 //! Tokio idle-thread lifetime, process-name cleanup, or queued plain-Child reply.
 use super::*;
+use crate::workspace_exec::capture::Capture;
 use std::{
-    fs::File,
     io::{self, Read},
     os::unix::process::ExitStatusExt,
     process::{Child, ChildStderr, ChildStdout, Command, ExitStatus},
@@ -29,7 +29,7 @@ pub struct WorkspaceExecProcess {
 pub(super) fn start(
     mut command: Command,
     mut job: cgroup::Job,
-    descriptors: (Arc<File>, File, File, std::os::unix::net::UnixStream),
+    descriptors: Box<dyn Send>,
     mut readiness: std::os::unix::net::UnixStream,
     limits: WorkerLimits,
     deadline: Instant,
@@ -154,13 +154,65 @@ fn finish(
     }))
 }
 impl WorkspaceExecProcess {
-    pub fn wait(mut self, cancellation: &WorkerCancellation) -> Result<WorkerOutput> {
-        let mut output = WorkerOutput {
-            exit_code: None,
-            signal: None,
-            stdout: vec![],
-            stderr: vec![],
-        };
+    /// Restricted contract: exceeding the output bound refuses the command.
+    pub fn wait(self, cancellation: &WorkerCancellation) -> Result<WorkerOutput> {
+        let limit = self.limits.max_output_bytes;
+        let (mut stdout, mut stderr) = (vec![], vec![]);
+        let mut total = 0usize;
+        let status = self.stream(cancellation, &mut |error, bytes| {
+            total += bytes.len();
+            if total > limit {
+                return Err(Error::OutputLimit);
+            }
+            (if error { &mut stderr } else { &mut stdout }).extend_from_slice(bytes);
+            Ok(())
+        })?;
+        Ok(WorkerOutput {
+            exit_code: status.code(),
+            signal: status.signal(),
+            stdout,
+            stderr,
+        })
+    }
+
+    /// Trusted contract: output beyond the bound is truncated (head and tail
+    /// kept per stream) instead of failing an otherwise finished command.
+    pub fn wait_truncated(self, cancellation: &WorkerCancellation) -> Result<WorkerOutput> {
+        // Room for each stream's omission marker: the total stays within the
+        // bound Core enforces when rendering the result.
+        let half = self.limits.max_output_bytes.saturating_sub(256) / 2;
+        let (mut stdout, mut stderr) = (Capture::new(half), Capture::new(half));
+        let status = self.stream(cancellation, &mut |error, bytes| {
+            (if error { &mut stderr } else { &mut stdout }).push(bytes);
+            Ok(())
+        })?;
+        Ok(WorkerOutput {
+            exit_code: status.code(),
+            signal: status.signal(),
+            stdout: stdout.finish(),
+            stderr: stderr.finish(),
+        })
+    }
+
+    /// Long-running job contract: every byte goes to `sink` (stderr=true for
+    /// standard error) as it arrives; the sink alone bounds retention.
+    pub fn wait_streaming(
+        self,
+        cancellation: &WorkerCancellation,
+        sink: &mut dyn FnMut(bool, &[u8]),
+    ) -> Result<(Option<i32>, Option<i32>)> {
+        let status = self.stream(cancellation, &mut |error, bytes| {
+            sink(error, bytes);
+            Ok(())
+        })?;
+        Ok((status.code(), status.signal()))
+    }
+
+    fn stream(
+        mut self,
+        cancellation: &WorkerCancellation,
+        sink: &mut dyn FnMut(bool, &[u8]) -> Result<()>,
+    ) -> Result<ExitStatus> {
         let (mut out_eof, mut err_eof) = (false, false);
         loop {
             if cancellation.cancelled() {
@@ -169,41 +221,17 @@ impl WorkspaceExecProcess {
             if Instant::now() >= self.deadline {
                 return Err(Error::Timeout);
             }
-            let mut total = output.stdout.len() + output.stderr.len();
-            out_eof |= drain(
-                &mut self.stdout,
-                &mut output.stdout,
-                &mut total,
-                self.limits.max_output_bytes,
-            )?;
-            err_eof |= drain(
-                &mut self.stderr,
-                &mut output.stderr,
-                &mut total,
-                self.limits.max_output_bytes,
-            )?;
+            out_eof |= drain(&mut self.stdout, &mut |b| sink(false, b))?;
+            err_eof |= drain(&mut self.stderr, &mut |b| sink(true, b))?;
             // WNOWAIT: only the creating thread may release the original Child.
             if linux::exited(self.id)? {
                 self.request_cleanup();
                 // Killing the cgroup closes any background descendants' pipe
                 // copies. Drain only the already bounded remaining output.
-                out_eof |= drain(
-                    &mut self.stdout,
-                    &mut output.stdout,
-                    &mut total,
-                    self.limits.max_output_bytes,
-                )?;
-                err_eof |= drain(
-                    &mut self.stderr,
-                    &mut output.stderr,
-                    &mut total,
-                    self.limits.max_output_bytes,
-                )?;
+                out_eof |= drain(&mut self.stdout, &mut |b| sink(false, b))?;
+                err_eof |= drain(&mut self.stderr, &mut |b| sink(true, b))?;
                 if out_eof && err_eof {
-                    let status = self.complete()?;
-                    output.exit_code = status.code();
-                    output.signal = status.signal();
-                    return Ok(output);
+                    return self.complete();
                 }
                 // After cleanup starts, Child may be reaped before the next
                 // iteration; only pipe EOF and the retained completion matter.
@@ -212,23 +240,12 @@ impl WorkspaceExecProcess {
             std::thread::sleep(Duration::from_millis(2));
         }
         let status = self.complete()?;
-        let mut total = output.stdout.len() + output.stderr.len();
-        if !drain(
-            &mut self.stdout,
-            &mut output.stdout,
-            &mut total,
-            self.limits.max_output_bytes,
-        )? || !drain(
-            &mut self.stderr,
-            &mut output.stderr,
-            &mut total,
-            self.limits.max_output_bytes,
-        )? {
+        if !drain(&mut self.stdout, &mut |b| sink(false, b))?
+            || !drain(&mut self.stderr, &mut |b| sink(true, b))?
+        {
             return Err(Error::Io);
         }
-        output.exit_code = status.code();
-        output.signal = status.signal();
-        Ok(output)
+        Ok(status)
     }
     fn request_cleanup(&mut self) {
         if let Some(sender) = self.cleanup.take() {
@@ -259,23 +276,12 @@ impl Drop for WorkspaceExecProcess {
         }
     }
 }
-fn drain(
-    pipe: &mut impl Read,
-    output: &mut Vec<u8>,
-    total: &mut usize,
-    limit: usize,
-) -> Result<bool> {
+fn drain(pipe: &mut impl Read, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<bool> {
     let mut bytes = [0; 4096];
     for _ in 0..32 {
         match pipe.read(&mut bytes) {
             Ok(0) => return Ok(true),
-            Ok(n) => {
-                *total += n;
-                if *total > limit {
-                    return Err(Error::OutputLimit);
-                }
-                output.extend_from_slice(&bytes[..n]);
-            }
+            Ok(n) => sink(&bytes[..n])?,
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(false),
             Err(e) if e.kind() == io::ErrorKind::Interrupted => (),
             Err(_) => return Err(Error::Io),

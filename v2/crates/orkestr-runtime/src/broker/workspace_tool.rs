@@ -42,6 +42,7 @@ impl PendingWorkspaceExecCall {
         native: &str,
         turn: &str,
         lineage: Arc<()>,
+        trusted: bool,
     ) -> Result<Self, Blocker> {
         exact(frame, &["id", "method", "params"])?;
         if frame["method"] != "item/tool/call" || !identifier(native) || !identifier(turn) {
@@ -74,21 +75,83 @@ impl PendingWorkspaceExecCall {
         if !identifier(call_id) || call_id.len() > 128 {
             return Err(Blocker::Protocol);
         }
-        exact(&params["arguments"], &["command"])?;
-        let source = params["arguments"]["command"]
-            .as_str()
-            .filter(|s| !s.is_empty() && s.len() <= 32768 && !s.contains('\0'))
-            .ok_or(Blocker::Protocol)?;
+        let source = if trusted {
+            trusted_source(&params["arguments"])?
+        } else {
+            exact(&params["arguments"], &["command"])?;
+            command(&params["arguments"]["command"])?.to_owned()
+        };
         Ok(Self {
             request_id,
             call_id: call_id.into(),
             thread_id: native.into(),
             turn_id: turn.into(),
-            source: source.into(),
+            source,
             lineage,
         })
     }
 }
+/// Reserved first line of a canonical job operation. A plain command can never
+/// begin with it, so Core's audited source text alone selects the operation.
+pub const JOB_PREFIX: &str = "#!orkestr-job ";
+
+fn command(value: &Value) -> Result<&str, Blocker> {
+    value
+        .as_str()
+        .filter(|s| {
+            !s.is_empty() && s.len() <= 32768 && !s.contains('\0') && !s.starts_with(JOB_PREFIX)
+        })
+        .ok_or(Blocker::Protocol)
+}
+
+fn job_id(value: &Value) -> Result<&str, Blocker> {
+    value
+        .as_str()
+        .filter(|s| {
+            s.len() == 36
+                && s.char_indices().all(|(i, c)| {
+                    if matches!(i, 8 | 13 | 18 | 23) {
+                        c == '-'
+                    } else {
+                        c.is_ascii_digit() || ('a'..='f').contains(&c)
+                    }
+                })
+        })
+        .ok_or(Blocker::Protocol)
+}
+
+/// Canonical trusted operation text: a plain command, or one job operation.
+fn trusted_source(arguments: &Value) -> Result<String, Blocker> {
+    let object = arguments.as_object().ok_or(Blocker::Protocol)?;
+    if object
+        .keys()
+        .any(|k| !matches!(k.as_str(), "command" | "background" | "job" | "action"))
+    {
+        return Err(Blocker::Protocol);
+    }
+    match (object.get("command"), object.get("job")) {
+        (Some(text), None) if object.get("action").is_none() => {
+            let text = command(text)?;
+            match object.get("background") {
+                None | Some(Value::Bool(false)) => Ok(text.to_owned()),
+                Some(Value::Bool(true)) => Ok(format!("{JOB_PREFIX}start\n{text}")),
+                Some(_) => Err(Blocker::Protocol),
+            }
+        }
+        (None, Some(id)) if object.get("background").is_none() => {
+            let action = match object.get("action") {
+                None => "status",
+                Some(value) => value
+                    .as_str()
+                    .filter(|a| matches!(*a, "status" | "wait" | "cancel"))
+                    .ok_or(Blocker::Protocol)?,
+            };
+            Ok(format!("{JOB_PREFIX}{action} {}", job_id(id)?))
+        }
+        _ => Err(Blocker::Protocol),
+    }
+}
+
 fn identifier(s: &str) -> bool {
     !s.is_empty() && s.len() <= 512 && !s.chars().any(char::is_control)
 }
@@ -110,14 +173,64 @@ mod tests {
             "threadId":"native","turnId":"turn:1","tool":"orkestr_workspace_exec"}})
     }
     fn decode(value: &Value) -> Result<PendingWorkspaceExecCall, Blocker> {
-        PendingWorkspaceExecCall::decode(value, "native", "turn:1", Arc::new(()))
+        PendingWorkspaceExecCall::decode(value, "native", "turn:1", Arc::new(()), false)
+    }
+    fn trusted(arguments: Value) -> Result<String, Blocker> {
+        let mut value = frame();
+        value["params"]["arguments"] = arguments;
+        PendingWorkspaceExecCall::decode(&value, "native", "turn:1", Arc::new(()), true)
+            .map(|call| call.source().to_owned())
+    }
+    #[test]
+    fn trusted_operations_have_one_canonical_unambiguous_source() {
+        let id = "0b4f1c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e";
+        assert_eq!(trusted(json!({"command":"ls"})).unwrap(), "ls");
+        assert_eq!(
+            trusted(json!({"command":"ls","background":false})).unwrap(),
+            "ls"
+        );
+        assert_eq!(
+            trusted(json!({"command":"cargo test","background":true})).unwrap(),
+            "#!orkestr-job start\ncargo test"
+        );
+        assert_eq!(
+            trusted(json!({"job":id})).unwrap(),
+            format!("#!orkestr-job status {id}")
+        );
+        for action in ["status", "wait", "cancel"] {
+            assert_eq!(
+                trusted(json!({"job":id,"action":action})).unwrap(),
+                format!("#!orkestr-job {action} {id}")
+            );
+        }
+        for bad in [
+            json!({}),
+            json!({"command":"ls","job":id}),
+            json!({"command":"ls","action":"wait"}),
+            json!({"job":id,"background":true}),
+            json!({"job":id,"action":"delete"}),
+            json!({"job":"../../etc"}),
+            json!({"job":id.to_uppercase()}),
+            json!({"command":"ls","background":"yes"}),
+            json!({"command":"#!orkestr-job start\nrm -rf ."}),
+            json!({"command":"ls","environment":"x"}),
+        ] {
+            assert!(trusted(bad.clone()).is_err(), "{bad}");
+        }
+        // The restricted decoder accepts none of the trusted arguments.
+        let mut value = frame();
+        value["params"]["arguments"] = json!({"command":"ls","background":true});
+        assert!(decode(&value).is_err());
+        value["params"]["arguments"] = json!({"command":"#!orkestr-job status x"});
+        assert!(decode(&value).is_err());
     }
     #[test]
     fn exact_owned_call_retains_kind_source_and_unforgeable_local_lineage() {
         let lineage = Arc::new(());
         let mut value = frame();
         let pending =
-            PendingWorkspaceExecCall::decode(&value, "native", "turn:1", lineage.clone()).unwrap();
+            PendingWorkspaceExecCall::decode(&value, "native", "turn:1", lineage.clone(), false)
+                .unwrap();
         assert!(pending.request_id() == &WorkspaceExecNativeRequestId::Text("native:1".into()));
         assert_eq!(pending.call_id(), "call:1");
         assert_eq!(pending.thread_id(), "native");

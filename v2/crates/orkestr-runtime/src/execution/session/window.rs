@@ -106,6 +106,33 @@ impl PreparingCodex {
         )
     }
 
+    /// Trusted command profile: same sealed setup, extended fixed advertisement.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_window_trusted_workspace_exec_retained(
+        store: Store,
+        grant: BoundSessionMetadata,
+        launcher: &Path,
+        workspace: &Path,
+        directories: ChildDirectories,
+        resources: Box<dyn Send + 'static>,
+        bind: impl FnOnce(BrokerChildLocator) -> Result<(), ()>,
+    ) -> Result<Self, SetupFailure> {
+        if grant.binding().native_session_id.is_some() {
+            return Err(Blocker::Protocol.into());
+        }
+        Self::open_window_role(
+            store,
+            grant,
+            launcher,
+            workspace,
+            directories,
+            resources,
+            bind,
+            Role::Worker,
+            ToolProfile::TrustedWorkspaceExec,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn open_window_role(
         store: Store,

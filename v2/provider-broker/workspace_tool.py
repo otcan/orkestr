@@ -9,7 +9,25 @@ from protocol import exact, identifier, require
 NAME='orkestr_workspace_exec'
 
 
-def advertisement():
+TRUSTED_DESCRIPTION=('Run a shell command in the approved project workspace under the operator\'s '
+    'trusted profile (host toolchains; network and credentials only as configured). Pass {command} '
+    'for a short command; its output returns directly. For long builds or tests pass '
+    '{command, background:true}; the result names a job. Then pass {job, action:"wait"} (waits '
+    'briefly), {job, action:"status"} or {job, action:"cancel"}. Redirect large output to a '
+    'workspace file and read it with later commands.')
+JOB_PREFIX='#!orkestr-job '
+ACTIONS=('status','wait','cancel')
+
+
+def advertisement(trusted=False):
+    require(type(trusted) is bool)
+    if trusted:
+        return {'type':'function','name':NAME,'description':TRUSTED_DESCRIPTION,
+            'inputSchema':{'type':'object','properties':{
+                'command':{'type':'string','maxLength':32768},'background':{'type':'boolean'},
+                'job':{'type':'string','maxLength':64},
+                'action':{'type':'string','enum':list(ACTIONS)}},
+                'additionalProperties':False}}
     return {'type':'function','name':NAME,
         'description':'Run a bounded shell command in the approved project workspace, without network or account access.',
         'inputSchema':{'type':'object','properties':{'command':{'type':'string',
@@ -22,7 +40,30 @@ def request_id(value):
         and not any(unicodedata.category(char)=='Cc' for char in value))
 
 
-def validate_call(frame, native, turn):
+def command(value):
+    return (isinstance(value,str) and 0<len(value.encode())<=32768 and '\0' not in value
+            and not value.startswith(JOB_PREFIX))
+
+
+def job_id(value):
+    return (isinstance(value,str) and len(value)==36 and all(
+        (char=='-') if index in (8,13,18,23) else char in '0123456789abcdef'
+        for index,char in enumerate(value)))
+
+
+def trusted_arguments(arguments):
+    """Shape only; Runtime derives the canonical audited operation text."""
+    require(isinstance(arguments,dict) and set(arguments)<={'command','background','job','action'})
+    if 'command' in arguments:
+        require('job' not in arguments and 'action' not in arguments and command(arguments['command']))
+        require(type(arguments.get('background',False)) is bool)
+    else:
+        require('job' in arguments and 'background' not in arguments and job_id(arguments['job']))
+        require(arguments.get('action','status') in ACTIONS)
+    return dict(arguments)
+
+
+def validate_call(frame, native, turn, trusted=False):
     exact(frame,('id','method','params'))
     require(request_id(frame['id']) and frame['method']=='item/tool/call')
     params=frame['params']
@@ -33,12 +74,15 @@ def validate_call(frame, native, turn):
     require(identifier(native) and identifier(turn))
     require(params['threadId']==native and params['turnId']==turn)
     require(identifier(params['callId']) and len(params['callId'].encode())<=128)
-    exact(params['arguments'],('command',))
-    source=params['arguments']['command']
-    require(isinstance(source,str) and 0<len(source.encode())<=32768 and '\0' not in source)
+    if trusted:
+        arguments=trusted_arguments(params['arguments'])
+    else:
+        exact(params['arguments'],('command',))
+        require(command(params['arguments']['command']))
+        arguments={'command':params['arguments']['command']}
     # Return no fabricated grant and no mutable alias into the provider input.
     return {'id':frame['id'],'method':'item/tool/call','params':{
-        'arguments':{'command':source},'callId':params['callId'],
+        'arguments':arguments,'callId':params['callId'],
         'threadId':native,'turnId':turn,'tool':NAME}}
 
 

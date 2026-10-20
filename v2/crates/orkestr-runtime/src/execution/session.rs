@@ -168,7 +168,7 @@ impl PreparingCodex {
                 TransportBounds::default(),
                 resources,
             )?
-        } else if tool_profile == ToolProfile::WorkspaceExec {
+        } else if tool_profile.workspace().is_some() {
             launcher.open_workspace_worker_metadata_fd_retained(
                 store,
                 grant,
@@ -195,8 +195,8 @@ impl PreparingCodex {
         } else {
             launcher.open_metadata(store, grant, directories, TransportBounds::default())?
         };
-        if tool_profile == ToolProfile::WorkspaceExec {
-            child.enable_workspace_exec()?;
+        if let Some(trusted) = tool_profile.workspace() {
+            child.enable_workspace_exec(trusted)?;
         }
         if tool_profile == ToolProfile::OfflinePython {
             child.enable_offline_python()?;
@@ -221,8 +221,8 @@ impl PreparingCodex {
         })
     }
     fn queue(&mut self, mut frame: serde_json::Value) -> Result<(), SetupFailure> {
-        if self.tool_profile == ToolProfile::WorkspaceExec {
-            crate::broker::workspace_setup::enable(&mut frame);
+        if let Some(trusted) = self.tool_profile.workspace() {
+            crate::broker::workspace_setup::enable(&mut frame, trusted);
         }
         if self.tool_profile == ToolProfile::OfflinePython {
             crate::broker::offline_setup::enable(&mut frame);
@@ -293,8 +293,8 @@ impl PreparingCodex {
             if self.tool_profile == ToolProfile::OfflinePython {
                 channel.enable_offline_python()?;
             }
-            if self.tool_profile == ToolProfile::WorkspaceExec {
-                channel.enable_workspace_exec()?;
+            if let Some(trusted) = self.tool_profile.workspace() {
+                channel.enable_workspace_exec(trusted)?;
             }
             if self.actual_fd {
                 channel.require_prepared()?;

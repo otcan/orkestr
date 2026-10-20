@@ -33,6 +33,17 @@ impl ConfiguredExecution {
                     .install_workspace_exec(&token, workspace)
                     .await
                     .map_err(|_| "workspace execution installation refused")?;
+                let trusted = profile.trusted_profile(
+                    home,
+                    std::iter::once(config.workspace.clone()).chain(
+                        config
+                            .roles
+                            .iter()
+                            .flat_map(|roles| roles.launches().map(|r| r.workspace.clone())),
+                    ),
+                )?;
+                // Private per-project job records beside the server's own state.
+                let jobs = home.join(format!("workspace-jobs-{}", profile.project_id));
                 Some(Arc::new(
                     crate::workspace_exec::WorkspaceExecDispatcher::configured(
                         store.clone(),
@@ -40,8 +51,9 @@ impl ConfiguredExecution {
                         Arc::new(authority),
                         &profile.cgroup_root,
                         &profile.toolchain_root,
-                    )
-                    .map_err(|_| "workspace command sandbox unavailable")?,
+                        trusted.map(|trusted| (trusted, jobs.as_path())),
+                    )?
+                    .with_worker_run_ms(profile.trusted.as_ref().map(|t| t.worker_run_ms())),
                 ))
             }
             None if workspace_grant.is_none() => None,

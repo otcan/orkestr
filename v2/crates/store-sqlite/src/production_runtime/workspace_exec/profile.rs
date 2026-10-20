@@ -63,6 +63,20 @@ impl Store {
             workspace: workspace.clone(),
         })
     }
+    /// Read-only revocation monitor for detached jobs, which outlive the
+    /// Worker tool call that started them. Refusal requires their termination.
+    pub async fn check_workspace_exec_profile(
+        &self,
+        credential: &str,
+        profile: &WorkspaceExecProfile,
+    ) -> Result<()> {
+        authority::credential(self, credential)?;
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        profile.validate(self, &mut tx).await?;
+        tx.commit().await.map_err(db)?;
+        Ok(())
+    }
+
     pub async fn revoke_workspace_exec(
         &self,
         credential: &str,

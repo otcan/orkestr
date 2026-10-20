@@ -1,6 +1,6 @@
 //! Only the trusted Worker setup marker can admit this exact fixed profile.
 use super::*;
-pub(crate) fn metadata(frame: &[u8], workspace: &Path) -> Result<Vec<u8>, Error> {
+pub(crate) fn metadata(frame: &[u8], workspace: &Path, trusted: bool) -> Result<Vec<u8>, Error> {
     let original: Value = serde_json::from_slice(frame).map_err(|_| Error::InvalidFrame)?;
     outer(&original, "BrokerMetadata")?;
     let mut validation = original.clone();
@@ -16,7 +16,7 @@ pub(crate) fn metadata(frame: &[u8], workspace: &Path) -> Result<Vec<u8>, Error>
             let params = inner["params"].as_object_mut().ok_or(Error::InvalidFrame)?;
             if params.remove("dynamicTools")
                 != Some(serde_json::json!([
-                    crate::broker::workspace_setup::advertisement()
+                    crate::broker::workspace_setup::advertisement(trusted)
                 ]))
             {
                 return Err(Error::InvalidFrame);
@@ -43,19 +43,25 @@ mod tests {
     fn fixed_worker_setup_accepts_only_exact_advertisement_and_experimental_flag() {
         let mut frame = crate::codex_rpc::CodexRpc::default().initialize().unwrap();
         let workspace = std::env::temp_dir();
-        assert!(metadata(&envelope(frame.clone()), &workspace).is_err());
-        crate::broker::workspace_setup::enable(&mut frame);
-        assert!(metadata(&envelope(frame.clone()), &workspace).is_ok());
+        assert!(metadata(&envelope(frame.clone()), &workspace, false).is_err());
+        crate::broker::workspace_setup::enable(&mut frame, false);
+        assert!(metadata(&envelope(frame.clone()), &workspace, false).is_ok());
         frame["params"]["capabilities"]["other"] = json!(true);
-        assert!(metadata(&envelope(frame), &workspace).is_err());
+        assert!(metadata(&envelope(frame), &workspace, false).is_err());
         let mut thread = json!({"id":3,"method":"thread/start","params":{"cwd":workspace,"approvalPolicy":"never","sandbox":"read-only","ephemeral":false,"modelProvider":"openai"}});
-        crate::broker::workspace_setup::enable(&mut thread);
-        assert!(metadata(&envelope(thread.clone()), &workspace).is_ok());
+        crate::broker::workspace_setup::enable(&mut thread, false);
+        assert!(metadata(&envelope(thread.clone()), &workspace, false).is_ok());
+        assert!(metadata(&envelope(thread.clone()), &workspace, true).is_err());
+        let mut trusted = thread.clone();
+        crate::broker::workspace_setup::enable(&mut trusted, true);
+        assert!(metadata(&envelope(trusted.clone()), &workspace, true).is_ok());
+        assert!(metadata(&envelope(trusted), &workspace, false).is_err());
         thread["params"]["dynamicTools"][0]["name"] = json!("other");
-        assert!(metadata(&envelope(thread), &workspace).is_err());
+        assert!(metadata(&envelope(thread), &workspace, false).is_err());
         assert!(metadata(
             &envelope(crate::broker::claude_initialize::frame()),
-            &workspace
+            &workspace,
+            false
         )
         .is_err());
     }

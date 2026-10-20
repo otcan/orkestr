@@ -3,8 +3,14 @@
 Runtime owns this original Child outside the job cgroup. Only bwrap and its
 descendants enter that cgroup; after cgroup.kill this process retains waitpid
 ownership through ECHILD, including setsid/double-fork descendants.
+
+Layout mode (ORKESTR_SUPERVISOR_LAYOUT_V1) is used only by the operator-
+configured trusted profile: Runtime computes the exact bwrap argv/environment
+and passes it through a sealed descriptor, so credential values never appear in
+any process argv. The isolation flags below remain mandatory in that mode.
 """
 import ctypes
+import json
 import os
 import signal
 import stat
@@ -31,15 +37,55 @@ def arguments(policy, image, workspace, command):
     ]
 
 
+REQUIRED = ("--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+            "--unshare-cgroup", "--disable-userns", "--assert-userns-disabled",
+            "--die-with-parent", "--new-session")
+
+
+def layout(fd, policy, workspace, image):
+    with os.fdopen(fd, "rb", closefd=True) as stream:
+        raw = stream.read(1024 * 1024 + 1)
+    if len(raw) > 1024 * 1024:
+        raise ValueError("layout bound")
+    value = json.loads(raw.decode())
+    if type(value) is not dict or set(value) != {"argv", "env", "pass"}:
+        raise ValueError("closed layout required")
+    argv, env, passed = value["argv"], value["env"], value["pass"]
+    def pair(first, second):
+        return any(argv[i:i + 2] == [first, second] for i in range(len(argv)))
+    if (type(argv) is not list or not all(type(a) is str and "\0" not in a for a in argv)
+            or not argv or argv[0] != "/usr/bin/bwrap" or "--" in argv
+            or any(flag not in argv for flag in REQUIRED)
+            or not pair("--seccomp", str(policy)) or not pair("--cap-drop", "ALL")):
+        raise ValueError("isolating layout required")
+    if (type(env) is not dict or not all(type(k) is str and type(v) is str
+            and "\0" not in k + v and "=" not in k for k, v in env.items())
+            or any(k.startswith(("LD_", "PYTHON")) for k in env)):
+        raise ValueError("closed environment required")
+    if (type(passed) is not list or not set(passed) <= {policy, workspace, image}
+            or not {policy, workspace} <= set(passed)):
+        raise ValueError("closed descriptor set required")
+    return argv, env, tuple(passed)
+
+
 def run(argv):
-    if len(argv) != 7 or argv[5] != "--":
+    trusted = len(argv) == 8 and argv[6] == "--"
+    if not trusted and (len(argv) != 7 or argv[5] != "--"):
         raise ValueError("fixed command operation required")
-    fds = tuple(int(value) for value in argv[:5])
-    if len(set(fds)) != 5 or any(fd < 3 for fd in fds):
+    count = 6 if trusted else 5
+    fds = tuple(int(value) for value in argv[:count])
+    if len(set(fds)) != count or any(fd < 3 for fd in fds):
         raise ValueError("distinct retained descriptors required")
-    policy, image, workspace, cgroup, ready = fds
+    policy, image, workspace, cgroup, ready = fds[:5]
     os.set_inheritable(ready, False)
-    command = argv[6]
+    command = argv[count + 1]
+    if trusted:
+        launch, environment, passed = layout(fds[5], policy, workspace, image)
+        launch = [*launch, "--", "/bin/sh", "-c", command]
+    else:
+        launch = arguments(policy, image, workspace, command)
+        environment = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+        passed = fds[:3]
     if not 0 < len(command.encode()) <= 32768 or "\0" in command:
         raise ValueError("command bound")
     if not all(stat.S_ISDIR(os.fstat(fd).st_mode) for fd in (image, workspace)):
@@ -63,13 +109,14 @@ def run(argv):
     status = None
     try:
         child = subprocess.Popen(
-            arguments(policy, image, workspace, command),
+            launch,
             stdin=subprocess.DEVNULL, stdout=sys.stdout.buffer, stderr=sys.stderr.buffer,
-            close_fds=True, pass_fds=fds[:4], preexec_fn=attach,
-            env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+            close_fds=True, pass_fds=(*passed, cgroup), preexec_fn=attach,
+            env=environment,
         )
+        environment = None
         os.write(ready, b"R")  # cgroup attach completed before Popen returned.
-        for fd in fds[:4]:
+        for fd in (policy, image, workspace, cgroup):
             os.close(fd)
         status = child.wait()
     finally:
@@ -92,6 +139,7 @@ def run(argv):
     return status
 
 
+# ORKESTR_SUPERVISOR_LAYOUT_V1
 def main():
     try:
         status = run(sys.argv[1:])

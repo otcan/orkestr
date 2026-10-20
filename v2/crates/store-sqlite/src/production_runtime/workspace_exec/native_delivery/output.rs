@@ -30,19 +30,25 @@ pub(super) fn render(output: &WorkspaceExecOutput) -> Result<(String, String, bo
         output.exit_code == Some(0) && output.signal.is_none(),
     ))
 }
+/// First 1 KiB and last 2 KiB: build failures report their cause at the end.
 fn bounded_text(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     if text.len() <= 3072 {
         return text.into_owned();
     }
-    let mut end = 3072;
+    let mut end = 1024;
     while !text.is_char_boundary(end) {
         end -= 1;
     }
+    let mut start = text.len() - 2048;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
     format!(
-        "{}\n[truncated; original {} bytes]",
+        "{}\n[truncated; original {} bytes]\n{}",
         &text[..end],
-        bytes.len()
+        bytes.len(),
+        &text[start..]
     )
 }
 

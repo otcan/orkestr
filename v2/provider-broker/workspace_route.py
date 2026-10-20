@@ -4,14 +4,15 @@ from workspace_tool import validate_call, validate_submission
 
 
 class WorkspaceRoute:
-    def __init__(self):
+    def __init__(self, trusted=False):
+        self.trusted=trusted is True
         self.pending=None
         self.ids=set()
         self.calls=set()
 
     def receive(self,frame,native,turn):
         require(self.pending is None and len(self.ids)<128)
-        clean=validate_call(frame,native,turn)
+        clean=validate_call(frame,native,turn,self.trusted)
         key=(type(clean['id']),clean['id'])
         call=clean['params']['callId']
         require(key not in self.ids and call not in self.calls)

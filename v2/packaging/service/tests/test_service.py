@@ -125,7 +125,7 @@ class ServiceTests(unittest.TestCase):
                 validate(json.dumps(dict(value,**{key:bad})).encode())
         with self.assertRaises(RuntimeError):validate(json.dumps(dict(value,token='forbidden')).encode())
         with self.assertRaisesRegex(RuntimeError,'duplicate'):validate(b'{"schema_version":1,"schema_version":1}')
-        with self.assertRaisesRegex(RuntimeError,'bounded'):validate(b' '*8193)
+        with self.assertRaisesRegex(RuntimeError,'bounded'):validate(b' '*16385)
 
     def test_workspace_exec_profile_is_explicit_exact_and_never_browser_authority(self):
         from beta_config import validate, workspace_exec
@@ -157,6 +157,24 @@ class ServiceTests(unittest.TestCase):
                           'workspace':'/srv/native-readonly'}
         base['roles']={'fast':role('fast'),'workers':[role('w'+str(i)) for i in range(4)]}
         self.assertEqual(validate(json.dumps(base).encode())['workspace_exec'],profile)
+
+    def test_trusted_workspace_profile_is_closed_shape_with_empty_default_credentials(self):
+        from beta_config import workspace_exec
+        profile={'conversation_id':'11111111-1111-4111-8111-111111111111',
+                 'project_id':'22222222-2222-4222-8222-222222222222',
+                 'workspace':'/srv/project','allowed_roots':['/srv/project'],
+                 'protected_roots':['/srv/provider-account'],
+                 'cgroup_root':'/sys/fs/cgroup/commands','toolchain_root':'/opt/command-image'}
+        trusted={'network':True,'host_toolchain':True,'cache_mounts':['/var/cache/example'],
+                 'environment':{'CARGO_HOME':'/var/cache/example/cargo'},'job_timeout_ms':1800000}
+        self.assertEqual(workspace_exec(dict(profile,trusted=trusted))['trusted'],trusted)
+        self.assertEqual(workspace_exec(dict(profile,trusted={}))['trusted'],{})
+        for key,value in [('network','yes'),('credential_mounts',['relative']),
+                          ('skill_mounts','/not/a/list'),('job_timeout_ms',-1),
+                          ('environment',{'lower':'x'}),('owner_id','x'),('command','x'),
+                          ('cache_mounts',['/srv/../etc'])]:
+            with self.subTest(key=key),self.assertRaises(RuntimeError):
+                workspace_exec(dict(profile,trusted=dict(trusted,**{key:value})))
 
     def test_provisioned_home_preserves_existing_state(self):
         home=self.root/'home';home.mkdir(mode=0o700)
