@@ -12,7 +12,7 @@
 //
 // Kept free of core imports: the standalone bridge's import graph stays closed.
 import {notificationKey} from './whatsapp-timer-notification-proof.js';
-import {scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
+import {encodeReplyEntry, replyEntrySendFields, scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 
 export const remoteTimerParentEvent = 'whatsapp_remote_timer_parent_materialized';
 const remoteTimerParentSource = 'orkestr-v2-timer';
@@ -82,8 +82,8 @@ export function createRemoteTimerReplies({config, api, send, formatter, env, now
       try { const {quota} = await api(`/api/quota/providers?ownerUserId=${encodeURIComponent(config.ownerUserId)}`, {timeoutMs: 1000}); if (quota) current = {...current, whatsAppDebugProviderQuota: quota}; } catch {}
       const label = String(parent.text || '').replace(/^Scheduled timer:\s*/, '').replace(/[\r\n]/g, ' ').slice(0, 120) || 'Scheduled task';
       chunks = scopedGroupReplyChunks({text: `[Timer: ${label}]\n${answer.text}`, message: {...answer, chatId}, thread: current, messages, config, formatter, env, deliveryType: 'router_update'});
-      proofs.prepareBatch(chunks.map((text, i) => ({id: baseId + ':' + i, threadId, chatId, timerId: pick(parent.timerId, event.timerSourceId, 'v2-timer'),
-        parentId: parent.id, answerId: answer.id, text, createdAt: answer.createdAt, runAt: event.ts,
+      proofs.prepareBatch(chunks.map((entry, i) => ({id: baseId + ':' + i, threadId, chatId, timerId: pick(parent.timerId, event.timerSourceId, 'v2-timer'),
+        parentId: parent.id, answerId: answer.id, text: encodeReplyEntry(entry), createdAt: answer.createdAt, runAt: event.ts,
         expiresAt: new Date(answerAt + scope.maxAgeMs).toISOString()})));
     }
     let sent = 0;
@@ -94,7 +94,7 @@ export function createRemoteTimerReplies({config, api, send, formatter, env, now
       if (!delegatedTo(await thread(threadId), event.remoteThreadId)) { proofs.mark(id, 'revoked'); continue; }
       fence.assertActive(config.routeControl.routeId);
       try {
-        const r = await send({chatId, requestId: id, notificationId: id, parentId: parent.id, text: row.text});
+        const r = await send({chatId, requestId: id, notificationId: id, parentId: parent.id, ...replyEntrySendFields(row.text)});
         if (r.ok !== true || !r.ids?.length) throw new Error('unconfirmed');
         proofs.mark(id, 'sent'); proofs.receipt(id, r.ids); sent++;
       } catch (error) {

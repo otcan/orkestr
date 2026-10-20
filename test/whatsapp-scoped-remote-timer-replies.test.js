@@ -47,7 +47,7 @@ function fixture(t) {
     state.sent.push({to, text}); if (state.fail) throw new Error('timeout');
     return {id: {_serialized: 'sent-' + state.sent.length}};
   }};
-  const options = {config, api, formatter, env: {}, now, proofStore: proofs, routeFence: fence, send: p => transport.sendText(client, p.chatId, p.text, 'main', p)};
+  const options = {config, api, formatter, env: {}, now, proofStore: proofs, routeFence: fence, send: p => p.document ? transport.sendDocument(client, p.chatId, p.document, 'main', p, media => ({media})) : transport.sendText(client, p.chatId, p.text, 'main', p)};
   const notifier = createScopedTimerNotifications(options);
   t.after(() => { notifier.close(); transport.close(); proofs.close(); fence.close(); });
   return {notifier, state, options, proofs, fence, advance: ms => clock += ms};
@@ -162,4 +162,23 @@ test('a delegation notice for a timer that was re-enabled or never paused does n
     await notifier.tick();
     assert.equal(state.sent.length, 0, mode);
   }
+});
+
+test('a long V2 timer reply is one message plus the full text as a Markdown document, reported together', async t => {
+  const {state, options} = fixture(t);
+  state.messages[1].text = 'Morning paragraph. '.repeat(1500);
+  const env = {ORKESTR_WHATSAPP_MAX_REPLY_CHARS: '5000'};
+  const notifier = createScopedTimerNotifications({...options, env});
+  t.after(() => notifier.close());
+  assert.equal((await notifier.tick()).sent, 2);
+  assert.match(state.sent[0].text, /^\[Timer: Morning brief\]\nMorning paragraph\.[\s\S]*\n\n… \(full reply attached\)/);
+  assert.ok(state.sent[0].text.length < 5000 + 4000);
+  const {media} = state.sent[1].text;
+  assert.equal(media.mimetype, 'text/markdown');
+  assert.equal(Buffer.from(media.data, 'base64').toString('utf8'), `[Timer: Morning brief]\n${state.messages[1].text.trim()}`);
+  assert.equal(state.reports.length, 1);
+  assert.equal(state.reports[0].body.requestIds.length, 2);
+  assert.deepEqual(state.reports[0].body.connectorMessageIds, ['sent-1', 'sent-2']);
+  const resumed = createScopedTimerNotifications({...options, env}); await resumed.tick(); resumed.close();
+  assert.equal(state.sent.length, 2);
 });

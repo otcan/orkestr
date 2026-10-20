@@ -1,6 +1,6 @@
 import {notificationScope,notificationKey,createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
-import {scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
+import {encodeReplyEntry, replyEntrySendFields, scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 import {createRemoteTimerReplies,remoteTimerEventEligible,remoteTimerParentEvent} from './whatsapp-scoped-remote-timer-replies.js';
 
 const sources=new Set(['codex-app-server','codex-rollout','codex-app-server-import','claude-code']);
@@ -105,7 +105,7 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
         try{const {quota}=await api(`/api/quota/providers?ownerUserId=${encodeURIComponent(config.ownerUserId)}`,{timeoutMs:1000});if(quota)current={...current,whatsAppDebugProviderQuota:quota};}catch{}
         const label=String(timer.label||'Scheduled task').replace(/[\r\n]/g,' ').slice(0,120);
         chunks=scopedGroupReplyChunks({text:`[Timer: ${label}]\n${answer.text}`,message:{...answer,chatId},thread:current,messages,config,formatter,env,deliveryType:'router_update'});
-        proofs.prepareBatch(chunks.map((text,i)=>({id:baseId+':'+i,threadId,chatId,timerId:timer.id,parentId:parent.id,answerId:answer.id,text,createdAt:answer.createdAt,runAt:event.ts,expiresAt:new Date(Date.parse(answer.createdAt)+scope.maxAgeMs).toISOString()})));
+        proofs.prepareBatch(chunks.map((entry,i)=>({id:baseId+':'+i,threadId,chatId,timerId:timer.id,parentId:parent.id,answerId:answer.id,text:encodeReplyEntry(entry),createdAt:answer.createdAt,runAt:event.ts,expiresAt:new Date(Date.parse(answer.createdAt)+scope.maxAgeMs).toISOString()})));
       }
       for(let i=0;i<chunks.length;i++) {
         const id=baseId+':'+i,row=proofs.get(id);if(row.state==='sent' || row.state==='revoked')continue;
@@ -114,7 +114,7 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
         const latest=(await api('/api/timers')).timers.find(x=>x.id===timer.id);
         if(!allowedTimer(latest,event,threadId)){proofs.mark(id,'revoked');continue;}
         try {
-          const r=await send({chatId,requestId:id,notificationId:id,parentId:parent.id,text:row.text});
+          const r=await send({chatId,requestId:id,notificationId:id,parentId:parent.id,...replyEntrySendFields(row.text)});
           if(r.ok!==true || !r.ids?.length)throw new Error('unconfirmed');
           proofs.mark(id,'sent');sent++;
         }catch(error){

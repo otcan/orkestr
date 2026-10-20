@@ -25,6 +25,7 @@ import {
   recoverLocalWhatsAppChatMessages,
   recoverUnreadLocalWhatsAppMessages,
   sendLocalWhatsAppMessage,
+  sendLocalWhatsAppScopedDocument,
   startConfiguredLocalWhatsAppAccounts,
   startLocalWhatsAppAccount,
   startLocalWhatsAppTyping,
@@ -341,6 +342,7 @@ const defaultBridge = {
   recoverLocalWhatsAppChatMessages,
   recoverUnreadLocalWhatsAppMessages,
   sendLocalWhatsAppMessage,
+  sendLocalWhatsAppScopedDocument,
   startLocalWhatsAppAccount,
   startLocalWhatsAppTyping,
   stopLocalWhatsAppTyping,
@@ -350,7 +352,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   const method = clean(req.method || "GET").toUpperCase();
   const url = new URL(req.url || "/", "http://orkestr-wa.local");
   const scoped = scopedNativeWorker(env);
-  if (scoped && !(method === "POST" && url.pathname === "/send-text")) scoped.checkRequest(method, url);
+  if (scoped && !(method === "POST" && ["/send-text", "/send-document"].includes(url.pathname))) scoped.checkRequest(method, url);
   if (method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
     requireAuth(req, env);
     const health = publicHealth(await bridge.getLocalWhatsAppBridgeStatus(env, { probeChatOps: false }), env);
@@ -599,6 +601,22 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       attachments: paths.map((filePath) => ({ path: filePath })),
       crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
       ...(scoped ? { scopedRequest: { requestId: body.requestId, parentId: body.parentId, ...(body.notificationId ? { notificationId: body.notificationId } : {}) } } : {}),
+      env,
+    }));
+  }
+
+  // Scoped workers only: the full text of a long group reply as one document.
+  if (method === "POST" && url.pathname === "/send-document") {
+    requireAuth(req, env);
+    const body = await readJsonBody(req);
+    if (!scoped) return json(res, 404, { ok: false, error: "not_found" });
+    scoped.checkRequest(method, url, body);
+    requireServicePolicy(req, url, env, body, { accounts: [body.accountId], recipients: [body.to], recipientScope: "send" });
+    return json(res, 200, await bridge.sendLocalWhatsAppScopedDocument({
+      accountId: clean(body.accountId),
+      chatId: clean(body.to),
+      document: { filename: body.filename, mimetype: body.mimetype, text: body.text },
+      scopedRequest: { requestId: body.requestId, parentId: body.parentId, ...(body.notificationId ? { notificationId: body.notificationId } : {}) },
       env,
     }));
   }
