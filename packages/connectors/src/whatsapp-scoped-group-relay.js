@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import {createGroupParticipantPolicy, participantInputMetadata} from './whatsapp-group-participant-author.js';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
@@ -9,8 +11,10 @@ const key = value => crypto.createHash('sha256').update(value).digest('hex');
 const progressPhases = new Set(['commentary', 'awaiting_approval']);
 const progressSources = new Set(['codex-rollout', 'codex-app-server', 'codex-app-server-import', 'claude-code']);
 const errorCode = error => /^[a-z_]+$/.test(error.message) ? error.message : 'operation_failed';
+const GROUP_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const GROUP_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 
-export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env}) {
+export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile}) {
   // Operator holds are exclusions, not delivery/completion receipts. Validate
   // before opening either journal and snapshot the policy for this process.
   const heldIds = config.heldInputIds === undefined ? [] : config.heldInputIds;
@@ -32,10 +36,27 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS routed(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,message_id TEXT NOT NULL,completed INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS replies(id TEXT PRIMARY KEY,state TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS reply_payloads(id TEXT PRIMARY KEY,chunks TEXT NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS reply_payloads(id TEXT PRIMARY KEY,chunks TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS input_media_uploads(id TEXT PRIMARY KEY,attachments TEXT NOT NULL,created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS input_media_upload_attempts(id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL DEFAULT 'retrying');`);
   const routeFence = config.routeControl ? createDeliveryRouteFence({dbPath:config.routeControl.dbPath}) : null;
   const groups = new Map(config.groups.map(g => [g.chatId, g]));
   const errors = new Map();
+
+  async function removeStagedFile(mediaPath, realRoot = '') {
+    if (!mediaPath) return;
+    const realPath = await fs.realpath(path.resolve(String(mediaPath))).catch(() => '');
+    if (!realPath) return;
+    const root = realRoot || await fs.realpath(path.resolve(config.mediaDir || (config.journalPath ? `${config.journalPath}.media` : '.'))).catch(() => '');
+    const relative = root ? path.relative(root, realPath) : '..';
+    if (root && relative && !relative.startsWith('..') && !path.isAbsolute(relative))
+      await fs.rm(realPath, {force: true}).catch(() => {});
+  }
+
+  function rememberUploadFailure(id, attempts) {
+    db.prepare(`INSERT INTO input_media_upload_attempts(id,attempts,state) VALUES(?,?,'retrying')
+      ON CONFLICT(id) DO UPDATE SET attempts=excluded.attempts,state=excluded.state`).run(id, attempts);
+  }
 
   async function threadFor(group) {
     const {thread: t} = await api(`/api/threads/${encodeURIComponent(group.threadId)}`);
@@ -99,8 +120,85 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     if (route?.completed) return;
     const {metadata} = await inputThread(input, group);
     if (!route) {
+      let attachments = [];
+      let inputBody = String(input.body || '').trim();
+      if (input.media_path) {
+        const priorUpload = db.prepare('SELECT attachments FROM input_media_uploads WHERE id=?').get(input.id);
+        const priorAttempt = db.prepare('SELECT attempts,state FROM input_media_upload_attempts WHERE id=?').get(input.id);
+        if (priorUpload) {
+          attachments = JSON.parse(priorUpload.attachments);
+          await removeStagedFile(input.media_path);
+        } else if (priorAttempt?.state === 'skipped') {
+          inputBody = [inputBody, '[WhatsApp attachment skipped: upload failed after 3 attempts]'].filter(Boolean).join('\n\n');
+          await removeStagedFile(input.media_path);
+        } else {
+          const mediaRoot = path.resolve(config.mediaDir || (config.journalPath ? `${config.journalPath}.media` : '.'));
+          const mediaPath = path.resolve(String(input.media_path));
+          const relative = path.relative(mediaRoot, mediaPath);
+          if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+            inputBody = [inputBody, '[WhatsApp attachment skipped: media unavailable]'].filter(Boolean).join('\n\n');
+          } else {
+            const realRoot = await fs.realpath(mediaRoot).catch(() => '');
+            const realPath = await fs.realpath(mediaPath).catch(() => '');
+            const realRelative = realRoot && realPath ? path.relative(realRoot, realPath) : '..';
+            const stat = realPath ? await fs.stat(realPath).catch(() => null) : null;
+            const mimetype = String(input.media_mimetype || '').trim().toLowerCase();
+            if (!realRoot || !realPath || !stat?.isFile() || realRelative.startsWith('..') || path.isAbsolute(realRelative)
+                || !GROUP_IMAGE_MIMES.has(mimetype) || stat.size > GROUP_MEDIA_MAX_BYTES) {
+              inputBody = [inputBody, '[WhatsApp attachment skipped: media unavailable or outside supported limits]'].filter(Boolean).join('\n\n');
+              if (realPath && realRoot && !realRelative.startsWith('..') && !path.isAbsolute(realRelative))
+                await removeStagedFile(realPath, realRoot);
+            } else {
+              let bytes;
+              try {
+                bytes = await readMediaFile(realPath);
+              } catch {
+                inputBody = [inputBody, '[WhatsApp attachment skipped: staged media could not be read]'].filter(Boolean).join('\n\n');
+                await removeStagedFile(realPath, realRoot);
+              }
+              if (bytes) {
+                const form = new FormData();
+                form.append('files', new Blob([bytes], {type: mimetype}), String(input.media_filename || 'image'));
+                form.append('metadata', JSON.stringify([{
+                  filename: String(input.media_filename || 'image'), name: String(input.media_filename || 'image'),
+                  mimetype, type: mimetype, kind: 'image', size: bytes.length,
+                  sourceEventId: String(input.id), chatId: String(input.chat_id), accountId: String(config.accountId || 'main'),
+                }]));
+                form.append('eventId', String(input.id));
+                form.append('chatId', String(input.chat_id));
+                form.append('accountId', String(config.accountId || 'main'));
+                try {
+                  const uploaded = await api('/api/connectors/whatsapp/inbound-media', {method: 'POST', body: form});
+                  attachments = Array.isArray(uploaded?.attachments) ? uploaded.attachments : [];
+                  if (attachments.length !== 1) throw new Error('group_attachment_upload_unconfirmed');
+                  db.prepare('INSERT OR IGNORE INTO input_media_uploads(id,attachments,created_at) VALUES(?,?,?)')
+                    .run(input.id, JSON.stringify(attachments), new Date().toISOString());
+                  db.prepare("INSERT INTO input_media_upload_attempts(id,attempts,state) VALUES(?,0,'uploaded') ON CONFLICT(id) DO UPDATE SET state='uploaded'")
+                    .run(input.id);
+                  await removeStagedFile(realPath, realRoot);
+                } catch {
+                  attachments = [];
+                  const attempts = Number(priorAttempt?.attempts || 0) + 1;
+                  if (attempts >= 3) {
+                    db.prepare(`INSERT INTO input_media_upload_attempts(id,attempts,state) VALUES(?,?,'skipped')
+                      ON CONFLICT(id) DO UPDATE SET attempts=excluded.attempts,state=excluded.state`).run(input.id, attempts);
+                    inputBody = [inputBody, '[WhatsApp attachment skipped: upload failed after 3 attempts]'].filter(Boolean).join('\n\n');
+                    await removeStagedFile(realPath, realRoot);
+                  } else {
+                    rememberUploadFailure(input.id, attempts);
+                    throw new Error('group_attachment_upload_retry');
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      if (!inputBody) inputBody = attachments.length
+        ? `[Image attached: ${String(input.media_filename || 'image')}]`
+        : '[WhatsApp attachment received]';
       const response = await api(`/api/threads/${encodeURIComponent(group.threadId)}/input`, {method: 'POST', body: {
-        ...metadata, text: `[WhatsApp: ${group.name}]\n\n${input.body}`, source: 'whatsapp_group_relay',
+        ...metadata, text: `[WhatsApp: ${group.name}]\n\n${inputBody}`, ...(attachments.length ? {attachments} : {}), source: 'whatsapp_group_relay',
         parseCommands: false, controlAllowed: false, idempotencyKey: `group:${key(input.id)}`,
       }});
       const messageId = response.message?.id || response.messageId;

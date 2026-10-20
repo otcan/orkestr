@@ -1,5 +1,8 @@
 import crypto from 'node:crypto';
 import {createGroupParticipantPolicy} from './whatsapp-group-participant-author.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {createGroupOwnerAuthorPolicy} from './whatsapp-group-owner-author.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
@@ -8,6 +11,16 @@ import {notificationScope, createTimerNotificationProofStore} from './whatsapp-t
 
 const fail=code=>{throw new Error(`group_transport_${code}`);};
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const IMAGE_MIME_EXTENSIONS=new Map([['image/jpeg','.jpg'],['image/png','.png'],['image/gif','.gif'],['image/webp','.webp']]);
+const MAX_GROUP_MEDIA_BYTES=10*1024*1024;
+const safeMediaName=value=>path.basename(String(value||'image').replace(/[\\/\0]/g,'_')).replace(/[^a-zA-Z0-9_. -]/g,'_').slice(0,180)||'image';
+
+function addInputColumns(db) {
+  const columns=new Set(db.prepare('PRAGMA table_info(group_input)').all().map(column=>column.name));
+  for(const [name,type] of [['media_path','TEXT'],['media_filename','TEXT'],['media_mimetype','TEXT'],['media_size','INTEGER']]) {
+    if(!columns.has(name))db.exec(`ALTER TABLE group_input ADD COLUMN ${name} ${type}`);
+  }
+}
 
 // An explicitly configured, existing-account transport. The surrounding bridge
 // keeps its legacy router disabled; only explicitly authorized, fresh group input enters.
@@ -23,6 +36,10 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
     CREATE TABLE IF NOT EXISTS group_send(id TEXT PRIMARY KEY,hash TEXT NOT NULL,chat_id TEXT NOT NULL,parent_id TEXT NOT NULL,state TEXT NOT NULL,provider_id TEXT,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_input_author(id TEXT PRIMARY KEY,proof TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);`);
+  addInputColumns(db);
+  const mediaDir=path.resolve(config.mediaDir || (dbPath===':memory:'
+    ? path.join(os.tmpdir(),`orkestr-scoped-group-media-${process.pid}`)
+    : `${dbPath}.media`));
   const contract=hash([config.ownChatId,config.activatedAt,config.groups]);
   const prior=db.prepare('SELECT value FROM group_meta WHERE key=?').get('contract');
   if(prior && prior.value!==contract)fail('configuration_changed');
@@ -85,9 +102,11 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         assertClient(client);
         const id=message?.id?._serialized,chatId=message?.fromMe===true?message?.to:message?.from;
         const ts=Number(message?.timestamp)*1000;
+        const hasMedia=message?.hasMedia===true;
         if(!groups.has(chatId) || typeof id!=='string' || !id || id.startsWith('summary:')
-            || typeof message.body!=='string' || !message.body.trim() || message.body.length>32000
+            || typeof message.body!=='string' || (!message.body.trim()&&!hasMedia) || message.body.length>32000
             || !Number.isFinite(ts) || ts<=Date.parse(config.activatedAt) || ts>now()+5000)return false;
+        if(db.prepare('SELECT 1 FROM group_input WHERE id=?').get(id))return false;
         const remote=message?.id?.remote?._serialized || message?.id?.remote;
         if(remote && remote!==chatId)return false;
         let participant=null;
@@ -101,11 +120,41 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         }
         if(uncertain())fail('delivery_uncertain');
         if(db.prepare('SELECT 1 FROM group_send WHERE provider_id=?').get(id))return false;
+        let body=message.body,mediaPath='',mediaFilename='',mediaMimetype='',mediaSize=0;
+        if(hasMedia) {
+          let media=null;
+          try {if(typeof message.downloadMedia==='function')media=await message.downloadMedia();} catch { /* converted to a visible skip note */ }
+          const mimetype=String(media?.mimetype||'').split(';')[0].trim().toLowerCase();
+          const encoded=String(media?.data||'');
+          if(!media?.data) body=[body.trim(),'[WhatsApp attachment skipped: download failed]'].filter(Boolean).join('\n\n');
+          else if(!IMAGE_MIME_EXTENSIONS.has(mimetype)) body=[body.trim(),`[WhatsApp attachment skipped: unsupported media type ${mimetype||'unknown'}]`].filter(Boolean).join('\n\n');
+          else if(encoded.length>Math.ceil(MAX_GROUP_MEDIA_BYTES*4/3)+8) body=[body.trim(),'[WhatsApp attachment skipped: file exceeds 10 MiB limit]'].filter(Boolean).join('\n\n');
+          else {
+            const buffer=Buffer.from(encoded,'base64');
+            if(!buffer.length) body=[body.trim(),'[WhatsApp attachment skipped: download was empty]'].filter(Boolean).join('\n\n');
+            else if(buffer.length>MAX_GROUP_MEDIA_BYTES) body=[body.trim(),'[WhatsApp attachment skipped: file exceeds 10 MiB limit]'].filter(Boolean).join('\n\n');
+            else {
+              await fs.mkdir(mediaDir,{recursive:true,mode:0o700});
+              mediaFilename=safeMediaName(media.filename||`image${IMAGE_MIME_EXTENSIONS.get(mimetype)}`);
+              mediaMimetype=mimetype;mediaSize=buffer.length;
+              mediaPath=path.join(mediaDir,`${crypto.createHash('sha256').update(id).digest('hex')}${IMAGE_MIME_EXTENSIONS.get(mimetype)}`);
+              const temporary=`${mediaPath}.tmp`;
+              await fs.writeFile(temporary,buffer,{mode:0o600,flag:'wx'}).catch(async error=>{
+                if(error?.code!=='EEXIST')throw error;
+                await fs.rm(temporary,{force:true});
+                await fs.writeFile(temporary,buffer,{mode:0o600,flag:'wx'});
+              });
+              await fs.rename(temporary,mediaPath);
+            }
+          }
+        }
         // Input and participant evidence commit together; a crash cannot turn a
         // participant input into a legacy owner input on the next relay poll.
         db.exec('BEGIN IMMEDIATE');
         try {
-          const result=db.prepare('INSERT OR IGNORE INTO group_input VALUES(?,?,?,?)').run(id,chatId,message.body,new Date(ts).toISOString());
+          const result=db.prepare(`INSERT OR IGNORE INTO group_input
+            (id,chat_id,body,created_at,media_path,media_filename,media_mimetype,media_size) VALUES(?,?,?,?,?,?,?,?)`)
+            .run(id,chatId,body,new Date(ts).toISOString(),mediaPath||null,mediaFilename||null,mediaMimetype||null,mediaSize||null);
           if(result.changes && participant) db.prepare('INSERT INTO group_input_author VALUES(?,?)').run(id,JSON.stringify(participant));
           db.exec('COMMIT');
           return Boolean(result.changes);

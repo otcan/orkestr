@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
+import {DatabaseSync} from 'node:sqlite';
 import {createScopedGroupTransport} from '../packages/connectors/src/whatsapp-scoped-group-transport.js';
 
 function fixture(t,send) {
@@ -17,6 +21,35 @@ test('only fresh owner messages in the configured groups are admitted once',asyn
   assert.equal(await p.observe(client,{...message,...patch}),false);
  assert.equal(await p.observe(client,message),true);
  assert.equal(await p.observe(client,message),false);
+});
+test('captionless WhatsApp images are admitted for attachment publication', async t => {
+ const {p,client,message}=fixture(t);
+ const media={...message,id:{_serialized:'owner-image-1'},body:'',hasMedia:true,
+   downloadMedia:async()=>({data:Buffer.from('fake-image').toString('base64'),mimetype:'image/png',filename:'sample.png'})};
+ assert.equal(await p.observe(client,media),true);
+ assert.equal(await p.observe(client,media),false,'provider replay stays idempotent');
+});
+test('group input media migration is additive and safe to repeat', async t => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'scoped-group-migration-'));
+ t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const dbPath=path.join(dir,'group.sqlite');
+ const legacy=new DatabaseSync(dbPath);
+ legacy.exec(`CREATE TABLE group_input(id TEXT PRIMARY KEY,chat_id TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
+   INSERT INTO group_input VALUES('legacy-1','120000000001@g.us','legacy text','2026-01-01');`);
+ legacy.close();
+ const now=Date.now(),own='15550000001@c.us',group='120000000001@g.us';
+ const config={ownChatId:own,activatedAt:new Date(now-1000).toISOString(),groups:[{chatId:group,threadId:'thread-1'}]};
+ const first=createScopedGroupTransport({config,token:'test-token',base:{},dbPath,now:()=>now});
+ first.close();
+ const second=createScopedGroupTransport({config,token:'test-token',base:{},dbPath,now:()=>now});
+ second.close();
+ const check=new DatabaseSync(dbPath);
+ const retained=check.prepare('SELECT id,body FROM group_input').get();
+ assert.equal(retained.id,'legacy-1');
+ assert.equal(retained.body,'legacy text');
+ assert.ok(['media_path','media_filename','media_mimetype','media_size'].every(name=>
+   check.prepare('PRAGMA table_info(group_input)').all().some(column=>column.name===name)));
+ check.close();
 });
 test('replies require the original group and parent and remain idempotent',async t=>{
  let calls=0;const {p,client,message,group}=fixture(t,async()=>{calls++;return {id:{_serialized:'agent-1'}};});

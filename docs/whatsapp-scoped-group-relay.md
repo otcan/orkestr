@@ -3,9 +3,13 @@
 This optional transport extension uses an already paired WhatsApp Web account
 to route fresh messages authored by that account into existing Orkestr threads.
 Completed answers return to the original group. It does not create groups or
-pair accounts. It supports text and need-input questions; it does not transfer
-attachments. Other participants are excluded by default; restoring an existing
-thread-scoped contact requires the explicit
+pair accounts. It supports text, need-input questions and allowlisted image
+attachments (JPEG, PNG, GIF and WebP, up to 10 MiB). Images are staged in a
+private transport media directory, then submitted through the existing
+WhatsApp inbound-media and thread-input path so the thread's normal attachment
+publication policy applies. Unsupported, oversized or unavailable media is
+represented by a visible skip note in the thread. Other participants are
+excluded by default; restoring an existing thread-scoped contact requires the explicit
 [participant admission policy](scoped-group-participant-routing.md).
 
 The thread registry remains authoritative: before input and each reply the relay
@@ -42,6 +46,7 @@ Config fields:
 | `formattingModulePath` | Optional existing immutable Orkestr formatter module for a minimal transport install; defaults to the product module in the same repository |
 | `journalPath` | Transport SQLite journal |
 | `relayJournalPath` | Orkestr routing and completed reply journal |
+| `mediaDir` | Optional private directory for staged media; defaults beside the transport journal |
 | `statusPath` | Optional private JSON status file, updated each poll |
 | `wrapperPath` | Prepared account wrapper, called using `group-reply` |
 
