@@ -110,6 +110,14 @@ test('entries carry no edge whitespace, so they match what the bridge actually s
   assert.equal(entries[1].document.text, words(5000));
 });
 
+test('a reply mirrored from a remote runtime carries the remote debug footer', () => {
+  const entries = scopedGroupReplyChunks({text: 'Done', deliveryType: 'final',
+    message: {id: 'm2', chatId: 'group-1', role: 'assistant', source: 'rust-v2-pilot', phase: 'final_answer', remoteBackend: 'rust-v2', remoteMessageId: 'r1'},
+    thread: {codexModel: 'example-model', binding: {remoteBackend: 'rust-v2'}}, messages: [], config: {appendDebugFooter: true}, formatter, env: {}});
+  assert.equal(entries.length, 1);
+  assert.match(entries[0], /^Done\n\ndbg: rust · rt:rust-v2 · msg:\*final\*\n/);
+});
+
 test('a footer embedded at the end of a long reply stays on the message', () => {
   const footer = 'dbg: claude-code/example · rt:coordinator · msg:*update*\nsession: abcd1234 · 23:30 CEST';
   const text = `${words(5000)}\n\n${footer}`;

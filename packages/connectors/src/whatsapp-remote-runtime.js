@@ -315,6 +315,9 @@ async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, par
     remoteThreadId: remote.remoteThreadId,
     remoteMessageId: pickString(remoteMessage.id, remoteMessage.messageId),
     remoteParentMessageId: pickString(remoteMessage.parentMessageId, remoteMessage.parentId),
+    // Optional remote provider/model, shown in the WhatsApp debug footer.
+    ...(pickString(remoteMessage.provider) ? { remoteProvider: pickString(remoteMessage.provider).slice(0, 64) } : {}),
+    ...(pickString(remoteMessage.model) ? { remoteModel: pickString(remoteMessage.model).slice(0, 64) } : {}),
     ...(Number.isSafeInteger(remoteMessage.exportSequence) ? { remoteExportSequence: String(remoteMessage.exportSequence) } : {}),
     ...(pickString(remoteMessage.kind).toLowerCase() === "progress" ? { remoteKind: "progress" } : {}),
     remoteSyncedAt: new Date().toISOString(),
