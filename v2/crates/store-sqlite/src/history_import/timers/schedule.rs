@@ -29,6 +29,19 @@ pub(super) fn encode(schedule: &TimerSchedule) -> Result<String> {
             }
             json!(["utc_clock", weekly, minute_of_day])
         }
+        TimerSchedule::ZonedClock {
+            timezone,
+            weekday,
+            minute_of_day,
+        } => {
+            if *minute_of_day >= 1440
+                || weekday.is_some_and(|day| !(1..=7).contains(&day))
+                || !zoned::valid_zone(timezone)
+            {
+                return Err(HistoryError::Invalid);
+            }
+            json!(["zoned_clock", timezone, weekday, minute_of_day])
+        }
         TimerSchedule::Dormant {
             cadence,
             timezone,
@@ -95,6 +108,16 @@ pub(super) fn decode(encoded: &str) -> Result<TimerSchedule> {
             minute_of_day: u16::try_from(array[2].as_u64().ok_or_else(invalid)?)
                 .map_err(unavailable)?,
         },
+        Some("zoned_clock") if array.len() == 4 => TimerSchedule::ZonedClock {
+            timezone: array[1].as_str().ok_or_else(invalid)?.into(),
+            weekday: if array[2].is_null() {
+                None
+            } else {
+                Some(u8::try_from(array[2].as_u64().ok_or_else(invalid)?).map_err(unavailable)?)
+            },
+            minute_of_day: u16::try_from(array[3].as_u64().ok_or_else(invalid)?)
+                .map_err(unavailable)?,
+        },
         Some("dormant") if array.len() == 7 => TimerSchedule::Dormant {
             cadence: array[1].as_str().ok_or_else(invalid)?.into(),
             timezone: optional(2)?,
@@ -134,6 +157,11 @@ pub(super) fn next(schedule: &TimerSchedule, now_ms: i64) -> Result<i64> {
                 today + if *weekly { 7 * DAY } else { DAY }
             }
         }
+        TimerSchedule::ZonedClock {
+            timezone,
+            weekday,
+            minute_of_day,
+        } => zoned::next(timezone, *weekday, *minute_of_day, now_ms)?,
         _ => return Err(HistoryError::Conflict),
     };
     clock(due)?;

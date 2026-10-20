@@ -77,6 +77,18 @@ pub(super) async fn enable_in_transaction(
         return Ok(result);
     }
     let result = receipt(&current)?;
+    // A timer moved into a specific conversation can only be enabled there.
+    let mapped: Option<String> = sqlx::query_scalar(
+        "SELECT conversation_id FROM dormant_timer_targets WHERE owner_id=? AND namespace=?",
+    )
+    .bind(owner.to_string())
+    .bind(request.namespace.to_string())
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(unavailable)?;
+    if mapped.is_some_and(|id| id != request.conversation_id.to_string()) {
+        return Err(HistoryError::Conflict);
+    }
     if !matches!(result.state, TimerState::Paused | TimerState::Disabled)
         || result.revision != request.expected_revision
         || result.dormant_reason.is_some()

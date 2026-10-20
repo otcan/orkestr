@@ -241,3 +241,56 @@ pub(super) async fn mark_dispatched(
         .execute(tx).await.map_err(db)?;
     Ok(())
 }
+
+/// Queue the Deep window intent for a timer occurrence inside the trusted timer
+/// scheduler transaction that admitted its ordinary input. The owner's durable
+/// timer grant is the intent; dispatch still re-authenticates and Core admission
+/// repeats every source predicate. A full queue refuses the whole occurrence so
+/// it is retried later instead of leaving an input nobody will run.
+pub(in crate::production_runtime) async fn enqueue_timer_intent(
+    tx: &mut SqliteConnection,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    input_message_id: MessageId,
+    input_event_id: EventId,
+    input_request_key: &str,
+) -> Result<()> {
+    let input = ExecutionWindowRequest {
+        request_key: format!("timer-window:{}", input_event_id.0),
+        input_message_id,
+        input_event_id,
+        input_request_key: input_request_key.to_owned(),
+        expected_generation: 0,
+        window_id: None,
+        predecessor_window_id: None,
+    };
+    if !input.is_valid() {
+        return Err(RuntimeStoreError::InvalidInput);
+    }
+    let digest = crate::digest(&serde_json::to_string(&input).map_err(db)?);
+    if let Some(row) = by_key(tx, owner, conversation, &input.request_key).await? {
+        return if row.get::<String, _>("semantic_digest") == digest {
+            Ok(())
+        } else {
+            Err(RuntimeStoreError::Conflict)
+        };
+    }
+    admission::source_in(tx, owner, conversation, &input).await?;
+    let total: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM execution_window_queue WHERE owner_id=? AND state='queued'",
+    )
+    .bind(owner.to_string())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(db)?;
+    if total >= i64::from(MAX_QUEUED_WINDOW_REQUESTS) {
+        return Err(RuntimeStoreError::Busy);
+    }
+    let clock = now(tx).await?;
+    sqlx::query("INSERT INTO execution_window_queue(owner_id,conversation_id,request_key,semantic_digest,message_id,event_id,input_request_key,state,queued_at_ms) VALUES(?,?,?,?,?,?,?,'queued',?)")
+        .bind(owner.to_string()).bind(conversation.to_string()).bind(&input.request_key).bind(digest)
+        .bind(input.input_message_id.to_string()).bind(input.input_event_id.to_string())
+        .bind(&input.input_request_key).bind(clock)
+        .execute(&mut *tx).await.map_err(db)?;
+    Ok(())
+}

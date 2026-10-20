@@ -21,6 +21,35 @@ pub fn timer_source_digest(request: &TimerImportRequest) -> Result<String> {
         .to_string(),
     ))
 }
+pub(super) async fn import_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    request: &TimerImportRequest,
+) -> Result<TimerReceipt> {
+    let digest = timer_source_digest(request)?;
+    let encoded = schedule::encode(&request.schedule)?;
+    let existing = sqlx::query("SELECT * FROM dormant_timers WHERE owner_id=? AND (namespace=? OR (source_namespace=? AND source_timer_id=?))")
+        .bind(owner.to_string()).bind(request.namespace.to_string()).bind(&request.source_namespace).bind(&request.source_timer_id)
+        .fetch_all(&mut **tx).await.map_err(unavailable)?;
+    if !existing.is_empty() {
+        if existing.len() != 1 {
+            return Err(HistoryError::Conflict);
+        }
+        let stored = &existing[0];
+        if stored.get::<String, _>("namespace") != request.namespace.to_string()
+            || stored.get::<String, _>("source_digest") != digest
+            || stored.get::<String, _>("schedule_json") != encoded
+        {
+            return Err(HistoryError::Conflict);
+        }
+        // Current receipt, explicitly NOT an authority to enable or claim.
+        return receipt(stored);
+    }
+    sqlx::query("INSERT INTO dormant_timers(owner_id,namespace,source_namespace,source_timer_id,source_enabled,source_digest,schedule_json,state,dormant_reason,revision,generation) VALUES(?,?,?,?,?,?,?,'paused',?,1,0)")
+        .bind(owner.to_string()).bind(request.namespace.to_string()).bind(&request.source_namespace).bind(&request.source_timer_id).bind(request.source_enabled).bind(digest).bind(encoded).bind(schedule::reason(&request.schedule))
+        .execute(&mut **tx).await.map_err(unavailable)?;
+    receipt(&row(tx, owner, request.namespace).await?)
+}
 impl Store {
     /// Exact provenance replay never re-enables, resurrects or creates native input.
     pub async fn import_dormant_timer(
@@ -29,32 +58,8 @@ impl Store {
         owner: &OwnerId,
         request: &TimerImportRequest,
     ) -> Result<TimerReceipt> {
-        let digest = timer_source_digest(request)?;
-        let encoded = schedule::encode(&request.schedule)?;
         let mut tx = self.history_transaction(credential, owner, true).await?;
-        let existing = sqlx::query("SELECT * FROM dormant_timers WHERE owner_id=? AND (namespace=? OR (source_namespace=? AND source_timer_id=?))")
-            .bind(owner.to_string()).bind(request.namespace.to_string()).bind(&request.source_namespace).bind(&request.source_timer_id)
-            .fetch_all(&mut *tx).await.map_err(unavailable)?;
-        if !existing.is_empty() {
-            if existing.len() != 1 {
-                return Err(HistoryError::Conflict);
-            }
-            let stored = &existing[0];
-            if stored.get::<String, _>("namespace") != request.namespace.to_string()
-                || stored.get::<String, _>("source_digest") != digest
-                || stored.get::<String, _>("schedule_json") != encoded
-            {
-                return Err(HistoryError::Conflict);
-            }
-            // Current receipt, explicitly NOT an authority to enable or claim.
-            let result = receipt(stored)?;
-            tx.commit().await.map_err(unavailable)?;
-            return Ok(result);
-        }
-        sqlx::query("INSERT INTO dormant_timers(owner_id,namespace,source_namespace,source_timer_id,source_enabled,source_digest,schedule_json,state,dormant_reason,revision,generation) VALUES(?,?,?,?,?,?,?,'paused',?,1,0)")
-            .bind(owner.to_string()).bind(request.namespace.to_string()).bind(&request.source_namespace).bind(&request.source_timer_id).bind(request.source_enabled).bind(digest).bind(encoded).bind(schedule::reason(&request.schedule))
-            .execute(&mut *tx).await.map_err(unavailable)?;
-        let result = receipt(&row(&mut tx, owner, request.namespace).await?)?;
+        let result = import_in_transaction(&mut tx, owner, request).await?;
         tx.commit().await.map_err(unavailable)?;
         Ok(result)
     }

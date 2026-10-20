@@ -90,6 +90,34 @@ pub fn schedule_label(schedule: &crate::timers::Schedule) -> String {
                 ""
             }
         ),
+        Schedule::ZonedClock {
+            timezone,
+            weekday,
+            minute_of_day,
+        } => format!(
+            "{} at {:02}:{:02} {}",
+            match weekday {
+                Some(day) => format!(
+                    "Every {}",
+                    [
+                        "Monday",
+                        "Tuesday",
+                        "Wednesday",
+                        "Thursday",
+                        "Friday",
+                        "Saturday",
+                        "Sunday"
+                    ]
+                    .get(usize::from(day.saturating_sub(1)))
+                    .copied()
+                    .unwrap_or("week")
+                ),
+                None => "Daily".into(),
+            },
+            minute_of_day / 60,
+            minute_of_day % 60,
+            timezone
+        ),
         Schedule::Dormant => "Saved schedule needs review".into(),
     }
 }

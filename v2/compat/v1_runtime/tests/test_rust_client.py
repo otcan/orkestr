@@ -177,7 +177,8 @@ class ClientTests(unittest.TestCase):
         for suffix in ("//elsewhere.test/api", "https://elsewhere.test", "/../messages",
                        "/messages?run_id=" + RUN, "/execution?run_id=bad",
                        "/execution?run_id=" + RUN + "&run_id=" + RUN,
-                       "/accepted-results?limit=101", "/payloads/%2e%2e"):
+                       "/accepted-results?limit=101", "/payloads/%2e%2e",
+                       "/timer-inputs?after=1", "/timer-inputs?limit=101", "/timer-inputs?after_sequence=-1"):
             with self.subTest(suffix=suffix), self.assertRaises(ClientError):
                 self.client.request("GET", suffix)
         self.assertEqual(self.server.observed, [])

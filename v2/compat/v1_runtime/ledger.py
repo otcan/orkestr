@@ -21,6 +21,11 @@ MAX_ATTACHMENT_BYTES = 16 * 1024 * 1024
 MAX_ATTACHMENTS = 8
 MAX_STAGED_BYTES = 64 * 1024 * 1024
 UPLOAD_NAMESPACE = uuid.UUID("6f2b8f2e-2f0e-4d55-9c7e-6a1f3d0b9a41")
+# Deterministic route IDs for V2 timer occurrences, keyed by the Core message ID.
+TIMER_NAMESPACE = uuid.UUID("0c6f7a52-5d8e-4b1f-9a3c-2e7d4b8f1a60")
+TIMER_PREFIX = "v2timer-"
+TIMER_SOURCE = "orkestr-v2-timer"
+TIMER_TEXT_LIMIT = 500
 
 
 class Conflict(ValueError):
@@ -44,6 +49,7 @@ class Ledger:
         if not isinstance(scope, dict) or not scope:
             raise ValueError("ledger_scope_required")
         self.path = str(path)
+        self.scope = dict(scope)
         self.max_outstanding = max_outstanding
         identity = json.dumps({"schema": 1, "scope": scope}, sort_keys=True, separators=(",", ":"))
         with self.connect() as db:
@@ -163,6 +169,56 @@ class Ledger:
             db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (body["publicMessageId"], digest, remote_id, json.dumps(data)))
             return data, False
 
+    def enqueue_timer(self, record):
+        """Adopt one V2 timer occurrence already admitted in this binding's conversation.
+
+        The input exists in Core; this only records it so its accepted Deep reply is
+        exported with a V1-materializable parent. Capacity never refuses it: refusing
+        would strand an admitted input without a relay.
+        """
+        identity = {k: record[k] for k in ("message_id", "event_id", "sequence", "request_key", "namespace", "claim_id")}
+        digest = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        remote_id = str(uuid.uuid5(TIMER_NAMESPACE, record["message_id"]))
+        public_id = TIMER_PREFIX + remote_id
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT digest,data FROM inputs WHERE public_id=?", (public_id,)).fetchone()
+            if row:
+                if row[0] != digest:
+                    raise Conflict("timer_identity_changed")
+                return json.loads(row[1]), True
+            label = record.get("label") or "Scheduled task"
+            text = ("Scheduled timer: " + label)[:TIMER_TEXT_LIMIT]
+            data = {"remote_id": remote_id, "public_id": public_id, "origin": "timer", "text": text,
+                    "public_thread_id": self.scope.get("public_thread_id"), "chat_id": self.scope.get("chat_id"),
+                    "account_id": self.scope.get("account_id"),
+                    "timer": {k: record.get(k) for k in ("namespace", "claim_id", "source_timer_id", "label", "due_ms")},
+                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "intake": {"status": "accepted", "message_id": record["message_id"], "event_id": record["event_id"],
+                               "sequence": record["sequence"]},
+                    "cursor": record["sequence"] - 1, "phase": "admitted", "admitted_at": time.time(),
+                    "keys": {"message": record["request_key"], "window": str(uuid.uuid4()),
+                             "fast": str(uuid.uuid4()), "deep": str(uuid.uuid4())}}
+            db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (public_id, digest, remote_id, json.dumps(data)))
+            return data, False
+
+    def finish_silently(self, data, outcome):
+        """A timer occurrence that will never run (held/withdrawn by Core): nothing to export."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            data["phase"] = "completed"
+            self._settle(db, data, outcome)
+
+    def timer_cursor(self):
+        with self.connect() as db:
+            row = db.execute("SELECT value FROM ledger_meta WHERE key='timer_cursor'").fetchone()
+        return int(row[0]) if row else None
+
+    def set_timer_cursor(self, sequence):
+        with self.connect() as db:
+            db.execute("INSERT INTO ledger_meta VALUES ('timer_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                       (str(int(sequence)),))
+
     def save(self, data, db=None):
         if db is None:
             with self.connect() as db:
@@ -214,6 +270,20 @@ class Ledger:
             inputs = db.execute("SELECT data FROM inputs WHERE json_extract(data,'$.settled') IS NULL ORDER BY rowid").fetchall()
             for (raw,) in inputs:
                 data = json.loads(raw)
+                if data.get("origin") == "timer":
+                    # V1 materializes exactly this shape as the reply's local parent.
+                    timer = data.get("timer") or {}
+                    rows.append({"id": data["remote_id"], "role": "user", "text": data["text"],
+                                 "publicMessageId": data["public_id"], "publicThreadId": data["public_thread_id"],
+                                 "chatId": data["chat_id"], "accountId": data["account_id"],
+                                 "source": TIMER_SOURCE, "connector": TIMER_SOURCE, "origin": "timer",
+                                 "timerNamespace": timer.get("namespace"), "timerSourceId": timer.get("source_timer_id"),
+                                 "state": "delivered", "deliveryState": "delivered", "observedVia": "rust-pilot-ledger",
+                                 "createdAt": data.get("created_at")})
+                    for seq, message in db.execute("SELECT seq,message FROM exports WHERE input_id=? AND (outcome IS NULL OR outcome='uncertain') "
+                                                   "ORDER BY seq", (data["remote_id"],)).fetchall():
+                        rows.append(dict(json.loads(message), exportSequence=seq))
+                    continue
                 rows.append({"id": data["remote_id"], "role": "user", "text": data["text"],
                              "publicMessageId": data["public_id"], "publicThreadId": data["public_thread_id"],
                              "chatId": data["chat_id"], "accountId": data["account_id"],

@@ -61,6 +61,22 @@ fn utc_schedule_labels_do_not_use_browser_local_time() {
         minute_of_day: 90
     })
     .contains("01:30 UTC"));
+    let weekly = serde_json::from_str::<Schedule>(
+        r#"{"kind":"zoned_clock","timezone":"Europe/Berlin","weekday":5,"minute_of_day":1205}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        schedule_label(&weekly),
+        "Every Friday at 20:05 Europe/Berlin"
+    );
+    assert_eq!(
+        schedule_label(&Schedule::ZonedClock {
+            timezone: "Europe/Istanbul".into(),
+            weekday: None,
+            minute_of_day: 540
+        }),
+        "Daily at 09:00 Europe/Istanbul"
+    );
 }
 
 #[test]
