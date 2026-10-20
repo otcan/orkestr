@@ -103,8 +103,10 @@ static int failure(int code) {
 int main(int argc, char **argv) {
     alarm(180); umask(0077);
     setvbuf(stdin, NULL, _IONBF, 0);
-    if (argc != 6 || strcmp(argv[1], "-c") || strcmp(argv[2], "features.plugins=false") ||
-        strcmp(argv[3], "app-server") || strcmp(argv[4], "--listen") || strcmp(argv[5], "stdio://")) return failure(20);
+    if (argc != 10 || strcmp(argv[1], "-c") || strcmp(argv[2], "features.plugins=false") ||
+        strcmp(argv[3], "-c") || strcmp(argv[4], "features.code_mode=false") ||
+        strcmp(argv[5], "-c") || strcmp(argv[6], "features.code_mode_host=false") ||
+        strcmp(argv[7], "app-server") || strcmp(argv[8], "--listen") || strcmp(argv[9], "stdio://")) return failure(20);
     if (!getenv("CODEX_HOME") || strcmp(getenv("CODEX_HOME"), "/account") ||
         !getenv("HOME") || strcmp(getenv("HOME"), "/home/provider") ||
         getenv("OPENAI_API_KEY") || getenv("ORKESTR_V2_EXECUTION_SET")) return failure(21);
