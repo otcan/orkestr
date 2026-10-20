@@ -39,7 +39,7 @@ async fn synchronous_fence_can_wait_for_another_roles_async_transaction() {
             })
         })
     };
-    assert_eq!(join_roles(deep, fast).await, Ok(()));
+    assert_eq!(join_roles(deep, fast, |_| {}).await, Ok(()));
 }
 
 #[tokio::test]
@@ -57,7 +57,10 @@ async fn role_failure_joins_the_aborted_sibling_before_returning() {
         Err("synthetic role refusal")
     };
     assert_eq!(
-        join_roles(failing, sibling).await,
+        join_roles(failing, sibling, |_| panic!(
+            "Deep failure is not a Fast failure"
+        ))
+        .await,
         Err("synthetic role refusal")
     );
     assert!(dropped.load(Ordering::Acquire));
@@ -73,7 +76,7 @@ async fn cancelling_the_owner_does_not_detach_its_role_tasks() {
         started.send(()).unwrap();
         std::future::pending::<Result<(), &'static str>>().await
     };
-    let owner = tokio::spawn(join_roles(std::future::pending(), sibling));
+    let owner = tokio::spawn(join_roles(std::future::pending(), sibling, |_| {}));
     ready.await.unwrap();
     owner.abort();
     assert!(owner.await.unwrap_err().is_cancelled());
@@ -84,4 +87,28 @@ async fn cancelling_the_owner_does_not_detach_its_role_tasks() {
     })
     .await
     .expect("role task retained after owner cancellation");
+}
+
+#[tokio::test]
+async fn a_failed_fast_companion_never_aborts_its_deep_owner() {
+    let (finish, finished) = oneshot::channel::<()>();
+    let reported = Arc::new(std::sync::Mutex::new(None));
+    let seen = reported.clone();
+    let deep = async move {
+        finished.await.unwrap();
+        Ok(())
+    };
+    let fast = async move { Err("synthetic Fast lost") };
+    let joined = tokio::spawn(join_roles(deep, fast, move |reason| {
+        *seen.lock().unwrap() = Some(reason);
+        finish.send(()).unwrap();
+    }));
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), joined)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(())
+    );
+    assert_eq!(*reported.lock().unwrap(), Some("synthetic Fast lost"));
 }

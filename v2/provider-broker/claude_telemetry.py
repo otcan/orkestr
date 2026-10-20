@@ -1,4 +1,5 @@
 """Closed non-authoritative native telemetry; selected-account data never forwarded."""
+import json
 import math
 from protocol import exact, require
 
@@ -18,28 +19,11 @@ def validate_telemetry(frame, input_uuid):
         return
     exact(frame, ('type', 'session_id', 'uuid', 'rate_limit_info'))
     info = frame['rate_limit_info']
-    require(isinstance(info, dict) and 'status' in info)
-    require(set(info) <= {'status', 'resetsAt', 'rateLimitType', 'utilization',
-        'overageStatus', 'overageResetsAt', 'overageDisabledReason',
-        'isUsingOverage', 'unifiedWindows'})
-    statuses = ('allowed', 'allowed_warning', 'rejected')
-    require(info['status'] in statuses)
-    for key in ('resetsAt', 'overageResetsAt', 'utilization'):
-        if key in info:
-            require(number(info[key]))
-    if 'rateLimitType' in info:
-        require(info['rateLimitType'] in ('five_hour', 'seven_day', 'seven_day_opus',
-                                        'seven_day_sonnet', 'overage'))
-    if 'overageStatus' in info:
-        require(info['overageStatus'] in statuses)
-    if 'overageDisabledReason' in info:
-        require(isinstance(info['overageDisabledReason'], str)
-                and len(info['overageDisabledReason'].encode()) <= 256)
-    if 'isUsingOverage' in info:
-        require(type(info['isUsingOverage']) is bool)
-    if 'unifiedWindows' in info:
-        windows = info['unifiedWindows']
-        require(isinstance(windows, dict) and set(windows) <= {'five_hour', 'seven_day'})
-        for window in windows.values():
-            exact(window, ('utilization', 'resetsAt'))
-            require(number(window['utilization']) and number(window['resetsAt']))
+    # Account rate-limit telemetry is never forwarded and grants nothing. The
+    # installed CLI adds fields over time (e.g. overageEnabled); refusing an
+    # unknown informational field would kill the turn, so only its shape and
+    # size are bounded. Quota failure itself arrives as the assistant error.
+    require(isinstance(info, dict) and isinstance(info.get('status'), str)
+            and 0 < len(info['status']) <= 64 and len(info) <= 32
+            and all(isinstance(key, str) and len(key) <= 64 for key in info)
+            and len(json.dumps(info, allow_nan=False).encode()) <= 4096)

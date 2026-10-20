@@ -51,6 +51,9 @@ impl Companion {
     pub(super) fn fail(&self) {
         self.failed.store(true, Ordering::Release);
     }
+    pub(super) fn has_failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
     pub(super) fn ready_to_close(&self) -> bool {
         self.started.load(Ordering::Acquire) && !self.failed.load(Ordering::Acquire)
     }
@@ -188,7 +191,22 @@ impl ConfiguredExecution {
     ) -> Result<(), &'static str> {
         match self.fast_factory.take() {
             None => self.run(shutdown).await,
-            Some(fast) => join_roles(self.run(shutdown.clone()), fast.run(shutdown)).await,
+            Some(fast) => {
+                // A lost or failed Fast companion fails alone: Deep (and its
+                // Workers) keep the window. Core still decides retirement.
+                let companion = self.companion.clone();
+                join_roles(
+                    self.run(shutdown.clone()),
+                    fast.run(shutdown),
+                    move |reason| {
+                        eprintln!("owned window Fast companion failed: {reason}");
+                        if let Some(companion) = companion {
+                            companion.fail();
+                        }
+                    },
+                )
+                .await
+            }
         }
     }
 
@@ -208,12 +226,12 @@ impl ConfiguredExecution {
             } else {
                 &companion.started
             };
-            if observed.load(Ordering::Acquire) {
+            // A failed companion never holds Deep: it proceeds without it.
+            if observed.load(Ordering::Acquire) || companion.failed.load(Ordering::Acquire) {
                 return Ok(());
             }
             if *shutdown.borrow()
                 || Instant::now() >= deadline
-                || companion.failed.load(Ordering::Acquire)
                 || self.window.as_ref().is_none_or(|window| window.work_due())
             {
                 return Err("Fast companion setup incomplete");
@@ -269,6 +287,11 @@ impl ConfiguredExecution {
         };
         let mut heartbeat = Instant::now();
         loop {
+            // A failed companion has no proof to hand over; Core's terminal
+            // and retirement checks still refuse an unresolved Fast run.
+            if companion.failed.load(Ordering::Acquire) {
+                return Ok(None);
+            }
             if let Some(proof) = companion.take()? {
                 return Ok(Some(proof));
             }
@@ -286,17 +309,30 @@ impl ConfiguredExecution {
 async fn join_roles(
     deep: impl std::future::Future<Output = Result<(), &'static str>> + Send + 'static,
     fast: impl std::future::Future<Output = Result<(), &'static str>> + Send + 'static,
+    fast_failed: impl FnOnce(&'static str),
 ) -> Result<(), &'static str> {
     let mut roles = tokio::task::JoinSet::new();
-    roles.spawn(deep);
+    let deep = roles.spawn(deep).id();
     roles.spawn(fast);
-    while let Some(result) = roles.join_next().await {
-        let result = result.unwrap_or(Err("window role task lost"));
-        if let Err(error) = result {
-            roles.abort_all();
-            while roles.join_next().await.is_some() {}
-            return Err(error);
+    let mut fast_failed = Some(fast_failed);
+    while let Some(joined) = roles.join_next_with_id().await {
+        let (id, result) = match joined {
+            Ok((id, result)) => (id, result),
+            Err(error) => (error.id(), Err("window role task lost")),
+        };
+        let Err(error) = result else {
+            continue;
+        };
+        if id != deep {
+            // Fast fails alone; the Deep role keeps the window.
+            if let Some(report) = fast_failed.take() {
+                report(error);
+            }
+            continue;
         }
+        roles.abort_all();
+        while roles.join_next().await.is_some() {}
+        return Err(error);
     }
     // JoinSet also aborts retained tasks if this owning future is cancelled.
     // Task completion never replaces the existing original-child reap barrier.
