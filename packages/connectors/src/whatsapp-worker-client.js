@@ -200,14 +200,17 @@ export function whatsappWorkerGroupPictureAudit(accountId = "", chatIds = [], en
   }, env);
 }
 
-export function whatsappWorkerSend({ accountId = "", conversationId = "", text = "", attachmentPaths = [] } = {}, env = process.env) {
+export function whatsappWorkerSend({ accountId = "", conversationId = "", text = "", attachmentPaths = [], requestId = "" } = {}, env = process.env) {
+  // Text-only sends carry no empty `paths` list, and an idempotency request id
+  // when the caller has one: a scoped recovery worker accepts only that shape.
   return requestWhatsAppWorker(attachmentPaths.length ? "/send-media" : "/send-text", {
     method: "POST",
     body: {
       accountId: clean(accountId || "sender"),
       to: clean(conversationId),
       text: String(text || ""),
-      paths: attachmentPaths,
+      ...(attachmentPaths.length ? { paths: attachmentPaths } : {}),
+      ...(clean(requestId) ? { requestId: clean(requestId) } : {}),
     },
   }, env);
 }

@@ -231,6 +231,7 @@ async function runMessaging(input, auth, env) {
       conversationId: input.conversation_id,
       text: input.text,
       attachmentPaths: attachments.map((item) => item.path),
+      requestId: ensured.job.id,
     }, env);
     const job = await markConnectorOutboxJob(ensured.job.id, {
       state: "delivered",
@@ -249,7 +250,7 @@ async function runMessaging(input, auth, env) {
   } catch (error) {
     const partialDelivery = error?.partialDelivery || error?.payload?.partialDelivery || null;
     const partial = hasWhatsAppPartialDelivery(error);
-    const uncertain = /not_confirmed|timeout/i.test(clean(error?.message));
+    const uncertain = /not_confirmed|timeout|delivery_uncertain/i.test(clean(error?.message));
     const state = partial ? "partial_delivery" : uncertain ? "delivery_uncertain" : "failed_retryable";
     await markConnectorOutboxJob(ensured.job.id, {
       state,
