@@ -72,9 +72,19 @@ async fn update_settings(
 ) -> Result<Response, Error> {
     let (owner, credential) = owner_credential(&state, &headers).await?;
     let conversation = conversation(&id)?;
+    let request = body(request)?;
+    // Like V1 `orkestr switch`, selecting a provider this installation cannot
+    // start is refused instead of silently running the turn on another one.
+    if request.provider == ConversationProvider::Claude && !state.claude_turns {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "provider_unavailable",
+            "Claude turns are not installed for this conversation",
+        ));
+    }
     let value = state
         .store
-        .update_conversation_settings(&credential, &owner, &conversation, &body(request)?)
+        .update_conversation_settings(&credential, &owner, &conversation, &request)
         .await
         .map_err(failure)?;
     Ok(Json(value).into_response())

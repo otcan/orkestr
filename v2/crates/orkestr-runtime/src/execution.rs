@@ -64,10 +64,21 @@ fn execution_scope(
 
 fn turn_frame(capability: &ConsumedProviderDispatch, request_id: u64) -> serde_json::Value {
     let provider = capability.provider();
-    json!({"id":request_id,"method":"turn/start","params":{
+    let mut frame = json!({"id":request_id,"method":"turn/start","params":{
         "threadId":provider.binding.native_session_id,
         "clientUserMessageId":capability.message_id().to_string(),
-        "input":[{"type":"text","text":capability.text(),"text_elements":[]}]}})
+        "input":[{"type":"text","text":capability.text(),"text_elements":[]}]}});
+    // Owner conversation settings (V1 `turnStartParams`): per-turn overrides,
+    // so a change applies from the next turn and never to a running one.
+    if let Some((model, effort)) = capability.launch().and_then(|l| l.codex_overrides()) {
+        if let Some(model) = model {
+            frame["params"]["model"] = json!(model);
+        }
+        if let Some(effort) = effort {
+            frame["params"]["effort"] = json!(effort);
+        }
+    }
+    frame
 }
 
 impl ConsumedTurn for CodexTurn {

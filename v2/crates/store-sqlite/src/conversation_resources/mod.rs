@@ -3,7 +3,7 @@
 //! create effects; they are preferences, fences and lineage.
 mod desktops;
 mod legacy_workers;
-mod settings;
+pub(crate) mod settings;
 #[cfg(test)]
 mod tests_desktops;
 #[cfg(test)]

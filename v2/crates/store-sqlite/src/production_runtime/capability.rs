@@ -14,6 +14,8 @@ pub struct ConsumedProviderDispatch {
     pub(super) text: String,
     pub(super) namespace: String,
     pub(super) incarnation: String,
+    /// Conversation settings for Deep/Worker turns; None for Fast turns.
+    pub(super) launch: Option<orkestr_v2_contracts::TurnLaunch>,
 }
 impl ConsumedProviderDispatch {
     pub fn provider(&self) -> &ProviderAdmission {
@@ -33,6 +35,10 @@ impl ConsumedProviderDispatch {
     }
     pub fn incarnation_id(&self) -> &str {
         &self.incarnation
+    }
+    /// Owner settings applied from this turn (model, effort, provider).
+    pub fn launch(&self) -> Option<&orkestr_v2_contracts::TurnLaunch> {
+        self.launch.as_ref()
     }
 }
 pub enum ExecutionConsumption {
