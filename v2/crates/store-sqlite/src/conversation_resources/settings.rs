@@ -1,0 +1,108 @@
+//! Owner conversation settings with optimistic revision control.
+use super::{now_ms, unavailable, ResourceError, Result};
+use crate::Store;
+use orkestr_v2_contracts::*;
+use sqlx::{Row, Sqlite, Transaction};
+
+async fn current(
+    tx: &mut Transaction<'_, Sqlite>,
+    conversation: &ConversationId,
+) -> Result<ConversationSettings> {
+    let row = sqlx::query("SELECT * FROM conversation_settings WHERE conversation_id=?")
+        .bind(conversation.to_string())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(unavailable)?;
+    let Some(row) = row else {
+        return Ok(ConversationSettings::defaults(conversation.clone()));
+    };
+    Ok(ConversationSettings {
+        schema_version: 1,
+        conversation_id: conversation.clone(),
+        revision: row.get("revision"),
+        provider: ConversationProvider::parse(row.get::<String, _>("provider").as_str())
+            .ok_or(ResourceError::Unavailable)?,
+        model: row.get("model"),
+        reasoning_effort: row.get("reasoning_effort"),
+        honor_no_reply: row.get::<i64, _>("honor_no_reply") == 1,
+        reply_prefix: row.get("reply_prefix"),
+        reply_footer: row.get("reply_footer"),
+        provider_generation: row.get("provider_generation"),
+        updated_at_ms: Some(row.get("updated_at_ms")),
+    })
+}
+
+impl Store {
+    pub async fn conversation_settings(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+    ) -> Result<ConversationSettings> {
+        let mut tx = self
+            .owner_scope(credential, owner, conversation, false)
+            .await?;
+        let settings = current(&mut tx, conversation).await?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(settings)
+    }
+
+    /// Full replacement. A provider change bumps `provider_generation` so the
+    /// runtime switches at the next turn boundary (V1 `orkestr switch`).
+    /// Replaying an identical update at the previous revision is idempotent.
+    pub async fn update_conversation_settings(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        update: &ConversationSettingsUpdate,
+    ) -> Result<ConversationSettings> {
+        if !update.is_valid() {
+            return Err(ResourceError::Invalid);
+        }
+        let mut tx = self
+            .owner_scope(credential, owner, conversation, true)
+            .await?;
+        let before = current(&mut tx, conversation).await?;
+        let same = |s: &ConversationSettings| {
+            s.provider == update.provider
+                && s.model == update.model
+                && s.reasoning_effort == update.reasoning_effort
+                && s.honor_no_reply == update.honor_no_reply
+                && s.reply_prefix == update.reply_prefix
+                && s.reply_footer == update.reply_footer
+        };
+        if before.revision != update.expected_revision {
+            if before.revision == update.expected_revision + 1 && same(&before) {
+                tx.commit().await.map_err(unavailable)?;
+                return Ok(before);
+            }
+            return Err(ResourceError::Conflict("settings_revision_mismatch"));
+        }
+        let generation = before.provider_generation + i64::from(before.provider != update.provider);
+        sqlx::query(
+            "INSERT INTO conversation_settings(conversation_id,owner_id,revision,provider,model,reasoning_effort,honor_no_reply,reply_prefix,reply_footer,provider_generation,updated_at_ms)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?)
+             ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision,provider=excluded.provider,model=excluded.model,
+             reasoning_effort=excluded.reasoning_effort,honor_no_reply=excluded.honor_no_reply,reply_prefix=excluded.reply_prefix,
+             reply_footer=excluded.reply_footer,provider_generation=excluded.provider_generation,updated_at_ms=excluded.updated_at_ms",
+        )
+        .bind(conversation.to_string())
+        .bind(owner.to_string())
+        .bind(before.revision + 1)
+        .bind(update.provider.as_str())
+        .bind(&update.model)
+        .bind(&update.reasoning_effort)
+        .bind(i64::from(update.honor_no_reply))
+        .bind(&update.reply_prefix)
+        .bind(&update.reply_footer)
+        .bind(generation)
+        .bind(now_ms())
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let after = current(&mut tx, conversation).await?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(after)
+    }
+}

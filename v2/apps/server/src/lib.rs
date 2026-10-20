@@ -30,7 +30,10 @@ pub mod build_identity;
 pub mod claude_execution;
 pub mod control_dispatch;
 pub mod control_registry;
+mod conversation_resources_http;
 mod conversations_http;
+mod desktop_broker;
+mod desktop_http;
 mod execution;
 mod execution_accept;
 mod execution_registry;
@@ -72,6 +75,7 @@ pub struct AppState {
     auth_window: Arc<Mutex<(Instant, u32)>>,
     resources: resource_health::ResourceSampler,
     timers: timer_http::DurableOwnerController,
+    desktop_broker: Option<Arc<desktop_broker::Broker>>,
 }
 impl AppState {
     pub async fn shutdown_beta_window(&self) -> Result<(), &'static str> {
@@ -138,6 +142,14 @@ impl AppState {
         self.window_handles = Some(handles);
         Ok(self)
     }
+    /// Trusted startup only: the private V1 desktop broker client configuration.
+    pub fn with_desktop_broker_file(
+        mut self,
+        path: &std::path::Path,
+    ) -> Result<Self, &'static str> {
+        self.desktop_broker = Some(Arc::new(desktop_broker::Broker::load(path)?));
+        Ok(self)
+    }
     /// The ordinary server owns the bounded controller task and its shutdown.
     /// With a beta window runtime, every timer occurrence also queues its Deep
     /// turn and wakes the window dispatcher; otherwise only the input is admitted.
@@ -189,6 +201,7 @@ impl AppState {
             authority: Arc::new(authority),
             auth_window: Arc::new(Mutex::new((Instant::now(), 0))),
             resources: resource_health::ResourceSampler::new(),
+            desktop_broker: None,
         })
     }
 }
@@ -358,6 +371,8 @@ pub fn router_with_google_catalog(
         .nest("/api/v2",automatic_reply_control::router())
         .merge(memory_service::router(state.clone()))
         .merge(archived_history_http::router())
+        .merge(conversation_resources_http::router())
+        .merge(desktop_http::router())
         .merge(google_registry_metadata::router(catalog))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })
         .layer(DefaultBodyLimit::max(40 * 1024))
