@@ -176,6 +176,20 @@ class ServiceTests(unittest.TestCase):
             with self.subTest(key=key),self.assertRaises(RuntimeError):
                 workspace_exec(dict(profile,trusted=dict(trusted,**{key:value})))
 
+    def test_window_capacity_is_optional_and_bounded(self):
+        from beta_config import validate
+        base={'schema_version':1,'owner_id':'11111111-1111-4111-8111-111111111111',
+              'conversation_id':'33333333-3333-4333-8333-333333333333',
+              'manager_socket':'/run/example/control.sock','launcher':'/opt/example/launcher',
+              'launcher_sha256':'a'*64,'workspace':'/srv/native-readonly',
+              'namespace':'synthetic','supervisor_key':'synthetic.deep'}
+        self.assertNotIn('max_active_windows',validate(json.dumps(base).encode()))
+        for value in (1,8,12):
+            self.assertEqual(validate(json.dumps(dict(base,max_active_windows=value)).encode())['max_active_windows'],value)
+        for value in (0,13,-1,True,'8',None,2.0):
+            with self.subTest(value=value),self.assertRaisesRegex(RuntimeError,'window capacity'):
+                validate(json.dumps(dict(base,max_active_windows=value)).encode())
+
     def test_provisioned_home_preserves_existing_state(self):
         home=self.root/'home';home.mkdir(mode=0o700)
         original=b'synthetic existing database bytes, not an empty database'

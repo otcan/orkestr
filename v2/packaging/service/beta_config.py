@@ -87,7 +87,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= 16384, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) - {'roles', 'workspace_exec'} == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'max_active_windows'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -118,6 +118,9 @@ def validate(raw):
                     'beta role launcher digest required')
             launchers.add(role['launcher'])
         require(len(launchers)==5 and value['launcher'] not in launchers,'distinct beta role launchers required')
+    if 'max_active_windows' in value:
+        capacity = value['max_active_windows']
+        require(type(capacity) is int and 1 <= capacity <= 12, 'bounded beta window capacity required')
     if 'workspace_exec' in value:
         require('roles' in value, 'workspace execution requires configured Worker roles')
         workspace_exec(value['workspace_exec'])

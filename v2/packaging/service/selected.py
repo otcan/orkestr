@@ -72,7 +72,7 @@ def prepare(plan):
     fields={'format','output','source_repository','pair','pair_sha256','server','ui','native','native_sha256',
             'uid','gid','home','workspace','state_root','auth_file','bootstrap_file','ledger_directory',
             'endpoint_directory','owner_id','conversation_id','namespace','supervisor_key','origin','port'}
-    require(set(plan) - {'roles', 'preserve_state', 'workspace_exec'} == fields and
+    require(set(plan) - {'roles', 'preserve_state', 'workspace_exec', 'max_active_windows'} == fields and
             plan['format']=='orkestr-v2-selected-service-plan-v1','closed plan required')
     if 'workspace_exec' in plan:
         require('roles' in plan, 'workspace execution requires configured Worker roles')
@@ -156,6 +156,8 @@ def prepare(plan):
                 beta['roles']=selected_roles.emit(inner,role_paths,profile,gid,entry,write,encoded)
             if 'workspace_exec' in plan:
                 beta['workspace_exec']=plan['workspace_exec']
+            if 'max_active_windows' in plan:
+                beta['max_active_windows']=plan['max_active_windows']
             validate_beta(encoded(beta))
             for name,value in (('beta.json',beta),('service.json',runtime),('profile.json',profile)):
                 write(inner/name,encoded(value),gid,mode=0o640 if name=='beta.json' else None)

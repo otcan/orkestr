@@ -64,3 +64,47 @@ fn immutable_receipt_binds_input_key_ids_and_exact_window_generation() {
     intent.clear_scope();
     assert!(!intent.receipt_matches(0, &receipt));
 }
+
+#[test]
+fn queue_receipt_completes_only_its_exact_pending_send() {
+    use orkestr_v2_contracts::{ConversationId, ExecutionWindowQueued, QueuedWindowState, Receipt};
+    use orkestr_v2_ui::beta_inputs::{SavedInput, SavedInputs};
+    use orkestr_v2_ui::beta_window::{queued_notice, WindowIntents};
+    let route = "00000000-0000-4000-8000-000000000004";
+    let mut input = request("queued-send");
+    input.expected_generation = 0;
+    let conversation: ConversationId = serde_json::from_value(serde_json::json!(route)).unwrap();
+    let mut saved = SavedInputs::default();
+    let receipt: Receipt = serde_json::from_value(serde_json::json!({
+        "message_id":input.input_message_id,"event_id":input.input_event_id,"sequence":1,"status":"accepted"
+    }))
+    .unwrap();
+    let kept = SavedInput {
+        conversation: conversation.clone(),
+        input_request_key: input.input_request_key.clone(),
+        receipt,
+    };
+    assert!(saved.retain_receipt(kept));
+    let mut intents = WindowIntents::default();
+    intents.prepare(route, input.clone()).unwrap();
+    let ticket = intents.ticket(route).unwrap();
+    let mut queued = ExecutionWindowQueued {
+        conversation_id: conversation,
+        request_key: "another-send".into(),
+        input_message_id: input.input_message_id.clone(),
+        input_event_id: input.input_event_id.clone(),
+        input_request_key: input.input_request_key.clone(),
+        state: QueuedWindowState::Queued,
+        position: Some(3),
+        queued_at_ms: 1,
+        window_id: None,
+        withdrawal: None,
+    };
+    assert!(!intents.queued(route, &ticket, &queued, &mut saved));
+    assert!(saved.first(route).is_some());
+    queued.request_key = input.request_key.clone();
+    assert!(queued_notice(&queued).contains("position 3"));
+    assert!(intents.queued(route, &ticket, &queued, &mut saved));
+    assert!(saved.first(route).is_none());
+    assert!(intents.pending(route).is_none());
+}

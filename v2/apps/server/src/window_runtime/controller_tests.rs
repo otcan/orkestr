@@ -133,9 +133,14 @@ async fn revoked_or_foreign_selection_cannot_replace_the_current_controller() {
             .process(token, &owner, selected, &input)
             .await
             .is_err());
-        assert_eq!(
-            controller.current().unwrap().configured_scope().1,
-            &conversation
+        // Neither a foreign nor a revoked request creates or replaces a controller.
+        assert!(controller.existing(&foreign).is_none());
+        assert!(
+            !controller
+                .existing(&conversation)
+                .unwrap()
+                .has_local_task()
+                .await
         );
         assert!(store
             .execution_window_status_authenticated("synthetic-browser", &conversation)
@@ -225,26 +230,23 @@ async fn historical_admission_replay_never_selects_or_closes_another_conversatio
         Handles::new(owner.clone(), selected.conversation_id.clone()).unwrap(),
         manager,
     );
-    let replay = controller
+    let WindowOutcome::Admitted(replay) = controller
         .process("synthetic-browser", &owner, &original, &input)
         .await
-        .unwrap();
+        .unwrap()
+    else {
+        panic!("historical admission must replay, never queue")
+    };
     assert!(replay.duplicate);
     assert_eq!(replay.status.window_id, original_receipt.status.window_id);
-    assert_eq!(
-        controller.current().unwrap().configured_scope().1,
-        &selected.conversation_id
-    );
+    assert!(controller.existing(&original).is_none());
     let mut conflict = input.clone();
     conflict.input_request_key = "different-source".into();
     assert!(controller
         .process("synthetic-browser", &owner, &original, &conflict)
         .await
         .is_err());
-    assert_eq!(
-        controller.current().unwrap().configured_scope().1,
-        &selected.conversation_id
-    );
+    assert!(controller.existing(&original).is_none());
     assert!(controller.snapshot(&owner, &original).is_none());
     controller.shutdown().await.unwrap();
     drop(controller);

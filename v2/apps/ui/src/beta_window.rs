@@ -158,6 +158,56 @@ impl WindowIntents {
     }
 }
 
+impl WindowIntents {
+    /// A durable queue receipt (HTTP 202) ends this Send: the server owns the
+    /// intent and starts it when a work slot frees. It must name the exact
+    /// pending request and input; anything else stays pending for retry.
+    pub fn queued(
+        &mut self,
+        route: &str,
+        ticket: &IntentTicket,
+        queued: &orkestr_v2_contracts::ExecutionWindowQueued,
+        saved: &mut crate::beta_inputs::SavedInputs,
+    ) -> bool {
+        if !self.current(route, ticket) || queued.conversation_id.to_string() != route {
+            return false;
+        }
+        let request = self
+            .entries
+            .get(route)
+            .and_then(WindowIntent::pending)
+            .expect("current ticket owns request")
+            .clone();
+        if request.request_key != queued.request_key
+            || request.input_message_id != queued.input_message_id
+            || request.input_event_id != queued.input_event_id
+            || request.input_request_key != queued.input_request_key
+            || queued.state == orkestr_v2_contracts::QueuedWindowState::Withdrawn
+        {
+            return false;
+        }
+        saved.admitted_request(route, &request);
+        self.review_refusal(route, ticket)
+    }
+}
+
+/// Owner-facing wording for one queued intent; never claims work has started.
+pub fn queued_notice(queued: &orkestr_v2_contracts::ExecutionWindowQueued) -> String {
+    use orkestr_v2_contracts::QueuedWindowState;
+    match (queued.state, queued.position) {
+        (QueuedWindowState::Queued, Some(position)) => format!(
+            "Queued: other conversations are using every work slot. This message starts automatically (position {position})."
+        ),
+        (QueuedWindowState::Queued, None) => {
+            "Queued: this message starts automatically when a work slot frees.".into()
+        }
+        (QueuedWindowState::Dispatched, _) => "Sent. Waiting for a reply.".into(),
+        (QueuedWindowState::Withdrawn, _) => {
+            "This queued message could not start. It is saved in history; send it again.".into()
+        }
+    }
+}
+
 pub fn valid_status(value: &orkestr_v2_contracts::ExecutionWindowStatus, id: &str) -> bool {
     value.conversation_id.to_string() == id
         && !value.window_id.is_nil()

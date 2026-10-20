@@ -8,6 +8,9 @@ pub(crate) struct WindowTask {
     task: Option<JoinHandle<Result<(), &'static str>>>,
     children: crate::owned_children::ChildSet,
     context: Option<std::sync::Arc<crate::window_runtime::context::Context>>,
+    /// Retained for the task's lifetime; conversations no longer switch, so
+    /// nothing reads its close readiness from here.
+    #[allow(dead_code)]
     companion: Option<std::sync::Arc<window_roles::Companion>>,
 }
 
@@ -53,13 +56,6 @@ impl ConfiguredExecution {
 }
 
 impl WindowTask {
-    /// Startup observation only; durable canonical terminal checks and original
-    /// tree proofs are independently required before switching conversations.
-    pub(crate) fn roles_ready_to_close(&self) -> bool {
-        self.companion
-            .as_ref()
-            .is_none_or(|companion| companion.ready_to_close())
-    }
     pub(crate) fn cleanup_deadline(&self) -> tokio::time::Instant {
         self.context
             .as_ref()

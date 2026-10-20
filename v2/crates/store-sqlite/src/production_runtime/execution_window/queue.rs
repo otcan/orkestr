@@ -69,15 +69,17 @@ async fn by_key(
 }
 
 impl Store {
-    /// Durably queue a fresh-window intent. Identical retries return the
-    /// original row; a changed body or an already admitted key conflicts.
+    /// Durably queue a window intent. Identical retries return the original
+    /// row; a changed body or an already admitted key conflicts. Dispatch
+    /// rebuilds the window tuple from current state, so a follow-up queued
+    /// behind earlier intents keeps its conversation order.
     pub async fn enqueue_execution_window_authenticated(
         &self,
         credential: &str,
         conversation: &ConversationId,
         input: &ExecutionWindowRequest,
     ) -> Result<ExecutionWindowQueued> {
-        if !input.is_valid() || input.window_id.is_some() {
+        if !input.is_valid() {
             return Err(RuntimeStoreError::InvalidInput);
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
@@ -177,12 +179,14 @@ impl Store {
     }
 
     /// Owner windows that currently hold a manager budget and live processes.
-    /// Reconciliation-required windows block only their own conversation.
+    /// Reconciliation-required or past-deadline windows (for example stuck
+    /// awaiting acceptance) block only their own conversation.
     pub async fn live_execution_windows_authenticated(&self, credential: &str) -> Result<u32> {
         let mut tx = self.pool.begin().await.map_err(db)?;
         let owner = browser_owner(self, &mut tx, credential).await?;
-        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows WHERE owner_id=? AND state IN ('opening','active','retiring')")
-            .bind(owner.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
+        let clock = now(&mut tx).await?;
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows WHERE owner_id=? AND state IN ('opening','active','retiring') AND expires_at_ms>?")
+            .bind(owner.to_string()).bind(clock).fetch_one(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;
         u32::try_from(count).map_err(db)
     }

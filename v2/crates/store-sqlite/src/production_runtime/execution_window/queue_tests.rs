@@ -3,7 +3,9 @@
 use super::*;
 use crate::production_runtime::tests as fixtures;
 use orkestr_v2_application::IntakeStore;
-use orkestr_v2_contracts::{ConversationInput, MessageInput, QueuedWindowState, QueuedWindowWithdrawal};
+use orkestr_v2_contracts::{
+    ConversationInput, MessageInput, QueuedWindowState, QueuedWindowWithdrawal,
+};
 
 struct Owner {
     store: Store,
@@ -18,7 +20,10 @@ async fn owner() -> Owner {
         .join("core.sqlite3");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let store = Store::open(&path).await.unwrap();
-    let home = store.setup("synthetic-owner", "synthetic-hash").await.unwrap();
+    let home = store
+        .setup("synthetic-owner", "synthetic-hash")
+        .await
+        .unwrap();
     let owner = store
         .credentials("synthetic-owner")
         .await
@@ -238,14 +243,17 @@ async fn queue_is_durable_fifo_idempotent_and_dispatches_exactly_once() {
             .await,
         Err(RuntimeStoreError::Conflict)
     ));
-    // Follow-up intent never queues; a foreign or revoked browser reads nothing.
+    // A queued follow-up of the same input is the same event: it conflicts.
     let mut follow = first.clone();
+    follow.request_key = "follow-same-input".into();
     follow.window_id = Some(Uuid::new_v4());
-    assert!(o
-        .store
-        .enqueue_execution_window_authenticated(&o.browser, &o.home, &follow)
-        .await
-        .is_err());
+    assert!(matches!(
+        o.store
+            .enqueue_execution_window_authenticated(&o.browser, &o.home, &follow)
+            .await,
+        Err(RuntimeStoreError::Conflict)
+    ));
+    // A foreign or revoked browser reads nothing.
     assert!(o
         .store
         .execution_window_queue_authenticated("synthetic-foreign", None)
@@ -324,10 +332,11 @@ async fn queued_rows_survive_reopen_without_dispatch() {
         .enqueue_execution_window_authenticated(&o.browser, &o.home, &request)
         .await
         .unwrap();
-    let path: String = sqlx::query_scalar("SELECT file FROM pragma_database_list WHERE name='main'")
-        .fetch_one(&o.store.pool)
-        .await
-        .unwrap();
+    let path: String =
+        sqlx::query_scalar("SELECT file FROM pragma_database_list WHERE name='main'")
+            .fetch_one(&o.store.pool)
+            .await
+            .unwrap();
     o.store.close().await;
     let reopened = Store::open(std::path::Path::new(&path)).await.unwrap();
     let rows = reopened
@@ -342,4 +351,40 @@ async fn queued_rows_survive_reopen_without_dispatch() {
         .await
         .unwrap();
     assert_eq!(windows, 0);
+}
+
+#[tokio::test]
+async fn window_stuck_past_its_deadline_never_blocks_another_conversation() {
+    // Beta regression: a window whose runs await acceptance past the hard
+    // deadline stays unresolved, but must not hold another conversation back.
+    let o = owner().await;
+    let b = o.conversation("unblocked").await;
+    o.bootstrap(&o.home, "stuck").await;
+    let stuck = o
+        .admit(&o.home, &o.input(&o.home, "stuck-1").await, 1)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE execution_windows SET state='retiring',opened_at_ms=opened_at_ms-900001,work_deadline_ms=work_deadline_ms-900001,expires_at_ms=expires_at_ms-900001 WHERE id=?")
+        .bind(stuck.status.window_id.to_string())
+        .execute(&o.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        o.store
+            .live_execution_windows_authenticated(&o.browser)
+            .await
+            .unwrap(),
+        0
+    );
+    o.bootstrap(&b, "unblocked").await;
+    let opened = o
+        .admit(&b, &o.input(&b, "unblocked-1").await, 1)
+        .await
+        .unwrap();
+    assert_eq!(opened.status.conversation_id, b);
+    // The stuck conversation itself still cannot bypass its own window.
+    let mut successor = o.input(&o.home, "stuck-2").await;
+    successor.expected_generation = 1;
+    successor.predecessor_window_id = Some(stuck.status.window_id);
+    assert!(o.admit(&o.home, &successor, 8).await.is_err());
 }

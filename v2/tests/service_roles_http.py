@@ -1,4 +1,4 @@
-"""One finite real-HTTP shared-window role/switch/resume fixture. No provider.
+"""One finite real-HTTP concurrent-window role/queue/resume fixture. No provider.
 
 Run as root with a server built from the same source. The package and fixed
 native ELF are entirely disposable; retained evidence contains synthetic data.
@@ -115,55 +115,92 @@ def run(case):
     assert worker_status["run_id"] not in (deep["run_id"], fast["run_id"])
     worker_receipt = accept(case, first, worker_status, "accept:worker")
     assert status(case, first, phase="running")["run_id"] == deep["run_id"]
+    # Concurrency: the second conversation opens its own window while the
+    # first conversation's Deep turn is still running in its own window.
     bkey = "second:1"
     pending_b = window_request(intake(case, second, bkey, 2), bkey)
-    refusal = expect(case, path(second) + "/window", 409, "POST", pending_b)
-    assert refusal["code"] == "window_busy" and len(windows(case)) == 1
+    second_admission = expect(case, path(second) + "/window", 201, "POST", pending_b)["status"]
+    assert second_admission["generation"] == 1 and second_admission["conversation_id"] == second
+    bdeep_running = ready(case, second, "deep", "running")
+    assert status(case, first, phase="running")["run_id"] == deep["run_id"]
+    live = {row["conversation_id"] for row in windows(case) if row["state"] == "active"}
+    assert live == {first, second}, live
+    managed = case.rows("SELECT conversation FROM windows WHERE state='active'", manager=True)
+    assert {row["conversation"] for row in managed} == {first, second}
+    # Capacity is two: a third conversation's intent is durably queued, not refused.
+    third = expect(case, "/api/v2/conversations", 201, "POST",
+                   {"client_request_id": "synthetic:third", "name": "Synthetic third thread"})["conversation_id"]
+    ckey = "third:1"
+    pending_c = window_request(intake(case, third, ckey, 4), ckey)
+    queued = expect(case, path(third) + "/window", 202, "POST", pending_c)
+    assert queued["state"] == "queued" and queued["position"] == 1, queued
+    assert expect(case, path(third) + "/window", 202, "POST", pending_c) == queued
+    queue = expect(case, path(third) + "/window/queue")
+    assert (queue["capacity"], queue["active"], queue["queued_total"]) == (2, 2, 1), queue
+    assert [entry["request_key"] for entry in queue["entries"]] == [pending_c["request_key"]]
+    assert not [row for row in windows(case) if row["conversation_id"] == third]
+    # The second conversation progresses independently of the held first.
+    (case.workspaces["deep"] / "release-2").touch()
+    bdeep = ready(case, second, "deep")
+    assert bdeep["run_id"] == bdeep_running["run_id"]
+    assert status(case, first, phase="running")["run_id"] == deep["run_id"]
+    accept(case, second, bdeep, "accept:second-deep")
+    bfast = ready(case, second, "fast")
+    bfast["_role"] = "fast"
+    accept(case, second, bfast, "accept:second-fast")
+    assert status(case, first, phase="running")["run_id"] == deep["run_id"]
+    # Retiring the second window frees a slot: the queued third starts by itself.
+    cdeep_running = wait_for(lambda: status(case, third, phase="running"), "queued third Deep turn", 30)
+    dispatched = expect(case, path(third) + "/window", 202, "POST", pending_c)
+    assert dispatched["state"] == "dispatched" and dispatched["window_id"], dispatched
+    assert expect(case, path(third) + "/window/queue")["entries"] == []
     fast["_role"] = "fast"
     fast_receipt = accept(case, first, fast, "accept:first-fast")
     (case.workspaces["deep"] / "release-1").touch()
     deep_receipt = accept(case, first, ready(case, first, "deep"), "accept:first-deep")
-    case.fixture.write_private(case.workspaces["deep"] / "mode", b"complete")
-    second_admission = expect(case, path(second) + "/window", 201, "POST", pending_b)["status"]
-    assert second_admission["generation"] == 1 and second_admission["conversation_id"] == second
-    assert next(row for row in windows(case) if row["id"] == a["window_id"])["state"] == "closed"
-    bdeep, bfast = ready(case, second, "deep"), ready(case, second, "fast")
-    accept(case, second, bdeep, "accept:second-deep")
-    # Deep acceptance alone cannot close a window with an unaccepted Fast reply.
+    # Deep stays in "hold" mode: every Deep turn here needs its own release file.
+    wait_for(lambda: next(row for row in windows(case) if row["id"] == a["window_id"])["state"] == "closed",
+             "first window retirement", 30)
     akey = "first:2"
     pending_a = window_request(intake(case, first, akey, 3), akey, 1, a["window_id"])
-    refusal = expect(case, path(first) + "/window", 409, "POST", pending_a)
-    assert refusal["code"] == "window_busy" and len(windows(case)) == 2
-    bfast["_role"] = "fast"
-    accept(case, second, bfast, "accept:second-fast")
     resumed = expect(case, path(first) + "/window", 201, "POST", pending_a)["status"]
     assert resumed["generation"] == 2 and resumed["predecessor_window_id"] == a["window_id"]
+    (case.workspaces["deep"] / "release-3").touch()
     adeep = ready(case, first, "deep", previous=deep["run_id"])
     afast = ready(case, first, "fast", previous=fast["run_id"])
     afast["_role"] = "fast"
     accept(case, first, afast, "accept:resumed-fast")
     accept(case, first, adeep, "accept:resumed-deep")
+    (case.workspaces["deep"] / "release-4").touch()
+    cdeep = ready(case, third, "deep", run=cdeep_running["run_id"])
+    accept(case, third, cdeep, "accept:third-deep")
+    cfast = ready(case, third, "fast")
+    cfast["_role"] = "fast"
+    accept(case, third, cfast, "accept:third-fast")
+    wait_for(lambda: all(row["state"] == "closed" for row in windows(case)), "all windows retired", 30)
     runs = case.rows("SELECT id,role,conversation_id,state,session_id,native_session_id,context_id,incarnation_id FROM production_runs ORDER BY rowid")
-    assert len(runs) == 7 and all(row["state"] == "succeeded" for row in runs)
+    assert len(runs) == 9 and all(row["state"] == "succeeded" for row in runs)
     for role in ("deep", "fast"):
         rows = [row for row in runs if row["role"] == role and row["conversation_id"] == first]
         assert len(rows) == 2
         assert len({row["session_id"] for row in rows}) == len({row["native_session_id"] for row in rows}) == 1
         assert len({row["incarnation_id"] for row in rows}) == 2
-        other = next(row for row in runs if row["role"] == role and row["conversation_id"] == second)
-        assert other["native_session_id"] != rows[0]["native_session_id"]
+        for conversation in (second, third):
+            other = next(row for row in runs if row["role"] == role and row["conversation_id"] == conversation)
+            assert other["native_session_id"] != rows[0]["native_session_id"]
+            assert other["context_id"] not in {row["context_id"] for row in rows}
     trace = case.trace()
-    assert len([row for row in trace if row["kind"] == "turn"]) == 7
+    assert len([row for row in trace if row["kind"] == "turn"]) == 9
     for role in ("deep", "fast"):
-        assert [row["resumed"] for row in trace if row["kind"] == "ready" and row["role"] == role] == [False, False, True]
-    assert case.rows("SELECT count(*) AS n FROM production_acceptances") == [{"n": 7}]
+        assert [row["resumed"] for row in trace if row["kind"] == "ready" and row["role"] == role] == [False, False, False, True]
+    assert case.rows("SELECT count(*) AS n FROM production_acceptances") == [{"n": 9}]
     from service_roles_retention import run as retained_workers
     retention = retained_workers(case)
     case.stop()
     final = windows(case)
-    assert len(final) == 5 and all(row["state"] == "closed" for row in final)
+    assert len(final) == 6 and all(row["state"] == "closed" for row in final)
     manager = case.rows("SELECT conversation,generation,state FROM windows ORDER BY rowid", manager=True)
-    assert len(manager) == 5 and all(row["state"] == "retired" for row in manager)
+    assert len(manager) == 6 and all(row["state"] == "retired" for row in manager)
     return {"windows": final, "manager": manager, "runs": runs, "trace": trace,
             "first_acceptances": [worker_receipt, fast_receipt, deep_receipt],
             "retained_worker_cases": retention}

@@ -41,22 +41,13 @@ impl ConversationController {
     pub(super) fn handles(&self) -> &Handles {
         &self.handles
     }
-    pub(super) async fn roles_ready_to_close(&self) -> bool {
-        match &*self.state.lock().await {
-            State::Idle => true,
-            State::Running(task) => task.roles_ready_to_close(),
-            State::Starting | State::Uncertain => false,
-        }
+    /// A task this process started (or is starting) may still own the window.
+    pub(super) async fn has_local_task(&self) -> bool {
+        matches!(
+            &*self.state.lock().await,
+            State::Starting | State::Running(_)
+        )
     }
-    pub(crate) fn configured_scope(
-        &self,
-    ) -> (
-        &orkestr_v2_contracts::OwnerId,
-        &orkestr_v2_contracts::ConversationId,
-    ) {
-        (&self.config.owner_id, &self.config.conversation_id)
-    }
-
     pub(crate) fn new(
         config: BetaConfig,
         home: PathBuf,

@@ -124,14 +124,16 @@ impl AppState {
             manager_pid,
         )
         .map_err(|_| "beta manager identity refused")?;
-        self.window_controller = Some(Arc::new(window_runtime::Controller::new(
+        let controller = Arc::new(window_runtime::Controller::new(
             config.clone(),
             home.to_owned(),
             self.store.clone(),
             initial.clone(),
             handles.clone(),
             manager,
-        )));
+        ));
+        controller.start_dispatcher();
+        self.window_controller = Some(controller);
         self.initial_window = Some(initial);
         self.window_handles = Some(handles);
         Ok(self)
@@ -326,6 +328,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/beta",get(beta_discovery_http::read))
         .route("/api/v2/conversations/{id}/intelligence",get(intelligence_http::read))
         .route("/api/v2/conversations/{id}/window",get(window_http::status).post(window_http::admit))
+        .route("/api/v2/conversations/{id}/window/queue",get(window_http::queue))
         .route("/api/v2/conversations/{id}/execution",get(execution::status))
         .route("/api/v2/conversations/{id}/fast/execution",get(execution::fast_status))
         .route("/api/v2/conversations/{id}/workers",get(worker_discovery::list))

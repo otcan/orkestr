@@ -110,6 +110,17 @@ class Conversations(unittest.TestCase):
             ledger.admit(self.request(self.other, 2, b["window_id"], "after-restart"))
         self.assertTrue(ledger.admit(self.request(uid()))[1])
 
+    def test_expired_window_awaiting_retirement_holds_no_slot(self):
+        ledger = self.open(live_windows=1)
+        a = self.request(self.home)
+        ledger.admit(a)
+        self.clock.advance(901)
+        self.assertEqual(ledger.tick(a["window_id"], 1)["state"], "expired")
+        # Still unretired for its own conversation, but no longer live custody.
+        with self.assertRaisesRegex(Refused, "previous_window_unretired"):
+            ledger.admit(self.request(self.home, 2, a["window_id"], "next"))
+        self.assertTrue(ledger.admit(self.request(self.other))[1])
+
     def test_live_window_bound_is_closed(self):
         for value in (0, 17, True, "2", None):
             with self.subTest(value=value), self.assertRaisesRegex(Refused, "live_window_bound"):

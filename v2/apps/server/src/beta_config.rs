@@ -23,7 +23,15 @@ pub(crate) struct BetaConfig {
     pub roles: Option<roles::Roles>,
     #[serde(default)]
     pub workspace_exec: Option<workspace_exec::WorkspaceExecConfig>,
+    /// Owner-wide bound on concurrently live execution windows (conversations
+    /// with active Deep work). Further fresh-window intents queue durably.
+    #[serde(default)]
+    pub max_active_windows: Option<u32>,
 }
+/// Default number of conversations that may hold a live window at once.
+pub(crate) const DEFAULT_ACTIVE_WINDOWS: u32 = 8;
+/// Upper bound; the root manager's independent ceiling stays above it.
+pub(crate) const MAX_ACTIVE_WINDOWS: u32 = 12;
 impl BetaConfig {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         let key = |s: &str| {
@@ -51,6 +59,12 @@ impl BetaConfig {
         if let Some(roles) = &self.roles {
             roles.validate(&self.launcher)?;
         }
+        if self
+            .max_active_windows
+            .is_some_and(|value| value == 0 || value > MAX_ACTIVE_WINDOWS)
+        {
+            return Err("invalid beta window capacity");
+        }
         if let Some(profile) = &self.workspace_exec {
             profile.validate()?;
             if self.roles.is_none() {
@@ -58,6 +72,10 @@ impl BetaConfig {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn active_windows(&self) -> u32 {
+        self.max_active_windows.unwrap_or(DEFAULT_ACTIVE_WINDOWS)
     }
 
     pub(crate) fn workspace_profile(&self) -> Option<&workspace_exec::WorkspaceExecConfig> {
@@ -101,6 +119,23 @@ mod tests {
                 "{name}"
             );
         }
+    }
+    #[test]
+    fn window_capacity_defaults_and_is_bounded() {
+        let valid: BetaConfig = serde_json::from_value(input()).unwrap();
+        assert_eq!(valid.active_windows(), DEFAULT_ACTIVE_WINDOWS);
+        for (value, ok) in [(1, true), (12, true), (0, false), (13, false)] {
+            let mut config = input();
+            config["max_active_windows"] = serde_json::json!(value);
+            let config: BetaConfig = serde_json::from_value(config).unwrap();
+            assert_eq!(config.validate().is_ok(), ok, "{value}");
+            if ok {
+                assert_eq!(config.active_windows(), value);
+            }
+        }
+        let mut negative = input();
+        negative["max_active_windows"] = serde_json::json!(-1);
+        assert!(serde_json::from_value::<BetaConfig>(negative).is_err());
     }
     #[test]
     fn relative_paths_nil_scope_and_noncanonical_digest_refuse() {

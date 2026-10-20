@@ -220,7 +220,9 @@ class Ledger:
             # Each window owns its own child set, relay pool and durable budget.
             # An uncertain/unfinished scope still blocks its own conversation
             # above; live custody across conversations is bounded here.
-            live = self.db.execute("SELECT count(*) FROM windows WHERE state IN ('active','draining','expired')").fetchone()[0]
+            # An expired window's custody was terminated at its hard deadline;
+            # one stuck awaiting retirement never holds a live slot.
+            live = self.db.execute("SELECT count(*) FROM windows WHERE state IN ('active','draining')").fetchone()[0]
             require(live < self.live_windows, "window_capacity")
             require(request["predecessor_window_id"] == (latest["id"] if latest else None), "window_predecessor")
             require(self.db.execute("SELECT 1 FROM windows WHERE id=?", (request["window_id"],)).fetchone() is None,
