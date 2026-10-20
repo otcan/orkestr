@@ -2,6 +2,7 @@
 use crate::{ports::Blocker, ports::ProviderEvent};
 use serde_json::Value;
 use std::collections::VecDeque;
+mod text;
 
 /// One fresh owned native thread and one submitted request, never a resumed
 /// connection. Native identifiers and output are deliberately absent from Debug.
@@ -15,6 +16,7 @@ pub struct TurnStream {
     events: VecDeque<ProviderEvent>,
     poisoned: bool,
     interrupt_claimed: bool,
+    text: text::TurnText,
 }
 impl TurnStream {
     /// Protocol correlation only. The process layer separately consumes Core's
@@ -33,6 +35,7 @@ impl TurnStream {
             events: VecDeque::new(),
             poisoned: false,
             interrupt_claimed: false,
+            text: text::TurnText::default(),
         })
     }
     pub fn next_event(&mut self) -> Option<ProviderEvent> {
@@ -168,7 +171,11 @@ impl TurnStream {
         let method = text(&value, "method")?;
         if !matches!(
             method,
-            "turn/started" | "turn/completed" | "item/agentMessage/delta"
+            "turn/started"
+                | "turn/completed"
+                | "item/agentMessage/delta"
+                | "item/started"
+                | "item/completed"
         ) {
             return Ok(());
         }
@@ -176,16 +183,18 @@ impl TurnStream {
         if text(params, "threadId")? != self.thread {
             return Err(Blocker::StaleLease);
         }
-        if method == "item/agentMessage/delta" {
+        if matches!(
+            method,
+            "item/agentMessage/delta" | "item/started" | "item/completed"
+        ) {
             self.turn_id(text(params, "turnId")?)?;
             if self.terminal.is_some() {
                 return Err(Blocker::Protocol);
             }
-            let delta = text(params, "delta")?;
-            if delta.len() > 8192 {
-                return Err(Blocker::Protocol);
+            if let Some(snapshot) = self.text.receive(method, params)? {
+                self.queue(ProviderEvent::Progress(snapshot))?;
             }
-            return self.queue(ProviderEvent::Progress(delta.into()));
+            return Ok(());
         }
         let turn = params.get("turn").ok_or(Blocker::Protocol)?;
         self.turn_id(text(turn, "id")?)?;
@@ -212,6 +221,11 @@ impl TurnStream {
             } else {
                 Err(Blocker::Protocol)
             };
+        }
+        if matches!(event, ProviderEvent::CompletedProposal { .. }) {
+            if let Some(snapshot) = self.text.finish(turn)? {
+                self.queue(ProviderEvent::Progress(snapshot))?;
+            }
         }
         self.queue(event.clone())?;
         self.terminal = Some(event);

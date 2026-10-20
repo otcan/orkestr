@@ -80,7 +80,7 @@ for line in frames():"#,
             source
         };
         let source = if (7..=9).contains(&stop_mode) {
-            source.replace("  emit({'method':'turn/completed'", "  for i in range(32): emit({'method':'item/agentMessage/delta','params':{'threadId':'synthetic-native','turnId':'t1','itemId':'buffered','delta':'buffered progress'}})\n  emit({'method':'turn/completed'")
+            source.replace("  emit({'method':'turn/completed'", "  for i in range(32): emit({'method':'item/agentMessage/delta','params':{'threadId':'synthetic-native','turnId':'t1','itemId':'buffered-%d'%i,'delta':'buffered progress'}})\n  emit({'method':'turn/completed'")
         } else {
             source
         };

@@ -7,6 +7,25 @@ fn channel() -> BrokerChannel {
     .into_channel()
 }
 #[test]
+fn agent_item_boundaries_preserve_original_handle_and_turn_fences() {
+    for method in ["item/started", "item/completed"] {
+        let mut c = channel();
+        c.reserve_execution(7).unwrap();
+        c.receive(json!({"id":2,"result":{"owned_handle":"synthetic_owned","frame":{"id":7,"result":{"turn":{"id":"turn","status":"inProgress"}}}}}).to_string().as_bytes()).unwrap();
+        let frame = json!({"method":method,"params":{"threadId":"native","turnId":"turn",
+            "item":{"type":"agentMessage","id":"item","text":"Full answer.","phase":"final_answer"}}});
+        let mut envelope = json!({"method":"BrokerOutput","params":{"owned_handle":"synthetic_owned","frame":frame}});
+        assert_eq!(
+            c.receive(envelope.to_string().as_bytes()).unwrap(),
+            Some(frame)
+        );
+        assert!(!c.terminal_observed);
+        assert!(c.reserve_continuation(8).is_err());
+        envelope["params"]["frame"]["params"]["turnId"] = json!("foreign");
+        assert!(c.receive(envelope.to_string().as_bytes()).is_err());
+    }
+}
+#[test]
 fn execution_correlation_is_once_only_without_becoming_authority() {
     let mut c = channel();
     let envelope = c.reserve_execution(7).unwrap();

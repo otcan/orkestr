@@ -141,7 +141,20 @@ async fn exercise(
     )
     .unwrap();
     let script = if pump_progress == Some(true) {
-        r#"import sys,json; r=json.loads(sys.stdin.readline()); print(json.dumps({'id':r['id'],'result':{'turn':{'id':'t1','status':'inProgress'}}}),flush=True); print(json.dumps({'method':'turn/started','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'inProgress'}}}),flush=True); print(json.dumps({'method':'item/agentMessage/delta','params':{'threadId':'synthetic-native','turnId':'t1','delta':'synthetic progress'}}),flush=True); print(json.dumps({'method':'turn/completed','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'completed'}}}),flush=True); sys.stdin.read()"#
+        r#"import sys,json
+r=json.loads(sys.stdin.readline())
+def emit(method, params): print(json.dumps({'method':method,'params':params}),flush=True)
+def item(method, identity, text, phase):
+ emit(method, {'threadId':'synthetic-native','turnId':'t1','item':{'type':'agentMessage','id':identity,'text':text,'phase':phase}})
+print(json.dumps({'id':r['id'],'result':{'turn':{'id':'t1','status':'inProgress'}}}),flush=True)
+emit('turn/started', {'threadId':'synthetic-native','turn':{'id':'t1','status':'inProgress'}})
+item('item/completed','comment','Working on the request.','commentary')
+item('item/started','answer','','final_answer')
+for fragment in ['synthetic ', 'progress', '.']:
+ emit('item/agentMessage/delta', {'threadId':'synthetic-native','turnId':'t1','itemId':'answer','delta':fragment})
+item('item/completed','answer','synthetic progress.','final_answer')
+emit('turn/completed', {'threadId':'synthetic-native','turn':{'id':'t1','status':'completed','itemsView':'summary','items':[{'type':'agentMessage','id':'answer','text':'synthetic progress.','phase':'final_answer'}]}})
+sys.stdin.read()"#
     } else {
         r#"import sys,json; r=json.loads(sys.stdin.readline()); print(json.dumps({'id':r['id'],'result':{'turn':{'id':'t1','status':'inProgress'}}}),flush=True); print(json.dumps({'method':'turn/started','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'inProgress'}}}),flush=True); print(json.dumps({'method':'turn/completed','params':{'threadId':'synthetic-native','turn':{'id':'t1','status':'completed'}}}),flush=True); sys.stdin.read()"#
     };
@@ -201,7 +214,38 @@ async fn exercise(
                         .provider_payload(&owner, &conversation, &payload_id)
                         .await
                         .unwrap();
-                    assert_eq!(payload.text.as_deref(), Some("synthetic progress"));
+                    assert_eq!(payload.text.as_deref(), Some("synthetic progress."));
+                    let candidate = status.acceptance_candidate.as_ref().unwrap();
+                    store
+                        .accept_execution_authenticated(
+                            &token,
+                            &conversation,
+                            &orkestr_v2_contracts::ExecutionAcceptanceRequest {
+                                run_id: candidate.run_id.clone(),
+                                completion_event_id: candidate.completion_event_id.clone(),
+                                expected_revision: status.revision,
+                                request_key: "full-answer-accept".into(),
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    let reopened = Store::open(&root.join("state.sqlite3")).await.unwrap();
+                    let accepted = reopened
+                        .accepted_results_authenticated(&token, &conversation, 0, 10)
+                        .await
+                        .unwrap();
+                    assert_eq!(accepted.results.len(), 1);
+                    assert_eq!(accepted.results[0].payload_id.as_ref(), Some(&payload_id));
+                    assert_eq!(
+                        reopened
+                            .provider_payload(&owner, &conversation, &payload_id)
+                            .await
+                            .unwrap()
+                            .text
+                            .as_deref(),
+                        Some("synthetic progress.")
+                    );
+                    reopened.close().await;
                     store
                         .remove_provider_payload(&owner, &conversation, &payload_id)
                         .await
