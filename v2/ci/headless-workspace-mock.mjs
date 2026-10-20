@@ -28,11 +28,44 @@ export function createState() {
   };
   const queued = { [C]: [{ conversation_id: C, request_key: 'synthetic-queued', input_message_id: uuid(301), input_event_id: uuid(302),
     input_request_key: 'synthetic-input', state: 'queued', position: 2, queued_at_ms: 2000, window_id: null, withdrawal: null }] };
-  return { archived, messages, window, queued, requests: [] };
+  // windowMode: 'accept' admits; 'uncertain' answers 503 after the request is seen.
+  return { archived, messages, window, queued, requests: [], intake: {}, windowPosts: [], windowMode: 'accept', windowDelayMs: 0 };
 }
 
 const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
 const missing = res => json(res, 404, { code: 'not_found', message: 'Endpoint not found', request_id: 'synthetic', retryable: false });
+
+const body = req => new Promise(resolve => { let text = ''; req.on('data', c => { text += c; }); req.on('end', () => resolve(text)); });
+
+async function intake(state, req, res, id) {
+  if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+  const input = JSON.parse(await body(req));
+  let receipt = state.intake[input.client_message_id];
+  if (!receipt) {
+    const sequence = state.messages[id].length + 1, n = 400 + Object.keys(state.intake).length * 2;
+    receipt = { conversation: id, request: input.client_message_id, message_id: uuid(n), event_id: uuid(n + 1), sequence, status: 'accepted' };
+    state.intake[input.client_message_id] = receipt;
+    state.messages[id].push({ message_id: receipt.message_id, sequence, actor_kind: 'owner', text: input.text });
+  }
+  const { conversation, request, ...wire } = receipt;
+  return json(res, 202, wire);
+}
+
+async function admit(state, req, res, id) {
+  if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+  const request = JSON.parse(await body(req));
+  state.windowPosts.push(request);
+  if (state.windowDelayMs) await new Promise(resolve => setTimeout(resolve, state.windowDelayMs));
+  if (state.windowMode === 'uncertain') return json(res, 503, { code: 'unavailable', message: 'Synthetic uncertainty' });
+  const join = request.window_id !== null;
+  const status = { window_id: join ? request.window_id : uuid(500 + state.windowPosts.length), conversation_id: id,
+    generation: join ? request.expected_generation : request.expected_generation + 1, state: 'active',
+    input_message_id: request.input_message_id, input_event_id: request.input_event_id, predecessor_window_id: null,
+    opened_at_ms: 1000, work_deadline_ms: 871000, expires_at_ms: 901000, limits: LIMITS };
+  state.window[id] = status;
+  return json(res, 201, { status, input_message_id: request.input_message_id, input_event_id: request.input_event_id,
+    input_request_key: request.input_request_key, request_key: request.request_key, duplicate: false });
+}
 
 function api(state, req, res, url) {
   const path = url.pathname, q = url.searchParams;
@@ -66,6 +99,8 @@ function api(state, req, res, url) {
     const more = state.archived.some(x => x.archive_sequence > (rows.at(-1)?.archive_sequence ?? after));
     return json(res, 200, { conversation_id: id, entries: rows, next_after: more ? rows.at(-1).archive_sequence : null });
   }
+  if (rest === '/messages' && req.method === 'POST') return intake(state, req, res, id);
+  if (rest === '/window' && req.method === 'POST') return admit(state, req, res, id);
   if (rest === '/window' && req.method === 'GET') {
     if (!state.window[id]) { res.writeHead(204, { 'cache-control': 'no-store' }); return res.end(); }
     return json(res, 200, state.window[id]);

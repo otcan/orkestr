@@ -240,6 +240,7 @@ pub mod memory_state;
 pub mod beta_window;
 
 pub mod beta_inputs;
+pub mod page_memory;
 
 pub mod chat_timeline;
 pub mod conversation_directory;

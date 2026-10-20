@@ -115,6 +115,12 @@ impl WindowIntents {
             .or_default()
             .prepare(request)
     }
+    /// Uncertain window requests by conversation, for page-reload recovery.
+    pub fn pending_requests(&self) -> impl Iterator<Item = (&str, &ExecutionWindowRequest)> {
+        self.entries
+            .iter()
+            .filter_map(|(route, intent)| Some((route.as_str(), intent.pending()?)))
+    }
     pub fn ticket(&self, route: &str) -> Option<IntentTicket> {
         let intent = self.entries.get(route)?;
         intent.pending()?;

@@ -1,7 +1,7 @@
 //! Page-lifetime durable intake receipts retained while a Send action awaits execution admission.
 use orkestr_v2_contracts::{ConversationId, Receipt};
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SavedInput {
     pub conversation: ConversationId,
     pub input_request_key: String,
@@ -68,5 +68,9 @@ impl SavedInputs {
     }
     pub fn clear_owner(&mut self) {
         self.inputs.clear();
+    }
+    /// Retained receipts in arrival order, for page-reload recovery.
+    pub fn all(&self) -> &[SavedInput] {
+        &self.inputs
     }
 }

@@ -94,7 +94,7 @@ pub fn Composer(
             textarea { id: "composer", rows: 3, value: "{draft.text}", "aria-describedby": "composer-help",
                 oninput: move |event| { if session_scope.read().is_current(owner) { drafts.write().entry(input_id.clone()).or_default().edit(event.value()); } }
             }
-            p { id: "composer-help", if draft.pending.is_some() { "Retry sends the original message. Your newer edits stay in the composer." } else { "Send starts work. Enter adds a new line." } }
+            p { id: "composer-help", if retained.is_some() && !sending() { "Message saved; work has not started yet. Retry send to start it. Your newer edits stay in the composer." } else if draft.pending.is_some() { "Retry sends the original message. Your newer edits stay in the composer." } else { "Send starts work. Enter adds a new line." } }
             button { r#type: "submit", disabled: sending() || full, if review { "Review and retry send" } else if draft.pending.is_some() { "Retry send" } else { "Send" } }
             if !status().is_empty() { p { class: "composer-notice", role: "status", "{status}" } }
         }
