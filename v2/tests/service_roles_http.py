@@ -144,8 +144,9 @@ def run(case):
     bdeep = ready(case, second, "deep")
     assert bdeep["run_id"] == bdeep_running["run_id"]
     assert status(case, first, phase="running")["run_id"] == deep["run_id"]
-    accept(case, second, bdeep, "accept:second-deep")
+    # Both roles settle before either acceptance: the revision is per conversation.
     bfast = ready(case, second, "fast")
+    accept(case, second, bdeep, "accept:second-deep")
     bfast["_role"] = "fast"
     accept(case, second, bfast, "accept:second-fast")
     assert status(case, first, phase="running")["run_id"] == deep["run_id"]
@@ -174,8 +175,8 @@ def run(case):
     accept(case, first, adeep, "accept:resumed-deep")
     (case.workspaces["deep"] / "release-4").touch()
     cdeep = ready(case, third, "deep", run=cdeep_running["run_id"])
-    accept(case, third, cdeep, "accept:third-deep")
     cfast = ready(case, third, "fast")
+    accept(case, third, cdeep, "accept:third-deep")
     cfast["_role"] = "fast"
     accept(case, third, cfast, "accept:third-fast")
     # Both remaining windows are idle; later fresh windows reclaim them inline.
