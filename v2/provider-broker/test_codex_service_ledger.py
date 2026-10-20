@@ -244,7 +244,8 @@ class LedgerTests(unittest.TestCase):
 import json,os,sys,uuid,time
 p,owner,conversation=sys.argv[1:]
 l=Ledger(p,owner,conversation)
-r={'version':1,'operation':'admit','request_id':str(uuid.uuid4()),'owner_id':owner,'conversation_id':conversation,'window_id':str(uuid.uuid4()),'input_message_id':str(uuid.uuid4()),'input_event_id':str(uuid.uuid4()),'input_request_key':'synthetic-input','generation':1,'expected_generation':0,'predecessor_window_id':None,'opened_at_ms':int(time.time()*1000),'work_deadline_ms':int(time.time()*1000)+870000,'expires_at_ms':int(time.time()*1000)+900000}
+opened=int(time.time()*1000)
+r={'version':1,'operation':'admit','request_id':str(uuid.uuid4()),'owner_id':owner,'conversation_id':conversation,'window_id':str(uuid.uuid4()),'input_message_id':str(uuid.uuid4()),'input_event_id':str(uuid.uuid4()),'input_request_key':'synthetic-input','generation':1,'expected_generation':0,'predecessor_window_id':None,'opened_at_ms':opened,'work_deadline_ms':opened+870000,'expires_at_ms':opened+900000}
 l.admit(r)
 l.reserve(r['window_id'],1,str(uuid.uuid4()),'bytes',16384)
 os._exit(0)
@@ -252,7 +253,7 @@ os._exit(0)
         result = subprocess.run([sys.executable, "-B", "-c", code, self.path, self.owner, self.conversation],
             cwd=Path(__file__).resolve().parent, env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
             stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
-        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
         self.ledger = Ledger(self.path, self.owner, self.conversation, clock=self.clock)
         self.assertEqual(self.ledger.status()["state"], "reconciliation")
         self.assertEqual(self.ledger.status()["reserved_bytes"], 16384)
