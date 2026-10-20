@@ -1,8 +1,80 @@
-//! Upgrade from schema 51: a Workbench stranded by an older release.
+//! Upgrades from older schemas with windows stranded by older releases.
 use super::*;
+
+fn between<'a>(sql: &'a str, start: &str, end: Option<&str>) -> &'a str {
+    let from = sql.find(start).unwrap();
+    match end {
+        Some(end) => &sql[from..sql.find(end).unwrap()],
+        None => &sql[from..],
+    }
+}
+
+/// Undo 0054 exactly: the schema-53 views, outcome CHECK and no lapse tables.
+pub(super) async fn downgrade_to_schema53(store: &Store) {
+    let v48 = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/migrations/0048_stranded_window_reconciliation.sql"
+    ));
+    let v53 = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/migrations/0053_stranded_lost_worker.sql"
+    ));
+    let table = between(
+        v48,
+        "CREATE TABLE execution_window_reconciliations",
+        Some("-- An unaccepted completed proposal"),
+    );
+    let mut tx = store.pool.begin().await.unwrap();
+    sqlx::query("PRAGMA defer_foreign_keys = ON")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    for statement in [
+        "DROP VIEW production_terminal_evidence",
+        "DROP VIEW production_retirement_provenance",
+        "DROP TABLE worker_task_failures",
+        "DROP TABLE production_lapsed_retirements",
+        "DROP TABLE production_run_lapses",
+        "DELETE FROM _sqlx_migrations WHERE version=54",
+    ] {
+        sqlx::query(statement).execute(&mut *tx).await.unwrap();
+    }
+    // Recreate under the original, unquoted 0048 definition.
+    for statement in [
+        "CREATE TEMP TABLE reconciliations_copy AS SELECT * FROM execution_window_reconciliations",
+        "DROP TABLE execution_window_reconciliations",
+    ] {
+        sqlx::query(statement).execute(&mut *tx).await.unwrap();
+    }
+    sqlx::raw_sql(table).execute(&mut *tx).await.unwrap();
+    for statement in [
+        "INSERT INTO execution_window_reconciliations SELECT * FROM reconciliations_copy",
+        "DROP TABLE reconciliations_copy",
+    ] {
+        sqlx::query(statement).execute(&mut *tx).await.unwrap();
+    }
+    sqlx::raw_sql(between(
+        v53,
+        "CREATE VIEW production_terminal_evidence",
+        None,
+    ))
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::raw_sql(between(
+        v48,
+        "CREATE VIEW production_retirement_provenance",
+        None,
+    ))
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}
 
 /// Return a populated database to the exact schema-51 shape (before 0052).
 async fn downgrade_to_schema51(store: &Store) {
+    downgrade_to_schema53(store).await;
     let mut tx = store.pool.begin().await.unwrap();
     for statement in [
         "DROP VIEW production_terminal_evidence",
@@ -56,7 +128,7 @@ async fn schema51_stranded_workbench_reconciles_after_upgrade() {
     let fresh = restart(w, true).await;
     assert_eq!(
         count(&fresh, "SELECT max(version) FROM _sqlx_migrations").await,
-        53
+        54
     );
     for table in [
         "production_run_failures",

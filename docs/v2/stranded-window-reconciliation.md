@@ -118,6 +118,60 @@ Inputs the failed window admitted are released for re-admission
 (`execution_window_open_failure_inputs`), and its credential is revoked. The
 manager records the window `retired` with outcome `failed` and no run.
 
+## Lapsed runs (0054)
+
+A service restart or a dead broker can leave a Worker, Deep or Fast run
+`starting`, `running` or `blocked`. In that state it has unknown delivery and no
+terminal observation. Its lease has passed, so Core already refuses every effect
+of the lost child, but nothing made the run terminal. Its window could not
+retire, and a parent proposal waiting on it could not be accepted.
+
+Before planning the window decision, both the automatic and the owner path
+**settle** such runs. A run is settled only when all of the following hold:
+
+- The process holds no custody of the window.
+- The manager reports no live budget for the exact window: it is not `active`
+  or `draining`.
+- The window is `reconciliation_required`.
+- The run's lease has passed, and it has no issued control.
+
+Each settled run becomes `cancelled` with a `production_run_lapses` audit row:
+cause `lease_expired_process_gone`, its prior state, the lease it lapsed under,
+the actor, and the evidence event (its latest observation). Its terminal kind is
+`failed`. Children settle before parents.
+
+- A Worker's binding is lost.
+- A Deep or Fast binding is released at the next generation, so the conversation
+  resumes the same native session. The interrupted turn is never re-run.
+- A parent Deep proposal stays acceptable: its children are now terminal.
+
+A blocked Worker after a `lost` observation keeps its 0053 decision.
+
+When the window's last Deep turn lapsed, the window closes with outcome
+`failed`, naming that turn. A `production_lapsed_retirements` provenance row lets
+the successor reattach that native session. `execution_window_reconciliations`
+was rebuilt only to widen its outcome CHECK.
+
+## Acceptance grace
+
+The automatic path abandons a proposal still awaiting acceptance only once the
+window's hard deadline has passed by more than 24 hours. Until then the owner
+can accept it, and the next automatic pass closes the window as accepted. The
+owner can also abandon it at any time with the explicit endpoint.
+
+## Worker setup when the parent proposes first (0054)
+
+No new delegation is admitted under a parent that no longer runs. A Worker still
+in native setup when its parent proposes therefore never runs. The scheduler
+ends it as follows:
+
+- Its task is recorded in `worker_task_failures` with cause
+  `parent_left_running_during_setup`, and the task list shows it as `Failed`
+  with that cause.
+- Its unused setup binding, including confirmed readiness, is lost and no longer
+  counts as unresolved setup, so the window still retires.
+- Runtime reaps the setup child as before.
+
 ## Not covered
 
 Any of the following refuses the reconciliation and changes nothing:

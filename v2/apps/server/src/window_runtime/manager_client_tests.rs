@@ -86,9 +86,10 @@ fn exact_receipt_refusals_and_retired_provenance() {
     assert!(client.receipt(&value).is_ok());
     value["outcome"] = json!("succeeded");
     assert!(client.receipt(&value).is_err());
-    // A failed open is retired without a run; nothing else may omit it.
+    // A failed window may name its lapsed Deep turn, or (a failed open) no
+    // run at all; nothing else may omit it.
     value["outcome"] = json!("failed");
-    assert!(client.receipt(&value).is_err());
+    assert!(client.receipt(&value).is_ok());
     value["run_id"] = json!(null);
     assert!(client.receipt(&value).is_err());
     value["terminal_event_id"] = json!(null);
@@ -138,12 +139,12 @@ async fn abandonment_is_reconcile_only_and_refused_before_io() {
             .unwrap_err(),
         ManagerError::InvalidRequest
     );
-    // Only a failed open names no run; it never names one, and never retires.
+    // Only a failed window may name no run, and none retires.
     for (outcome, run) in [
         (TerminalOutcome::Abandoned, None),
         (
             TerminalOutcome::Failed,
-            Some((Uuid::from_u128(7), EventId(Uuid::from_u128(8)))),
+            Some((Uuid::nil(), EventId(Uuid::from_u128(8)))),
         ),
     ] {
         assert_eq!(

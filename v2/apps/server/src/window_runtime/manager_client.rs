@@ -285,7 +285,7 @@ impl ManagerClient {
     }
     /// Release a stranded window (expired/reconciliation, no live custody in
     /// the manager) after Core prepared its audited decision. Idempotent.
-    /// Only a `Failed` open names no run.
+    /// Only a `Failed` window may name no run (a failed open).
     pub async fn reconcile(
         &self,
         request_id: &str,
@@ -306,7 +306,7 @@ impl ManagerClient {
         run: Option<(Uuid, EventId)>,
         deadline: Instant,
     ) -> Result<WindowReceipt> {
-        if (outcome == TerminalOutcome::Failed) != run.is_none()
+        if (outcome != TerminalOutcome::Failed && run.is_none())
             || run
                 .as_ref()
                 .is_some_and(|(run_id, event)| run_id.is_nil() || event.0.is_nil())
@@ -539,10 +539,10 @@ impl ManagerClient {
                 ]
                 .contains(&s)
             })
-            // Only a failed open is retired without naming a run.
+            // Only a failed window may be retired without naming a run.
             || (r.state == WindowState::Retired
                 && (r.outcome.is_none()
-                    || (r.outcome == Some(TerminalOutcome::Failed)) != r.run_id.is_none()
+                    || (r.outcome != Some(TerminalOutcome::Failed) && r.run_id.is_none())
                     || r.run_id.is_none() != r.terminal_event_id.is_none()))
             || (r.state != WindowState::Retired
                 && (r.outcome.is_some() || r.run_id.is_some() || r.terminal_event_id.is_some()))

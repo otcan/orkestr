@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use orkestr_v2_contracts::{ConversationId, RunId, WorkerTaskPhase, WorkerTaskReceipt};
 use orkestr_v2_ui::{
     session_scope::SessionScope,
-    worker_tasks::{phase_label, TaskHistory},
+    worker_tasks::{status_label, TaskHistory},
 };
 use serde_json::{json, Value};
 use std::{cell::Cell, rc::Rc};
@@ -110,7 +110,7 @@ pub fn WorkerTasksView(
                     for row in &list.tasks {
                         li { key: "{row.task.task_id}",
                             h4 { "{row.title.as_deref().unwrap_or(\"Task payload removed\")}" }
-                            p { "{phase_label(row.phase)}" }
+                            p { "{status_label(row)}" }
                             p { "Effective saved deadline is not provided here. View worker activity for current status." }
                             p { if row.instructions_available { "Instructions saved. This history shows the task title; instruction text is not included." } else { "Saved instructions removed." } }
                             if let Some(run) = &row.run_id {

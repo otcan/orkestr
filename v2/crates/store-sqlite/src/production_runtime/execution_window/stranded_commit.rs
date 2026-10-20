@@ -99,7 +99,7 @@ pub(super) async fn commit_turns(
             Outcome::Accepted => ("production_graceful_retirements", "acceptance_event_id"),
             Outcome::Stopped => ("production_stopped_retirements", "stopped_event_id"),
             Outcome::Abandoned => ("production_abandoned_retirements", "abandoned_event_id"),
-            Outcome::Failed => return Err(RuntimeStoreError::Fenced),
+            Outcome::Failed => ("production_lapsed_retirements", "lapsed_event_id"),
         };
         // Closed constant identifiers above, never caller data.
         sqlx::query(&format!("INSERT INTO {table}(context_id,incarnation_id,supervisor_generation,prior_run_id,{column},session_id,binding_generation,retired_at_ms) SELECT r.context_id,r.incarnation_id,?,r.id,t.event_id,r.session_id,b.generation,? FROM production_runs r JOIN production_terminal_evidence t ON t.run_id=r.id JOIN session_bindings b ON b.id=r.session_id WHERE r.id=? AND t.terminal_kind=? AND t.event_id=?"))

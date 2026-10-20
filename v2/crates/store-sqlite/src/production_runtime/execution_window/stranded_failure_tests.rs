@@ -5,9 +5,9 @@ use super::*;
 use orkestr_v2_application::runtime::RuntimeStore;
 use orkestr_v2_contracts::ExecutionWindowOpenFailureCause as Cause;
 
-struct Workbench {
-    p: Pending,
-    worker: ProviderAdmission,
+pub(super) struct Workbench {
+    pub(super) p: Pending,
+    pub(super) worker: ProviderAdmission,
     /// The cancellation receipt, or the `lost` observation for a broker death.
     cancellation: EventId,
 }
@@ -16,13 +16,24 @@ struct Workbench {
 /// requests its cancellation; Fast and Deep then propose. The process dies
 /// before the Worker acknowledges: exactly the live Workbench shape.
 async fn workbench() -> Workbench {
-    workbench_with(false).await
+    workbench_with(WorkerEnd::Cancelled).await
+}
+
+/// How the Worker's process ended before the restart.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum WorkerEnd {
+    /// Deadline cancellation requested, never acknowledged (0052).
+    Cancelled,
+    /// Broker died mid-turn after a `lost` observation (0053).
+    Lost,
+    /// Nothing recorded: the process just vanished while `running` (0054).
+    Running,
 }
 
 /// `lost`: instead of a deadline cancellation, the Worker's broker dies
 /// mid-turn (live host-mode incident: a refused provider frame). The run is
 /// `blocked` with unknown delivery after a `lost` observation.
-async fn workbench_with(lost: bool) -> Workbench {
+pub(super) async fn workbench_with(end: WorkerEnd) -> Workbench {
     let w = Window::open().await;
     let fast = w.ready_fast().await;
     w.activate().await;
@@ -114,22 +125,28 @@ async fn workbench_with(lost: bool) -> Workbench {
         )
         .await
         .unwrap();
-    let evidence = if lost {
-        w.bound
-            .append_provider_event(
-                &w.f.owner,
-                &worker,
-                &observation(&worker, 2, ProviderEvent::Lost),
-            )
-            .await
-            .unwrap();
-        "SELECT event_id FROM production_observations WHERE run_id=? AND kind='lost'"
-    } else {
-        w.bound
-            .request_cancel(&w.f.owner, &worker.run.run_id, "worker-runtime-deadline")
-            .await
-            .unwrap();
-        "SELECT event_id FROM production_cancellations WHERE run_id=?"
+    let evidence = match end {
+        WorkerEnd::Lost => {
+            w.bound
+                .append_provider_event(
+                    &w.f.owner,
+                    &worker,
+                    &observation(&worker, 2, ProviderEvent::Lost),
+                )
+                .await
+                .unwrap();
+            "SELECT event_id FROM production_observations WHERE run_id=? AND kind='lost'"
+        }
+        WorkerEnd::Cancelled => {
+            w.bound
+                .request_cancel(&w.f.owner, &worker.run.run_id, "worker-runtime-deadline")
+                .await
+                .unwrap();
+            "SELECT event_id FROM production_cancellations WHERE run_id=?"
+        }
+        WorkerEnd::Running => {
+            "SELECT event_id FROM production_observations WHERE run_id=? AND kind='started'"
+        }
     };
     let cancellation = EventId(
         scalar(&w.f.store, evidence, &worker.run.run_id.to_string())
@@ -296,7 +313,7 @@ async fn deadline_cancelled_worker_fails_and_unblocks_the_workbench_conversation
 /// and the conversation stayed stranded.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lost_worker_fails_and_unblocks_its_conversation() {
-    let b = workbench_with(true).await;
+    let b = workbench_with(WorkerEnd::Lost).await;
     let w = &b.p.w;
     let worker = b.worker.run.run_id.to_string();
     assert_eq!(
@@ -629,3 +646,6 @@ async fn unissued_open_closes_without_touching_any_supervisor() {
 
 #[path = "stranded_upgrade_tests.rs"]
 mod upgrade;
+
+#[path = "stranded_lapse_tests.rs"]
+mod lapse;

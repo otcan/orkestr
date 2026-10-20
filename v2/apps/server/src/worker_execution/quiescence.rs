@@ -42,14 +42,43 @@ impl WorkerSchedule {
         phase: Phase,
     ) -> Result<(Phase, WorkerProgress), &'static str> {
         match phase {
-            Phase::Pending if self.launch.is_none() => Ok((
-                Phase::Closed(WorkerProgress::Completed),
-                WorkerProgress::Completed,
-            )),
+            Phase::Pending if self.launch.is_none() => {
+                // A claimed task that never started setup ends visibly.
+                self.fail_task_setup(None).await;
+                Ok((
+                    Phase::Closed(WorkerProgress::Completed),
+                    WorkerProgress::Completed,
+                ))
+            }
+            Phase::Preparing(preparing) => {
+                // The parent left Running during native setup: no delegation
+                // can be admitted any more. Record the task failed with its
+                // cause and release its unused setup; dropping the setup
+                // starts Runtime's owned reaper for the original child.
+                let session = preparing.binding.session_id.clone();
+                self.fail_task_setup(Some(&session)).await;
+                drop(preparing);
+                Err("Worker setup ended: parent left Running before delegation")
+            }
             // Running checks exact current terminal status or an already-issued
             // control before refusing all further inference in quiesced mode.
             Phase::Running(running) => self.running(running).await,
             _ => Err("Worker setup or nonterminal cleanup requires reconciliation"),
+        }
+    }
+
+    /// Best effort: Core refuses while the parent still runs, and an already
+    /// recorded failure replays. A refusal leaves the task held, as before.
+    pub(super) async fn fail_task_setup(&self, setup: Option<&orkestr_v2_contracts::SessionId>) {
+        let Some(task) = self.task_id.as_ref() else {
+            return;
+        };
+        if let Err(error) = self
+            .store
+            .fail_worker_task_setup(&self.credential, task, setup)
+            .await
+        {
+            eprintln!("Worker task setup failure not recorded: {error:?}");
         }
     }
 

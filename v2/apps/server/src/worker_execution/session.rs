@@ -219,10 +219,19 @@ impl WorkerSchedule {
             return Err("Worker readiness lineage changed");
         }
         let delegation = if let Some(claim) = self.task_claim.take() {
-            self.store
+            match self
+                .store
                 .delegate_worker_task(&self.credential, claim, &binding)
                 .await
-                .map_err(|_| "Worker subtask delegation refused")?
+            {
+                Ok(delegation) => delegation,
+                Err(_) => {
+                    // The parent may have proposed after readiness: the
+                    // confirmed setup must not strand the window.
+                    self.fail_task_setup(Some(&binding.session_id)).await;
+                    return Err("Worker subtask delegation refused");
+                }
+            }
         } else {
             if self.configuration.policy.owner_tasks() {
                 return Err("Worker subtask claim missing; parent input substitution refused");

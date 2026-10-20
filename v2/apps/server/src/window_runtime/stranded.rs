@@ -123,6 +123,22 @@ impl Controller {
                 .await
                 .map_err(|_| "window reconciliation mark refused")?;
         }
+        // Runs whose lease passed with their process gone become terminal
+        // first, so a parent proposal waiting on them stays acceptable. This
+        // process holds no custody (the caller checked); the manager must also
+        // report no live budget for the window. A refusal changes nothing.
+        if self.manager_released(window).await {
+            let _ = self
+                .store
+                .settle_lapsed_runs_authenticated(
+                    browser,
+                    conversation,
+                    window.window_id,
+                    window.generation,
+                    actor,
+                )
+                .await;
+        }
         let plan = self
             .store
             .plan_stranded_execution_window_authenticated(
@@ -153,7 +169,7 @@ impl Controller {
             Outcome::Abandoned => TerminalOutcome::Abandoned,
             Outcome::Failed => TerminalOutcome::Failed,
         };
-        // A failed open names no run; every other outcome names exactly one.
+        // A failed open names no run; every other window names exactly one.
         let run = match (run, event) {
             (Some(run), Some(event)) => Some((run.0, event)),
             (None, None) => None,
@@ -185,6 +201,34 @@ impl Controller {
         };
         self.reset_current_if(conversation)?;
         Ok(receipt)
+    }
+
+    /// The manager holds no live budget (or custody) for this exact window.
+    async fn manager_released(&self, window: &ExecutionWindowStatus) -> bool {
+        let Ok(manager) = self
+            .manager
+            .for_conversation(window.conversation_id.clone())
+        else {
+            return false;
+        };
+        match manager
+            .status(
+                &format!("lapse:{}", uuid::Uuid::new_v4()),
+                Instant::now() + Duration::from_secs(5),
+            )
+            .await
+        {
+            Ok(super::super::manager_client::ManagerReceipt::Window(receipt)) => {
+                receipt.window_id == window.window_id
+                    && receipt.generation == window.generation
+                    && !matches!(
+                        receipt.state,
+                        super::super::manager_client::WindowState::Active
+                            | super::super::manager_client::WindowState::Draining
+                    )
+            }
+            _ => false,
+        }
     }
 
     /// This conversation's local controller may be poisoned/released from

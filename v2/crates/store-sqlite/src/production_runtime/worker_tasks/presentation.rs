@@ -68,7 +68,7 @@ impl Store {
                 ) => false,
                 Err(error) => return Err(error),
             };
-        let rows = sqlx::query("SELECT t.*,CASE WHEN length(CAST(p.title AS BLOB))<=160 THEN p.title END AS title,p.task_id AS payload_present,d.admitted_run_id,r.state AS run_state FROM worker_tasks t LEFT JOIN worker_task_payloads p ON p.task_id=t.id LEFT JOIN worker_provider_delegations d ON d.id=t.delegation_id LEFT JOIN production_runs r ON r.id=d.admitted_run_id WHERE t.owner_id=? AND t.conversation_id=? AND t.parent_run_id=? ORDER BY t.ordinal LIMIT 33")
+        let rows = sqlx::query("SELECT t.*,CASE WHEN length(CAST(p.title AS BLOB))<=160 THEN p.title END AS title,p.task_id AS payload_present,d.admitted_run_id,r.state AS run_state,tf.cause AS failure_cause FROM worker_tasks t LEFT JOIN worker_task_payloads p ON p.task_id=t.id LEFT JOIN worker_task_failures tf ON tf.task_id=t.id LEFT JOIN worker_provider_delegations d ON d.id=t.delegation_id LEFT JOIN production_runs r ON r.id=d.admitted_run_id WHERE t.owner_id=? AND t.conversation_id=? AND t.parent_run_id=? ORDER BY t.ordinal LIMIT 33")
             .bind(owner.to_string()).bind(conversation.to_string()).bind(parent.to_string())
             .fetch_all(&mut *tx).await.map_err(db)?;
         if rows.len() > MAX_WORKER_TASKS_PER_PARENT {
@@ -117,6 +117,9 @@ impl Store {
                 Some("running") if live => WorkerTaskPhase::Running,
                 Some("starting") if live => WorkerTaskPhase::Preparing,
                 Some("running" | "starting") => WorkerTaskPhase::Held,
+                None if row.get::<Option<&str>, _>("failure_cause").is_some() => {
+                    WorkerTaskPhase::Failed
+                }
                 None => match (row.get::<&str, _>("state"), live && available) {
                     ("queued", true) => WorkerTaskPhase::Queued,
                     ("claimed" | "delegated", true) => WorkerTaskPhase::Claimed,
@@ -131,6 +134,13 @@ impl Store {
                 title: row.get("title"),
                 instructions_available: available,
                 run_id,
+                failure_cause: match row.get::<Option<&str>, _>("failure_cause") {
+                    None => None,
+                    Some("parent_left_running_during_setup") => {
+                        Some(WorkerTaskFailureCause::ParentLeftRunningDuringSetup)
+                    }
+                    Some(_) => return Err(RuntimeStoreError::Unavailable),
+                },
             });
         }
         tx.commit().await.map_err(db)?;

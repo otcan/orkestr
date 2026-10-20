@@ -34,10 +34,13 @@ def restart(case):
 def expire_while_stopped(case, window):
     # The hard deadline passes while the service is down. Core timestamps keep
     # their fixed 870/900 s shape; nothing else in Core or the manager changes.
+    # Past the hard deadline and the 24 h acceptance grace, so the automatic
+    # path may abandon proposals still awaiting the owner.
+    shift = 900001 + 86400000
     with closing(sqlite3.connect(case.home / "core.sqlite3")) as db:
-        db.execute("UPDATE execution_windows SET opened_at_ms=opened_at_ms-900001,"
-                   "work_deadline_ms=work_deadline_ms-900001,expires_at_ms=expires_at_ms-900001 "
-                   "WHERE id=?", (window,))
+        db.execute("UPDATE execution_windows SET opened_at_ms=opened_at_ms-?,"
+                   "work_deadline_ms=work_deadline_ms-?,expires_at_ms=expires_at_ms-? "
+                   "WHERE id=?", (shift, shift, shift, window))
         db.commit()
 
 

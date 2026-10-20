@@ -2,8 +2,9 @@
 use super::*;
 use crate::runtime::ledger::{hash, secret};
 use orkestr_v2_contracts::{
-    ConversationId, EventId, MessageId, RunId, TaskId, WorkerTaskCreateRequest, WorkerTaskList,
-    WorkerTaskPhase, WorkerTaskReceipt, WorkerTaskStatus, MAX_WORKER_TASKS_PER_PARENT,
+    ConversationId, EventId, MessageId, RunId, TaskId, WorkerTaskCreateRequest,
+    WorkerTaskFailureCause, WorkerTaskList, WorkerTaskPhase, WorkerTaskReceipt, WorkerTaskStatus,
+    MAX_WORKER_TASKS_PER_PARENT,
 };
 use sqlx::sqlite::SqliteRow;
 
@@ -12,6 +13,7 @@ mod creation;
 mod hold;
 mod input;
 mod presentation;
+mod setup_failure;
 
 /// Private one-use queue claim. It is not a provider execution grant and cannot
 /// be reconstructed from a receipt, browser task ID, or provider output.

@@ -252,8 +252,7 @@ class LedgerTests(unittest.TestCase):
         request = self.admit()
         self.ledger.uncertain(request["window_id"], 1, "runtime_refused")
         failed = {**self.reconciliation(request, "failed"), "run_id": None, "terminal_event_id": None}
-        for bad in ({**failed, "run_id": uid()},
-                    {**failed, "terminal_event_id": uid()},
+        for bad in ({**failed, "terminal_event_id": uid()},
                     {**self.reconciliation(request, "abandoned"), "run_id": None}):
             with self.subTest(bad=bad), self.assertRaisesRegex(contract.Refused, "terminal_run"):
                 self.ledger.reconcile(bad)
@@ -268,11 +267,22 @@ class LedgerTests(unittest.TestCase):
         self.assertTrue(self.ledger.admit(self.request(2))[1])
         wire = {**failed, "version": 1, "operation": "reconcile", "request_id": uid()}
         self.assertEqual(contract.decode(contract.canonical(wire)), wire)
-        for bad in ({**wire, "run_id": uid()},
+        for bad in ({**wire, "terminal_event_id": uid()},
                     {**wire, "outcome": "abandoned"},
                     {**wire, "operation": "retire"}):
             with self.subTest(wire=bad), self.assertRaises(contract.Refused):
                 contract.decode(contract.canonical(bad))
+
+    def test_window_with_a_lapsed_deep_turn_fails_naming_that_turn(self):
+        request = self.admit()
+        self.ledger.uncertain(request["window_id"], 1, "server_lost")
+        lapsed = self.reconciliation(request, "failed")
+        self.assertIsNotNone(lapsed["run_id"])
+        receipt = self.ledger.reconcile(lapsed)
+        self.assertEqual((receipt["state"], receipt["outcome"], receipt["run_id"]),
+                         ("retired", "failed", lapsed["run_id"]))
+        wire = {**lapsed, "version": 1, "operation": "reconcile", "request_id": uid()}
+        self.assertEqual(contract.decode(contract.canonical(wire)), wire)
 
     def test_manager_reconcile_requires_released_custody(self):
         import threading

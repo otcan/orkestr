@@ -30,8 +30,9 @@ pub enum ExecutionWindowTerminalOutcome {
     Accepted,
     Stopped,
     Abandoned,
-    /// The window's open failed before it produced any run of its own. Only a
-    /// reconciliation outcome; never a run's terminal kind.
+    /// The window's open failed before it produced any run of its own (no
+    /// prior run), or its last Deep turn lapsed with its process gone (names
+    /// that turn). Only a reconciliation outcome.
     Failed,
 }
 impl ExecutionWindowTerminalOutcome {
@@ -112,7 +113,7 @@ pub struct ExecutionWindowReconciliation {
     pub actor: ExecutionWindowReconciliationActor,
     pub decision: ExecutionWindowReconciliationDecision,
     pub outcome: ExecutionWindowTerminalOutcome,
-    /// The window's own last Deep turn. None only for a `failed` open.
+    /// The window's own last Deep turn. None only for a failed open.
     pub prior_run_id: Option<RunId>,
     pub terminal_event_id: Option<EventId>,
     pub abandoned_run_ids: Vec<RunId>,
