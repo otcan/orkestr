@@ -57,6 +57,10 @@ noVNC/CDP endpoints.
    `{"v1_url":"http://127.0.0.1:<port>","bearer_token":"<V1 operator token>"}`.
    Only `http://` IPv4 loopback is accepted. Without it, lease routes return
    `503 desktop_broker_unconfigured`.
+   A packaged service sets it through the selected plan key
+   `"desktop_broker": "/private/desktop-broker.json"`. The packager copies only
+   the path into `service.json`, never the file, and the manager passes it to
+   the server environment.
 2. Owner binds the conversation to exactly one V1 thread identity and slugs:
    `PUT .../desktop-binding {"expected_revision":0,"v1_thread_id":"…","desktop_slugs":["…"]}`.
    Every slug must be in V1's grant for that thread
