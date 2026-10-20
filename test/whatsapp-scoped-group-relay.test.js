@@ -26,9 +26,9 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
       if (state.quotaFails) throw new Error('quota_unavailable');
       return {quota: state.quota};
     }
-    if (url.endsWith('/uploads')) {
+    if (url.endsWith('/inbound-media')) {
       state.uploads.push({url, ...options});
-      return {attachments: [{id: 'attachment-safe-1', name: options.body.files[0].name, mimetype: options.body.files[0].mimetype}]};
+      return {attachments: [{id: 'attachment-safe-1', name: 'sample.png', mimetype: 'image/png', path: '/server-owned/inbound/media.png'}]};
     }
     const threadId = url.split('/')[3], groupId = threadId.replace('thread', 'group');
     if (url.endsWith('/input')) {
@@ -60,12 +60,17 @@ test('scoped group media is uploaded through thread attachments and routed once 
   await relay.tick();
   await relay.tick();
   assert.equal(state.uploads.length, 1);
-  assert.equal(state.uploads[0].url, '/api/threads/thread-1/uploads');
-  assert.equal(state.uploads[0].body.files[0].contentBase64, Buffer.from('synthetic-image').toString('base64'));
+  assert.equal(state.uploads[0].url, '/api/connectors/whatsapp/inbound-media');
+  const form = state.uploads[0].body;
+  assert.ok(form instanceof FormData);
+  assert.equal(form.get('eventId'), 'wa-image');
+  assert.equal(form.get('chatId'), 'group-1');
+  assert.equal(JSON.parse(form.get('metadata'))[0].mimetype, 'image/png');
+  assert.equal(Buffer.from(await form.get('files').arrayBuffer()).toString(), 'synthetic-image');
   const inputPosts = state.posts.filter(post => post.url.endsWith('/input'));
   const imagePost = inputPosts.find(post => /please inspect/.test(post.body.text));
   assert.ok(imagePost);
-  assert.deepEqual(imagePost.body.attachments, [{id: 'attachment-safe-1', name: 'sample.png', mimetype: 'image/png'}]);
+  assert.deepEqual(imagePost.body.attachments, [{id: 'attachment-safe-1', name: 'sample.png', mimetype: 'image/png', path: '/server-owned/inbound/media.png'}]);
   assert.equal(inputPosts.filter(post => /please inspect/.test(post.body.text)).length, 1);
   assert.equal(await fs.stat(mediaPath).then(() => true, () => false), false);
 });
@@ -76,12 +81,15 @@ test('captionless supported image is visibly described and attached; unsupported
   const {relay, state, inboxDb} = fixture(t, false, false, {mediaDir: dir});
   const imagePath = path.join(dir, 'image.png');
   const docPath = path.join(dir, 'document.bin');
+  const largePath = path.join(dir, 'large.jpg');
   await fs.writeFile(imagePath, Buffer.from('image'));
   await fs.writeFile(docPath, Buffer.from('document'));
+  await fs.writeFile(largePath, Buffer.alloc(10 * 1024 * 1024 + 1));
   const insert = inboxDb.prepare(`INSERT INTO group_input(id,chat_id,body,created_at,media_path,media_filename,media_mimetype,media_size)
     VALUES(?,?,?,?,?,?,?,?)`);
   insert.run('wa-empty-caption', 'group-1', '', '2026-01-02', imagePath, 'image.png', 'image/png', 5);
   insert.run('wa-unsupported', 'group-1', 'see attached', '2026-01-02', docPath, 'document.bin', 'application/pdf', 8);
+  insert.run('wa-oversize', 'group-1', 'large image', '2026-01-02', largePath, 'large.jpg', 'image/jpeg', 10 * 1024 * 1024 + 1);
   await relay.tick();
   const posts = state.posts.filter(post => post.url.endsWith('/input'));
   assert.equal(state.uploads.length, 1);
@@ -89,6 +97,9 @@ test('captionless supported image is visibly described and attached; unsupported
   const skipped = posts.find(post => /attachment skipped/.test(post.body.text));
   assert.ok(skipped);
   assert.equal(skipped.body.attachments, undefined);
+  const oversize = posts.find(post => /large image/.test(post.body.text));
+  assert.match(oversize.body.text, /attachment skipped/);
+  assert.equal(oversize.body.attachments, undefined);
 });
 const answer = (id, parent = 'input-thread-1', phase = 'final_answer') => ({id, role: 'assistant', source: 'codex-app-server', state: 'completed', phase, parentMessageId: parent, text: 'agent: answer'});
 test('only the matching final is sent; input and completed output do not replay', async t => {

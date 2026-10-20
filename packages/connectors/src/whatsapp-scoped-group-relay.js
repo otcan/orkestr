@@ -126,10 +126,20 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
                 || !GROUP_IMAGE_MIMES.has(mimetype) || stat.size > GROUP_MEDIA_MAX_BYTES) {
               inputBody = [inputBody, '[WhatsApp attachment skipped: media unavailable or outside supported limits]'].filter(Boolean).join('\n\n');
             } else {
-              const contentBase64 = (await fs.readFile(realPath)).toString('base64');
-              const uploaded = await api(`/api/threads/${encodeURIComponent(group.threadId)}/uploads`, {
+              const bytes = await fs.readFile(realPath);
+              const form = new FormData();
+              form.append('files', new Blob([bytes], {type: mimetype}), String(input.media_filename || 'image'));
+              form.append('metadata', JSON.stringify([{
+                filename: String(input.media_filename || 'image'), name: String(input.media_filename || 'image'),
+                mimetype, type: mimetype, kind: 'image', size: bytes.length,
+                sourceEventId: String(input.id), chatId: String(input.chat_id), accountId: String(config.accountId || 'main'),
+              }]));
+              form.append('eventId', String(input.id));
+              form.append('chatId', String(input.chat_id));
+              form.append('accountId', String(config.accountId || 'main'));
+              const uploaded = await api('/api/connectors/whatsapp/inbound-media', {
                 method: 'POST',
-                body: {files: [{name: String(input.media_filename || 'image'), mimetype, contentBase64}]},
+                body: form,
               });
               attachments = Array.isArray(uploaded?.attachments) ? uploaded.attachments : [];
               if (attachments.length !== 1) throw new Error('group_attachment_upload_unconfirmed');

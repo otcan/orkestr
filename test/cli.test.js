@@ -85,6 +85,24 @@ test("CLI API client aborts stalled requests on its own deadline", async () => {
   );
 });
 
+test("requestJson preserves multipart bodies and lets fetch set the boundary", async () => {
+  const form = new FormData();
+  form.append("chatId", "group-test");
+  let observed;
+  const result = await requestJson("/api/connectors/whatsapp/inbound-media", {
+    baseUrl: "http://127.0.0.1:19812", method: "POST", body: form,
+    env: { ORKESTR_DISABLE_CLI_AUTH: "1" },
+    fetchImpl: async (url, options) => {
+      observed = { url, options };
+      return jsonResponse({ ok: true });
+    },
+  });
+  assert.deepEqual(result, { ok: true });
+  assert.equal(observed.url, "http://127.0.0.1:19812/api/connectors/whatsapp/inbound-media");
+  assert.equal(observed.options.body, form);
+  assert.equal(observed.options.headers["content-type"], undefined);
+});
+
 test("CLI spawns a scoped specialist task agent", async () => {
   const stdout = capture();
   const seen = [];

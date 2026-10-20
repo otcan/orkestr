@@ -44,7 +44,7 @@ export async function requestJson(path, options = {}) {
     response = await fetchImpl(`${String(baseUrl).replace(/\/+$/g, "")}${path}`, {
       method,
       headers: { ...(await requestHeaders({ body, env: options.env })), ...(extraHeaders || {}) },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : isMultipartBody(body) ? body : JSON.stringify(body),
       ...(controller ? { signal: controller.signal } : {}),
     });
   } catch (error) {
@@ -66,10 +66,14 @@ export async function requestJson(path, options = {}) {
 
 async function requestHeaders({ body, env = process.env } = {}) {
   const headers = {};
-  if (body !== undefined) headers["content-type"] = "application/json";
+  if (body !== undefined && !isMultipartBody(body)) headers["content-type"] = "application/json";
   const token = await cliAuthToken(effectiveCliEnv(env));
   if (token) headers.authorization = `Bearer ${token}`;
   return Object.keys(headers).length ? headers : undefined;
+}
+
+function isMultipartBody(body) {
+  return typeof FormData === "function" && body instanceof FormData;
 }
 
 async function cliAuthToken(env = process.env) {
