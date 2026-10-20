@@ -157,7 +157,19 @@ impl WorkerSchedule {
         Ok((Phase::Running(running), WorkerProgress::Running))
     }
 
-    async fn refresh_running(&self, running: Box<Running>) -> Result<Box<Running>, &'static str> {
+    async fn refresh_running(
+        &self,
+        mut running: Box<Running>,
+    ) -> Result<Box<Running>, &'static str> {
+        if !running
+            .liveness
+            .as_mut()
+            .ok_or("Worker renewal issuer missing")?
+            .extendable(&self.store)
+            .await
+        {
+            return Ok(running);
+        }
         let Running {
             authority,
             pump,
