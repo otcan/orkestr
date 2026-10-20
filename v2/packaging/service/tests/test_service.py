@@ -127,6 +127,37 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'duplicate'):validate(b'{"schema_version":1,"schema_version":1}')
         with self.assertRaisesRegex(RuntimeError,'bounded'):validate(b' '*8193)
 
+    def test_workspace_exec_profile_is_explicit_exact_and_never_browser_authority(self):
+        from beta_config import validate, workspace_exec
+        profile={'conversation_id':'11111111-1111-4111-8111-111111111111',
+                 'project_id':'22222222-2222-4222-8222-222222222222',
+                 'workspace':'/srv/project','allowed_roots':['/srv/project'],
+                 'protected_roots':['/srv/provider-account'],
+                 'cgroup_root':'/sys/fs/cgroup/commands','toolchain_root':'/opt/command-image'}
+        self.assertEqual(workspace_exec(profile),profile)
+        for key,value in [
+            ('allowed_roots',['/srv/project','/srv/other']), ('workspace','/srv/other'),
+            ('project_id','00000000-0000-0000-0000-000000000000'),
+            ('protected_roots',[]), ('protected_roots',['/srv/account']*56),
+            ('toolchain_root','/srv/project/image'), ('cgroup_root','/opt/command-image/cgroup'),
+            ('workspace','/'), ('cgroup_root','/sys/../tmp'), ('toolchain_root','relative')
+        ]:
+            with self.subTest(key=key),self.assertRaises(RuntimeError):
+                workspace_exec(dict(profile,**{key:value}))
+        for field in ('command','environment','network','owner_id','max_run_ms'):
+            with self.subTest(field=field),self.assertRaises(RuntimeError):
+                workspace_exec(dict(profile,**{field:'untrusted'}))
+        base={'schema_version':1,'owner_id':'11111111-1111-4111-8111-111111111111',
+              'conversation_id':'33333333-3333-4333-8333-333333333333',
+              'manager_socket':'/run/example/control.sock','launcher':'/opt/example/launcher',
+              'launcher_sha256':'a'*64,'workspace':'/srv/native-readonly',
+              'namespace':'synthetic','supervisor_key':'synthetic.deep','workspace_exec':profile}
+        with self.assertRaisesRegex(RuntimeError,'Worker roles'):validate(json.dumps(base).encode())
+        role=lambda name:{'launcher':'/opt/example/'+name,'launcher_sha256':'b'*64,
+                          'workspace':'/srv/native-readonly'}
+        base['roles']={'fast':role('fast'),'workers':[role('w'+str(i)) for i in range(4)]}
+        self.assertEqual(validate(json.dumps(base).encode())['workspace_exec'],profile)
+
     def test_provisioned_home_preserves_existing_state(self):
         home=self.root/'home';home.mkdir(mode=0o700)
         original=b'synthetic existing database bytes, not an empty database'

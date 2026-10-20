@@ -155,14 +155,19 @@ impl ConfiguredExecution {
             children: self.children.clone(),
             worker_reaps: self.worker_reaps.clone(),
             offline_python: None,
+            workspace_exec: None,
             initial_grant: None,
-            workspace_grant: None,
+            workspace_grant: self.workspace_grant.clone(),
             window: Some(context),
             window_workers: None,
             companion: Some(companion.clone()),
             fast_factory: None,
         };
-        self.config.worker = Some(crate::worker_execution::WorkerPolicy::window_owner_tasks());
+        self.config.worker = Some(if self.workspace_exec.is_some() {
+            crate::worker_execution::WorkerPolicy::window_workspace_tasks()
+        } else {
+            crate::worker_execution::WorkerPolicy::window_owner_tasks()
+        });
         self.companion = Some(companion);
         self.fast_factory = Some(Box::new(fast));
         Ok(())

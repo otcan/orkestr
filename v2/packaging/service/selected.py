@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from artifact_boundary import separate
-from beta_config import validate as validate_beta
+from beta_config import validate as validate_beta, workspace_exec as validate_workspace_exec
 from closure import pin, require, trusted
 from manager_source import authority
 from prepare import inventory, settings
@@ -45,7 +45,7 @@ def entry(root, mode):
 def pair_bytes(plan):
     path=Path(plan['pair']);require(pin(path)['sha256']==plan['pair_sha256'],'pair receipt digest mismatch')
     pair=json.loads(path.read_bytes());source=pair['source_commit']
-    require(pair['version'] in ('2.0.0-beta.1','2.0.0-beta.2') and re.fullmatch('[0-9a-f]{40}',source),'beta source/version required')
+    require(pair['version'] in ('2.0.0-beta.1','2.0.0-beta.2','2.0.0-beta.3') and re.fullmatch('[0-9a-f]{40}',source),'beta source/version required')
     require(pair['server']['profile']=='release' and pair['server']['default_features'] is True and
             pair['server']['features']==[] and pair['web']['profile']=='release' and
             pair['web']['features']==['web','execution-controls'] and
@@ -72,8 +72,11 @@ def prepare(plan):
     fields={'format','output','source_repository','pair','pair_sha256','server','ui','native','native_sha256',
             'uid','gid','home','workspace','state_root','auth_file','bootstrap_file','ledger_directory',
             'endpoint_directory','owner_id','conversation_id','namespace','supervisor_key','origin','port'}
-    require(set(plan) - {'roles', 'preserve_state'} == fields and
+    require(set(plan) - {'roles', 'preserve_state', 'workspace_exec'} == fields and
             plan['format']=='orkestr-v2-selected-service-plan-v1','closed plan required')
+    if 'workspace_exec' in plan:
+        require('roles' in plan, 'workspace execution requires configured Worker roles')
+        validate_workspace_exec(plan['workspace_exec'])
     preserve=plan.get('preserve_state',False)
     require(type(preserve) is bool,'explicit preserve_state boolean required')
     separate(plan)  # Metadata only: MUST precede every artifact read/hash.
@@ -107,6 +110,12 @@ def prepare(plan):
         for index,a in enumerate(roots):
             for b in roots[index+1:]:require(a!=b and a not in b.parents and b not in a.parents,'isolated path overlap')
         role_paths = selected_roles.validate(plan['roles'],trust,uid,roots,preserve) if 'roles' in plan else None
+        if 'workspace_exec' in plan:
+            project = trust.private(plan['workspace_exec']['workspace'],uid,True)
+            isolated = [*roots, *(p for pair in role_paths.values() for p in pair)]
+            for other in isolated:
+                require(project != other and project not in other.parents and other not in project.parents,
+                        'project must be separate from provider and service state')
         role_files = getattr(manager,'ROLE_FILES',set()) if role_paths is not None else set()
         require(role_paths is None or len(role_files)==10,'manager role inventory required')
         package_files = manager.FILES | role_files
@@ -145,6 +154,8 @@ def prepare(plan):
                      'hosts':list(config.HOSTS)}
             if role_paths is not None:
                 beta['roles']=selected_roles.emit(inner,role_paths,profile,gid,entry,write,encoded)
+            if 'workspace_exec' in plan:
+                beta['workspace_exec']=plan['workspace_exec']
             validate_beta(encoded(beta))
             for name,value in (('beta.json',beta),('service.json',runtime),('profile.json',profile)):
                 write(inner/name,encoded(value),gid,mode=0o640 if name=='beta.json' else None)
@@ -170,6 +181,7 @@ def prepare(plan):
                      'startup_dependencies':{name:pin(trusted(Path(name).resolve())) for name in ('/bin/sh','/usr/bin/python3')},
                      'credential_contents_read':False,'provider_invoked':False,
                      'preserved_existing_state':preserve,'roles_enabled':role_paths is not None,
+                     'workspace_exec_enabled':'workspace_exec' in beta,
                      'transitive_startup_closure_qualified':False,
                      'custody':{str(p.relative_to(output)):{'uid':p.stat().st_uid,'gid':p.stat().st_gid,
                                'mode':p.stat().st_mode&0o777} for p in [output,*output.rglob('*')]}}

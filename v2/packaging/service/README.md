@@ -209,7 +209,7 @@ beta `f6fb00a461d792af22ec15c80d089c266081ca3b`, including the reviewed
 paused-launch and retirement corrections. Source is exported from Git blobs;
 mutable checkout modules are never imported. Its authoritative `FILES` and
 `MODULES_SERVICE` define the closed inner package. Pair version must be
-`2.0.0-beta.1` or `2.0.0-beta.2`, with matching embedded native/web identities and release profiles.
+`2.0.0-beta.1`, `2.0.0-beta.2`, or `2.0.0-beta.3`, with matching embedded native/web identities and release profiles.
 Synthetic ELF fixtures only exercise packaging; they are never launched.
 
 Output is final-path-bound `start-service`, `release.json`, and `package/`.
@@ -265,3 +265,36 @@ retain a rollback snapshot. The new manager's ordinary transactional ledger
 migration preserves historical windows, generations and consumed budgets;
 unfinished work remains subject to reconciliation. This flag supplies no proof
 of quiescence and grants no permission to replay an unfinished window.
+
+### Beta.3 opt-in project commands
+
+The optional `workspace_exec` field requires `roles` and is copied into the
+protected beta configuration. Its closed fields are `conversation_id`,
+`project_id`, `workspace`, `allowed_roots`, `protected_roots`, `cgroup_root`, and
+`toolchain_root`. Use one explicitly selected conversation and one registered
+project: `allowed_roots` must equal `[workspace]`. All values are trusted operator
+configuration; no browser or native tool argument supplies a path or profile.
+
+Provision a private service-owned full Git clone with its Git/common directory
+inside that workspace, separate from Core, native account, credential and provider
+scratch roots. Include all private credential/account locations in
+`protected_roots`. Provision the Runtime's root-owned immutable command image and
+an empty delegated cgroup2 subtree with memory, pids and cpu controllers. Startup
+performs read-only readiness checks; packaging does not create those resources.
+
+Only Workers for the exact conversation expose `orkestr_workspace_exec`, whose
+only argument is a bounded `command` string. The provider retains its read-only
+mounts and subprocess prohibition. The separate command sandbox receives only
+the retained project descriptor as writable `/workspace`, the immutable image,
+private temporary storage, and no network or provider credentials. Core checks
+the current project, Worker, parent, lease and control revision at delegation,
+single consumption, actual spawn and result delivery.
+
+This opt-in uses the existing renewable Worker budget with a five-minute host
+ceiling, further narrowed by the owner's task budget and the shared window.
+Each command is at most 30 seconds and is clipped to its original consumed lease;
+output is at most 128 KiB. Pending commands are never renewed or retried. Stop
+waits for the retained original command cleanup before confirming native Stopped.
+Native result delivery remains separate from assistant progress and acceptance.
+Real command execution, cancellation, restart and preserved-history qualification
+are required separately from this inert packaging step.

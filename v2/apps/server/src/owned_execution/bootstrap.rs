@@ -27,7 +27,13 @@ impl ConfiguredExecution {
         .map_err(|_| "execution child directories unavailable")?;
         // The opaque grant selects fresh setup or exact native resume. Neither
         // caller text nor persisted status can supply a replacement identity.
-        let mut launch = self.workspace_launch(&grant).await?;
+        // Window execution keeps the provider's existing read-only launch.
+        // Its registered project is granted only to the separate command sandbox.
+        let mut launch = if self.window.is_none() {
+            self.workspace_launch(&grant).await?
+        } else {
+            None
+        };
         let mut setup = if let Some(context) = &self.window {
             let store = self.store.clone();
             let launcher = self.config.launcher.clone();

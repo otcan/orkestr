@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     beta_config::BetaConfig,
-    owned_execution::{ConfiguredExecution, WindowTask},
+    owned_execution::{ConfiguredExecution, WindowSetup, WindowTask},
 };
 use orkestr_v2_application::runtime::{
     ProductionSupervisorConfig, ProductionTakeover, ProviderKind,
@@ -308,7 +308,7 @@ impl ConversationController {
             .take()
             .await
             .map_err(|_| "private window authority unavailable")?;
-        let (bound, credential, metadata, resumed) = match authority {
+        let (bound, credential, metadata, workspace, resumed) = match authority {
             WindowAuthority::Initial(cap) => {
                 let grant = cap
                     .store()
@@ -327,11 +327,32 @@ impl ConversationController {
                     .bind_execution_window(cap.credential(), &grant)
                     .await
                     .map_err(|_| "initial window binding refused")?;
+                let workspace = match self.config.workspace_profile() {
+                    Some(profile) => {
+                        let installation =
+                            profile.installation(&self.home, self.native_workspaces())?;
+                        let workspace = bound
+                            .register_workspace(
+                                grant.credential(),
+                                &self.config.conversation_id,
+                                profile.project_id,
+                                installation,
+                            )
+                            .await
+                            .map_err(|_| "initial workspace registration refused")?;
+                        bound
+                            .bind_workspace_session(grant.credential(), &workspace, cap.binding())
+                            .await
+                            .map_err(|_| "initial workspace binding refused")?;
+                        Some(Arc::new(workspace))
+                    }
+                    None => None,
+                };
                 let metadata = bound
                     .authorize_session_metadata(cap.binding())
                     .await
                     .map_err(|_| "opening metadata refused")?;
-                (bound, grant, metadata, false)
+                (bound, grant, metadata, workspace, false)
             }
             WindowAuthority::Retired(cap) => {
                 let grant = cap
@@ -354,12 +375,37 @@ impl ConversationController {
                         incarnation_id: cap.predecessor_incarnation().into(),
                     },
                 };
-                let (bound, metadata) = self
-                    .store
-                    .reattach_terminal_supervisor(grant.credential(), config, cap.prior_run_id())
-                    .await
-                    .map_err(|_| "window predecessor reattachment refused")?;
-                (bound, grant, metadata, true)
+                let (bound, metadata, workspace) = match self.config.workspace_profile() {
+                    Some(profile) => {
+                        let installation =
+                            profile.installation(&self.home, self.native_workspaces())?;
+                        let (bound, metadata, workspace) = self
+                            .store
+                            .reattach_terminal_supervisor_with_workspace(
+                                grant.credential(),
+                                config,
+                                cap.prior_run_id(),
+                                profile.project_id,
+                                installation,
+                            )
+                            .await
+                            .map_err(|_| "window workspace reattachment refused")?;
+                        (bound, metadata, Some(Arc::new(workspace)))
+                    }
+                    None => {
+                        let (bound, metadata) = self
+                            .store
+                            .reattach_terminal_supervisor(
+                                grant.credential(),
+                                config,
+                                cap.prior_run_id(),
+                            )
+                            .await
+                            .map_err(|_| "window predecessor reattachment refused")?;
+                        (bound, metadata, None)
+                    }
+                };
+                (bound, grant, metadata, workspace, true)
             }
         };
         let context = Arc::new(Context::new(
@@ -371,12 +417,26 @@ impl ConversationController {
         ConfiguredExecution::from_window(
             &self.home,
             &self.config,
-            bound,
-            credential.credential().to_owned(),
-            metadata,
+            WindowSetup {
+                store: bound,
+                token: credential.credential().to_owned(),
+                metadata,
+                workspace,
+            },
             context,
             resumed,
-        )?
+        )
+        .await?
         .start_window()
+    }
+
+    fn native_workspaces(&self) -> impl Iterator<Item = PathBuf> + '_ {
+        std::iter::once(self.config.workspace.clone()).chain(
+            self.config
+                .roles
+                .iter()
+                .flat_map(|roles| roles.launches())
+                .map(|role| role.workspace.clone()),
+        )
     }
 }

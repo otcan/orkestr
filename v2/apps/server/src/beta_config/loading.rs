@@ -52,6 +52,24 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
             }
         }
     }
+    if let Some(profile) = &config.workspace_exec {
+        // Readiness only: no Core project registration, command, or cgroup is
+        // created by loading the trusted operator profile.
+        profile.installation(
+            home,
+            std::iter::once(config.workspace.clone()).chain(
+                config
+                    .roles
+                    .iter()
+                    .flat_map(|roles| roles.launches().map(|r| r.workspace.clone())),
+            ),
+        )?;
+        orkestr_runtime::workspace_exec::WorkspaceExecSandbox::configured(
+            &profile.cgroup_root,
+            &profile.toolchain_root,
+        )
+        .map_err(|_| "workspace command sandbox unavailable")?;
+    }
     control_socket(&config.manager_socket, gid)?;
     // Recheck custody after the bounded reads; no stale pre-read path approval.
     private_directory(home, uid, gid)?;

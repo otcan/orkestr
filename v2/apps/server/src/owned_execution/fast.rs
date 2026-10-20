@@ -35,11 +35,26 @@ impl ConfiguredExecution {
                 .await
                 .map_err(|_| "Fast bindings unavailable")?
                 .fast;
+            if binding.state != SessionState::Lost {
+                self.bind_workspace(&binding).await?;
+            }
             if self.window.is_some() {
-                self.store
-                    .authorize_window_fast_metadata(&self.token, &binding)
-                    .await
-                    .map_err(|_| "Fast window setup authority refused")?
+                match &self.workspace_grant {
+                    Some(workspace) => self
+                        .store
+                        .authorize_window_fast_metadata_with_workspace(
+                            &self.token,
+                            &binding,
+                            workspace,
+                        )
+                        .await
+                        .map_err(|_| "Fast window workspace setup authority refused")?,
+                    None => self
+                        .store
+                        .authorize_window_fast_metadata(&self.token, &binding)
+                        .await
+                        .map_err(|_| "Fast window setup authority refused")?,
+                }
             } else {
                 self.store
                     .authorize_session_metadata(&binding)

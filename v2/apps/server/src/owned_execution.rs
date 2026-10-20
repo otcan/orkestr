@@ -1,6 +1,7 @@
 //! Explicit isolated acceptance composition. No HTTP configuration.
 mod admission;
 mod beta_window;
+pub(crate) use beta_window::WindowSetup;
 mod bootstrap;
 mod budget;
 mod claude;
@@ -49,8 +50,9 @@ pub struct ConfiguredExecution {
     children: crate::owned_children::ChildSet,
     worker_reaps: crate::worker_execution::WorkerReaps,
     offline_python: Option<std::sync::Arc<crate::offline_python::OfflinePythonDispatcher>>,
+    workspace_exec: Option<std::sync::Arc<crate::workspace_exec::WorkspaceExecDispatcher>>,
     initial_grant: Option<BoundSessionMetadata>,
-    workspace_grant: Option<orkestr_v2_store_sqlite::WorkspaceGrant>,
+    workspace_grant: Option<std::sync::Arc<orkestr_v2_store_sqlite::WorkspaceGrant>>,
     window: Option<std::sync::Arc<crate::window_runtime::context::Context>>,
     window_workers: Option<crate::worker_execution::WindowWorkers>,
     companion: Option<std::sync::Arc<window_roles::Companion>>,
@@ -148,11 +150,11 @@ impl ConfiguredExecution {
             (bound, None, directory)
         };
         let workspace_grant = match (&config.workspace_authority, installation) {
-            (Some(policy), Some(installation)) => Some(
+            (Some(policy), Some(installation)) => Some(std::sync::Arc::new(
                 policy
                     .register(&bound, &token, &config.conversation_id, installation)
                     .await?,
-            ),
+            )),
             _ => None,
         };
         if let (Some(workspace), Some(metadata)) = (&workspace_grant, &initial_grant) {
@@ -194,6 +196,7 @@ impl ConfiguredExecution {
             tasks,
             children: crate::owned_children::ChildSet::default(),
             offline_python,
+            workspace_exec: None,
             worker_reaps,
             initial_grant,
             workspace_grant,

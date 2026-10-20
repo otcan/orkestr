@@ -28,6 +28,13 @@ impl WorkerPolicy {
             broker_launcher_sha256: None,
         }
     }
+
+    pub(crate) fn window_workspace_tasks() -> Self {
+        Self {
+            execution_budget: Some(super::budget::WorkerBudget::workspace_commands()),
+            ..Self::window_owner_tasks()
+        }
+    }
     /// One independently bound Worker for the parent's immutable input. This
     /// policy cannot select an owner, parent, native session, prompt or privilege.
     pub fn validate(&self) -> Result<(), &'static str> {

@@ -59,8 +59,13 @@ impl WorkerSchedule {
     ) -> Result<(Phase, WorkerProgress), &'static str> {
         if running.pump.pending().is_some()
             || running.pump.pending_offline_python().is_some()
+            || running.pump.pending_workspace_exec().is_some()
             || running
                 .tools
+                .as_ref()
+                .is_some_and(|tools| !tools.renewal_quiescent())
+            || running
+                .workspace_tools
                 .as_ref()
                 .is_some_and(|tools| !tools.renewal_quiescent())
         {
