@@ -6,6 +6,8 @@ async fn downgrade_to_schema51(store: &Store) {
     let mut tx = store.pool.begin().await.unwrap();
     for statement in [
         "DROP VIEW production_terminal_evidence",
+        "DROP TABLE production_run_lost_failures",
+        "DELETE FROM _sqlx_migrations WHERE version=53",
         "DROP TABLE production_run_failures",
         "DROP TABLE execution_window_failed_resume_metadata",
         "DROP TABLE execution_window_open_failure_inputs",
@@ -54,7 +56,7 @@ async fn schema51_stranded_workbench_reconciles_after_upgrade() {
     let fresh = restart(w, true).await;
     assert_eq!(
         count(&fresh, "SELECT max(version) FROM _sqlx_migrations").await,
-        52
+        53
     );
     for table in [
         "production_run_failures",
