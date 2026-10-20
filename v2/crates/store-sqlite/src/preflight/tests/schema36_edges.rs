@@ -28,7 +28,7 @@ async fn selected(
         .collect::<Vec<_>>()
         .join(" || '|' || ");
     let filter = if table == "_sqlx_migrations" {
-        format!(" WHERE version<={}", prefix.unwrap_or(42))
+        format!(" WHERE version<={}", prefix.unwrap_or(43))
     } else {
         String::new()
     };
@@ -41,7 +41,7 @@ async fn selected(
 }
 
 #[tokio::test]
-async fn populated_14_17_31_33_36_37_38_copy_first_edges_to_42_preserve_rows_and_rollback_source() {
+async fn populated_prefixes_copy_first_edges_to_43_preserve_rows_and_rollback_source() {
     for prefix in [14, 17, 31, 33, 36, 37, 38, 39, 40] {
         let dir = Directory::new();
         let mut conn = populated_payload_prefix(&dir).await;
@@ -67,6 +67,16 @@ async fn populated_14_17_31_33_36_37_38_copy_first_edges_to_42_preserve_rows_and
                 "prefix {prefix}, table {table}"
             );
         }
+        let directory: Vec<String> = sqlx::query_scalar("SELECT quote(d.row_sequence)||'|'||quote(d.conversation_id)||'|'||quote(d.owner_id)||'|'||quote(d.name)||'|'||quote(d.request_key)||'|'||quote(d.payload_digest)||'|'||quote(c.standalone) FROM conversation_directory d JOIN conversations c ON c.id=d.conversation_id AND c.owner_id=d.owner_id ORDER BY d.row_sequence")
+            .fetch_all(&mut upgraded).await.unwrap();
+        assert_eq!(
+            directory,
+            vec![
+                "1|'conversation'|'owner'|'Assistant'|NULL|NULL|0",
+                "2|'production-conversation'|'owner'|'Synthetic'|NULL|NULL|0",
+            ],
+            "derived directory and legacy scope: {prefix}"
+        );
         for table in [
             "production_stopped_retirements",
             "attachment_manifests",
@@ -102,7 +112,7 @@ async fn populated_14_17_31_33_36_37_38_copy_first_edges_to_42_preserve_rows_and
                 .fetch_one(&mut upgraded)
                 .await
                 .unwrap(),
-            42
+            43
         );
         assert!(sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&mut upgraded)
