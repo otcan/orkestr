@@ -36,13 +36,7 @@ impl Store {
             let mut receipt:ExecutionWindowAdmission=serde_json::from_str(row.get("receipt_json")).map_err(db)?;
             receipt.duplicate=true; tx.commit().await.map_err(db)?; return Ok(receipt);
         }
-        let source:i64=sqlx::query_scalar("SELECT count(*) FROM messages m JOIN events e ON e.message_id=m.id JOIN reasoning_inbox i ON i.event_id=e.id AND i.message_id=m.id WHERE m.id=? AND e.id=? AND m.owner_id=? AND m.conversation_id=? AND e.owner_id=m.owner_id AND e.conversation_id=m.conversation_id AND m.actor_kind='owner' AND m.request_key=? AND i.state='queued' AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.event_id=e.id)")
-            .bind(input.input_message_id.to_string()).bind(input.input_event_id.to_string())
-            .bind(owner.to_string()).bind(conversation.to_string()).bind(&input.input_request_key)
-            .fetch_one(&mut *tx).await.map_err(db)?;
-        if source != 1 {
-            return Err(RuntimeStoreError::Fenced);
-        }
+        source_in(&mut tx, &owner, conversation, input).await?;
         let latest=sqlx::query("SELECT * FROM execution_windows WHERE owner_id=? AND conversation_id=? ORDER BY generation DESC LIMIT 1")
             .bind(owner.to_string()).bind(conversation.to_string()).fetch_optional(&mut *tx).await.map_err(db)?;
         let clock = now(&mut tx).await?;
@@ -63,6 +57,12 @@ impl Store {
             }
             r
         } else {
+            let other: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows WHERE owner_id=? AND conversation_id!=? AND state!='closed'")
+                .bind(owner.to_string()).bind(conversation.to_string())
+                .fetch_one(&mut *tx).await.map_err(db)?;
+            if other != 0 {
+                return Err(RuntimeStoreError::Busy);
+            }
             match latest.as_ref() {
                 None if input.predecessor_window_id.is_none() => {}
                 Some(r)
@@ -97,4 +97,20 @@ impl Store {
         tx.commit().await.map_err(db)?;
         Ok(receipt)
     }
+}
+
+pub(super) async fn source_in(
+    tx: &mut SqliteConnection,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    input: &ExecutionWindowRequest,
+) -> Result<()> {
+    let source:i64=sqlx::query_scalar("SELECT count(*) FROM messages m JOIN events e ON e.message_id=m.id JOIN reasoning_inbox i ON i.event_id=e.id AND i.message_id=m.id WHERE m.id=? AND e.id=? AND m.owner_id=? AND m.conversation_id=? AND e.owner_id=m.owner_id AND e.conversation_id=m.conversation_id AND m.actor_kind='owner' AND m.request_key=? AND i.state='queued' AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.event_id=e.id)")
+        .bind(input.input_message_id.to_string()).bind(input.input_event_id.to_string())
+        .bind(owner.to_string()).bind(conversation.to_string()).bind(&input.input_request_key)
+        .fetch_one(tx).await.map_err(db)?;
+    if source != 1 {
+        return Err(RuntimeStoreError::Fenced);
+    }
+    Ok(())
 }

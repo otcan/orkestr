@@ -13,6 +13,7 @@ pub fn AcceptanceButton(
     csrf: String,
     now_ms: u64,
     onexpired: EventHandler<()>,
+    #[props(default)] onaccepted: Option<EventHandler<i64>>,
 ) -> Element {
     let mut busy = use_signal(|| false);
     let mut channel = use_signal(|| None::<document::Eval>);
@@ -46,7 +47,13 @@ pub fn AcceptanceButton(
         .as_ref()
         .and_then(|s| execution.read().acceptances.notice(s));
     rsx! {
-        button { r#type: "button", disabled: !enabled, title: if ACCEPTANCE_ACTIVATED { if fast_reply { "Accept this Fast reply" } else { "Accept this completion" } } else { "Completion acceptance is not available on this server yet" }, onclick: move |_| {
+        button {
+            r#type: "button", disabled: !enabled,
+            "data-conversation-id": status.as_ref().map(|s| s.conversation_id.to_string()),
+            "data-run-id": status.as_ref().and_then(|s| s.run_id.as_ref()).map(ToString::to_string),
+            "data-completion-event-id": status.as_ref().and_then(|s| s.acceptance_candidate.as_ref()).map(|c| c.completion_event_id.to_string()),
+            "data-execution-revision": status.as_ref().map(|s| s.revision.to_string()),
+            title: if ACCEPTANCE_ACTIVATED { if fast_reply { "Accept this Fast reply" } else { "Accept this completion" } } else { "Completion acceptance is not available on this server yet" }, onclick: move |_| {
             if !enabled || busy() { return; }
             let csrf = csrf.clone();
             let owner = session_scope.read().generation();
@@ -71,7 +78,16 @@ pub fn AcceptanceButton(
                     if code==401 || code==403 { execution.write().authorization_lost();onexpired.call(());return Ok(()); }
                     if code==200 {
                         let receipt=serde_json::from_value::<ExecutionAcceptanceReceipt>(response["body"].clone());
-                        if receipt.ok().is_none_or(|r|execution.write().acceptances.receipt(&pending,r).is_err()) { execution.write().acceptances.failed(&pending,0); }
+                        match receipt {
+                            Ok(receipt) => {
+                                let revision = receipt.revision;
+                                if execution.write().acceptances.receipt(&pending,receipt).is_ok() {
+                                    // Presentation refresh only after the original receipt guards pass.
+                                    if let Some(onaccepted) = onaccepted { onaccepted.call(revision); }
+                                } else { execution.write().acceptances.failed(&pending,0); }
+                            }
+                            Err(_) => execution.write().acceptances.failed(&pending,0),
+                        }
                     } else { execution.write().acceptances.failed(&pending,code); }
                     Ok::<(),crate::transport::Failure>(())
                 }.await;

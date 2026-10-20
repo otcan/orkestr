@@ -13,6 +13,7 @@ pub(crate) struct Generation {
 struct Installed {
     generation: Generation,
     scope: ExecutionScope,
+    fast: Option<ExecutionScope>,
 }
 
 /// One configured conversation for the entire API process lifetime. Removing a
@@ -48,18 +49,37 @@ impl Handles {
 
     /// Called only after exact Core activation. `scope` came from the trusted
     /// configured factory, never from a serialized manager or browser message.
+    #[cfg(test)]
     pub(crate) fn install(
         &self,
         generation: Generation,
         scope: ExecutionScope,
     ) -> Result<(), &'static str> {
+        self.install_roles(generation, scope, None)
+    }
+
+    pub(crate) fn install_roles(
+        &self,
+        generation: Generation,
+        scope: ExecutionScope,
+        fast: Option<ExecutionScope>,
+    ) -> Result<(), &'static str> {
         if generation.window.is_nil()
             || generation.number == 0
-            || scope.tasks.is_some()
+            || scope
+                .tasks
+                .as_ref()
+                .is_some_and(|tasks| !tasks.matches_scope(&self.owner, &self.conversation))
             || scope
                 .control
                 .as_ref()
                 .is_none_or(|c| !c.matches_scope(&self.owner, &self.conversation))
+            || fast.as_ref().is_some_and(|scope| {
+                scope.tasks.is_some()
+                    || scope.control.as_ref().is_none_or(|control| {
+                        !control.matches_scope(&self.owner, &self.conversation)
+                    })
+            })
         {
             return Err("invalid window handle scope");
         }
@@ -72,7 +92,11 @@ impl Handles {
             return Err("window handle replacement refused");
         }
         state.last_generation = generation.number;
-        state.installed = Some(Installed { generation, scope });
+        state.installed = Some(Installed {
+            generation,
+            scope,
+            fast,
+        });
         Ok(())
     }
 
@@ -89,6 +113,21 @@ impl Handles {
             return None;
         }
         state.installed.as_ref().map(|entry| entry.scope.clone())
+    }
+
+    pub(crate) fn fast_snapshot(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+    ) -> Option<ExecutionScope> {
+        if !self.matches(owner, conversation) {
+            return None;
+        }
+        let state = self.inner.lock().ok()?;
+        if state.poisoned {
+            return None;
+        }
+        state.installed.as_ref()?.fast.clone()
     }
 
     /// Core retirement and the original typed reap must already have succeeded.

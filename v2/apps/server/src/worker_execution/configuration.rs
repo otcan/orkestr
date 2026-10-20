@@ -21,11 +21,15 @@ pub struct WorkerConfiguration {
     pub tasks: crate::worker_tasks::WorkerTaskAccess,
     /// Fixed trusted server profile; no browser/provider-selected paths or tools.
     pub offline_python: Option<std::sync::Arc<crate::offline_python::OfflinePythonDispatcher>>,
+    pub(crate) window: Option<super::WindowWorkers>,
 }
 
 impl WorkerConfiguration {
     pub(super) fn validate(&self) -> Result<(), &'static str> {
         self.policy.validate()?;
+        if self.window.is_some() && (!self.policy.owner_tasks() || self.offline_python.is_some()) {
+            return Err("window Workers require explicit owner tasks without tool profiles");
+        }
         if self.policy.offline_python_enabled() != self.offline_python.is_some()
             || self.policy.broker_launcher().is_some_and(|(path, digest)| {
                 path != self.launcher || digest != self.launcher_sha256

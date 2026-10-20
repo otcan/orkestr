@@ -23,7 +23,7 @@ impl Store {
         {
             return Err(RuntimeStoreError::Conflict);
         }
-        self.worker_delegation_parent_in(&mut tx, &d).await?;
+        self.worker_delegation_parent_in(&mut tx, &d, false).await?;
         let clock = now(&mut tx).await?;
         let deadline: i64 = d.get("expires_at_ms");
         if deadline <= clock {
@@ -108,12 +108,18 @@ impl Store {
         if d.get::<i64, _>("expires_at_ms") <= now(conn).await? {
             return Err(RuntimeStoreError::Expired);
         }
-        self.worker_delegation_parent_in(conn, &d).await
+        self.worker_delegation_parent_in(
+            conn,
+            &d,
+            run.get::<&str, _>("dispatch_state") == "delivery_unknown",
+        )
+        .await
     }
     async fn worker_delegation_parent_in(
         &self,
         conn: &mut SqliteConnection,
         d: &SqliteRow,
+        retained: bool,
     ) -> Result<()> {
         let c = self.context()?;
         if d.get::<&str, _>("owner_id") != c.owner.to_string()
@@ -122,7 +128,7 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
-        let parent=sqlx::query("SELECT * FROM production_runs WHERE id=? AND context_id=? AND incarnation_id=? AND owner_id=? AND conversation_id=? AND role='deep' AND state='running' AND dispatch_state='delivery_unknown'")
+        let parent=sqlx::query("SELECT * FROM production_runs WHERE id=? AND context_id=? AND incarnation_id=? AND owner_id=? AND conversation_id=? AND role='deep' AND dispatch_state='delivery_unknown'")
             .bind(d.get::<&str,_>("parent_run_id")).bind(&c.id).bind(&c.incarnation).bind(c.owner.to_string()).bind(d.get::<&str,_>("conversation_id"))
             .fetch_optional(&mut *conn).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
         for (parent_field, delegation_field) in [
@@ -139,6 +145,12 @@ impl Store {
             || parent.get::<&str, _>("message_id") != d.get::<&str, _>("source_message_id")
             || parent.get::<&str, _>("event_id") != d.get::<&str, _>("source_event_id")
         {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        if retained && parent.get::<&str, _>("state") == "awaiting_acceptance" {
+            return self.worker_proposal_parent_in(conn, &parent).await;
+        }
+        if parent.get::<&str, _>("state") != "running" {
             return Err(RuntimeStoreError::Fenced);
         }
         let canonical = super::super::admission::envelope(&parent)?;

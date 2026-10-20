@@ -29,6 +29,32 @@ class Clock:
         return self.boot, time.time_ns(), time.monotonic_ns()
 
 
+def schema(db, owner, conversation):
+    """Atomic closed-row migration. Existing IDs, counters and failures survive."""
+    db.execute("CREATE TABLE IF NOT EXISTS service_scope (singleton INTEGER PRIMARY KEY CHECK(singleton=1), version INTEGER NOT NULL, owner TEXT NOT NULL, conversation TEXT NOT NULL)")
+    db.execute("INSERT OR IGNORE INTO service_scope VALUES(1,2,?,?)", (owner, conversation))
+    scope = db.execute("SELECT * FROM service_scope").fetchone()
+    require(tuple(scope) in ((1, 1, owner, conversation), (1, 2, owner, conversation)), "ledger_scope")
+    legacy = scope["version"] == 1
+    if legacy:
+        # Rename the old dependents first. SQLite retargets their FKs when the
+        # parent is renamed; none of these records are discarded or refunded.
+        for name in ("reservations", "admissions", "windows"):
+            db.execute(f"ALTER TABLE {name} RENAME TO legacy_{name}_v1")
+    db.execute("CREATE TABLE IF NOT EXISTS windows (id TEXT PRIMARY KEY, conversation TEXT NOT NULL, generation INTEGER NOT NULL, request_id TEXT NOT NULL, input_id TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('active','draining','expired','retired','reconciliation')), boot TEXT NOT NULL, created_wall_ns INTEGER NOT NULL, deadline_wall_ns INTEGER NOT NULL, deadline_mono_ns INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0, reason TEXT, outcome TEXT, run_id TEXT, terminal_event_id TEXT, UNIQUE(conversation,generation), UNIQUE(conversation,request_id))")
+    db.execute("CREATE TABLE IF NOT EXISTS reservations (id TEXT PRIMARY KEY, window_id TEXT NOT NULL REFERENCES windows(id), kind TEXT NOT NULL CHECK(kind IN ('attempt','bytes')), amount INTEGER NOT NULL CHECK(amount>0))")
+    db.execute("CREATE TABLE IF NOT EXISTS admissions (conversation TEXT NOT NULL, request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, window_id TEXT NOT NULL REFERENCES windows(id), input_id TEXT NOT NULL UNIQUE, event_id TEXT NOT NULL UNIQUE, PRIMARY KEY(conversation,request_id))")
+    if legacy:
+        columns = "id,generation,request_id,input_id,fingerprint,state,boot,created_wall_ns,deadline_wall_ns,deadline_mono_ns,attempts,reserved_bytes,reason,outcome,run_id,terminal_event_id"
+        db.execute(f"INSERT INTO windows(conversation,{columns}) SELECT ?,{columns} FROM legacy_windows_v1 ORDER BY generation", (conversation,))
+        db.execute("INSERT INTO reservations SELECT * FROM legacy_reservations_v1")
+        db.execute("INSERT INTO admissions SELECT ?,request_id,fingerprint,window_id,input_id,event_id FROM legacy_admissions_v1", (conversation,))
+        for name in ("reservations", "admissions", "windows"):
+            db.execute(f"DROP TABLE legacy_{name}_v1")
+        db.execute("UPDATE service_scope SET version=2 WHERE singleton=1")
+    require(not db.execute("PRAGMA foreign_key_check").fetchall(), "ledger_foreign_keys")
+
+
 class Ledger:
     """Storage logic; production custody and singleton lock belong to Manager."""
     def __init__(self, path, owner, conversation, *, clock=None):
@@ -41,13 +67,7 @@ class Ledger:
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("PRAGMA foreign_keys=ON")
         with self.transaction():
-            self.db.execute("CREATE TABLE IF NOT EXISTS service_scope (singleton INTEGER PRIMARY KEY CHECK(singleton=1), version INTEGER NOT NULL, owner TEXT NOT NULL, conversation TEXT NOT NULL)")
-            self.db.execute("INSERT OR IGNORE INTO service_scope VALUES(1,1,?,?)", (owner, conversation))
-            scope = self.db.execute("SELECT * FROM service_scope").fetchone()
-            require(tuple(scope) == (1, 1, owner, conversation), "ledger_scope")
-            self.db.execute("CREATE TABLE IF NOT EXISTS windows (id TEXT PRIMARY KEY, generation INTEGER NOT NULL UNIQUE, request_id TEXT NOT NULL UNIQUE, input_id TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('active','draining','expired','retired','reconciliation')), boot TEXT NOT NULL, created_wall_ns INTEGER NOT NULL, deadline_wall_ns INTEGER NOT NULL, deadline_mono_ns INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0, reason TEXT, outcome TEXT, run_id TEXT, terminal_event_id TEXT)")
-            self.db.execute("CREATE TABLE IF NOT EXISTS reservations (id TEXT PRIMARY KEY, window_id TEXT NOT NULL REFERENCES windows(id), kind TEXT NOT NULL CHECK(kind IN ('attempt','bytes')), amount INTEGER NOT NULL CHECK(amount>0))")
-            self.db.execute("CREATE TABLE IF NOT EXISTS admissions (request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, window_id TEXT NOT NULL REFERENCES windows(id), input_id TEXT NOT NULL UNIQUE, event_id TEXT NOT NULL UNIQUE)")
+            schema(self.db, owner, conversation)
             self.db.execute("CREATE TABLE IF NOT EXISTS endpoints (name TEXT PRIMARY KEY, device INTEGER NOT NULL, inode INTEGER NOT NULL)")
             # A durable reservation without an independently retained process owner
             # is spent/uncertain even when no forwarding happened before the crash.
@@ -91,23 +111,26 @@ class Ledger:
         with self.transaction():
             self.db.execute("DELETE FROM endpoints WHERE name=? AND device=? AND inode=?", (name, *identity))
 
-    def _latest(self):
-        return self.db.execute("SELECT * FROM windows ORDER BY generation DESC LIMIT 1").fetchone()
+    def _latest(self, conversation=None):
+        if conversation is None:
+            return self.db.execute("SELECT * FROM windows ORDER BY rowid DESC LIMIT 1").fetchone()
+        return self.db.execute("SELECT * FROM windows WHERE conversation=? ORDER BY generation DESC LIMIT 1", (identifier(conversation),)).fetchone()
 
     def _exact(self, window, selected_generation):
         identifier(window)
         generation(selected_generation)
-        row = self._latest()
-        require(row is not None and row["id"] == window and row["generation"] == selected_generation,
+        row = self.db.execute("SELECT * FROM windows WHERE id=?", (window,)).fetchone()
+        require(row is not None and row["generation"] == selected_generation
+                and self._latest(row["conversation"])["id"] == window,
                 "window_generation")
         return row
 
     def _scope(self, request):
-        require(request["owner_id"] == self.owner and request["conversation_id"] == self.conversation,
-                "scope")
+        require(request["owner_id"] == self.owner, "scope")
+        identifier(request["conversation_id"])
 
-    def _receipt(self, row):
-        scope = {"owner_id": self.owner, "conversation_id": self.conversation}
+    def _receipt(self, row, conversation=None):
+        scope = {"owner_id": self.owner, "conversation_id": row["conversation"] if row else conversation or self.conversation}
         if row is None:
             return {**scope, "generation": 0, "state": "idle", "window_id": None}
         return {**scope, "generation": row["generation"], "window_id": row["id"], "state": row["state"],
@@ -121,9 +144,9 @@ class Ledger:
                 "reason": row["reason"], "outcome": row["outcome"],
                 "run_id": row["run_id"], "terminal_event_id": row["terminal_event_id"]}
 
-    def status(self):
+    def status(self, conversation=None):
         with self.lock:
-            return self._receipt(self._latest())
+            return self._receipt(self._latest(conversation), conversation)
 
     def details(self, window, selected_generation):
         with self.lock:
@@ -158,12 +181,13 @@ class Ledger:
         fingerprint = hashlib.sha256(canonical(request)).hexdigest()
         with self.transaction():
             boot, wall, mono = self.clock.sample()
-            old = self.db.execute("SELECT a.fingerprint,w.* FROM admissions a JOIN windows w ON w.id=a.window_id WHERE a.request_id=?", (request["request_id"],)).fetchone()
+            conversation = request["conversation_id"]
+            old = self.db.execute("SELECT a.fingerprint,w.* FROM admissions a JOIN windows w ON w.id=a.window_id WHERE a.conversation=? AND a.request_id=?", (conversation, request["request_id"])).fetchone()
             if old is not None:
                 require(old["fingerprint"] == fingerprint, "idempotency_conflict")
                 # Historical replay is evidence only: Manager must never reopen it.
                 return self._receipt(old), False
-            latest = self._latest()
+            latest = self._latest(conversation)
             previous = latest["generation"] if latest else 0
             require(request["expected_generation"] == previous, "window_generation")
             require(self.db.execute("SELECT 1 FROM admissions WHERE input_id=? OR event_id=?",
@@ -185,6 +209,10 @@ class Ledger:
                 return self._receipt(latest), False
             require(request["generation"] == previous + 1, "window_generation")
             require(latest is None or latest["state"] == "retired", "previous_window_unretired")
+            # All conversations share one original child set, relay and budget.
+            # An uncertain/unfinished scope can never be bypassed with a new ID.
+            require(self.db.execute("SELECT 1 FROM windows WHERE state!='retired' LIMIT 1").fetchone() is None,
+                    "other_window_unretired")
             require(request["predecessor_window_id"] == (latest["id"] if latest else None), "window_predecessor")
             require(self.db.execute("SELECT 1 FROM windows WHERE id=?", (request["window_id"],)).fetchone() is None,
                     "window_reused")
@@ -194,14 +222,14 @@ class Ledger:
                     deadline - opened == LIFETIME_SECONDS * 1_000_000_000 and
                     request["work_deadline_ms"] == request["expires_at_ms"] - DRAIN_SECONDS * 1000,
                     "window_deadlines")
-            self.db.execute("INSERT INTO windows(id,generation,request_id,input_id,fingerprint,state,boot,created_wall_ns,deadline_wall_ns,deadline_mono_ns) VALUES(?,?,?,?,?,'active',?,?,?,?)",
-                (request["window_id"], request["generation"], request["request_id"], request["input_message_id"],
+            self.db.execute("INSERT INTO windows(id,conversation,generation,request_id,input_id,fingerprint,state,boot,created_wall_ns,deadline_wall_ns,deadline_mono_ns) VALUES(?,?,?,?,?,?,'active',?,?,?,?)",
+                (request["window_id"], conversation, request["generation"], request["request_id"], request["input_message_id"],
                  fingerprint, boot, opened, deadline, mono + deadline - wall))
             self._record_admission(request, fingerprint)
-            return self._receipt(self._latest()), True
+            return self._receipt(self._latest(conversation)), True
 
     def _record_admission(self, request, fingerprint):
-        self.db.execute("INSERT INTO admissions VALUES(?,?,?,?,?)", (request["request_id"], fingerprint,
+        self.db.execute("INSERT INTO admissions VALUES(?,?,?,?,?,?)", (request["conversation_id"], request["request_id"], fingerprint,
             request["window_id"], request["input_message_id"], request["input_event_id"]))
 
     def tick(self, window, selected_generation):
@@ -219,7 +247,7 @@ class Ledger:
                   row["attempts"] >= MAX_ATTEMPTS - DRAIN_ATTEMPTS or
                   row["reserved_bytes"] >= MAX_BYTES - DRAIN_BYTES):
                 self.db.execute("UPDATE windows SET state='draining',reason=coalesce(reason,'shutdown_margin') WHERE id=?", (window,))
-            return self._receipt(self._latest())
+            return self._receipt(self._exact(window, selected_generation))
 
     def reserve(self, window, selected_generation, reservation, kind, amount):
         identifier(reservation)
@@ -244,7 +272,7 @@ class Ledger:
             row = self._exact(window, selected_generation)
             require(row["state"] in ("active", "draining"), "window_closed")
             self.db.execute("UPDATE windows SET state='draining',reason=coalesce(reason,'runtime_drain') WHERE id=?", (window,))
-            return self._receipt(self._latest())
+            return self._receipt(self._exact(window, selected_generation))
 
     def uncertain(self, window, selected_generation, reason):
         require(reason in ("runtime_refused", "auth_revoked", "cleanup_unknown", "server_lost", "manager_stopped", "clock_changed"), "reason")
@@ -252,12 +280,13 @@ class Ledger:
             row = self._exact(window, selected_generation)
             require(row["state"] != "retired", "window_retired")
             self.db.execute("UPDATE windows SET reason=CASE WHEN state='reconciliation' THEN coalesce(reason,?) ELSE ? END,state='reconciliation' WHERE id=?", (reason, reason, window))
-            return self._receipt(self._latest())
+            return self._receipt(self._exact(window, selected_generation))
 
     def retire(self, request):
         self._scope(request)
         with self.transaction():
             row = self._exact(request["window_id"], request["generation"])
+            require(row["conversation"] == request["conversation_id"], "scope")
             desired = (request["outcome"], request["run_id"], request["terminal_event_id"])
             if row["state"] == "retired":
                 require(tuple(row[key] for key in ("outcome", "run_id", "terminal_event_id")) == desired,
@@ -269,4 +298,4 @@ class Ledger:
             # exact trusted Runtime's committed Core terminal+retirement proof.
             self.db.execute("UPDATE windows SET state='retired',outcome=?,run_id=?,terminal_event_id=? WHERE id=?",
                             (*desired, request["window_id"]))
-            return self._receipt(self._latest())
+            return self._receipt(self._exact(request["window_id"], request["generation"]))

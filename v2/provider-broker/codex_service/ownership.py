@@ -9,6 +9,7 @@ import time
 import threading
 from codex_bounded.trust import belongs, exists, process
 from .contract import MAX_BIND_MS, require
+from .role_profiles import ROLE_NAMES
 
 MAX_CHILDREN = 256
 
@@ -92,11 +93,15 @@ class Children:
         # Only the final stopped interpreter/argv can establish launch authority.
         executable = Path("/usr/bin/python3").resolve()
         expected = [bytes(executable), b"-I", b"-S", b"-B",
-                    bytes(self.package.root / "codex_service/entry.py"), b"broker"]
+                    bytes(self.package.root / "codex_service/entry.py")]
+        modes = {b"broker": "deep", **{("broker-" + role).encode(): role
+                 for role in ROLE_NAMES if role in getattr(self.package, "role_profiles", {})}}
         fresh = [b"open-owned-session", b"--protocol", b"orkestr-v2-provider-broker-v1"]
         resumed = [b"resume-owned-session", b"--protocol", b"orkestr-v2-provider-broker-v1"]
         arguments = (path / "cmdline").read_bytes().split(b"\0")[:-1]
-        require(arguments[:6] == expected and arguments[6:] in (fresh, resumed)
+        role = modes.get(arguments[5]) if len(arguments) >= 6 else None
+        allowed = (fresh,) if role is not None and role.startswith("worker-") else (fresh, resumed)
+        require(arguments[:5] == expected and role is not None and arguments[6:] in allowed
                 and (path / "exe").resolve() == executable, "broker_source")
         require(exists(identity) and belongs(pid, self.server), "broker_owner_changed")
         require(time.monotonic() < deadline, "broker_pause_deadline")

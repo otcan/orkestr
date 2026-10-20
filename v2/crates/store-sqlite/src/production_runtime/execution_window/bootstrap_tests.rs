@@ -188,3 +188,134 @@ async fn bootstrap_current_auth_foreign_scope_and_history_refuse_without_writes(
         .unwrap();
     assert_eq!(count, 0);
 }
+
+#[tokio::test]
+async fn another_native_conversation_requires_all_prior_retirement_and_distinct_context() {
+    use orkestr_v2_contracts::ConversationInput;
+    let root = std::path::PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").unwrap())
+        .join(format!("native-conversation-retired-{}", Uuid::new_v4()));
+    super::retired_process_tests::seed_closed(root.clone(), false).await;
+    let store = Store::open(&root.join("core.sqlite3")).await.unwrap();
+    let browser = "synthetic-browser-window";
+    let (new, _) = store
+        .create_conversation_authenticated(
+            browser,
+            &ConversationInput {
+                client_request_id: "native-second-thread".into(),
+                name: "Rust workbench".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let existing: Vec<(String, String, i64)> =
+        sqlx::query_as("SELECT context_id,incarnation_id,generation FROM production_supervisors")
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
+    let prior_config = fixtures::config(ProductionTakeover::First);
+    assert!(store
+        .bootstrap_execution_window_authenticated(browser, &new.conversation_id, prior_config)
+        .await
+        .is_err());
+    let mut config = fixtures::config(ProductionTakeover::First);
+    config.namespace = "native-second-context".into();
+    config.supervisor_key = "native-second-supervisor".into();
+    let initial = store
+        .bootstrap_execution_window_authenticated(browser, &new.conversation_id, config)
+        .await
+        .unwrap();
+    assert_eq!(initial.binding().conversation_id, new.conversation_id);
+    assert!(initial.binding().native_session_id.is_none());
+    for (context, incarnation, generation) in existing {
+        let same: (String, i64) = sqlx::query_as(
+            "SELECT incarnation_id,generation FROM production_supervisors WHERE context_id=?",
+        )
+        .bind(context)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(same, (incarnation, generation));
+    }
+    let (third, _) = store
+        .create_conversation_authenticated(
+            browser,
+            &ConversationInput {
+                client_request_id: "native-third-thread".into(),
+                name: "Another thread".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let mut config = fixtures::config(ProductionTakeover::First);
+    config.namespace = "native-third-context".into();
+    config.supervisor_key = "native-third-supervisor".into();
+    // An issued-but-unused private context is not discarded or bypassed.
+    assert!(store
+        .bootstrap_execution_window_authenticated(browser, &third.conversation_id, config)
+        .await
+        .is_err());
+    let windows: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(windows, 1);
+}
+
+#[tokio::test]
+async fn an_unfinished_window_blocks_other_conversation_admission_without_new_rows() {
+    use orkestr_v2_contracts::ConversationInput;
+    let root = std::path::PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").unwrap())
+        .join(format!("native-conversation-active-{}", Uuid::new_v4()));
+    super::retired_process_tests::seed_closed(root.clone(), true).await;
+    let store = Store::open(&root.join("core.sqlite3")).await.unwrap();
+    let browser = "synthetic-browser-window";
+    let owner = store
+        .credentials("synthetic-owner")
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let (new, _) = store
+        .create_conversation_authenticated(
+            browser,
+            &ConversationInput {
+                client_request_id: "native-blocked-thread".into(),
+                name: "Unstarted thread".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let intake = store
+        .admit(
+            &owner,
+            &new.conversation_id,
+            &MessageInput {
+                client_message_id: "queued-in-other-thread".into(),
+                text: "synthetic input".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .receipt;
+    let result = store
+        .admit_execution_window_authenticated(
+            browser,
+            &new.conversation_id,
+            &ExecutionWindowRequest {
+                request_key: "other-window".into(),
+                input_message_id: intake.message_id,
+                input_event_id: intake.event_id,
+                input_request_key: "queued-in-other-thread".into(),
+                expected_generation: 0,
+                window_id: None,
+                predecessor_window_id: None,
+            },
+        )
+        .await;
+    assert!(matches!(result, Err(RuntimeStoreError::Busy)));
+    assert!(store
+        .execution_window_status_authenticated(browser, &new.conversation_id)
+        .await
+        .unwrap()
+        .is_none());
+}

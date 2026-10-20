@@ -1,4 +1,4 @@
-//! Page-lifetime durable intake receipts waiting for explicit window admission.
+//! Page-lifetime durable intake receipts retained while a Send action awaits execution admission.
 use orkestr_v2_contracts::{ConversationId, Receipt};
 
 #[derive(Clone, PartialEq, Eq)]
@@ -20,6 +20,15 @@ impl SavedInputs {
         self.inputs
             .iter()
             .find(|input| input.conversation.to_string() == conversation)
+            .cloned()
+    }
+    pub fn request(&self, conversation: &str, request_key: &str) -> Option<SavedInput> {
+        self.inputs
+            .iter()
+            .find(|input| {
+                input.conversation.to_string() == conversation
+                    && input.input_request_key == request_key
+            })
             .cloned()
     }
     pub fn retain_receipt(&mut self, input: SavedInput) -> bool {

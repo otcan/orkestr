@@ -79,11 +79,12 @@ impl Context {
             })
             .map_err(|_| ())
     }
-    pub(crate) async fn activate(
+    pub(crate) async fn activate_roles(
         &self,
         store: &Store,
         token: &str,
         scope: ExecutionScope,
+        fast: Option<ExecutionScope>,
     ) -> Result<(), &'static str> {
         if self.work_due() {
             return Err("window work deadline elapsed before activation");
@@ -97,12 +98,13 @@ impl Context {
             )
             .await
             .map_err(|_| "window activation refused")?;
-        self.handles.install(
+        self.handles.install_roles(
             Generation {
                 window: self.window.window_id,
                 number: self.window.generation,
             },
             scope,
+            fast,
         )
     }
     pub(crate) async fn uncertain(&self, store: &Store, token: &str) {

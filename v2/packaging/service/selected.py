@@ -16,6 +16,7 @@ from closure import pin, require, trusted
 from manager_source import authority
 from prepare import inventory, settings
 from release import final_bindings, wrapper
+import selected_roles
 
 
 def encoded(value):
@@ -34,7 +35,8 @@ def directory(path, gid, mode=0o750):
 
 
 def entry(root, mode):
-    require(mode in ('manager','broker'),'fixed entry mode required')
+    require(mode in ('manager','broker', *('broker-' + role for role in selected_roles.NAMES)),
+            'fixed entry mode required')
     interpreter=Path('/usr/bin/python3').resolve(strict=True)
     return ('#!/bin/sh\nset -eu\nexec '+shlex.join([str(interpreter),'-I','-S','-B',
             str(root/'codex_service/entry.py'),mode])+' "$@"\n').encode()
@@ -43,7 +45,7 @@ def entry(root, mode):
 def pair_bytes(plan):
     path=Path(plan['pair']);require(pin(path)['sha256']==plan['pair_sha256'],'pair receipt digest mismatch')
     pair=json.loads(path.read_bytes());source=pair['source_commit']
-    require(pair['version']=='2.0.0-beta.1' and re.fullmatch('[0-9a-f]{40}',source),'beta source/version required')
+    require(pair['version'] in ('2.0.0-beta.1','2.0.0-beta.2') and re.fullmatch('[0-9a-f]{40}',source),'beta source/version required')
     require(pair['server']['profile']=='release' and pair['server']['default_features'] is True and
             pair['server']['features']==[] and pair['web']['profile']=='release' and
             pair['web']['features']==['web','execution-controls'] and
@@ -56,7 +58,7 @@ def pair_bytes(plan):
     wasm=list(ui.rglob('*.wasm'));require(len(wasm)==1,'one web WASM required')
     for component,path in (('server',server),('web',wasm[0])):
         blob=path.read_bytes();prefix=b'ORKESTR_V2_BUILD_IDENTITY_V1|'
-        record=f'ORKESTR_V2_BUILD_IDENTITY_V1|{component}|2.0.0-beta.1|{source}|END'.encode()
+        record=f"ORKESTR_V2_BUILD_IDENTITY_V1|{component}|{pair['version']}|{source}|END".encode()
         require(blob.count(prefix)>0 and blob.count(prefix)==blob.count(record),'embedded identity mismatch')
     for path in (server,native):
         blob=path.read_bytes()[:20]
@@ -70,7 +72,10 @@ def prepare(plan):
     fields={'format','output','source_repository','pair','pair_sha256','server','ui','native','native_sha256',
             'uid','gid','home','workspace','state_root','auth_file','bootstrap_file','ledger_directory',
             'endpoint_directory','owner_id','conversation_id','namespace','supervisor_key','origin','port'}
-    require(set(plan)==fields and plan['format']=='orkestr-v2-selected-service-plan-v1','closed plan required')
+    require(set(plan) - {'roles', 'preserve_state'} == fields and
+            plan['format']=='orkestr-v2-selected-service-plan-v1','closed plan required')
+    preserve=plan.get('preserve_state',False)
+    require(type(preserve) is bool,'explicit preserve_state boolean required')
     separate(plan)  # Metadata only: MUST precede every artifact read/hash.
     pair=pair_bytes(plan);source=pair['source_commit'];gid=plan['gid'];uid=plan['uid']
     require(type(uid) is int and 0<uid<2**31 and type(gid) is int and 0<gid<2**31,'dropped identity required')
@@ -87,7 +92,8 @@ def prepare(plan):
         auth=trust.private(plan['auth_file'],uid);require(auth.name=='auth.json','canonical auth reference required')
         workspace=trust.private(plan['workspace'],uid,True)
         account=trust.private(plan['state_root'],uid,True)
-        require(not any(workspace.iterdir()) and not any(account.iterdir()),'fresh native state/workspace required')
+        require(preserve or (not any(workspace.iterdir()) and not any(account.iterdir())),
+                'fresh native state/workspace required')
         ledger=Path(plan['ledger_directory']);endpoint=Path(plan['endpoint_directory'])
         created=[]
         for path,mode in ((ledger,0o700),(endpoint,0o750)):
@@ -95,11 +101,15 @@ def prepare(plan):
             if path.exists():
                 trust.protected(path,True)
                 require(path.stat().st_gid==gid and path.stat().st_mode&0o777==mode and
-                        not any(path.iterdir()),'empty reserved manager directory required')
+                        (preserve or not any(path.iterdir())),'empty reserved manager directory required')
             else:trust.protected(path.parent,True)
         roots=[output,home,workspace,account,ledger,endpoint,auth,Path(plan['bootstrap_file'])]
         for index,a in enumerate(roots):
             for b in roots[index+1:]:require(a!=b and a not in b.parents and b not in a.parents,'isolated path overlap')
+        role_paths = selected_roles.validate(plan['roles'],trust,uid,roots,preserve) if 'roles' in plan else None
+        role_files = getattr(manager,'ROLE_FILES',set()) if role_paths is not None else set()
+        require(role_paths is None or len(role_files)==10,'manager role inventory required')
+        package_files = manager.FILES | role_files
         modules={}
         for folder,names in (('broker',config.BROKER),('isolation',config.ISOLATION),
                              ('codex_bounded',config.MODULES),('codex_service',manager.MODULES_SERVICE)):
@@ -125,7 +135,6 @@ def prepare(plan):
                   'manager_socket':str(endpoint/'control.sock'),'launcher':str(inner/'launcher.py'),
                   'launcher_sha256':pin(inner/'launcher.py')['sha256'],'workspace':str(workspace),
                   'namespace':plan['namespace'],'supervisor_key':plan['supervisor_key']}
-            validate_beta(encoded(beta))
             runtime={'format':'orkestr-v2-codex-service-v1','uid':uid,'gid':gid,
                      'owner_id':plan['owner_id'],'conversation_id':plan['conversation_id'],'home':str(home),
                      'bootstrap_file':plan['bootstrap_file'],'ledger_directory':str(ledger),
@@ -134,6 +143,9 @@ def prepare(plan):
                      'auth_file':str(auth),'state_root':str(account),'workspace':str(workspace),
                      'egress_socket':str(endpoint/'egress.sock'),'supervisor':str(inner/'isolation/supervisor.py'),
                      'hosts':list(config.HOSTS)}
+            if role_paths is not None:
+                beta['roles']=selected_roles.emit(inner,role_paths,profile,gid,entry,write,encoded)
+            validate_beta(encoded(beta))
             for name,value in (('beta.json',beta),('service.json',runtime),('profile.json',profile)):
                 write(inner/name,encoded(value),gid,mode=0o640 if name=='beta.json' else None)
             directory(inner/'ui',gid)
@@ -147,7 +159,7 @@ def prepare(plan):
             require(pin(inner/'server')['sha256']==pair['server']['sha256'] and
                     pin(inner/'native')['sha256']==plan['native_sha256'],'copied executable mismatch')
             manifest={'format':'orkestr-v2-codex-service-package-v1','source_commit':source,
-                      'files':{name:pin(inner/name)['sha256'] for name in sorted(manager.FILES)},
+                      'files':{name:pin(inner/name)['sha256'] for name in sorted(package_files)},
                       'dependencies':deps,'ui':{name:info['sha256'] for name,info in pair['web']['files'].items()}}
             write(inner/'manifest.json',encoded(manifest),gid);digest=pin(inner/'manifest.json')['sha256']
             manager.Package(inner,digest);final_bindings(inner,inner,gid)
@@ -157,6 +169,7 @@ def prepare(plan):
                      'inner_manifest_sha256':digest,'files':inventory(output),'activated':False,
                      'startup_dependencies':{name:pin(trusted(Path(name).resolve())) for name in ('/bin/sh','/usr/bin/python3')},
                      'credential_contents_read':False,'provider_invoked':False,
+                     'preserved_existing_state':preserve,'roles_enabled':role_paths is not None,
                      'transitive_startup_closure_qualified':False,
                      'custody':{str(p.relative_to(output)):{'uid':p.stat().st_uid,'gid':p.stat().st_gid,
                                'mode':p.stat().st_mode&0o777} for p in [output,*output.rglob('*')]}}

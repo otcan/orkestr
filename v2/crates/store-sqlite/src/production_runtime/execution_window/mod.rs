@@ -9,8 +9,10 @@ mod admission;
 mod bootstrap;
 pub use bootstrap::ExecutionWindowBootstrap;
 mod credential;
+mod fast_metadata;
 mod guard;
 mod lifecycle;
+mod switching;
 pub use credential::{ExecutionWindowCredential, ExecutionWindowRetirement};
 #[cfg(test)]
 mod tests;
@@ -97,3 +99,6 @@ mod retired_process_tests;
 
 #[cfg(test)]
 mod retired_revalidation_tests;
+
+#[cfg(test)]
+mod role_tests;

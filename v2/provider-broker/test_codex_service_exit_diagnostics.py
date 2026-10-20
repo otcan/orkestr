@@ -183,10 +183,11 @@ class ExitDiagnostics(unittest.TestCase):
                     raise Refused("SYNTHETIC-CANARY")
         endpoint = types.SimpleNamespace(family=broker.socket.AF_UNIX,
             type=broker.socket.SOCK_STREAM, getpeername=lambda: None)
+        package = types.SimpleNamespace(root="/synthetic", uid=os.geteuid(),
+            role_profiles={"deep": "/synthetic/profile.json"})
         with contextlib.ExitStack() as stack:
-            stack.enter_context(patch.object(broker, "Package", return_value=types.SimpleNamespace(
-                root="/synthetic", uid=os.geteuid())))
-            stack.enter_context(patch.object(broker, "Configuration", return_value=types.SimpleNamespace(
+            stack.enter_context(patch.object(broker, "Package", return_value=package))
+            configuration = stack.enter_context(patch.object(broker, "Configuration", return_value=types.SimpleNamespace(
                 workspace="/synthetic/workspace")))
             stack.enter_context(patch.object(broker, "modules", return_value=(
                 Channel, PROTOCOL, Refused, lambda: None, 73, object)))
@@ -200,6 +201,7 @@ class ExitDiagnostics(unittest.TestCase):
             receive = stack.enter_context(patch("codex_bootstrap.receive", return_value="synthetic-native"))
             output = stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
             result = broker.main("/synthetic")
+            configuration.assert_called_once_with(package, "deep")
             paused.assert_called_once_with(os.getpid(), signal.SIGSTOP)
             self.assertEqual(receive.call_count, int(resumed))
             self.assertNotIn("SYNTHETIC-CANARY", output.getvalue())

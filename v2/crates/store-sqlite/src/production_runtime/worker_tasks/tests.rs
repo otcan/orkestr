@@ -346,3 +346,5 @@ async fn owner_budget_digest_legacy_compatibility_and_changed_replay_conflict() 
     let run = candidate(&f).await; // oldest legacy request still verifies its v1 digest
     consume(&f, &run).await;
 }
+
+mod proposal_tests;

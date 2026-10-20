@@ -29,12 +29,14 @@ pub mod build_identity;
 pub mod claude_execution;
 pub mod control_dispatch;
 pub mod control_registry;
+mod conversations_http;
 mod execution;
 mod execution_accept;
 mod execution_registry;
 pub mod fast_execution;
 pub mod google_registry_metadata;
 mod held_inputs;
+mod intelligence_http;
 mod memory_service;
 pub mod offline_python;
 pub mod owned_children;
@@ -317,8 +319,10 @@ pub fn router_with_google_catalog(
         .route("/api/v2/projects",get(routes::projects).post(routes::create_project))
         .route("/api/v2/resources",get(resource_health::resources))
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
+        .route("/api/v2/conversations",get(conversations_http::list).post(conversations_http::create))
         .route("/api/v2/conversations/{id}/accepted-results",get(accepted_results_http::read))
         .route("/api/v2/beta",get(beta_discovery_http::read))
+        .route("/api/v2/conversations/{id}/intelligence",get(intelligence_http::read))
         .route("/api/v2/conversations/{id}/window",get(window_http::status).post(window_http::admit))
         .route("/api/v2/conversations/{id}/execution",get(execution::status))
         .route("/api/v2/conversations/{id}/fast/execution",get(execution::fast_status))

@@ -30,19 +30,27 @@ async fn discovery_requires_current_auth_and_explicit_trusted_configuration() {
     let mut headers = HeaderMap::new();
     headers.insert("host", "127.0.0.1:19880".parse().unwrap());
     assert_eq!(
-        read(State(state.clone()), headers.clone())
-            .await
-            .unwrap_err()
-            .0,
+        read(
+            State(state.clone()),
+            headers.clone(),
+            Query(Selection::default())
+        )
+        .await
+        .unwrap_err()
+        .0,
         StatusCode::UNAUTHORIZED
     );
     headers.insert(
         "cookie",
         format!("orkestr_v2_session={token}").parse().unwrap(),
     );
-    let error = read(State(state.clone()), headers.clone())
-        .await
-        .unwrap_err();
+    let error = read(
+        State(state.clone()),
+        headers.clone(),
+        Query(Selection::default()),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(
         (error.0, error.1),
         (StatusCode::NOT_FOUND, "beta_unconfigured")
@@ -76,13 +84,20 @@ async fn discovery_requires_current_auth_and_explicit_trusted_configuration() {
     .with_beta_config(&foreign_config, &root, parent)
     .unwrap();
     assert_eq!(
-        read(State(foreign), headers.clone()).await.unwrap_err().0,
+        read(State(foreign), headers.clone(), Query(Selection::default()))
+            .await
+            .unwrap_err()
+            .0,
         StatusCode::FORBIDDEN
     );
     assert_mounted_route(configured.clone(), &token).await;
-    let response = read(State(configured.clone()), headers.clone())
-        .await
-        .unwrap_or_else(|error| panic!("{}", error.1));
+    let response = read(
+        State(configured.clone()),
+        headers.clone(),
+        Query(Selection::default()),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{}", error.1));
     assert_eq!(response.status(), StatusCode::OK);
     let body: BetaDiscovery =
         serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap();
@@ -97,12 +112,74 @@ async fn discovery_requires_current_auth_and_explicit_trusted_configuration() {
         }
     );
     assert!(body.window.is_none());
+    let (created, _) = store
+        .create_conversation_authenticated(
+            &format!("browser:{token}"),
+            &orkestr_v2_contracts::ConversationInput {
+                client_request_id: "discovery-native-thread".into(),
+                name: "Native Rust workbench".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let selected = read(
+        State(configured.clone()),
+        headers.clone(),
+        Query(Selection {
+            conversation_id: Some(created.conversation_id.clone()),
+        }),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{}", error.1));
+    let selected: BetaDiscovery =
+        serde_json::from_slice(&to_bytes(selected.into_body(), 8192).await.unwrap()).unwrap();
+    assert_eq!(selected.conversation_id, created.conversation_id);
+    assert!(selected.window.is_none());
+    assert!(!selected.controls.stop && !selected.controls.steer && !selected.controls.accept);
+    assert_eq!(
+        read(
+            State(configured.clone()),
+            headers.clone(),
+            Query(Selection {
+                conversation_id: Some(ConversationId(Uuid::new_v4())),
+            })
+        )
+        .await
+        .unwrap_err()
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        read(
+            State(configured.clone()),
+            headers.clone(),
+            Query(Selection {
+                conversation_id: Some(ConversationId(Uuid::nil())),
+            })
+        )
+        .await
+        .unwrap_err()
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert!(store
+        .execution_window_status_authenticated(
+            &format!("browser:{token}"),
+            &created.conversation_id
+        )
+        .await
+        .unwrap()
+        .is_none());
     headers.insert("host", "foreign.invalid".parse().unwrap());
     assert_eq!(
-        read(State(configured.clone()), headers.clone())
-            .await
-            .unwrap_err()
-            .0,
+        read(
+            State(configured.clone()),
+            headers.clone(),
+            Query(Selection::default())
+        )
+        .await
+        .unwrap_err()
+        .0,
         StatusCode::FORBIDDEN
     );
     headers.insert("host", "127.0.0.1:19880".parse().unwrap());
@@ -111,7 +188,10 @@ async fn discovery_requires_current_auth_and_explicit_trusted_configuration() {
         .await
         .unwrap();
     assert_eq!(
-        read(State(configured), headers).await.unwrap_err().0,
+        read(State(configured), headers, Query(Selection::default()))
+            .await
+            .unwrap_err()
+            .0,
         StatusCode::UNAUTHORIZED
     );
     drop(store);

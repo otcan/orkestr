@@ -361,11 +361,23 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         }
         result
     }
-    let before = rows(&mut conn).await;
+    let mut expected = rows(&mut conn).await;
+    // Migration 43 appends the legacy standalone default and derives a titled
+    // directory entry without replacing any conversation or existing row.
+    for row in expected.get_mut("conversations").unwrap() {
+        row.push_str("|0");
+    }
+    expected.insert(
+        "conversation_directory".into(),
+        vec![
+            "1|'conversation'|'owner'|'Assistant'|NULL|NULL".into(),
+            "2|'production-conversation'|'owner'|'Synthetic'|NULL|NULL".into(),
+        ],
+    );
     conn.close().await.unwrap();
     let store = Store::open(&dir.db()).await.unwrap();
     let mut conn = raw(&dir.db()).await;
-    assert_eq!(rows(&mut conn).await, before);
+    assert_eq!(rows(&mut conn).await, expected);
     for table in [
         "production_stop_boundaries",
         "production_held_inputs",
@@ -428,7 +440,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        42
+        44
     );
     for table in [
         "history_imports",

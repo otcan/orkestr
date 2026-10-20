@@ -5,6 +5,7 @@ use orkestr_v2_contracts::{ExecutionWindowAdmission, ExecutionWindowRequest};
 pub struct WindowIntent {
     generation: u64,
     pending: Option<ExecutionWindowRequest>,
+    refused: bool,
 }
 impl WindowIntent {
     pub fn generation(&self) -> u64 {
@@ -17,6 +18,7 @@ impl WindowIntent {
             .checked_add(1)
             .expect("scope generation exhausted");
         self.pending = None;
+        self.refused = false;
     }
     pub fn pending(&self) -> Option<&ExecutionWindowRequest> {
         self.pending.as_ref()
@@ -78,6 +80,14 @@ pub struct IntentTicket {
     generation: u64,
 }
 impl WindowIntents {
+    pub fn refused(&self, route: &str) -> bool {
+        self.entries.get(route).is_some_and(|intent| intent.refused)
+    }
+    pub fn mark_refused(&mut self, route: &str, ticket: &IntentTicket) {
+        if self.current(route, ticket) {
+            self.entries.get_mut(route).expect("current entry").refused = true;
+        }
+    }
     pub fn clear_scope(&mut self) {
         self.epoch = self
             .epoch
@@ -146,4 +156,15 @@ impl WindowIntents {
         saved.admitted_request(route, &request);
         self.review_refusal(route, ticket)
     }
+}
+
+pub fn valid_status(value: &orkestr_v2_contracts::ExecutionWindowStatus, id: &str) -> bool {
+    value.conversation_id.to_string() == id
+        && !value.window_id.is_nil()
+        && value.generation > 0
+        && value.generation < 9_007_199_254_740_992
+        && value.limits == Default::default()
+        && value.opened_at_ms >= 0
+        && value.work_deadline_ms.checked_sub(value.opened_at_ms) == Some(870_000)
+        && value.expires_at_ms.checked_sub(value.opened_at_ms) == Some(900_000)
 }

@@ -5,6 +5,10 @@ const source=await readFile(new URL('../src/beta_request.js',import.meta.url),'u
 const {betaRequest}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const conversation='00000000-0000-4000-8000-000000000001';
 const read={route:'beta',method:'GET',body:null};
+test('selected conversation discovery preserves exact scope without admitting work',async()=>{
+ await betaRequest({...read,conversation},async(path,o)=>{assert.equal(path,`/api/v2/beta?conversation_id=${conversation}`);assert.equal(o.method,'GET');assert.equal(o.body,undefined);return new Response('{}');});
+ for(const value of [conversation+'?owner=x','../other','']) await assert.rejects(betaRequest({...read,conversation:value},()=>assert.fail('fetch')));
+});
 test('capability and window reads use only agreed relative cookie routes without authority headers',async()=>{
  for(const input of [read,{...read,route:'window',conversation}]){
   const result=await betaRequest(input,async(path,options)=>{

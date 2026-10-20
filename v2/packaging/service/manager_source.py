@@ -10,7 +10,10 @@ import tempfile
 
 from closure import require
 
-MANAGER_BASE = '0dbb4226a2fdd611bd75b22d4a17117c438a1484'
+# Qualified persistent Deep beta baseline, including its reviewed retirement
+# and paused-launch corrections. The original worker revision is not an
+# ancestor of the integration branch; require the qualified successor instead.
+MANAGER_BASE = 'f6fb00a461d792af22ec15c80d089c266081ca3b'
 
 
 def git(repository, *arguments):

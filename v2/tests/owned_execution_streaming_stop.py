@@ -32,6 +32,10 @@ def streaming_stop(case, wait_for, late_burst=False):
     assert control_revision > 1, "Started must advance the exact run control revision"
     body = {"run_id": before["run_id"], "expected_revision": before["revision"],
             "expected_control_revision": control_revision, "request_key": "streaming-stop"}
+    code, initial, _ = case.request(case.path + "/payloads/" + before["progress"]["payload_id"])
+    assert code == 200 and initial["text"] == "synthetic progress <untrusted>"
+    # Progress payloads are immutable complete snapshots, not individual deltas.
+    expected_text = initial["text"] + "synthetic interleaved progress"
     # The peer cannot emit this frame until AFTER the browser has sampled status.
     # Wait for its actual persisted payload; a sleep is not proof of interleaving.
     (case.workspace / "release-progress").touch()
@@ -43,7 +47,7 @@ def streaming_stop(case, wait_for, late_burst=False):
         assert status["run_id"] == before["run_id"]
         assert status["control_revision"] == control_revision
         code, payload, _ = case.request(case.path + "/payloads/" + status["progress"]["payload_id"])
-        return status if code == 200 and payload["text"] == "synthetic interleaved progress" else None
+        return status if code == 200 and payload["text"] == expected_text else None
 
     after = wait_for(interleaved, "native progress must commit between status GET and Stop POST")
     # A genuinely old control version still refuses before any durable intent.

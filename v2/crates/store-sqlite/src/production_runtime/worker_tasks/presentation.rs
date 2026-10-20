@@ -44,7 +44,19 @@ impl Store {
                 .map(|id| id.parse().map(RunId).map_err(db))
                 .transpose()?;
             let available = row.get::<Option<String>, _>("payload_present").is_some();
-            let live = match self.task_parent_in(&mut tx, &row).await {
+            // Creation remains Running-only. A consumed child instead reports
+            // its own current authority, including a retained parent proposal.
+            let current = if let Some(run) = run_id.as_ref().filter(|_| {
+                matches!(
+                    row.get::<Option<&str>, _>("run_state"),
+                    Some("starting" | "running")
+                )
+            }) {
+                self.task_run_current_in(&mut tx, run).await
+            } else {
+                self.task_parent_in(&mut tx, &row).await.map(|_| ())
+            };
+            let live = match current {
                 Ok(_) => true,
                 Err(
                     RuntimeStoreError::Unauthorized
@@ -93,5 +105,14 @@ impl Store {
             return Err(RuntimeStoreError::Unavailable);
         }
         Ok(result)
+    }
+    async fn task_run_current_in(&self, tx: &mut SqliteConnection, run: &RunId) -> Result<()> {
+        let context = self.context()?;
+        let row = sqlx::query("SELECT * FROM production_runs WHERE id=? AND owner_id=? AND context_id=? AND incarnation_id=? AND role='worker'")
+            .bind(run.to_string()).bind(context.owner.to_string()).bind(&context.id).bind(&context.incarnation)
+            .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
+        let canonical = super::super::admission::envelope(&row)?;
+        self.production_authorized_run(tx, &canonical).await?;
+        Ok(())
     }
 }

@@ -9,6 +9,7 @@ pub fn FastPanel(
     csrf: String,
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
+    #[props(default)] onaccepted: Option<EventHandler<i64>>,
 ) -> Element {
     let model = execution.read();
     rsx! {
@@ -24,11 +25,11 @@ pub fn FastPanel(
                     }
                 }
                 crate::acceptance_button::AcceptanceButton {
-                    execution, fast_reply: true, now_ms, csrf, session_scope, onexpired
+                    execution, fast_reply: true, now_ms, csrf, session_scope, onexpired, onaccepted
                 }
-                p { "Send messages in the conversation below. A Fast reply needs your review before it can continue; accepting it does not complete Deep work or a Worker task." }
+                p { "A Fast reply needs your review before it can continue. Accepting it does not complete Deep work or a Worker task." }
             } else {
-                p { role: "status", "No Fast reply available. Continue using the conversation below." }
+                p { role: "status", "No Fast reply is available for this conversation yet." }
             }
         }
     }

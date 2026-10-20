@@ -91,3 +91,74 @@ async fn foreign_control_or_missing_control_never_becomes_a_live_handle() {
     drop(store);
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[tokio::test]
+async fn companion_handles_are_scope_checked_and_retire_atomically() {
+    use crate::worker_tasks::WorkerTaskAccess;
+    let owner = OwnerId(Uuid::new_v4());
+    let conversation = ConversationId(Uuid::new_v4());
+    let handles = Handles::new(owner.clone(), conversation.clone()).unwrap();
+    let directory = std::env::temp_dir().join(format!("window-role-handles-{}", Uuid::new_v4()));
+    std::fs::create_dir(&directory).unwrap();
+    let store = Store::open(&directory.join("core.sqlite3")).await.unwrap();
+    let scope = |scoped_owner: OwnerId, tasks| ExecutionScope {
+        store: store.clone(),
+        control: Some(ControlRegistry::new(scoped_owner, conversation.clone())),
+        tasks,
+    };
+    let generation = Generation {
+        window: Uuid::new_v4(),
+        number: 1,
+    };
+    let tasks = WorkerTaskAccess::new(owner.clone(), conversation.clone());
+    for fast in [
+        scope(OwnerId(Uuid::new_v4()), None),
+        scope(owner.clone(), Some(tasks.clone())),
+    ] {
+        assert!(handles
+            .install_roles(
+                generation,
+                scope(owner.clone(), Some(tasks.clone())),
+                Some(fast)
+            )
+            .is_err());
+        assert!(handles.snapshot(&owner, &conversation).is_none());
+        assert!(handles.fast_snapshot(&owner, &conversation).is_none());
+    }
+    handles
+        .install_roles(
+            generation,
+            scope(owner.clone(), Some(tasks)),
+            Some(scope(owner.clone(), None)),
+        )
+        .unwrap();
+    assert!(handles
+        .snapshot(&owner, &conversation)
+        .unwrap()
+        .tasks
+        .is_some());
+    assert!(handles
+        .fast_snapshot(&owner, &conversation)
+        .unwrap()
+        .tasks
+        .is_none());
+    assert!(handles
+        .fast_snapshot(&OwnerId(Uuid::new_v4()), &conversation)
+        .is_none());
+    assert!(handles
+        .fast_snapshot(&owner, &ConversationId(Uuid::new_v4()))
+        .is_none());
+    assert!(handles
+        .remove(Generation {
+            window: Uuid::new_v4(),
+            number: 1
+        })
+        .is_err());
+    assert!(handles.fast_snapshot(&owner, &conversation).is_some());
+    handles.remove(generation).unwrap();
+    assert!(handles.snapshot(&owner, &conversation).is_none());
+    assert!(handles.fast_snapshot(&owner, &conversation).is_none());
+    drop(handles);
+    drop(store);
+    std::fs::remove_dir_all(directory).unwrap();
+}

@@ -208,7 +208,16 @@ def parent_proposal_durably_holds_unissued_tasks(case):
     ordinary.wait_for(lambda: case.phase("awaiting_acceptance"), "parent proposal missing")
     assert case.rows("SELECT state,claim_hash FROM worker_tasks WHERE id=?", (queued["task_id"],)) == [
         {"state": "held", "claim_hash": None}]
-    ordinary.wait_for(case.worker_gone, "parent proposal must reap its fenced Workers")
+    running = [row for row in case.task_list()["tasks"] if row["phase"] == "running"]
+    assert len(running) == 4, "ordinary parent completion must retain already running children"
+    assert case.accept(case.parent["id"], case.completion(case.parent["id"]), "parent-before-children")[0] == 409
+    for name in ["alpha", "beta", "gamma", "delta"]:
+        (case.workspace / f"release-{name}").touch()
+    ordinary.wait_for(lambda: sum(row["phase"] == "awaiting_acceptance" for row in case.task_list()["tasks"]) == 4,
+                      "retained Workers must finish after their parent proposal")
+    ordinary.wait_for(case.worker_gone, "completed Worker proposals must reap their original children")
+    assert not case.rows("SELECT id FROM production_runs WHERE role='worker' AND state!='awaiting_acceptance'")
+    assert case.accept(case.parent["id"], case.completion(case.parent["id"]), "parent-before-decisions")[0] == 409
     assert case.task(queued, "held")
     assert not any(row.get("task") == "queued" for row in case.trace() if row["kind"] == "turn")
     assert not case.rows("SELECT run_id FROM production_observations WHERE kind='stopped'")

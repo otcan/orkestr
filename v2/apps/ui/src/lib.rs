@@ -239,3 +239,8 @@ pub mod memory_state;
 pub mod beta_window;
 
 pub mod beta_inputs;
+
+pub mod chat_timeline;
+pub mod conversation_directory;
+pub mod intelligence;
+pub mod send_intent;

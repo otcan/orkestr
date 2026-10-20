@@ -18,6 +18,16 @@ pub struct WorkerPolicy {
 }
 
 impl WorkerPolicy {
+    pub(crate) fn window_owner_tasks() -> Self {
+        Self {
+            mode: "owner-tasks-v1".into(),
+            lifetime_ms: 30_000,
+            execution_budget: None,
+            offline_python: false,
+            broker_launcher: None,
+            broker_launcher_sha256: None,
+        }
+    }
     /// One independently bound Worker for the parent's immutable input. This
     /// policy cannot select an owner, parent, native session, prompt or privilege.
     pub fn validate(&self) -> Result<(), &'static str> {

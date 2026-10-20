@@ -84,6 +84,7 @@ class Manager:
     def _bind_deadline(self, request, accepted):
         self.ledger._scope(request)
         row = self.ledger.details(request["window_id"], request["generation"])
+        require(row["conversation"] == request["conversation_id"], "scope")
         return bind_deadline(request["bind_deadline_ms"], accepted,
                              row["deadline_mono_ns"] / 1e9 - DRAIN_SECONDS)
 
@@ -91,7 +92,7 @@ class Manager:
         self.ledger._scope(request)
         operation = request["operation"]
         if operation == "status":
-            return {"ok": True, "receipt": self.ledger.status()}
+            return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
         if operation == "admit":
             receipt, fresh = self.ledger.admit(request)
             if fresh:
@@ -111,6 +112,7 @@ class Manager:
                     raise Refused("window_initialization") from None
             return {"ok": True, "receipt": receipt, "fresh_window": fresh}
         row = self.ledger.details(request["window_id"], request["generation"])
+        require(row["conversation"] == request["conversation_id"], "scope")
         if operation == "bind_child":
             status = self.ledger.tick(request["window_id"], request["generation"])
             require(status["state"] == "active" and self.children is not None
@@ -124,13 +126,13 @@ class Manager:
                 self._uncertain("cleanup_unknown")
                 self._terminate_window()
                 raise Refused("broker_binding") from None
-            return {"ok": True, "receipt": self.ledger.status(), "fresh_child": fresh}
+            return {"ok": True, "receipt": self.ledger.status(request["conversation_id"]), "fresh_child": fresh}
         if operation == "drain":
             return {"ok": True, "receipt": self.ledger.drain(request["window_id"], request["generation"])}
         if operation == "uncertain":
             self.ledger.uncertain(request["window_id"], request["generation"], request["reason"])
             self._terminate_window()
-            return {"ok": True, "receipt": self.ledger.status()}
+            return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
         require(operation == "retire", "operation")
         if row["state"] != "retired":
             require(self.children is not None, "original_cleanup_proof_missing")

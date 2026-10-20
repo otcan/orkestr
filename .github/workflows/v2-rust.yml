@@ -51,14 +51,18 @@ jobs:
       - name: Persistent manager ledger and owned-process regressions
         run: |
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_ledger.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_conversations.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_clock.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_process.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_boundaries.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_bind_deadline.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_native_state.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_exit_diagnostics.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_output_items.py -v
       - name: Protected synthetic manager package regressions
-        run: sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_package.py -v
+        run: |
+          sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_package.py -v
+          sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_roles.py -v
       - name: Mocked provider metadata probe safety
         env:
           PYTHONDONTWRITEBYTECODE: '1'
@@ -86,10 +90,20 @@ jobs:
         run: cargo +1.99.1 clippy --locked --workspace --all-targets -- -D warnings
       - name: Locked build
         run: cargo +1.99.1 build --locked --workspace
+      - name: Shared Fast, Deep and Worker windows over real HTTP
+        run: |
+          sudo /usr/bin/python3 -B tests/service_roles_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --source "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-service-roles.json"
       - name: Unit and HTTP process-failure tests (requires Python 3)
         run: cargo +1.99.1 test --locked --workspace
       - name: Offline domain demo smoke check
         run: cargo +1.99.1 run --locked -p orkestr-v2-demo
+      - name: Make shared-window synthetic evidence readable
+        if: ${{ always() }}
+        run: |
+          # The root fixture keeps reports private; transfer only this fixed CI artifact.
+          if [ -f "$RUNNER_TEMP/v2-service-roles.json" ]; then
+            sudo chown --no-dereference -- "$(id -u):$(id -g)" "$RUNNER_TEMP/v2-service-roles.json"
+          fi
       - name: Retain synthetic worker lifecycle evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -97,6 +111,7 @@ jobs:
           name: v2-worker-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}
           # Explicit report files only: never upload the candidate home or databases.
           path: |
+            ${{ runner.temp }}/v2-service-roles.json
             ${{ runner.temp }}/orkestr-v2-intake/worker-retirement-*.json
             ${{ runner.temp }}/orkestr-v2-intake/worker-continuation-*.json
           if-no-files-found: ignore

@@ -115,7 +115,9 @@ def start(case, hold_worker=False, hold_started=False, lifetime_ms=30000):
 
 
 def independent_completion(case):
-    receipt = start(case)
+    receipt = start(case, hold_worker=True)
+    ordinary.wait_for(lambda: case.role_state("worker", "running"), "original Worker must be observed")
+    (case.workspace / "release-worker").touch()
     child = ordinary.wait_for(lambda: case.role_state("worker", "awaiting_acceptance"),
                               "Worker durable completion missing")
     parent = case.role_state("deep", "running")
@@ -175,17 +177,23 @@ def revoked_in_flight(case):
     assert all(run["state"] not in ("succeeded", "cancelled") for run in case.runs())
 
 
-def parent_completion_fences_child(case):
+def parent_completion_retains_child_until_owner_decision(case):
     start(case, hold_worker=True)
     ordinary.wait_for(lambda: case.role_state("worker", "running"), "Worker did not start")
     before = case.inbox()
     (case.workspace / "release-deep").touch()
     status = ordinary.wait_for(lambda: case.phase("awaiting_acceptance"), "parent truth was not persisted")
-    ordinary.wait_for(case.worker_gone, "parent completion did not clean up fenced Worker")
-    assert case.role_state("worker", "blocked") is not None
+    child = case.role_state("worker", "running")
+    assert child is not None
+    assert case.accept(status["run_id"], case.completion(status["run_id"]), "running-child")[0] == 409
+    (case.workspace / "release-worker").touch()
+    ordinary.wait_for(lambda: case.role_state("worker", "awaiting_acceptance"), "retained child completion missing")
+    ordinary.wait_for(case.worker_gone, "completed child must reap before its owner decision")
     assert case.inbox() == before
     assert not case.rows("SELECT kind FROM production_observations WHERE kind='stopped'")
-    assert case.accept(status["run_id"], case.completion(status["run_id"]), "unresolved-child")[0] == 409
+    assert case.accept(status["run_id"], case.completion(status["run_id"]), "undecided-child")[0] == 409
+    assert case.accept(child["id"], case.completion(child["id"]), "retained-child")[0] == 200
+    assert case.accept(status["run_id"], case.completion(status["run_id"]), "parent-after-child")[0] == 200
 
 
 def parent_http_stop(case):
@@ -233,7 +241,7 @@ def worker_deadline_stop(case):
 
 
 SCENARIOS = [independent_completion, revoked_before_started, revoked_in_flight,
-             parent_completion_fences_child, parent_http_stop, worker_deadline_stop]
+             parent_completion_retains_child_until_owner_decision, parent_http_stop, worker_deadline_stop]
 
 
 def main():
