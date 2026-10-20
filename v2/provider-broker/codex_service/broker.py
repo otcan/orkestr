@@ -49,7 +49,8 @@ def main(root, role="deep"):
                         workspace_exec=sys.argv[1:] == workspace,
                         workspace_trusted=sys.argv[1:] == workspace and type(
                             package.beta["workspace_exec"].get("trusted")) is dict,
-                        host_full_access=config.host_full_access), handoff=handoff,
+                        host_full_access=getattr(config, "host_full_access", False) is True),
+                handoff=handoff,
                 diagnostics=True)
             pump.run()
             if pump.parent_eof and pump.child is not None and pump.reaped:
