@@ -96,10 +96,20 @@ class ClaudeTelemetryTests(unittest.TestCase):
         with self.assertRaises(Refused):
             self.channel.provider(frame)
 
-    def test_unknown_rate_payload_refused(self):
+    def test_new_informational_rate_fields_drain_but_shape_stays_bounded(self):
+        # Installed CLI 2.1.x added overageEnabled; a refusal lost a live Fast turn.
         self.init()
         self.channel.client(self.request(2))
         frame = self.telemetry('rate_limit_event')
-        frame['rate_limit_info']['unknown_control'] = 'synthetic'
-        with self.assertRaises(Refused):
-            self.channel.provider(frame)
+        frame['rate_limit_info'].update(status='allowed_warning', rateLimitType='seven_day',
+            utilization=0.3, overageStatus='rejected', overageEnabled=False,
+            unifiedWindows={'five_hour': {'utilization': 0.19, 'resetsAt': 1},
+                            'seven_day_opus': {'utilization': 0.3, 'resetsAt': 2}})
+        self.assertIsNone(self.channel.provider(frame))
+        for bad in ({'status': 7}, {'status': ''}, {'status': 'x', 'blob': 'y' * 5000},
+                    {'status': 'x', **{f'k{i}': i for i in range(40)}}):
+            self.setUp(); self.init(); self.channel.client(self.request(2))
+            frame = self.telemetry('rate_limit_event')
+            frame['rate_limit_info'] = bad
+            with self.assertRaises(Refused):
+                self.channel.provider(frame)

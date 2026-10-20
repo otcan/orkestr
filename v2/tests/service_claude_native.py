@@ -63,6 +63,15 @@ emit({"type": "assistant", "session_id": native, "uuid": str(uuid.uuid4()),
       "parent_tool_use_id": None, "user_message_uuid": message,
       "message": {"id": "msg_synthetic", "role": "assistant",
                   "content": [{"type": "text", "text": f"synthetic Claude turn {turns}"}]}})
+# Installed-CLI informational rate telemetry, including a field added after the
+# closed codec was written (overageEnabled); it must drain, never lose the turn.
+emit({"type": "rate_limit_event", "uuid": str(uuid.uuid4()), "session_id": native,
+      "rate_limit_info": {"status": "allowed_warning", "resetsAt": 1, "rateLimitType": "seven_day",
+                          "utilization": 0.3, "overageStatus": "rejected", "overageEnabled": False,
+                          "isUsingOverage": False}})
+if Path("fast-crash").exists() and "ANTHROPIC_MODEL" not in os.environ:
+    record("fast-crash")
+    os._exit(1)  # A lost Fast native: no terminal result, abrupt exit.
 emit({"type": "result", "subtype": "success", "is_error": False, "session_id": native,
       "uuid": str(uuid.uuid4()), "user_message_uuid": message,
       "result": f"synthetic Claude turn {turns}"})

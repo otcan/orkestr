@@ -175,6 +175,28 @@ def run(case, real):
     return {"runs": runs, "windows": final, "texts": [text1[:40], text2[:40], text4[:40]]}
 
 
+def fast_lost(case):
+    """A lost Claude Fast companion fails alone; Deep keeps the window."""
+    select_claude(case, False)
+    case.fixture.write_private(case.claude_workspace / "fast-crash", b"1")
+    window = admit(case, "lost:1", "synthetic window input 1")
+    deep, text = settle(case, "lost:1", "deep", None, 60)
+    assert text == "synthetic Claude turn 1", text
+    def fast_blocked():
+        code, value, _ = case.request(path(case.conversation) + "/fast/execution")
+        return value if code == 200 and value["phase"] in ("blocked", "failed") else None
+    wait_for(fast_blocked, "lost Fast companion", 30)
+    follow = admit(case, "lost:2", "synthetic window input 2", window["window_id"], 1)
+    assert follow["window_id"] == window["window_id"]
+    second, text2 = settle(case, "lost:2", "deep", deep["run_id"], 60)
+    assert text2 == "synthetic Claude turn 2", text2
+    runs = case.rows("SELECT role,state FROM production_runs ORDER BY rowid")
+    assert [r["state"] for r in runs if r["role"] == "deep"] == ["succeeded", "succeeded"], runs
+    assert len([row for row in case.trace() if row["kind"] == "fast-crash"]) == 1
+    case.stop()
+    return {"runs": runs, "texts": [text, text2]}
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
@@ -183,6 +205,7 @@ if __name__ == "__main__":
     parser.add_argument("--executable")
     parser.add_argument("--account")
     parser.add_argument("--keep-logs")
+    parser.add_argument("--scenario", choices=("turns", "fast-lost"), default="turns")
     args = parser.parse_args()
     real = args.executable is not None
     record = {"source": args.source, "binary_sha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(),
@@ -192,7 +215,7 @@ if __name__ == "__main__":
     started = time.monotonic()
     try:
         case.setup()
-        record.update(run(case, real), passed=True)
+        record.update(fast_lost(case) if args.scenario == "fast-lost" else run(case, real), passed=True)
     except BaseException as error:
         record["error"] = type(error).__name__ + ": " + str(error)
         raise

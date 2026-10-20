@@ -44,6 +44,13 @@ selection in conversation settings (`with_claude_turns`).
   effort, its own Stop (`…/fast/stop`) and owner acceptance, resumed per
   presentation exactly like Deep. Workers and the descriptor workspace profile
   stay Codex-only for Claude conversations.
+- A lost or failed Fast companion (Codex or Claude) fails alone: it is logged,
+  marked failed and stops presenting; Deep and Workers keep the window and keep
+  serving turns. Retiring that window still goes through Core, which refuses
+  an unresolved Fast run, so the window ends in reconciliation, not closed.
+- Claude account rate-limit telemetry is drained with only a size/shape bound:
+  the installed CLI added `overageEnabled`, and the closed field list lost a
+  live Fast turn on it.
 - Switching provider after a conversation already has a committed native
   identity of the other provider is refused at window admission (`409`) until
   the handoff path exists; new or untouched conversations may select either.
