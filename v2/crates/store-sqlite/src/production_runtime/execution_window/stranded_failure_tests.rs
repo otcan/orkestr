@@ -8,6 +8,7 @@ use orkestr_v2_contracts::ExecutionWindowOpenFailureCause as Cause;
 struct Workbench {
     p: Pending,
     worker: ProviderAdmission,
+    /// The cancellation receipt, or the `lost` observation for a broker death.
     cancellation: EventId,
 }
 
@@ -15,6 +16,13 @@ struct Workbench {
 /// requests its cancellation; Fast and Deep then propose. The process dies
 /// before the Worker acknowledges: exactly the live Workbench shape.
 async fn workbench() -> Workbench {
+    workbench_with(false).await
+}
+
+/// `lost`: instead of a deadline cancellation, the Worker's broker dies
+/// mid-turn (live host-mode incident: a refused provider frame). The run is
+/// `blocked` with unknown delivery after a `lost` observation.
+async fn workbench_with(lost: bool) -> Workbench {
     let w = Window::open().await;
     let fast = w.ready_fast().await;
     w.activate().await;
@@ -106,19 +114,28 @@ async fn workbench() -> Workbench {
         )
         .await
         .unwrap();
-    w.bound
-        .request_cancel(&w.f.owner, &worker.run.run_id, "worker-runtime-deadline")
-        .await
-        .unwrap();
+    let evidence = if lost {
+        w.bound
+            .append_provider_event(
+                &w.f.owner,
+                &worker,
+                &observation(&worker, 2, ProviderEvent::Lost),
+            )
+            .await
+            .unwrap();
+        "SELECT event_id FROM production_observations WHERE run_id=? AND kind='lost'"
+    } else {
+        w.bound
+            .request_cancel(&w.f.owner, &worker.run.run_id, "worker-runtime-deadline")
+            .await
+            .unwrap();
+        "SELECT event_id FROM production_cancellations WHERE run_id=?"
+    };
     let cancellation = EventId(
-        scalar(
-            &w.f.store,
-            "SELECT event_id FROM production_cancellations WHERE run_id=?",
-            &worker.run.run_id.to_string(),
-        )
-        .await
-        .parse()
-        .unwrap(),
+        scalar(&w.f.store, evidence, &worker.run.run_id.to_string())
+            .await
+            .parse()
+            .unwrap(),
     );
     let fast_done = propose(&w, &fast).await;
     let deep_done = propose(&w, &deep).await;
@@ -272,6 +289,65 @@ async fn deadline_cancelled_worker_fails_and_unblocks_the_workbench_conversation
         .unwrap();
     assert!(replay.duplicate);
     assert_eq!(replay.failed_run_ids, receipt.failed_run_ids);
+}
+
+/// Live host-mode shape: the Worker's broker died on its first tool call, so
+/// the run is `blocked` after `lost`. Before 0053 nothing could reconcile it,
+/// and the conversation stayed stranded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lost_worker_fails_and_unblocks_its_conversation() {
+    let b = workbench_with(true).await;
+    let w = &b.p.w;
+    let worker = b.worker.run.run_id.to_string();
+    assert_eq!(
+        scalar(
+            &w.f.store,
+            "SELECT state||':'||dispatch_state FROM production_runs WHERE id=?",
+            &worker
+        )
+        .await,
+        "blocked:delivery_unknown"
+    );
+    let fresh = restart(w, true).await;
+    // Its lease is still live: the child could still answer. Refused.
+    let before = fixtures::snapshot(&fresh).await;
+    assert!(matches!(
+        reconcile(&fresh, w, Decision::AbandonUnaccepted, Actor::Startup).await,
+        Err(RuntimeStoreError::Fenced)
+    ));
+    assert_eq!(before, fixtures::snapshot(&fresh).await);
+    expire_worker_lease(&fresh, &b.worker).await;
+    let receipt = reconcile(&fresh, w, Decision::AbandonUnaccepted, Actor::Startup)
+        .await
+        .unwrap();
+    assert_eq!(receipt.failed_run_ids, vec![b.worker.run.run_id.clone()]);
+    assert_eq!(receipt.abandoned_run_ids.len(), 2);
+    assert_eq!(
+        scalar(&fresh, "SELECT r.state||':'||t.terminal_kind||':'||t.event_id FROM production_runs r JOIN production_terminal_evidence t ON t.run_id=r.id WHERE r.id=?", &worker).await,
+        format!("cancelled:failed:{}", b.cancellation)
+    );
+    assert_eq!(
+        scalar(
+            &fresh,
+            "SELECT reconciliation_id FROM production_run_lost_failures WHERE run_id=?",
+            &worker
+        )
+        .await,
+        receipt.reconciliation_id.to_string()
+    );
+    assert_eq!(
+        count(&fresh, "SELECT count(*) FROM production_run_failures").await,
+        0
+    );
+    assert_eq!(
+        scalar(&fresh, "SELECT b.state||':'||b.generation FROM session_bindings b JOIN production_runs r ON r.session_id=b.id WHERE r.id=?", &worker).await,
+        format!("lost:{}", b.worker.binding.generation + 1)
+    );
+    assert_eq!(window_state(&fresh, w.status.window_id).await, "closed");
+    let replay = reconcile(&fresh, w, Decision::AbandonUnaccepted, Actor::Owner)
+        .await
+        .unwrap();
+    assert!(replay.duplicate);
 }
 
 /// Successor window: the opening reattached the retired supervisor (new

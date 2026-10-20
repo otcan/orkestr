@@ -57,7 +57,7 @@ pub(super) async fn receipt_in(
     .await?;
     let failed = ids(
         tx,
-        "SELECT run_id FROM production_run_failures WHERE reconciliation_id=? ORDER BY run_id",
+        "SELECT run_id FROM production_run_failures WHERE reconciliation_id=?1 UNION SELECT run_id FROM production_run_lost_failures WHERE reconciliation_id=?1 ORDER BY run_id",
         &id,
     )
     .await?;

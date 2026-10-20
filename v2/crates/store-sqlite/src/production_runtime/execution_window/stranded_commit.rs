@@ -30,18 +30,28 @@ pub(super) async fn commit_turns(
         let lost = sqlx::query("UPDATE session_bindings SET state='lost',generation=generation+1 WHERE id=? AND owner_id=? AND conversation_id=? AND role='worker' AND generation=? AND state!='retired'")
             .bind(&f.session).bind(owner.to_string()).bind(conversation.to_string()).bind(f.binding_generation)
             .execute(&mut *tx).await.map_err(db)?.rows_affected();
-        let cancelled = sqlx::query("UPDATE production_runs SET state='cancelled' WHERE id=? AND role='worker' AND state='cancel_requested' AND dispatch_state='delivery_unknown' AND lease_deadline_ms=?")
-            .bind(&f.run).bind(f.lease_deadline)
+        let cancelled = sqlx::query("UPDATE production_runs SET state='cancelled' WHERE id=? AND role='worker' AND state=? AND dispatch_state='delivery_unknown' AND lease_deadline_ms=?")
+            .bind(&f.run).bind(f.evidence.state()).bind(f.lease_deadline)
             .execute(&mut *tx).await.map_err(db)?.rows_affected();
         if lost != 1 || cancelled != 1 {
             return Err(RuntimeStoreError::Fenced);
         }
-        sqlx::query("INSERT INTO production_run_failures(run_id,reconciliation_id,cause,cancellation_event_id,lease_deadline_ms,binding_generation,failed_at_ms) VALUES(?,?,'cancel_unacknowledged',?,?,?,?)")
-            .bind(&f.run).bind(id.to_string()).bind(&f.cancellation).bind(f.lease_deadline)
-            .bind(f.binding_generation + 1).bind(clock)
-            .execute(&mut *tx).await.map_err(db)?;
+        let record = match &f.evidence {
+            worker::Evidence::Cancellation(_) => "INSERT INTO production_run_failures(run_id,reconciliation_id,cause,cancellation_event_id,lease_deadline_ms,binding_generation,failed_at_ms) VALUES(?,?,'cancel_unacknowledged',?,?,?,?)",
+            worker::Evidence::Lost(_) => "INSERT INTO production_run_lost_failures(run_id,reconciliation_id,lost_event_id,lease_deadline_ms,binding_generation,failed_at_ms) VALUES(?,?,?,?,?,?)",
+        };
+        sqlx::query(record)
+            .bind(&f.run)
+            .bind(id.to_string())
+            .bind(f.evidence.event())
+            .bind(f.lease_deadline)
+            .bind(f.binding_generation + 1)
+            .bind(clock)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
         let failed: i64 = sqlx::query_scalar("SELECT count(*) FROM production_terminal_evidence WHERE run_id=? AND terminal_kind='failed' AND event_id=?")
-            .bind(&f.run).bind(&f.cancellation).fetch_one(&mut *tx).await.map_err(db)?;
+            .bind(&f.run).bind(f.evidence.event()).fetch_one(&mut *tx).await.map_err(db)?;
         if failed != 1 {
             return Err(RuntimeStoreError::Fenced);
         }
