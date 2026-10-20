@@ -1161,6 +1161,11 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
         next.push(message);
         continue;
       }
+      if (Object.entries(options.expectedFields || {}).some(([key, value]) => message[key] !== value)) {
+        const error = new Error("message_fields_conflict");
+        error.statusCode = 409;
+        throw error;
+      }
       const expectedStates = Array.isArray(options.expectedStates)
         ? options.expectedStates.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean)
         : [];
