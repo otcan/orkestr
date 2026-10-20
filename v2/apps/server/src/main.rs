@@ -60,6 +60,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         }
         state = state.with_beta_config_file(&PathBuf::from(path), &home)?;
     }
+    if let Some(path) = std::env::var_os("ORKESTR_V2_DESKTOP_BROKER_CONFIG") {
+        state = state.with_desktop_broker_file(&PathBuf::from(path))?;
+    }
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let catalog = match std::env::var_os("ORKESTR_V2_GOOGLE_CATALOG") {
         Some(path) => {

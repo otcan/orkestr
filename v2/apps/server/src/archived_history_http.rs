@@ -31,7 +31,7 @@ pub(crate) fn router() -> Router<AppState> {
 }
 
 /// Shared owner policy first; the exact credential is re-checked by Core.
-async fn owner_credential(
+pub(crate) async fn owner_credential(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<(OwnerId, String), Error> {

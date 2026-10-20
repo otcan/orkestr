@@ -38,3 +38,10 @@ operator commands. Tests use synthetic homes only:
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s v2/migration/tests -v
 python3 -B v2/acceptance/thread_history_e2e.py PATH/TO/orkestr-v2-server
 ```
+
+## Worker sub-threads
+
+`thread_workers.py` maps a moved parent's V1 worker sub-threads onto the
+parent's V2 conversation (archived history, finish in V1 or recreate in V2,
+single-writer worktree transfer). Dry-run by default; see
+`docs/v2/conversation-resources.md`.
