@@ -204,6 +204,17 @@ imported manifest and references. Missing bytes block the input instead of
 dropping a file. Rust currently produces no files, so outbound attachments
 are never exported; replies are text only.
 
+Rust provider turns receive text only, so a reference UUID alone does not let
+the model see the file. When `ORKESTR_V2_ADAPTER_ATTACHMENT_DIR` (an absolute
+path) is set in the adapter's environment, each imported file is also written
+to `<dir>/<conversation_id>/<sha256><ext>` (directory 0750, file 0640, group
+`ORKESTR_V2_ADAPTER_ATTACHMENT_GROUP` when set), and the note names that
+local file so a host-mode provider can open it (an image viewing tool or a
+file read). A write failure keeps the reference-only note.
+
+Final replies also carry the conversation's `provider` and `model` (from
+`GET /settings`, when available) so V1 can show them in its debug footer.
+
 ## Adding a binding
 
 1. Obtain the exact selected chat, verify its existing account and verified

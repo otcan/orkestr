@@ -1,4 +1,8 @@
 """Serial, restart-safe Rust intake for one binding. Only the matched Deep run is mirrored."""
+import grp
+import os
+from pathlib import Path
+import re
 import time
 import uuid
 
@@ -32,16 +36,73 @@ def refusal_reason(error):
     return "upstream_refused:%s" % (status if status is not None else getattr(error, "code", "error"))
 
 
-def attachment_note(text, manifest_id, references):
+def attachment_note(text, manifest_id, references, paths=None):
+    paths = paths or {}
     lines = ["[WhatsApp attachments imported into this conversation's attachment store, manifest %s:" % manifest_id]
-    lines += ["- %s (%s, %d bytes, reference %s)" % (r["filename"], r["media_type"], r["byte_length"], r["reference_id"])
-              for r in references]
+    for r in references:
+        line = "- %s (%s, %d bytes, reference %s" % (r["filename"], r["media_type"], r["byte_length"], r["reference_id"])
+        path = paths.get(r["sha256"])
+        lines.append(line + (", local file %s)" % path if path else ")"))
+    if paths:
+        lines.append("Open the local file to see an attachment (for an image use your image viewing tool).")
     return (text.rstrip() + "\n\n" if text.strip() else "") + "\n".join(lines) + "]"
 
 
+MEDIA_EXTENSIONS = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp",
+                    "application/pdf": ".pdf", "text/plain": ".txt"}
+
+
+def attachment_export_settings(environ=os.environ):
+    """Optional host directory where imported attachments are also written as
+    files, so a provider turn (which receives text only) can open them.
+    Returns (directory, gid) or (None, None) when not configured."""
+    directory = environ.get("ORKESTR_V2_ADAPTER_ATTACHMENT_DIR", "").strip()
+    if not directory or not os.path.isabs(directory):
+        return None, None
+    group = environ.get("ORKESTR_V2_ADAPTER_ATTACHMENT_GROUP", "").strip()
+    try:
+        gid = grp.getgrnam(group).gr_gid if group else None
+    except KeyError:
+        gid = None
+    return directory, gid
+
+
+def export_attachment(directory, gid, conversation, item, content):
+    """Write one attachment as <dir>/<conversation>/<sha256><ext>, readable by
+    the configured group only. Idempotent: the name is the content digest."""
+    digest = item["sha256"]
+    if not re.fullmatch("[0-9a-f]{64}", digest) or not re.fullmatch("[0-9a-zA-Z-]{1,64}", str(conversation)):
+        return None
+    suffix = MEDIA_EXTENSIONS.get(item["media_type"]) or "".join(
+        c for c in Path(item.get("filename") or "").suffix.lower()[:8] if c.isalnum() or c == ".")
+    folder = Path(directory) / conversation
+    folder.mkdir(mode=0o750, parents=True, exist_ok=True)
+    os.chmod(folder, 0o750)
+    if gid is not None:
+        os.chown(folder.parent, -1, gid)
+        os.chown(folder, -1, gid)
+    target = folder / (digest + suffix)
+    if not target.exists():
+        temporary = folder / (".%s.%s.tmp" % (digest, uuid.uuid4().hex))
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(content)
+            if gid is not None:
+                os.chown(temporary, -1, gid)
+            os.chmod(temporary, 0o640)
+            os.replace(temporary, target)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+    return str(target)
+
+
 class Worker:
-    def __init__(self, client, ledger, progress_updates=False, max_input_age_s=DEFAULT_MAX_INPUT_AGE_S):
+    def __init__(self, client, ledger, progress_updates=False, max_input_age_s=DEFAULT_MAX_INPUT_AGE_S,
+                 attachment_dir=None, attachment_gid=None):
         self.client, self.ledger = client, ledger
+        self.attachment_dir, self.attachment_gid = attachment_dir, attachment_gid
         self.progress_updates = progress_updates
         self.max_input_age_s = max_input_age_s
 
@@ -64,17 +125,25 @@ class Worker:
                             for a, b in zip(source, target)]}
             self.ledger.save(data)
         request = dict(data["attachment_request"])
-        contents = []
+        contents, paths = [], {}
         for item, ref in zip(data["attachments"], request["source"]["manifest"]["references"]):
             content = self.ledger.upload_bytes(item["upload_id"])
             if content is None:
                 raise Refused("attachment_bytes_missing")
             contents.append({"reference_id": ref["reference_id"], "bytes": list(content)})
+            if self.attachment_dir:
+                try:
+                    path = export_attachment(self.attachment_dir, self.attachment_gid, self.client.conversation,
+                                             item, content)
+                except OSError:
+                    path = None
+                if path:
+                    paths[item["sha256"]] = path
         request["source"] = dict(request["source"], contents=contents)
         receipt = self.client.import_attachments(request)
         target = request["target_manifest"]
         data["attachment_receipt"] = {"import_id": receipt["import_id"], "manifest_id": target["manifest_id"]}
-        data["intake_text"] = attachment_note(data["text"], target["manifest_id"], target["references"])
+        data["intake_text"] = attachment_note(data["text"], target["manifest_id"], target["references"], paths)
         self.ledger.save(data)
         self.ledger.release_uploads([item["upload_id"] for item in data["attachments"]])
 
@@ -276,10 +345,27 @@ class Worker:
         text = self.render_final(data["deep_payload"]["text"])
         reply = {"id": deep["acceptance_event_id"], "role": "assistant", "state": "completed",
                  "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": data["remote_id"], "text": text}
+        reply.update(self.provider_identity())
         if text is None:
             # V1 never transports an exact NO_REPLY; it acknowledges it as no_reply.
             reply.update(text="NO_REPLY", noReply=True)
         self.ledger.complete(data, reply)
+
+    def provider_identity(self):
+        """Provider and model of the conversation, for the V1 debug footer.
+        Best effort: a missing route or odd shape only omits the fields."""
+        try:
+            value = self.call("GET", "/settings")
+        except Exception:
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        identity = {}
+        for key in ("provider", "model"):
+            item = value.get(key)
+            if isinstance(item, str) and re.fullmatch("[A-Za-z0-9._:-]{1,64}", item):
+                identity[key] = item
+        return identity if "provider" in identity else {}
 
     def render_final(self, text):
         """Apply the conversation's reply settings (NO_REPLY, prefix, footer)
