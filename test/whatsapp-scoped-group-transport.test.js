@@ -91,6 +91,34 @@ test('replies require the original group and parent and remain idempotent',async
  await assert.rejects(p.sendText(client,group,'different','main',request),/conflict/);
  assert.equal(await p.observe(client,{...message,id:{_serialized:'agent-1'},body:'reply'}),false);
 });
+test('a reply document is one more journaled send with the same parent, dedupe and conflict rules',async t=>{
+ const calls=[];const {p,client,message,group}=fixture(t,async(to,content,options)=>{calls.push({to,content,options});return {id:{_serialized:`agent-${calls.length}`}};});
+ const document={filename:'reply-0123456789.md',mimetype:'text/markdown',text:'# Full reply\n\nbody'};
+ const media=m=>({media:m});
+ await assert.rejects(p.sendDocument(client,group,document,'main',{requestId:'d1',parentId:'missing'},media),/parent_required/);
+ await p.observe(client,message);
+ for(const bad of [{...document,filename:'../x.md'},{...document,mimetype:'text/html'},{...document,text:' '}])
+  await assert.rejects(p.sendDocument(client,group,bad,'main',{requestId:'d1',parentId:'owner-1'},media),/scope_denied/);
+ await assert.rejects(p.sendDocument(client,group,document,'main',{requestId:'d1',parentId:'owner-1'}),/scope_denied/);
+ const request={requestId:'d1',parentId:'owner-1'};
+ assert.deepEqual((await p.sendDocument(client,group,document,'main',request,media)).ids,['agent-1']);
+ assert.equal((await p.sendDocument(client,group,document,'main',request,media)).duplicate,true);
+ assert.equal(calls.length,1);
+ assert.deepEqual(calls[0].options,{sendSeen:false,sendMediaAsDocument:true});
+ assert.equal(calls[0].content.media.filename,'reply-0123456789.md');
+ assert.equal(Buffer.from(calls[0].content.media.data,'base64').toString('utf8'),document.text);
+ await assert.rejects(p.sendDocument(client,group,{...document,text:'other'},'main',request,media),/conflict/);
+ await assert.rejects(p.sendText(client,group,'text','main',request),/conflict/);
+ assert.equal(await p.observe(client,{...message,id:{_serialized:'agent-1'},body:'',hasMedia:true}),false,'the document echo is not input');
+});
+test('an uncertain document send blocks replay and later sends',async t=>{
+ let calls=0;const {p,client,message,group}=fixture(t,async()=>{calls++;throw new Error('provider timeout');});
+ await p.observe(client,message);
+ const document={filename:'reply-0123456789.md',mimetype:'text/markdown',text:'full'};
+ await assert.rejects(p.sendDocument(client,group,document,'main',{requestId:'d1',parentId:'owner-1'},m=>m),/delivery_uncertain/);
+ await assert.rejects(p.sendText(client,group,'reply','main',{requestId:'r2',parentId:'owner-1'}),/delivery_uncertain/);
+ assert.equal(calls,1);
+});
 test('uncertain provider outcome blocks replay and later sends',async t=>{
  let calls=0;const {p,client,message,group}=fixture(t,async()=>{calls++;throw new Error('provider timeout');});
  await p.observe(client,message);

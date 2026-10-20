@@ -7838,6 +7838,24 @@ function localWhatsAppOutboundAttachmentMaxBytes(env = process.env) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 25 * 1024 * 1024;
 }
 
+// Scoped native workers only: send the full text of a long group reply as one
+// Markdown document through the scoped transport's journaled send.
+export async function sendLocalWhatsAppScopedDocument({ chatId = "", accountId = "", document = {}, env = process.env, scopedRequest = {} } = {}) {
+  const scoped = scopedNativeWorker(env);
+  if (!scoped) throw Object.assign(new Error("scoped_worker_required"), { statusCode: 403 });
+  const selectedAccountId = await normalizeManagedAccountId(accountId, env);
+  const runtime = selectedAccountId ? runtimes.get(selectedAccountId) : null;
+  const state = selectedAccountId ? accountStates.get(selectedAccountId) : null;
+  if (!runtime?.client || !state?.ready || state?.runtimeUsable === false) {
+    const error = new Error("whatsapp_local_bridge_not_ready");
+    error.statusCode = 400;
+    throw error;
+  }
+  const MessageMedia = runtime.MessageMedia || (await loadBridgeDependencies()).whatsapp.MessageMedia;
+  return scoped.sendDocument(selectedAccountId, runtime.client, chatId, document, scopedRequest,
+    ({ mimetype, data, filename }) => new MessageMedia(mimetype, data, filename));
+}
+
 /**
  * @param {{ chatId?: string, text?: string, accountId?: string, mentions?: string[], attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean, scopedRequest?: Record<string, unknown> }} [options]
  */

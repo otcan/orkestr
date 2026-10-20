@@ -32,7 +32,7 @@ function fixture(t) {
   state.echoes.push(transport.observe(client,{fromMe:true,to,body:text,timestamp:now()/1000,id:{_serialized:id}}));
   return {id:{_serialized:id}};
  }};
- const options={config,api,formatter,env:{},now,proofStore:proofs,routeFence:fence,send:p=>transport.sendText(client,p.chatId,p.text,'main',p)};
+ const options={config,api,formatter,env:{},now,proofStore:proofs,routeFence:fence,send:p=>p.document ? transport.sendDocument(client,p.chatId,p.document,'main',p,media=>({media})) : transport.sendText(client,p.chatId,p.text,'main',p)};
  const notifier=createScopedTimerNotifications(options);
  t.after(()=>{notifier.close();transport.close();proofs.close();fence.close();});
  return {notifier,transport,client,state,config,proofs,fence,options,advance:ms=>clock+=ms};
@@ -244,4 +244,30 @@ test('a definitive pre-dispatch rejection closes the run without blocking other 
  assert.equal(state.sent.length,2);
  assert.equal(proofs.finished('parent1'),'rejected');
  await notifier.tick();assert.equal(calls,3,'rejected run is not retried');
+});
+test('a long timer reply goes out as one message with its footer through the group transport',async t=>{
+ const {notifier,state}=fixture(t);
+ state.messages[1].text=Array.from({length:500},(_,i)=>`item${i}`).join(' ').slice(0,3500);
+ assert.equal((await notifier.tick()).sent,1);
+ assert.equal(state.sent.length,1);
+ assert.ok(state.sent[0].text.length>3000 && state.sent[0].text.length<=4000);
+ assert.match(state.sent[0].text,/^\[Timer: Example check\]\nitem0 [\s\S]*\n\ndbg:/);
+});
+test('a timer reply over the budget is one message plus a journaled Markdown document',async t=>{
+ const {state,options}=fixture(t);
+ const text=Array.from({length:500},(_,i)=>`item${i}`).join(' ');
+ state.messages[1].text=text;
+ const env={ORKESTR_WHATSAPP_MAX_REPLY_CHARS:'1000'};
+ const notifier=createScopedTimerNotifications({...options,env});
+ t.after(()=>notifier.close());
+ assert.equal((await notifier.tick()).sent,2);
+ assert.equal(state.sent.length,2);
+ assert.match(state.sent[0].text,/^\[Timer: Example check\]\nitem0 [\s\S]*\n\n… \(full reply attached\)\n\ndbg:/);
+ const {media}=state.sent[1].text;
+ assert.equal(media.mimetype,'text/markdown');
+ assert.match(media.filename,/^reply-[0-9a-f]{10}\.md$/);
+ assert.equal(Buffer.from(media.data,'base64').toString('utf8'),`[Timer: Example check]\n${text}`);
+ await notifier.tick();
+ const resumed=createScopedTimerNotifications({...options,env});await resumed.tick();resumed.close();
+ assert.equal(state.sent.length,2,'neither the message nor the document repeats');
 });

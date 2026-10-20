@@ -10,8 +10,14 @@ test('native worker accepts only scoped text, health and read-without-seen opera
  p.checkRequest('GET',url('/accounts/existing/chats/120000000001%40g.us/history?mark_seen=false&limit=30'));
  const body={accountId:'existing',to:config.groups[0].chatId,text:'hello',requestId:'r1',parentId:'p1'};
  p.checkRequest('POST',url('/send-text'),body);
- for(const patch of [{to:'120000000002@g.us'},{accountId:'other'},{paths:[]},{parentId:undefined}])
+ p.checkRequest('POST',url('/send-text'),{...body,text:'x'.repeat(65000)});
+ for(const patch of [{to:'120000000002@g.us'},{accountId:'other'},{paths:[]},{parentId:undefined},{text:'x'.repeat(65001)}])
   assert.throws(()=>p.checkRequest('POST',url('/send-text'),{...body,...patch}),/denied/);
+ const doc={accountId:'existing',to:config.groups[0].chatId,filename:'reply-0123456789.md',mimetype:'text/markdown',text:'full',requestId:'d1',parentId:'p1'};
+ p.checkRequest('POST',url('/send-document'),doc);
+ p.checkRequest('POST',url('/send-document'),{...doc,notificationId:'d1'});
+ for(const patch of [{to:'120000000002@g.us'},{accountId:'other'},{filename:'reply.sh'},{mimetype:'application/pdf'},{text:''},{path:'/etc/passwd'},{parentId:undefined}])
+  assert.throws(()=>p.checkRequest('POST',url('/send-document'),{...doc,...patch}),/denied/);
  for(const op of ['/accounts/existing/logout','/send-media','/accounts/existing/reconnect','/accounts/existing/pair-code','/api/groups','/accounts/existing/chats/120000000001%40g.us/recover'])
   assert.throws(()=>p.checkRequest('POST',url(op),{}),/denied/);
  assert.throws(()=>p.checkRequest('GET',url('/accounts/existing/chats/120000000001%40g.us/history?mark_seen=true')),/denied/);

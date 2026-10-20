@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createGroupOwnerAuthorPolicy} from './whatsapp-group-owner-author.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
+import {SCOPED_SEND_MAX_TEXT_LENGTH, encodeReplyEntry, validReplyDocument} from './whatsapp-scoped-group-formatting.js';
 import {DatabaseSync} from 'node:sqlite';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {notificationScope, createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
@@ -85,7 +86,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
       }
       if(req.method==='POST' && req.path==='/send-text') {
         const b=req.body || {};
-        allowed=groups.has(b.to) && b.accountId==='main' && typeof b.text==='string' && b.text.trim() && b.text.length<=3000
+        allowed=groups.has(b.to) && b.accountId==='main' && typeof b.text==='string' && b.text.trim() && b.text.length<=SCOPED_SEND_MAX_TEXT_LENGTH
           && typeof b.requestId==='string' && typeof b.parentId==='string'
           && Object.keys(b).every(k=>['to','text','accountId','requestId','parentId','notificationId'].includes(k))
           && (b.notificationId===undefined || (scope?.allowsChat(b.to) && b.notificationId===b.requestId));
@@ -171,10 +172,27 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
       });
     },
     sendText(client,to,text,accountId,request={}) {
+      const valid=typeof text==='string' && Boolean(text.trim()) && text.length<=SCOPED_SEND_MAX_TEXT_LENGTH;
+      return deliver(client,to,valid ? text : '',accountId,request,()=>client.sendMessage(to,text,{sendSeen:false}),valid);
+    },
+    // The full text of a long reply as one Markdown document. It is one more
+    // journaled send: same parent/proof authorization, dedupe, uncertainty and
+    // route fence as a text. `createMedia` builds the provider's media object.
+    sendDocument(client,to,document,accountId,request={},createMedia) {
+      const valid=validReplyDocument(document) && typeof createMedia==='function';
+      return deliver(client,to,valid ? encodeReplyEntry({document}) : '',accountId,request,()=>client.sendMessage(to,
+        createMedia({mimetype:document.mimetype,data:Buffer.from(document.text,'utf8').toString('base64'),filename:document.filename}),
+        {sendSeen:false,sendMediaAsDocument:true}),valid);
+    },
+    policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,additionalOwnerAuthors:authors.count,participantGroups:participants.count,timerNotifications:!!scope,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:SCOPED_SEND_MAX_TEXT_LENGTH,markSeen:false,automaticRouting:false,strictBearer:true,buildHash};},
+    diagnostics(client,buildHash) {return {identityMatches:client?.info?.wid?._serialized===config.ownChatId,...this.policyFields(buildHash)};},
+  };
+  // `text` is the canonical payload string: the message itself, or a
+  // document's envelope. It is what proofs authorize and the journal hashes.
+  function deliver(client,to,text,accountId,request,dispatch,valid) {
       return serial(async()=>{
         assertClient(client);
-        if(!groups.has(to) || accountId!=='main' || typeof text!=='string' || !text.trim() || text.length>3000
-            || !/^[a-zA-Z0-9:._-]{1,200}$/.test(request.requestId || ''))fail('scope_denied');
+        if(!valid || !groups.has(to) || accountId!=='main' || !/^[a-zA-Z0-9:._-]{1,200}$/.test(request.requestId || ''))fail('scope_denied');
         let parent;
         if(request.notificationId!==undefined) {
           if(!scope || request.notificationId!==request.requestId)fail('notification_denied');
@@ -199,7 +217,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         db.prepare('INSERT INTO group_send VALUES(?,?,?,?,?,?,?)').run(request.requestId,material,to,request.parentId,'sending',null,new Date(now()).toISOString());
         let timer;
         try {
-          const sent=await Promise.race([client.sendMessage(to,text,{sendSeen:false}),new Promise((_,reject)=>{
+          const sent=await Promise.race([dispatch(),new Promise((_,reject)=>{
             timer=setTimeout(()=>reject(new Error('send_timeout')),30000);
           })]);
           const id=sent?.id?._serialized;if(typeof id!=='string' || !id || id.startsWith('summary:'))fail('delivery_uncertain');
@@ -212,8 +230,5 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
           fail('delivery_uncertain');
         } finally {clearTimeout(timer);}
       });
-    },
-    policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,additionalOwnerAuthors:authors.count,participantGroups:participants.count,timerNotifications:!!scope,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:3000,markSeen:false,automaticRouting:false,strictBearer:true,buildHash};},
-    diagnostics(client,buildHash) {return {identityMatches:client?.info?.wid?._serialized===config.ownChatId,...this.policyFields(buildHash)};},
-  };
+  }
 }
