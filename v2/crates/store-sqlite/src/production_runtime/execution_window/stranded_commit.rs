@@ -59,10 +59,13 @@ pub(super) async fn commit_turns(
     for a in &plan.abandon {
         // Same exact busy-generation release as owner acceptance, but the
         // run becomes Cancelled with abandonment evidence, never Succeeded.
-        let released = sqlx::query("UPDATE session_bindings SET state='ready',generation=generation+1 WHERE id=? AND owner_id=? AND conversation_id=? AND generation=? AND state='busy' AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=session_bindings.id AND other.id!=? AND other.state NOT IN ('cancelled','succeeded'))")
-            .bind(&a.session).bind(owner.to_string()).bind(conversation.to_string())
+        // A session that already moved on (not busy at this generation) is
+        // left as it is; a Worker session is never reused.
+        let target = if a.worker { "lost" } else { "ready" };
+        sqlx::query("UPDATE session_bindings SET state=?,generation=generation+1 WHERE id=? AND owner_id=? AND conversation_id=? AND generation=? AND state='busy' AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=session_bindings.id AND other.id!=? AND other.state NOT IN ('cancelled','succeeded'))")
+            .bind(target).bind(&a.session).bind(owner.to_string()).bind(conversation.to_string())
             .bind(a.binding_generation).bind(&a.run)
-            .execute(&mut *tx).await.map_err(db)?.rows_affected();
+            .execute(&mut *tx).await.map_err(db)?;
         let cancelled = sqlx::query(
             "UPDATE production_runs SET state='cancelled' WHERE id=? AND state='awaiting_acceptance'",
         )
@@ -71,12 +74,25 @@ pub(super) async fn commit_turns(
         .await
         .map_err(db)?
         .rows_affected();
-        if released != 1 || cancelled != 1 {
+        if cancelled != 1 {
             return Err(RuntimeStoreError::Fenced);
         }
         sqlx::query("INSERT INTO production_run_abandonments(run_id,reconciliation_id,completion_event_id,binding_generation,abandoned_at_ms) VALUES(?,?,?,?,?)")
             .bind(&a.run).bind(id.to_string()).bind(&a.completion).bind(a.binding_generation + 1).bind(clock)
             .execute(&mut *tx).await.map_err(db)?;
+        let cause = if !a.acceptable {
+            "proposal_execution_missing"
+        } else if actor == Actor::Startup {
+            "acceptance_grace_expired"
+        } else {
+            "owner_decision"
+        };
+        sqlx::query("INSERT INTO production_abandonment_causes(run_id,cause) VALUES(?,?)")
+            .bind(&a.run)
+            .bind(cause)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
     }
     super::release_inputs(tx, &id, p.window_id, &plan.release, false).await?;
     // Post-condition: the whole context is now canonically terminal.

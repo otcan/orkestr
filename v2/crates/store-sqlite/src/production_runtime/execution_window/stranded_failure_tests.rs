@@ -649,3 +649,6 @@ mod upgrade;
 
 #[path = "stranded_lapse_tests.rs"]
 mod lapse;
+
+#[path = "stranded_property_tests.rs"]
+mod property;

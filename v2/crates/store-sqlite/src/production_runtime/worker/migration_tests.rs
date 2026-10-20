@@ -35,6 +35,7 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
         "DROP VIEW production_retirement_provenance",
         "DROP VIEW production_terminal_evidence",
         "DROP TABLE production_run_lost_failures",
+        "DROP TABLE production_abandonment_causes",
         "DROP TABLE worker_task_failures",
         "DROP TABLE production_lapsed_retirements",
         "DROP TABLE production_run_lapses",
@@ -107,5 +108,5 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
         .fetch_one(&reopened.pool)
         .await
         .unwrap();
-    assert_eq!(latest, 54);
+    assert_eq!(latest, 55);
 }

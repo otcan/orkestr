@@ -9,8 +9,52 @@ fn between<'a>(sql: &'a str, start: &str, end: Option<&str>) -> &'a str {
     }
 }
 
+/// Undo 0055 exactly: the schema-54 lapse CHECKs and evidence view.
+pub(super) async fn downgrade_to_schema54(store: &Store) {
+    let v54 = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/migrations/0054_lapsed_runs.sql"
+    ));
+    let lapses = between(
+        v54,
+        "CREATE TABLE production_run_lapses (",
+        Some("CREATE TABLE production_lapsed_retirements"),
+    );
+    let mut tx = store.pool.begin().await.unwrap();
+    sqlx::query("PRAGMA defer_foreign_keys = ON")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    for statement in [
+        "DROP VIEW production_terminal_evidence",
+        "DROP TABLE production_abandonment_causes",
+        "DELETE FROM _sqlx_migrations WHERE version=55",
+        "CREATE TEMP TABLE lapses_copy AS SELECT * FROM production_run_lapses",
+        "DROP TABLE production_run_lapses",
+    ] {
+        sqlx::query(statement).execute(&mut *tx).await.unwrap();
+    }
+    sqlx::raw_sql(lapses).execute(&mut *tx).await.unwrap();
+    for statement in [
+        "INSERT INTO production_run_lapses SELECT * FROM lapses_copy",
+        "DROP TABLE lapses_copy",
+    ] {
+        sqlx::query(statement).execute(&mut *tx).await.unwrap();
+    }
+    sqlx::raw_sql(between(
+        v54,
+        "CREATE VIEW production_terminal_evidence",
+        Some("DROP VIEW production_retirement_provenance"),
+    ))
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}
+
 /// Undo 0054 exactly: the schema-53 views, outcome CHECK and no lapse tables.
 pub(super) async fn downgrade_to_schema53(store: &Store) {
+    downgrade_to_schema54(store).await;
     let v48 = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/migrations/0048_stranded_window_reconciliation.sql"
@@ -128,7 +172,7 @@ async fn schema51_stranded_workbench_reconciles_after_upgrade() {
     let fresh = restart(w, true).await;
     assert_eq!(
         count(&fresh, "SELECT max(version) FROM _sqlx_migrations").await,
-        54
+        55
     );
     for table in [
         "production_run_failures",

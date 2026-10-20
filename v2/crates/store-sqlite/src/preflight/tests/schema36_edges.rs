@@ -87,6 +87,7 @@ async fn populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_so
             "production_run_lapses",
             "production_lapsed_retirements",
             "worker_task_failures",
+            "production_abandonment_causes",
             "production_run_lost_failures",
             "dormant_timer_targets",
             "execution_window_queue",
@@ -140,7 +141,7 @@ async fn populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_so
                 .fetch_one(&mut upgraded)
                 .await
                 .unwrap(),
-            54
+            55
         );
         assert!(sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&mut upgraded)
