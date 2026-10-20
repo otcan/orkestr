@@ -15,12 +15,10 @@ const IMAGE_MIME_EXTENSIONS=new Map([['image/jpeg','.jpg'],['image/png','.png'],
 const MAX_GROUP_MEDIA_BYTES=10*1024*1024;
 const safeMediaName=value=>path.basename(String(value||'image').replace(/[\\/\0]/g,'_')).replace(/[^a-zA-Z0-9_. -]/g,'_').slice(0,180)||'image';
 
-function addInputColumns(db) {
-  const columns=new Set(db.prepare('PRAGMA table_info(group_input)').all().map(column=>column.name));
-  for(const [name,type] of [['media_path','TEXT'],['media_filename','TEXT'],['media_mimetype','TEXT'],['media_size','INTEGER']]) {
-    if(!columns.has(name))db.exec(`ALTER TABLE group_input ADD COLUMN ${name} ${type}`);
-  }
-}
+// Media evidence lives in a side table so group_input keeps the exact four-column
+// shape every earlier transport build writes positionally. Altering group_input
+// made a rollback to an earlier build fail every insert (and drop all input).
+const MEDIA_TABLE='CREATE TABLE IF NOT EXISTS group_input_media(id TEXT PRIMARY KEY,path TEXT NOT NULL,filename TEXT,mimetype TEXT,size INTEGER)';
 
 // An explicitly configured, existing-account transport. The surrounding bridge
 // keeps its legacy router disabled; only explicitly authorized, fresh group input enters.
@@ -31,12 +29,17 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   if(groups.size!==config.groups.length || [...groups].some(([id,g])=>!/^\d+(?:-\d+)?@g\.us$/.test(id) || !g.threadId))fail('configuration_invalid');
   const authors=createGroupOwnerAuthorPolicy(config,now);
   const participants=createGroupParticipantPolicy(config,now);
+  // Validate the whole contract before opening durable state: a build that
+  // rejects the live configuration must leave the journal untouched.
+  const scope=notificationScope(config);
+  const fencedThreads=scopedRouteMembership(config);
+  if(fencedThreads && [...fencedThreads].some(id=>!config.groups.some(g=>g.threadId===id)))fail('route_thread_invalid');
   const db=new DatabaseSync(dbPath);db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS group_input(id TEXT PRIMARY KEY,chat_id TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_send(id TEXT PRIMARY KEY,hash TEXT NOT NULL,chat_id TEXT NOT NULL,parent_id TEXT NOT NULL,state TEXT NOT NULL,provider_id TEXT,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_input_author(id TEXT PRIMARY KEY,proof TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS group_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);`);
-  addInputColumns(db);
+    CREATE TABLE IF NOT EXISTS group_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+    ${MEDIA_TABLE};`);
   const mediaDir=path.resolve(config.mediaDir || (dbPath===':memory:'
     ? path.join(os.tmpdir(),`orkestr-scoped-group-media-${process.pid}`)
     : `${dbPath}.media`));
@@ -51,10 +54,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
     db.prepare('INSERT OR IGNORE INTO group_meta VALUES(?,?)').run('owner_authors',authorContract);
   }
   db.prepare("UPDATE group_send SET state='uncertain' WHERE state='sending'").run();
-  const scope=notificationScope(config);
   const routeFence=config.routeControl ? suppliedFence || createDeliveryRouteFence({dbPath:config.routeControl.dbPath,now}) : null;
-  const fencedThreads=scopedRouteMembership(config);
-  if(fencedThreads && [...fencedThreads].some(id=>!config.groups.some(g=>g.threadId===id)))fail('route_thread_invalid');
   const fenced=to=>routeFence && fencedThreads.has(groups.get(to)?.threadId);
   if(routeFence)routeFence.recover(config.routeControl.routeId);
   const proofStore=scope ? suppliedProof || createTimerNotificationProofStore({path:scope.proofDbPath,readOnly:true,now}) : null;
@@ -152,9 +152,10 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         // participant input into a legacy owner input on the next relay poll.
         db.exec('BEGIN IMMEDIATE');
         try {
-          const result=db.prepare(`INSERT OR IGNORE INTO group_input
-            (id,chat_id,body,created_at,media_path,media_filename,media_mimetype,media_size) VALUES(?,?,?,?,?,?,?,?)`)
-            .run(id,chatId,body,new Date(ts).toISOString(),mediaPath||null,mediaFilename||null,mediaMimetype||null,mediaSize||null);
+          const result=db.prepare('INSERT OR IGNORE INTO group_input(id,chat_id,body,created_at) VALUES(?,?,?,?)')
+            .run(id,chatId,body,new Date(ts).toISOString());
+          if(result.changes && mediaPath) db.prepare('INSERT INTO group_input_media(id,path,filename,mimetype,size) VALUES(?,?,?,?,?)')
+            .run(id,mediaPath,mediaFilename||null,mediaMimetype||null,mediaSize||null);
           if(result.changes && participant) db.prepare('INSERT INTO group_input_author VALUES(?,?)').run(id,JSON.stringify(participant));
           db.exec('COMMIT');
           return Boolean(result.changes);

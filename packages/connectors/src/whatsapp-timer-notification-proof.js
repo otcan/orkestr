@@ -1,12 +1,17 @@
 import crypto from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
+import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 
 export const notificationKey = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export function notificationScope(config) {
   const p = config.timerNotifications;
   if (!p?.enabled) return null;
   const group = config.groups?.find(g => g.threadId === p.threadId);
-  if (!group || !p.proofDbPath || !Number.isFinite(Date.parse(p.since)) || !config.routeControl?.routeId || !config.routeControl?.dbPath || config.routeControl.threadId !== p.threadId)
+  // The notification thread must belong to the validated delivery fence, in
+  // either its legacy single-thread form or an explicit multi-thread list.
+  let fenced = null;
+  try { fenced = scopedRouteMembership(config); } catch { fenced = null; }
+  if (!group || !p.proofDbPath || !Number.isFinite(Date.parse(p.since)) || !config.routeControl?.routeId || !config.routeControl?.dbPath || !fenced?.has(p.threadId))
     throw new Error('timer_notification_configuration_invalid');
   return {...p, chatId: group.chatId, maxAgeMs: 900000};
 }

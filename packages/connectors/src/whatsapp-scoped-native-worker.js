@@ -5,13 +5,20 @@ import {createScopedPairingPermit} from './whatsapp-scoped-pairing.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 const loaded=new Map();
 const fail=()=>{throw Object.assign(new Error('scoped_worker_operation_denied'),{statusCode:403});};
-export function createScopedNativeWorkerPolicy(config,{createTransport=createScopedGroupTransport}={}) {
+// Inbound events are fire-and-forget, so a failing journal (for example a build
+// that cannot write the live schema) used to drop every message silently.
+// Report each distinct failure code at most once a minute, without content.
+export function observeFailureCode(error) {
+ return String(error?.message || error || 'unknown').replace(/\d{6,}/g,'#').slice(0,160);
+}
+export function createScopedNativeWorkerPolicy(config,{createTransport=createScopedGroupTransport,report=entry=>console.error(JSON.stringify(entry)),now=Date.now}={}) {
  const threads=scopedRouteMembership(config),groups=config.groups || [];
  if(!config.workerAccountId || !threads || !groups.length || groups.length!==threads.size
      || new Set(groups.map(g=>g.chatId)).size!==groups.length
      || groups.some(g=>!threads.has(g.threadId) || !/^\d+(?:-\d+)?@g\.us$/.test(g.chatId)))throw new Error('scoped_worker_configuration_invalid');
  const chats=new Set(groups.map(g=>g.chatId));
  let transport,started=false;
+ const reported=new Map(),failures={total:0,last:null};
  const pairing=createScopedPairingPermit(config);
  const get=accountId=>{
   if(accountId!==config.workerAccountId)fail();
@@ -40,7 +47,17 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
       && Object.keys(body).every(k=>['accountId','to','text','requestId','parentId','notificationId'].includes(k)))return;
    fail();
   },
-  observe(accountId,client,message){return get(accountId).observe(client,message);},
+  observe(accountId,client,message){
+   if(accountId!==config.workerAccountId)fail();
+   const failed=error=>{
+    const code=observeFailureCode(error);failures.total++;failures.last={code,at:new Date(now()).toISOString()};
+    if(!reported.has(code) || now()-reported.get(code)>=60000){reported.set(code,now());
+     report({event:'scoped_group_observe_failed',accountId,chatId:message?.fromMe===true?message?.to:message?.from,code,failures:failures.total});}
+    return false;
+   };
+   try {return Promise.resolve(get(accountId).observe(client,message)).catch(failed);} catch(error) {return Promise.resolve(failed(error));}
+  },
+  observeFailures:()=>({...failures}),
   send(accountId,client,chatId,text,request){return get(accountId).sendText(client,chatId,text,'main',request);},
   close(){transport?.close();},
  };
