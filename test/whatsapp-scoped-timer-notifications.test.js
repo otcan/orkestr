@@ -245,3 +245,20 @@ test('a definitive pre-dispatch rejection closes the run without blocking other 
  assert.equal(proofs.finished('parent1'),'rejected');
  await notifier.tick();assert.equal(calls,3,'rejected run is not retried');
 });
+test('a chunk cut next to whitespace is proven exactly as the trimming worker sends it',async t=>{
+ // 2026-10-20 incident: a 1400-char cut left a trailing space on chunk 0; the
+ // worker trimmed it, the proof text no longer matched and the attempt was
+ // recorded as uncertain, which blocked every fenced send.
+ const {state,options,proofs}=multiFixture(t);
+ const header='[Timer: Check 1]\n';
+ state.messages['thread-1']=[{...state.messages['thread-1'][0],text:'a'.repeat(1399-header.length)+' '+'b'.repeat(200)+' \n'}];
+ state.events=[state.events[0]];
+ const notifier=createScopedTimerNotifications({...options,send:p=>options.send({...p,text:p.text.trim()})});
+ t.after(()=>notifier.close());
+ const r=await notifier.tick();
+ assert.equal(r.errors,undefined);
+ assert.equal(r.sent,2);
+ assert.ok(state.sent.every(s=>s.text===s.text.trim() && s.text.length));
+ assert.equal(proofs.finished('parent1'),'delivered');
+ assert.equal(options.routeFence.blocked(),false);
+});

@@ -16,8 +16,15 @@ const relay = createScopedGroupRelay({
   formatter,
   api: (url, options = {}) => requestJson(url, {timeoutMs: 15000, ...options}),
   send: async ({chatId, requestId, parentId, text}) => {
-    const {stdout} = await execute('/usr/bin/node', [config.wrapperPath, 'group-reply', chatId, requestId, parentId, text],
-      {timeout: 45000, maxBuffer: 1024 * 1024});
+    // Surface the wrapper's code (for example delivery_route_delivery_unresolved)
+    // instead of the generic operation_failed of an execFile rejection.
+    let stdout;
+    try {
+      ({stdout} = await execute('/usr/bin/node', [config.wrapperPath, 'group-reply', chatId, requestId, parentId, text],
+        {timeout: 45000, maxBuffer: 1024 * 1024}));
+    } catch (error) {
+      throw wrapperRejection(error);
+    }
     return JSON.parse(stdout);
   },
   log,

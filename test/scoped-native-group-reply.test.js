@@ -50,3 +50,15 @@ test('invalid commands and recipients are rejected before any worker request, as
   assert.equal(wrapperRejection({stderr: '{"ok":false,"error":"scoped_reply_unconfirmed"}\n'}).definitive, false);
   assert.equal(wrapperRejection({stderr: 'garbage'}).message, 'scoped_reply_failed');
 });
+
+test('worker policy denials raised before the send is journaled are definitive; delivery doubts are not', () => {
+  const rejection = code => wrapperRejection({stderr: `${JSON.stringify({ok: false, error: code})}\n`});
+  for (const code of ['timer_notification_proof_denied', 'group_transport_scope_denied', 'group_transport_notification_denied',
+    'scoped_worker_operation_denied', 'scoped_worker_text_only']) {
+    assert.equal(rejection(code).message, code);
+    assert.equal(rejection(code).definitive, true, code);
+  }
+  for (const code of ['group_transport_delivery_uncertain', 'group_transport_request_conflict', 'delivery_route_delivery_unresolved',
+    'whatsapp_worker_timeout', 'scoped_reply_failed'])
+    assert.equal(rejection(code).definitive, false, code);
+});
