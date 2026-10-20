@@ -60,11 +60,13 @@ def run(case):
         assert expect(case, listing)["can_create"] is False
         assert expect(case, path(conversation) + "/intelligence")["worker"]["available"] is False
         # Parent output cannot be accepted over its unfinished child decision.
-        expect(case, path(conversation) + "/accept", 409, "POST", {
+        parent_proposal = ready(case, conversation, "deep", run=parent["run_id"])
+        refusal = expect(case, path(conversation) + "/accept", 409, "POST", {
             **parent_proposal["acceptance_candidate"],
             "expected_revision": parent_proposal["revision"],
             "request_key": f"retained:premature-parent:{number}",
         })
+        assert refusal["code"] == "execution_unavailable"
         if parent_first:
             still_running = status(case, conversation, run=worker_id)
             assert still_running["phase"] == "running"
