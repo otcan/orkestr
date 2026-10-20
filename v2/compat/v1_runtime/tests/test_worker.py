@@ -65,6 +65,8 @@ class Peer:
                 self.lose_deep_response = False
                 raise ConnectionError("synthetic lost commit response")
             return 200, receipt
+        if route == "/settings" and method == "GET" and getattr(self, "settings", None):
+            return 200, self.settings
         if route == "/settings/render":
             if self.render_missing:
                 raise ClientError("unexpected_status", 404)
@@ -353,6 +355,44 @@ class ExtensionTests(unittest.TestCase):
         with self.assertRaisesRegex(Refused, "attachment_bytes_missing"):
             Worker(self.peer, self.ledger).step(data)
         self.assertFalse(any(route == "/messages" for route, _ in self.peer.mutations))
+
+    def test_final_reply_carries_the_conversation_provider_and_model(self):
+        self.peer.settings = dict(provider="codex", model="gpt-6-astra", revision=3)
+        Worker(self.peer, self.ledger).step(self.enqueue())
+        final = self.ledger.messages()[-1]
+        self.assertEqual((final["provider"], final["model"]), ("codex", "gpt-6-astra"))
+
+    def test_final_reply_without_settings_route_omits_provider(self):
+        Worker(self.peer, self.ledger).step(self.enqueue())
+        self.assertNotIn("provider", self.ledger.messages()[-1])
+
+    def test_attachments_are_exported_as_files_named_in_the_intake_note(self):
+        content = b"\x89PNG synthetic"
+        digest = hashlib.sha256(content).hexdigest()
+        upload, _ = self.ledger.stage_upload("public", "photo.png", "image/png", content, digest)
+        data = self.enqueue(text="what is this", attachments=[{"uploadId": upload, "sha256": digest}])
+        self.peer.import_attachments = lambda request: {"import_id": "import"}
+        export = Path(self.temp.name) / "media"
+        Worker(self.peer, self.ledger, attachment_dir=str(export)).step(data)
+        path = export / "conversation" / (digest + ".png")
+        self.assertEqual(path.read_bytes(), content)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o640)
+        intake = [body for route, body in self.peer.mutations if route == "/messages"][0]
+        self.assertIn("local file %s)" % path, intake["text"])
+        self.assertIsNone(self.ledger.upload_bytes(upload))
+
+    def test_unwritable_export_directory_keeps_the_reference_only_note(self):
+        content = b"x"
+        digest = hashlib.sha256(content).hexdigest()
+        upload, _ = self.ledger.stage_upload("public", "a.png", "image/png", content, digest)
+        data = self.enqueue(attachments=[{"uploadId": upload, "sha256": digest}])
+        self.peer.import_attachments = lambda request: {"import_id": "import"}
+        blocker = Path(self.temp.name) / "file"
+        blocker.write_text("not a directory")
+        Worker(self.peer, self.ledger, attachment_dir=str(blocker)).step(data)
+        intake = [body for route, body in self.peer.mutations if route == "/messages"][0]
+        self.assertNotIn("local file", intake["text"])
+        self.assertIn("reference", intake["text"])
 
 
 if __name__ == "__main__":
