@@ -854,11 +854,12 @@ active_thread_unsafe_count() {
 }
 
 active_report_unavailable() {
-  node -e 'const report = JSON.parse(process.argv[1] || "{}"); process.stdout.write(report.unavailable ? "1" : "0");' "$1"
+  # Only a successful, typed report may reach the active-thread counters.
+  node -e 'let report; try { report = JSON.parse(process.argv[1]); } catch {} const available = report?.ok === true && report?.unavailable === false && Array.isArray(report?.active); process.stdout.write(available ? "0" : "1");' "$1"
 }
 
 active_report_error() {
-  node -e 'const report = JSON.parse(process.argv[1] || "{}"); process.stdout.write(String(report.error || ""));' "$1"
+  node -e 'let report; try { report = JSON.parse(process.argv[1]); } catch {} process.stdout.write(typeof report?.error === "string" ? report.error : "invalid_active_work_report");' "$1"
 }
 
 service_is_active() {
