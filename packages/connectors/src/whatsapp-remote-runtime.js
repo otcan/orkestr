@@ -4,6 +4,8 @@ import { recordRouterTraceEvent } from "../../core/src/router-traces.js";
 import { appendThreadMessage, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
 import { remoteWhatsAppRuntimeBinding } from "../../core/src/thread-remote-runtime-binding.js";
 import { remoteParentExpectedFields, remoteParentRecoveryCandidate } from "./whatsapp-remote-parent.js";
+import { acknowledgeRemoteMirrorDeliveries, remoteMirrorAckSupported } from "./whatsapp-remote-mirror-ack.js";
+import { uploadRemoteInputAttachments } from "./whatsapp-remote-attachment-upload.js";
 
 export { remoteWhatsAppRuntimeBinding };
 
@@ -34,6 +36,8 @@ function normalizeBackendConfig(backendId, config = {}) {
     token: pickString(input.token, input.apiToken, input.bearerToken),
     timeoutMs: Math.max(1000, Number(input.timeoutMs || input.timeout || 10_000) || 10_000),
     fetchLimit: Math.max(1, Math.min(500, Number(input.fetchLimit || input.messageLimit || 100) || 100)),
+    // Opt-in: upload accepted inbound files and reference them by upload ID.
+    attachmentUpload: input.attachmentUpload === true,
   };
 }
 
@@ -165,10 +169,20 @@ export async function enqueueRemoteWhatsAppThreadInput({ thread, message, input 
   const remote = remoteWhatsAppRuntimeBinding(thread, env);
   if (!remote) return null;
   const backend = backendForBinding(remote.binding, env);
-  const payload = await remoteJson(backend, `threads/${encodeURIComponent(remote.remoteThreadId)}/input`, fetchImpl, {
+  const threadPath = `threads/${encodeURIComponent(remote.remoteThreadId)}`;
+  const uploaded = backend.attachmentUpload
+    ? await uploadRemoteInputAttachments({
+        thread,
+        message,
+        env,
+        post: (body) => remoteJson(backend, `${threadPath}/attachments`, fetchImpl, { method: "POST", body: JSON.stringify(body) }),
+      })
+    : null;
+  const payload = await remoteJson(backend, `${threadPath}/input`, fetchImpl, {
     method: "POST",
     body: JSON.stringify({
       ...input,
+      ...(uploaded ? { attachments: uploaded } : {}),
       role: "user",
       source: input.source || "whatsapp_inbound",
       connector: "whatsapp",
@@ -300,6 +314,8 @@ async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, par
     remoteThreadId: remote.remoteThreadId,
     remoteMessageId: pickString(remoteMessage.id, remoteMessage.messageId),
     remoteParentMessageId: pickString(remoteMessage.parentMessageId, remoteMessage.parentId),
+    ...(Number.isSafeInteger(remoteMessage.exportSequence) ? { remoteExportSequence: String(remoteMessage.exportSequence) } : {}),
+    ...(pickString(remoteMessage.kind).toLowerCase() === "progress" ? { remoteKind: "progress" } : {}),
     remoteSyncedAt: new Date().toISOString(),
     ...(attachments.length ? { attachments } : {}),
   }, env);
@@ -317,13 +333,13 @@ async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, par
   return appended;
 }
 
-export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchImpl = fetch) {
+export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchImpl = fetch, options = {}) {
   const results = [];
   for (const thread of await listThreads(env)) {
     const remote = remoteWhatsAppRuntimeBinding(thread, env);
     if (!remote || remote.binding.remoteMirrorEnabled === false) continue;
     try {
-      const { messages: remoteMessages } = await fetchRemoteThreadMessages(remote, env, fetchImpl);
+      const { backend, payload, messages: remoteMessages } = await fetchRemoteThreadMessages(remote, env, fetchImpl);
       const localMessages = await listThreadMessages(thread.id, env);
       const localByRemoteId = new Map(
         localMessages
@@ -359,7 +375,20 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
         localByRemoteId.set(remoteMessageId, appended);
         imported += 1;
       }
-      if (imported || updated) {
+      // Report outbox outcomes only to runtimes that hold replies until acknowledged.
+      const acks = remoteMirrorAckSupported(payload)
+        ? await acknowledgeRemoteMirrorDeliveries({
+            thread,
+            remote,
+            env,
+            readState: options.readState,
+            postAck: (body) => remoteJson(backend, `threads/${encodeURIComponent(remote.remoteThreadId)}/mirror-acks`, fetchImpl, {
+              method: "POST",
+              body: JSON.stringify(body),
+            }),
+          })
+        : null;
+      if (imported || updated || acks?.acknowledged || acks?.rejected) {
         await appendEvent({
           type: "whatsapp_remote_runtime_messages_synced",
           threadId: thread.id,
@@ -367,9 +396,13 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
           remoteThreadId: remote.remoteThreadId,
           imported,
           updated,
+          ...(acks ? { acknowledged: acks.acknowledged, ackRejected: acks.rejected, ackedThrough: payload.mirrorAck.ackedThrough } : {}),
         }, env);
       }
-      results.push({ threadId: thread.id, remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, imported, updated });
+      results.push({
+        threadId: thread.id, remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, imported, updated,
+        ...(acks ? { acks } : {}),
+      });
     } catch (error) {
       await appendEvent({
         type: "whatsapp_remote_runtime_sync_failed",

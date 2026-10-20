@@ -73,12 +73,19 @@ export function internalAssistantSource(message = {}) {
 }
 
 const codexProgressPhases = new Set(["commentary", "awaiting_approval"]);
+
+// Progress exported by a delegated runtime (remote binding). It follows the
+// thread's own update settings, exactly like a local executor's progress.
+export function remoteRuntimeProgressMessage(message = {}) {
+  return cleanKey(message?.remoteKind) === "progress" && Boolean(clean(message?.remoteMessageId));
+}
 const codexSuppressedPhases = new Set(["context_compaction"]);
 
 export function shouldMirrorWhatsAppReply(message = {}) {
   if (isNoReplyAssistantMessage(message)) return false;
   if (internalAssistantSource(message)) return false;
   if (isThreadSignalMessage(message)) return threadSignalMirrorsToConnector(message);
+  if (remoteRuntimeProgressMessage(message)) return false;
   if (codexAssistantSource(message)) {
     const phase = codexAssistantPhase(message);
     return !codexProgressPhases.has(phase) && !codexSuppressedPhases.has(phase);
@@ -89,6 +96,7 @@ export function shouldMirrorWhatsAppReply(message = {}) {
 export function shouldMirrorWhatsAppProgress(message = {}, env = process.env) {
   if (isNoReplyAssistantMessage(message)) return false;
   if (internalAssistantSource(message)) return false;
+  if (remoteRuntimeProgressMessage(message)) return true;
   if (!codexAssistantSource(message)) return false;
   const phase = codexAssistantPhase(message);
   return codexProgressPhases.has(phase) && !codexSuppressedPhases.has(phase);
