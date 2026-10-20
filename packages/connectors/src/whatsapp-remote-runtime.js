@@ -2,6 +2,7 @@ import path from "node:path";
 import { appendEvent } from "../../storage/src/store.js";
 import { recordRouterTraceEvent } from "../../core/src/router-traces.js";
 import { appendThreadMessage, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
+import { remoteParentExpectedFields, remoteParentRecoveryCandidate } from "./whatsapp-remote-parent.js";
 
 function pickString(...values) {
   for (const value of values) {
@@ -275,7 +276,7 @@ function publicParentIdForRemoteMessage(remoteMessage = {}, localByRemoteId = ne
   return pickString(parent?.id);
 }
 
-async function updatePublicRemoteParent(thread, localMessage, remoteMessage, remote, env) {
+async function updatePublicRemoteParent(thread, localMessage, remoteMessage, remote, env, recovered = false) {
   if (!localMessage || !remoteMessage) return null;
   const patch = {
     remoteBackend: remote.backendId,
@@ -291,7 +292,10 @@ async function updatePublicRemoteParent(thread, localMessage, remoteMessage, rem
   if (deliveryState) patch.deliveryState = deliveryState;
   if (observedVia) patch.observedVia = observedVia;
   if (deliveredAt) patch.deliveredAt = deliveredAt;
-  return updateThreadMessage(thread.id, localMessage.id, patch, env).catch(() => null);
+  if (recovered && state === "completed" && deliveryState === "delivered") patch.error = null;
+  return updateThreadMessage(thread.id, localMessage.id, patch, env, {
+    expectedFields: remoteParentExpectedFields(localMessage),
+  }).catch(() => null);
 }
 
 async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, parentMessageId, parent, env }) {
@@ -341,19 +345,30 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
       const localMessages = await listThreadMessages(thread.id, env);
       const localByRemoteId = new Map(
         localMessages
+          .filter(message => message.remoteBackend === remote.backendId && message.remoteThreadId === remote.remoteThreadId)
           .map((message) => [pickString(message.remoteMessageId), message])
           .filter(([id]) => id),
       );
       let imported = 0;
       let updated = 0;
+      // Recover user acknowledgements first, even when replies precede them in
+      // the fetched page. An assistant still needs an ordinary mapped parent.
+      for (const remoteMessage of remoteMessages) {
+        if (messageRole(remoteMessage) !== "user") continue;
+        const remoteMessageId = pickString(remoteMessage.id, remoteMessage.messageId);
+        if (!remoteMessageId) continue;
+        const known = localByRemoteId.get(remoteMessageId);
+        const local = known || remoteParentRecoveryCandidate(thread, remote, remoteMessage, localMessages, remoteMessages);
+        if (!local || local.role !== "user") continue;
+        const changed = await updatePublicRemoteParent(thread, local, remoteMessage, remote, env, !known);
+        if (!changed) continue;
+        localByRemoteId.set(remoteMessageId, changed);
+        updated += 1;
+      }
       for (const remoteMessage of remoteMessages) {
         const remoteMessageId = pickString(remoteMessage.id, remoteMessage.messageId);
         if (!remoteMessageId) continue;
         const local = localByRemoteId.get(remoteMessageId);
-        if (local && messageRole(remoteMessage) === "user") {
-          if (await updatePublicRemoteParent(thread, local, remoteMessage, remote, env)) updated += 1;
-          continue;
-        }
         if (local || !completedAssistantMessage(remoteMessage)) continue;
         const parentMessageId = publicParentIdForRemoteMessage(remoteMessage, localByRemoteId);
         if (!parentMessageId && remote.binding.remoteMirrorOrphanReplies !== true) continue;
