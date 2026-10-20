@@ -109,3 +109,13 @@ test('entries carry no edge whitespace, so they match what the bridge actually s
   assert.equal(entries[0], entries[0].trim());
   assert.equal(entries[1].document.text, words(5000));
 });
+
+test('a footer embedded at the end of a long reply stays on the message', () => {
+  const footer = 'dbg: claude-code/example · rt:coordinator · msg:*update*\nsession: abcd1234 · 23:30 CEST';
+  const text = `${words(5000)}\n\n${footer}`;
+  const entries = chunk(text);
+  assert.ok(entries[0].endsWith(`${SCOPED_ATTACHED_MARKER}\n\n${footer}`));
+  assert.equal(entries[1].document.text, text);
+  const short = chunk(`hello\n\n${footer}`);
+  assert.deepEqual(short, [`hello\n\n${footer}`]);
+});
