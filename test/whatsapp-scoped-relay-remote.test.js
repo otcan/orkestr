@@ -80,13 +80,13 @@ async function fixture(t, { binding = {} } = {}) {
   return { env, runtime, fetchImpl, relayInput };
 }
 
-test("relay input on a delegated thread requires the legacy mirror off and owner authorship", async (t) => {
+test("relay input on a delegated thread requires the legacy mirror off and a verified author", async (t) => {
   const { env } = await fixture(t);
   const thread = await getThread("example-thread", env);
   assert.equal(scopedRelayRemoteBinding(thread, { ...relayBody, source: "ui" }, env), null);
   assert.equal(scopedRelayRemoteBinding(thread, relayBody, env).remoteThreadId, "example-remote-thread");
   assert.throws(() => scopedRelayRemoteBinding(thread, { ...relayBody, scopedParticipant: { id: "proof" } }, env),
-    /scoped_relay_delegation_owner_only/);
+    /scoped_relay_participant_unverified/);
   const mirrored = { ...thread, binding: { ...thread.binding, mirrorToWhatsApp: true } };
   assert.throws(() => scopedRelayRemoteBinding(mirrored, relayBody, env), /scoped_relay_delegation_requires_mirror_disabled/);
   const local = { ...thread, binding: { ...thread.binding, remoteRuntimeEnabled: false } };
@@ -280,4 +280,72 @@ test("a V2 timer reply on a delegated relay thread is never sent by the outbox a
   assert.equal(runtime.acks[0].outcome, "delivered");
   assert.equal(runtime.acks[0].parentPublicMessageId, `v2timer-${timerId}`);
   assert.deepEqual(runtime.acks[0].connectorMessageIds, ["provider-1"]);
+});
+
+// A participant the server admitted (checkScopedParticipant ran in /input).
+const lid = "100000000000001@lid";
+const phone = "491700000001@c.us";
+const participantBody = (changes = {}) => ({
+  ...relayBody, from: lid, senderParticipantId: lid, senderTrustLevel: "trusted", senderEffectiveRole: "trusted",
+  senderPolicyMode: "this-thread-only", originOwner: false, controlAllowed: false, parseCommands: false,
+  scopedParticipant: { version: 1, inputId: "event-1", authorId: lid, phoneId: phone, chatId: "example-group@g.us",
+    threadId: "example-thread", createdAt: "2026-01-01T00:00:00.000Z" },
+  ...changes,
+});
+
+test("an admitted group participant is forwarded with its own author and no owner authority", async (t) => {
+  const { env, runtime, fetchImpl, relayInput } = await fixture(t, { binding: { additionalParticipantLabels: { [phone]: "Ayse" } } });
+  const thread = await getThread("example-thread", env);
+  const remote = scopedRelayRemoteBinding(thread, participantBody(), env);
+  assert.deepEqual(remote.participant, { authorId: lid, phoneId: phone, label: "Ayse" });
+  const message = await relayInput();
+  const result = await forwardScopedRelayInputToRemote({ thread, message, remote }, env, fetchImpl);
+  assert.equal(result.forwarded, true);
+  const [sent] = runtime.inputs;
+  assert.equal(sent.from, lid);
+  assert.equal(sent.senderParticipantId, lid);
+  assert.equal(sent.senderPhoneId, phone);
+  assert.equal(sent.senderLabel, "Ayse");
+  assert.equal(sent.senderTrustLevel, "trusted");
+  assert.equal(sent.senderEffectiveRole, "trusted");
+  assert.equal(sent.originOwner, false);
+  assert.equal(sent.controlAllowed, false);
+  assert.equal(sent.parseCommands, false);
+  assert.deepEqual({ ...sent.externalPrincipal }, {
+    connector: "whatsapp", accountId: "example-account", chatId: "example-group@g.us", threadId: "example-thread",
+    senderId: lid, participantId: lid, fromMe: false, phoneId: phone,
+  });
+});
+
+test("a phone-JID participant needs no label, and an unverified or owner-claiming participant is refused", async (t) => {
+  const { env } = await fixture(t);
+  const thread = await getThread("example-thread", env);
+  const direct = participantBody({ from: phone, senderParticipantId: phone,
+    scopedParticipant: { ...participantBody().scopedParticipant, authorId: phone } });
+  assert.deepEqual(scopedRelayRemoteBinding(thread, direct, env).participant, { authorId: phone, phoneId: phone, label: "" });
+  for (const forged of [
+    participantBody({ controlAllowed: true }),
+    participantBody({ originOwner: true }),
+    participantBody({ senderTrustLevel: "owner" }),
+    participantBody({ from: "100000000000009@lid" }),
+    participantBody({ scopedParticipant: { ...participantBody().scopedParticipant, phoneId: lid } }),
+    participantBody({ scopedParticipant: { ...participantBody().scopedParticipant, threadId: "other-thread" } }),
+  ]) {
+    assert.throws(() => scopedRelayRemoteBinding(thread, forged, env), /scoped_relay_participant_unverified/);
+  }
+});
+
+test("a participant the remote runtime does not list is answered once with a visible notice", async (t) => {
+  const { env, runtime, fetchImpl, relayInput } = await fixture(t);
+  const thread = await getThread("example-thread", env);
+  const remote = scopedRelayRemoteBinding(thread, participantBody(), env);
+  const message = await relayInput();
+  runtime.inputStatus = 409;
+  const refused = await forwardScopedRelayInputToRemote({ thread, message, remote }, env, fetchImpl);
+  assert.equal(refused.refused, true);
+  const rows = await listThreadMessages("example-thread", env);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1].parentMessageId, message.id);
+  assert.match(rows[1].text, /did not accept this message/);
+  assert.equal(runtime.inputs.length, 1);
 });

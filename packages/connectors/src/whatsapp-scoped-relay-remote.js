@@ -28,8 +28,8 @@ function statusError(code, statusCode) {
   return Object.assign(new Error(code), { statusCode });
 }
 
-// The relay only admits input authored by the configured owner accounts, so the
-// forwarded principal is the thread owner, not a WhatsApp participant.
+// Owner-authored relay input is forwarded as the thread owner. Input from an
+// admitted group participant carries its own verified author instead (below).
 export function scopedRelayRemotePrincipal(thread = {}) {
   return `scoped-owner:${pickString(thread.ownerUserId, "admin")}`;
 }
@@ -45,9 +45,39 @@ export function scopedRelayRemoteBinding(thread, body = {}, env = process.env) {
   if (!remote) return null;
   // Exactly one sender: with the legacy mirror on, V1's outbox would also send.
   if (remote.binding.mirrorToWhatsApp !== false) throw statusError("scoped_relay_delegation_requires_mirror_disabled", 409);
-  // Admitted non-owner participants keep their local, thread-scoped policy.
-  if (body.scopedParticipant) throw statusError("scoped_relay_delegation_owner_only", 409);
-  return remote;
+  if (!body.scopedParticipant) return remote;
+  // A group participant the server already admitted for this thread
+  // (checkScopedParticipant runs before this). It is forwarded with its own
+  // author and never with owner or control authority; the remote runtime
+  // applies its explicit participant list on top of V1's policy.
+  return { ...remote, participant: scopedRelayRemoteParticipant(thread, body) };
+}
+
+const phoneJid = /^\d+@c\.us$/;
+const lidJid = /^\d+@lid$/;
+
+// The verified author of an admitted participant input, or a refusal.
+export function scopedRelayRemoteParticipant(thread = {}, body = {}) {
+  const proof = body.scopedParticipant || {};
+  const authorId = pickString(proof.authorId);
+  const phoneId = pickString(proof.phoneId);
+  if (!phoneJid.test(phoneId) || !(authorId === phoneId || lidJid.test(authorId)) || pickString(body.from) !== authorId
+      || proof.threadId !== thread.id || body.senderTrustLevel !== "trusted" || body.controlAllowed === true
+      || body.originOwner === true) {
+    throw statusError("scoped_relay_participant_unverified", 409);
+  }
+  return { authorId, phoneId, label: scopedRelayParticipantLabel(thread, authorId, phoneId) };
+}
+
+// The binding's display label for a participant, if the owner set one.
+export function scopedRelayParticipantLabel(thread = {}, ...ids) {
+  const labels = thread?.binding?.additionalParticipantLabels;
+  if (!labels || typeof labels !== "object" || Array.isArray(labels)) return "";
+  for (const id of ids) {
+    const label = String(labels[id] || "").replace(/[\u0000-\u001f\u007f:]/g, " ").replace(/\s+/g, " ").trim().slice(0, 64);
+    if (label) return label;
+  }
+  return "";
 }
 
 function definiteRefusal(error) {
@@ -82,7 +112,8 @@ export async function forwardScopedRelayInputToRemote({ thread, message, remote 
   const binding = remote.binding;
   const accountId = scopedRelayRemoteAccountId(binding);
   const chatId = pickString(binding.chatId);
-  const principal = scopedRelayRemotePrincipal(thread);
+  const participant = remote.participant;
+  const principal = participant ? participant.authorId : scopedRelayRemotePrincipal(thread);
   const input = {
     source: "whatsapp_inbound",
     text: String(message.text || ""),
@@ -92,12 +123,19 @@ export async function forwardScopedRelayInputToRemote({ thread, message, remote 
     externalId: pickString(message.externalId, message.clientMessageId, message.id),
     externalPrincipal: {
       connector: "whatsapp", accountId, chatId, threadId: thread.id,
-      senderId: principal, participantId: principal, fromMe: true,
+      senderId: principal, participantId: principal, fromMe: !participant,
+      ...(participant ? { phoneId: participant.phoneId } : {}),
     },
     senderParticipantId: principal,
-    senderTrustLevel: "owner",
-    senderEffectiveRole: "owner",
+    senderTrustLevel: participant ? "trusted" : "owner",
+    senderEffectiveRole: participant ? "trusted" : "owner",
     originTransport: "whatsapp-scoped-group-relay",
+    ...(participant ? {
+      senderPhoneId: participant.phoneId,
+      ...(participant.label ? { senderLabel: participant.label } : {}),
+      senderPolicyMode: "this-thread-only",
+      originOwner: false, controlAllowed: false, parseCommands: false,
+    } : {}),
   };
   let result;
   try {

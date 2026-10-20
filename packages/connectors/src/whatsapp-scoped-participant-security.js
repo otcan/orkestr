@@ -31,7 +31,9 @@ export async function checkScopedParticipant(thread, input, env = process.env) {
       input: {from, fromMe: false, accountId: input.accountId, chatId: b.chatId, text: input.text}});
     if (!decision.allowed) deny();
   }
-  return {allowed: true, senderTrustLevel: 'trusted', senderEffectiveRole: 'trusted',
+  const labels = b.additionalParticipantLabels && typeof b.additionalParticipantLabels === 'object' ? b.additionalParticipantLabels : {};
+  const senderLabel = String(labels[proof.authorId] || labels[proof.phoneId] || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 64);
+  return {allowed: true, ...(senderLabel ? {senderLabel} : {}), senderTrustLevel: 'trusted', senderEffectiveRole: 'trusted',
     senderPolicyMode: 'this-thread-only', originOwner: false, controlAllowed: false, parseCommands: false,
     securityClassification: classified};
 }

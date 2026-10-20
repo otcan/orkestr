@@ -187,9 +187,10 @@ export async function enqueueRemoteWhatsAppThreadInput({ thread, message, input 
       role: "user",
       source: input.source || "whatsapp_inbound",
       connector: "whatsapp",
-      parseCommands: true,
-      controlAllowed: true,
-      originOwner: true,
+      // Only owner input carries owner authority; a participant's never does.
+      parseCommands: input.originOwner !== false,
+      controlAllowed: input.originOwner !== false,
+      originOwner: input.originOwner !== false,
       forwardedBy: "orkestr-public-whatsapp-router",
       publicThreadId: thread?.id || "",
       publicMessageId: message?.id || "",
