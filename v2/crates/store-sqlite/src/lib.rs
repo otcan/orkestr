@@ -12,6 +12,10 @@ pub mod archived_history;
 pub use archived_history::{
     archived_checksum_next, archived_message_canonical, archived_message_digest,
 };
+pub mod conversation_resources;
+pub use conversation_resources::{
+    DesktopCaller, DesktopFence, PreparedAcquire, ResourceError, V1LeaseGrant,
+};
 mod conversation_export;
 mod conversations;
 pub mod fixture_runtime;
