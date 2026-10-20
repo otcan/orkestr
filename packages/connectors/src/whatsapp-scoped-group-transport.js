@@ -80,7 +80,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         allowed=groups.has(b.to) && b.accountId==='main' && typeof b.text==='string' && b.text.trim() && b.text.length<=3000
           && typeof b.requestId==='string' && typeof b.parentId==='string'
           && Object.keys(b).every(k=>['to','text','accountId','requestId','parentId','notificationId'].includes(k))
-          && (b.notificationId===undefined || (scope?.chatId===b.to && b.notificationId===b.requestId));
+          && (b.notificationId===undefined || (scope?.allowsChat(b.to) && b.notificationId===b.requestId));
       }
       return allowed?next():res.status(403).json({ok:false,error:'group_transport_scope_denied'});
     },
