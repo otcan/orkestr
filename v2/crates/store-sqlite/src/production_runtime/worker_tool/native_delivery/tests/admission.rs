@@ -71,6 +71,10 @@ async fn current_auth_native_scope_and_budgets_precede_replay() {
     let f = setup().await;
     let (_, parent) = worker(&f).await;
     for mut bad in [call(0), call(1), call(2)] {
+        if bad.call_id == "call:0" {
+            // 0 is Codex's first server request id; beyond the JSON safe range is not.
+            bad.request_id = OfflinePythonNativeRequestId::Integer(9_007_199_254_740_992);
+        }
         if bad.call_id == "call:1" {
             bad.thread_id = "foreign".into();
         }

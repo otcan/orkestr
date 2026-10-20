@@ -30,6 +30,15 @@ class WorkspaceRouteTests(unittest.TestCase):
         with self.assertRaises(Refused):request(channel,result,'ToolResult',9)
         with self.assertRaises(Refused):channel.provider(call())
 
+    def test_first_codex_server_request_id_zero_routes(self):
+        # A fresh Codex app-server numbers its first server request 0.
+        channel=active();frame=call();frame['id']=0
+        output=channel.provider(frame)
+        self.assertEqual(output['params']['frame']['id'],0)
+        result={'id':0,'result':{'contentItems':[{'type':'inputText','text':'synthetic'}],'success':True}}
+        native,_=request(channel,result,'ToolResult',8)
+        self.assertEqual(native,result)
+
     def test_default_refuses_and_pending_terminal_quarantines(self):
         with self.assertRaises(Refused):active(False).provider(call())
         channel=active();channel.provider(call())
