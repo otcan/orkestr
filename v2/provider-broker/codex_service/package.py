@@ -33,6 +33,9 @@ DEPENDENCIES = ("/usr/bin/python3", "/usr/bin/bwrap", "/usr/bin/prlimit",
 
 
 LIVE_MAP_ENV = "ORKESTR_V2_LIVE_MAP"
+# Private V1 desktop lease broker client file (0600, service user); the server
+# validates and reads it, the package never does.
+DESKTOP_BROKER_ENV = "ORKESTR_V2_DESKTOP_BROKER_CONFIG"
 
 
 def live_map_path(value):
@@ -88,10 +91,12 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - {"live_map"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - {"live_map", "desktop_broker"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         self.live_map = live_map_path(value["live_map"]) if "live_map" in value else None
+        self.desktop_broker = (live_map_path(value["desktop_broker"])
+                               if "desktop_broker" in value else None)
         require(all(type(value[k]) is int and 0 < value[k] < 2**31 for k in ("uid", "gid")),
                 "service_identity")
         require(type(value["port"]) is int and 1024 <= value["port"] <= 65535, "service_port")
@@ -224,4 +229,6 @@ class Package:
                 "ORKESTR_V2_BETA_CONFIG": str(self.root / "beta.json"),
                 "ORKESTR_V2_UI_DIST": str(self.root / "ui"),
                 "ORKESTR_V2_ORIGIN": self.runtime["trusted_origin"],
-                **({LIVE_MAP_ENV: self.live_map} if self.live_map else {})}
+                **({LIVE_MAP_ENV: self.live_map} if self.live_map else {}),
+                **({DESKTOP_BROKER_ENV: self.desktop_broker}
+                   if getattr(self, "desktop_broker", None) else {})}

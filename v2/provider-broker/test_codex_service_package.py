@@ -13,7 +13,7 @@ from codex_bounded.trust import digest, exists, process, protected, Refused as T
 from codex_service.contract import Refused
 from codex_service.custody import StateLock, OwnedSocket
 from codex_service.manager import Manager
-from codex_service.package import LIVE_MAP_ENV, Package, live_map_path
+from codex_service.package import DESKTOP_BROKER_ENV, LIVE_MAP_ENV, Package, live_map_path
 from codex_service_fixture import ServiceFixture, UID, GID
 
 
@@ -30,6 +30,9 @@ class LiveMapPathTests(unittest.TestCase):
         self.assertNotIn(LIVE_MAP_ENV, Package.environment(stub))
         stub.live_map = "/var/lib/synthetic/map.json"
         self.assertEqual(Package.environment(stub)[LIVE_MAP_ENV], "/var/lib/synthetic/map.json")
+        self.assertNotIn(DESKTOP_BROKER_ENV, Package.environment(stub))
+        stub.desktop_broker = "/var/lib/synthetic/desktop-broker.json"
+        self.assertEqual(Package.environment(stub)[DESKTOP_BROKER_ENV], "/var/lib/synthetic/desktop-broker.json")
 
 
 @unittest.skipUnless(os.geteuid() == 0, "explicit root run required for protected synthetic fixture")
