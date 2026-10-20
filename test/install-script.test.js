@@ -412,6 +412,10 @@ test("install script provisions isolated connector MCP and WhatsApp worker servi
   assert.match(releaseScript, /did not stay active \(partial WhatsApp rollout\)/);
   assert.match(releaseScript, /ORKESTR_WA_DEPLOY_PROBE_COMMAND/);
   assert.match(releaseScript, /WhatsApp end-to-end probe failed after activation/);
+  const gitDeploy = await fs.readFile("scripts/deploy-git-release.sh", "utf8");
+  assert.match(gitDeploy, /ORKESTR_WA_POST_DEPLOY_PROBE_COMMAND/);
+  assert.ok(gitDeploy.indexOf("Running post-deploy WhatsApp end-to-end probe") < gitDeploy.indexOf('write_history_event "success"'),
+    "the full WhatsApp probe runs before the deploy is recorded as successful");
   assert.match(migrationScript, /--activate/);
   assert.match(migrationScript, /Connector MCP cutover failed; embedded UI routing was restored/);
   assert.match(migrationScript, /ORKESTR_WHATSAPP_AUTOSTART=0/);

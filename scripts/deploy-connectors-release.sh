@@ -23,9 +23,11 @@ Environment:
   ORKESTR_WA_SCOPED_RELAY_SERVICES       Relay units paired with the worker (space separated).
       Units that Require the worker are discovered automatically. They are
       restarted with the new release and must stay active, or the deploy rolls back.
-  ORKESTR_WA_DEPLOY_PROBE_COMMAND        Optional end-to-end WhatsApp probe run after health;
-      a non-zero exit rolls the release back. ORKESTR_WA_DEPLOY_PROBE_TIMEOUT (seconds,
-      default 900) bounds it.
+  ORKESTR_WA_DEPLOY_PROBE_COMMAND        Optional WhatsApp intake probe run after health; a
+      non-zero exit rolls the release back. ORKESTR_WA_DEPLOY_PROBE_TIMEOUT (seconds,
+      default 900) bounds it. Inside a full deploy the UI drain can hold thread
+      replies, so use an intake-only probe here (whatsapp-group-probe.mjs
+      --intake-only) and the full probe via ORKESTR_WA_POST_DEPLOY_PROBE_COMMAND.
 EOF
 }
 

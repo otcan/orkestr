@@ -226,3 +226,10 @@ test('multi-thread scope reports an event gap and still delivers provable runs',
  state.events=[...Array.from({length:497},(_,i)=>({type:'other',ts:iso(6000+i)})),...state.events.map(e=>({...e,ts:iso(6000)}))];
  const r=await notifier.tick();assert.ok(r.eventGap);assert.equal(r.sent,3);
 });
+test('V2-owned timer replies (no V1 timer_due run) are never delivered by the scoped notifier',async t=>{
+ const {notifier,state}=multiFixture(t);
+ state.events=[];
+ state.messages['thread-1']=[{id:'v2timer-1',role:'user',source:'orkestr-v2-timer',timerId:'timer1',ownerUserId:'admin',createdAt:iso(5000)},
+  {...state.messages['thread-1'][0],parentMessageId:'v2timer-1'}];
+ const r=await notifier.tick();assert.equal(r.sent,0);assert.equal(state.sent.length,0);
+});

@@ -1912,6 +1912,18 @@ install_command() {
       write_history_event "failed" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "whatsapp_required_accounts_not_ready" "$provenance_file"
       exit 1
     fi
+    # Full WhatsApp end-to-end probe once the UI restart has lifted the deploy
+    # drain, so a thread can answer. The connector step runs only an intake
+    # probe. A failure means the deploy is never reported as successful.
+    if [ -n "${ORKESTR_WA_POST_DEPLOY_PROBE_COMMAND:-}" ]; then
+      echo "Running post-deploy WhatsApp end-to-end probe."
+      if ! timeout "${ORKESTR_WA_POST_DEPLOY_PROBE_TIMEOUT:-900}" bash -c "$ORKESTR_WA_POST_DEPLOY_PROBE_COMMAND"; then
+        echo "Post-deploy WhatsApp end-to-end probe failed; deploy is not reported as successful." >&2
+        write_history_event "failed" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "whatsapp_probe_failed" "$provenance_file"
+        exit 1
+      fi
+      echo "Post-deploy WhatsApp end-to-end probe passed."
+    fi
     fanout_status=0
     release_train_instance_fanout "$release_dir" "$target_ref" || fanout_status=$?
     send_release_whatsapp_notifications "$release_dir" "$target_ref" "$deployed_at"

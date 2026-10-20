@@ -30,7 +30,10 @@ export function probeTarget(probe, primary, sender) {
   return { chatId: probe.chatId, owners: [primary.ownChatId, sender.ownChatId].sort() };
 }
 
-export async function runProbe({ probe, primary, sender, token, fetchImpl = fetch, now = Date.now, wait = sleep, nonce = crypto.randomBytes(4).toString('hex') }) {
+// intakeOnly: pass once the primary recorded the probe and the relay routed it
+// into the probe thread. Used inside a deploy, where the UI drain may hold the
+// thread's reply until the deploy finishes; the full probe runs afterwards.
+export async function runProbe({ probe, primary, sender, token, intakeOnly = false, fetchImpl = fetch, now = Date.now, wait = sleep, nonce = crypto.randomBytes(4).toString('hex') }) {
   const target = probeTarget(probe, primary, sender);
   const base = String(probe.senderUrl || '').replace(/\/$/, '');
   const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
@@ -54,12 +57,19 @@ export async function runProbe({ probe, primary, sender, token, fetchImpl = fetc
     const db = new DatabaseSync(primary.journalPath, { readOnly: true });
     try {
       inputId ||= db.prepare('SELECT id FROM group_input WHERE chat_id=? AND body=?').get(target.chatId, text)?.id || null;
-      if (inputId && db.prepare("SELECT 1 FROM group_send WHERE parent_id=? AND chat_id=? AND state='sent' AND provider_id IS NOT NULL").get(inputId, target.chatId))
+      if (inputId && !intakeOnly && db.prepare("SELECT 1 FROM group_send WHERE parent_id=? AND chat_id=? AND state='sent' AND provider_id IS NOT NULL").get(inputId, target.chatId))
         return { ok: true, nonce, totalMs: now() - started };
     } finally { db.close(); }
+    if (inputId && intakeOnly) {
+      const relay = new DatabaseSync(primary.relayJournalPath, { readOnly: true });
+      try {
+        if (relay.prepare('SELECT 1 FROM routed WHERE id=? AND thread_id=?').get(inputId, probe.threadId))
+          return { ok: true, nonce, intakeOnly: true, totalMs: now() - started };
+      } finally { relay.close(); }
+    }
     await wait(Number(probe.pollMs || 5000));
   }
-  fail(inputId ? 'probe_reply_not_delivered' : 'probe_input_not_recorded');
+  fail(!inputId ? 'probe_input_not_recorded' : intakeOnly ? 'probe_input_not_routed' : 'probe_reply_not_delivered');
 }
 
 // Alert after N consecutive failures, once per failure streak.
@@ -81,7 +91,7 @@ if (isMainModule(import.meta.url)) {
   const probe = readJson(process.argv[2]);
   let outcome;
   try {
-    const result = await runProbe({ probe, primary: readJson(probe.primaryConfigPath), sender: readJson(probe.senderConfigPath),
+    const result = await runProbe({ probe, intakeOnly: process.argv.includes('--intake-only'), primary: readJson(probe.primaryConfigPath), sender: readJson(probe.senderConfigPath),
       token: fs.readFileSync(probe.senderTokenFile, 'utf8').trim() });
     outcome = { ok: true, ...result };
   } catch (error) {
