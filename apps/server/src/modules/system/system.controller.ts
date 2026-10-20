@@ -1084,6 +1084,7 @@ export class SystemController {
       thread: { id: result.thread.id, name: result.thread.name || null },
       message: result.message,
       deliveryExpected: result.deliveryExpected,
+      relayParentMessageId: result.relayParentMessageId,
       deliveryState,
       delivery,
     };

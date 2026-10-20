@@ -6,10 +6,17 @@ import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
 import {scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
+import {threadSuppressesWhatsAppUpdates} from './whatsapp-mirror-policy.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
 const progressPhases = new Set(['commentary', 'awaiting_approval']);
 const progressSources = new Set(['codex-rollout', 'codex-app-server', 'codex-app-server-import', 'claude-code']);
+// Replies posted after the turn ended (a bound api-session) and parented by V1
+// to the latest relay-routed input. Delivered once, within a bounded window.
+const lateSources = new Set(['api-session']);
+const finalPhases = new Set(['final_answer', 'final']);
+const LATE_REPLY_WINDOW_MS = 6 * 60 * 60 * 1000;
+const LATE_REPLY_POLL_MS = 10_000;
 const errorCode = error => /^[a-z_]+$/.test(error.message) ? error.message : 'operation_failed';
 const GROUP_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const GROUP_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
@@ -27,7 +34,7 @@ function readGroupInputs(inbox) {
     FROM group_input i ${join} ORDER BY i.created_at`).all();
 }
 
-export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile}) {
+export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile, now = Date.now}) {
   // Operator holds are exclusions, not delivery/completion receipts. Validate
   // before opening either journal and snapshot the policy for this process.
   const heldIds = config.heldInputIds === undefined ? [] : config.heldInputIds;
@@ -41,8 +48,11 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   const progressSince = Date.parse(config.forwardProgressSince || '');
   if (config.forwardProgressUpdates === true && !Number.isFinite(progressSince))
     throw new Error('group_progress_cutoff_required');
-  const eligibleProgress = message => config.forwardProgressUpdates === true
+  // Commentary honours the thread's own update suppression; approval requests
+  // still reach the owner because the turn waits on them.
+  const eligibleProgress = (message, suppressUpdates = false) => config.forwardProgressUpdates === true
     && progressPhases.has(message.phase) && progressSources.has(message.source)
+    && !(suppressUpdates && message.phase === 'commentary')
     && Number.isFinite(Date.parse(message.createdAt)) && Date.parse(message.createdAt) >= progressSince;
   const inbox = inboxDb || new DatabaseSync(config.journalPath, {readOnly: true});
   const db = relayDb || new DatabaseSync(config.relayJournalPath);
@@ -95,7 +105,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return {thread, metadata};
   }
 
-  async function answersFor(group, route) {
+  async function answersFor(group, route, suppressUpdates = false) {
     // Walk older pages until the parent is found, so a long-running turn cannot
     // lose its final answer merely because another turn produced many messages.
     let before = '';
@@ -107,7 +117,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       for (const message of messages) {
         context.set(message.id, message);
         if (message.role === 'assistant' && message.state === 'completed'
-            && (['final_answer', 'final', 'need_input', 'awaiting_input', 'question', 'request_user_input'].includes(message.phase) || eligibleProgress(message))
+            && (['final_answer', 'final', 'need_input', 'awaiting_input', 'question', 'request_user_input'].includes(message.phase) || eligibleProgress(message, suppressUpdates))
             && message.parentMessageId === route.message_id) answers.set(message.id, message);
       }
       if (messages.some(m => m.id === route.message_id) || !page.hasMoreBefore || !messages.length) {
@@ -115,7 +125,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         const finals = ordered.filter(m => ['final_answer', 'final'].includes(m.phase));
         // A final supersedes stale progress and unanswered questions. Live progress
         // keeps the route open; durable reply IDs prevent replays on later polls.
-        const updates = ordered.filter(eligibleProgress);
+        const updates = ordered.filter(message => eligibleProgress(message, suppressUpdates));
         const question = ordered.filter(m => !progressPhases.has(m.phase)).slice(-1);
         const pending = [...updates, ...question].sort((a, b) => Number(a.cursor || 0) - Number(b.cursor || 0));
         return {answers: finals.length ? finals : pending, messages: [...context.values()]};
@@ -126,6 +136,50 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     throw new Error('group_reply_history_incomplete');
   }
 
+  async function deliverAnswer(input, group, answer, messages) {
+    const text = String(answer.text || '').trim();
+    if (!text || text === 'NO_REPLY') return;
+    const payloadId = key(`${input.id}:${answer.id}`);
+    let saved = db.prepare('SELECT chunks FROM reply_payloads WHERE id=?').get(payloadId);
+    if (!saved) {
+      let {thread} = await inputThread(input, group);
+      if (config.appendDebugFooter === true) {
+        try {
+          const {quota} = await api(`/api/quota/providers?ownerUserId=${encodeURIComponent(config.ownerUserId)}`, {timeoutMs: 1000});
+          if (quota) thread = {...thread, whatsAppDebugProviderQuota: quota};
+        } catch { /* Missing telemetry must not prevent an otherwise valid reply. */ }
+      }
+      const deliveryType = progressPhases.has(answer.phase) ? 'progress' : 'final';
+      const chunks = scopedGroupReplyChunks({deliveryType, text, message: {...answer, chatId: group.chatId}, thread, messages, config, formatter, env});
+      // Freeze text and chunk boundaries before the first provider attempt.
+      // A retry or restart must reuse the same quota snapshot and payload.
+      db.prepare('INSERT INTO reply_payloads(id,chunks) VALUES(?,?)').run(payloadId, JSON.stringify(chunks));
+      saved = {chunks: JSON.stringify(chunks)};
+    }
+    const chunks = JSON.parse(saved.chunks);
+    for (let index = 0; index < chunks.length; index++) {
+      const requestId = `reply:${key(`${input.id}:${answer.id}:${index}`)}`;
+      if (db.prepare("SELECT 1 FROM replies WHERE id=? AND state='sent'").get(requestId)) continue;
+      await inputThread(input, group);
+      const result = await send({chatId: input.chat_id, requestId, parentId: input.id, text: chunks[index]});
+      if (result.ok !== true || !result.ids?.length) throw new Error('group_reply_unconfirmed');
+      db.prepare("INSERT OR REPLACE INTO replies VALUES(?,'sent')").run(requestId);
+      db.prepare('INSERT OR REPLACE INTO reply_receipts VALUES(?,?)').run(requestId, JSON.stringify(result.ids.map(String)));
+      log({event: 'reply_delivered', threadId: group.threadId, messageId: answer.id});
+    }
+    // A mirrored remote-runtime reply: report the confirmed send so V1 can
+    // acknowledge it to the runtime. A failed report retries on the next
+    // poll without resending (every chunk above is already 'sent').
+    if (answer.remoteMessageId && !db.prepare('SELECT 1 FROM remote_delivery_reports WHERE id=?').get(payloadId)) {
+      const requestIds = chunks.map((_, index) => `reply:${key(`${input.id}:${answer.id}:${index}`)}`);
+      const connectorMessageIds = requestIds.flatMap(id => JSON.parse(db.prepare('SELECT provider_ids FROM reply_receipts WHERE id=?').get(id)?.provider_ids || '[]'));
+      await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages/${encodeURIComponent(answer.id)}/scoped-relay-delivery`,
+        {method: 'POST', body: {requestIds, connectorMessageIds, deliveredAt: new Date().toISOString()}});
+      db.prepare('INSERT OR IGNORE INTO remote_delivery_reports VALUES(?,?)').run(payloadId, new Date().toISOString());
+      log({event: 'remote_delivery_reported', threadId: group.threadId, messageId: answer.id});
+    }
+  }
+
   async function routeInput(input, group) {
     if (routeFence && fencedThreads.has(group.threadId)) {
       const active = routeFence.current();
@@ -133,7 +187,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     }
     let route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
     if (route?.completed) return;
-    const {metadata} = await inputThread(input, group);
+    const {metadata, thread: routeThread} = await inputThread(input, group);
     if (!route) {
       let attachments = [];
       let inputBody = String(input.body || '').trim();
@@ -222,51 +276,47 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
       log({event: 'input_routed', threadId: group.threadId, messageId});
     }
-    const {answers, messages} = await answersFor(group, route);
+    const suppressUpdates = threadSuppressesWhatsAppUpdates(routeThread, group.chatId, env);
+    const {answers, messages} = await answersFor(group, route, suppressUpdates);
     for (const answer of answers) {
-      const text = String(answer.text || '').trim();
-      if (text && text !== 'NO_REPLY') {
-        const payloadId = key(`${input.id}:${answer.id}`);
-        let saved = db.prepare('SELECT chunks FROM reply_payloads WHERE id=?').get(payloadId);
-        if (!saved) {
-          let {thread} = await inputThread(input, group);
-          if (config.appendDebugFooter === true) {
-            try {
-              const {quota} = await api(`/api/quota/providers?ownerUserId=${encodeURIComponent(config.ownerUserId)}`, {timeoutMs: 1000});
-              if (quota) thread = {...thread, whatsAppDebugProviderQuota: quota};
-            } catch { /* Missing telemetry must not prevent an otherwise valid reply. */ }
-          }
-          const deliveryType = progressPhases.has(answer.phase) ? 'progress' : 'final';
-          const chunks = scopedGroupReplyChunks({deliveryType, text, message: {...answer, chatId: group.chatId}, thread, messages, config, formatter, env});
-          // Freeze text and chunk boundaries before the first provider attempt.
-          // A retry or restart must reuse the same quota snapshot and payload.
-          db.prepare('INSERT INTO reply_payloads(id,chunks) VALUES(?,?)').run(payloadId, JSON.stringify(chunks));
-          saved = {chunks: JSON.stringify(chunks)};
-        }
-        const chunks = JSON.parse(saved.chunks);
-        for (let index = 0; index < chunks.length; index++) {
-          const requestId = `reply:${key(`${input.id}:${answer.id}:${index}`)}`;
-          if (db.prepare("SELECT 1 FROM replies WHERE id=? AND state='sent'").get(requestId)) continue;
-          await inputThread(input, group);
-          const result = await send({chatId: input.chat_id, requestId, parentId: input.id, text: chunks[index]});
-          if (result.ok !== true || !result.ids?.length) throw new Error('group_reply_unconfirmed');
-          db.prepare("INSERT OR REPLACE INTO replies VALUES(?,'sent')").run(requestId);
-          db.prepare('INSERT OR REPLACE INTO reply_receipts VALUES(?,?)').run(requestId, JSON.stringify(result.ids.map(String)));
-          log({event: 'reply_delivered', threadId: group.threadId, messageId: answer.id});
-        }
-        // A mirrored remote-runtime reply: report the confirmed send so V1 can
-        // acknowledge it to the runtime. A failed report retries on the next
-        // poll without resending (every chunk above is already 'sent').
-        if (answer.remoteMessageId && !db.prepare('SELECT 1 FROM remote_delivery_reports WHERE id=?').get(payloadId)) {
-          const requestIds = chunks.map((_, index) => `reply:${key(`${input.id}:${answer.id}:${index}`)}`);
-          const connectorMessageIds = requestIds.flatMap(id => JSON.parse(db.prepare('SELECT provider_ids FROM reply_receipts WHERE id=?').get(id)?.provider_ids || '[]'));
-          await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages/${encodeURIComponent(answer.id)}/scoped-relay-delivery`,
-            {method: 'POST', body: {requestIds, connectorMessageIds, deliveredAt: new Date().toISOString()}});
-          db.prepare('INSERT OR IGNORE INTO remote_delivery_reports VALUES(?,?)').run(payloadId, new Date().toISOString());
-          log({event: 'remote_delivery_reported', threadId: group.threadId, messageId: answer.id});
-        }
-      }
+      await deliverAnswer(input, group, answer, messages);
       if (['final_answer', 'final'].includes(answer.phase)) db.prepare('UPDATE routed SET completed=1 WHERE id=?').run(input.id);
+    }
+  }
+
+  // A reply posted after the turn completed (a bound api-session answer, which V1
+  // parents to the latest relay-routed input) is delivered once through the same
+  // durable payload/receipt journal. Only each group's newest completed input
+  // inside the window is watched, polled at most every LATE_REPLY_POLL_MS.
+  const lastLatePoll = new Map();
+  async function deliverLateReplies(inputs) {
+    const latest = new Map();
+    for (const input of inputs) if (!heldInputIds.has(input.id) && groups.has(input.chat_id)) latest.set(input.chat_id, input);
+    for (const [chatId, input] of latest) {
+      const group = groups.get(chatId);
+      const at = Date.parse(input.created_at);
+      if (!Number.isFinite(at) || now() - at > LATE_REPLY_WINDOW_MS) continue;
+      const route = db.prepare('SELECT * FROM routed WHERE id=? AND completed=1').get(input.id);
+      if (!route || now() - (lastLatePoll.get(chatId) || 0) < LATE_REPLY_POLL_MS) continue;
+      if (routeFence && fencedThreads.has(group.threadId)) {
+        const active = routeFence.current();
+        if (active?.route !== config.routeControl.routeId || at < Date.parse(active.since)) continue;
+      }
+      lastLatePoll.set(chatId, now());
+      try {
+        const page = await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages?limit=50`);
+        const messages = page.messages || [];
+        const late = messages.filter(m => m.role === 'assistant' && m.state === 'completed' && finalPhases.has(m.phase)
+            && lateSources.has(m.source) && m.parentMessageId === route.message_id
+            && Date.parse(m.createdAt) >= at && Date.parse(m.createdAt) - at <= LATE_REPLY_WINDOW_MS)
+          .sort((a, b) => Number(a.cursor || 0) - Number(b.cursor || 0));
+        for (const answer of late) await deliverAnswer(input, group, answer, messages);
+        errors.delete(`late:${input.id}`);
+      } catch (error) {
+        const code = errorCode(error);
+        if (errors.get(`late:${input.id}`) !== code) log({event: 'group_relay_error', threadId: group.threadId, code});
+        errors.set(`late:${input.id}`, code);
+      }
     }
   }
 
@@ -288,6 +338,8 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
           errors.set(input.id, code);
         }
       }
+      if (!inbox.prepare("SELECT 1 FROM group_send WHERE state IN ('sending','uncertain') LIMIT 1").get())
+        await deliverLateReplies(inputs);
       return {ok: errors.size === 0, groups: groups.size, received: inputs.length,
         configuredHolds: heldInputIds.size, held, excluded,
         routed: db.prepare('SELECT count(*) n FROM routed').get().n,
