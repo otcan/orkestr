@@ -37,8 +37,14 @@ authority. Core `c8beddef8` generation validation is consumed unchanged.
 Explicit admission is now mounted separately from Send. The page retains at most
 128 durable intake receipts across tab/reconnect remounts; it refuses further
 Send actions at capacity without dropping older entries. Owner/session changes
-clear this private page state. Reload recovery of a lost page's unadmitted
-receipts is not provided by this slice; durable server history remains intact.
+clear this private page state. Reload recovery: unsent drafts, the
+pending send's original client key, retained intake receipts and the exact
+uncertain window request are kept in tab-scoped `sessionStorage` under the
+owner's namespace (`orkestr.v2.page.<global conversation>`), bounded to 2 MiB
+and 64 drafts. After a full reload they are re-validated and restored without
+overwriting newer page memory; continuing still needs an explicit Retry send,
+which resends the original tuple. Sign-out removes the stored state; session
+expiry keeps it for the same owner.
 
 Start work uses a new window request; Add to current work binds the active
 window without changing its generation or budget. Uncertain replies retain the

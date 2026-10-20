@@ -2,7 +2,7 @@
 // Exercises the real WASM bundle at desktop and phone widths; no provider runs.
 import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer';
-import { A, startMock } from './headless-workspace-mock.mjs';
+import { A, createState, startMock } from './headless-workspace-mock.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -39,11 +39,40 @@ export const scenarios = [
     await page.waitForFunction(() => document.querySelectorAll('.archived-messages > li').length === 60);
     assert.match(await text('.archived-history > summary'), /60 messages/);
   }],
+  ['reload-recovery', async () => {
+    const draft = () => page.$eval('#composer', node => node.value);
+    const typeDraft = async value => { await page.focus('#composer'); await page.keyboard.type(value); };
+    // An unsent draft survives a full reload.
+    await typeDraft('Draft survives reload');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => document.querySelector('#composer')?.value === 'Draft survives reload');
+    // Intake succeeds, admission is uncertain, and the composer stays editable while busy.
+    state.windowMode = 'uncertain'; state.windowDelayMs = 1500;
+    await clickText('Send');
+    await page.waitForFunction(() => document.querySelector('.message-composer button[type=submit]')?.disabled);
+    await typeDraft(' + edit while busy');
+    assert.equal(await draft(), 'Draft survives reload + edit while busy');
+    await waitText('Send not confirmed');
+    const first = state.windowPosts.at(-1);
+    const intakes = Object.keys(state.intake).length;
+    // Reload recovers the saved receipt and the exact uncertain work request.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await waitText('Message saved; work has not started yet');
+    assert.equal(await draft(), 'Draft survives reload + edit while busy');
+    state.windowMode = 'accept'; state.windowDelayMs = 0;
+    await clickText('Retry send');
+    await waitText('Sent. Waiting for a reply.');
+    const retry = state.windowPosts.at(-1);
+    assert.deepEqual(retry, first, 'Retry after reload must resend the exact original work request');
+    assert.equal(Object.keys(state.intake).length, intakes, 'Retry after reload must not create another message');
+    assert.equal(await draft(), 'Draft survives reload + edit while busy', 'Edits made after Send are kept');
+  }],
 ];
 
 try {
   browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
   for (const [label, viewport] of [['desktop', { width: 1280, height: 860 }], ['phone', { width: 390, height: 844, isMobile: true, hasTouch: true }]]) {
+    Object.assign(state, createState());
     page = await browser.newPage();
     page.on('pageerror', error => errors.push(error.message));
     await page.setViewport(viewport);
