@@ -28,7 +28,7 @@ async fn selected(
         .collect::<Vec<_>>()
         .join(" || '|' || ");
     let filter = if table == "_sqlx_migrations" {
-        format!(" WHERE version<={}", prefix.unwrap_or(45))
+        format!(" WHERE version<={}", prefix.unwrap_or(46))
     } else {
         String::new()
     };
@@ -103,6 +103,9 @@ async fn populated_prefixes_copy_first_edges_to_45_preserve_rows_and_rollback_so
             "production_steering",
             "production_steering_turns",
             "worker_running_budgets",
+            "archived_history_sources",
+            "archived_history_messages",
+            "archived_history_quarantine",
         ] {
             let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
                 .fetch_one(&mut upgraded)
@@ -115,7 +118,7 @@ async fn populated_prefixes_copy_first_edges_to_45_preserve_rows_and_rollback_so
                 .fetch_one(&mut upgraded)
                 .await
                 .unwrap(),
-            45
+            46
         );
         assert!(sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&mut upgraded)

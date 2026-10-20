@@ -8,6 +8,10 @@ use sqlx::{
 };
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
+pub mod archived_history;
+pub use archived_history::{
+    archived_checksum_next, archived_message_canonical, archived_message_digest,
+};
 mod conversation_export;
 mod conversations;
 pub mod fixture_runtime;

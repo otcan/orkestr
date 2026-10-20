@@ -1,6 +1,8 @@
 //! Version 0 HTTP contracts. No storage or provider dependencies.
 mod accepted_results;
 pub use accepted_results::*;
+mod archived_history;
+pub use archived_history::*;
 mod conversations;
 pub use conversations::*;
 mod beta;

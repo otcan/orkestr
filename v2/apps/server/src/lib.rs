@@ -19,6 +19,7 @@ use std::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 mod accepted_results_http;
+mod archived_history_http;
 mod attachment_transfer;
 mod auth;
 mod automatic_reply_control;
@@ -344,6 +345,7 @@ pub fn router_with_google_catalog(
         .nest("/api/v2",attachment_transfer::router())
         .nest("/api/v2",automatic_reply_control::router())
         .merge(memory_service::router(state.clone()))
+        .merge(archived_history_http::router())
         .merge(google_registry_metadata::router(catalog))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })
         .layer(DefaultBodyLimit::max(40 * 1024))
