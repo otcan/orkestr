@@ -30,6 +30,9 @@ pub enum ExecutionWindowTerminalOutcome {
     Accepted,
     Stopped,
     Abandoned,
+    /// The window's open failed before it produced any run of its own. Only a
+    /// reconciliation outcome; never a run's terminal kind.
+    Failed,
 }
 impl ExecutionWindowTerminalOutcome {
     pub fn as_str(self) -> &'static str {
@@ -37,13 +40,48 @@ impl ExecutionWindowTerminalOutcome {
             Self::Accepted => "accepted",
             Self::Stopped => "stopped",
             Self::Abandoned => "abandoned",
+            Self::Failed => "failed",
         }
     }
+    /// Parses a recorded window outcome. A run's terminal evidence kind is
+    /// parsed separately: `failed` there names a reconciled Worker, never a turn.
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "accepted" => Some(Self::Accepted),
             "stopped" => Some(Self::Stopped),
             "abandoned" => Some(Self::Abandoned),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// Why a window's open is recorded as failed. Derived by Core from durable
+/// state at reconciliation time; the live error of the lost process is gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionWindowOpenFailureCause {
+    /// The manager admitted the window but its private credential was never issued.
+    CredentialUnissued,
+    /// The credential was issued but the opening never bound it.
+    CredentialUnbound,
+    /// The window was bound, but setup (for example broker readiness or Fast
+    /// setup) failed before any run of its own existed.
+    SetupIncomplete,
+}
+impl ExecutionWindowOpenFailureCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CredentialUnissued => "credential_unissued",
+            Self::CredentialUnbound => "credential_unbound",
+            Self::SetupIncomplete => "setup_incomplete",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "credential_unissued" => Some(Self::CredentialUnissued),
+            "credential_unbound" => Some(Self::CredentialUnbound),
+            "setup_incomplete" => Some(Self::SetupIncomplete),
             _ => None,
         }
     }
@@ -74,9 +112,16 @@ pub struct ExecutionWindowReconciliation {
     pub actor: ExecutionWindowReconciliationActor,
     pub decision: ExecutionWindowReconciliationDecision,
     pub outcome: ExecutionWindowTerminalOutcome,
-    pub prior_run_id: RunId,
-    pub terminal_event_id: EventId,
+    /// The window's own last Deep turn. None only for a `failed` open.
+    pub prior_run_id: Option<RunId>,
+    pub terminal_event_id: Option<EventId>,
     pub abandoned_run_ids: Vec<RunId>,
+    /// Workers left `cancel_requested` past their lease deadline, now failed.
+    pub failed_run_ids: Vec<RunId>,
+    /// Set only for a `failed` open.
+    pub open_failure_cause: Option<ExecutionWindowOpenFailureCause>,
+    /// The retired window the conversation continues from after a failed open.
+    pub restored_window_id: Option<Uuid>,
     pub released_input_event_ids: Vec<EventId>,
     pub reconciled_at_ms: i64,
     pub duplicate: bool,
@@ -106,7 +151,7 @@ mod tests {
             r#"{"window_id":"00000000-0000-0000-0000-000000000007","generation":1,"decision":"accept"}"#
         )
         .is_err());
-        for outcome in ["accepted", "stopped", "abandoned"] {
+        for outcome in ["accepted", "stopped", "abandoned", "failed"] {
             assert_eq!(
                 ExecutionWindowTerminalOutcome::parse(outcome)
                     .unwrap()
@@ -115,5 +160,18 @@ mod tests {
             );
         }
         assert!(ExecutionWindowTerminalOutcome::parse("succeeded").is_none());
+        for cause in [
+            "credential_unissued",
+            "credential_unbound",
+            "setup_incomplete",
+        ] {
+            assert_eq!(
+                ExecutionWindowOpenFailureCause::parse(cause)
+                    .unwrap()
+                    .as_str(),
+                cause
+            );
+        }
+        assert!(ExecutionWindowOpenFailureCause::parse("open_failed").is_none());
     }
 }

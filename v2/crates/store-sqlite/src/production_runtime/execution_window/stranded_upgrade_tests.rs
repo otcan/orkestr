@@ -1,0 +1,91 @@
+//! Upgrade from schema 51: a Workbench stranded by an older release.
+use super::*;
+
+/// Return a populated database to the exact schema-51 shape (before 0052).
+async fn downgrade_to_schema51(store: &Store) {
+    let mut tx = store.pool.begin().await.unwrap();
+    for statement in [
+        "DROP VIEW production_terminal_evidence",
+        "DROP TABLE production_run_failures",
+        "DROP TABLE execution_window_failed_resume_metadata",
+        "DROP TABLE execution_window_open_failure_inputs",
+        "DROP TABLE execution_window_open_failures",
+        "DELETE FROM _sqlx_migrations WHERE version=52",
+    ] {
+        sqlx::query(statement).execute(&mut *tx).await.unwrap();
+    }
+    let view = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/migrations/0048_stranded_window_reconciliation.sql"
+    ));
+    let start = view
+        .find("CREATE VIEW production_terminal_evidence")
+        .unwrap();
+    let end = view
+        .find("DROP VIEW production_retirement_provenance")
+        .unwrap();
+    sqlx::raw_sql(&view[start..end])
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// A Workbench left stranded by a schema-51 release: the deadline-cancelled
+/// Worker blocked reconciliation. Upgrading alone changes no row; the first
+/// reconciliation afterwards fails the Worker and closes the window.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn schema51_stranded_workbench_reconciles_after_upgrade() {
+    let b = workbench().await;
+    let w = &b.p.w;
+    expire_worker_lease(&w.f.store, &b.worker).await;
+    downgrade_to_schema51(&w.f.store).await;
+    // The schema-51 release could not plan it.
+    assert!(matches!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM production_terminal_evidence WHERE run_id=?"
+        )
+        .bind(b.worker.run.run_id.to_string())
+        .fetch_one(&w.f.store.pool)
+        .await,
+        Ok(0)
+    ));
+    let before = fixtures::snapshot(&w.f.store).await;
+    let fresh = restart(w, true).await;
+    assert_eq!(
+        count(&fresh, "SELECT max(version) FROM _sqlx_migrations").await,
+        52
+    );
+    for table in [
+        "production_run_failures",
+        "execution_window_open_failures",
+        "execution_window_open_failure_inputs",
+        "execution_window_failed_resume_metadata",
+    ] {
+        assert_eq!(
+            count(&fresh, &format!("SELECT count(*) FROM {table}")).await,
+            0,
+            "no retroactive decision: {table}"
+        );
+    }
+    assert_eq!(
+        count(
+            &fresh,
+            "SELECT count(*) FROM production_terminal_evidence WHERE terminal_kind='failed'"
+        )
+        .await,
+        0
+    );
+    let after = fixtures::snapshot(&fresh).await;
+    assert_eq!(before, after, "upgrading alone changes no row");
+    let receipt = reconcile(&fresh, w, Decision::AbandonUnaccepted, Actor::Startup)
+        .await
+        .unwrap();
+    assert_eq!(receipt.failed_run_ids, vec![b.worker.run.run_id.clone()]);
+    assert_eq!(window_state(&fresh, w.status.window_id).await, "closed");
+    assert!(sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&fresh.pool)
+        .await
+        .unwrap()
+        .is_empty());
+}

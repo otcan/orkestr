@@ -266,8 +266,8 @@ async fn restart_with_pending_acceptance_abandons_once_without_rerun_or_late_acc
         panic!("unreconciled window must plan")
     };
     assert_eq!(plan.outcome, Outcome::Abandoned);
-    assert_eq!(plan.prior_run_id, p.deep.run.run_id);
-    assert_eq!(plan.terminal_event_id, p.deep_done);
+    assert_eq!(plan.prior_run_id, Some(p.deep.run.run_id.clone()));
+    assert_eq!(plan.terminal_event_id, Some(p.deep_done.clone()));
     assert!(plan.hard_deadline_passed);
 
     let receipt = reconcile(&fresh, w, Decision::AbandonUnaccepted, Actor::Startup)
@@ -276,8 +276,8 @@ async fn restart_with_pending_acceptance_abandons_once_without_rerun_or_late_acc
     assert!(!receipt.duplicate);
     assert_eq!(receipt.actor, Actor::Startup);
     assert_eq!(receipt.outcome, Outcome::Abandoned);
-    assert_eq!(receipt.prior_run_id, p.deep.run.run_id);
-    assert_eq!(receipt.terminal_event_id, p.deep_done);
+    assert_eq!(receipt.prior_run_id, Some(p.deep.run.run_id.clone()));
+    assert_eq!(receipt.terminal_event_id, Some(p.deep_done.clone()));
     let mut expected = vec![p.fast.run.run_id.clone(), p.deep.run.run_id.clone()];
     expected.sort_by_key(|r| r.to_string());
     assert_eq!(receipt.abandoned_run_ids, expected);
@@ -469,3 +469,6 @@ async fn abandoned_conversation_resumes_its_native_session_in_a_successor_window
 
 #[path = "stranded_decision_tests.rs"]
 mod decisions;
+
+#[path = "stranded_failure_tests.rs"]
+mod failures;

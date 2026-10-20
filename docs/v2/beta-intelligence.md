@@ -25,7 +25,11 @@ conversation has an active aggregate window at a time.
   and explicit acceptance. It does not consume the Deep inbox or support Steer.
 - **Worker** runs an owner-created task under an exact live Running Deep parent.
   Up to four Workers may run concurrently, each with a fresh native session and
-  the existing 30-second task policy. A Worker proposal still requires owner
+  the existing 30-second initial lease. A task with an explicit owner
+  `execution_budget_ms` renews its lease like a command Worker, with or without
+  command authority, until that budget (or the parent, window or supervisor
+  deadline) ends; a task without one keeps the hard 30-second lifetime. A
+  Worker proposal still requires owner
   acceptance. Parent fencing, task hold, Stop, payload deletion, and selected
   run inspection retain their existing ordinary API semantics.
 

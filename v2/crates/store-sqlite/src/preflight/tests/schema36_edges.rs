@@ -80,6 +80,10 @@ async fn populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_so
             "derived directory and legacy scope: {prefix}"
         );
         for table in [
+            "execution_window_open_failures",
+            "execution_window_open_failure_inputs",
+            "execution_window_failed_resume_metadata",
+            "production_run_failures",
             "dormant_timer_targets",
             "execution_window_queue",
             "production_failure_classes",
@@ -132,7 +136,7 @@ async fn populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_so
                 .fetch_one(&mut upgraded)
                 .await
                 .unwrap(),
-            51
+            52
         );
         assert!(sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&mut upgraded)

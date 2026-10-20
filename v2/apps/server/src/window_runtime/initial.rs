@@ -86,6 +86,18 @@ impl InitialAuthority {
                         .bootstrap_execution_window_authenticated(browser, conversation, config)
                         .await?,
                 )
+            } else if store
+                .execution_window_failed_first_open_authenticated(browser, conversation)
+                .await?
+            {
+                // Every earlier opening was reconciled as failed before it ran
+                // anything: there is no retired turn to resume, so bootstrap
+                // again. Durable state selects the port, never a refusal.
+                WindowAuthority::Initial(
+                    store
+                        .rebootstrap_execution_window_authenticated(browser, conversation, config)
+                        .await?,
+                )
             } else {
                 WindowAuthority::Retired(
                     store
@@ -237,5 +249,149 @@ mod tests {
             )
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn failed_first_open_bootstraps_again_instead_of_recovering() {
+        use orkestr_v2_contracts::{
+            ExecutionWindowReconciliationActor as Actor,
+            ExecutionWindowReconciliationDecision as Decision,
+        };
+        use orkestr_v2_store_sqlite::StrandedExecutionWindow;
+        let root = std::path::PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").unwrap())
+            .join(format!("runtime-failed-first-open-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Store::open(&root.join("state.sqlite3")).await.unwrap();
+        let conversation = store
+            .setup("synthetic-owner", "synthetic-hash")
+            .await
+            .unwrap();
+        let owner = store
+            .credentials("synthetic-owner")
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+        store
+            .save_session("synthetic-browser", &owner)
+            .await
+            .unwrap();
+        let config: BetaConfig = serde_json::from_value(serde_json::json!({
+            "schema_version":1,"owner_id":owner,"conversation_id":conversation,
+            "manager_socket":"/run/example/control.sock","launcher":"/opt/example/launcher",
+            "launcher_sha256":"a".repeat(64),"workspace":"/srv/example",
+            "namespace":"synthetic-beta","supervisor_key":"synthetic-supervisor"
+        }))
+        .unwrap();
+        let request = |key: &str, receipt: orkestr_v2_contracts::Receipt| ExecutionWindowRequest {
+            request_key: format!("window:{key}"),
+            input_message_id: receipt.message_id,
+            input_event_id: receipt.event_id,
+            input_request_key: key.into(),
+            expected_generation: 0,
+            window_id: None,
+            predecessor_window_id: None,
+        };
+        let text = |key: &str| MessageInput {
+            client_message_id: key.into(),
+            text: "synthetic input".into(),
+        };
+        let first = request(
+            "first",
+            store
+                .admit(&owner, &conversation, &text("first"))
+                .await
+                .unwrap()
+                .receipt,
+        );
+        let initial = InitialAuthority::new(&config).unwrap();
+        let admitted = initial
+            .admit(&store, "synthetic-browser", &owner, &conversation, &first)
+            .await
+            .unwrap();
+        let WindowAuthority::Initial(cap) = initial.take().await.unwrap() else {
+            panic!("fresh owner must use initial authority")
+        };
+        let status = admitted.status;
+        let grant = cap
+            .store()
+            .issue_execution_window_credential(
+                cap.credential(),
+                status.window_id,
+                1,
+                "synthetic-boot",
+                status.expires_at_ms,
+                &"a".repeat(64),
+            )
+            .await
+            .unwrap();
+        cap.store()
+            .bind_execution_window(cap.credential(), &grant)
+            .await
+            .unwrap();
+        // Setup (broker readiness) fails here: no run. A restart reconciles it.
+        let fresh = Store::open(&root.join("state.sqlite3")).await.unwrap();
+        fresh
+            .reconcile_execution_window_authenticated(
+                "synthetic-browser",
+                &conversation,
+                status.window_id,
+                1,
+            )
+            .await
+            .unwrap();
+        let StrandedExecutionWindow::Pending(plan) = fresh
+            .plan_stranded_execution_window_authenticated(
+                "synthetic-browser",
+                &conversation,
+                status.window_id,
+                1,
+                Decision::AbandonUnaccepted,
+                Actor::Owner,
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("failed open must plan")
+        };
+        fresh
+            .reconcile_stranded_execution_window_authenticated(
+                "synthetic-browser",
+                &plan,
+                Decision::AbandonUnaccepted,
+                Actor::Owner,
+            )
+            .await
+            .unwrap();
+        let mut next = request(
+            "second",
+            fresh
+                .admit(&owner, &conversation, &text("second"))
+                .await
+                .unwrap()
+                .receipt,
+        );
+        next.expected_generation = 1;
+        next.predecessor_window_id = Some(status.window_id);
+        let initial = InitialAuthority::new(&config).unwrap();
+        let admitted = initial
+            .admit(&fresh, "synthetic-browser", &owner, &conversation, &next)
+            .await
+            .unwrap();
+        assert_eq!(admitted.status.generation, 2);
+        let WindowAuthority::Initial(cap) = initial.take().await.unwrap() else {
+            panic!("no retired turn exists: bootstrap again, never recover")
+        };
+        cap.store()
+            .issue_execution_window_credential(
+                cap.credential(),
+                admitted.status.window_id,
+                2,
+                "synthetic-boot-2",
+                admitted.status.expires_at_ms,
+                &"b".repeat(64),
+            )
+            .await
+            .unwrap();
     }
 }

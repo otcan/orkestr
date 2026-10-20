@@ -86,6 +86,18 @@ fn exact_receipt_refusals_and_retired_provenance() {
     assert!(client.receipt(&value).is_ok());
     value["outcome"] = json!("succeeded");
     assert!(client.receipt(&value).is_err());
+    // A failed open is retired without a run; nothing else may omit it.
+    value["outcome"] = json!("failed");
+    assert!(client.receipt(&value).is_err());
+    value["run_id"] = json!(null);
+    assert!(client.receipt(&value).is_err());
+    value["terminal_event_id"] = json!(null);
+    assert!(matches!(
+        client.receipt(&value),
+        Ok(ManagerReceipt::Window(receipt)) if receipt.outcome == Some(TerminalOutcome::Failed)
+    ));
+    value["outcome"] = json!("abandoned");
+    assert!(client.receipt(&value).is_err());
     let mut idle = json!({"owner_id":owner(),"conversation_id":conversation(),"state":"idle","generation":0,"window_id":null});
     assert!(matches!(
         client.receipt(&idle),
@@ -119,7 +131,36 @@ async fn abandonment_is_reconcile_only_and_refused_before_io() {
                 "synthetic",
                 &window(),
                 TerminalOutcome::Abandoned,
-                Uuid::nil(),
+                Some((Uuid::nil(), EventId(Uuid::from_u128(8)))),
+                deadline,
+            )
+            .await
+            .unwrap_err(),
+        ManagerError::InvalidRequest
+    );
+    // Only a failed open names no run; it never names one, and never retires.
+    for (outcome, run) in [
+        (TerminalOutcome::Abandoned, None),
+        (
+            TerminalOutcome::Failed,
+            Some((Uuid::from_u128(7), EventId(Uuid::from_u128(8)))),
+        ),
+    ] {
+        assert_eq!(
+            client
+                .reconcile("synthetic", &window(), outcome, run, deadline)
+                .await
+                .unwrap_err(),
+            ManagerError::InvalidRequest
+        );
+    }
+    assert_eq!(
+        client
+            .retire(
+                "synthetic",
+                &window(),
+                TerminalOutcome::Failed,
+                Uuid::from_u128(7),
                 EventId(Uuid::from_u128(8)),
                 deadline,
             )
@@ -304,6 +345,15 @@ fn run_case(case: &str) {
         }
         "drain" => reply["receipt"]["state"] = json!("draining"),
         "uncertain" => reply["receipt"]["state"] = json!("reconciliation"),
+        "reconcile_failed" => {
+            assert_eq!(request["operation"], "reconcile");
+            assert_eq!(request["outcome"], "failed");
+            assert_eq!(request["run_id"], Value::Null);
+            assert_eq!(request["terminal_event_id"], Value::Null);
+            reply["receipt"]["state"] = json!("retired");
+            reply["receipt"]["reason"] = json!("runtime_refused");
+            reply["receipt"]["outcome"] = json!("failed");
+        }
         "reconcile" => {
             assert_eq!(request["operation"], "reconcile");
             assert_eq!(request["outcome"], "abandoned");
@@ -431,8 +481,17 @@ fn transport_child() {
                     "synthetic",
                     &window(),
                     TerminalOutcome::Abandoned,
-                    Uuid::from_u128(7),
-                    EventId(Uuid::from_u128(8)),
+                    Some((Uuid::from_u128(7), EventId(Uuid::from_u128(8)))),
+                    deadline,
+                )
+                .await
+                .map(|_| ()),
+            "reconcile_failed" => client
+                .reconcile(
+                    "synthetic",
+                    &window(),
+                    TerminalOutcome::Failed,
+                    None,
                     deadline,
                 )
                 .await
@@ -441,7 +500,8 @@ fn transport_child() {
         }
     });
     match case.as_str() {
-        "status" | "admit" | "historical" | "drain" | "uncertain" | "retire" | "reconcile" => {
+        "status" | "admit" | "historical" | "drain" | "uncertain" | "retire" | "reconcile"
+        | "reconcile_failed" => {
             assert_eq!(result, Ok(()))
         }
         "deadline" | "partial_deadline" => assert_eq!(result, Err(ManagerError::Deadline)),
@@ -546,7 +606,7 @@ fn actual_parent_with_nonroot_uid_gets_no_request() {
 macro_rules! transport_cases { ($($name:ident => $case:literal),+ $(,)?) => { $(#[test] #[ignore = "requires root synthetic peer; run focused executable with --include-ignored"] fn $name(){run_case($case);})+ }; }
 transport_cases! {
     status_actual_parent => "status", admission_unicode_and_digest => "admit", historical_ack_does_not_activate => "historical",
-    drain_exact_window => "drain", uncertainty_exact_window => "uncertain", retired_exact_provenance => "retire", reconciled_stranded_window => "reconcile",
+    drain_exact_window => "drain", uncertainty_exact_window => "uncertain", retired_exact_provenance => "retire", reconciled_stranded_window => "reconcile", reconciled_failed_open => "reconcile_failed",
     foreign_scope_refused => "wrong_scope", foreign_window_refused => "wrong_window", unknown_success_fields_refused => "unknown",
     duplicate_fields_refused => "duplicate", noncanonical_reply_refused => "noncanonical", oversized_reply_refused => "oversized",
     truncated_reply_refused => "truncated", trailing_reply_refused => "suffix", ambiguous_timeout_is_not_retried => "deadline",
