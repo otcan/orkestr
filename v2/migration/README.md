@@ -25,3 +25,16 @@ implemented. Runs/timers/routes/approvals remain PAUSED plan entries. Unknown or
 conflicting records retain exact source evidence and quarantine reasons. Structural
 exclusions are not a secret scanner. Producer consistency receipts are not verified
 by contacting a source; real snapshot/export/apply requires Core's reviewed ports.
+
+## Per-thread history moves
+
+`thread_history.py` is the separate, explicitly writing workflow for moving one
+V1 thread's history into a V2 conversation as archived history and for rolling
+V2-era messages back onto the V1 thread. Dry-run is the default; `--apply` is
+required to write. See `docs/v2/thread-history-import.md` for semantics and
+operator commands. Tests use synthetic homes only:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s v2/migration/tests -v
+python3 -B v2/acceptance/thread_history_e2e.py PATH/TO/orkestr-v2-server
+```
