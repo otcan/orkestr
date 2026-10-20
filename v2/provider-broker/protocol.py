@@ -42,6 +42,9 @@ class Refused(Exception):
         self.failure = failure if type(failure) is Failure else Failure.INTERNAL
 
 
+CODEX_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+
+
 def require(condition, failure=Failure.PROTOCOL):
     if not condition:
         raise Refused("broker protocol refused", failure)
@@ -283,7 +286,16 @@ class Channel:
         exact(frame, ("id", "method", "params"))
         require(type(frame["id"]) is int and frame["id"] > 0 and frame["method"] == "turn/start")
         params = frame["params"]
-        exact(params, ("threadId", "clientUserMessageId", "input"))
+        # Optional owner conversation settings, as V1 turnStartParams sends them.
+        overrides = tuple(key for key in ("model", "effort") if isinstance(params, dict) and key in params)
+        if "model" in overrides:
+            model = params["model"]
+            require(isinstance(model, str) and 0 < len(model) <= 120 and not model.isdigit()
+                    and all(c.isascii() and (c.isalnum() or c in "._:-") for c in model)
+                    and model.lower() not in ("openai", "azure", "openrouter"))
+        if "effort" in overrides:
+            require(params["effort"] in CODEX_EFFORTS)
+        exact(params, ("threadId", "clientUserMessageId", "input") + overrides)
         require(params["threadId"] == self.native and identifier(params["clientUserMessageId"]))
         require(isinstance(params["input"], list) and len(params["input"]) == 1)
         item = params["input"][0]

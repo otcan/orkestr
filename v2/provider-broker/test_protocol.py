@@ -55,6 +55,22 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaises(Refused):
             request(channel, turn(), "CommitExecution", 7)
 
+    def test_owner_model_and_effort_overrides_are_closed(self):
+        allowed = turn()
+        allowed["params"].update(model="gpt-5.1-codex", effort="xhigh")
+        channel, _ = opened()
+        ready(channel)
+        outgoing, _ = request(channel, allowed, "CommitExecution", 6)
+        self.assertEqual(outgoing, allowed)
+        for key, value in [("model", "openai"), ("model", "a b"), ("model", 5), ("effort", "extreme"),
+                           ("sandboxPolicy", {"type": "dangerFullAccess"}), ("cwd", "/")]:
+            denied = turn()
+            denied["params"][key] = value
+            channel, _ = opened()
+            ready(channel)
+            with self.assertRaises(Refused):
+                request(channel, denied, "CommitExecution", 6)
+
     def test_metadata_never_commits_and_foreign_native_refused(self):
         for kind in ["BrokerMetadata", "CommitExecution"]:
             channel, _ = opened()

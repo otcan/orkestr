@@ -165,6 +165,7 @@ async fn fast_setup_is_not_inference_and_only_admitted_input_is_selected() {
         .unwrap();
     let dispatch = w.consume(&admission).await;
     assert_eq!(dispatch.provider().run.role, Role::Fast);
+    assert!(dispatch.launch().is_none(), "Fast keeps its pinned launch");
     assert_eq!(
         w.bound
             .with_execution_fence(dispatch.provider(), || Ok::<_, ()>(7))
@@ -366,3 +367,6 @@ mod resume;
 
 #[path = "stranded_tests.rs"]
 mod stranded;
+
+#[path = "launch_tests.rs"]
+mod launch;

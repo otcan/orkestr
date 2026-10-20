@@ -32,6 +32,26 @@ async fn current(
     })
 }
 
+/// Launch parameters for the next Deep/Worker turn of `conversation`, read
+/// inside the caller's dispatch transaction. Absent settings mean defaults.
+pub(crate) async fn turn_launch(
+    tx: &mut Transaction<'_, Sqlite>,
+    conversation: &ConversationId,
+) -> Result<TurnLaunch> {
+    // A store still on a pre-0050 schema (historical upgrade paths) has no
+    // settings table yet: it can only have defaults.
+    let present: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='conversation_settings'",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(unavailable)?;
+    if present == 0 {
+        return Ok(ConversationSettings::defaults(conversation.clone()).launch());
+    }
+    Ok(current(tx, conversation).await?.launch())
+}
+
 impl Store {
     pub async fn conversation_settings(
         &self,

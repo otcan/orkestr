@@ -76,6 +76,8 @@ pub struct AppState {
     resources: resource_health::ResourceSampler,
     timers: timer_http::DurableOwnerController,
     desktop_broker: Option<Arc<desktop_broker::Broker>>,
+    /// Whether this installation can run a conversation's turns on Claude.
+    claude_turns: bool,
 }
 impl AppState {
     pub async fn shutdown_beta_window(&self) -> Result<(), &'static str> {
@@ -158,6 +160,12 @@ impl AppState {
         self.desktop_broker = Some(Arc::new(desktop_broker::Broker::load(path)?));
         Ok(self)
     }
+    /// Trusted startup only: the Claude execution path for conversation turns
+    /// is installed, so owners may select Claude in conversation settings.
+    pub fn with_claude_turns(mut self) -> Self {
+        self.claude_turns = true;
+        self
+    }
     /// The ordinary server owns the bounded controller task and its shutdown.
     /// With a beta window runtime, every timer occurrence also queues its Deep
     /// turn and wakes the window dispatcher; otherwise only the input is admitted.
@@ -210,6 +218,7 @@ impl AppState {
             auth_window: Arc::new(Mutex::new((Instant::now(), 0))),
             resources: resource_health::ResourceSampler::new(),
             desktop_broker: None,
+            claude_turns: false,
         })
     }
 }

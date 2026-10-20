@@ -22,6 +22,8 @@ class Peer:
         self.foreign = False
         self.busy = False
         self.saved_window = None
+        self.reply_settings = dict(prefix=None, footer=None, honor_no_reply=True)
+        self.render_missing = False
 
     def window_request(self, intake, input_key, request_key, current):
         return dict(request_key=request_key, input_message_id=intake["message_id"], input_event_id=intake["event_id"],
@@ -63,6 +65,17 @@ class Peer:
                 self.lose_deep_response = False
                 raise ConnectionError("synthetic lost commit response")
             return 200, receipt
+        if route == "/settings/render":
+            if self.render_missing:
+                raise ClientError("unexpected_status", 404)
+            text, rules = body["text"], self.reply_settings
+            if rules["honor_no_reply"] and text.strip() == "NO_REPLY":
+                return 200, dict(settings_revision=1, outcome="suppressed", reason="no_reply")
+            if rules["prefix"] and not text.lower().startswith(rules["prefix"].lower()):
+                text = rules["prefix"] + " " + text
+            if rules["footer"]:
+                text += "\n\n" + rules["footer"]
+            return 200, dict(settings_revision=1, outcome="deliver", text=text)
         if route.startswith("/accepted-results?"):
             return 200, dict(results=[dict(run_id=role + "-run", completion_event_id=role + "-completion",
                 acceptance_event_id=role + "-accepted", payload_id=role + "-payload", payload_removed=False)
@@ -216,6 +229,34 @@ class ExtensionTests(unittest.TestCase):
     def enqueue(self, **body):
         base = dict(publicMessageId="public", publicThreadId="thread", chatId="chat", accountId="account", text="request")
         return self.ledger.enqueue(dict(base, **body))[0]
+
+    def test_final_reply_uses_conversation_reply_settings(self):
+        self.peer.reply_settings = dict(prefix="orkestr:", footer="-- v2", honor_no_reply=True)
+        Worker(self.peer, self.ledger).step(self.enqueue())
+        final = self.ledger.messages()[-1]
+        self.assertEqual(final["text"], "orkestr: deep result\n\n-- v2")
+        self.assertNotIn("noReply", final)
+        self.assertIn(("/settings/render", {"text": "deep result"}), self.peer.mutations)
+
+    def test_render_route_absent_keeps_v1_no_reply_rule(self):
+        self.peer.render_missing = True
+        Worker(self.peer, self.ledger).step(self.enqueue())
+        self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
+        peer = Peer()
+        peer.render_missing = True
+        original = peer.request
+        def request(method, route, **kwargs):
+            status, value = original(method, route, **kwargs)
+            if route == "/payloads/deep-payload":
+                value = dict(value, text="NO_REPLY")
+            return status, value
+        peer.request = request
+        ledger = Ledger(Path(self.temp.name) / "fallback.sqlite3", {"test_scope": "one"})
+        data = ledger.enqueue(dict(publicMessageId="public", publicThreadId="thread", chatId="chat",
+                                   accountId="account", text="request"))[0]
+        Worker(peer, ledger).step(data)
+        final = ledger.messages()[-1]
+        self.assertEqual((final["text"], final["noReply"]), ("NO_REPLY", True))
 
     def test_exact_no_reply_final_is_exported_as_silent(self):
         original = self.peer.request

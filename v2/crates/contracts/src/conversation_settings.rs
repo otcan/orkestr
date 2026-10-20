@@ -168,6 +168,48 @@ impl ConversationSettings {
     }
 }
 
+/// Launch parameters a runtime applies when it starts a Deep or Worker turn.
+/// Read in the same transaction that consumes the dispatch, so a change
+/// applies from the next turn and never mutates a running one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnLaunch {
+    pub settings_revision: i64,
+    pub provider: ConversationProvider,
+    pub provider_generation: i64,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+}
+impl TurnLaunch {
+    /// `turn/start` `model`/`effort` overrides for a Codex turn (V1
+    /// `turnStartParams`). None when the conversation selected another
+    /// provider: its model and effort must never be sent to Codex.
+    pub fn codex_overrides(&self) -> Option<(Option<&str>, Option<&str>)> {
+        (self.provider == ConversationProvider::Codex)
+            .then_some((self.model.as_deref(), self.reasoning_effort.as_deref()))
+    }
+    /// Whether a turn on `running` must first switch provider (V1 switch
+    /// at a turn boundary with a one-time handoff).
+    pub fn requires_switch_from(&self, running: ConversationProvider) -> bool {
+        self.provider != running
+    }
+}
+/// Model names accepted on the wire (same rule as settings).
+pub fn launch_model_valid(value: &str) -> bool {
+    model_valid(value)
+}
+impl ConversationSettings {
+    pub fn launch(&self) -> TurnLaunch {
+        TurnLaunch {
+            settings_revision: self.revision,
+            provider: self.provider,
+            provider_generation: self.provider_generation,
+            model: self.model.clone(),
+            reasoning_effort: self.reasoning_effort.clone(),
+        }
+    }
+}
+
 /// V1 `no-reply.js`: trimmed, case-sensitive, whole-message match.
 pub fn is_no_reply(text: &str) -> bool {
     text.trim() == NO_REPLY
@@ -270,6 +312,21 @@ mod tests {
         assert_eq!(deliver(&s, "ö"), "orkestr: ö\n\n-- footer");
         s.reply_footer = None;
         assert_eq!(deliver(&s, "orkestr:x"), "orkestr:x");
+    }
+
+    #[test]
+    fn codex_overrides_only_for_codex() {
+        let mut s = settings();
+        s.model = Some("gpt-5.1-codex".into());
+        s.reasoning_effort = Some("high".into());
+        assert_eq!(
+            s.launch().codex_overrides(),
+            Some((Some("gpt-5.1-codex"), Some("high")))
+        );
+        s.provider = ConversationProvider::Claude;
+        assert_eq!(s.launch().codex_overrides(), None);
+        assert!(s.launch().requires_switch_from(ConversationProvider::Codex));
+        assert_eq!(settings().launch().codex_overrides(), Some((None, None)));
     }
 
     #[test]

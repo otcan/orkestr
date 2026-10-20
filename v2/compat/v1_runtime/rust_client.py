@@ -306,7 +306,7 @@ class RustClient:
                 "/timer-inputs": ("after_sequence", "limit")}
         payload = path.path.startswith("/payloads/") and identity(path.path[10:])
         require((method == "GET" and (path.path in read or payload)) or
-                (method == "POST" and path.path in ("/messages", "/window", "/accept")), "route_refused")
+                (method == "POST" and path.path in ("/messages", "/window", "/accept", "/settings/render")), "route_refused")
         try:
             query = parse_qsl(path.query, strict_parsing=True, max_num_fields=2)
         except ValueError:

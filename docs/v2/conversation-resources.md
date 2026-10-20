@@ -20,16 +20,31 @@ is idempotent, any other stale write is `409 settings_revision_mismatch`.
 | `reply_footer` | WhatsApp footer | ≤512 bytes, newlines allowed; appended after a blank line |
 
 `provider_generation` increments on every provider change. As with V1
-`orkestr switch` (`after_turn`), a running turn is never mutated: the runtime
-finishes the current turn and starts the next one on the selected provider
-with a one-time handoff. Wiring model/effort/provider into session launch is
-the runtime's follow-up; until then the beta window keeps its operator-pinned
-Codex launcher.
+`orkestr switch` (`after_turn`), a running turn is never mutated.
+
+Launch wiring: the dispatch transaction that consumes a Deep or Worker turn
+reads the settings (`ConsumedProviderDispatch::launch()`, a `TurnLaunch`), so
+a change applies from the next turn. Codex turns carry `model` and `effort` as
+`turn/start` overrides exactly like V1 `turnStartParams`; Runtime and the
+provider broker accept only a valid model name and a Codex effort there, and
+nothing else (sandbox, cwd and approval stay operator-owned, so
+`host_full_access` is unaffected). Fast turns keep their pinned launch. A
+conversation set to Claude never sends its Claude model/effort to Codex
+(`TurnLaunch::codex_overrides`); the Claude runtime reads the same `TurnLaunch`
+and `requires_switch_from` to start the next turn on Claude with a one-time
+handoff. Until the server is started `with_claude_turns()` (the installed
+Claude execution path), selecting Claude is refused with
+`409 provider_unavailable`, as V1 refuses a switch it cannot start.
 
 `POST /api/v2/conversations/{id}/settings/render` with `{"text": ...}` returns
 `{"outcome":"deliver","text":...}` or `{"outcome":"suppressed","reason":"no_reply"|"empty"}`
 plus `settings_revision`, so any delivering adapter applies the same canonical
-rules (`ConversationSettings::render_reply`).
+rules (`ConversationSettings::render_reply`). The multi-chat WhatsApp adapter
+(`v2/compat/v1_runtime`) renders every exported final reply, including timer
+replies, through it: suppressed answers are exported as V1's silent
+`NO_REPLY`; prefix and footer are applied once. Intermediate progress keeps
+only the `NO_REPLY` rule. Against a server without the route (404) the adapter
+keeps V1's `NO_REPLY` rule only.
 
 ## Browser desktops during the parallel run
 

@@ -91,8 +91,18 @@ pub(crate) async fn send(
 
 #[tokio::test]
 async fn settings_round_trip_render_and_auth() {
-    let case = case().await;
+    let mut case = case().await;
     let auth = case.auth();
+    // Without an installed Claude path, selecting Claude is refused (V1 switch).
+    let claude =
+        serde_json::json!({"expected_revision":0,"provider":"claude","honor_no_reply":true});
+    let path = case.path("/settings");
+    let (status, value) = send(&case.state, "PUT", &path, &[&auth], &claude.to_string()).await;
+    assert_eq!(
+        (status, value["code"].as_str()),
+        (409, Some("provider_unavailable"))
+    );
+    case.state = case.state.clone().with_claude_turns();
     let (status, value) = send(&case.state, "GET", &case.path("/settings"), &[&auth], "").await;
     assert_eq!(
         (
