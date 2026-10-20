@@ -92,6 +92,25 @@ test('upload failures retry at most three polls, then visibly skip media and rou
   assert.equal(state.posts.filter(post => post.url.endsWith('/input') && /caption survives/.test(post.body.text)).length, 1);
 });
 
+test('cached media upload recovery removes the staged copy after a restart', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scoped-group-media-'));
+  t.after(() => fs.rm(dir, {recursive: true, force: true}));
+  const {relay, state, inboxDb, relayDb} = fixture(t, false, false, {mediaDir: dir});
+  const mediaPath = path.join(dir, 'media.png');
+  await fs.writeFile(mediaPath, Buffer.from('synthetic-image'));
+  inboxDb.prepare(`INSERT INTO group_input(id,chat_id,body,created_at,media_path,media_filename,media_mimetype,media_size)
+    VALUES(?,?,?,?,?,?,?,?)`).run('wa-cached-upload', 'group-1', 'cached caption', '2026-01-02', mediaPath, 'sample.png', 'image/png', 15);
+  relayDb.prepare('INSERT INTO input_media_uploads(id,attachments,created_at) VALUES(?,?,?)')
+    .run('wa-cached-upload', JSON.stringify([{id: 'attachment-safe-1', name: 'sample.png', mimetype: 'image/png', path: '/server-owned/inbound/media.png'}]), '2026-01-02');
+
+  await relay.tick();
+  const post = state.posts.find(item => item.url.endsWith('/input') && /cached caption/.test(item.body.text));
+  assert.ok(post);
+  assert.equal(state.uploads.length, 0);
+  assert.equal(post.body.attachments[0].id, 'attachment-safe-1');
+  assert.equal(await fs.stat(mediaPath).then(() => true, () => false), false);
+});
+
 test('scoped group media is uploaded through thread attachments and routed once with caption', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scoped-group-media-'));
   t.after(() => fs.rm(dir, {recursive: true, force: true}));

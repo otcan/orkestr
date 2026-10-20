@@ -127,6 +127,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         const priorAttempt = db.prepare('SELECT attempts,state FROM input_media_upload_attempts WHERE id=?').get(input.id);
         if (priorUpload) {
           attachments = JSON.parse(priorUpload.attachments);
+          await removeStagedFile(input.media_path);
         } else if (priorAttempt?.state === 'skipped') {
           inputBody = [inputBody, '[WhatsApp attachment skipped: upload failed after 3 attempts]'].filter(Boolean).join('\n\n');
           await removeStagedFile(input.media_path);
