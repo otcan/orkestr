@@ -1,4 +1,4 @@
-//! One trusted project and conversation. No HTTP or model-supplied paths.
+//! One trusted project per conversation. No HTTP or model-supplied paths.
 use orkestr_v2_contracts::ConversationId;
 use orkestr_v2_store_sqlite::{WorkspaceInstallation, WorkspaceOperatorAllowlist};
 use serde::Deserialize;
@@ -20,6 +20,30 @@ pub(crate) struct WorkspaceExecConfig {
 }
 
 type HostAccess = super::host_full_access::HostFullAccess;
+
+/// Several profiles: each its own conversation, project and workspace, never
+/// nested in another's workspace, and all of one command shape. The provider
+/// broker advertises one tool schema for every Worker, so trusted and
+/// restricted profiles cannot be mixed.
+pub(crate) fn validate_set(
+    profiles: Vec<&WorkspaceExecConfig>,
+    host: Option<&HostAccess>,
+) -> Result<(), &'static str> {
+    for (index, profile) in profiles.iter().enumerate() {
+        profile.validate_with(host)?;
+        for other in &profiles[index + 1..] {
+            if profile.conversation_id == other.conversation_id
+                || profile.project_id == other.project_id
+                || profile.workspace.starts_with(&other.workspace)
+                || other.workspace.starts_with(&profile.workspace)
+                || profile.trusted.is_some() != other.trusted.is_some()
+            {
+                return Err("workspace execution profiles overlap");
+            }
+        }
+    }
+    Ok(())
+}
 
 impl WorkspaceExecConfig {
     /// Scope plus trusted profile; `host` is the instance-level opt-in that a
@@ -126,6 +150,39 @@ mod tests {
             "protected_roots":["/srv/private"], "cgroup_root":"/sys/fs/cgroup/example",
             "toolchain_root":"/opt/example-command-image"
         })
+    }
+    #[test]
+    fn profiles_of_several_conversations_never_share_scope_or_shape() {
+        let first: WorkspaceExecConfig = serde_json::from_value(profile()).unwrap();
+        let mut value = profile();
+        value["workspace"] = serde_json::json!("/srv/second");
+        value["allowed_roots"] = serde_json::json!(["/srv/second"]);
+        let second: WorkspaceExecConfig = serde_json::from_value(value.clone()).unwrap();
+        validate_set(vec![&first, &second], None).unwrap();
+        let same = |key: &str, from: &serde_json::Value| {
+            let mut bad = value.clone();
+            bad[key] = from[key].clone();
+            if key == "workspace" {
+                bad["allowed_roots"] = serde_json::json!([from[key].clone()]);
+            }
+            serde_json::from_value::<WorkspaceExecConfig>(bad).unwrap()
+        };
+        let first_value = serde_json::json!({
+            "conversation_id": first.conversation_id.0, "project_id": first.project_id,
+            "workspace": "/srv/project"});
+        for key in ["conversation_id", "project_id", "workspace"] {
+            let bad = same(key, &first_value);
+            assert!(validate_set(vec![&first, &bad], None).is_err(), "{key}");
+        }
+        let mut nested = value.clone();
+        nested["workspace"] = serde_json::json!("/srv/project/inner");
+        nested["allowed_roots"] = serde_json::json!(["/srv/project/inner"]);
+        let nested: WorkspaceExecConfig = serde_json::from_value(nested).unwrap();
+        assert!(validate_set(vec![&first, &nested], None).is_err());
+        let mut trusted = value;
+        trusted["trusted"] = serde_json::json!({"network": true});
+        let trusted: WorkspaceExecConfig = serde_json::from_value(trusted).unwrap();
+        assert!(validate_set(vec![&first, &trusted], None).is_err());
     }
     #[test]
     fn profile_is_closed_and_registers_exactly_one_project() {

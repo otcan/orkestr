@@ -112,7 +112,8 @@ class Package:
                 origin == f"http://127.0.0.1:{value['port']}") and len(origin) <= 512
                 and not any(ord(c) < 33 for c in origin) and not origin.endswith("/"), "trusted_origin")
         beta = self.beta
-        require(set(beta) - {"roles", "workspace_exec", "max_active_windows", "host_full_access", "claude"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
+        require(set(beta) - {"roles", "workspace_exec", "additional_workspace_exec", "max_active_windows",
+                             "host_full_access", "claude"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
@@ -134,8 +135,12 @@ class Package:
                     and {"HOME", "PATH"} <= set(access["environment"])
                     and all(type(k) is str and type(v) is str and "\0" not in k + v
                             for k, v in access["environment"].items()), "host_full_access")
-        if "workspace_exec" in beta:
-            command = beta["workspace_exec"]
+        additional = beta.get("additional_workspace_exec", [])
+        # Further conversations' projects: same closed shape and the same
+        # command profile kind (one tool schema for every Worker broker).
+        require(type(additional) is list and len(additional) <= 8
+                and (not additional or "workspace_exec" in beta), "workspace_exec_config")
+        for command in ([beta["workspace_exec"]] if "workspace_exec" in beta else []) + additional:
             require(type(command) is dict and set(command) - {"trusted"} == {"conversation_id",
                     "project_id", "workspace", "allowed_roots", "protected_roots", "cgroup_root",
                     "toolchain_root"} and "roles" in beta, "workspace_exec_config")
@@ -151,6 +156,10 @@ class Package:
                 require(type(path) is str and path.startswith("/") and len(path) <= 4096
                         and "\0" not in path and ".." not in Path(path).parts,
                         "workspace_exec_path")
+            require(("trusted" in command) == ("trusted" in beta["workspace_exec"]), "workspace_exec_trusted")
+        scopes = [(c["conversation_id"], c["project_id"]) for c in
+                  ([beta["workspace_exec"]] if "workspace_exec" in beta else []) + additional]
+        require(len({c for c, _ in scopes}) == len({p for _, p in scopes}) == len(scopes), "workspace_exec_scope")
         profile = self.profile
         require(set(profile) == {"format", "native", "auth_file", "state_root", "workspace",
                 "egress_socket", "supervisor", "hosts"}

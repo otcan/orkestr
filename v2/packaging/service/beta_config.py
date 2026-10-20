@@ -100,7 +100,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= 16384, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'max_active_windows', 'host_full_access', 'claude'} == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -149,4 +149,29 @@ def validate(raw):
         workspace_exec(value['workspace_exec'])
         require(value['workspace_exec'].get('trusted', {}).get('host_privileged') is not True
                 or 'host_full_access' in value, 'host-privileged commands require host_full_access')
+    if 'additional_workspace_exec' in value:
+        additional_workspace_exec(value)
     return value
+
+
+def additional_workspace_exec(value):
+    """Further conversations, each its own project and workspace, all of the
+    primary profile's kind (trusted or not; one Worker tool schema)."""
+    extra = value['additional_workspace_exec']
+    primary = value.get('workspace_exec')
+    require(type(extra) is list and 0 < len(extra) <= 8 and type(primary) is dict,
+            'additional workspace execution requires workspace_exec')
+    profiles = [primary]
+    for profile in extra:
+        workspace_exec(profile)
+        require(('trusted' in profile) == ('trusted' in primary), 'workspace profiles of one kind required')
+        require(profile.get('trusted', {}).get('host_privileged') is not True or 'host_full_access' in value,
+                'host-privileged commands require host_full_access')
+        for other in profiles:
+            a, b = Path(profile['workspace']), Path(other['workspace'])
+            require(profile['conversation_id'] != other['conversation_id']
+                    and profile['project_id'] != other['project_id']
+                    and a != b and a not in b.parents and b not in a.parents,
+                    'workspace execution profiles overlap')
+        profiles.append(profile)
+    return extra

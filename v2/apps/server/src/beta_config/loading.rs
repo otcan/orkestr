@@ -65,7 +65,7 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
             return Err(REFUSED);
         }
     }
-    if let Some(profile) = &config.workspace_exec {
+    for profile in config.workspace_profiles() {
         // Readiness only: no Core project registration, command, or cgroup is
         // created by loading the trusted operator profile.
         profile.installation(
