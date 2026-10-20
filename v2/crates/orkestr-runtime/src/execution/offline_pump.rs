@@ -14,7 +14,8 @@ impl CodexPump {
         delivery: CompletedToolDelivery,
     ) -> Result<(), Blocker> {
         let result = (|| {
-            if self.source.tool_write.is_some() || self.source.workspace_write.is_some()
+            if self.source.tool_write.is_some()
+                || self.source.workspace_write.is_some()
                 || self.cursor.pending().is_some()
                 || self.source.failed.is_some()
             {
