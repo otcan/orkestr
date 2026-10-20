@@ -127,6 +127,25 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'duplicate'):validate(b'{"schema_version":1,"schema_version":1}')
         with self.assertRaisesRegex(RuntimeError,'bounded'):validate(b' '*16385)
 
+    def test_selected_plan_accepts_only_closed_host_full_access(self):
+        from selected import OPTIONAL, optional
+        self.assertIn('host_full_access', OPTIONAL)
+        access = {'providers': True, 'environment': {'HOME': '/home/service', 'PATH': '/usr/bin:/bin'}}
+        optional({'host_full_access': access})
+        for bad in ({'providers': True}, {'environment': {'PATH': '/bin'}},
+                    {'providers': 'yes', 'environment': access['environment']},
+                    dict(access, extra=True)):
+            with self.subTest(bad=bad), self.assertRaises(RuntimeError):
+                optional({'host_full_access': bad})
+        profile = {'conversation_id': '33333333-3333-4333-8333-333333333333',
+                   'project_id': '44444444-4444-4444-8444-444444444444', 'workspace': '/srv/project',
+                   'allowed_roots': ['/srv/project'], 'protected_roots': ['/srv/private'],
+                   'cgroup_root': '/sys/fs/cgroup/example', 'toolchain_root': '/opt/image',
+                   'trusted': {'host_privileged': True}}
+        with self.assertRaisesRegex(RuntimeError, 'require host_full_access'):
+            optional({'roles': {}, 'workspace_exec': profile})
+        optional({'roles': {}, 'workspace_exec': profile, 'host_full_access': access})
+
     def test_workspace_exec_profile_is_explicit_exact_and_never_browser_authority(self):
         from beta_config import validate, workspace_exec
         profile={'conversation_id':'11111111-1111-4111-8111-111111111111',

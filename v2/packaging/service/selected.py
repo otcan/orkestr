@@ -11,7 +11,8 @@ import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from artifact_boundary import separate
-from beta_config import validate as validate_beta, workspace_exec as validate_workspace_exec
+from beta_config import (validate as validate_beta, workspace_exec as validate_workspace_exec,
+                         host_full_access as validate_host_full_access)
 from closure import pin, require, trusted
 from manager_source import authority
 from prepare import inventory, settings
@@ -66,17 +67,31 @@ def pair_bytes(plan):
     return pair
 
 
+OPTIONAL = {'roles', 'preserve_state', 'workspace_exec', 'max_active_windows', 'host_full_access'}
+
+
+def optional(plan):
+    """Shape of the optional plan extensions copied into the protected beta config."""
+    if 'workspace_exec' in plan:
+        require('roles' in plan, 'workspace execution requires configured Worker roles')
+        validate_workspace_exec(plan['workspace_exec'])
+    if 'host_full_access' in plan:
+        # Operator opt-in equivalent to host root; never derived from HTTP or model input.
+        validate_host_full_access(plan['host_full_access'])
+    privileged = plan.get('workspace_exec', {}).get('trusted', {}).get('host_privileged') is True
+    require(not privileged or 'host_full_access' in plan,
+            'host-privileged commands require host_full_access')
+
+
 def prepare(plan):
     require(os.geteuid()==0,'root preparation required')
     require(sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode,'use -I -S -B')
     fields={'format','output','source_repository','pair','pair_sha256','server','ui','native','native_sha256',
             'uid','gid','home','workspace','state_root','auth_file','bootstrap_file','ledger_directory',
             'endpoint_directory','owner_id','conversation_id','namespace','supervisor_key','origin','port'}
-    require(set(plan) - {'roles', 'preserve_state', 'workspace_exec', 'max_active_windows'} == fields and
+    require(set(plan) - OPTIONAL == fields and
             plan['format']=='orkestr-v2-selected-service-plan-v1','closed plan required')
-    if 'workspace_exec' in plan:
-        require('roles' in plan, 'workspace execution requires configured Worker roles')
-        validate_workspace_exec(plan['workspace_exec'])
+    optional(plan)
     preserve=plan.get('preserve_state',False)
     require(type(preserve) is bool,'explicit preserve_state boolean required')
     separate(plan)  # Metadata only: MUST precede every artifact read/hash.
@@ -158,6 +173,8 @@ def prepare(plan):
                 beta['workspace_exec']=plan['workspace_exec']
             if 'max_active_windows' in plan:
                 beta['max_active_windows']=plan['max_active_windows']
+            if 'host_full_access' in plan:
+                beta['host_full_access']=plan['host_full_access']
             validate_beta(encoded(beta))
             for name,value in (('beta.json',beta),('service.json',runtime),('profile.json',profile)):
                 write(inner/name,encoded(value),gid,mode=0o640 if name=='beta.json' else None)
@@ -184,6 +201,7 @@ def prepare(plan):
                      'credential_contents_read':False,'provider_invoked':False,
                      'preserved_existing_state':preserve,'roles_enabled':role_paths is not None,
                      'workspace_exec_enabled':'workspace_exec' in beta,
+                     'host_full_access_enabled':'host_full_access' in beta,
                      'transitive_startup_closure_qualified':False,
                      'custody':{str(p.relative_to(output)):{'uid':p.stat().st_uid,'gid':p.stat().st_gid,
                                'mode':p.stat().st_mode&0o777} for p in [output,*output.rglob('*')]}}
