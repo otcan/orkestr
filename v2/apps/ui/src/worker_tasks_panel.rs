@@ -11,6 +11,7 @@ pub fn WorkerTasksPanel(
     csrf: String,
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
+    #[props(default = true)] allow_create: bool,
 ) -> Element {
     let history = use_signal(TaskHistory::default);
     let control = use_signal(|| None::<i64>);
@@ -21,7 +22,7 @@ pub fn WorkerTasksPanel(
         TaskRead { conversation: conversation.clone(), parent: parent.clone(), session_scope, onexpired, history, control, ready, status_read: true } }
         crate::worker_tasks_view::WorkerTasksView {
             conversation, parent, control_revision: control().unwrap_or(0),
-            can_create: ready() && control().is_some() && history.read().list().is_some_and(|list| list.can_create),
+            can_create: allow_create && ready() && control().is_some() && history.read().list().is_some_and(|list| list.can_create),
             csrf, session_scope, history, onexpired, onrefresh: move |_| refresh += 1
         }
     }

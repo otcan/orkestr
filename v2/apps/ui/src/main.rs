@@ -8,6 +8,7 @@ mod beta_discovery;
 mod beta_settings;
 mod beta_window_view;
 mod composer;
+mod conversation_location;
 mod conversation_sidebar;
 mod execution_panel;
 mod execution_poll;
@@ -16,7 +17,9 @@ mod held_inputs_poll;
 mod held_inputs_view;
 mod history;
 mod host_resources_view;
+mod intelligence_view;
 mod progress_view;
+mod send_admission;
 mod steering_view;
 mod stop_button;
 mod transport;
@@ -38,6 +41,7 @@ fn App() -> Element {
     let mut csrf = use_signal(String::new);
     let mut global = use_signal(String::new);
     let mut current = use_signal(String::new);
+    let mut requested_conversation = use_signal(|| None::<String>);
     let mut drafts = use_signal(BTreeMap::<String, Draft>::new);
     let mut session_scope = use_signal(SessionScope::default);
     let mut saved_inputs = use_signal(orkestr_v2_ui::beta_inputs::SavedInputs::default);
@@ -57,6 +61,7 @@ fn App() -> Element {
     let mut resuming = use_signal(|| true);
     let mut logging_out = use_signal(|| false);
     use_future(move || async move {
+        requested_conversation.set(conversation_location::read().await);
         match transport::request::<transport::BrowserSession>(
             "GET",
             "/api/v2/browser/session",
@@ -102,6 +107,8 @@ fn App() -> Element {
         session_scope.write().invalidate();
         global.set(String::new());
         current.set(String::new());
+        requested_conversation.set(None);
+        conversation_location::replace(None);
         refresh += 1;
         csrf.set(String::new());
         notice.set("Session expired. Sign in again; unsent drafts remain in this page.".into());
@@ -136,13 +143,15 @@ fn App() -> Element {
                 } }
             } else if current().is_empty() {
                 beta_discovery::BetaDiscoveryGate {
-                    key: "{session_scope.read().generation()}", session_scope,
+                    key: "{session_scope.read().generation()}-{refresh}", session_scope, conversation: requested_conversation(),
                     onexpired: expired,
                     onready: move |value: orkestr_v2_contracts::BetaDiscovery| {
                         global.set(value.conversation_id.to_string());
                         current.set(value.conversation_id.to_string());
+                        conversation_location::replace(Some(&value.conversation_id.to_string()));
                     }
                 }
+                if requested_conversation().is_some() { button { onclick: move |_| { requested_conversation.set(None); refresh += 1; conversation_location::replace(None); }, "Open default conversation" } }
             } else {
                 workspace::Workspace { key: "{session_scope.read().generation()}-{refresh}", current, csrf: csrf(), session_scope, execution, drafts, held_inputs, resources: host_resources, onexpired: expired }
             }
@@ -165,6 +174,7 @@ fn App() -> Element {
                                     task_drafts.write().clear_owner();
                                     session_scope.write().invalidate();
                                     global.set(String::new()); current.set(String::new()); refresh += 1;
+                                    requested_conversation.set(None); conversation_location::replace(None);
                                     csrf.set(String::new());
                                     notice.set("Signed out. Server session revoked; unsent drafts remain in this page.".into());
                                 }

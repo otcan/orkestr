@@ -130,7 +130,7 @@ pub fn WorkerTasksView(
                 }
             } else { p { "Task history has not been loaded for this parent." } }
             if !selected_run().is_empty() && history.read().list().is_some_and(|list| list.tasks.iter().any(|row| row.run_id.as_ref().is_some_and(|run| run.to_string()==selected_run()))) {
-                crate::execution_poll::ExecutionPoll { key:"{selected_run()}", id:conversation.to_string(), run:selected_run(), csrf:csrf.clone(), session_scope, execution:worker_execution, onexpired }
+                crate::execution_poll::ExecutionPoll { key:"{selected_run()}", id:conversation.to_string(), run:selected_run(), csrf:csrf.clone(), session_scope, execution:worker_execution, onexpired, allow_steer:false }
             }
         }
     }

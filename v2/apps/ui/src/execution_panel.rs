@@ -12,6 +12,7 @@ pub fn ExecutionPanel(
     session_scope: Signal<orkestr_v2_ui::session_scope::SessionScope>,
     onexpired: EventHandler<()>,
     #[props(default)] onaccepted: Option<EventHandler<i64>>,
+    #[props(default = true)] allow_steer: bool,
 ) -> Element {
     let model = execution.read();
     let summary = if compact && model.fresh(now_ms) {
@@ -19,12 +20,12 @@ pub fn ExecutionPanel(
         model
             .control_status()
             .map(|s| match s.phase {
-                Queued => "Message queued",
-                Starting => "Starting work…",
-                Running => "Deep is working",
+                Queued => "Queued",
+                Starting => "Starting…",
+                Running => "Working",
                 CancelRequested => "Stop requested; waiting for confirmation",
-                Cancelled => "Work stopped",
-                AwaitingAcceptance => "Proposed result ready for review",
+                Cancelled => "Stopped",
+                AwaitingAcceptance => "Reply ready",
                 Completed => "Result accepted",
                 Failed => "Work failed",
                 Blocked => "Work needs attention",
@@ -59,7 +60,7 @@ pub fn ExecutionPanel(
                     }
                 }
             }
-            if let Some(status) = model.control_status() {
+            if let Some(status) = model.control_status().filter(|_| allow_steer) {
                 details { class: "steer-drawer",
                     summary { "Steer running work" }
                     crate::steering_view::SteeringView { key:"{status.conversation_id}/{status.run_id:?}/{session_scope.read().generation()}/{model.selection_generation()}", execution, session_scope, csrf:csrf.clone(), onexpired, now_ms }

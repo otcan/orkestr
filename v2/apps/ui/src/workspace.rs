@@ -22,11 +22,15 @@ pub fn Workspace(
         div { class: "workspace", "data-sidebar-open": "{sidebar}",
             crate::conversation_sidebar::ConversationSidebar {
                 selected: current(), csrf: csrf.clone(), session_scope, onexpired,
+                onloaded: move |rows: Vec<orkestr_v2_ui::conversation_directory::ConversationSummary>| {
+                    if let Some(row) = rows.iter().find(|row| row.conversation_id.to_string() == current()) { title.set(row.name.clone()); }
+                },
                 onselect: move |row: orkestr_v2_ui::conversation_directory::ConversationSummary| {
                     let id = row.conversation_id.to_string();
                     // Fence a late control response before the new keyed reader mounts.
                     execution.write().select(&id, "");
                     current.set(id);
+                    crate::conversation_location::replace(Some(&current()));
                     title.set(row.name);
                     tab.set("Chat".into());
                     sidebar.set(false);
