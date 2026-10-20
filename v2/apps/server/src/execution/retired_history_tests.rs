@@ -1,13 +1,9 @@
 use super::*;
-use crate::held_inputs::read;
+use crate::held_inputs::tests::fixture::*;
 use orkestr_v2_application::runtime::{
     ProductionSupervisorConfig, ProductionTakeover, ProviderKind,
 };
 use std::io::{Read, Write};
-
-#[path = "../held_inputs_http_tests/fixture.rs"]
-mod fixture;
-use fixture::*;
 
 async fn execution_read(
     state: &AppState,

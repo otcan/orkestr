@@ -7,7 +7,7 @@ use std::{
 };
 
 #[path = "held_inputs_http_tests/fixture.rs"]
-mod fixture;
+pub(crate) mod fixture;
 use fixture::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

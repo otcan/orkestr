@@ -84,4 +84,4 @@ pub(crate) async fn read(
 
 #[cfg(test)]
 #[path = "held_inputs_http_tests.rs"]
-mod tests;
+pub(crate) mod tests;
