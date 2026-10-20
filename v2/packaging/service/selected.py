@@ -36,7 +36,7 @@ def directory(path, gid, mode=0o750):
 
 
 def entry(root, mode):
-    require(mode in ('manager','broker', *('broker-' + role for role in selected_roles.NAMES)),
+    require(mode in ('manager','broker','broker-claude', *('broker-' + role for role in selected_roles.NAMES)),
             'fixed entry mode required')
     interpreter=Path('/usr/bin/python3').resolve(strict=True)
     return ('#!/bin/sh\nset -eu\nexec '+shlex.join([str(interpreter),'-I','-S','-B',
@@ -74,7 +74,26 @@ def pair_bytes(plan):
 
 
 OPTIONAL = {'roles', 'preserve_state', 'workspace_exec', 'max_active_windows', 'host_full_access',
-            'code_mode_host', 'code_mode_host_sha256'}
+            'code_mode_host', 'code_mode_host_sha256', 'claude'}
+CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
+# Account selection stays with the Claude account reference, never the env.
+CLAUDE_FORBIDDEN_ENV = {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
+                        'CLAUDE_CONFIG_DIR'}
+
+
+def claude(plan):
+    """Optional Claude Deep/Fast window runtime; requires host full access."""
+    value = plan['claude']
+    require(type(value) is dict and set(value) - {'default', 'fast'} == set(CLAUDE_PATHS)
+            and all(type(value.get(k, False)) is bool for k in ('default', 'fast')),
+            'closed Claude plan required')
+    require(all(type(value[k]) is str and value[k].startswith('/') and '\x00' not in value[k]
+                and '..' not in Path(value[k]).parts for k in CLAUDE_PATHS), 'absolute Claude paths required')
+    access = plan.get('host_full_access')
+    require(type(access) is dict, 'Claude windows require host_full_access')
+    require(not CLAUDE_FORBIDDEN_ENV & set(access['environment']),
+            'host environment must not select a Claude account')
+    return value
 
 
 def optional(plan):
@@ -96,6 +115,8 @@ def optional(plan):
                 and type(plan['code_mode_host_sha256']) is str
                 and re.fullmatch('[0-9a-f]{64}', plan['code_mode_host_sha256']),
                 'pinned code_mode_host required')
+    if 'claude' in plan:
+        claude(plan)
     privileged = plan.get('workspace_exec', {}).get('trusted', {}).get('host_privileged') is True
     require(not privileged or 'host_full_access' in plan,
             'host-privileged commands require host_full_access')
@@ -153,7 +174,21 @@ def prepare(plan):
         require(role_paths is None or len(role_files)==10,'manager role inventory required')
         host_files = set(getattr(manager,'HOST_FILES',set())) if 'code_mode_host' in plan else set()
         require(not host_files or host_files == {'codex-code-mode-host'},'manager host inventory required')
-        package_files = manager.FILES | role_files | host_files
+        claude_plan = plan.get('claude')
+        claude_files = set(getattr(manager,'CLAUDE_FILES',set())) if claude_plan else set()
+        require(not claude_plan or len(claude_files)==8,'manager Claude inventory required')
+        if claude_plan:
+            # Paths only: the account directory is never opened, listed or hashed.
+            require(Path(claude_plan['executable']).resolve(strict=True)==Path(claude_plan['executable'])
+                    and Path(claude_plan['executable']).is_file()
+                    and Path(claude_plan['account']).resolve(strict=True)==Path(claude_plan['account']),
+                    'canonical Claude executable and account required')
+            claude_dirs=[trust.private(claude_plan[k],uid,True) for k in ('workspace','home','temporary')]
+            require(preserve or not any(claude_dirs[0].iterdir()),'fresh Claude workspace required')
+            for index,a in enumerate(claude_dirs):
+                for b in [*roots,*claude_dirs[index+1:]]:
+                    require(a!=b and a not in b.parents and b not in a.parents,'isolated Claude path overlap')
+        package_files = manager.FILES | role_files | host_files | claude_files
         modules={}
         for folder,names in (('broker',config.BROKER),('isolation',config.ISOLATION),
                              ('codex_bounded',config.MODULES),('codex_service',manager.MODULES_SERVICE)):
@@ -162,6 +197,9 @@ def prepare(plan):
                 modules[folder+'/'+name]=original.read_bytes()
         generated={'server','native','manager.py','launcher.py','service.json','profile.json','beta.json'}
         require(set(modules)|generated==manager.FILES,'authoritative inventory changed; review packager')
+        if claude_plan:
+            for name in manager.CLAUDE_BROKER:
+                modules['broker/'+name]=(src/name).read_bytes()
         deps={str(Path(p).resolve(strict=True)):pin(trust.protected(Path(p).resolve(strict=True)))['sha256']
               for p in manager.DEPENDENCIES}
         directory(output,gid)
@@ -199,6 +237,15 @@ def prepare(plan):
                 beta['max_active_windows']=plan['max_active_windows']
             if 'host_full_access' in plan:
                 beta['host_full_access']=plan['host_full_access']
+            if claude_plan:
+                launcher=inner/'launcher-claude.py'
+                write(launcher,entry(inner,'broker-claude'),gid,True)
+                private={**{k:claude_plan[k] for k in CLAUDE_PATHS},
+                         'host_full_access':{'environment':plan['host_full_access']['environment']}}
+                write(inner/'claude-private.json',encoded(private),gid)
+                beta['claude']={'launcher':str(launcher),'launcher_sha256':pin(launcher)['sha256'],
+                                'workspace':claude_plan['workspace'],'default':claude_plan.get('default',False),
+                                'fast':claude_plan.get('fast',False)}
             validate_beta(encoded(beta))
             for name,value in (('beta.json',beta),('service.json',runtime),('profile.json',profile)):
                 write(inner/name,encoded(value),gid,mode=0o640 if name=='beta.json' else None)
@@ -226,6 +273,7 @@ def prepare(plan):
                      'preserved_existing_state':preserve,'roles_enabled':role_paths is not None,
                      'workspace_exec_enabled':'workspace_exec' in beta,
                      'host_full_access_enabled':'host_full_access' in beta,
+                     'claude_enabled':'claude' in beta,
                      'transitive_startup_closure_qualified':False,
                      'custody':{str(p.relative_to(output)):{'uid':p.stat().st_uid,'gid':p.stat().st_gid,
                                'mode':p.stat().st_mode&0o777} for p in [output,*output.rglob('*')]}}

@@ -31,6 +31,25 @@ pub(crate) struct BetaConfig {
     /// Owner/instance-level V1-equivalent full access; absent by default.
     #[serde(default)]
     pub host_full_access: Option<host_full_access::HostFullAccess>,
+    /// Optional Claude Deep runtime for conversations that select it (or all
+    /// conversations without a choice when `default` is set).
+    #[serde(default)]
+    pub claude: Option<ClaudeWindow>,
+}
+
+/// Operator-pinned Claude service launcher. Account and full-access
+/// environment stay in the root-owned package, never in this file.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ClaudeWindow {
+    pub launcher: PathBuf,
+    pub launcher_sha256: String,
+    pub workspace: PathBuf,
+    #[serde(default)]
+    pub default: bool,
+    /// Present each input on a Claude Fast companion as well.
+    #[serde(default)]
+    pub fast: bool,
 }
 /// Default number of conversations that may hold a live window at once.
 pub(crate) const DEFAULT_ACTIVE_WINDOWS: u32 = 8;
@@ -72,6 +91,19 @@ impl BetaConfig {
         if let Some(access) = &self.host_full_access {
             access.validate()?;
         }
+        if let Some(claude) = &self.claude {
+            if !claude.launcher.is_absolute()
+                || !claude.workspace.is_absolute()
+                || claude.launcher == self.launcher
+                || claude.launcher_sha256.len() != 64
+                || !claude
+                    .launcher_sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err("invalid Claude window configuration");
+            }
+        }
         if let Some(profile) = &self.workspace_exec {
             profile.validate_with(self.host_full_access.as_ref())?;
             if self.roles.is_none() {
@@ -79,6 +111,34 @@ impl BetaConfig {
             }
         }
         Ok(())
+    }
+
+    /// The window provider for a conversation: its owner setting, or the
+    /// instance default while settings were never changed. Claude without a
+    /// configured runtime is refused, and a window never silently continues a
+    /// committed native identity of the other provider.
+    pub(crate) fn window_provider(
+        &self,
+        launch: &orkestr_v2_contracts::TurnLaunch,
+        native: Option<orkestr_v2_application::runtime::ProviderKind>,
+    ) -> Result<orkestr_v2_application::runtime::ProviderKind, &'static str> {
+        use orkestr_v2_application::runtime::ProviderKind;
+        use orkestr_v2_contracts::ConversationProvider;
+        let claude_default = self.claude.as_ref().is_some_and(|c| c.default);
+        let selected = match launch.provider {
+            ConversationProvider::Codex if launch.settings_revision == 0 && claude_default => {
+                ProviderKind::Claude
+            }
+            ConversationProvider::Codex => ProviderKind::Codex,
+            ConversationProvider::Claude => ProviderKind::Claude,
+        };
+        if selected == ProviderKind::Claude && self.claude.is_none() {
+            return Err("selected conversation provider is not configured");
+        }
+        if native.is_some_and(|native| native != selected) {
+            return Err("conversation provider switch requires a handoff window");
+        }
+        Ok(selected)
     }
 
     pub(crate) fn active_windows(&self) -> u32 {
@@ -126,6 +186,47 @@ mod tests {
                 "{name}"
             );
         }
+    }
+    #[test]
+    fn window_provider_follows_settings_default_and_refuses_unconfigured_or_switch() {
+        use orkestr_v2_application::runtime::ProviderKind;
+        use orkestr_v2_contracts::{ConversationProvider, ConversationSettings};
+        let conversation = ConversationId("22222222-2222-4222-8222-222222222222".parse().unwrap());
+        let mut launch = ConversationSettings::defaults(conversation).launch();
+        let codex: BetaConfig = serde_json::from_value(input()).unwrap();
+        assert_eq!(
+            codex.window_provider(&launch, None),
+            Ok(ProviderKind::Codex)
+        );
+        let mut value = input();
+        value["claude"] = serde_json::json!({"launcher":"/opt/example-package/launcher-claude",
+            "launcher_sha256":"b".repeat(64), "workspace":"/srv/example-claude", "default":true});
+        let claude: BetaConfig = serde_json::from_value(value).unwrap();
+        claude.validate().unwrap();
+        // Untouched settings take the operator default; an explicit choice wins.
+        assert_eq!(
+            claude.window_provider(&launch, None),
+            Ok(ProviderKind::Claude)
+        );
+        launch.settings_revision = 1;
+        assert_eq!(
+            claude.window_provider(&launch, None),
+            Ok(ProviderKind::Codex)
+        );
+        launch.provider = ConversationProvider::Claude;
+        assert_eq!(
+            claude.window_provider(&launch, None),
+            Ok(ProviderKind::Claude)
+        );
+        assert!(codex.window_provider(&launch, None).is_err());
+        // A committed native identity of the other provider is never continued.
+        assert!(claude
+            .window_provider(&launch, Some(ProviderKind::Codex))
+            .is_err());
+        assert_eq!(
+            claude.window_provider(&launch, Some(ProviderKind::Claude)),
+            Ok(ProviderKind::Claude)
+        );
     }
     #[test]
     fn window_capacity_defaults_and_is_bounded() {

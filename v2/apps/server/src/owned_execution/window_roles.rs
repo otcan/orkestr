@@ -19,7 +19,7 @@ pub(super) struct Companion {
 }
 
 impl Companion {
-    fn new(scope: ExecutionScope) -> Arc<Self> {
+    pub(super) fn new(scope: ExecutionScope) -> Arc<Self> {
         Arc::new(Self {
             scope,
             ready: AtomicBool::new(false),
@@ -161,6 +161,7 @@ impl ConfiguredExecution {
             window: Some(context),
             window_workers: None,
             companion: Some(companion.clone()),
+            window_activated: std::sync::atomic::AtomicBool::new(false),
             fast_factory: None,
         };
         self.config.worker = Some(
@@ -187,9 +188,7 @@ impl ConfiguredExecution {
     ) -> Result<(), &'static str> {
         match self.fast_factory.take() {
             None => self.run(shutdown).await,
-            Some(fast) => {
-                join_roles(self.run_codex(shutdown.clone()), fast.run_fast(shutdown)).await
-            }
+            Some(fast) => join_roles(self.run(shutdown.clone()), fast.run(shutdown)).await,
         }
     }
 

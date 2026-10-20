@@ -52,6 +52,19 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
             }
         }
     }
+    if let Some(claude) = &config.claude {
+        let info = private_directory(&claude.workspace, uid, gid)?;
+        if claude.workspace.starts_with(home)
+            || home.starts_with(&claude.workspace)
+            || (home_info.dev(), home_info.ino()) == (info.dev(), info.ino())
+        {
+            return Err(REFUSED);
+        }
+        let bytes = protected_bytes(&claude.launcher, gid, true, 16 * 1024 * 1024)?;
+        if format!("{:x}", Sha256::digest(bytes)) != claude.launcher_sha256 {
+            return Err(REFUSED);
+        }
+    }
     if let Some(profile) = &config.workspace_exec {
         // Readiness only: no Core project registration, command, or cgroup is
         // created by loading the trusted operator profile.
@@ -100,6 +113,10 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
             private_directory(&role.workspace, uid, gid)?;
             protected_chain(&role.launcher, None)?;
         }
+    }
+    if let Some(claude) = &config.claude {
+        private_directory(&claude.workspace, uid, gid)?;
+        protected_chain(&claude.launcher, None)?;
     }
     Ok(config)
 }

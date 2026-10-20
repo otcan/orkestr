@@ -12,7 +12,8 @@ from .role_profiles import ROLE_FILES, bind as bind_roles
 
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",
                    "channel.py", "package.py", "ownership.py", "egress.py", "manager.py",
-                   "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py")
+                   "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
+                   "claude_broker.py")
 FILES = {"server", "native", "manager.py", "launcher.py", "service.json", "profile.json", "beta.json"}
 FILES |= {"broker/" + name for name in BROKER}
 FILES |= {"isolation/" + name for name in ISOLATION}
@@ -23,6 +24,10 @@ FILES |= {"codex_service/" + name for name in MODULES_SERVICE}
 # Pinned beside the native; the sandboxed provider forbids subprocesses.
 CODE_MODE_HOST = "codex-code-mode-host"
 HOST_FILES = {CODE_MODE_HOST}
+# Optional per-conversation Claude Deep runtime (operator host full access).
+CLAUDE_BROKER = ("claude_connector.py", "claude_protocol.py", "claude_control.py",
+                 "claude_telemetry.py", "claude_resume.py", "claude_bootstrap.py")
+CLAUDE_FILES = {"launcher-claude.py", "claude-private.json"} | {"broker/" + name for name in CLAUDE_BROKER}
 DEPENDENCIES = ("/usr/bin/python3", "/usr/bin/bwrap", "/usr/bin/prlimit",
                 "/etc/ssl/certs/ca-certificates.crt")
 
@@ -38,8 +43,9 @@ class Package:
                 and manifest["format"] == "orkestr-v2-codex-service-package-v1"
                 and type(manifest["source_commit"]) is str
                 and re.fullmatch(r"[0-9a-f]{40}", manifest["source_commit"]), "package_format")
-        require(type(manifest["files"]) is dict and set(manifest["files"]) - HOST_FILES
-                in (FILES, FILES | ROLE_FILES), "package_inventory")
+        require(type(manifest["files"]) is dict and set(manifest["files"]) - HOST_FILES in
+                (FILES, FILES | ROLE_FILES, FILES | CLAUDE_FILES, FILES | ROLE_FILES | CLAUDE_FILES),
+                "package_inventory")
         ui = manifest["ui"]
         require(type(ui) is dict and 0 < len(ui) <= 10000 and "index.html" in ui, "ui_inventory")
         for name in ui:
@@ -94,7 +100,7 @@ class Package:
                 origin == f"http://127.0.0.1:{value['port']}") and len(origin) <= 512
                 and not any(ord(c) < 33 for c in origin) and not origin.endswith("/"), "trusted_origin")
         beta = self.beta
-        require(set(beta) - {"roles", "workspace_exec", "max_active_windows", "host_full_access"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
+        require(set(beta) - {"roles", "workspace_exec", "max_active_windows", "host_full_access", "claude"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
@@ -158,6 +164,38 @@ class Package:
         require(packaged == host_providers, "code_mode_host_inventory")
         if packaged:
             require((self.root / CODE_MODE_HOST).stat().st_mode & 0o111, "executable_required")
+        self._bind_claude(account, auth)
+
+    def _bind_claude(self, codex_account, codex_auth):
+        """Optional Claude Deep runtime. Paths only: never read account bytes."""
+        self.claude = None
+        files = CLAUDE_FILES <= set(self.manifest["files"])
+        require(files == ("claude" in self.beta), "claude_inventory")
+        if not files:
+            return
+        selected = self.beta["claude"]
+        launcher = self.root / "launcher-claude.py"
+        require(type(selected) is dict and set(selected) - {"fast"} == {"launcher", "launcher_sha256", "workspace", "default"}
+                and type(selected.get("fast", False)) is bool
+                and selected["launcher"] == str(launcher)
+                and selected["launcher_sha256"] == digest(launcher)
+                and type(selected["default"]) is bool
+                and launcher.stat().st_mode & 0o111, "claude_launcher_binding")
+        private_config = metadata(self.root / "claude-private.json")
+        require(type(private_config) is dict and set(private_config) == {"executable", "account",
+                "workspace", "home", "temporary", "host_full_access"}
+                and private_config["workspace"] == selected["workspace"]
+                and type(private_config["host_full_access"]) is dict, "claude_profile")
+        paths = {key: Path(private_config[key]) for key in ("executable", "account", "workspace",
+                                                            "home", "temporary")}
+        require(all(p.is_absolute() and p.resolve(strict=True) == p for p in paths.values()),
+                "claude_profile_paths")
+        workspace = private(paths["workspace"], self.uid, True)
+        state = [private(paths[key], self.uid, True) for key in ("home", "temporary")]
+        for a in [workspace, *state]:
+            for b in [self.home, self.root, self.ledger_directory, codex_account, codex_auth]:
+                require(a != b and a not in b.parents and b not in a.parents, "claude_scope_overlap")
+        self.claude = selected
 
     def environment(self):
         return {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(self.provider_home),

@@ -9,6 +9,9 @@ pub struct ChildDirectories {
     workspace: PathBuf,
     home: PathBuf,
     temporary: PathBuf,
+    /// Owner turn preference for a Claude launcher (model, effort); closed
+    /// values only, never a path, account or credential.
+    claude_launch: Option<(Option<String>, Option<String>)>,
 }
 
 impl ChildDirectories {
@@ -27,7 +30,24 @@ impl ChildDirectories {
             workspace: canonical(workspace)?,
             home: canonical(home)?,
             temporary: canonical(temporary)?,
+            claude_launch: None,
         })
+    }
+
+    /// Pass the conversation's Claude model/effort to the trusted launcher.
+    pub fn with_claude_launch(
+        mut self,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> Result<Self, Error> {
+        let model_ok = |m: &str| orkestr_v2_contracts::launch_model_valid(m);
+        if model.is_some_and(|m| !model_ok(m))
+            || effort.is_some_and(|e| !orkestr_v2_contracts::CLAUDE_EFFORTS.contains(&e))
+        {
+            return Err(Error::InvalidPath);
+        }
+        self.claude_launch = Some((model.map(str::to_owned), effort.map(str::to_owned)));
+        Ok(self)
     }
 
     pub(super) fn workspace(&self) -> &Path {
@@ -47,5 +67,13 @@ impl ChildDirectories {
         command.env("LC_ALL", "C.UTF-8");
         command.env("HOME", &self.home);
         command.env("TMPDIR", &self.temporary);
+        if let Some((model, effort)) = &self.claude_launch {
+            if let Some(model) = model {
+                command.env("ORKESTR_CLAUDE_MODEL", model);
+            }
+            if let Some(effort) = effort {
+                command.env("ORKESTR_CLAUDE_EFFORT", effort);
+            }
+        }
     }
 }

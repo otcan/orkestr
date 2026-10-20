@@ -9,6 +9,23 @@ import uuid
 import json
 
 PATHS = ("executable", "account", "workspace", "home", "temporary")
+EFFORTS = ("low", "medium", "high", "max")
+
+
+def turn_preferences(source):
+    """Owner model/effort from the trusted Runtime launch (closed values)."""
+    selected = {}
+    model, effort = source.get("ORKESTR_CLAUDE_MODEL"), source.get("ORKESTR_CLAUDE_EFFORT")
+    if model is not None:
+        if not (0 < len(model) <= 120 and all(c.isascii() and (c.isalnum() or c in "._:-") for c in model)
+                and not model.isdigit()):
+            raise ValueError("invalid Claude model preference")
+        selected["ANTHROPIC_MODEL"] = model
+    if effort is not None:
+        if effort not in EFFORTS:
+            raise ValueError("invalid Claude effort preference")
+        selected["CLAUDE_CODE_EFFORT_LEVEL"] = effort
+    return selected
 
 
 def host_environment(value):
@@ -138,6 +155,8 @@ class ClaudeOwnedSession:
                                CLAUDE_CONFIG_DIR=str(self._config.account),
                                CLAUDE_CODE_DISABLE_BACKGROUND_TASKS="1")
 
+        import os
+        environment.update(turn_preferences(os.environ))
         if self._account_environment is not None:
             # Trusted launcher-side callback only, never protocol/config JSON.
             # Root resolves the existing selected account at acceptance/runtime.

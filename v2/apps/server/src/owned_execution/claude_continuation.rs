@@ -45,7 +45,14 @@ impl ConfiguredExecution {
             let (run, proof, stopped) = match exit {
                 ClaudeExit::Accepted(run, proof) => (run, proof, false),
                 ClaudeExit::Stopped(run, proof) => (run, proof, true),
+                ClaudeExit::WindowClosed => return Ok(()),
             };
+            // A window ends at Stop, like Codex; the next input opens a
+            // successor window that resumes the same native session.
+            if stopped && self.window.is_some() {
+                self.retire_terminal(&run, proof).await?;
+                return Ok(());
+            }
             // Old queued input remains ordinary durable FIFO input. Held input
             // is never made eligible by acceptance, reap, or a process restart.
             if !self.wait_eligible(&mut shutdown, &mut heartbeat).await? {

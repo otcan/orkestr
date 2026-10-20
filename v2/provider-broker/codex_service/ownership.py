@@ -129,6 +129,8 @@ class Children:
                     bytes(self.package.root / "codex_service/entry.py")]
         modes = {b"broker": "deep", **{("broker-" + role).encode(): role
                  for role in ROLE_NAMES if role in getattr(self.package, "role_profiles", {})}}
+        if getattr(self.package, "claude", None) is not None:
+            modes[b"broker-claude"] = "claude"
         fresh = [b"open-owned-session", b"--protocol", b"orkestr-v2-provider-broker-v1"]
         resumed = [b"resume-owned-session", b"--protocol", b"orkestr-v2-provider-broker-v1"]
         arguments = (path / "cmdline").read_bytes().split(b"\0")[:-1]

@@ -82,7 +82,7 @@ def main():
         raise ValueError("no-site invocation required")
     root = Path(__file__).resolve().parents[1]
     mode, *arguments = sys.argv[1:]
-    if mode not in ("manager", "broker", "broker-fast", "broker-worker-0",
+    if mode not in ("manager", "broker", "broker-fast", "broker-worker-0", "broker-claude",
                     "broker-worker-1", "broker-worker-2", "broker-worker-3", "server"):
         raise ValueError("fixed entry mode")
     expected = arguments[0] if mode == "manager" and len(arguments) == 1 else None
@@ -94,6 +94,9 @@ def main():
         from codex_service.broker import main as selected
         role = "deep" if mode == "broker" else mode.removeprefix("broker-")
         sys.argv = [str(root / ("launcher.py" if role == "deep" else f"launcher-{role}.py")), *arguments]
+        if role == "claude":
+            from codex_service.claude_broker import main as claude
+            return claude(root)
         return selected(root, role)
     if mode == "server":
         if len(arguments) != 1:
