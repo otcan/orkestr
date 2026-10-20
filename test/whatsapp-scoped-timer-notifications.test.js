@@ -233,3 +233,15 @@ test('V2-owned timer replies (no V1 timer_due run) are never delivered by the sc
   {...state.messages['thread-1'][0],parentMessageId:'v2timer-1'}];
  const r=await notifier.tick();assert.equal(r.sent,0);assert.equal(state.sent.length,0);
 });
+test('a definitive pre-dispatch rejection closes the run without blocking other deliveries',async t=>{
+ const {state,options,proofs,groups}=multiFixture(t);
+ let calls=0;
+ const notifier=createScopedTimerNotifications({...options,send:async p=>{calls++;if(p.chatId===groups[0].chatId)throw Object.assign(new Error('scoped_reply_invalid'),{definitive:true});return options.send(p);}});
+ t.after(()=>notifier.close());
+ const r=await notifier.tick();
+ assert.equal(r.errors['thread-1'],'timer_notification_send_rejected');
+ assert.equal(r.sent,2);
+ assert.equal(state.sent.length,2);
+ assert.equal(proofs.finished('parent1'),'rejected');
+ await notifier.tick();assert.equal(calls,3,'rejected run is not retried');
+});

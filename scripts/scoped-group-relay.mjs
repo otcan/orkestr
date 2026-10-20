@@ -4,6 +4,7 @@ import {promisify} from 'node:util';
 import {requestJson} from '../apps/cli/src/api-client.js';
 import {createScopedTimerNotifications} from '../packages/connectors/src/whatsapp-scoped-timer-notifications.js';
 import {createScopedGroupRelay} from '../packages/connectors/src/whatsapp-scoped-group-relay.js';
+import {wrapperRejection} from '../packages/connectors/src/whatsapp-scoped-wrapper-errors.js';
 
 const execute = promisify(execFile);
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
@@ -24,8 +25,12 @@ const relay = createScopedGroupRelay({
 const notifications = createScopedTimerNotifications({config,formatter,minIntervalMs:10000,
   api:(url,options={})=>requestJson(url,{timeoutMs:15000,...options}),
   send:async({chatId,requestId,parentId,text})=>{
-    const {stdout}=await execute('/usr/bin/node',[config.wrapperPath,'group-notify',chatId,requestId,parentId,text],{timeout:45000,maxBuffer:1024*1024});
-    return JSON.parse(stdout);
+    try {
+      const {stdout}=await execute('/usr/bin/node',[config.wrapperPath,'group-notify',chatId,requestId,parentId,text],{timeout:45000,maxBuffer:1024*1024});
+      return JSON.parse(stdout);
+    } catch (error) {
+      throw wrapperRejection(error);
+    }
   },
 });
 let stopped = false;
