@@ -122,3 +122,25 @@ fragments, analysis, tools and context-compaction events are excluded. Updates
 keep the turn open, use the same durable payload/receipt journal and label their
 footer `msg:*update*`. A final supersedes any unsent progress already in history.
 Enabling updates does not reopen completed turns or change legacy group bindings.
+
+## Synthetic health probe
+
+`scripts/whatsapp-group-probe.mjs <probe.json>` checks the whole scoped path:
+the secondary owner bridge posts one fixed, labelled text into a dedicated
+probe group. The primary worker must record it, the relay must route it to
+the group's probe thread, and the thread's reply must be `sent`. The probe
+config is private and lives with the operator. It names `chatId`, `threadId`,
+`senderUrl`, `senderTokenFile`, `senderConfigPath`, `primaryConfigPath`,
+`statePath`, `timeoutMs`, `alertAfter` (default 2) and `alertCommand` (argv;
+the alert body arrives on stdin, the subject in `PROBE_ALERT_SUBJECT`).
+
+The probe refuses to run in these cases:
+
+- the group has any participant other than the two owner accounts
+- the probe thread is bound to more than one group
+- the group is not bound to the configured probe thread
+
+It never sends free text. Bootstrap the group with one message, so the
+sender bridge has a recorded parent. Run the probe every 15 minutes from a
+timer, and set `ORKESTR_WA_DEPLOY_PROBE_COMMAND` so connector deploys roll
+back when it fails.
