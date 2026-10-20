@@ -115,7 +115,10 @@ keep them 0700/0600 and delete them after verification.
 
 - Attachment bytes stay in the private bundle; V2 records only metadata and
   hashes. Uploading them into V2 attachment storage is a follow-up.
-- The V2 web UI does not yet render archived history; it is readable through
-  the API (`GET …/archived-history`). A UI panel is a follow-up for the UI lane.
+- The V2 web UI renders archived history read-only at the top of each
+  conversation, before native messages, in visually distinct "Archived" rows.
+  It pages forward from the oldest entry (50 per page, smaller after an
+  oversized page) and keeps at most 2000 rows mounted; attachment bytes are
+  not shown, only names and availability.
 - Rollback restores text and roles, not V2 run/worker internals; it is a
   reconciliation archive, not a lossless reverse migration.
