@@ -14,6 +14,19 @@ const errorCode = error => /^[a-z_]+$/.test(error.message) ? error.message : 'op
 const GROUP_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const GROUP_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 
+// Media evidence comes from the additive group_input_media side table; journals
+// written by the short-lived column migration keep working through COALESCE.
+function readGroupInputs(inbox) {
+  const tables = new Set(inbox.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
+  const columns = new Set(inbox.prepare('PRAGMA table_info(group_input)').all().map(column => column.name));
+  const legacy = name => columns.has(`media_${name}`) ? `i.media_${name}` : 'NULL';
+  const side = name => tables.has('group_input_media') ? `m.${name}` : 'NULL';
+  const join = tables.has('group_input_media') ? 'LEFT JOIN group_input_media m ON m.id=i.id' : '';
+  const field = name => `COALESCE(${side(name)},${legacy(name)}) AS media_${name}`;
+  return inbox.prepare(`SELECT i.id,i.chat_id,i.body,i.created_at,${['path','filename','mimetype','size'].map(field).join(',')}
+    FROM group_input i ${join} ORDER BY i.created_at`).all();
+}
+
 export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile}) {
   // Operator holds are exclusions, not delivery/completion receipts. Validate
   // before opening either journal and snapshot the policy for this process.
@@ -248,7 +261,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     async tick() {
       if (inbox.prepare("SELECT 1 FROM group_send WHERE state IN ('sending','uncertain') LIMIT 1").get())
         return {ok: false, error: 'group_delivery_requires_review'};
-      const inputs = inbox.prepare('SELECT * FROM group_input ORDER BY created_at').all();
+      const inputs = readGroupInputs(inbox);
       let held = 0, excluded = 0;
       for (const input of inputs) {
         if (heldInputIds.has(input.id)) { held++; continue; }

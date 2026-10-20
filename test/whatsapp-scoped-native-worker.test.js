@@ -38,3 +38,20 @@ test('scoped native startup preserves the saved profile and refuses pairing/rese
  const auth=new (createPreservingNativeAuth(Base))();assert.equal(await auth.beforeBrowserInitialized(),'existing');
  assert.equal((await auth.onAuthenticationNeeded()).failed,true);await assert.rejects(auth.logout(),/preserve_session/);assert.equal(fs.existsSync(profile),true);
 });
+
+test('journal failures are reported without content instead of being dropped silently',async()=>{
+ const reports=[];let clock=1000;
+ const p=createScopedNativeWorkerPolicy(config,{report:e=>reports.push(e),now:()=>clock,createTransport:()=>({observe:async()=>{throw new Error('table group_input has 8 columns but 4 values were supplied');},close(){}})});
+ const message={from:'120000000001@g.us',body:'private words 4915550000000',fromMe:false};
+ assert.equal(await p.observe('existing',{},message),false);
+ assert.equal(await p.observe('existing',{},message),false);
+ assert.equal(reports.length,1,'rate limited per code');
+ assert.equal(reports[0].event,'scoped_group_observe_failed');assert.equal(reports[0].chatId,'120000000001@g.us');
+ assert.doesNotMatch(JSON.stringify(reports),/private words/);
+ clock+=60000;await p.observe('existing',{},message);
+ assert.equal(reports.length,2);assert.equal(p.observeFailures().total,3);
+ const broken=createScopedNativeWorkerPolicy(config,{report:e=>reports.push(e),now:()=>clock,createTransport:()=>{throw new Error('timer_notification_configuration_invalid');}});
+ assert.equal(await broken.observe('existing',{},message),false);
+ assert.equal(reports.at(-1).code,'timer_notification_configuration_invalid');
+ assert.throws(()=>broken.observe('other',{},message),/denied/);
+});

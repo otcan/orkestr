@@ -356,3 +356,29 @@ for (const activeRoute of ['temporary', 'successor']) {
     assert.equal(state.sent.length,0);
   });
 }
+
+test('media evidence is read from the additive side table', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scoped-group-media-side-'));
+  t.after(() => fs.rm(dir, {recursive: true, force: true}));
+  const inboxDb = new DatabaseSync(':memory:'), relayDb = new DatabaseSync(':memory:');
+  t.after(() => {inboxDb.close(); relayDb.close();});
+  inboxDb.exec(`CREATE TABLE group_input(id TEXT PRIMARY KEY,chat_id TEXT,body TEXT,created_at TEXT);
+    CREATE TABLE group_input_media(id TEXT PRIMARY KEY,path TEXT NOT NULL,filename TEXT,mimetype TEXT,size INTEGER);
+    CREATE TABLE group_send(state TEXT);`);
+  const mediaPath = path.join(dir, 'media.png');
+  await fs.writeFile(mediaPath, Buffer.from('synthetic-image'));
+  inboxDb.prepare('INSERT INTO group_input VALUES(?,?,?,?)').run('wa-side', 'group-1', 'with image', '2026-01-02');
+  inboxDb.prepare('INSERT INTO group_input_media VALUES(?,?,?,?,?)').run('wa-side', mediaPath, 'sample.png', 'image/png', 15);
+  const uploads = [], posts = [];
+  const api = async (url, options) => {
+    if (url.endsWith('/inbound-media')) { uploads.push(options); return {attachments: [{id: 'a1', name: 'sample.png', mimetype: 'image/png', path: '/server/inbound/a1.png'}]}; }
+    if (url.endsWith('/input')) { posts.push(options); return {message: {id: 'input-1'}}; }
+    if (url.includes('/messages')) return {messages: []};
+    return {thread: {ownerUserId: 'admin', binding: {chatId: 'group-1', enabled: true}}};
+  };
+  const relay = createScopedGroupRelay({config: {ownerUserId: 'admin', replyPrefix: 'agent:', mediaDir: dir, groups: [{chatId: 'group-1', threadId: 'thread-1'}]},
+    inboxDb, relayDb, api, formatter, env: {}, send: async () => ({ok: true, ids: ['s1']})});
+  await relay.tick();
+  assert.equal(uploads.length, 1);
+  assert.equal(posts.length, 1);
+});

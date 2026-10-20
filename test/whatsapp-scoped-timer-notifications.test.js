@@ -144,3 +144,14 @@ test('scheduler-recorded passive auth notices notify, while record-only and paus
   await notifier.tick();assert.equal(state.sent.length,mode==='visible'?1:0,mode);
  }
 });
+
+test('notification scope accepts a multi-thread route fence that includes its thread', async () => {
+  const {notificationScope} = await import('../packages/connectors/src/whatsapp-timer-notification-proof.js');
+  const groups = [{chatId: '120000000001@g.us', threadId: 'thread-a'}, {chatId: '120000000002@g.us', threadId: 'thread-b'}];
+  const base = {groups, timerNotifications: {enabled: true, threadId: 'thread-a', proofDbPath: '/tmp/unused.sqlite', since: '2026-01-01T00:00:00Z'}};
+  const route = extra => ({routeId: 'route-1', dbPath: '/tmp/unused-route.sqlite', ...extra});
+  assert.equal(notificationScope({...base, routeControl: route({threadIds: ['thread-a', 'thread-b']})}).chatId, '120000000001@g.us');
+  assert.equal(notificationScope({...base, groups: [groups[0]], routeControl: route({threadId: 'thread-a'})}).chatId, '120000000001@g.us');
+  for (const control of [{threadIds: ['thread-b']}, {threadId: 'thread-a', threadIds: ['thread-a', 'thread-b']}, {threadIds: ['thread-a']}])
+    assert.throws(() => notificationScope({...base, routeControl: route(control)}), /timer_notification_configuration_invalid/);
+});
