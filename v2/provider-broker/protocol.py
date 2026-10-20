@@ -95,13 +95,19 @@ def encode(value):
 
 
 class Channel:
-    def __init__(self, workspace, *, expected_native=None, offline_python=False):
-        require(type(offline_python) is bool)
+    def __init__(self, workspace, *, expected_native=None, offline_python=False, workspace_exec=False):
+        require(type(offline_python) is bool and type(workspace_exec) is bool
+                and not (offline_python and workspace_exec))
         self.offline_python = offline_python
+        self.workspace_exec = workspace_exec
+        self.tool_enabled = offline_python or workspace_exec
         self.offline_route = None
         if offline_python:
             from offline_route import OfflineRoute
             self.offline_route = OfflineRoute()
+        if workspace_exec:
+            from workspace_route import WorkspaceRoute
+            self.offline_route = WorkspaceRoute()
         require(expected_native is None or identifier(expected_native))
         self.expected_native = expected_native
         self.workspace = str(workspace)
@@ -141,7 +147,7 @@ class Channel:
             # Closed transport metadata only. Core must separately issue Worker
             # parent/task admission; role JSON cannot create that authority.
             require(identity["role"] in ("fast", "deep", "worker"))
-            require(not self.offline_python or identity["role"] == "worker")
+            require(not self.tool_enabled or identity["role"] == "worker")
             self.role = identity["role"]
             self.handle = secrets.token_hex(24)
             return None, {"id": outer, "result": {"protocol": PROTOCOL,
@@ -153,7 +159,7 @@ class Channel:
         require(self.pending is None)
         require(isinstance(frame, dict))
         if method == "ToolResult":
-            require(self.offline_python and self.committed and self.turn is not None
+            require(self.tool_enabled and self.committed and self.turn is not None
                     and not self.terminal and not self.cancelled)
             clean = self.offline_route.submit(request, self.handle)
             return clean, {"id": outer, "result": {"owned_handle": self.handle, "frame": None}}
@@ -165,7 +171,7 @@ class Channel:
         elif method == "SteerExecution":
             # Exclusively owned parent pipe; only Core-issued consumed steer
             # authority may derive this frame. JSON is not that authority.
-            require(self.role in ("fast", "deep") and not self.offline_python and self.committed and self.turn is not None
+            require(self.role in ("fast", "deep") and not self.tool_enabled and self.committed and self.turn is not None
                     and not self.terminal and not self.cancelled)
             exact(frame, ("id", "method", "params"))
             request_id = frame["id"]
@@ -234,8 +240,8 @@ class Channel:
             exact(params, ("clientInfo", "capabilities"))
             exact(params["clientInfo"], ("name", "title", "version"))
             require(all(identifier(v) for v in params["clientInfo"].values()))
-            require(params["capabilities"] == {"experimentalApi": self.offline_python}
-                    and params["capabilities"]["experimentalApi"] is self.offline_python)
+            require(params["capabilities"] == {"experimentalApi": self.tool_enabled}
+                    and params["capabilities"]["experimentalApi"] is self.tool_enabled)
         elif kind == "account/read":
             require(self.stage == "initialized" and params == {"refreshToken": False}
                     and params["refreshToken"] is False)
@@ -250,8 +256,11 @@ class Channel:
                 del params["excludeTurns"]
                 require("ephemeral" not in params)
                 params["ephemeral"] = False
-            if self.offline_python:
-                from offline_tool import advertisement
+            if self.tool_enabled:
+                if self.workspace_exec:
+                    from workspace_tool import advertisement
+                else:
+                    from offline_tool import advertisement
                 require(isinstance(params, dict) and params.get("dynamicTools") == [advertisement()])
                 params = dict(params)
                 del params["dynamicTools"]
@@ -276,7 +285,7 @@ class Channel:
     def provider(self, frame):
         require(isinstance(frame, dict), Failure.PROVIDER_OUTER)
         if frame.get("method") == "item/tool/call":
-            require(self.offline_python and self.pending is None and self.committed
+            require(self.tool_enabled and self.pending is None and self.committed
                     and self.turn is not None and not self.terminal and not self.cancelled,
                     Failure.UNSUPPORTED_TOOL)
             clean = self.offline_route.receive(frame, self.native, self.turn)

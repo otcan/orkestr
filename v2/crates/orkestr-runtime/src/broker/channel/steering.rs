@@ -16,6 +16,7 @@ impl BrokerChannel {
                 && self.pending.is_none()
                 && self.steering.is_none()
                 && self.offline.pending.is_none()
+                && self.workspace_tool.pending.is_none()
                 && !self.cancellation_pending
                 && self.next < (1_u64 << 53),
         )
@@ -35,7 +36,7 @@ impl BrokerChannel {
         if self.steering_turn()? != turn
             || self.preparation != Some(Preparation::Written)
             || self.steering.is_some()
-            || self.offline.pending.is_some()
+            || (self.offline.pending.is_some() || self.workspace_tool.pending.is_some())
             || self.cancellation_pending
             || self.steering_ids.len() >= 128
             || self.steering_ids.contains(&id)

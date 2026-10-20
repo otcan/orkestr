@@ -10,6 +10,8 @@ pub(crate) mod claude;
 pub(crate) mod claude_initialize;
 pub(crate) mod offline_setup;
 pub mod offline_tool;
+pub mod workspace_tool;
+pub(crate) mod workspace_setup;
 use crate::ports::Blocker;
 use orkestr_v2_application::runtime::ProviderKind;
 use orkestr_v2_store_sqlite::BoundSessionMetadata;

@@ -87,7 +87,7 @@ class Package:
                 origin == f"http://127.0.0.1:{value['port']}") and len(origin) <= 512
                 and not any(ord(c) < 33 for c in origin) and not origin.endswith("/"), "trusted_origin")
         beta = self.beta
-        require(set(beta) - {"roles"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
+        require(set(beta) - {"roles", "workspace_exec"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
@@ -97,6 +97,21 @@ class Package:
                 and beta["launcher_sha256"] == digest(self.root / "launcher.py"), "beta_binding")
         for key in ("namespace", "supervisor_key"):
             require(type(beta[key]) is str and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", beta[key]), "beta_key")
+        if "workspace_exec" in beta:
+            command = beta["workspace_exec"]
+            require(type(command) is dict and set(command) == {"conversation_id", "project_id",
+                    "workspace", "allowed_roots", "protected_roots", "cgroup_root", "toolchain_root"}
+                    and "roles" in beta, "workspace_exec_config")
+            identifier(command["conversation_id"])
+            identifier(command["project_id"])
+            require(type(command["workspace"]) is str and command["allowed_roots"] == [command["workspace"]]
+                    and type(command["protected_roots"]) is list and command["protected_roots"],
+                    "workspace_exec_roots")
+            for path in [command["workspace"], command["cgroup_root"], command["toolchain_root"],
+                         *command["protected_roots"]]:
+                require(type(path) is str and path.startswith("/") and len(path) <= 4096
+                        and "\0" not in path and ".." not in Path(path).parts,
+                        "workspace_exec_path")
         profile = self.profile
         require(set(profile) == {"format", "native", "auth_file", "state_root", "workspace",
                 "egress_socket", "supervisor", "hosts"}

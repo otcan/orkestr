@@ -101,6 +101,8 @@ class Children:
         arguments = (path / "cmdline").read_bytes().split(b"\0")[:-1]
         role = modes.get(arguments[5]) if len(arguments) >= 6 else None
         allowed = (fresh,) if role is not None and role.startswith("worker-") else (fresh, resumed)
+        if role is not None and role.startswith("worker-") and getattr(self.package, "beta", {}).get("workspace_exec") is not None:
+            allowed += ([b"open-owned-workspace-worker-session", b"--protocol", b"orkestr-v2-provider-broker-v1"],)
         require(arguments[:5] == expected and role is not None and arguments[6:] in allowed
                 and (path / "exe").resolve() == executable, "broker_source")
         require(exists(identity) and belongs(pid, self.server), "broker_owner_changed")

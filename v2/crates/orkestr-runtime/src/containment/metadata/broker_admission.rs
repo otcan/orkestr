@@ -8,10 +8,26 @@ impl MetadataChild {
             || state.phase != Phase::Setup
             || state.broker_open_attempted
             || !self.broker_launcher
+            || self.process.workspace_exec.load(Ordering::Acquire)
         {
             return Err(Error::WrongScope);
         }
         self.process.offline_python.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    pub(crate) fn enable_workspace_exec(&self) -> Result<(), Error> {
+        let state = self.shared.state.lock().map_err(|_| Error::Revoked)?;
+        if self.shared.scope.binding.role != orkestr_v2_application::runtime::Role::Worker
+            || self.shared.scope.provider != ProviderKind::Codex
+            || state.phase != Phase::Setup
+            || state.broker_open_attempted
+            || !self.broker_launcher
+            || self.process.offline_python.load(Ordering::Acquire)
+        {
+            return Err(Error::WrongScope);
+        }
+        self.process.workspace_exec.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -37,6 +53,11 @@ impl MetadataChild {
                 }
                 let canonical = if self.process.offline_python.load(Ordering::Acquire) {
                     super::super::broker_frames::offline::metadata(&frame, &self.process.workspace)?
+                } else if self.process.workspace_exec.load(Ordering::Acquire) {
+                    super::super::broker_frames::workspace::metadata(
+                        &frame,
+                        &self.process.workspace,
+                    )?
                 } else {
                     super::super::broker_frames::metadata(&frame, &self.process.workspace)?
                 };

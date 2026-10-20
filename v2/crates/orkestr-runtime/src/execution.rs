@@ -8,6 +8,8 @@ mod fence;
 mod lease_refresh;
 mod offline_pump;
 mod offline_result;
+mod workspace_result;
+mod workspace_pump;
 mod provider_write;
 mod pump;
 mod reuse;

@@ -21,7 +21,9 @@ impl CodexPump {
             && self.source.writing.is_none()
             && self.source.steering.is_none()
             && self.pending_offline_python().is_none()
+            && self.pending_workspace_exec().is_none()
             && self.source.tool_write.is_none()
+            && self.source.workspace_write.is_none()
             && self.source.stream.renewal_quiescent()
             && self.cursor.next_control_sequence().is_ok()
     }

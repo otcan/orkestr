@@ -83,6 +83,7 @@ impl CodexPump {
                 return Err(Blocker::Protocol);
             }
             self.source.tool_write = None;
+            self.source.workspace_write = None;
             let (lineage, bytes) = self
                 .source
                 .broker
