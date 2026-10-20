@@ -139,7 +139,12 @@ export function scopedGroupReplyChunks({text, message, thread, messages, config,
   // The footer rides on the message and does not count against the budget.
   if (body.length <= limit) return [body + suffix];
   const marker = `\n\n${SCOPED_ATTACHED_MARKER}`;
-  const preview = scopedReplyPreview(body, limit - marker.length);
+  // A footer already embedded at the end of the reply text (a final "dbg:"
+  // block of up to five lines) stays on the message too, not only in the file.
+  const embedded = suffix ? null : body.match(/\n\n(dbg: [^\n]*(?:\n[^\n]+){0,4})$/);
+  if (embedded && embedded[1].length <= SCOPED_FOOTER_MAX_CHARS) suffix = `\n\n${embedded[1]}`;
+  const lead = embedded && suffix ? body.slice(0, embedded.index).trimEnd() : body;
+  const preview = scopedReplyPreview(lead, limit - marker.length);
   const whole = clean.trim();
   const full = whole.length > SCOPED_DOCUMENT_MAX_CHARS
     ? scopedReplyPreview(whole, SCOPED_DOCUMENT_MAX_CHARS - TRUNCATED_NOTE.length) + TRUNCATED_NOTE : whole;

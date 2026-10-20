@@ -117,3 +117,13 @@ test('a reply mirrored from a remote runtime carries the remote debug footer', (
   assert.equal(entries.length, 1);
   assert.match(entries[0], /^Done\n\ndbg: rust · rt:rust-v2 · msg:\*final\*\n/);
 });
+
+test('a footer embedded at the end of a long reply stays on the message', () => {
+  const footer = 'dbg: claude-code/example · rt:coordinator · msg:*update*\nsession: abcd1234 · 23:30 CEST';
+  const text = `${words(5000)}\n\n${footer}`;
+  const entries = chunk(text);
+  assert.ok(entries[0].endsWith(`${SCOPED_ATTACHED_MARKER}\n\n${footer}`));
+  assert.equal(entries[1].document.text, text);
+  const short = chunk(`hello\n\n${footer}`);
+  assert.deepEqual(short, [`hello\n\n${footer}`]);
+});
