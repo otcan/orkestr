@@ -41,22 +41,13 @@ impl ConversationController {
     pub(super) fn handles(&self) -> &Handles {
         &self.handles
     }
-    pub(super) async fn roles_ready_to_close(&self) -> bool {
-        match &*self.state.lock().await {
-            State::Idle => true,
-            State::Running(task) => task.roles_ready_to_close(),
-            State::Starting | State::Uncertain => false,
-        }
+    /// A task this process started (or is starting) may still own the window.
+    pub(super) async fn has_local_task(&self) -> bool {
+        matches!(
+            &*self.state.lock().await,
+            State::Starting | State::Running(_)
+        )
     }
-    pub(crate) fn configured_scope(
-        &self,
-    ) -> (
-        &orkestr_v2_contracts::OwnerId,
-        &orkestr_v2_contracts::ConversationId,
-    ) {
-        (&self.config.owner_id, &self.config.conversation_id)
-    }
-
     pub(crate) fn new(
         config: BetaConfig,
         home: PathBuf,
@@ -135,23 +126,53 @@ impl ConversationController {
         }
         Ok(None)
     }
+    /// Capacity pressure only: retire this conversation's live window when every
+    /// role is accepted and Core shows no pending input, run or descendant (the
+    /// former conversation-switch precondition). The operation lock keeps any
+    /// follow-up admission from interleaving between the check and the stop.
+    pub(super) async fn retire_if_idle(&self, browser: &str) -> Result<bool, &'static str> {
+        let _operation = self.operation.lock().await;
+        self.refresh().await?;
+        let mut state = self.state.lock().await;
+        let State::Running(task) = &mut *state else {
+            return Ok(false);
+        };
+        if !task.roles_ready_to_close()
+            || !self
+                .store
+                .execution_window_switch_ready_authenticated(browser, &self.config.conversation_id)
+                .await
+                .unwrap_or(false)
+        {
+            return Ok(false);
+        }
+        Self::stop_task(&self.handles, &mut state)
+            .await
+            .map(|_| true)
+    }
+    async fn stop_task(handles: &Handles, state: &mut State) -> Result<(), &'static str> {
+        let State::Running(task) = state else {
+            return Ok(());
+        };
+        let deadline = task
+            .cleanup_deadline()
+            .min(tokio::time::Instant::now() + Duration::from_secs(30));
+        let result = task.stop_until(deadline).await;
+        if result.is_ok() && task.is_closed() {
+            *state = State::Idle;
+            return Ok(());
+        }
+        *state = State::Uncertain;
+        handles.poison();
+        Err("window shutdown is not proven retirement")
+    }
     pub(crate) async fn shutdown(&self) -> Result<(), &'static str> {
         let _operation = self.operation.lock().await;
         // Observe completed retirement before applying a live cleanup deadline.
         self.refresh().await?;
         let mut state = self.state.lock().await;
-        if let State::Running(task) = &mut *state {
-            let deadline = task
-                .cleanup_deadline()
-                .min(tokio::time::Instant::now() + Duration::from_secs(30));
-            let result = task.stop_until(deadline).await;
-            if result.is_ok() && task.is_closed() {
-                *state = State::Idle;
-                return Ok(());
-            }
-            *state = State::Uncertain;
-            self.handles.poison();
-            return Err("window shutdown is not proven retirement");
+        if matches!(*state, State::Running(_)) {
+            return Self::stop_task(&self.handles, &mut state).await;
         }
         if matches!(*state, State::Idle) {
             return Ok(());

@@ -15,6 +15,10 @@ MAX_BYTES = 64 * 1024**2
 DRAIN_BYTES = 1024**2
 CREDIT_BYTES = 16 * 1024
 MAX_BIND_MS = 5000
+# Independent root ceiling on concurrently live windows (all conversations).
+# Runtime's configured capacity stays below it: Core closes a window before
+# this manager records retirement, so the ceiling keeps that ordering slack.
+MAX_LIVE_WINDOWS = 16
 BIND_REPLY_SECONDS = 0.1
 
 

@@ -3,10 +3,12 @@ use crate::{
     transport::{self, Failure},
 };
 use dioxus::prelude::*;
-use orkestr_v2_contracts::{ExecutionWindowAdmission, ExecutionWindowStatus};
+use orkestr_v2_contracts::{
+    ExecutionWindowAdmission, ExecutionWindowQueued, ExecutionWindowStatus,
+};
 use orkestr_v2_ui::{
     beta_inputs::{SavedInput, SavedInputs},
-    beta_window::{valid_status, WindowIntents},
+    beta_window::{queued_notice, valid_status, WindowIntents},
     send_intent,
     session_scope::SessionScope,
 };
@@ -21,7 +23,12 @@ pub struct SendScope {
     pub channel: Signal<Option<document::Eval>>,
 }
 
-pub async fn admit(input: SavedInput, csrf: String, scope: SendScope) -> Result<(), Failure> {
+/// `Ok(Some(notice))` means the server durably queued the Send behind busy work slots.
+pub async fn admit(
+    input: SavedInput,
+    csrf: String,
+    scope: SendScope,
+) -> Result<Option<String>, Failure> {
     let SendScope {
         session,
         owner,
@@ -122,13 +129,30 @@ pub async fn admit(input: SavedInput, csrf: String, scope: SendScope) -> Result<
                         .write()
                         .complete(&id, &ticket, receipt, &mut saved.write())
             }) {
-                Ok(())
+                Ok(None)
             } else {
                 Err(
                     "Send confirmation could not be verified. Retry keeps the original request."
                         .to_string()
                         .into(),
                 )
+            }
+        }
+        Ok(reply) if reply.status == 202 => {
+            let queued = serde_json::from_str::<ExecutionWindowQueued>(&reply.text);
+            match queued {
+                Ok(queued)
+                    if intents
+                        .write()
+                        .queued(&id, &ticket, &queued, &mut saved.write()) =>
+                {
+                    Ok(Some(queued_notice(&queued)))
+                }
+                _ => Err(
+                    "Queue confirmation could not be verified. Retry keeps the original request."
+                        .to_string()
+                        .into(),
+                ),
             }
         }
         Ok(reply) if reply.status == 401 => Err(Failure {

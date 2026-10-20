@@ -31,6 +31,7 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
     // Model the actual schema-43 source, including absence of later opt-in
     // tables. Removing only a checksum row would create a foreign schema.
     for table in [
+        "execution_window_queue",
         "archived_history_messages",
         "archived_history_quarantine",
         "archived_history_sources",
@@ -72,5 +73,5 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
         .fetch_one(&reopened.pool)
         .await
         .unwrap();
-    assert_eq!(latest, 46);
+    assert_eq!(latest, 47);
 }

@@ -14,6 +14,7 @@ pub(crate) struct InitialAuthority {
     conversation: ConversationId,
     namespace: String,
     supervisor_key: String,
+    capacity: u32,
     state: Mutex<State>,
     last_request: Mutex<Option<String>>,
 }
@@ -40,6 +41,7 @@ impl InitialAuthority {
             conversation: config.conversation_id.clone(),
             namespace: config.namespace.clone(),
             supervisor_key: config.supervisor_key.clone(),
+            capacity: config.active_windows(),
             state: Mutex::new(State::Fresh),
             last_request: Mutex::new(None),
         })
@@ -99,8 +101,14 @@ impl InitialAuthority {
         }
         match &*state {
             State::Ready(_) | State::Transferred => {
+                // Core re-checks the owner-wide live-window capacity atomically.
                 let admission = store
-                    .admit_execution_window_authenticated(browser, conversation, input)
+                    .admit_execution_window_capped_authenticated(
+                        browser,
+                        conversation,
+                        input,
+                        self.capacity,
+                    )
                     .await?;
                 if !admission.duplicate && input.window_id.is_none() {
                     *self.last_request.lock().await = Some(input.request_key.clone());

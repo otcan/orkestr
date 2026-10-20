@@ -6,6 +6,8 @@ import stat
 from codex_bounded.configuration import BROKER, ISOLATION, MODULES, HOSTS
 from codex_bounded.trust import digest, metadata, private, protected
 from .contract import identifier, require
+
+MAX_RUNTIME_WINDOWS = 12
 from .role_profiles import ROLE_FILES, bind as bind_roles
 
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",
@@ -87,7 +89,7 @@ class Package:
                 origin == f"http://127.0.0.1:{value['port']}") and len(origin) <= 512
                 and not any(ord(c) < 33 for c in origin) and not origin.endswith("/"), "trusted_origin")
         beta = self.beta
-        require(set(beta) - {"roles", "workspace_exec"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
+        require(set(beta) - {"roles", "workspace_exec", "max_active_windows"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
@@ -97,6 +99,10 @@ class Package:
                 and beta["launcher_sha256"] == digest(self.root / "launcher.py"), "beta_binding")
         for key in ("namespace", "supervisor_key"):
             require(type(beta[key]) is str and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", beta[key]), "beta_key")
+        if "max_active_windows" in beta:
+            # Runtime's owner-wide capacity; the ledger's own ceiling stays above it.
+            require(type(beta["max_active_windows"]) is int
+                    and 0 < beta["max_active_windows"] <= MAX_RUNTIME_WINDOWS, "beta_window_capacity")
         if "workspace_exec" in beta:
             command = beta["workspace_exec"]
             require(type(command) is dict and set(command) - {"trusted"} == {"conversation_id",

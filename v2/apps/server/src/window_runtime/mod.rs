@@ -8,11 +8,12 @@ mod cold_process_tests;
 pub(crate) mod context;
 mod controller;
 mod conversation;
+mod dispatch;
 pub(crate) mod handles;
 pub(crate) mod initial;
 mod integers;
 pub(crate) mod manager_client;
-pub(crate) use controller::Controller;
+pub(crate) use controller::{Controller, WindowOutcome};
 
 #[cfg(test)]
 mod closed_idle_process_tests;

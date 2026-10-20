@@ -43,3 +43,10 @@ test('owner/logout cancellation aborts hung request rather than creating an admi
  const controller=new AbortController();const pending=betaRequest({...read,signal:controller.signal},async(_,o)=>new Promise((_,reject)=>{o.signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true});queueMicrotask(()=>controller.abort());}));
  await assert.rejects(pending,/aborted/);
 });
+test('queue read uses its fixed route, GET only, and 202 queued receipts keep their body',async()=>{
+ const r=await betaRequest({route:'window_queue',method:'GET',conversation,body:null},async(path,o)=>{assert.equal(path,`/api/v2/conversations/${conversation}/window/queue`);assert.equal(o.method,'GET');return new Response('{"entries":[]}');});
+ assert.equal(r.text,'{"entries":[]}');
+ for(const input of [{route:'window_queue',method:'POST',conversation,csrf:'x',body:'{}'},{route:'window_queue',method:'GET',conversation:'../x',body:null},{route:'window_queue',method:'GET',body:null}]) await assert.rejects(betaRequest(input,()=>assert.fail('fetch')));
+ const queued=await betaRequest({route:'window',method:'POST',conversation,csrf:'c',body:'{"request_key":"q"}'},async()=>new Response('{"state":"queued"}',{status:202}));
+ assert.deepEqual(queued,{status:202,text:'{"state":"queued"}'});
+});

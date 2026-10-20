@@ -51,7 +51,7 @@ pub fn Composer(
             let id = id.clone(); let csrf = csrf.clone(); let live = live.clone();
             spawn(async move {
                 let current = || live.get() && session_scope.read().is_current(owner);
-                let result: Result<(), Failure> = async {
+                let result: Result<Option<String>, Failure> = async {
                     let key = transport::key().await?;
                     if !current() { return Err("Conversation changed.".to_string().into()); }
                     let input = drafts.write().entry(id.clone()).or_default().prepare(key).map_err(|m| Failure::from(m.to_string()))?;
@@ -84,7 +84,7 @@ pub fn Composer(
                 }.await;
                 if !current() { return; }
                 match result {
-                    Ok(()) => { drafts.write().entry(id).or_default().accepted(); status.set("Sent. Waiting for a reply.".into()); }
+                    Ok(queued) => { drafts.write().entry(id).or_default().accepted(); status.set(queued.unwrap_or_else(|| "Sent. Waiting for a reply.".into())); }
                     Err(error) => { if error.status==401 { onexpired.call(()); } status.set(error.message); }
                 }
                 sending.set(false);

@@ -133,6 +133,8 @@ class ServiceRolesCase:
             else:
                 roles["workers"].append(value)
         beta["roles"] = roles
+        # Two live windows: a third conversation must queue durably, then start.
+        beta["max_active_windows"] = 2
         (f.package / "beta.json").write_bytes(packager.encoded(beta))
         (f.package / "beta.json").chmod(0o640)
         manifest = json.loads((f.package / "manifest.json").read_bytes())

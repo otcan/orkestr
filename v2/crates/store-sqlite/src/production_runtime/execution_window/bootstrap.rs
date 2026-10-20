@@ -62,10 +62,19 @@ impl Store {
         if history != 0 {
             return Err(RuntimeStoreError::Fenced);
         }
-        // A new conversation is not a way around an unfinished or lost owner
-        // context. Every previous scope must have the same durable retirement
-        // provenance required when recovering an existing conversation.
-        retired_context::all_prior_retired(&mut tx, &owner, None).await?;
+        // A new conversation is not a way around its own unfinished or lost
+        // context. Every previous scope of this conversation must have the same
+        // durable retirement provenance required when recovering it. Other
+        // conversations are bounded by the live-window capacity instead.
+        retired_context::all_prior_retired(
+            &mut tx,
+            &owner,
+            conversation,
+            &config.namespace,
+            &config.supervisor_key,
+            None,
+        )
+        .await?;
         let secret = format!("window-bootstrap:{}", crate::runtime::ledger::secret());
         let hash = crate::digest(&secret);
         let context = Context {

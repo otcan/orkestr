@@ -1,5 +1,6 @@
 //! Durable window admission only; a receipt never activates a provider.
 use super::*;
+use crate::window_runtime::WindowOutcome;
 use axum::extract::{rejection::JsonRejection, Path};
 use orkestr_v2_application::runtime::RuntimeStoreError;
 
@@ -49,16 +50,12 @@ pub(crate) async fn admit(
     }
     // The task owns admission and startup across HTTP disconnect/cancellation.
     // Dropping this join handle does not cancel its durable handoff.
-    let admission = tokio::spawn(async move {
+    let outcome = tokio::spawn(async move {
         if let Some(controller) = &state.window_controller {
             controller
                 .process(&credential, &owner, &conversation, &input)
                 .await
-                .map_err(|reason| {
-                    if reason == "previous conversation has unfinished work" {
-                        return Error(StatusCode::CONFLICT, "window_busy",
-                            "Accept or stop unfinished work in the active conversation before starting another");
-                    }
+                .map_err(|_| {
                     Error(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "window_unavailable",
@@ -70,6 +67,7 @@ pub(crate) async fn admit(
                 .store
                 .admit_execution_window_authenticated(&credential, &conversation, &input)
                 .await
+                .map(WindowOutcome::Admitted)
                 .map_err(store_error)
         }
     })
@@ -81,15 +79,40 @@ pub(crate) async fn admit(
             "Window task outcome is uncertain",
         )
     })??;
-    Ok((
-        if admission.duplicate {
-            StatusCode::OK
-        } else {
-            StatusCode::CREATED
-        },
-        Json(admission),
-    )
-        .into_response())
+    Ok(match outcome {
+        WindowOutcome::Admitted(admission) => (
+            if admission.duplicate {
+                StatusCode::OK
+            } else {
+                StatusCode::CREATED
+            },
+            Json(admission),
+        )
+            .into_response(),
+        // Durably queued behind live capacity or earlier intents; never started yet.
+        WindowOutcome::Queued(queued) => (StatusCode::ACCEPTED, Json(queued)).into_response(),
+    })
+}
+
+/// Owner-wide capacity and this conversation's durably queued window intents.
+pub(crate) async fn queue(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, Error> {
+    browser::owner(&state, &headers).await?;
+    let credential = browser::credential(&headers)?;
+    let conversation = conversation(&id)?;
+    let controller = state.window_controller.as_ref().ok_or(Error(
+        StatusCode::NOT_FOUND,
+        "beta_unconfigured",
+        "Beta execution is not configured",
+    ))?;
+    let queue = controller
+        .queue_status(&credential, &conversation)
+        .await
+        .map_err(store_error)?;
+    Ok(Json(queue).into_response())
 }
 
 fn conversation(id: &str) -> Result<ConversationId, Error> {

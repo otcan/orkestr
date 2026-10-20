@@ -10,13 +10,11 @@ import threading
 import time
 
 from codex_bounded.trust import exists, process
-from .budget import WindowBudget
 from .channel import ServerPeer, bind_deadline, receive, respond
 from .contract import BIND_REPLY_SECONDS, DRAIN_SECONDS, Refused, require
 from .custody import OwnedSocket, StateLock
-from .egress import Endpoint
+from .egress import Endpoint, Window
 from .ledger import Ledger
-from .ownership import Children
 from .package import Package
 
 
@@ -25,8 +23,9 @@ class Manager:
         require(os.geteuid() == 0, "root_manager_required")
         self.package = Package(root, expected)
         self.lock = self.ledger = self.control = None
-        self.child = self.identity = self.peer = None
-        self.children = self.egress = self.budget = None
+        self.child = self.identity = self.peer = self.egress = None
+        self.windows = {}
+        self.guard = threading.RLock()
         self.failed = self.closed = False
         try:
             self.lock = StateLock(self.package.ledger_directory)
@@ -52,34 +51,63 @@ class Manager:
                 and self.identity["uid"] == package.uid, "owned_server_identity")
         self.peer = ServerPeer(self.identity, package.root / "server")
 
-    def _uncertain(self, reason):
+    def _uncertain(self, window, generation, reason):
+        try:
+            self.ledger.uncertain(window, generation, reason)
+        except Refused:
+            pass  # Retired or superseded rows keep their committed outcome.
+
+    def _uncertain_all(self, reason):
         if self.ledger is not None:
-            status = self.ledger.status()
-            if status["state"] not in ("idle", "retired"):
-                self.ledger.uncertain(status["window_id"], status["generation"], reason)
+            for status in self.ledger.unfinished():
+                self._uncertain(status["window_id"], status["generation"], reason)
 
-    def _close_egress(self):
-        if self.budget is not None:
-            self.budget.stop("window_closed")
-        if self.egress is not None:
-            self.egress.close()
-            self.egress = None
+    def _close_egress(self, window):
+        endpoint = None
+        with self.guard:
+            window.close_egress()
+            if self.egress is not None and not any(
+                    not other.egress_closed for other in self.windows.values()):
+                endpoint, self.egress = self.egress, None
+        if endpoint is not None:
+            # Join outside the guard: the listener takes it on every loop.
+            endpoint.close()
 
-    def _terminate_window(self):
+    def _terminate(self, window):
+        """Emergency cleanup of one window; others keep their custody."""
         errors = []
         try:
-            self._close_egress()
+            self._close_egress(window)
         except Exception:
             errors.append("egress_cleanup")
-        if self.children is not None:
-            try:
-                if not self.children.cleanup() or self.children.forced:
-                    errors.append("child_cleanup")
-            except Exception:
+        try:
+            if not window.children.cleanup() or window.children.forced:
                 errors.append("child_cleanup")
+        except Exception:
+            errors.append("child_cleanup")
         if errors:
-            self._uncertain("cleanup_unknown")
+            self._uncertain(window.window, window.generation, "cleanup_unknown")
         return not errors
+
+    def _terminate_all(self):
+        return all([self._terminate(window) for window in list(self.windows.values())])
+
+    def _open(self, receipt):
+        window = None
+        try:
+            with self.guard:
+                window = Window(self.package, self.identity, self.ledger,
+                                receipt["window_id"], receipt["generation"])
+                self.windows[receipt["window_id"]] = window
+                if self.egress is None:
+                    owned = OwnedSocket(self.package.endpoint, self.package.gid, self.ledger, "egress")
+                    self.egress = Endpoint(self.package, owned, self.windows, self.guard)
+                    self.egress.thread.start()
+        except Exception:
+            self._uncertain(receipt["window_id"], receipt["generation"], "runtime_refused")
+            if window is not None:
+                self._terminate(window)
+            raise Refused("window_initialization") from None
 
     def _bind_deadline(self, request, accepted):
         self.ledger._scope(request)
@@ -96,71 +124,69 @@ class Manager:
         if operation == "admit":
             receipt, fresh = self.ledger.admit(request)
             if fresh:
-                try:
-                    require(self.egress is None, "previous_egress_owned")
-                    if self.children is not None:
-                        self.children.proven_gone()
-                        self.children.close()
-                    self.children = Children(self.package, self.identity)
-                    self.budget = WindowBudget(self.ledger, receipt["window_id"], receipt["generation"])
-                    owned = OwnedSocket(self.package.endpoint, self.package.gid, self.ledger, "egress")
-                    self.egress = Endpoint(self.package, owned, self.budget, self.children)
-                    self.egress.thread.start()
-                except Exception:
-                    self._uncertain("runtime_refused")
-                    self._terminate_window()
-                    raise Refused("window_initialization") from None
+                require(receipt["window_id"] not in self.windows, "previous_custody_owned")
+                self._open(receipt)
             return {"ok": True, "receipt": receipt, "fresh_window": fresh}
         row = self.ledger.details(request["window_id"], request["generation"])
         require(row["conversation"] == request["conversation_id"], "scope")
+        window = self.windows.get(request["window_id"])
         if operation == "bind_child":
             status = self.ledger.tick(request["window_id"], request["generation"])
-            require(status["state"] == "active" and self.children is not None
+            require(status["state"] == "active" and window is not None and not window.egress_closed
                     and self.egress is not None, "window_not_accepting_children")
             try:
                 if deadline is None:
                     deadline = self._bind_deadline(request, time.monotonic())
-                fresh = self.children.bind(request["broker_pid"], request["broker_start"],
-                                           deadline - BIND_REPLY_SECONDS)
+                fresh = window.children.bind(request["broker_pid"], request["broker_start"],
+                                             deadline - BIND_REPLY_SECONDS)
             except Exception:
-                self._uncertain("cleanup_unknown")
-                self._terminate_window()
+                self._uncertain(window.window, window.generation, "cleanup_unknown")
+                self._terminate(window)
                 raise Refused("broker_binding") from None
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"]), "fresh_child": fresh}
         if operation == "drain":
             return {"ok": True, "receipt": self.ledger.drain(request["window_id"], request["generation"])}
         if operation == "uncertain":
             self.ledger.uncertain(request["window_id"], request["generation"], request["reason"])
-            self._terminate_window()
+            if window is not None:
+                self._terminate(window)
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
         require(operation == "retire", "operation")
         if row["state"] != "retired":
-            require(self.children is not None, "original_cleanup_proof_missing")
-            self.children.proven_gone()
-            self._close_egress()
+            require(window is not None, "original_cleanup_proof_missing")
+            window.children.proven_gone()
+            self._close_egress(window)
             # Metadata-only exact Core proof after original observed child reap.
             # This remains legal after normal expiry; uncertainty never recovers.
-        return {"ok": True, "receipt": self.ledger.retire(request)}
+        receipt = self.ledger.retire(request)
+        if window is not None:
+            with self.guard:
+                self.windows.pop(window.window, None)
+            window.children.close()
+        return {"ok": True, "receipt": receipt}
 
     def tick(self):
         require(self.child is not None, "server_not_started")
         if self.child.poll() is not None and not self.closed:
             self.failed = True  # Even exit0 is unexpected outside close().
-            self._uncertain("server_lost")
+            self._uncertain_all("server_lost")
             raise Refused("unexpected_server_exit")
-        if self.children is not None:
-            self.children.observe()
-        status = self.ledger.status()
-        if status["state"] in ("active", "draining", "expired"):
+        for window in list(self.windows.values()):
+            window.children.observe()
+        for status in self.ledger.unfinished():
             try:
                 status = self.ledger.tick(status["window_id"], status["generation"])
             except Refused:
-                status = self.ledger.status()
-            if status["state"] in ("expired", "reconciliation"):
-                self._terminate_window()
+                status = self.ledger.status(status["conversation_id"])
+            window = self.windows.get(status["window_id"])
+            if status["state"] in ("expired", "reconciliation") and window is not None:
+                self._terminate(window)
         if self.egress is not None and self.egress.failed:
-            self._uncertain("cleanup_unknown")
-            self._terminate_window()
+            # The shared listener failed: every live window loses its relay.
+            for window in list(self.windows.values()):
+                if not window.egress_closed:
+                    self._uncertain(window.window, window.generation, "cleanup_unknown")
+            self._terminate_all()
 
     def once(self):
         self.tick()
@@ -212,13 +238,19 @@ class Manager:
             except Exception:
                 errors.append("server_cleanup")
         try:
-            self._uncertain("manager_stopped")
-            if not self._terminate_window():
+            self._uncertain_all("manager_stopped")
+            if not self._terminate_all():
                 errors.append("window_cleanup")
         except Exception:
             errors.append("window_cleanup")
-        if self.children is not None:
-            self.children.close()
+        if self.egress is not None:
+            try:
+                endpoint, self.egress = self.egress, None
+                endpoint.close()
+            except Exception:
+                errors.append("window_cleanup")
+        for window in list(self.windows.values()):
+            window.children.close()
         for item in (self.control, self.ledger, self.lock):
             if item is not None:
                 try:

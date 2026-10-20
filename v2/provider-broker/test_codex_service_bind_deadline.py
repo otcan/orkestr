@@ -5,6 +5,7 @@ from pathlib import Path
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 from types import SimpleNamespace
 import unittest
@@ -137,9 +138,15 @@ class BindingTests(unittest.TestCase):
     def manager(self, identity):
         manager = Manager.__new__(Manager)
         manager.package, manager.ledger = self.package, self.ledger
-        manager.identity, manager.budget = identity, None
+        manager.identity = identity
         manager.failed = manager.closed = False
-        manager.children = Children(self.package, identity)
+        manager.guard = threading.RLock()
+        # One synthetic admitted window with its own original child set.
+        window = SimpleNamespace(window=self.window, generation=1, egress_closed=False,
+                                 children=Children(self.package, identity))
+        window.close_egress = lambda: setattr(window, "egress_closed", True)
+        manager.windows = {self.window: window}
+        manager.children = window.children  # Test alias for the window's custody.
         self.managers.append(manager)
         manager.egress = SimpleNamespace(failed=False, close=lambda: None)
         return manager
