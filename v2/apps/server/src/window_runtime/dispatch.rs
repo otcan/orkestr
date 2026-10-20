@@ -155,6 +155,11 @@ fn now_ms() -> i64 {
 }
 
 impl Controller {
+    /// Another trusted producer (the timer scheduler) queued durable intents.
+    pub(crate) fn wake_dispatcher(&self) {
+        self.queue.wake();
+    }
+
     /// Start the background dispatcher. It holds only a weak controller link.
     pub(crate) fn start_dispatcher(self: &Arc<Self>) {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {

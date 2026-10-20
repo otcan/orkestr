@@ -13,6 +13,7 @@ mod fast_metadata;
 mod guard;
 mod lifecycle;
 mod queue;
+pub(super) use queue::enqueue_timer_intent;
 mod switching;
 pub use credential::{ExecutionWindowCredential, ExecutionWindowRetirement};
 #[cfg(test)]

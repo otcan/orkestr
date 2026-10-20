@@ -9,9 +9,21 @@ pub fn valid_namespace(value: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Schedule {
-    Once { due_ms: i64 },
-    Interval { every_ms: i64 },
-    UtcClock { weekly: bool, minute_of_day: u16 },
+    Once {
+        due_ms: i64,
+    },
+    Interval {
+        every_ms: i64,
+    },
+    UtcClock {
+        weekly: bool,
+        minute_of_day: u16,
+    },
+    ZonedClock {
+        timezone: String,
+        weekday: Option<u8>,
+        minute_of_day: u16,
+    },
     Dormant,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -78,6 +90,16 @@ impl Detail {
                 Schedule::Once { due_ms } => due_ms > 0,
                 Schedule::Interval { every_ms } => every_ms > 0,
                 Schedule::UtcClock { minute_of_day, .. } => minute_of_day < 1440,
+                Schedule::ZonedClock {
+                    ref timezone,
+                    weekday,
+                    minute_of_day,
+                } => {
+                    minute_of_day < 1440
+                        && !timezone.is_empty()
+                        && timezone.len() <= 64
+                        && weekday.is_none_or(|day| (1..=7).contains(&day))
+                }
                 Schedule::Dormant => true,
             }
     }

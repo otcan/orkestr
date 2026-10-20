@@ -6,6 +6,7 @@ from .ledger import PROGRESS_LIMIT, no_reply
 
 PROGRESS_INTERVAL_S = 60
 PROGRESS_MAX_CHARS = 3500
+TIMER_PAGE = 50
 
 
 class Refused(RuntimeError):
@@ -84,6 +85,65 @@ class Worker:
     def call(self, method, route, body=None, allowed=(200,)):
         return self.client.request(method, route, body=body, allowed=allowed)[1]
 
+    def timer_inputs(self, after, limit=TIMER_PAGE):
+        value = self.call("GET", "/timer-inputs?after_sequence=%d&limit=%d" % (after, limit))
+        rows = value.get("inputs") if isinstance(value, dict) else None
+        if not isinstance(rows, list) or len(rows) > limit:
+            raise Refused("timer_inputs_shape")
+        previous = after
+        for row in rows:
+            if (not isinstance(row, dict) or type(row.get("sequence")) is not int or row["sequence"] <= previous or
+                    not str(row.get("request_key", "")).startswith("timer:") or
+                    not all(isinstance(row.get(k), str) and row[k] for k in ("message_id", "event_id", "namespace", "claim_id"))):
+                raise Refused("timer_inputs_shape")
+            previous = row["sequence"]
+        return rows
+
+    def discover_timers(self):
+        """Adopt V2 timer occurrences admitted in this binding's conversation.
+
+        The first scan only records the current position: occurrences admitted
+        before this adapter relayed timers are never replayed to WhatsApp.
+        """
+        cursor = self.ledger.timer_cursor()
+        start = cursor or 0
+        while True:
+            rows = self.timer_inputs(start)
+            for row in rows:
+                if cursor is not None and not row.get("held"):
+                    self.ledger.enqueue_timer(row)
+                start = row["sequence"]
+            if rows:
+                self.ledger.set_timer_cursor(start)
+            if len(rows) < TIMER_PAGE:
+                break
+        if cursor is None:
+            self.ledger.set_timer_cursor(start)
+
+    def timer_window(self, data):
+        """Server-queued Deep turn for a timer occurrence. Returns True to continue."""
+        sequence = data["intake"]["sequence"]
+        rows = [row for row in self.timer_inputs(sequence - 1, 1) if row["message_id"] == data["intake"]["message_id"]]
+        if len(rows) != 1 or rows[0]["event_id"] != data["intake"]["event_id"] or rows[0]["request_key"] != data["keys"]["message"]:
+            raise Refused("timer_input_mismatch")
+        row = rows[0]
+        if row.get("held"):
+            # Disabled or handed back before it ran: Core will never execute it.
+            self.ledger.finish_silently(data, "held")
+            return False
+        if row.get("window") == "queued":
+            # Reading window status keeps the owner session current for the dispatcher.
+            self.call("GET", "/window", allowed=(200, 204))
+            if data.get("phase") != "waiting_for_timer_dispatch":
+                data["phase"] = "waiting_for_timer_dispatch"
+                self.ledger.save(data)
+            return False
+        if row.get("window") == "dispatched":
+            data.update(window={"dispatched_by": "server_timer_queue"}, phase="running")
+            self.ledger.save(data)
+        # Withdrawn or never queued: open the window through the ordinary path.
+        return True
+
     def step(self, data):
         if data.get("blocked"):
             return
@@ -96,6 +156,9 @@ class Worker:
                 raise Refused("intake_receipt")
             data.update(intake=intake, cursor=intake["sequence"] - 1, phase="admitted", admitted_at=time.time())
             self.ledger.save(data)
+        if data.get("origin") == "timer" and "window" not in data and "window_request" not in data:
+            if not self.timer_window(data):
+                return
         if "window" not in data:
             if "window_request" not in data:
                 current = self.call("GET", "/window", allowed=(200, 204))
@@ -204,6 +267,11 @@ class Worker:
                 self.run_once(stop)
 
     def run_once(self, stop):
+        try:
+            self.discover_timers()
+        except Exception:
+            # Discovery is retried every pass; it never blocks existing inputs.
+            pass
         data = self.ledger.next_input()
         if not data:
             return

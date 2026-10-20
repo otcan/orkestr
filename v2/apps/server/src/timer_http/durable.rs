@@ -2,9 +2,20 @@
 //! No browser credentials, instruction cache, caller clock or HTTP dispatch port.
 use orkestr_v2_application::runtime::RuntimeStoreError;
 use orkestr_v2_store_sqlite::{history_import::HistoryError, Store};
-use std::time::Duration;
+use std::{collections::HashMap, sync::Arc, time::Duration};
+use tokio::time::Instant;
 use uuid::Uuid;
 const PAGE: u16 = 32;
+/// Retry spacing for a due occurrence that could not be admitted (for example a
+/// changed Stop boundary, a removed conversation or a full window queue).
+const RETRY_BASE: Duration = Duration::from_secs(5);
+const RETRY_MAX: Duration = Duration::from_secs(15 * 60);
+
+fn retry_delay(failures: u32) -> Duration {
+    RETRY_BASE
+        .saturating_mul(1u32 << failures.saturating_sub(1).min(16))
+        .min(RETRY_MAX)
+}
 
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct DurableTick {
@@ -17,6 +28,11 @@ pub struct DurableTick {
 pub struct DurableTimerController {
     supervisor: Store,
     after: Option<Uuid>,
+    /// Process-local backoff per namespace; never authority, lost on restart.
+    backoff: HashMap<Uuid, (u32, Instant)>,
+    /// When a window dispatcher runs, each occurrence also queues its Deep turn.
+    queue_window: bool,
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 impl DurableTimerController {
     /// A normal/worker Store cannot pass Core's subsequent context validation.
@@ -24,7 +40,17 @@ impl DurableTimerController {
         Self {
             supervisor,
             after: None,
+            backoff: HashMap::new(),
+            queue_window: false,
+            wake: None,
         }
+    }
+    /// Queue a Deep window intent with every admitted occurrence and wake the
+    /// dispatcher. Only the trusted server composition selects this.
+    pub fn with_window_dispatch(mut self, wake: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.queue_window = true;
+        self.wake = Some(wake);
+        self
     }
     /// One bounded page; cursor is process-local fairness metadata, never authority.
     pub async fn tick(&mut self) -> Result<DurableTick, HistoryError> {
@@ -33,13 +59,23 @@ impl DurableTimerController {
             .map_err(|_| HistoryError::Unavailable)?
     }
     async fn pass(&mut self) -> Result<DurableTick, HistoryError> {
+        // Only occurrences that are due by the Store clock are scanned.
         let candidates = self
             .supervisor
-            .timer_scheduler_candidates(self.after, PAGE)
+            .due_timer_scheduler_candidates(self.after, PAGE)
             .await?;
         let next = next_cursor(&candidates);
         let mut result = DurableTick::default();
+        let now = Instant::now();
         for namespace in candidates {
+            if self
+                .backoff
+                .get(&namespace)
+                .is_some_and(|(_, retry)| *retry > now)
+            {
+                result.deferred += 1;
+                continue;
+            }
             // Fresh issuer every time: discovery/UUID alone never grants admission.
             let issuer = self
                 .supervisor
@@ -52,20 +88,35 @@ impl DurableTimerController {
             result.scanned += 1;
             match self
                 .supervisor
-                .admit_authorized_timer(&issuer, namespace)
+                .admit_authorized_timer_turn(&issuer, namespace, self.queue_window)
                 .await
             {
                 Ok(receipt) => {
+                    self.backoff.remove(&namespace);
                     if !receipt.duplicate {
                         result.admitted += 1;
                     }
                 }
-                Err(HistoryError::Conflict | HistoryError::NotFound) => result.deferred += 1,
+                // Concurrently disabled/stopped, Stop boundary changed or the
+                // window queue is full: hold with backoff, recreate nothing.
+                Err(
+                    HistoryError::Conflict | HistoryError::NotFound | HistoryError::Unavailable,
+                ) => {
+                    let failures = self.backoff.get(&namespace).map_or(0, |(n, _)| *n) + 1;
+                    self.backoff
+                        .insert(namespace, (failures, now + retry_delay(failures)));
+                    result.deferred += 1;
+                }
                 Err(error) => return Err(error),
             }
             // Issuer drops here; no instruction or credential is retained locally.
         }
         self.after = next;
+        if result.admitted > 0 {
+            if let Some(wake) = &self.wake {
+                wake();
+            }
+        }
         Ok(result)
     }
     /// No runtime registration here. Caller must join this future on shutdown.

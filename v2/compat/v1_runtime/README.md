@@ -133,6 +133,25 @@ not resend them) and remain visible there for operator review.
 A V1 build without acknowledgements never settles anything, so the adapter
 then behaves exactly like the pilot: at most `max_outstanding_inputs` inputs.
 
+## Timer occurrences
+
+A V2 timer enabled in a binding's conversation (see
+`docs/v2/thread-timers.md`) produces ordinary input that Core admits itself.
+The worker discovers those occurrences through
+`GET /api/v2/conversations/<id>/timer-inputs`, adopts each one into the
+ledger (identity keyed by its Core message ID; capacity never refuses it) and
+drives it like an intake without re-sending it: it waits while the server's
+window intent is `queued` (reading `/window` keeps the dispatcher session
+current), follows a `dispatched` window, or opens the window itself with the
+timer input key if the intent was withdrawn. Both roles are accepted and the
+canonical Deep reply is exported exactly like a WhatsApp reply. Its listed
+parent is a user row with `source`/`connector` `orkestr-v2-timer`,
+`origin: "timer"` and `publicMessageId: "v2timer-<remote id>"`, which V1
+materializes once as the reply's local parent; acknowledgements then settle it
+normally. A held occurrence (timer disabled or handed back before it ran)
+settles silently with nothing exported. The first scan of a ledger records
+the current position and adopts nothing older.
+
 ## Progress, NO_REPLY and attachments
 
 With `progress_updates`, intermediate payloads of the exact matched Deep run

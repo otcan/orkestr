@@ -28,7 +28,7 @@ async fn selected(
         .collect::<Vec<_>>()
         .join(" || '|' || ");
     let filter = if table == "_sqlx_migrations" {
-        format!(" WHERE version<={}", prefix.unwrap_or(48))
+        format!(" WHERE version<={}", prefix.unwrap_or(49))
     } else {
         String::new()
     };
@@ -41,8 +41,10 @@ async fn selected(
 }
 
 #[tokio::test]
-async fn populated_prefixes_copy_first_edges_to_47_preserve_rows_and_rollback_source() {
-    for prefix in [14, 17, 31, 33, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46] {
+async fn populated_prefixes_copy_first_edges_to_49_preserve_rows_and_rollback_source() {
+    for prefix in [
+        14, 17, 31, 33, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+    ] {
         let dir = Directory::new();
         let mut conn = populated_payload_prefix(&dir).await;
         for migration in sqlx::migrate!("./migrations")
@@ -78,6 +80,7 @@ async fn populated_prefixes_copy_first_edges_to_47_preserve_rows_and_rollback_so
             "derived directory and legacy scope: {prefix}"
         );
         for table in [
+            "dormant_timer_targets",
             "execution_window_queue",
             "workspace_exec_profiles",
             "workspace_exec_delegations",
@@ -123,7 +126,7 @@ async fn populated_prefixes_copy_first_edges_to_47_preserve_rows_and_rollback_so
                 .fetch_one(&mut upgraded)
                 .await
                 .unwrap(),
-            48
+            49
         );
         assert!(sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&mut upgraded)

@@ -1,4 +1,5 @@
 //! Leaf router. Deep owns registration under existing auth/origin/CSRF guard.
+mod conversation;
 pub mod durable;
 mod owner_controller;
 pub use owner_controller::DurableOwnerController;
@@ -92,6 +93,15 @@ async fn detail(controller: &DurableOwnerController, value: TimerDetail) -> dto:
                 minute_of_day,
             } => dto::Schedule::UtcClock {
                 weekly,
+                minute_of_day,
+            },
+            TimerSchedule::ZonedClock {
+                timezone,
+                weekday,
+                minute_of_day,
+            } => dto::Schedule::ZonedClock {
+                timezone,
+                weekday,
                 minute_of_day,
             },
             TimerSchedule::Dormant { .. } => dto::Schedule::Dormant,
@@ -203,11 +213,19 @@ async fn control(
 }
 pub fn routes(controller: DurableOwnerController) -> Router<AppState> {
     Router::new()
+        .route("/api/v2/timers/import", post(conversation::import))
         .route("/api/v2/timers/{namespace}", get(read))
+        .route("/api/v2/conversations/{id}/timers", get(conversation::list))
+        .route(
+            "/api/v2/conversations/{id}/timer-inputs",
+            get(conversation::inputs),
+        )
         .route("/api/v2/timers/{namespace}/enable", post(enable))
         .route("/api/v2/timers/{namespace}/control", post(control))
         .layer(Extension(controller))
 }
 
+#[cfg(test)]
+mod conversation_tests;
 #[cfg(test)]
 mod tests;
